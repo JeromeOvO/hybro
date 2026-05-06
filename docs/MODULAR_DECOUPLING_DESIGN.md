@@ -3,7 +3,7 @@
 > **Status**: Proposal (v3)  
 > **Date**: 2026-05-04  
 > **Scope**: Refactor hybro-multi-agents-backend into interface-driven modular architecture  
-> **Constraint**: All existing features remain unchanged; no new technology stack; zero backend breaking changes
+> **Constraint**: All existing features remain unchanged; no new technology stack; zero backend breaking changes (except explicitly decommissioned legacy workflow endpoints after Phase 0d deprecation)
 
 ---
 
@@ -11,7 +11,7 @@
 
 The current codebase delivers a full-featured multi-agent orchestration platform with rooms, supervisor/debate workflows, HITL, hub relay, memory compaction, and a discovery/gateway API. However, it suffers from tight coupling via singleton imports, a service-locator anti-pattern, no interface abstractions, and monolithic initialization.
 
-This document proposes restructuring the codebase into **well-defined modules** connected through **Python Protocol interfaces**, managed by **module-scoped sub-containers**, while preserving every existing feature and API endpoint. The modular structure enables future technology stack replacement (DBOS, AG-UI, etc.) by creating clean seams — but this document does not introduce any new technology.
+This document proposes restructuring the codebase into **well-defined modules** connected through **Python Protocol interfaces**, managed by **module-scoped sub-containers**, while preserving every non-decommissioned feature and API endpoint (legacy workflow endpoints are explicitly removed via Phase 0d deprecation). The modular structure enables future technology stack replacement (DBOS, AG-UI, etc.) by creating clean seams — but this document does not introduce any new technology.
 
 ### Design Principles
 
@@ -120,18 +120,17 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 | 4 | **LLM Gateway** | Unified LLM invocation, provider routing, capability registry | `services/openai_service.py`, `services/gemini_service.py`, `services/bedrock_service.py` |
 | 5 | **Agent** | Agent lifecycle, health, matching, discovery | `services/agent_*.py`, `api/agent.py`, `api/discovery.py` |
 | 6 | **Room** | Room CRUD, membership, raw message persistence, message graph | `modules/RoomCenter.py`, `services/room_*.py` |
-| 7 | **Context & Memory** | Context assembly, compaction, search, user memory, chat contexts | `services/memory_*.py`, `services/compaction_service.py`, `services/context_assembly_service.py` |
+| 7 | **Context & Memory** | Context assembly, compaction, search, user memory, ~~chat contexts~~ (legacy; source removed in Phase 0d/8) | `services/memory_*.py`, `services/compaction_service.py`, `services/context_assembly_service.py` |
 | 8 | **Execution** | Run lifecycle, supervisor, debate, HITL, dispatch (NOT workflow) | `modules/SupervisorExecutor.py`, `modules/RoomMessageCenter.py`, `services/run_*.py`, `services/hitl_service.py` |
-| 9 | **Workflow** | Task decomposition, meta-task execution, chat context summary | `modules/WorkflowCenter.py`, `services/task_service.py` |
-| 10 | **Delivery** | SSE connections, event broker, dedup, domain→frontend event translation | `services/sse_services.py`, `infrastructure/event_broker.py`, `infrastructure/brokers/` |
-| 11 | **Platform** | Gateway API, rate limiting, file storage | `services/gateway_service.py`, `services/*_rate_limit_service.py`, `services/file_upload_service.py` |
-| 12 | **HubRuntimeBridge** | Hub connection, relay, liveness, offline queue, agent sync | `services/relay_service.py`, `infrastructure/relay_streams.py`, `api/relay.py`, `api/hub.py` |
-| 13 | **Jobs** | Background tasks with leader election | `jobs/*`, `infrastructure/leader_election.py` |
+| 9 | **Delivery** | SSE connections, event broker, dedup, domain→frontend event translation | `services/sse_services.py`, `infrastructure/event_broker.py`, `infrastructure/brokers/` |
+| 10 | **Platform** | Gateway API, rate limiting, file storage | `services/gateway_service.py`, `services/*_rate_limit_service.py`, `services/file_upload_service.py` |
+| 11 | **HubRuntimeBridge** | Hub connection, relay, liveness, offline queue, agent sync | `services/relay_service.py`, `infrastructure/relay_streams.py`, `api/relay.py`, `api/hub.py` |
+| 12 | **Jobs** | Background tasks with leader election | `jobs/*`, `infrastructure/leader_election.py` |
 
-> **NOTE (B2 fix)**: Execution and Workflow are **separate modules** because they have independent lifecycles:
-> - **Execution** operates on `runs` / `run_events` / `room_agent_messages`, uses supervisor state machine, returns via SSE streaming
-> - **Workflow** operates on `base_tasks` / `meta_tasks` / `task_sessions` / `chat_contexts`, returns HTTP 207 partial-success, triggers `update_chat_context_by_session_id`
-> They share no storage and no state machine. Workflow may invoke Execution's `ExecutionEngine` for individual meta-task agent calls, but their lifecycles are orthogonal.
+> **NOTE (Workflow decommission)**: The legacy `base_tasks` / `meta_tasks` / `task_sessions` data model
+> (from the first version of chat room) is **deleted** in this refactor, NOT wrapped. The endpoints
+> `api/orchestration_center.py` and `api/task.py` are decommissioned. See Phase 0d for frontend
+> coordination and deprecation timeline.
 
 ### 3.3 Dependency Rules (Hard Constraints)
 
@@ -161,13 +160,10 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 | Execution → Delivery | `EventPublisher` Protocol | Fire-and-forget | Execution records side effects BEFORE emitting |
 | Execution → A2A Adapter | `AgentTransport` Protocol | Async call | |
 | Execution → HubRuntimeBridge | `HubDispatchPort` Protocol | Async call | |
-| Workflow → Execution | `ExecutionEngine` Protocol | Async call | For individual meta-task agent calls |
-| Workflow → Agent | `AgentMatcher` Protocol | Sync call | For meta-task agent assignment |
-| Workflow → Context & Memory | `ChatContextManager` Protocol | Sync call | For task session memory |
 | Context & Memory → Room | `RoomHistoryReader` Protocol | Sync call | |
 | Context & Memory ← (domain events) | `MessageCommitted` | **In-process** on emitting worker + **Redis Pub/Sub** for other workers | See §4.5 |
 | HubRuntimeBridge → Agent | `AgentRegistryWriter` Protocol | Sync call | |
-| HubRuntimeBridge → Execution | `AgentEventSink` Protocol | Sync call | |
+| HubRuntimeBridge → Execution | `HubAgentResponseInternal` via `EventPublisher.emit_internal` | Async internal event | Owner-worker routing; see §4.5 |
 | HubRuntimeBridge → Room | `RoomOwnershipReader` Protocol | Sync call | |
 | Agent → HubRuntimeBridge | `HubLivenessReader` Protocol | Sync call | For agent hydration: `is_hub_online` |
 | Agent ↔ Room | NO direct dependency | — | |
@@ -196,7 +192,7 @@ class AgentRegistry(Protocol):
 
 @runtime_checkable
 class AgentMatcher(Protocol):
-    """Agent selection — used by Execution, Workflow."""
+    """Agent selection — used by Execution."""
 
     async def match_agents(
         self,
@@ -246,7 +242,7 @@ class AgentRegistryWriter(Protocol):
 
 @runtime_checkable
 class RoomRegistry(Protocol):
-    """Room state lookup — used by Execution, Workflow, HubRuntimeBridge."""
+    """Room state lookup — used by Execution, HubRuntimeBridge."""
 
     async def get_room(self, room_id: str) -> RoomInfo | None: ...
     async def get_room_agents(self, room_id: str) -> list[str]: ...
@@ -370,27 +366,6 @@ class MemoryManager(Protocol):
 
 
 @runtime_checkable
-class ChatContextManager(Protocol):
-    """Workflow-specific chat context — used by Workflow module.
-
-    Two update paths:
-    - summarize_and_update(): REST endpoint — receives raw user_input + agent_response,
-      internally calls LLM Gateway to generate summarized context, then persists.
-    - update_chat_context(): internal direct-write — for callers that already have
-      processed context_data (e.g., workflow executor post-summarization).
-    """
-
-    async def get_chat_context(self, session_id: str) -> ChatContextInfo | None: ...
-    async def update_chat_context(self, session_id: str, context_data: dict) -> None: ...
-    async def summarize_and_update(
-        self, session_id: str, user_input: str, agent_response: str
-    ) -> ChatContextInfo: ...
-        """Called by API layer for /memoryCenter/updateChatContextBySessionId.
-        Internally invokes LLM Gateway to summarize, then persists result."""
-    async def create_chat_context(self, session_id: str, user_name: str) -> ChatContextInfo: ...
-
-
-@runtime_checkable
 class MemoryProjector(Protocol):
     """Trigger projection from raw messages — used internally or by events."""
 
@@ -405,7 +380,7 @@ class MemoryProjector(Protocol):
 
 @runtime_checkable
 class ExecutionEngine(Protocol):
-    """Execute agent interactions within a room — used by API layer, Workflow, HubRuntimeBridge.
+    """Execute agent interactions within a room — used by API layer, HubRuntimeBridge.
 
     IMPORTANT: execute() is fire-and-forget from HTTP perspective.
     It persists the user message, starts orchestration as a background task,
@@ -417,6 +392,12 @@ class ExecutionEngine(Protocol):
     async def cancel(self, room_id: str, message_id: str) -> bool: ...
     async def get_run(self, run_id: str) -> RunInfo | None: ...
     async def get_runs_for_room(self, room_id: str) -> list[RunInfo]: ...
+    async def cancel_inflight_tasks(self) -> int: ...
+        """Graceful shutdown: cancel all tracked background orchestration tasks.
+        Returns count of cancelled tasks. Each cancelled run transitions to RunState.CANCELED."""
+    async def heal_diverged_runs(self, limit: int = 500) -> int: ...
+        """Startup recovery: replay committed events whose head-row update was lost.
+        Returns count of healed runs."""
 
 
 @runtime_checkable
@@ -444,10 +425,10 @@ class HITLManager(Protocol):
 
 
 @runtime_checkable
-class AgentEventSink(Protocol):
-    """Receive agent events from external sources — used by HubRuntimeBridge."""
+class HubAgentResponseSink(Protocol):
+    """Process hub agent responses for orchestration resume — used via internal event handler."""
 
-    async def handle_agent_event(self, event: AgentEvent) -> None: ...
+    async def handle_hub_agent_response(self, event: "HubAgentResponseInternal") -> None: ...
 ```
 
 **Key DTOs (A2 fix):**
@@ -548,6 +529,15 @@ class EventPublisher(Protocol):
     """
 
     async def emit(self, event: DomainEvent) -> None: ...
+    async def emit_internal(self, event: "InternalEvent") -> None: ...
+        """Dispatch internal cross-module events. NOT delivered to SSE clients.
+        Handler failures are logged + dead-lettered, never propagated."""
+    def register_internal_handler(self, event_type: str, handler: Callable) -> None: ...
+        """Register handler for internal events. Called during container assembly."""
+    async def start(self) -> None: ...
+        """Start Redis Pub/Sub listener for cross-worker fan-out. Called during lifespan startup."""
+    async def stop(self) -> None: ...
+        """Drain pending deliveries and disconnect Pub/Sub. Called during shutdown."""
 
 
 @runtime_checkable
@@ -565,6 +555,8 @@ class SSETransport(Protocol):
     def is_cancelled(self, message_id: str) -> bool: ...
     async def mark_cancelled(self, message_id: str) -> None: ...
     def set_draining(self, draining: bool) -> None: ...
+    async def start_cancellation_watcher(self) -> None: ...
+        """Start change-stream watcher for cancellation propagation. Runs per-worker."""
 ```
 
 **DomainEvent Discriminated Union (B1 fix):**
@@ -624,11 +616,13 @@ class HITLResolvedEvent(DomainEventBase):
     message_id: str
 
 class HubAgentEvent(DomainEventBase):
+    """Frontend-visible: UI rendering of hub agent activity."""
     event_type: Literal["hub_agent_event"] = "hub_agent_event"
     hub_id: str
     agent_id: str
     message_id: str
-    payload: dict
+    status: str  # "working" | "completed" | "error"
+    partial: str | None = None  # Streaming partial content for UI
 
 class DebateRoundEvent(DomainEventBase):
     event_type: Literal["debate_round"] = "debate_round"
@@ -679,7 +673,19 @@ class RunStateChanged(InternalEventBase):
     old_state: str
     new_state: str
 
-InternalEvent = MessageCommitted | RunStateChanged
+class HubAgentResponseInternal(InternalEventBase):
+    """Emitted by HubRuntimeBridge when hub agent sends response (fix 2.1).
+    Execution subscribes to resume orchestration. NOT sent to frontend —
+    HubAgentEvent (frontend-visible) is emitted separately for UI."""
+    event_type: Literal["hub_agent_response_internal"] = "hub_agent_response_internal"
+    hub_id: str
+    agent_id: str
+    task_id: str
+    room_id: str
+    is_terminal: bool
+    payload: dict  # Full a2a-normalized response with continuation_message_id, retry_count
+
+InternalEvent = MessageCommitted | RunStateChanged | HubAgentResponseInternal
 ```
 
 **Internal event delivery mechanism:**
@@ -690,90 +696,15 @@ InternalEvent = MessageCommitted | RunStateChanged
   - Does NOT deliver to SSE clients
 - This keeps one bus implementation with two entry points (`emit` for frontend-visible, `emit_internal` for module-to-module)
 
-### 4.6 Workflow Module Protocols
+**At-least-once + idempotent delivery for `HubAgentResponseInternal`:**
+- `HubFacade.publish_from_hub()` first persists the response to `run_events` collection with idempotency key `(hub_id, task_id, response_seq)` before calling `emit_internal()`.
+- `ExecutionFacade` maintains `_owned_hub_tasks: dict[str, str]` mapping `task_id → run_id` for tasks dispatched by this worker.
+- Internal handler checks `task_id in self._owned_hub_tasks` — only the owner-worker processes; other workers discard.
+- Handler deduplicates via the idempotency key against already-processed events in the run's event log.
+- If the owner-worker crashes: the response is durable in `run_events`. On next startup, `heal_diverged_runs()` replays unprocessed durable responses.
+- Pub/Sub delivery is at-least-once (Redis may redeliver on reconnect); idempotency key ensures no double-processing.
 
-```python
-# common/protocols/workflow_protocols.py
-
-@runtime_checkable
-class WorkflowEngine(Protocol):
-    """Task decomposition and multi-step workflow execution.
-    
-    DISTINCT FROM Execution: operates on base_tasks/meta_tasks, not runs/run_events.
-    Returns HTTP 207 partial-success semantics. Does NOT use RunLifecyclePort.
-    """
-
-    async def decompose_task(self, task_id: str, room_id: str) -> list[MetaTaskInfo]: ...
-    async def assign_agents(self, task_id: str, room_id: str) -> list[MetaTaskInfo]: ...
-    async def run_workflow(self, task_id: str, room_id: str) -> WorkflowResult: ...
-    async def get_task(self, task_id: str) -> BaseTaskInfo | None: ...
-    async def get_meta_task(self, task_id: str) -> MetaTaskInfo | None: ...
-    async def create_task(self, room_id: str, session_id: str, user_name: str, task_content: dict) -> BaseTaskInfo: ...
-    async def retry_meta_task(self, task_id: str) -> MetaTaskInfo: ...
-    async def summarize_for_base_task(self, task_id: str) -> BaseTaskInfo: ...
-        """Calls LLM Gateway to summarize meta-task results into base task chat context."""
-    async def list_sessions_for_user(self, user_name: str) -> list[TaskSessionInfo]: ...
-    async def list_base_tasks_for_session(self, session_id: str) -> list[BaseTaskInfo]: ...
-    async def list_meta_tasks_for_parent(self, parent_task_id: str) -> list[MetaTaskInfo]: ...
-```
-
-**Key DTOs:**
-
-```python
-# common/dto/workflow.py
-
-class MetaTaskInfo(BaseModel):
-    task_id: str
-    parent_task_id: str
-    agent_id: str | None
-    task_description: str | None
-    execution_order: int
-    depends_on_tasks: list[str] | None = None
-    status: str | None = None
-
-class WorkflowResult(BaseModel):
-    """Preserves HTTP 207 partial-success semantics."""
-    task_id: str
-    meta_tasks: list[MetaTaskInfo]
-    partial_success: bool
-    completed_count: int
-    failed_count: int
-    agent_messages: list[dict]  # Results from completed meta-tasks
-    errors: list[dict] | None = None  # Errors from failed meta-tasks
-
-class BaseTaskInfo(BaseModel):
-    task_id: str
-    session_id: str
-    user_name: str
-    task_content: dict
-    created_at: datetime
-
-class ChatContextInfo(BaseModel):
-    memory_id: str
-    session_id: str
-    user_name: str
-    context_data: dict
-    created_at: datetime
-    updated_at: datetime
-
-class TaskSessionInfo(BaseModel):
-    session_id: str
-    user_name: str
-    room_id: str
-    created_at: datetime
-```
-
-**N4: WorkflowResult → OrchestrationResponse contract translation:**
-
-> API layer maps `WorkflowResult` → current `OrchestrationResponse` as follows:
-> - `OrchestrationResponse.meta_task_ids` = `[mt.task_id for mt in result.meta_tasks if mt.status == "completed"]`  
->   (only **successful** meta-task IDs — this is the existing contract)
-> - `OrchestrationResponse.agent_messages` = `result.agent_messages`
-> - HTTP status = `207` if `result.partial_success and result.failed_count > 0` else `200`
->
-> Golden tests MUST assert that `meta_task_ids` excludes failed tasks.
-
-### 4.7 HubRuntimeBridge Protocols
+### 4.6 HubRuntimeBridge Protocols
 
 ```python
 # common/protocols/hub_protocols.py
@@ -797,6 +728,10 @@ class HubManagement(Protocol):
     async def list_hubs(self, owner_id: str) -> list[HubInfo]: ...
     async def connect_hub_stream(self, hub_id: str) -> AsyncIterator[dict]: ...
     async def publish_from_hub(self, hub_id: str, payload: dict) -> None: ...
+    async def start_heartbeat_monitor(self) -> None: ...
+        """Start background heartbeat monitor for hub liveness detection."""
+    async def stop(self) -> None: ...
+        """Stop heartbeat monitor and clean up hub state."""
 
 
 @runtime_checkable
@@ -807,7 +742,7 @@ class HubLivenessReader(Protocol):
     async def get_hub_owner_id(self, hub_id: str) -> str | None: ...
 ```
 
-### 4.8 Platform Module Protocols
+### 4.7 Platform Module Protocols
 
 ```python
 # common/protocols/platform_protocols.py
@@ -844,7 +779,7 @@ class FileStorage(Protocol):
     async def list_for_room(self, room_id: str) -> list[FileInfo]: ...
 ```
 
-### 4.9 Adapter Layer Protocols
+### 4.8 Adapter Layer Protocols
 
 ```python
 # common/protocols/a2a_protocols.py
@@ -876,7 +811,7 @@ class AgentCardResolver(Protocol):
 
 @runtime_checkable
 class LLMProvider(Protocol):
-    """Unified LLM invocation — used by Execution, Context & Memory, Agent, Workflow."""
+    """Unified LLM invocation — used by Execution, Context & Memory, Agent."""
 
     async def generate(
         self, messages: list[dict], model: str | None = None, **kwargs
@@ -929,23 +864,34 @@ class ModelInfo(BaseModel):
     embedding_dimensions: int | None = None
 ```
 
-### 4.10 DAL Protocols (B4 fix: split by concern)
+### 4.9 DAL Protocols (B4 fix: split by concern)
+
+#### 4.9.1 MongoDB — Two-Layer Design
+
+The DAL exposes MongoDB at **two granularity levels**:
+
+1. **`MongoDAL` + `MongoCollection`** — generic collection access for module-internal repositories
+2. **Domain-scoped Repository Protocols** — typed, query-encapsulating Protocols per bounded context
+
+Modules MUST use domain-scoped repositories for their primary data access. The generic `MongoDAL` is available for ad-hoc queries, migrations, and cross-cutting concerns only.
 
 ```python
 # common/protocols/dal_protocols.py
 
 @runtime_checkable
 class MongoDAL(Protocol):
-    """MongoDB operations — used by module Repositories."""
+    """Low-level MongoDB access — used by domain Repository implementations internally.
+    Business modules should prefer domain-scoped Repository Protocols."""
 
     def collection(self, name: str) -> MongoCollection: ...
     async def connect(self) -> None: ...
     async def close(self) -> None: ...
+    async def ping(self) -> bool: ...
 
 
 @runtime_checkable
 class MongoCollection(Protocol):
-    """Single collection operations."""
+    """Single collection operations — implementation detail of Repository layer."""
 
     async def find_one(self, query: dict, **kwargs) -> dict | None: ...
     async def find(self, query: dict, **kwargs) -> list[dict]: ...
@@ -958,6 +904,112 @@ class MongoCollection(Protocol):
     async def count(self, query: dict) -> int: ...
     async def aggregate(self, pipeline: list[dict]) -> list[dict]: ...
     async def create_index(self, keys: list[tuple], **kwargs) -> str: ...
+    def watch(self, pipeline: list[dict] | None = None, **kwargs) -> AsyncIterator[dict]: ...
+```
+
+#### 4.9.2 Domain-Scoped Repository Protocols
+
+Each module owns a Repository Protocol that encapsulates its queries. This prevents cross-module raw query coupling and makes the data schema ownership explicit.
+
+```python
+# common/protocols/repository_protocols.py
+
+@runtime_checkable
+class AgentRepository(Protocol):
+    """Agent data access — owned by Agent module."""
+    async def get_by_id(self, agent_id: str) -> dict | None: ...
+    async def get_by_ids(self, agent_ids: list[str]) -> list[dict]: ...
+    async def get_by_provider(self, provider_id: str) -> list[dict]: ...
+    async def get_public(self, limit: int = 50) -> list[dict]: ...
+    async def upsert(self, agent_id: str, data: dict) -> None: ...
+    async def delete(self, agent_id: str) -> bool: ...
+    async def update_health(self, agent_id: str, healthy: bool) -> None: ...
+    async def mark_hub_agents_offline(self, hub_id: str) -> int: ...
+
+
+@runtime_checkable
+class RoomRepository(Protocol):
+    """Room data access — owned by Room module."""
+    async def get_by_id(self, room_id: str) -> dict | None: ...
+    async def get_by_owner(self, owner_id: str) -> list[dict]: ...
+    async def create(self, room: dict) -> str: ...
+    async def update(self, room_id: str, updates: dict) -> bool: ...
+    async def delete(self, room_id: str) -> bool: ...
+
+
+@runtime_checkable
+class MessageRepository(Protocol):
+    """Message data access — owned by Room module."""
+    async def save_user_message(self, message: dict) -> str: ...
+    async def save_agent_message(self, message: dict) -> str: ...
+    async def get_by_id(self, message_id: str) -> dict | None: ...
+    async def get_by_ids(self, message_ids: list[str]) -> list[dict]: ...
+    async def get_for_room(self, room_id: str, limit: int, before: datetime | None = None) -> list[dict]: ...
+    async def get_thread(self, parent_message_id: str) -> list[dict]: ...
+    async def update_status(self, message_id: str, status: str, **fields) -> bool: ...
+
+
+@runtime_checkable
+class RunRepository(Protocol):
+    """Run data access — owned by Execution module."""
+    async def create(self, run: dict) -> str: ...
+    async def get_by_id(self, run_id: str) -> dict | None: ...
+    async def get_for_room(self, room_id: str) -> list[dict]: ...
+    async def update_state(self, run_id: str, state: str, **fields) -> bool: ...
+    async def get_diverged(self, limit: int) -> list[dict]: ...
+
+
+@runtime_checkable
+class RunEventRepository(Protocol):
+    """Run event data access — owned by Execution module."""
+    async def append(self, run_id: str, event: dict) -> str: ...
+    async def get_for_run(self, run_id: str) -> list[dict]: ...
+    async def get_latest(self, run_id: str) -> dict | None: ...
+
+
+@runtime_checkable
+class HITLRepository(Protocol):
+    """HITL request data access — owned by Execution module."""
+    async def create(self, request: dict) -> str: ...
+    async def get_by_id(self, request_id: str) -> dict | None: ...
+    async def get_pending_for_room(self, room_id: str) -> list[dict]: ...
+    async def resolve(self, request_id: str, response: dict) -> bool: ...
+
+
+@runtime_checkable
+class MemoryRepository(Protocol):
+    """Memory data access — owned by Context & Memory module."""
+    async def get_room_memory(self, room_id: str) -> dict | None: ...
+    async def upsert_room_memory(self, room_id: str, memory: dict) -> None: ...
+    async def get_user_memories(self, user_id: str) -> list[dict]: ...
+    async def delete_room_memory(self, room_id: str) -> bool: ...
+
+
+@runtime_checkable
+class HubRepository(Protocol):
+    """Hub data access — owned by HubRuntimeBridge module."""
+    async def get_by_id(self, hub_id: str) -> dict | None: ...
+    async def get_by_owner(self, owner_id: str) -> list[dict]: ...
+    async def upsert(self, hub_id: str, data: dict) -> None: ...
+    async def update_heartbeat(self, hub_id: str) -> None: ...
+    async def get_stale(self, threshold: datetime) -> list[dict]: ...
+```
+
+**Relationship between layers:**
+- `MongoDAL` → provides raw `MongoCollection` access
+- Domain Repositories → implemented using `MongoDAL.collection(name)` internally
+- Business facades → depend on Repository Protocols (not MongoDAL directly)
+- One Repository implementation per module, living in `<module>/repository/`
+
+**Why `dict` return types (fix 2.7):** Repository Protocols intentionally return `dict` (not typed
+Document models) because:
+1. The current MongoDB schema is implicit — introducing typed documents is a separate migration
+2. Facades already validate/transform via DTOs; adding validation at Repository doubles the cost
+3. Protocol consumers see only the facade's typed DTOs, never raw dicts
+
+This is a deliberate tradeoff: type safety lives at the **facade boundary** (Repository → DTO
+transform), not at the Repository wire. If schema is later formalized, Repository methods can be
+updated to return typed models without changing Protocol consumers (facades absorb the change).
 
 
 @runtime_checkable
@@ -970,6 +1022,7 @@ class RedisKV(Protocol):
     async def increment(self, key: str, amount: int = 1) -> int: ...
     async def setnx(self, key: str, value: str, ttl: int) -> bool: ...
     async def exists(self, key: str) -> bool: ...
+    async def ping(self) -> bool: ...
     async def close(self) -> None: ...
 
 
@@ -979,6 +1032,7 @@ class RedisPubSub(Protocol):
 
     async def publish(self, channel: str, message: str) -> None: ...
     async def subscribe(self, channel: str) -> AsyncIterator[str]: ...
+    async def ping(self) -> bool: ...
     async def close(self) -> None: ...
 
 
@@ -988,6 +1042,7 @@ class RedisStreams(Protocol):
 
     async def xadd(self, stream: str, fields: dict, maxlen: int | None = None) -> str: ...
     async def xread(self, streams: dict, block: int = 0, count: int = 100) -> list[dict]: ...
+    async def ping(self) -> bool: ...
     async def close(self) -> None: ...
 
 
@@ -1001,6 +1056,7 @@ class VectorDAL(Protocol):
 
     async def upsert(self, index: str, records: list[VectorRecord]) -> None: ...
     async def delete(self, index: str, ids: list[str]) -> None: ...
+    async def ping(self) -> bool: ...
 
 
 @runtime_checkable
@@ -1049,7 +1105,7 @@ class IndexRegistry(Protocol):
 ```
 execution/
 ├── __init__.py
-├── facade.py                      # ExecutionFacade: implements ExecutionEngine + HITLManager + AgentEventSink
+├── facade.py                      # ExecutionFacade: implements ExecutionEngine + HITLManager + HubAgentResponseSink
 ├── ports.py                       # Internal Protocols (module-private)
 │
 ├── orchestrator/                  # Supervisor loop, debate, queue execution
@@ -1161,42 +1217,45 @@ Orchestrator: agent response arrives
 Delivery NEVER calls run_command_handler. It is a pure pipe.
 ```
 
+### 5.5 In-Flight Task Tracking (fix 2.10)
+
+```python
+# execution/facade.py
+
+class ExecutionFacade:
+    def __init__(self, ...):
+        self._inflight: set[asyncio.Task] = set()
+        self._owned_hub_tasks: dict[str, str] = {}  # task_id → run_id (for hub response routing)
+
+    def _spawn_orchestration(self, coro: Coroutine, hub_task_id: str | None = None) -> asyncio.Task:
+        """Spawn a tracked background orchestration task."""
+        task = traced_create_task(coro, name=f"orchestrate-{uuid4().hex[:8]}")
+        self._inflight.add(task)
+        task.add_done_callback(self._inflight.discard)
+        if hub_task_id:
+            self._owned_hub_tasks[hub_task_id] = task.get_name()
+            task.add_done_callback(lambda _: self._owned_hub_tasks.pop(hub_task_id, None))
+        return task
+
+    async def cancel_inflight_tasks(self) -> int:
+        """Cancel all in-flight orchestration tasks. Called during graceful shutdown."""
+        count = len(self._inflight)
+        for t in self._inflight:
+            t.cancel()
+        await asyncio.gather(*self._inflight, return_exceptions=True)
+        # Each cancelled run transitions to RunState.CANCELED via orchestrator's
+        # CancelledError handler in supervisor_executor/queue_executor
+        return count
+```
+
+All background orchestrations (supervisor loop, queue execution, debate dispatch) MUST be
+created via `_spawn_orchestration`, never bare `asyncio.create_task`.
+
 ---
 
-## 6. Workflow Module Internal Architecture
+## 6. Application Shell & Lifespan
 
-```
-workflow/
-├── __init__.py
-├── facade.py                      # WorkflowFacade: implements WorkflowEngine
-├── service/
-│   ├── __init__.py
-│   ├── decomposer.py             # Task → MetaTasks via LLM
-│   ├── assigner.py                # MetaTask → Agent assignment
-│   ├── executor.py                # Workflow step execution (calls ExecutionEngine per meta-task)
-│   └── summarizer.py             # Result summarization
-├── repository/
-│   ├── __init__.py
-│   ├── task_repo.py               # base_tasks / meta_tasks persistence
-│   └── task_session_repo.py       # task_sessions persistence
-└── models.py
-```
-
-**Workflow vs Execution boundary:**
-
-| Aspect | Execution | Workflow |
-|--------|-----------|---------|
-| Storage | `runs`, `run_events`, `room_agent_messages` | `base_tasks`, `meta_tasks`, `task_sessions` |
-| State machine | RunState (queued→processing→completed/failed) | MetaTask ordering + dependency resolution |
-| HTTP response | 200 (ack) + SSE streaming | 200/207 (partial-success, synchronous) |
-| Orchestration | Supervisor loop (adaptive steps) | Sequential/parallel meta-task dispatch |
-| Memory | Room memory via ContextAssembler | Chat contexts via ChatContextManager |
-
----
-
-## 7. Application Shell & Lifespan
-
-### 7.1 Lifespan Sequence (A4, A5 fixes)
+### 6.1 Lifespan Sequence (A4, A5 fixes)
 
 ```python
 # main.py lifespan (pseudocode showing all phases)
@@ -1267,12 +1326,16 @@ async def lifespan(app: FastAPI):
     await container.hub.hub_management.stop()
     await container.delivery.event_publisher.stop()
     await container.dal.mongo.close()
-    await container.dal.redis_kv.close()
-    await container.dal.redis_pubsub.close()
-    await container.dal.redis_streams.close()
+    # Redis pools are Optional (None in single-worker no-redis mode)
+    if container.dal.redis_kv:
+        await container.dal.redis_kv.close()
+    if container.dal.redis_pubsub:
+        await container.dal.redis_pubsub.close()
+    if container.dal.redis_streams:
+        await container.dal.redis_streams.close()
 ```
 
-### 7.2 Sub-Container Design
+### 6.2 Sub-Container Design
 
 ```python
 # container.py
@@ -1320,19 +1383,13 @@ class ContextMemoryDeps:
     context_assembler: ContextAssembler
     memory_manager: MemoryManager
     memory_projector: MemoryProjector
-    chat_context_manager: ChatContextManager
 
 
 @dataclass(frozen=True)
 class ExecutionDeps:
     execution_engine: ExecutionEngine
     hitl_manager: HITLManager
-    agent_event_sink: AgentEventSink
-
-
-@dataclass(frozen=True)
-class WorkflowDeps:
-    workflow_engine: WorkflowEngine
+    hub_agent_response_sink: HubAgentResponseSink
 
 
 @dataclass(frozen=True)
@@ -1364,17 +1421,16 @@ class AppContainer:
     room: RoomDeps
     context_memory: ContextMemoryDeps
     execution: ExecutionDeps
-    workflow: WorkflowDeps
     delivery: DeliveryDeps
     hub: HubDeps
     platform: PlatformDeps
 ```
 
-### 7.3 Circular Dependency Resolution: Execution ⇆ Hub (N1 fix)
+### 6.3 Circular Dependency Resolution: Execution ⇆ Hub (N1 fix)
 
-**Problem:** `ExecutionFacade` needs `HubDispatchPort` (send to hub), and `HubFacade` needs `AgentEventSink` (hub publish → resume execution). This is a real bi-directional dependency from current `relay_service.publish_from_hub → RoomMessageCenter.resume_queue_from_continuation`.
+**Problem:** `ExecutionFacade` needs `HubDispatchPort` (send to hub), and `HubFacade` needs to resume execution (hub publish → orchestration continue). This is a real bi-directional dependency from current `relay_service.publish_from_hub → RoomMessageCenter.resume_queue_from_continuation`.
 
-**Solution:** Hub does NOT hold a direct reference to `AgentEventSink`. Instead, Hub publishes through `EventPublisher.emit(HubAgentEvent(...))`, and Execution subscribes to that event type internally. This breaks the construction-time cycle.
+**Solution:** Hub does NOT hold a direct reference to Execution. Instead, Hub calls `EventPublisher.emit_internal(HubAgentResponseInternal(...))` for orchestration resume, and separately `emit(HubAgentEvent(...))` for frontend SSE. Execution subscribes to `HubAgentResponseInternal` via an internal handler registered post-construction. This breaks the construction-time cycle.
 
 ```python
 # container.py — create_container() wiring order
@@ -1393,38 +1449,33 @@ async def create_container(settings: Settings) -> AppContainer:
     context_memory = _create_context_memory(dal, adapters, room.room_history_reader)
 
     # --- Phase D: Hub (depends on Agent, Delivery — NOT Execution) ---
-    # Hub publishes agent events via EventPublisher (delivery.event_publisher),
-    # NOT via AgentEventSink. This breaks Execution ⇆ Hub cycle.
+    # Hub publishes via EventPublisher.emit_internal (delivery.event_publisher),
+    # NOT via direct reference to Execution. This breaks Execution ⇆ Hub cycle.
     hub = _create_hub(dal, adapters, agent.agent_registry_writer, delivery.event_publisher)
 
-    # --- Phase E: Execution (depends on everything above, subscribes to HubAgentEvent) ---
+    # --- Phase E: Execution (depends on everything above, subscribes to HubAgentResponseInternal) ---
     execution = _create_execution(
         dal, adapters, agent.agent_registry, room.room_message_store,
         context_memory.context_assembler, delivery.event_publisher,
         hub.hub_dispatch,  # Execution → Hub (one-way, no cycle)
     )
-    # Execution registers internal listener for HubAgentEvent on the event bus
+    # Execution subscribes to internal hub response events
     delivery.event_publisher.register_internal_handler(
-        "hub_agent_event", execution.agent_event_sink.handle_agent_event
+        "hub_agent_response_internal",
+        execution.hub_agent_response_sink.handle_hub_agent_response,
     )
 
-    # --- Phase F: Workflow (depends on Execution, Agent, C&M) ---
-    workflow = _create_workflow(
-        dal, adapters, execution.execution_engine,
-        agent.agent_matcher, context_memory.chat_context_manager,
-    )
-
-    # --- Phase G: Platform (depends on Agent, Execution, Delivery) ---
+    # --- Phase F: Platform (depends on Agent, Execution, Delivery) ---
     platform = _create_platform(dal, adapters, agent.agent_registry, execution.execution_engine)
 
     return AppContainer(
         dal=dal, adapters=adapters, agent=agent, room=room,
         context_memory=context_memory, execution=execution,
-        workflow=workflow, delivery=delivery, hub=hub, platform=platform,
+        delivery=delivery, hub=hub, platform=platform,
     )
 ```
 
-**Key insight:** `HubFacade.publish_from_hub()` calls `event_publisher.emit(HubAgentEvent(...))` instead of directly calling `AgentEventSink`. Execution subscribes to `HubAgentEvent` via an internal handler registered post-construction. This is consistent with the existing event-driven pattern and eliminates the bidirectional compile-time dependency.
+**Key insight:** `HubFacade.publish_from_hub()` emits **two events**: (1) `event_publisher.emit(HubAgentEvent(...))` for frontend SSE delivery (partial/status updates), and (2) `event_publisher.emit_internal(HubAgentResponseInternal(...))` for orchestration resume. Execution subscribes to `HubAgentResponseInternal` via an internal handler registered post-construction. This eliminates the bidirectional compile-time dependency while preserving the separation of frontend-visible events from orchestration signals.
 
 **EventPublisher extension for internal handlers:**
 
@@ -1440,20 +1491,36 @@ class EventPublisherImpl:
         self._internal_handlers.setdefault(event_type, []).append(handler)
 
     async def emit(self, event: DomainEvent) -> None:
-        # 1. Deliver to SSE clients (frontend)
-        await self._deliver_to_sse(event)
-        # 2. Fan-out to other workers (Redis Pub/Sub)
-        await self._fanout_cross_instance(event)
-        # 3. Dispatch to internal handlers (same worker)
+        """Exception contract: emit() NEVER raises to callers.
+        Business side effects are already committed before emit() is called (invariant 4).
+        All delivery failures are best-effort: logged + dead-lettered, never propagated.
+        Callers must not rely on emit() success for correctness.
+        """
+        # 1. Deliver to SSE clients (frontend) — best-effort
+        try:
+            await self._deliver_to_sse(event)
+        except Exception as exc:
+            logger.warning("sse_delivery_failed", event_type=event.event_type, error=str(exc))
+        # 2. Fan-out to other workers (Redis Pub/Sub) — best-effort
+        try:
+            await self._fanout_cross_instance(event)
+        except Exception as exc:
+            logger.error("fanout_failed", event_type=event.event_type, error=str(exc))
+            await self._dead_letter(event, exc)
+        # 3. Dispatch to internal handlers — best-effort
         for handler in self._internal_handlers.get(event.event_type, []):
-            await handler(event)
+            try:
+                await handler(event)
+            except Exception as exc:
+                logger.error("internal_handler_failed", event_type=event.event_type, error=str(exc))
+                await self._dead_letter(event, exc)
 ```
 
 ---
 
-## 8. Configuration Management (A8 fix)
+## 7. Configuration Management (A8 fix)
 
-### 8.1 Config Unification Strategy
+### 7.1 Config Unification Strategy
 
 **Current problem:** 30+ `os.getenv()` calls scattered across services, some with defaults that shadow Settings fields. Settings model has fields with `""` defaults that silently produce empty strings instead of failing.
 
@@ -1516,7 +1583,7 @@ class Settings(BaseSettings):
 - All existing `os.getenv` calls migrated to Settings fields with matching env var names
 - Unit test: `test_settings_loads_from_env()` with all required vars
 
-### 8.2 Module-Scoped Config Access
+### 7.2 Module-Scoped Config Access
 
 Modules receive only their relevant settings section (not the full Settings object):
 
@@ -1531,9 +1598,9 @@ agent_config = AgentConfig(
 
 ---
 
-## 9. Migration Strategy
+## 8. Migration Strategy
 
-### 9.1 Three-Layer Defense
+### 8.1 Three-Layer Defense
 
 #### Layer 1: Contract Freeze
 
@@ -1579,7 +1646,6 @@ For each endpoint migrated:
 |----------|------------|-----------------|
 | `POST /roomCenter/sendMessage` | Core path; triggers run + SSE + dispatch | Shadow read path only (skip dispatch) |
 | `POST /hitl/resolve` | Resumes supervisor; state machine | Shadow state check only |
-| `POST /orchestrationCenter/runWorkflow` | Multi-step; HTTP 207 | Shadow decompose only |
 | `GET /sse/subscribe` | Streaming; event ordering | Dual-emit to shadow connection |
 | `POST /relay/hub/{id}/publish` | Hub → Cloud; multi-module | Shadow validation only |
 
@@ -1590,10 +1656,12 @@ Rules:
 - No dual writes — shadow skips side effects
 - Remove after 1 week stable with zero drift
 
-### 9.2 Migration Phases (C1 fix: realistic timeline)
+### 8.2 Migration Phases (C1 fix: realistic timeline)
 
 > **Total estimated: 18-22 weeks** (vs original 9 weeks)  
 > Strategy: "Facade wrap first, internal rewrite second" — each phase has a wrap sub-phase (fast, low risk) and a rewrite sub-phase (slower, needs golden tests).
+>
+> **Repository implementation:** Domain-scoped Repository Protocols (§4.9.2) are implemented as part of each business module phase. Phase 3 includes `AgentRepository` impl in `agent/repository/`; Phase 4 includes `RoomRepository` + `MessageRepository`; Phase 5 includes `MemoryRepository`; Phase 6+7 includes `RunRepository` + `RunEventRepository` + `HITLRepository`; Phase 8 includes `HubRepository`.
 
 #### Phase 0a: Common Foundation (1 week)
 
@@ -1622,6 +1690,21 @@ Rules:
 - No code changes — documentation and process only
 
 **Gate:** Checklist exists and reviewed by frontend team.
+
+#### Phase 0d: Legacy Workflow Decommission (1 week)
+
+- Coordinate with frontend to remove all UI dependencies on:
+  - `POST /orchestrationCenter/runWorkflow`
+  - `POST /orchestrationCenter/retryMetaTask`
+  - `POST /orchestrationCenter/summarizeMetaTaskForBaseTask`
+  - `GET /task/queryTask`, `GET /task/queryBaseTask`, `GET /task/getAllSessions`
+  - `GET /task/getBaseTasksBySessionId`, `GET /task/getMetaTasksByParentTaskId`
+- Remove `api/orchestration_center.py`, `api/task.py`
+- Remove `modules/WorkflowCenter.py`, `services/task_service.py`
+- 4-week deprecation window: endpoints return 410 Gone with deprecation message
+- Drop `base_tasks`, `meta_tasks`, `task_sessions`, `chat_contexts` collections in Phase 8 cleanup
+
+**Gate:** Frontend deployed without workflow endpoints. 410 responses confirmed for 4 weeks. No production traffic.
 
 #### Phase 1: DAL (2 weeks)
 
@@ -1665,7 +1748,7 @@ Rules:
 
 #### Phase 5: Context & Memory (1.5 weeks)
 
-- `context_memory/facade.py` implementing ContextAssembler, MemoryManager, ChatContextManager, MemoryProjector
+- `context_memory/facade.py` implementing ContextAssembler, MemoryManager, MemoryProjector
 - Token budgeting logic preserved exactly
 - Compaction logic preserved
 - Domain event listener for `MessageCommitted`
@@ -1702,15 +1785,14 @@ Rules:
 
 **Gate:** Full message flow end-to-end. HITL pause/resume. Shadow mode zero drift. No `run_command_handler` calls from Delivery.
 
-#### Phase 8: Workflow + HubRuntimeBridge (2.5 weeks)
+#### Phase 8: HubRuntimeBridge (2 weeks)
 
-- `workflow/facade.py` implementing WorkflowEngine
-- HTTP 207 partial-success preserved
 - `hub_runtime_bridge/facade.py` implementing HubDispatchPort, HubManagement, HubLivenessReader
 - Hub → Agent sync via AgentRegistryWriter
-- Hub → Execution via AgentEventSink
+- Hub → Execution via internal event (HubAgentResponseInternal)
+- Drop legacy workflow collections (`base_tasks`, `meta_tasks`, `task_sessions`, `chat_contexts`)
 
-**Gate:** Workflow decompose/assign/run returns 207. Hub relay works. Agent sync via Protocol.
+**Gate:** Hub relay works. Agent sync via Protocol. Legacy collections dropped.
 
 #### Phase 9: Platform + API Layer + Cleanup (2 weeks)
 
@@ -1723,7 +1805,7 @@ Rules:
 
 **Gate:** CI green. No old code. Import linter passes all contracts.
 
-### 9.3 Migration Adapter Pattern (C3 fix)
+### 8.3 Migration Adapter Pattern (C3 fix)
 
 During transition, old singletons delegate to new facades:
 
@@ -1756,7 +1838,7 @@ class AgentService:
 
 ---
 
-## 10. Feature Mapping
+## 9. Feature Mapping
 
 | Feature | Current Location | Target Module | Target Component |
 |---------|-----------------|---------------|-----------------|
@@ -1782,7 +1864,6 @@ class AgentService:
 | Memory compaction | `services/compaction_service.py` | Context & Memory | `service/compaction.py` |
 | Memory search | `services/memory_search_service.py` | Context & Memory | `service/memory_search.py` |
 | User memories | `services/memory_service.py` | Context & Memory | `service/user_memory.py` |
-| Chat contexts (workflow) | `services/memory_service.py` | Context & Memory | via `ChatContextManager` Protocol |
 | **Execution** | | | |
 | Message dispatch | `modules/RoomMessageCenter.py` | Execution | `orchestrator/` + `dispatch/` |
 | Supervisor loop | `modules/SupervisorExecutor.py` | Execution | `orchestrator/supervisor_executor.py` |
@@ -1796,12 +1877,8 @@ class AgentService:
 | heal_diverged_runs_on_startup | `main.py` | Execution | `run/lifecycle.py` (exposed via Protocol) |
 | A2A long-running tasks | `api/a2a_tasks.py` | Execution (API) | `api/a2a_task_routes.py` |
 | Webhooks | `api/webhooks.py` | Execution (API) | `api/webhook_routes.py` |
-| **Workflow** (separate from Execution) | | | |
-| Task decomposition | `modules/WorkflowCenter.py` | Workflow | `service/decomposer.py` |
-| Task assignment | `modules/WorkflowCenter.py` | Workflow | `service/assigner.py` |
-| Workflow execution (207) | `modules/WorkflowCenter.py` | Workflow | `service/executor.py` |
-| Task CRUD | `services/task_service.py` | Workflow | `repository/task_repo.py` |
-| Workflow summarization | `modules/WorkflowCenter.py` | Workflow | `service/summarizer.py` |
+| **Legacy Workflow** (DECOMMISSIONED — see Phase 0d) | | | |
+| Task decomposition / assignment / execution / CRUD | `modules/WorkflowCenter.py`, `services/task_service.py`, `api/orchestration_center.py`, `api/task.py` | DELETED | Endpoints removed; collections dropped in Phase 8 cleanup |
 | **Delivery** | | | |
 | SSE broadcasting | `services/sse_services.py` | Delivery | `sse/manager.py` |
 | SSE connections | `services/sse_services.py` | Delivery | `sse/connection.py` |
@@ -1848,7 +1925,7 @@ class AgentService:
 
 ---
 
-## 11. Invariants
+## 10. Invariants
 
 1. **No module imports another module's internal code** — only Protocols and DTOs from `common/`
 2. **`container.py` is the ONLY place that imports concrete implementations** across module boundaries
@@ -1868,25 +1945,216 @@ class AgentService:
 16. **Run head must be healed from events on startup** before serving traffic (A5)
 17. **Graceful shutdown must set_draining(True) and sleep shutdown_drain_seconds** before closing connections
 18. **Startup failure must NOT set_draining** — prevents singleton state poisoning on partial init
-19. **WorkflowEngine operates on base_tasks/meta_tasks** — never touches runs/run_events (B2)
-20. **Discovery API (X-API-Key) does NOT filter by visibility** — any indexed agent discoverable (B3)
+19. **Discovery API (X-API-Key) does NOT filter by visibility** — any indexed agent discoverable (B3)
 21. **Graceful shutdown must cancel in-flight background orchestration tasks** — `asyncio.create_task`-spawned orchestrations must be tracked and cancelled during shutdown; cancelled runs transition to `RunState.CANCELED` (N10)
 22. **`heal_diverged_runs(limit=500)` is best-effort at startup** — runs beyond the limit are caught by `StaleTaskCheckerJob._fail_stale_runs` (RUN_WATCHDOG_STALE_MINUTES=90) as a fallback (N10)
 
 ---
 
-## 12. Import Enforcement
+## 11. Error Handling and Propagation
+
+### 11.1 Error Hierarchy
+
+```python
+# common/errors/base.py
+
+class HybroError(Exception):
+    """Base for all application errors. Every Protocol method raises ONLY subtypes of this."""
+    def __init__(self, message: str, code: str, details: dict | None = None):
+        self.message = message
+        self.code = code
+        self.details = details or {}
+        super().__init__(message)
+
+class NotFoundError(HybroError):
+    """Entity does not exist (maps to HTTP 404)."""
+    def __init__(self, entity_type: str, entity_id: str):
+        super().__init__(f"{entity_type} {entity_id} not found", "NOT_FOUND",
+                         {"entity_type": entity_type, "entity_id": entity_id})
+
+class ConflictError(HybroError):
+    """Optimistic concurrency failure or duplicate (maps to HTTP 409)."""
+
+class ValidationError(HybroError):
+    """Business rule violation (maps to HTTP 422)."""
+
+class PermissionError(HybroError):
+    """Caller lacks permission for this operation (maps to HTTP 403)."""
+
+class TransientError(HybroError):
+    """Retryable failure — downstream timeout, connection lost (maps to HTTP 503)."""
+    def __init__(self, message: str, retry_after: int | None = None, **kwargs):
+        super().__init__(message, "TRANSIENT", **kwargs)
+        self.retry_after = retry_after
+
+class UpstreamError(HybroError):
+    """Non-retryable upstream failure — LLM refused, A2A agent errored (maps to HTTP 502)."""
+```
+
+### 11.2 Propagation Rules
+
+| Layer | Catches | Raises / Propagates |
+|-------|---------|---------------------|
+| **DAL** | Driver exceptions (pymongo, redis-py) | Wraps as `TransientError` (connection) or re-raises as `HybroError` subtype |
+| **Adapter** (A2A, LLM) | SDK exceptions, HTTP errors | Wraps as `UpstreamError` or `TransientError` (timeout) |
+| **Business Module** | `HybroError` subtypes from dependencies | Raises its own `HybroError` subtypes; NEVER catches and swallows silently |
+| **API Layer** | All `HybroError` subtypes | Maps to HTTP response via `error_handler` middleware |
+| **EventPublisher** | Handler exceptions | Logs + emits to dead-letter; does NOT propagate to emitter (fire-and-forget) |
+
+### 11.3 API Layer Error Mapping
+
+```python
+# api/error_handler.py
+
+ERROR_STATUS_MAP: dict[str, int] = {
+    "NOT_FOUND": 404,
+    "CONFLICT": 409,
+    "VALIDATION": 422,
+    "PERMISSION": 403,
+    "TRANSIENT": 503,
+    "UPSTREAM": 502,
+}
+
+@app.exception_handler(HybroError)
+async def hybro_error_handler(request: Request, exc: HybroError) -> JSONResponse:
+    status = ERROR_STATUS_MAP.get(exc.code, 500)
+    return JSONResponse(
+        status_code=status,
+        content={"error": exc.code, "message": exc.message, "details": exc.details},
+    )
+```
+
+### 11.4 Cross-Module Error Contracts
+
+- Protocol methods document which `HybroError` subtypes they may raise in docstrings
+- A module MUST NOT catch errors from another module's Protocol to silently succeed — callers propagate or explicitly translate to their own error type
+- `EventPublisher.emit()` NEVER raises to callers — internal failures go to dead-letter topic + structured log
+- Background jobs catch `TransientError` for retry, log `HybroError` as warning, and propagate unknown exceptions as fatal
+
+---
+
+## 12. Observability
+
+### 12.1 Structured Logging
+
+```python
+# common/observability/logging.py
+
+import structlog
+
+def configure_logging(settings: "Settings"):
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.JSONRenderer(),
+        ],
+    )
+```
+
+**Conventions:**
+- Every log line includes: `module`, `operation`, `room_id` (if applicable), `run_id` (if applicable), `trace_id`
+- Log levels: `DEBUG` for internal state transitions, `INFO` for cross-module calls, `WARNING` for recoverable errors, `ERROR` for unrecoverable
+- No string formatting in hot paths — use structlog lazy binding
+
+### 12.2 Distributed Tracing (OpenTelemetry)
+
+```python
+# common/observability/tracing.py
+
+from opentelemetry import trace
+
+tracer = trace.get_tracer("hybro-multi-agents")
+```
+
+**Span hierarchy per request:**
+
+```
+[API] POST /roomCenter/sendMessage
+  └── [Execution] execute()
+        ├── [Room] save_user_message()
+        ├── [Execution] create_run()
+        ├── [Execution] orchestrate() (background — linked span)
+        │     ├── [ContextMemory] assemble_context()
+        │     ├── [A2A] send_message() / [Hub] send_to_hub()
+        │     ├── [Execution] record_processing_status()
+        │     └── [Delivery] emit(ProcessingStatusEvent)
+        └── [API] return ExecutionAck
+```
+
+**Rules:**
+- Each module facade method creates a span with `module.<method>` name
+- Cross-module Protocol calls propagate trace context automatically (in-process)
+- Background tasks MUST use `traced_create_task()` helper (OTel context does NOT auto-propagate across `asyncio.create_task`):
+  ```python
+  # common/observability/tracing.py
+  def traced_create_task(coro, *, name: str | None = None) -> asyncio.Task:
+      """Create asyncio task with OTel context propagation + link to parent span."""
+      ctx = context.get_current()
+      parent_span = trace.get_current_span()
+      async def _wrapped():
+          token = context.attach(ctx)
+          try:
+              with tracer.start_as_current_span(name or coro.__name__, links=[Link(parent_span.get_span_context())]):
+                  return await coro
+          finally:
+              context.detach(token)
+      return asyncio.create_task(_wrapped(), name=name)
+  ```
+- **Invariant:** All `asyncio.create_task` calls within facades MUST use `traced_create_task()` — bare `create_task` produces orphan spans
+- EventPublisher includes `trace_id` in event payload for cross-worker correlation
+- DAL spans: `dal.mongo.<collection>.<operation>`, `dal.redis.<pool>.<command>`
+
+### 12.3 Key Metrics
+
+| Metric | Type | Labels | Source Module |
+|--------|------|--------|---------------|
+| `hybro_execution_run_duration_seconds` | Histogram | `room_id`, `mode`, `state` | Execution |
+| `hybro_execution_runs_active` | Gauge | `worker_id` | Execution |
+| `hybro_delivery_sse_connections` | Gauge | `worker_id` | Delivery |
+| `hybro_delivery_events_emitted_total` | Counter | `event_type` | Delivery |
+| `hybro_delivery_events_deduplicated_total` | Counter | `event_type` | Delivery |
+| `hybro_llm_request_duration_seconds` | Histogram | `provider`, `model`, `operation` | LLM Gateway |
+| `hybro_llm_tokens_total` | Counter | `provider`, `model`, `direction` | LLM Gateway |
+| `hybro_a2a_request_duration_seconds` | Histogram | `agent_id`, `transport` | A2A Adapter |
+| `hybro_hub_dispatch_duration_seconds` | Histogram | `hub_id` | HubRuntimeBridge |
+| `hybro_hub_connections_active` | Gauge | — | HubRuntimeBridge |
+| `hybro_dal_operation_duration_seconds` | Histogram | `backend`, `operation` | DAL |
+| `hybro_hitl_pending_total` | Gauge | `room_id` | Execution |
+
+### 12.4 Health Check Endpoint
+
+```python
+# api/health.py — /health (unauthenticated)
+
+async def health_check(container: AppContainer) -> dict:
+    return {
+        "status": "healthy",
+        "checks": {
+            "mongo": await container.dal.mongo.ping(),
+            "redis_kv": container.dal.redis_kv is not None and await container.dal.redis_kv.ping(),
+            "redis_pubsub": container.dal.redis_pubsub is not None and await container.dal.redis_pubsub.ping(),
+            "redis_streams": container.dal.redis_streams is not None and await container.dal.redis_streams.ping(),
+            "vector": await container.dal.vector.ping(),
+        },
+    }
+```
+
+---
+
+## 13. Import Enforcement
 
 ```toml
 # pyproject.toml
 [tool.import-linter]
-root_packages = ["common", "dal", "a2a_adapter", "llm_gateway", "agent", "room", "context_memory", "execution", "workflow", "delivery", "platform", "hub_runtime_bridge", "jobs", "api"]
+root_packages = ["common", "dal", "a2a_adapter", "llm_gateway", "agent", "room", "context_memory", "execution", "delivery", "platform", "hub_runtime_bridge", "jobs", "api"]
 
 [[tool.import-linter.contracts]]
 name = "Common has no dependencies"
 type = "forbidden"
 source_modules = ["common"]
-forbidden_modules = ["dal", "a2a_adapter", "llm_gateway", "agent", "room", "context_memory", "execution", "workflow", "delivery", "platform", "hub_runtime_bridge", "jobs", "api"]
+forbidden_modules = ["dal", "a2a_adapter", "llm_gateway", "agent", "room", "context_memory", "execution", "delivery", "platform", "hub_runtime_bridge", "jobs", "api"]
 
 [[tool.import-linter.contracts]]
 name = "DAL depends only on Common"
@@ -1897,51 +2165,45 @@ layers = ["dal", "common"]
 name = "Adapters depend only on DAL and Common"
 type = "forbidden"
 source_modules = ["a2a_adapter", "llm_gateway"]
-forbidden_modules = ["agent", "room", "context_memory", "execution", "workflow", "delivery", "platform", "hub_runtime_bridge", "jobs", "api"]
+forbidden_modules = ["agent", "room", "context_memory", "execution", "delivery", "platform", "hub_runtime_bridge", "jobs", "api"]
 
 [[tool.import-linter.contracts]]
 name = "Business modules never import each other's internals"
 type = "independence"
-modules = ["agent", "room", "context_memory", "execution", "workflow", "delivery", "platform", "hub_runtime_bridge"]
+modules = ["agent", "room", "context_memory", "execution", "delivery", "platform", "hub_runtime_bridge"]
 ignore_imports = ["common", "dal", "a2a_adapter", "llm_gateway"]
 
 [[tool.import-linter.contracts]]
 name = "No module imports container"
 type = "forbidden"
-source_modules = ["common", "dal", "a2a_adapter", "llm_gateway", "agent", "room", "context_memory", "execution", "workflow", "delivery", "platform", "hub_runtime_bridge", "jobs"]
+source_modules = ["common", "dal", "a2a_adapter", "llm_gateway", "agent", "room", "context_memory", "execution", "delivery", "platform", "hub_runtime_bridge", "jobs"]
 forbidden_modules = ["container"]
 
 [[tool.import-linter.contracts]]
 name = "A2A SDK confined to adapter"
 type = "forbidden"
-source_modules = ["agent", "room", "context_memory", "execution", "workflow", "delivery", "platform", "hub_runtime_bridge", "jobs", "api"]
+source_modules = ["agent", "room", "context_memory", "execution", "delivery", "platform", "hub_runtime_bridge", "jobs", "api"]
 forbidden_modules = ["a2a"]
 
 [[tool.import-linter.contracts]]
 name = "LLM SDKs confined to gateway"
 type = "forbidden"
-source_modules = ["agent", "room", "context_memory", "execution", "workflow", "delivery", "platform", "hub_runtime_bridge", "jobs", "api"]
+source_modules = ["agent", "room", "context_memory", "execution", "delivery", "platform", "hub_runtime_bridge", "jobs", "api"]
 forbidden_modules = ["openai", "google.genai", "aioboto3"]
-
-[[tool.import-linter.contracts]]
-name = "No os.getenv outside config"
-type = "forbidden"
-source_modules = ["agent", "room", "context_memory", "execution", "workflow", "delivery", "platform", "hub_runtime_bridge", "jobs", "api", "dal", "a2a_adapter", "llm_gateway"]
-forbidden_modules = []
-# NOTE: This contract is supplemented by AST scan (import-linter can't check function calls)
 ```
 
-**Additional AST scan (CI):**
+**AST scan (CI) — replaces the no-op import-linter contract (fix 2.8):**
 ```python
 # scripts/check_no_getenv.py
 # Fails CI if os.getenv() found outside common/config/settings.py
+# import-linter cannot check function calls — only this AST scan enforces the rule.
 ```
 
 ---
 
-## 13. Testing Strategy
+## 14. Testing Strategy
 
-### 13.1 Unit Tests (Per Module, Mocked Protocols)
+### 14.1 Unit Tests (Per Module, Mocked Protocols)
 
 ```python
 # tests/unit/execution/test_supervisor_executor.py
@@ -1968,7 +2230,7 @@ async def test_supervisor_pauses_on_hitl(mock_deps):
     mock_deps["event_publisher"].emit.assert_called_once()
 ```
 
-### 13.2 Integration Tests
+### 14.2 Integration Tests
 
 ```python
 # tests/integration/conftest.py
@@ -1985,7 +2247,7 @@ async def container():
         await c.dal.mongo.close()
 ```
 
-### 13.3 Golden Tests (Contract Freeze)
+### 14.3 Golden Tests (Contract Freeze)
 
 ```python
 # tests/golden/test_send_message_contract.py
@@ -2022,7 +2284,7 @@ async def test_send_message_response_contract(client, seeded_room):
 
 ---
 
-## 14. Key Design Decisions
+## 15. Key Design Decisions
 
 | # | Decision | Rationale | Alternative |
 |---|----------|-----------|-------------|
@@ -2038,14 +2300,19 @@ async def test_send_message_response_contract(client, seeded_room):
 | 10 | Redis split: KV / PubSub / Streams | Blocking XREAD can't share pool | Single pool (blocking risk) |
 | 11 | DistributedLock ≠ LeaderElector | Different TTL/semantics/lifecycle | Single lock abstraction |
 | 12 | Three-layer migration defense | Proportional protection | Single strategy |
-| 13 | Execution and Workflow are separate modules | Different storage, lifecycle, HTTP semantics | Combined (lifecycle contamination) |
+| 13 | Legacy Workflow deleted, not wrapped | Zero value wrapping dead code; saves ~1.5 weeks dev + ongoing maintenance | Wrap (cost with no benefit) |
 | 14 | Execution owns record_processing_status | Delivery must be pure transport | Delivery calls back (violates Rule 6) |
 | 15 | IndexRegistry centralized | Startup ordering constraint (heal needs indexes) | Per-module init (ordering unclear) |
 | 16 | Config unification in Phase 0b | Silent breakage risk from env var mismatch | Defer (risk accumulates) |
+| 17 | Domain-scoped Repository Protocols | Prevent cross-module raw query coupling; explicit schema ownership | Single generic MongoDAL (god interface) |
+| 18 | HybroError hierarchy for cross-module errors | Consistent error propagation without catching/re-raising SDK exceptions | Untyped exceptions (no contract) |
+| 19 | OpenTelemetry spans per facade method | Cross-module tracing impossible to retrofit; need upfront span design | Add later (orphan spans, lost context) |
+| 20 | Hub event split: frontend HubAgentEvent + internal HubAgentResponseInternal | Different payloads for different consumers; breaks dual-purpose coupling | Single event (payload mismatch) |
+| 21 | `traced_create_task()` mandatory for background orchestration | OTel context doesn't auto-propagate; bare create_task → orphan spans | Manual context passing (error-prone) |
 
 ---
 
-## 15. Risk Analysis
+## 16. Risk Analysis
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|-----------|
@@ -2053,15 +2320,15 @@ async def test_send_message_response_contract(client, seeded_room):
 | Protocol proliferation | Low | Medium | Only at module boundaries + Execution internal seams |
 | Config migration breaks prod | Medium | High | Phase 0b AST scan + env validation test |
 | Redis pool split breaks existing behavior | Medium | Medium | Shadow mode on SSE endpoint |
-| Workflow/Execution boundary misidentified | Low | High | Golden test for HTTP 207 vs 200 contract |
 | MongoDB query ownership unclear (cross-collection) | Medium | Medium | Agent hydration uses HubLivenessReader Protocol |
 | Frontend desync on feature flag changes | Medium | High | Phase 0c lockstep checklist |
+| Frontend still using legacy workflow endpoints | Medium | High | Phase 0d frontend coordination + 4-week deprecation window (410 Gone) |
 | Migration timeline slips | High | Medium | Facade-first strategy; each phase independently shippable |
 | Testcontainers CI complexity | Low | Low | Docker-in-Docker CI setup documented |
 
 ---
 
-## 16. Compatibility with Future Architecture
+## 17. Compatibility with Future Architecture
 
 | Future Change | Enabled By | Module Touched |
 |--------------|-----------|----------------|
@@ -2072,6 +2339,140 @@ async def test_send_message_response_contract(client, seeded_room):
 | Multi-tenant isolation | Add tenant_id to DAL queries | DAL only |
 | New LLM provider | Add provider in `llm_gateway/providers/` | LLM Gateway only |
 | A2A protocol v2 | Update translators in `a2a_adapter/translators/` | A2A Adapter only |
+
+---
+
+## 18. Potential Future Protocol Additions
+
+> **Scope note:** These are Protocols that do NOT exist today and are NOT required for the
+> current decoupling (which preserves all existing features). They are documented here because
+> they represent the **hardest-to-retrofit seams** — the ones that require cross-module schema
+> changes if added later without advance planning. Including them as an appendix lets us verify
+> that the current module boundaries accommodate them without refactoring.
+>
+> **Rule:** Do NOT implement these now. Only add them when the feature they enable is actually built.
+>
+> **Terminology:** "Workflow" in this section refers to a future generic execution workflow engine (step graphs, parallel branches, conditional routing) — NOT the deleted legacy Workflow module (base_tasks/meta_tasks) removed in Phase 0d.
+
+### 18.1 Events Extensions
+
+```python
+class WorkflowProgressEvent(DomainEventBase):
+    """Step-level progress for workflow UI rendering."""
+    event_type: Literal["workflow_progress"] = "workflow_progress"
+    workflow_run_id: str
+    step_id: str
+    parent_step_id: str | None  # For parallel branch rendering (step tree)
+    agent_id: str | None
+    status: Literal["queued", "running", "completed", "failed", "skipped"]
+    artifact_ref: str | None  # Reference to StepArtifactStore
+
+class StepInfo(BaseModel):
+    """Step tree model — steps carry parent for parallel branch visualization."""
+    step_id: str
+    parent_step_id: str | None
+    workflow_run_id: str
+    agent_id: str | None
+    instruction: str
+    status: str
+    depends_on: list[str] | None = None
+    artifacts: list[str] | None = None
+```
+
+**Accommodation check:** Adding `WorkflowProgressEvent` to the `DomainEvent` discriminated union is
+additive (no existing events change). Step tree is internal to Execution module storage (future
+step-based orchestration would live in Execution, not a separate Workflow module).
+
+### 18.2 SSE/Delivery Extensions
+
+```python
+class SSETransportV2(Protocol):
+    """Extended SSE with cross-room and topic-based subscriptions."""
+
+    async def subscribe_user(self, user_id: str, connection_id: str) -> AsyncIterator[dict]: ...
+        """Cross-room event stream for mission control / dashboard.
+        Aggregates events from all rooms the user owns."""
+
+    async def subscribe_topics(
+        self, topics: list[str], connection_id: str
+    ) -> AsyncIterator[dict]: ...
+        """Selective subscription for dashboard widgets.
+        Topics: 'runs:active', 'agents:health', 'hub:status', etc."""
+```
+
+**Accommodation check:** `SSETransport` Protocol is currently room-scoped. User-scoped and
+topic-scoped subscriptions require a routing layer in Delivery, but do NOT change any
+business module — Delivery already receives all events via `EventPublisher`.
+
+### 18.3 Artifacts
+
+```python
+@runtime_checkable
+class StepArtifactStore(Protocol):
+    """Query diffs, logs, reasoning traces by step_id.
+    Unspecified in current DAL — needs object storage + metadata index."""
+
+    async def store(self, step_id: str, artifact_type: str, data: bytes, metadata: dict) -> str: ...
+    async def get(self, artifact_id: str) -> ArtifactInfo | None: ...
+    async def list_for_step(self, step_id: str) -> list[ArtifactInfo]: ...
+    async def list_for_run(self, workflow_run_id: str) -> list[ArtifactInfo]: ...
+
+class ArtifactInfo(BaseModel):
+    artifact_id: str
+    step_id: str
+    workflow_run_id: str
+    artifact_type: str  # "reasoning_trace", "diff", "log", "output"
+    size_bytes: int
+    url: str  # Presigned URL from ObjectStorageDAL
+    created_at: datetime
+```
+
+**Accommodation check:** Lives in DAL layer (uses `ObjectStorageDAL` + metadata collection).
+Business modules reference artifacts by ID only.
+
+### 18.4 Cross-Cutting Queries
+
+```python
+@runtime_checkable
+class DashboardQueryService(Protocol):
+    """Cross-cutting read queries for operational dashboards.
+    Reads across module boundaries — lives in API layer, not a business module."""
+
+    async def get_active_runs_for_user(self, user_id: str) -> list[RunSummary]: ...
+    async def get_failed_runs(self, since: datetime, limit: int = 50) -> list[RunSummary]: ...
+    async def get_agent_health_summary(self) -> list[AgentHealthSummary]: ...
+    async def get_hub_status_overview(self) -> list[HubStatusSummary]: ...
+```
+
+**Accommodation check:** This is a read-only aggregation service that calls multiple module
+Protocols. It lives in the API layer (or a dedicated `dashboard/` module) and does NOT
+violate module independence — it consumes Protocol interfaces, not internal implementations.
+
+### 18.5 Plugin System
+
+```python
+@runtime_checkable
+class WorkflowTypeRegistry(Protocol):
+    """Pluggable workflow mechanism registration.
+    Enables third-party workflow types beyond supervisor/debate/queue."""
+
+    def register(self, workflow_type: str, factory: "WorkflowStepFactory") -> None: ...
+    def get_factory(self, workflow_type: str) -> "WorkflowStepFactory | None": ...
+    def list_types(self) -> list[str]: ...
+
+
+@runtime_checkable
+class WorkflowStep(Protocol):
+    """Interface for third-party step implementations."""
+
+    async def execute(self, context: "StepContext") -> "StepResult": ...
+    async def rollback(self, context: "StepContext") -> None: ...
+    def supports_retry(self) -> bool: ...
+```
+
+**Accommodation check:** Plugin registration happens during container assembly. The
+`WorkflowTypeRegistry` would live in the Execution module and the `mode` field in `ExecutionRequest`
+naturally routes to registered types. No cross-module changes needed.
 
 ---
 
@@ -2097,7 +2498,7 @@ Current `_enrich_hub_fields` joins `agents × hubs` to set `hub_owner_id` and `i
 | Date | Decision | Context |
 |------|----------|---------|
 | 2026-05-04 | Unified DAL (not per-module DocumentStore) | `database_service` is already a DAL embryo |
-| 2026-05-04 | Execution stays one module, Workflow separates | Different storage + HTTP semantics (B2) |
+| 2026-05-04 | ~~Execution stays one module, Workflow separates~~ | SUPERSEDED: Workflow deleted (see 2026-05-05) |
 | 2026-05-04 | Delivery is pure transport (no business callbacks) | SSE side effect trap documented in EVENT_PIPELINE_DESIGN.md (A1) |
 | 2026-05-04 | Mixed Protocol inside Execution | Core seams testable; helpers stay concrete |
 | 2026-05-04 | Sub-container per module | Physical isolation > self-discipline |
@@ -2116,11 +2517,27 @@ Current `_enrich_hub_fields` joins `agents × hubs` to set `hub_owner_id` and `i
 | 2026-05-04 | Migration timeline 18-22 weeks | Original 9-week estimate was 2-3x too low (C1) |
 | 2026-05-05 | Hub→Execution cycle broken via EventPublisher internal handler | Hub emits HubAgentEvent; Execution subscribes post-construction (N1) |
 | 2026-05-05 | AgentMatcher.match_agents adds requesting_user_id | Visibility filter requires user_id for owner-scoped agents (N2) |
-| 2026-05-05 | WorkflowEngine expanded to 11 methods | Covers retry, summarize, session/task list endpoints (N3) |
-| 2026-05-05 | WorkflowResult → OrchestrationResponse mapping documented | meta_task_ids only includes successful tasks (N4) |
+| 2026-05-05 | ~~WorkflowEngine expanded to 11 methods~~ | SUPERSEDED: Workflow deleted |
+| 2026-05-05 | ~~WorkflowResult → OrchestrationResponse mapping~~ | SUPERSEDED: Workflow deleted |
 | 2026-05-05 | Multi-worker guard checks all 3 Redis subsystems | Single missing pool causes silent runtime failure (N5) |
-| 2026-05-05 | ChatContextManager dual-path: summarize_and_update vs update | REST needs LLM summarization; internal needs direct write (N6) |
+| 2026-05-05 | ~~ChatContextManager dual-path~~ | SUPERSEDED: Merged into MemoryManager (summarize is impl detail) |
 | 2026-05-05 | FileStorage.upload requires room_id explicitly | S3 key + orphan cleanup both need room_id (N7) |
 | 2026-05-05 | Internal domain events (MessageCommitted) via emit_internal | Separate from frontend-visible DomainEvent; shared bus impl (N8) |
 | 2026-05-05 | Phase 6+7 interleaved (record-then-emit first) | Cannot extract pure Delivery until callers stop embedding record (N9) |
 | 2026-05-05 | Shutdown cancels in-flight orchestration; heal fallback documented | Invariants 21+22 (N10) |
+| 2026-05-05 | Added §12 Error Handling: HybroError hierarchy + propagation rules | Protocol implementors need consistent error contract |
+| 2026-05-05 | Added §13 Observability: structlog + OTel spans + metrics table | Cross-module tracing is impossible to retrofit without upfront span design |
+| 2026-05-05 | MongoDAL split into domain-scoped Repository Protocols (§4.9.2) | Prevents cross-module raw query coupling; explicit schema ownership |
+| 2026-05-05 | Legacy Workflow DELETED (not wrapped) | Dead code; zero value in wrapping; saves 1.5 weeks + maintenance |
+| 2026-05-05 | HubAgentEvent split: frontend (status) + HubAgentResponseInternal (orchestration) | Different payloads for different consumers; fixes dual-purpose conflict (fix 2.1) |
+| 2026-05-05 | EventPublisher.emit() catches handler exceptions (dead-letter) | Invariant 5 compliance; never propagate to caller (fix 2.2) |
+| 2026-05-05 | cancel_inflight_tasks() added to ExecutionEngine Protocol | Shutdown invariant requires Protocol method (fix 2.3) |
+| 2026-05-05 | emit_internal + register_internal_handler added to EventPublisher Protocol | Internal events need Protocol-visible methods (fix 2.4) |
+| 2026-05-05 | ping() added to all Redis + Vector Protocols | Health check requires real connectivity validation (fix 2.5/2.6) |
+| 2026-05-05 | Repository Protocols return dict (intentional) | Type safety at facade boundary; avoids double-validation cost (fix 2.7) |
+| 2026-05-05 | No-op import-linter os.getenv contract removed | Contract was always-pass; only AST scan enforces (fix 2.8) |
+| 2026-05-05 | traced_create_task() mandatory helper | OTel context doesn't auto-propagate across asyncio.create_task (fix 2.9) |
+| 2026-05-05 | ExecutionFacade._inflight set + _spawn_orchestration() | In-flight task tracking for graceful shutdown (fix 2.10) |
+| 2026-05-05 | Repository impl noted per migration phase | Prevents ambiguity about when Repositories are built (fix 2.11) |
+| 2026-05-05 | §15 Key Design Decisions expanded to 21 entries | Was stale at 16; now includes all major decisions (fix 2.12) |
+| 2026-05-05 | Added §19 Potential Future Protocol Additions | Documents hardest-to-retrofit seams; validates module boundaries accommodate them |
