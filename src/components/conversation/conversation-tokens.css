@@ -1,49 +1,54 @@
 :root {
-  --conversation-surface-user: #18181b;
+  /* Borders — derived from design system */
+  --conversation-surface-user: hsl(var(--color-card));
 
-  --conversation-border: #27272a;
-  --conversation-border-subtle: #18181b;
-  --conversation-border-light: rgba(255, 255, 255, 0.08);
+  --conversation-border: hsl(var(--color-border));
+  --conversation-border-subtle: hsl(var(--color-border) / 0.5);
+  --conversation-border-light: hsl(var(--color-border) / 0.6);
 
-  --conversation-agent-border-green: #1a3a2a;
-  --conversation-agent-border-blue: #1e3a5f;
-  --conversation-agent-border-purple: #3b1a70;
-  --conversation-agent-border-amber: #5a2d0a;
-  --conversation-agent-border-rose: #5c1a2a;
+  /* Agent card/avatar backgrounds — light mode: soft tinted pastels */
+  --conversation-agent-border-green:  hsl(var(--color-icon-success)  / 0.35);
+  --conversation-agent-border-blue:   hsl(var(--color-icon-network)   / 0.35);
+  --conversation-agent-border-purple: hsl(var(--color-icon-architecture) / 0.35);
+  --conversation-agent-border-amber:  hsl(var(--color-icon-warning)   / 0.35);
+  --conversation-agent-border-rose:   hsl(var(--color-icon-error)     / 0.35);
 
-  --conversation-agent-bg-green: #16332a;
-  --conversation-agent-bg-blue: #172554;
-  --conversation-agent-bg-purple: #2e1065;
-  --conversation-agent-bg-amber: #451a03;
-  --conversation-agent-bg-rose: #4c0519;
+  --conversation-agent-bg-green:  hsl(var(--color-icon-success)     / 0.12);
+  --conversation-agent-bg-blue:   hsl(var(--color-icon-network)      / 0.12);
+  --conversation-agent-bg-purple: hsl(var(--color-icon-architecture) / 0.12);
+  --conversation-agent-bg-amber:  hsl(var(--color-icon-warning)      / 0.12);
+  --conversation-agent-bg-rose:   hsl(var(--color-icon-error)        / 0.12);
 
-  --conversation-agent-avatar-green: rgba(74, 222, 128, 0.15);
-  --conversation-agent-avatar-blue: rgba(59, 130, 246, 0.18);
-  --conversation-agent-avatar-purple: rgba(167, 139, 250, 0.18);
-  --conversation-agent-avatar-amber: rgba(251, 191, 36, 0.15);
-  --conversation-agent-avatar-rose: rgba(251, 113, 133, 0.15);
+  --conversation-agent-avatar-green:  hsl(var(--color-icon-success)     / 0.15);
+  --conversation-agent-avatar-blue:   hsl(var(--color-icon-network)      / 0.18);
+  --conversation-agent-avatar-purple: hsl(var(--color-icon-architecture) / 0.18);
+  --conversation-agent-avatar-amber:  hsl(var(--color-icon-warning)      / 0.15);
+  --conversation-agent-avatar-rose:   hsl(var(--color-icon-error)        / 0.15);
 
-  --conversation-agent-card-green: rgba(74, 222, 128, 0.22);
-  --conversation-agent-card-blue: rgba(59, 130, 246, 0.22);
-  --conversation-agent-card-purple: rgba(167, 139, 250, 0.22);
-  --conversation-agent-card-amber: rgba(251, 191, 36, 0.22);
-  --conversation-agent-card-rose: rgba(251, 113, 133, 0.22);
+  --conversation-agent-card-green:  hsl(var(--color-icon-success)     / 0.10);
+  --conversation-agent-card-blue:   hsl(var(--color-icon-network)      / 0.10);
+  --conversation-agent-card-purple: hsl(var(--color-icon-architecture) / 0.10);
+  --conversation-agent-card-amber:  hsl(var(--color-icon-warning)      / 0.10);
+  --conversation-agent-card-rose:   hsl(var(--color-icon-error)        / 0.10);
 
-  --conversation-text-primary: #fafafa;
-  --conversation-text-secondary: #e4e4e7;
-  --conversation-text-tertiary: #d4d4d8;
-  --conversation-text-muted: #71717a;
-  --conversation-text-dim: #52525b;
+  /* Text — derived from design system foreground tokens */
+  --conversation-text-primary:   hsl(var(--color-foreground));
+  --conversation-text-secondary: hsl(var(--color-foreground) / 0.85);
+  --conversation-text-tertiary:  hsl(var(--color-foreground) / 0.70);
+  --conversation-text-muted:     hsl(var(--color-muted-foreground));
+  --conversation-text-dim:       hsl(var(--color-muted-foreground) / 0.65);
 
-  --conversation-agent-green: #4ade80;
-  --conversation-agent-blue: #3b82f6;
-  --conversation-agent-purple: #a78bfa;
-  --conversation-agent-amber: #fbbf24;
-  --conversation-agent-rose: #fb7185;
-  --conversation-agent-yellow: #eab308;
+  /* Agent status accent colors — reuse semantic icon tokens (mode-aware) */
+  --conversation-agent-green:  hsl(var(--color-icon-success));
+  --conversation-agent-blue:   hsl(var(--color-icon-network));
+  --conversation-agent-purple: hsl(var(--color-icon-architecture));
+  --conversation-agent-amber:  hsl(var(--color-icon-warning));
+  --conversation-agent-rose:   hsl(var(--color-icon-error));
+  --conversation-agent-yellow: hsl(var(--color-icon-warning));
 
-  --conversation-danger: #ef4444;
-  --conversation-danger-border: #ef444433;
+  /* Danger — reuse destructive token */
+  --conversation-danger:        hsl(var(--color-destructive));
+  --conversation-danger-border: hsl(var(--color-destructive) / 0.20);
 
   --conversation-radius-card: 10px;
   --conversation-user-font-size: 14px;
@@ -85,6 +90,39 @@
   :root {
     --conversation-shimmer-duration: 0s;
   }
+}
+
+/* Dark mode: restore richer saturated card/border backgrounds */
+.dark {
+  --conversation-surface-user: #18181b;
+
+  --conversation-border-light: rgba(255, 255, 255, 0.08);
+
+  --conversation-agent-border-green:  #1a3a2a;
+  --conversation-agent-border-blue:   #1e3a5f;
+  --conversation-agent-border-purple: #3b1a70;
+  --conversation-agent-border-amber:  #5a2d0a;
+  --conversation-agent-border-rose:   #5c1a2a;
+
+  --conversation-agent-bg-green:  #16332a;
+  --conversation-agent-bg-blue:   #172554;
+  --conversation-agent-bg-purple: #2e1065;
+  --conversation-agent-bg-amber:  #451a03;
+  --conversation-agent-bg-rose:   #4c0519;
+
+  --conversation-agent-avatar-green:  rgba(74, 222, 128, 0.15);
+  --conversation-agent-avatar-blue:   rgba(59, 130, 246, 0.18);
+  --conversation-agent-avatar-purple: rgba(167, 139, 250, 0.18);
+  --conversation-agent-avatar-amber:  rgba(251, 191, 36, 0.15);
+  --conversation-agent-avatar-rose:   rgba(251, 113, 133, 0.15);
+
+  --conversation-agent-card-green:  rgba(74, 222, 128, 0.22);
+  --conversation-agent-card-blue:   rgba(59, 130, 246, 0.22);
+  --conversation-agent-card-purple: rgba(167, 139, 250, 0.22);
+  --conversation-agent-card-amber:  rgba(251, 191, 36, 0.22);
+  --conversation-agent-card-rose:   rgba(251, 113, 133, 0.22);
+
+  --conversation-danger-border: #ef444433;
 }
 
 /* ---------- Gutter ---------- */

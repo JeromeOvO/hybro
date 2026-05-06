@@ -1,8 +1,15 @@
+import React from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import userEvent from '@testing-library/user-event'
 import { render, screen } from '../../../utils/test-utils'
 import { AgentCard } from '@/components/conversation/AgentCard'
 import { AGENT_THEMES } from '@/lib/selectors/conversation-types'
+
+vi.mock('next/link', () => ({
+  default: ({ children, href, onClick, ...rest }: { children: React.ReactNode; href: string; onClick?: React.MouseEventHandler; [k: string]: unknown }) => (
+    <a href={href} onClick={onClick} {...rest}>{children}</a>
+  ),
+}))
 
 describe('AgentCard', () => {
   it('uses conversation density classes for card and status sizing', () => {
@@ -88,5 +95,52 @@ describe('AgentCard', () => {
 
     expect(screen.getByRole('status', { name: 'Planner needs input' })).toHaveTextContent('Needs Input')
     expect(screen.queryByText('Agent is waiting for your response in the input panel below.')).not.toBeInTheDocument()
+  })
+
+  it('renders a link to the agent profile page', () => {
+    const { container } = render(
+      <AgentCard
+        agentId="agent-abc"
+        agentName="Planner"
+        taskDescription="Plan the trip"
+        theme={AGENT_THEMES[0]}
+        display={{ label: 'Completed', tone: 'muted', isAnimated: false, ariaLabel: 'Completed' }}
+      />
+    )
+
+    const link = container.querySelector('a[href="/c/agents/agent-abc"]')
+    expect(link).not.toBeNull()
+    expect(link).toHaveTextContent('Planner')
+  })
+
+  it('renders AgentSourceBadge when agentSource is provided', () => {
+    const { container } = render(
+      <AgentCard
+        agentId="agent-1"
+        agentName="Planner"
+        taskDescription="Plan the trip"
+        theme={AGENT_THEMES[0]}
+        agentSource="cloud"
+        display={{ label: 'Completed', tone: 'muted', isAnimated: false, ariaLabel: 'Completed' }}
+      />
+    )
+
+    // AgentSourceBadge renders a Cloud SVG icon for 'cloud' source
+    expect(container.querySelector('svg')).not.toBeNull()
+  })
+
+  it('does not render AgentSourceBadge when agentSource is absent', () => {
+    const { container } = render(
+      <AgentCard
+        agentId="agent-1"
+        agentName="Planner"
+        taskDescription="Plan the trip"
+        theme={AGENT_THEMES[0]}
+        display={{ label: 'Completed', tone: 'muted', isAnimated: false, ariaLabel: 'Completed' }}
+      />
+    )
+
+    // Without agentSource, no source badge icon SVG should appear
+    expect(container.querySelector('svg')).toBeNull()
   })
 })

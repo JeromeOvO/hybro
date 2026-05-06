@@ -137,7 +137,9 @@ export function ConsumerSidebar({ ...props }: React.ComponentProps<typeof Sideba
       </SidebarHeader>
       <SidebarContent>
         <NavAgent navAgents={CONSUMER_NAV} />
+        <div className="mx-3 border-t border-sidebar-border" />
         <NavHub basePath="/c" />
+        <div className="mx-3 border-t border-sidebar-border" />
         <NavMain items={navMainData} />
       </SidebarContent>
       <SidebarFooter>

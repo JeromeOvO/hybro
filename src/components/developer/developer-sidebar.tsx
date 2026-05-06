@@ -99,7 +99,9 @@ export function DeveloperSidebar({ ...props }: React.ComponentProps<typeof Sideb
         {isLoaded && (
           <>
             <NavAgent navAgents={DEVELOPER_NAV} />
+            <div className="mx-3 border-t border-sidebar-border" />
             <NavHub basePath="/d" />
+            <div className="mx-3 border-t border-sidebar-border" />
             <NavMain items={navMainData} />
           </>
         )}

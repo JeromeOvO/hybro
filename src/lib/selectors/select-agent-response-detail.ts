@@ -78,5 +78,6 @@ export function selectAgentResponseDetail(
     taskStatusMessage: agent.taskStatusMessage,
     taskError: agent.taskError,
     requestMessage: findRequestMessage(agent, entities, orderedIds),
+    agentSource: agent.agentSource,
   }
 }

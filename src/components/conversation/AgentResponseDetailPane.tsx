@@ -1,12 +1,24 @@
+'use client'
+
+import Link from 'next/link'
 import { X } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
 import { MarkdownContent } from '@/components/markdown-content'
 import { ArtifactList } from '@/components/artifact-list'
+import { AgentSourceBadge } from '@/components/agent-source-badge'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import type { AgentDisplayProps, AgentResponseDetail } from '@/lib/selectors/conversation-types'
+import type { Agent } from '@/lib/types/agent'
 
 interface AgentResponseDetailPaneProps {
   detail: AgentResponseDetail
   onClose: () => void
+}
+
+function useAgentFromCatalog(agentId: string): Agent | undefined {
+  const qc = useQueryClient()
+  const agents = qc.getQueryData<Agent[]>(['agents', 'all'])
+  return agents?.find(a => a.agent_id === agentId)
 }
 
 function EmptyResponse({ detail }: { detail: AgentResponseDetail }) {
@@ -19,6 +31,10 @@ function EmptyResponse({ detail }: { detail: AgentResponseDetail }) {
 }
 
 function AgentResponseDetailHeader({ detail, onClose }: AgentResponseDetailPaneProps) {
+  const catalogAgent = useAgentFromCatalog(detail.agentId)
+  const iconUrl = catalogAgent?.agent_card?.iconUrl || undefined
+  const isHubOnline = catalogAgent?.is_hub_online
+
   const toneColors: Record<AgentDisplayProps['tone'], string> = {
     accent: 'rgb(0, 255, 255)',
     muted: 'var(--conversation-agent-green)',
@@ -33,15 +49,42 @@ function AgentResponseDetailHeader({ detail, onClose }: AgentResponseDetailPaneP
       style={{ backgroundColor: detail.theme.cardBg }}
     >
       <div
-        className="conversation-detail-agent-avatar"
+        className="conversation-detail-agent-avatar relative overflow-hidden"
         style={{ backgroundColor: detail.theme.avatarLightBg }}
       >
-        <img src={getAgentAvatarUri(detail.agentId)} alt="" />
+        {iconUrl ? (
+          <img
+            src={iconUrl}
+            alt=""
+            className="absolute inset-0 w-full h-full object-cover"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.display = 'none'
+            }}
+          />
+        ) : null}
+        <img
+          src={getAgentAvatarUri(detail.agentId)}
+          alt=""
+          className="w-full h-full"
+          style={{ display: iconUrl ? 'none' : 'block' }}
+        />
       </div>
 
       <div className="conversation-detail-agent-main">
-        <div className="conversation-detail-agent-name">
-          {detail.agentName}
+        <div className="conversation-detail-agent-name flex items-center gap-1.5">
+          <Link
+            href={`/c/agents/${detail.agentId}`}
+            className="hover:underline focus-visible:outline-none"
+          >
+            {detail.agentName}
+          </Link>
+          {detail.agentSource != null && (
+            <AgentSourceBadge
+              source={detail.agentSource}
+              isHubOnline={isHubOnline}
+              className="h-3.5 w-3.5"
+            />
+          )}
         </div>
         {detail.taskDescription && (
           <div className="conversation-detail-agent-task">
