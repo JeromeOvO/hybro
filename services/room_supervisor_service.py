@@ -319,8 +319,13 @@ class RoomSupervisorService:
             # Hard guard: if the LLM keeps re-delegating to the same agent(s)
             # despite successful results, override to DONE.  Prompt hints are
             # not reliable enough with smaller models (gpt-4o-mini).
-            if action.action == ActionType.DELEGATE and len(trajectory.entries) >= 2:
-                action = self._guard_consecutive_redelegation(action, trajectory)
+            # threshold >= 1: even one successful delegation is enough to block
+            # an identical re-delegation on the next supervisor resume, which is
+            # the root cause of duplicated agent responses.
+            if action.action == ActionType.DELEGATE and len(trajectory.entries) >= 1:
+                action = self._guard_consecutive_redelegation(
+                    action, trajectory, max_consecutive=1,
+                )
 
             logger.info(
                 "Supervisor V2 decide_next — action=%s targets=%s reasoning=%s",
