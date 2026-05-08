@@ -138,7 +138,10 @@ describe('applyUpsert', () => {
       expect(result!.entities['msg-1'].content).toBe('Final answer from DB')
     })
 
-    it('allows DB update when SSE entity has terminal state but preserves divergent SSE body', () => {
+    it('blocks DB update when SSE agent entity is completed with content (Rule 2b: prevents post-stream duplicate re-render)', () => {
+      // Rule 2b: DB reconcile must not overwrite already-completed SSE agent content
+      // unless the DB body is materially longer (truncated stream). This prevents
+      // a re-render after streaming finishes that looks like a duplicate message.
       const entities = {
         'msg-1': makeEntity({
           source: 'sse', taskStatus: 'completed',
@@ -150,12 +153,12 @@ describe('applyUpsert', () => {
         makeIncoming({ taskStatus: 'completed', content: 'DB content (canonical)' }),
         'db',
       )
-      expect(result).not.toBeNull()
-      expect(result!.entities['msg-1'].content).toBe('SSE content')
-      expect(result!.entities['msg-1'].taskStatus).toBe('completed')
+      expect(result).toBeNull()
     })
 
-    it('allows DB to append-only extend SSE agent body on reconcile', () => {
+    it('blocks DB to non-materially extend SSE agent body on reconcile (Rule 2b)', () => {
+      // DB body is only slightly longer than SSE (< DB_RECONCILE_MATERIAL_LENGTH_DELTA chars)
+      // → treat as cosmetic/normalization difference, skip to avoid re-render.
       const entities = {
         'msg-1': makeEntity({
           source: 'sse', taskStatus: 'completed',
@@ -167,8 +170,45 @@ describe('applyUpsert', () => {
         makeIncoming({ taskStatus: 'completed', content: 'Hello world' }),
         'db',
       )
+      expect(result).toBeNull()
+    })
+
+    it('blocks DB update when SSE agent entity is completed with artifacts only (Rule 2b: Hermes-style agent)', () => {
+      // Hermes-style agents stream entirely via artifacts with empty content field.
+      // Rule 2b must use artifact text length as the "renderable" measure, not
+      // just content length, otherwise the rule is bypassed and DB reconcile
+      // re-renders a duplicate message after streaming finishes.
+      const entities = {
+        'msg-1': makeEntity({
+          source: 'sse', taskStatus: 'completed',
+          content: '', // empty — Hermes delivers via artifacts
+          artifacts: [{ artifactId: 'a1', name: 'result', parts: [{ kind: 'text' as const, text: 'Long Hermes response text here' }] }],
+          displayType: 'agent-bubble',
+        }),
+      }
+      const result = applyUpsert(
+        entities, ['msg-1'],
+        makeIncoming({ taskStatus: 'completed', content: 'Long Hermes response text here' }),
+        'db',
+      )
+      expect(result).toBeNull()
+    })
+
+    it('allows DB failed→completed upgrade even if SSE already has content (Rule 2b exception)', () => {
+      // Rule 2b does NOT block when existing is 'failed' — DB may carry the real result.
+      const entities = {
+        'msg-1': makeEntity({
+          source: 'sse', taskStatus: 'failed',
+          content: 'error text', displayType: 'agent-bubble',
+        }),
+      }
+      const result = applyUpsert(
+        entities, ['msg-1'],
+        makeIncoming({ taskStatus: 'completed', content: 'Result' }),
+        'db',
+      )
       expect(result).not.toBeNull()
-      expect(result!.entities['msg-1'].content).toBe('Hello world')
+      expect(result!.entities['msg-1'].taskStatus).toBe('completed')
     })
 
     it('prefers DB body when materially longer than SSE (truncated stream)', () => {
