@@ -29,6 +29,11 @@ interface MessageStoreState {
   upsertMessage: (msg: IncomingMessage, source: MessageSource) => void
   upsertMany: (msgs: IncomingMessage[], source: MessageSource) => void
   replaceMessageId: (oldId: string, newId: string) => void
+  replaceAndPatchMessageId: (
+    oldId: string,
+    newId: string,
+    patch: Partial<Pick<MessageEntity, 'content' | 'attachments' | 'clientRequestId' | 'userId' | 'timestamp'>>
+  ) => void
   removeMessage: (id: string) => void
   cancelAllNonTerminal: (roomId: string) => void
   nudgeSyncBridge: () => void
@@ -145,6 +150,64 @@ export const useMessageStore = create<MessageStoreState>()(
         orderedIds,
         version: state.version + 1,
       }
+    }),
+
+    /**
+     * Atomically replaces an optimistic message ID with the real server ID and
+     * applies a patch (e.g. server-resolved attachment URLs) in a single state
+     * update, avoiding the two-render flash caused by separate upsert+replace
+     * calls.
+     *
+     * If an SSE event has already created an entity for `newId` (race
+     * condition), the SSE entity wins and is merged with the optimistic one so
+     * that SSE-provided data is preserved.
+     */
+    replaceAndPatchMessageId: (oldId, newId, patch) => set((state) => {
+      if (!oldId || !newId || oldId === newId) return state
+      const oldEntity = state.entities[oldId]
+      if (!oldEntity) return state
+
+      const existingAtNewId = state.entities[newId]
+      const merged: MessageEntity = existingAtNewId
+        // SSE already wrote the real entity — merge optimistic into SSE (SSE wins).
+        ? {
+            ...oldEntity,
+            ...existingAtNewId,
+            id: newId,
+            clientRequestId: existingAtNewId.clientRequestId ?? oldEntity.clientRequestId,
+            sourceVersion: Math.max(existingAtNewId.sourceVersion, oldEntity.sourceVersion) + 1,
+            updatedAt: Date.now(),
+          }
+        // Normal case — apply patch from the HTTP response in one shot.
+        : {
+            ...oldEntity,
+            ...patch,
+            id: newId,
+            sourceVersion: oldEntity.sourceVersion + 1,
+            updatedAt: Date.now(),
+          }
+
+      const entities = { ...state.entities }
+      delete entities[oldId]
+      entities[newId] = merged
+
+      // Rewire related-message links pointing at the optimistic id.
+      for (const [id, entity] of Object.entries(entities)) {
+        if (entity.relatedMessageId === oldId) {
+          entities[id] = {
+            ...entity,
+            relatedMessageId: newId,
+            sourceVersion: entity.sourceVersion + 1,
+            updatedAt: Date.now(),
+          }
+        }
+      }
+
+      const orderedIds = state.orderedIds
+        .map(id => (id === oldId ? newId : id))
+        .filter((id, idx, arr) => arr.indexOf(id) === idx)
+
+      return { entities, orderedIds, version: state.version + 1 }
     }),
 
     removeMessage: (id) => set((state) => {

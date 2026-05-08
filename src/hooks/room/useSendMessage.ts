@@ -158,18 +158,17 @@ export function useSendMessage(
         return false
       }
 
-      // Step 2: Insert the real user message with stable messageId, then
-      // remove the optimistic user anchor.
+      // Step 2: Atomically swap the optimistic ID for the real server ID and
+      // apply server-resolved attachment URLs in one state update.  Using two
+      // separate calls (upsertMessage + replaceMessageId) would cause React to
+      // render an intermediate state where both IDs exist, producing a visible
+      // flash as the ConversationTurn key changes.
       const msgStoreSwap = useMessageStore.getState()
-      msgStoreSwap.upsertMessage({
-        id: messageId,
-        roomId,
-        messageType: 'user',
+      msgStoreSwap.replaceAndPatchMessageId(optimisticUserMessageId, messageId, {
         content: userInput,
-        senderName: userName,
+        clientRequestId,
         userId,
         timestamp: currentTime,
-        clientRequestId,
         attachments: pendingAttachments?.map(att => {
           const uploaded = uploadResponses?.get(att.id)
           return {
@@ -180,8 +179,7 @@ export function useSendMessage(
             sizeBytes: uploaded?.sizeBytes || att.file.size,
           }
         }),
-      }, 'optimistic')
-      msgStoreSwap.replaceMessageId(optimisticUserMessageId, messageId)
+      })
 
       useRoomUiStore.getState().setPendingTurnSkeleton(roomId)
       if (onPostMessageIdResolved) {

@@ -13,6 +13,7 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from '@/components/ui/resizable'
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore, useSelectedAgentMessageId } from '@/stores/room-ui-store'
 import { selectAgentResponseDetail } from '@/lib/selectors'
@@ -91,13 +92,15 @@ interface RoomPageShellProps {
 export function RoomPageShell({ adapter }: RoomPageShellProps) {
   const canShowAgentDetail = useCanShowDetailPane()
   const selectedMessageId = useSelectedAgentMessageId(adapter.roomId)
+  // Always read entities so the mobile sheet has data too
   const entities = useMessageStore(s => selectedMessageId ? s.entities : EMPTY_ENTITIES)
   const orderedIds = useMessageStore(s => selectedMessageId ? s.orderedIds : EMPTY_ORDERED_IDS)
 
+  // Compute detail regardless of breakpoint — needed for both side pane and mobile sheet
   const detail = useMemo(() => {
-    if (!canShowAgentDetail || !selectedMessageId) return null
+    if (!selectedMessageId) return null
     return selectAgentResponseDetail(adapter.roomId, selectedMessageId, entities, orderedIds)
-  }, [adapter.roomId, canShowAgentDetail, selectedMessageId, entities, orderedIds])
+  }, [adapter.roomId, selectedMessageId, entities, orderedIds])
 
   const prevRoomIdRef = useRef(adapter.roomId)
   useEffect(() => {
@@ -117,16 +120,39 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
     useRoomUiStore.getState().closeAgentDetail(adapter.roomId)
   }, [adapter.roomId])
 
+  // Track the input dock height so the scroll area always pads enough to
+  // clear it — prevents agent cards near the bottom from being occluded by
+  // the dock and becoming non-clickable on mobile.
+  const dockRef = useRef<HTMLDivElement>(null)
+  const primaryRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const dock = dockRef.current
+    const primary = primaryRef.current
+    if (!dock || !primary) return
+
+    const update = () => {
+      primary.style.setProperty('--conversation-dock-height', `${dock.offsetHeight}px`)
+    }
+    update()
+
+    const ro = new ResizeObserver(update)
+    ro.observe(dock)
+    return () => ro.disconnect()
+  }, [])
+
+  // On desktop the side pane is visible; on mobile the sheet takes over
+  const desktopDetail = canShowAgentDetail ? detail : null
+
   const primaryContent = (
-    <div className="conversation-primary">
+    <div ref={primaryRef} className="conversation-primary">
       <main className="flex-1 overflow-hidden">
         <ConversationMessageList
           roomId={adapter.roomId}
-          selectedAgentMessageId={canShowAgentDetail ? selectedMessageId : undefined}
-          enableAgentDetail={canShowAgentDetail}
+          selectedAgentMessageId={selectedMessageId}
+          enableAgentDetail
         />
       </main>
-      <div className="conversation-input-dock conversation-gutter">
+      <div ref={dockRef} className="conversation-input-dock conversation-gutter">
         <div className="conversation-frame">
           <ComposerShell adapter={adapter} />
         </div>
@@ -135,41 +161,59 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
   )
 
   return (
-    <ResizablePanelGroup
-      id={detail ? 'conversation-resizable-workspace' : undefined}
-      orientation="horizontal"
-      defaultLayout={detail ? DETAIL_PANE_LAYOUT : undefined}
-      className="conversation-workspace conversation-workspace-resizable"
-      data-detail-open={detail ? 'true' : undefined}
-    >
-      <ResizablePanel
-        id="conversation-primary-panel"
-        defaultSize={detail ? '66%' : '100%'}
-        minSize={detail ? '54%' : '100%'}
-        maxSize={detail ? '76%' : '100%'}
-        className="conversation-resizable-panel"
-        data-testid="conversation-primary-panel"
+    <>
+      <ResizablePanelGroup
+        id={desktopDetail ? 'conversation-resizable-workspace' : undefined}
+        orientation="horizontal"
+        defaultLayout={desktopDetail ? DETAIL_PANE_LAYOUT : undefined}
+        className="conversation-workspace conversation-workspace-resizable"
+        data-detail-open={desktopDetail ? 'true' : undefined}
       >
-        {primaryContent}
-      </ResizablePanel>
-      {detail && (
-        <>
-          <ResizableHandle
-            id="conversation-detail-resize-handle"
-            className="conversation-detail-resize-handle"
-          />
-          <ResizablePanel
-            id="conversation-detail-panel"
-            defaultSize="34%"
-            minSize="24%"
-            maxSize="46%"
-            className="conversation-detail-resizable-panel"
-            data-testid="conversation-detail-panel"
+        <ResizablePanel
+          id="conversation-primary-panel"
+          defaultSize={desktopDetail ? '66%' : '100%'}
+          minSize={desktopDetail ? '54%' : '100%'}
+          maxSize={desktopDetail ? '76%' : '100%'}
+          className="conversation-resizable-panel"
+          data-testid="conversation-primary-panel"
+        >
+          {primaryContent}
+        </ResizablePanel>
+        {desktopDetail && (
+          <>
+            <ResizableHandle
+              id="conversation-detail-resize-handle"
+              className="conversation-detail-resize-handle"
+            />
+            <ResizablePanel
+              id="conversation-detail-panel"
+              defaultSize="34%"
+              minSize="24%"
+              maxSize="46%"
+              className="conversation-detail-resizable-panel"
+              data-testid="conversation-detail-panel"
+            >
+              <AgentResponseDetailPane detail={desktopDetail} onClose={handleCloseDetail} />
+            </ResizablePanel>
+          </>
+        )}
+      </ResizablePanelGroup>
+
+      {/* Mobile sheet — shown when a card is tapped on narrow screens */}
+      {!canShowAgentDetail && (
+        <Sheet open={!!detail} onOpenChange={(open) => { if (!open) handleCloseDetail() }}>
+          <SheetContent
+            side="bottom"
+            className="h-[85dvh] p-0 flex flex-col gap-0 rounded-t-xl overflow-hidden"
+            data-mobile-sheet
           >
-            <AgentResponseDetailPane detail={detail} onClose={handleCloseDetail} />
-          </ResizablePanel>
-        </>
+            <SheetTitle className="sr-only">Agent response detail</SheetTitle>
+            {detail && (
+              <AgentResponseDetailPane detail={detail} onClose={handleCloseDetail} />
+            )}
+          </SheetContent>
+        </Sheet>
       )}
-    </ResizablePanelGroup>
+    </>
   )
 }

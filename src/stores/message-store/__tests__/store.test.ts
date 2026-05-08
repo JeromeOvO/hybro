@@ -238,4 +238,196 @@ describe('useMessageStore', () => {
       expect(state.lastDbSyncAt).toBeGreaterThan(0)
     })
   })
+
+  describe('replaceMessageId', () => {
+    it('renames an optimistic id to the real server id', () => {
+      const store = useMessageStore.getState()
+      store.upsertMessage(makeIncoming({ id: 'cr:opt-1', messageType: 'user' }), 'optimistic')
+
+      store.replaceMessageId('cr:opt-1', 'srv-1')
+      const state = useMessageStore.getState()
+      expect(state.entities['cr:opt-1']).toBeUndefined()
+      expect(state.entities['srv-1']).toBeDefined()
+      expect(state.entities['srv-1'].id).toBe('srv-1')
+      expect(state.orderedIds).toEqual(['srv-1'])
+    })
+
+    it('merges with an SSE entity already at the new id (SSE wins)', () => {
+      const store = useMessageStore.getState()
+      store.upsertMessage(
+        makeIncoming({ id: 'cr:opt-1', messageType: 'user', content: 'optimistic' }),
+        'optimistic',
+      )
+      store.upsertMessage(
+        makeIncoming({ id: 'srv-1', messageType: 'user', content: 'sse-version' }),
+        'sse',
+      )
+
+      store.replaceMessageId('cr:opt-1', 'srv-1')
+      const state = useMessageStore.getState()
+      expect(state.entities['cr:opt-1']).toBeUndefined()
+      expect(state.entities['srv-1'].content).toBe('sse-version')
+      // No duplicate id in orderedIds
+      expect(state.orderedIds.filter(id => id === 'srv-1')).toHaveLength(1)
+    })
+
+    it('is a no-op when old id does not exist', () => {
+      const store = useMessageStore.getState()
+      store.upsertMessage(makeIncoming({ id: 'msg-1' }), 'sse')
+      const v1 = useMessageStore.getState().version
+
+      store.replaceMessageId('does-not-exist', 'srv-1')
+      expect(useMessageStore.getState().version).toBe(v1)
+    })
+
+    it('is a no-op when old id equals new id', () => {
+      const store = useMessageStore.getState()
+      store.upsertMessage(makeIncoming({ id: 'msg-1' }), 'sse')
+      const v1 = useMessageStore.getState().version
+
+      store.replaceMessageId('msg-1', 'msg-1')
+      expect(useMessageStore.getState().version).toBe(v1)
+    })
+
+    it('rewires relatedMessageId links pointing at the old id', () => {
+      const store = useMessageStore.getState()
+      store.upsertMessage(makeIncoming({ id: 'cr:opt-1', messageType: 'user' }), 'optimistic')
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-reply', messageType: 'agent',
+          timestamp: '2026-02-17T10:01:00Z',
+          // @ts-ignore – relatedMessageId is set internally but not in IncomingMessage
+        }),
+        'sse',
+      )
+      // Manually set the relation to simulate a processing placeholder
+      const s = useMessageStore.getState()
+      s.entities['agent-reply'] = { ...s.entities['agent-reply'], relatedMessageId: 'cr:opt-1' }
+
+      store.replaceMessageId('cr:opt-1', 'srv-1')
+      const state = useMessageStore.getState()
+      expect(state.entities['agent-reply'].relatedMessageId).toBe('srv-1')
+    })
+  })
+
+  describe('replaceAndPatchMessageId', () => {
+    it('replaces id and applies patch in a single version bump', () => {
+      const store = useMessageStore.getState()
+      store.upsertMessage(
+        makeIncoming({ id: 'cr:opt-1', messageType: 'user', content: 'hello' }),
+        'optimistic',
+      )
+      const vBefore = useMessageStore.getState().version
+
+      store.replaceAndPatchMessageId('cr:opt-1', 'srv-1', {
+        content: 'hello',
+        userId: 'user-42',
+      })
+
+      const state = useMessageStore.getState()
+      expect(state.entities['cr:opt-1']).toBeUndefined()
+      expect(state.entities['srv-1']).toBeDefined()
+      expect(state.entities['srv-1'].id).toBe('srv-1')
+      expect(state.entities['srv-1'].userId).toBe('user-42')
+      expect(state.orderedIds).toEqual(['srv-1'])
+      // Exactly one version bump (atomic — not two)
+      expect(state.version).toBe(vBefore + 1)
+    })
+
+    it('merges attachment patch with server-resolved URLs', () => {
+      const store = useMessageStore.getState()
+      store.upsertMessage(
+        makeIncoming({
+          id: 'cr:opt-1', messageType: 'user',
+          attachments: [{ fileId: 'blob-id', fileUrl: 'blob:preview', mimeType: 'image/png', fileName: 'pic.png', sizeBytes: 1024 }],
+        }),
+        'optimistic',
+      )
+
+      store.replaceAndPatchMessageId('cr:opt-1', 'srv-1', {
+        attachments: [{ fileId: 'server-id', fileUrl: 'https://cdn.example.com/pic.png', mimeType: 'image/png', fileName: 'pic.png', sizeBytes: 1024 }],
+      })
+
+      const state = useMessageStore.getState()
+      const att = state.entities['srv-1'].attachments?.[0]
+      expect(att?.fileId).toBe('server-id')
+      expect(att?.fileUrl).toBe('https://cdn.example.com/pic.png')
+    })
+
+    it('SSE race: when srv id already exists, SSE entity wins and no duplicate in orderedIds', () => {
+      const store = useMessageStore.getState()
+      store.upsertMessage(
+        makeIncoming({ id: 'cr:opt-1', messageType: 'user', content: 'optimistic' }),
+        'optimistic',
+      )
+      store.upsertMessage(
+        makeIncoming({ id: 'srv-1', messageType: 'user', content: 'sse-wins' }),
+        'sse',
+      )
+
+      store.replaceAndPatchMessageId('cr:opt-1', 'srv-1', { content: 'http-patch' })
+
+      const state = useMessageStore.getState()
+      expect(state.entities['cr:opt-1']).toBeUndefined()
+      // SSE content preserved, not overwritten by http-patch
+      expect(state.entities['srv-1'].content).toBe('sse-wins')
+      expect(state.orderedIds.filter(id => id === 'srv-1')).toHaveLength(1)
+    })
+
+    it('preserves clientRequestId from optimistic entity when SSE omits it', () => {
+      const store = useMessageStore.getState()
+      store.upsertMessage(
+        makeIncoming({ id: 'cr:opt-1', messageType: 'user', clientRequestId: 'crid-xyz' }),
+        'optimistic',
+      )
+      // SSE entity has no clientRequestId
+      store.upsertMessage(
+        makeIncoming({ id: 'srv-1', messageType: 'user' }),
+        'sse',
+      )
+
+      store.replaceAndPatchMessageId('cr:opt-1', 'srv-1', {})
+
+      const state = useMessageStore.getState()
+      expect(state.entities['srv-1'].clientRequestId).toBe('crid-xyz')
+    })
+
+    it('is a no-op when old id does not exist', () => {
+      const store = useMessageStore.getState()
+      store.upsertMessage(makeIncoming({ id: 'msg-1' }), 'sse')
+      const v1 = useMessageStore.getState().version
+
+      store.replaceAndPatchMessageId('ghost', 'srv-1', {})
+      expect(useMessageStore.getState().version).toBe(v1)
+    })
+
+    it('is a no-op when old id equals new id', () => {
+      const store = useMessageStore.getState()
+      store.upsertMessage(makeIncoming({ id: 'msg-1' }), 'sse')
+      const v1 = useMessageStore.getState().version
+
+      store.replaceAndPatchMessageId('msg-1', 'msg-1', {})
+      expect(useMessageStore.getState().version).toBe(v1)
+    })
+
+    it('rewires relatedMessageId links pointing at the old id', () => {
+      const store = useMessageStore.getState()
+      store.upsertMessage(
+        makeIncoming({ id: 'cr:opt-1', messageType: 'user' }),
+        'optimistic',
+      )
+      store.upsertMessage(
+        makeIncoming({ id: 'agent-reply', messageType: 'agent', timestamp: '2026-02-17T10:01:00Z' }),
+        'sse',
+      )
+      useMessageStore.getState().entities['agent-reply'] = {
+        ...useMessageStore.getState().entities['agent-reply'],
+        relatedMessageId: 'cr:opt-1',
+      }
+
+      store.replaceAndPatchMessageId('cr:opt-1', 'srv-1', {})
+      const state = useMessageStore.getState()
+      expect(state.entities['agent-reply'].relatedMessageId).toBe('srv-1')
+    })
+  })
 })

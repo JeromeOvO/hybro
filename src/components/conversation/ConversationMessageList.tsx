@@ -57,6 +57,7 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
   }, [])
 
   const storeVersion = useMessageStore(s => s.version)
+  const hydratedFromDb = useMessageStore(s => s.hydratedFromDb)
 
   useLayoutEffect(() => {
     const el = scrollRef.current
@@ -142,9 +143,8 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
   }, [])
 
   const handleOpenAgentDetail = useCallback((messageId: string) => {
-    if (!enableAgentDetail) return
     useRoomUiStore.getState().openAgentDetail(roomId, messageId)
-  }, [enableAgentDetail, roomId])
+  }, [roomId])
 
   const hasMultipleAgents = (turn: ConversationTurnView) => {
     const agentIds = new Set<string>()
@@ -165,15 +165,16 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
         <div className="conversation-gutter">
           <div
             className="conversation-frame"
-            style={{ paddingTop: 'var(--conversation-sticky-top)', paddingBottom: 120 }}
+            data-hydrated={hydratedFromDb || undefined}
+            style={{ paddingTop: 'var(--conversation-sticky-top)', paddingBottom: 'calc(var(--conversation-dock-height, 120px) + 24px)' }}
           >
             {turns.map(turn => (
               <ConversationTurn
                 key={turn.turnId}
                 turn={turn}
                 multiAgentTurn={hasMultipleAgents(turn)}
-                selectedAgentMessageId={enableAgentDetail ? selectedAgentMessageId : undefined}
-                onOpenAgentDetail={enableAgentDetail ? handleOpenAgentDetail : undefined}
+                selectedAgentMessageId={selectedAgentMessageId}
+                onOpenAgentDetail={handleOpenAgentDetail}
               />
             ))}
           </div>

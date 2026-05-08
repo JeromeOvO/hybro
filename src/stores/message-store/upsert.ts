@@ -92,6 +92,44 @@ export function applyUpsert(
       return null
     }
 
+    // ── Rule 2b: Protect terminal SSE agent content from DB reconcile rewrites ──
+    // After streaming completes, the SSE entity is already terminal with the
+    // accumulated content the user saw. If the DB reconcile then arrives with
+    // different content (normalization, whitespace, slightly different text),
+    // it causes a visible re-render that looks like a duplicate message appearing
+    // after streaming finishes. Skip DB writes that would only change content on
+    // an already-completed SSE agent entity that already has renderable content,
+    // UNLESS the DB body is materially longer (indicating a truncated stream).
+    // Does NOT apply when existing is 'failed' — DB may carry the successful result.
+    //
+    // "Renderable content" includes both the content field AND artifacts, because
+    // agents like Hermes stream entirely via artifacts with an empty content field.
+    if (
+      existing.source === 'sse' &&
+      source === 'db' &&
+      existing.messageType === 'agent' &&
+      existing.taskStatus === 'completed'
+    ) {
+      const existingContentLen = (existing.content ?? '').trim().length
+      const existingArtifactText = existing.artifacts
+        ? extractTextFromArtifacts(existing.artifacts)
+        : ''
+      const existingRenderableLen = existingContentLen + existingArtifactText.length
+
+      if (existingRenderableLen > 0) {
+        const incomingContentLen = (incoming.content ?? '').trim().length
+        const incomingArtifactText = incoming.artifacts
+          ? extractTextFromArtifacts(incoming.artifacts)
+          : '' // DB reconcile often omits artifacts; treat as 0 for comparison
+        const incomingRenderableLen = incomingContentLen + incomingArtifactText.length
+
+        // Only let DB through if it's materially longer (truncated stream recovery)
+        if (incomingRenderableLen - existingRenderableLen < DB_RECONCILE_MATERIAL_LENGTH_DELTA) {
+          return null
+        }
+      }
+    }
+
     // ── Rule 4: Skip no-op updates ──
     if (isNoOpUpdate(existing, incoming, source)) {
       return null

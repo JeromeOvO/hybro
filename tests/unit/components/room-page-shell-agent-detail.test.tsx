@@ -154,7 +154,7 @@ describe('RoomPageShell agent detail pane', () => {
     expect(scrollTo).toHaveBeenCalledTimes(1)
   })
 
-  it('does not expose agent detail selection below the split-pane breakpoint', () => {
+  it('shows agent card buttons at narrow breakpoints but uses a mobile sheet instead of the side pane', async () => {
     Object.defineProperty(window, 'matchMedia', {
       writable: true,
       configurable: true,
@@ -168,7 +168,11 @@ describe('RoomPageShell agent detail pane', () => {
 
     render(<RoomPageShell adapter={makeAdapter()} />)
 
-    expect(screen.queryByRole('button', { name: /open researcher alex response/i })).not.toBeInTheDocument()
+    // The card button IS present so users on mobile can tap it to open the sheet
+    expect(screen.getByRole('button', { name: /open researcher alex response/i })).toBeInTheDocument()
+
+    // The desktop split-pane layout is NOT used at narrow widths
+    expect(screen.queryByTestId('conversation-resizable-workspace')).not.toBeInTheDocument()
     expect(screen.queryByTestId('agent-response-detail-pane')).not.toBeInTheDocument()
   })
 })
