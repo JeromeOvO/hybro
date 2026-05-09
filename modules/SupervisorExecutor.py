@@ -230,12 +230,7 @@ class SupervisorExecutor:
 
             # SSE: notify frontend of planning stage.
             # Skip if already cancelled — avoids duplicate PROCESSING after cancel.
-            # Skip on resume (trajectory already has entries) — the initial PROCESSING
-            # was already sent before the first agent ran.  Re-sending it after an agent
-            # completes and the supervisor loop resumes causes the frontend to recreate
-            # the ephemeral processing placeholder, which results in a duplicate message.
-            is_resume_iteration = resumed_trajectory is not None and step_number > 0
-            if not (token and token.is_cancelled) and not is_resume_iteration:
+            if not (token and token.is_cancelled):
                 try:
                     await self.sse_manager.send_processing_status(
                         room_id, SSEProcessingStatus.PROCESSING, user_message_id,
