@@ -312,6 +312,9 @@ class RelayTransport(AgentTransport):
                 continue
 
             if part.get("kind"):
+                kind = part.get("kind")
+                if kind == "text" and "text" not in part:
+                    continue
                 normalized.append(part)
                 continue
 

@@ -238,7 +238,7 @@ def sanitize_artifact_parts(parts: list[dict]) -> list[dict]:
         kind = root.get("kind")
         if kind == "text":
             if "text" not in root or root.get("text") is None:
-                logger.warning("Dropping malformed TextPart (missing or null 'text')")
+                logger.debug("Dropping malformed TextPart (missing or null 'text')")
                 continue
         elif kind == "file":
             if "file" not in root or root.get("file") is None:
