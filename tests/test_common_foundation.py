@@ -12,11 +12,16 @@ from common.dto import (
     AgentCardSnapshot,
     AgentInfo,
     AgentRegistered,
+    AgentMessageFinal,
+    AgentMessagePartial,
+    CancellationEvent,
     CompactionResult,
     ContextBlock,
     CreateRoomRequest,
+    DebateRoundEvent,
     DeliveryEnvelope,
     DeliveryEvent,
+    DeliveryEventBase,
     EmbeddingResult,
     ExecutionAck,
     ExecutionRequest,
@@ -24,6 +29,8 @@ from common.dto import (
     FileMetadata,
     GatewayRoute,
     HITLRequest,
+    HITLRequestEvent,
+    HITLResolvedEvent,
     HITLResponse,
     HubAgentEvent,
     HubAgentResponseInternal,
@@ -47,12 +54,14 @@ from common.dto import (
     RoomInfo,
     RoomMembership,
     RoomSummary,
+    RunEventNotification,
     RunInfo,
     RunState,
     SavedUserMessage,
     SSEEvent,
     SortOrder,
     WorkflowState,
+    ProcessingStatusEvent,
 )
 
 
@@ -168,6 +177,36 @@ def test_common_foundation_dtos_can_be_instantiated():
     MemorySearchResult(room_id="r1", content="memory", score=0.5)
     DeliveryEnvelope(room_id="r1", event_type="processing_status", payload={})
     SSEEvent(event="message", data={})
+    ProcessingStatusEvent(room_id="r1", message_id="m1", status="processing")
+    RunEventNotification(
+        room_id="r1",
+        event_id="e1",
+        run_id="run1",
+        seq=1,
+        run_event_type="agent_started",
+    )
+    AgentMessagePartial(
+        room_id="r1",
+        message_id="m1",
+        agent_id="a1",
+        content_delta="hello",
+    )
+    AgentMessageFinal(
+        room_id="r1",
+        message_id="m1",
+        agent_id="a1",
+        content={"text": "done"},
+    )
+    CancellationEvent(room_id="r1", message_id="m1")
+    HITLRequestEvent(
+        room_id="r1",
+        request_id="h1",
+        prompt="Continue?",
+        prompt_type="text",
+        source="agent",
+        message_id="m1",
+    )
+    HITLResolvedEvent(room_id="r1", request_id="h1", message_id="m1")
     HubAgentEvent(
         room_id="r1",
         hub_id="h1",
@@ -176,6 +215,7 @@ def test_common_foundation_dtos_can_be_instantiated():
         status="working",
         timestamp=now,
     )
+    DebateRoundEvent(room_id="r1", round_number=1, agent_id="a1", message_id="m1")
     NotificationPayload(room_id="r1", message="notice")
     HubConnectionInfo(hub_id="h1", owner_id="u1", is_online=True)
     HubAgentStatus(hub_id="h1", agent_id="a1", status="active")
@@ -230,6 +270,120 @@ def test_protocols_are_runtime_checkable():
 def test_event_exports_are_distinct():
     assert DeliveryEvent is not InternalDomainEvent
     assert InternalDomainEvent.__name__ == "InternalDomainEvent"
+
+
+def test_delivery_event_schemas_match_design_doc():
+    expected_fields = {
+        DeliveryEventBase: {"room_id", "timestamp"},
+        ProcessingStatusEvent: {
+            "room_id",
+            "timestamp",
+            "event_type",
+            "message_id",
+            "status",
+            "agent_id",
+            "details",
+            "client_request_id",
+            "agents",
+        },
+        RunEventNotification: {
+            "room_id",
+            "timestamp",
+            "event_type",
+            "event_id",
+            "run_id",
+            "seq",
+            "run_event_type",
+            "payload",
+        },
+        AgentMessagePartial: {
+            "room_id",
+            "timestamp",
+            "event_type",
+            "message_id",
+            "agent_id",
+            "content_delta",
+        },
+        AgentMessageFinal: {
+            "room_id",
+            "timestamp",
+            "event_type",
+            "message_id",
+            "agent_id",
+            "content",
+        },
+        CancellationEvent: {"room_id", "timestamp", "event_type", "message_id", "reason"},
+        HITLRequestEvent: {
+            "room_id",
+            "timestamp",
+            "event_type",
+            "request_id",
+            "prompt",
+            "prompt_type",
+            "source",
+            "message_id",
+        },
+        HITLResolvedEvent: {
+            "room_id",
+            "timestamp",
+            "event_type",
+            "request_id",
+            "message_id",
+        },
+        HubAgentEvent: {
+            "room_id",
+            "timestamp",
+            "event_type",
+            "hub_id",
+            "agent_id",
+            "message_id",
+            "status",
+            "partial",
+        },
+        DebateRoundEvent: {
+            "room_id",
+            "timestamp",
+            "event_type",
+            "round_number",
+            "agent_id",
+            "message_id",
+        },
+    }
+
+    for dto, fields in expected_fields.items():
+        assert set(dto.model_fields) == fields
+
+    expected_required_fields = {
+        DeliveryEventBase: {"room_id"},
+        ProcessingStatusEvent: {"room_id", "message_id", "status"},
+        RunEventNotification: {
+            "room_id",
+            "event_id",
+            "run_id",
+            "seq",
+            "run_event_type",
+        },
+        AgentMessagePartial: {"room_id", "message_id", "agent_id", "content_delta"},
+        AgentMessageFinal: {"room_id", "message_id", "agent_id"},
+        CancellationEvent: {"room_id", "message_id"},
+        HITLRequestEvent: {
+            "room_id",
+            "request_id",
+            "prompt",
+            "prompt_type",
+            "source",
+            "message_id",
+        },
+        HITLResolvedEvent: {"room_id", "request_id", "message_id"},
+        HubAgentEvent: {"room_id", "hub_id", "agent_id", "message_id", "status"},
+        DebateRoundEvent: {"room_id", "round_number", "agent_id", "message_id"},
+    }
+
+    for dto, fields in expected_required_fields.items():
+        required_fields = {
+            name for name, field in dto.model_fields.items() if field.is_required()
+        }
+        assert required_fields == fields
 
 
 def _public_protocol_methods(protocol):
