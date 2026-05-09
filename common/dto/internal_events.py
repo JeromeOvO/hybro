@@ -27,29 +27,32 @@ class MessageCommitted(InternalDomainEvent):
     event_type: Literal["message_committed"] = "message_committed"
     room_id: str
     message_id: str
+    message_type: Literal["user", "agent"]
+    agent_id: str | None = None
 
 
 class RunStateChanged(InternalDomainEvent):
     event_type: Literal["run_state_changed"] = "run_state_changed"
     run_id: str
     room_id: str
-    state: str
+    old_state: str
+    new_state: str
 
 
 class HubAgentResponseInternal(InternalDomainEvent):
-    event_type: Literal["hub_agent_response"] = "hub_agent_response"
+    event_type: Literal["hub_agent_response_internal"] = (
+        "hub_agent_response_internal"
+    )
     hub_id: str
     agent_id: str
-    task_id: str | None = None
-    response: dict[str, Any] = Field(default_factory=dict)
+    task_id: str
+    room_id: str
+    is_terminal: bool
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 InternalEvent = Annotated[
-    AgentRegistered
-    | RoomCreated
-    | MessageCommitted
-    | RunStateChanged
-    | HubAgentResponseInternal,
+    MessageCommitted | RunStateChanged | HubAgentResponseInternal,
     Field(discriminator="event_type"),
 ]
 

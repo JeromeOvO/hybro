@@ -1,44 +1,52 @@
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from common.dto import (
     ExecutionAck,
     ExecutionRequest,
-    ExecutionResult,
     HITLRequest,
     HITLResponse,
+    HubAgentResponseInternal,
     RunInfo,
-    WorkflowState,
 )
 
 
 @runtime_checkable
 class ExecutionEngine(Protocol):
     async def execute(self, request: ExecutionRequest) -> ExecutionAck: ...
-    async def get_result(self, run_id: str) -> ExecutionResult | None: ...
+    async def cancel(self, room_id: str, message_id: str) -> bool: ...
+    async def get_run(self, run_id: str) -> RunInfo | None: ...
+    async def get_runs_for_room(self, room_id: str) -> list[RunInfo]: ...
+    async def cancel_inflight_tasks(self) -> int: ...
+    async def heal_diverged_runs(self, limit: int = 500) -> int: ...
 
 
 @runtime_checkable
 class HITLManager(Protocol):
-    async def request_input(self, request: HITLRequest) -> HITLRequest: ...
-    async def handle_response(self, response: HITLResponse) -> bool: ...
-    async def get_pending_requests(
-        self, room_id: str | None = None
-    ) -> list[HITLRequest]: ...
-    async def cancel_request(self, request_id: str) -> bool: ...
-    async def cancel_requests_for_message(self, message_id: str) -> int: ...
+    async def create_hitl_request(
+        self,
+        room_id: str,
+        user_message_id: str,
+        prompt: str,
+        source: Literal["agent", "supervisor"],
+        agent_id: str | None = None,
+        a2a_task_id: str | None = None,
+        a2a_context_id: str | None = None,
+        continuation_message_id: str | None = None,
+    ) -> HITLRequest | None: ...
+
+    async def resolve_hitl(
+        self, request_id: str, response: str, responder_id: str
+    ) -> HITLResponse: ...
+
+    async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]: ...
+    async def cancel_hitl(self, request_id: str) -> bool: ...
 
 
 @runtime_checkable
-class WorkflowController(Protocol):
-    async def record_processing_status(
-        self, run_id: str, status: str, metadata: dict | None = None
-    ) -> WorkflowState: ...
-    async def heal_head_from_events(self, run_id: str) -> RunInfo | None: ...
-    async def append_run_timeout_failure(self, run_id: str, reason: str) -> RunInfo: ...
+class HubAgentResponseSink(Protocol):
+    async def handle_hub_agent_response(
+        self, event: HubAgentResponseInternal
+    ) -> None: ...
 
 
-__all__ = [
-    "ExecutionEngine",
-    "HITLManager",
-    "WorkflowController",
-]
+__all__ = ["ExecutionEngine", "HITLManager", "HubAgentResponseSink"]

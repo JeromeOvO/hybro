@@ -74,9 +74,12 @@ class HITLResolvedEvent(DeliveryEventBase):
 
 
 class HubAgentEvent(DeliveryEventBase):
-    event_type: Literal["hub_agent"] = "hub_agent"
-    hub_id: str | None = None
-    agent_id: str | None = None
+    event_type: Literal["hub_agent_event"] = "hub_agent_event"
+    hub_id: str
+    agent_id: str
+    message_id: str
+    status: str
+    partial: str | None = None
 
 
 class DebateRoundEvent(DeliveryEventBase):

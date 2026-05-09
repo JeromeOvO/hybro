@@ -1,30 +1,29 @@
 from typing import Protocol, runtime_checkable
 
-from common.dto import (
-    EmbeddingResult,
-    LLMRequest,
-    LLMResponse,
-    LLMStructuredResponse,
-    ModelInfo,
-)
+from common.dto import LLMResponse, LLMStructuredResponse, ModelInfo
 
 
 @runtime_checkable
 class LLMProvider(Protocol):
-    async def generate(self, request: LLMRequest) -> LLMResponse: ...
+    async def generate(
+        self, messages: list[dict], model: str | None = None, **kwargs
+    ) -> LLMResponse: ...
+
     async def generate_structured(
-        self, request: LLMRequest, schema: dict
+        self, messages: list[dict], schema: dict, model: str | None = None, **kwargs
     ) -> LLMStructuredResponse: ...
-    async def embed(self, text: str | list[str]) -> list[EmbeddingResult]: ...
+
+    async def embed(self, text: str, model: str | None = None) -> list[float]: ...
+    async def embed_batch(
+        self, texts: list[str], model: str | None = None
+    ) -> list[list[float]]: ...
 
 
 @runtime_checkable
 class ModelRegistry(Protocol):
-    async def get_model(self, logical_name: str) -> ModelInfo | None: ...
-    async def list_models(self, provider: str | None = None) -> list[ModelInfo]: ...
+    def get_model(self, logical_name: str) -> ModelInfo: ...
+    def supports_capability(self, model: str, capability: str) -> bool: ...
+    def list_models(self, capability: str | None = None) -> list[ModelInfo]: ...
 
 
-__all__ = [
-    "LLMProvider",
-    "ModelRegistry",
-]
+__all__ = ["LLMProvider", "ModelRegistry"]

@@ -3,7 +3,6 @@ from typing import Protocol, runtime_checkable
 from common.dto import (
     AssembledContext,
     CompactionResult,
-    ContextBlock,
     MemorySearchResult,
     RoomMemoryInfo,
     UserMemory,
@@ -12,30 +11,29 @@ from common.dto import (
 
 @runtime_checkable
 class ContextAssembler(Protocol):
-    async def build_supervisor_context(self, room_id: str) -> AssembledContext: ...
-    async def build_agent_execution_context(
-        self, room_id: str, agent_id: str
+    async def assemble_context(
+        self,
+        room_id: str,
+        message_id: str,
+        token_budget: int,
+        agent_id: str | None = None,
     ) -> AssembledContext: ...
 
 
 @runtime_checkable
 class MemoryManager(Protocol):
-    async def list_room_memory(self, room_id: str) -> list[RoomMemoryInfo]: ...
-    async def list_user_memory(self, user_id: str) -> list[UserMemory]: ...
-    async def compact_if_needed(self, room_id: str) -> CompactionResult | None: ...
-    async def compact_room_memory(self, room_id: str) -> CompactionResult: ...
+    async def get_room_memory(self, room_id: str) -> RoomMemoryInfo | None: ...
+    async def search_memory(
+        self, room_id: str, query: str, limit: int = 10
+    ) -> list[MemorySearchResult]: ...
+    async def get_user_memories(self, user_id: str) -> list[UserMemory]: ...
+    async def delete_room_memory(self, room_id: str) -> bool: ...
 
 
 @runtime_checkable
 class MemoryProjector(Protocol):
-    async def should_compact(self, room_id: str, blocks: list[ContextBlock]) -> bool: ...
-    async def search_memory(
-        self, room_id: str, query: str, limit: int | None = None
-    ) -> list[MemorySearchResult]: ...
+    async def project_message(self, room_id: str, message_id: str) -> None: ...
+    async def run_compaction(self, room_id: str) -> CompactionResult: ...
 
 
-__all__ = [
-    "ContextAssembler",
-    "MemoryManager",
-    "MemoryProjector",
-]
+__all__ = ["ContextAssembler", "MemoryManager", "MemoryProjector"]

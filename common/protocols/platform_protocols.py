@@ -1,42 +1,37 @@
-from typing import Protocol, runtime_checkable
+from typing import AsyncIterator, Protocol, runtime_checkable
 
-from common.dto import (
-    FileInfo,
-    FileMetadata,
-    GatewayRequest,
-    GatewayResponse,
-    GatewayRoute,
-    RateLimitResult,
-)
+from common.dto import FileInfo, GatewayRequest, GatewayResponse, RateLimitResult
 
 
 @runtime_checkable
 class GatewayService(Protocol):
-    async def send_message(self, request: GatewayRequest) -> GatewayResponse: ...
-    async def prepare_stream(self, agent_id: str, room_id: str) -> GatewayRoute: ...
+    async def send_message(
+        self, api_key: str, request: GatewayRequest
+    ) -> GatewayResponse: ...
+    async def stream_message(
+        self, api_key: str, request: GatewayRequest
+    ) -> AsyncIterator[dict]: ...
 
 
 @runtime_checkable
 class RateLimiter(Protocol):
-    async def check_rate_limit(self, key: str, scope: str | None = None) -> RateLimitResult: ...
-    async def record_request(self, key: str, scope: str | None = None) -> None: ...
+    async def check(self, key: str, limit: int, window: int) -> RateLimitResult: ...
+    async def check_global(self, limit: int, window: int) -> RateLimitResult: ...
 
 
 @runtime_checkable
 class FileStorage(Protocol):
     async def upload(
         self,
+        file_bytes: bytes,
+        filename: str,
+        owner_id: str,
         room_id: str,
-        user_id: str,
-        file_name: str,
-        content: bytes,
-        mime_type: str,
-    ) -> FileMetadata: ...
-    async def get_file(self, file_id: str) -> FileInfo | None: ...
+        **kwargs,
+    ) -> FileInfo: ...
+    async def get_url(self, file_id: str, ttl: int = 3600) -> str | None: ...
+    async def delete(self, file_id: str) -> bool: ...
+    async def list_for_room(self, room_id: str) -> list[FileInfo]: ...
 
 
-__all__ = [
-    "FileStorage",
-    "GatewayService",
-    "RateLimiter",
-]
+__all__ = ["FileStorage", "GatewayService", "RateLimiter"]
