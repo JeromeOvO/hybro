@@ -29,33 +29,35 @@ function useAgentFromCatalog(agentId: string): Agent | undefined {
   return agents?.find(a => a.agent_id === agentId)
 }
 
-function AgentAvatar({ agentId, theme }: { agentId: string; theme: AgentTheme }) {
+function AgentAvatar({ agentId, theme, isAnimated }: { agentId: string; theme: AgentTheme; isAnimated?: boolean }) {
   const catalogAgent = useAgentFromCatalog(agentId)
   const iconUrl = catalogAgent?.agent_card?.iconUrl || undefined
 
   return (
-    <div
-      className="w-8 h-8 overflow-hidden shrink-0 relative"
-      style={{ backgroundColor: theme.avatarLightBg, borderRadius: 'var(--chat-input-radius)' }}
-    >
-      {iconUrl ? (
+    <div className={cn("w-8 h-8 shrink-0 relative", isAnimated && "conversation-avatar-working")}>
+      <div
+        className="w-full h-full overflow-hidden"
+        style={{ backgroundColor: theme.avatarLightBg, borderRadius: 'var(--chat-input-radius)' }}
+      >
+        {iconUrl ? (
+          <img
+            src={iconUrl}
+            alt=""
+            className="w-full h-full object-cover"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.display = 'none'
+              const fallback = (e.currentTarget as HTMLImageElement).nextElementSibling as HTMLImageElement | null
+              if (fallback) fallback.style.display = 'block'
+            }}
+          />
+        ) : null}
         <img
-          src={iconUrl}
+          src={getAgentAvatarUri(agentId)}
           alt=""
-          className="w-full h-full object-cover"
-          onError={(e) => {
-            (e.currentTarget as HTMLImageElement).style.display = 'none'
-            const fallback = (e.currentTarget as HTMLImageElement).nextElementSibling as HTMLImageElement | null
-            if (fallback) fallback.style.display = 'block'
-          }}
+          className="w-full h-full"
+          style={{ display: iconUrl ? 'none' : 'block' }}
         />
-      ) : null}
-      <img
-        src={getAgentAvatarUri(agentId)}
-        alt=""
-        className="w-full h-full"
-        style={{ display: iconUrl ? 'none' : 'block' }}
-      />
+      </div>
     </div>
   )
 }
@@ -102,7 +104,7 @@ export function AgentCard({
   const content = (
     <>
       <div className="flex items-center gap-2.5" style={{ position: 'relative', zIndex: 1 }}>
-        <AgentAvatar agentId={agentId} theme={theme} />
+        <AgentAvatar agentId={agentId} theme={theme} isAnimated={display.isAnimated} />
         <Link
           href={`/c/agents/${agentId}`}
           className="text-[13px] font-medium hover:underline focus-visible:outline-none"
