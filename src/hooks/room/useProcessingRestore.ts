@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 import { useMessageStore } from '@/stores/message-store'
+import { useRoomUiStore } from '@/stores/room-ui-store'
 import { TASK_STATE, isTerminalState } from '@/lib/types/sse'
 import { isStale } from '@/lib/time'
 
@@ -94,6 +95,10 @@ export function useProcessingRestore(
     } else {
       // Backend truth says no active processing — aggressively clean up any
       // stale local spinner/placeholder left behind by missed terminal SSE.
+      // But don't wipe it if a message send is still in flight (the SSE events
+      // haven't arrived yet).
+      const { sending } = useRoomUiStore.getState().rooms[roomId] ?? {}
+      if (sending) return
       store.removeMessage(lifecycle.placeholderId(roomId))
       lifecycle.stopProcessing()
     }

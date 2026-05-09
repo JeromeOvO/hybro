@@ -39,8 +39,14 @@ export function selectConversationTurns(
 
   // Track which clientRequestIds have real agents (for dedup)
   const clientReqIdsWithRealAgent = new Set<string>()
+  const clientReqIdsWithWorkingAgent = new Set<string>()
   for (const agent of agentEntities) {
-    if (agent.clientRequestId) clientReqIdsWithRealAgent.add(agent.clientRequestId)
+    if (agent.clientRequestId) {
+      clientReqIdsWithRealAgent.add(agent.clientRequestId)
+      if (agent.taskStatus === 'working' || agent.taskStatus === 'submitted') {
+        clientReqIdsWithWorkingAgent.add(agent.clientRequestId)
+      }
+    }
   }
 
   for (const agent of agentEntities) {
@@ -98,9 +104,26 @@ export function selectConversationTurns(
     }
   }
 
-  // Add synthetic working cards for ephemeral placeholders without real agents
+  // Add synthetic working cards for ephemeral placeholders.
+  //
+  // Standard case: suppress the placeholder when real agents already exist for
+  // the same clientRequestId — the real agent card replaces it.
+  //
+  // Exception: when the placeholder has a non-empty taskContent (supervisor
+  // planning-stage update like "Planning next action...") AND no agent for
+  // that turn is currently working. This shows the user that the supervisor
+  // is planning the next step after an agent completed.
   for (const [crId, eph] of ephemeralByClientReqId) {
-    if (clientReqIdsWithRealAgent.has(crId)) continue
+    const hasRealAgent = clientReqIdsWithRealAgent.has(crId)
+    const hasWorkingAgent = clientReqIdsWithWorkingAgent.has(crId)
+    const hasSupervisorStage = Boolean(eph.taskContent?.trim())
+
+    // Suppress placeholder if real agents exist, UNLESS it's a supervisor
+    // stage update AND no agent is currently working (i.e. all agents for
+    // this turn have completed and the supervisor is planning next steps).
+    if (hasRealAgent && (!hasSupervisorStage || hasWorkingAgent)) {
+      continue
+    }
 
     const targetTurn = userMessageIdByClientRequestId.get(crId)
     if (!targetTurn) continue
