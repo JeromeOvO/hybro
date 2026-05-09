@@ -279,6 +279,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
           }
 
           if (status === PROCESSING_STATUS.PROCESSING) {
+            console.log('[SSE] PROCESSING event received', { status, details: sseMessage.data.details, messageId: sseMessage.data.message_id, clientReqId: correlation.clientReqId })
             const pendingAckClientRequestId = lifecycle.getPendingRunEventAck()
             if (
               pendingAckClientRequestId
@@ -300,9 +301,18 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
 
             // When details are present (supervisor stage updates), always
             // re-show the placeholder — even after task_submitted dismissed
-            // it — so the user sees "Evaluating...", "Synthesizing...", etc.
+            // it — so the user sees "Planning next action...", etc.
+            // Reset the dismissed flag so the selector knows the placeholder
+            // is active again (the selector uses taskContent to decide whether
+            // to render it alongside completed agents, but the flag keeps
+            // lifecycle state consistent).
+            if (stageDetails) {
+              lifecycle.resetPlaceholder()
+            }
+
             if (stageDetails || !lifecycle.isPlaceholderDismissed()) {
               const defaultText = 'Processing your request\u2026'
+              console.log('[SSE PROCESSING] upserting placeholder', { stageDetails, placeholderId: lifecycle.placeholderId(roomId), roomId, isDismissed: lifecycle.isPlaceholderDismissed() })
               store.upsertMessage({
                 id: lifecycle.placeholderId(roomId),
                 roomId,
@@ -427,9 +437,6 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             break
           }
         }
-        store.removeMessage(lifecycle.placeholderId(roomId))
-        lifecycle.dismissPlaceholder()
-
         if (sseMessage.data?.message_id) {
           const messageId = sseMessage.data.message_id
           let resolvedAgentName = sseMessage.data.agent_name
