@@ -45,8 +45,7 @@ class RedisPubSubImpl:
         client = self._ensure_client()
         if client is None:
             return _empty_iterator()
-        pubsub = client.pubsub()
-        return _message_iterator(pubsub, channel)
+        return _message_iterator(client, channel)
 
     async def ping(self) -> bool:
         client = self._ensure_client()
@@ -72,7 +71,8 @@ async def _empty_iterator() -> AsyncIterator[str]:
         yield ""
 
 
-async def _message_iterator(pubsub: Any, channel: str) -> AsyncIterator[str]:
+async def _message_iterator(client: Any, channel: str) -> AsyncIterator[str]:
+    pubsub = client.pubsub()
     await pubsub.subscribe(channel)
     try:
         async for message in pubsub.listen():

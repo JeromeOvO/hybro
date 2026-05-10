@@ -210,6 +210,33 @@ async def test_redis_pubsub_impl_yields_only_messages():
 
 
 @pytest.mark.asyncio
+async def test_redis_pubsub_impl_allocates_pubsub_lazily():
+    from dal.redis.pubsub import RedisPubSubImpl
+
+    pubsub = MagicMock()
+    pubsub.subscribe = AsyncMock()
+    pubsub.unsubscribe = AsyncMock()
+    pubsub.aclose = AsyncMock()
+
+    async def listen():
+        yield {"type": "message", "data": "payload"}
+
+    pubsub.listen = listen
+
+    client = MagicMock()
+    client.pubsub.return_value = pubsub
+
+    pubsub_impl = RedisPubSubImpl(client=client)
+
+    iterator = await pubsub_impl.subscribe("events")
+    client.pubsub.assert_not_called()
+
+    assert await anext(iterator) == "payload"
+    client.pubsub.assert_called_once_with()
+    await iterator.aclose()
+
+
+@pytest.mark.asyncio
 async def test_redis_pubsub_impl_publishes_with_direct_client():
     from dal.redis.pubsub import RedisPubSubImpl
 
