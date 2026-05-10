@@ -17,9 +17,16 @@ function blocksEqual(a: ConversationBlock, b: ConversationBlock): boolean {
     }
     case 'agent_content': {
       const bc = b as typeof a
-      return a.content === bc.content
-        && a.isStreaming === bc.isStreaming
-        && (a.artifacts?.length ?? 0) === (bc.artifacts?.length ?? 0)
+      if (a.content !== bc.content) return false
+      if (a.isStreaming !== bc.isStreaming) return false
+      if ((a.artifacts?.length ?? 0) !== (bc.artifacts?.length ?? 0)) return false
+      // Compare artifact IDs for stability
+      if (a.artifacts && bc.artifacts) {
+        for (let i = 0; i < a.artifacts.length; i++) {
+          if (a.artifacts[i].artifactId !== bc.artifacts[i].artifactId) return false
+        }
+      }
+      return true
     }
     case 'user_answer': {
       const bc = b as typeof a

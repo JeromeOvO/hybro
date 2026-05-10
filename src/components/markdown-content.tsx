@@ -311,7 +311,6 @@ export function MarkdownContent({
       className={cn("min-w-0 text-sm leading-relaxed text-inherit", className)}
     >
       <Streamdown
-        key={isStreaming ? 'streaming' : 'static'}
         mode={isStreaming ? 'streaming' : 'static'}
         caret={isStreaming ? 'block' : undefined}
         components={components}
