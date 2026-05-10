@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from a2a.types import AgentCard
+from common.dto.agent import HubAgentDescriptor
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from config.settings import settings
@@ -95,10 +96,14 @@ class RelayService:
         self._hub_disconnect_events: dict[str, asyncio.Event] = {}
 
         self._leader: LeaderElection | None = None
+        self._agent_registry_writer = None
 
     def set_leader_election(self, leader: LeaderElection | None) -> None:
         """Attach a LeaderElection instance for distributed leader gating."""
         self._leader = leader
+
+    def bind_agent_registry_writer(self, writer) -> None:
+        self._agent_registry_writer = writer
 
     def set_relay_transport(self, transport: Any) -> None:
         """Wire up the RelayTransport so publish events can be delegated."""
@@ -364,6 +369,32 @@ class RelayService:
         # (multi-worker: sync may hit a different worker than the SSE loop).
         if self._streams:
             await self._streams.record_heartbeat(hub_id)
+
+        if self._agent_registry_writer is not None:
+            descriptors = [
+                HubAgentDescriptor(
+                    hub_id=hub_id,
+                    agent_id=ag.local_agent_id,
+                    name=ag.name,
+                    url=ag.agent_card.get("url"),
+                    capabilities=list(ag.capabilities or []),
+                    raw_card=dict(ag.agent_card or {}),
+                )
+                for ag in agents
+            ]
+            synced = await self._agent_registry_writer.sync_hub_agents(
+                hub_id,
+                api_key.user_id,
+                descriptors,
+                prune_missing=prune_missing,
+            )
+            return [
+                {
+                    "agent_id": item.agent_id,
+                    "local_agent_id": item.descriptor.agent_id if item.descriptor else None,
+                }
+                for item in synced
+            ]
 
         user_id = api_key.user_id
         gateway_base = settings.gateway_base_url

@@ -14,6 +14,7 @@ Tests cover:
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from common.dto.agent import AgentInfo
 from models.agent import Agent, AgentStatus
 from models.request import AgentCenterRequest
 from models.error import (
@@ -172,6 +173,25 @@ def mock_a2a_service():
     return mock
 
 
+def _info_from_agent(agent: Agent) -> AgentInfo:
+    return AgentInfo(
+        agent_id=agent.agent_id,
+        name=agent.agent_card.name,
+        description=agent.agent_card.description,
+        url=agent.agent_card.url,
+        provider_id=agent.provider_id,
+        status=agent.agent_status.value,
+        is_public=agent.is_public,
+        public_url=agent.public_url,
+        source=agent.source,
+        hub_id=agent.hub_id,
+        is_hub_online=agent.is_hub_online,
+        rate_limit_per_user_per_hour=agent.rate_limit_per_user_per_hour,
+        rate_limit_system_per_hour=agent.rate_limit_system_per_hour,
+        call_count=agent.call_count,
+    )
+
+
 # =============================================================================
 # Agent Registration Tests
 # =============================================================================
@@ -184,50 +204,55 @@ class TestRegisterAgent:
     async def test_registers_new_agent(
         self, agent_service, mock_agent_db_service, sample_agent_card, mock_user
     ):
-        """Should register a new agent successfully."""
-        agent_service.database_service = mock_agent_db_service
+        """Should delegate registration to the bound facade."""
+        facade = MagicMock()
+        facade.register_agent = AsyncMock(
+            return_value=AgentInfo(
+                agent_id="agent-123",
+                provider_id=mock_user.user_id,
+                name=sample_agent_card.name,
+                description=sample_agent_card.description,
+                url=sample_agent_card.url,
+                public_url="https://public.hybro.ai/test-agent",
+            )
+        )
+        agent_service.bind_facade(facade)
         
         request = AgentCenterRequest(
             agent_card=sample_agent_card,
             provider_id=mock_user.user_id,
         )
-        
-        # Mock no existing agent with same URL
-        with patch.object(
-            agent_service, "_find_agent_by_normalized_url", 
-            AsyncMock(return_value=None)
-        ):
-            with patch(
-                "services.agent_service.domain_alias_service.generate_public_url",
-                AsyncMock(return_value="https://public.hybro.ai/test-agent"),
-            ):
-                result = await agent_service.register_agent(request)
+        result = await agent_service.register_agent(request)
         
         assert result.success is True
-        assert result.agent_id is not None
+        assert result.agent_id == "agent-123"
         assert result.provider_id == mock_user.user_id
-        mock_agent_db_service.add_agent.assert_called_once()
+        facade.register_agent.assert_called_once_with(
+            sample_agent_card.url,
+            mock_user.user_id,
+            preferred_subdomain=None,
+        )
 
     @pytest.mark.asyncio
     async def test_raises_error_when_agent_card_missing(self, agent_service):
-        """Should raise error when agent_card is not provided."""
+        """Should fail fast before bind."""
         request = AgentCenterRequest(agent_card=None)
         
-        with pytest.raises(AgentCardRequiredError):
+        with pytest.raises(RuntimeError, match="bind_facade"):
             await agent_service.register_agent(request)
 
     @pytest.mark.asyncio
     async def test_returns_error_for_duplicate_url(
         self, agent_service, sample_agent_card, sample_agent
     ):
-        """Should return error when agent URL is already registered."""
+        """Should map facade duplicate errors to a 400 response."""
+        facade = MagicMock()
+        facade.register_agent = AsyncMock(
+            side_effect=ValueError("Agent with this URL is already registered")
+        )
+        agent_service.bind_facade(facade)
         request = AgentCenterRequest(agent_card=sample_agent_card)
-        
-        with patch.object(
-            agent_service, "_find_agent_by_normalized_url",
-            AsyncMock(return_value=sample_agent),
-        ):
-            result = await agent_service.register_agent(request)
+        result = await agent_service.register_agent(request)
         
         assert result.success is False
         assert result.status_code == 400
@@ -237,21 +262,12 @@ class TestRegisterAgent:
     async def test_handles_db_error_on_registration(
         self, agent_service, mock_agent_db_service, sample_agent_card
     ):
-        """Should handle database errors gracefully."""
-        agent_service.database_service = mock_agent_db_service
-        mock_agent_db_service.add_agent.side_effect = Exception("DB connection failed")
-        
+        """Should handle facade errors gracefully."""
+        facade = MagicMock()
+        facade.register_agent = AsyncMock(side_effect=Exception("DB connection failed"))
+        agent_service.bind_facade(facade)
         request = AgentCenterRequest(agent_card=sample_agent_card)
-        
-        with patch.object(
-            agent_service, "_find_agent_by_normalized_url",
-            AsyncMock(return_value=None),
-        ):
-            with patch(
-                "services.agent_service.domain_alias_service.generate_public_url",
-                AsyncMock(return_value=None),
-            ):
-                result = await agent_service.register_agent(request)
+        result = await agent_service.register_agent(request)
         
         assert result.success is False
         assert result.status_code == 500
@@ -269,9 +285,10 @@ class TestQueryAgentByAgentId:
     async def test_returns_public_agent(
         self, agent_service, mock_agent_db_service, sample_agent
     ):
-        """Should return public agent."""
-        agent_service.database_service = mock_agent_db_service
-        mock_agent_db_service.get_agent_by_agent_id.return_value = sample_agent
+        """Should return public agent from bound facade."""
+        facade = MagicMock()
+        facade.get_agent = AsyncMock(return_value=_info_from_agent(sample_agent))
+        agent_service.bind_facade(facade)
         
         request = AgentCenterRequest(agent_id=sample_agent.agent_id)
         result = await agent_service.query_agent_by_agent_id(request)
@@ -292,8 +309,9 @@ class TestQueryAgentByAgentId:
         self, agent_service, mock_agent_db_service, sample_private_agent
     ):
         """Should return 404 for private agent when user is not owner."""
-        agent_service.database_service = mock_agent_db_service
-        mock_agent_db_service.get_agent_by_agent_id.return_value = sample_private_agent
+        facade = MagicMock()
+        facade.get_agent = AsyncMock(return_value=_info_from_agent(sample_private_agent))
+        agent_service.bind_facade(facade)
         
         # Request without user_id (unauthenticated)
         request = AgentCenterRequest(
@@ -310,8 +328,9 @@ class TestQueryAgentByAgentId:
         self, agent_service, mock_agent_db_service, sample_private_agent, mock_user
     ):
         """Should return private agent when user is the owner."""
-        agent_service.database_service = mock_agent_db_service
-        mock_agent_db_service.get_agent_by_agent_id.return_value = sample_private_agent
+        facade = MagicMock()
+        facade.get_agent = AsyncMock(return_value=_info_from_agent(sample_private_agent))
+        agent_service.bind_facade(facade)
         
         request = AgentCenterRequest(
             agent_id=sample_private_agent.agent_id,
@@ -330,8 +349,9 @@ class TestGetAgentsByProviderId:
         self, agent_service, mock_agent_db_service, sample_agent, mock_user
     ):
         """Should return agents owned by provider."""
-        agent_service.database_service = mock_agent_db_service
-        mock_agent_db_service.get_agents_by_provider_id.return_value = [sample_agent]
+        facade = MagicMock()
+        facade.list_agents = AsyncMock(return_value=[_info_from_agent(sample_agent)])
+        agent_service.bind_facade(facade)
         
         request = AgentCenterRequest(provider_id=mock_user.user_id)
         result = await agent_service.get_agents_by_provider_id(request)
@@ -357,8 +377,9 @@ class TestGetAllActiveAgents:
         self, agent_service, mock_agent_db_service, sample_agent
     ):
         """Should return only active agents."""
-        agent_service.database_service = mock_agent_db_service
-        mock_agent_db_service.get_all_active_agents.return_value = [sample_agent]
+        facade = MagicMock()
+        facade.list_visible_agents = AsyncMock(return_value=[_info_from_agent(sample_agent)])
+        agent_service.bind_facade(facade)
         
         request = AgentCenterRequest()
         result = await agent_service.get_all_active_agents(request)
@@ -371,14 +392,16 @@ class TestGetAllActiveAgents:
         self, agent_service, mock_agent_db_service, mock_user
     ):
         """Should pass user_id for visibility filtering."""
-        agent_service.database_service = mock_agent_db_service
-        mock_agent_db_service.get_all_active_agents.return_value = []
+        facade = MagicMock()
+        facade.list_visible_agents = AsyncMock(return_value=[])
+        agent_service.bind_facade(facade)
         
         request = AgentCenterRequest(user_id=mock_user.user_id)
         await agent_service.get_all_active_agents(request)
         
-        mock_agent_db_service.get_all_active_agents.assert_called_once_with(
-            mock_user.user_id
+        facade.list_visible_agents.assert_called_once_with(
+            user_id=mock_user.user_id,
+            active_only=True,
         )
 
 
@@ -394,8 +417,10 @@ class TestUpdateAgent:
     async def test_updates_whole_agent(
         self, agent_service, mock_agent_db_service, sample_agent
     ):
-        """Should update the entire agent."""
-        agent_service.database_service = mock_agent_db_service
+        """Should update through the bound facade."""
+        facade = MagicMock()
+        facade.update_agent = AsyncMock(return_value=_info_from_agent(sample_agent))
+        agent_service.bind_facade(facade)
         
         updated_agent = sample_agent.model_copy(
             update={"agent_status": AgentStatus.inactive}
@@ -408,14 +433,16 @@ class TestUpdateAgent:
         result = await agent_service.update_agent(request)
         
         assert result.success is True
-        mock_agent_db_service.update_agent_by_agent_id.assert_called_once()
+        facade.update_agent.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_updates_agent_card_only(
         self, agent_service, mock_agent_db_service, sample_agent, sample_agent_card
     ):
-        """Should update only the agent card."""
-        agent_service.database_service = mock_agent_db_service
+        """Should update only the agent card through the bound facade."""
+        facade = MagicMock()
+        facade.update_agent = AsyncMock(return_value=_info_from_agent(sample_agent))
+        agent_service.bind_facade(facade)
         
         request = AgentCenterRequest(
             agent_id=sample_agent.agent_id,
@@ -425,7 +452,7 @@ class TestUpdateAgent:
         result = await agent_service.update_agent(request)
         
         assert result.success is True
-        mock_agent_db_service.update_agent_agent_card_by_agent_id.assert_called_once()
+        facade.update_agent.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_raises_error_when_agent_id_missing(self, agent_service):
@@ -448,15 +475,19 @@ class TestRemoveAgent:
     async def test_removes_agent(
         self, agent_service, mock_agent_db_service, sample_agent
     ):
-        """Should remove agent successfully."""
-        agent_service.database_service = mock_agent_db_service
+        """Should remove agent successfully through facade."""
+        facade = MagicMock()
+        facade.get_agent = AsyncMock(return_value=_info_from_agent(sample_agent))
+        facade.delete_agent = AsyncMock(return_value=True)
+        agent_service.bind_facade(facade)
         
         request = AgentCenterRequest(agent_id=sample_agent.agent_id)
         result = await agent_service.remove_agent(request)
         
         assert result.success is True
-        mock_agent_db_service.delete_agent_by_agent_id.assert_called_once_with(
-            sample_agent.agent_id
+        facade.delete_agent.assert_called_once_with(
+            sample_agent.agent_id,
+            sample_agent.provider_id,
         )
 
     @pytest.mark.asyncio

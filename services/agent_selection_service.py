@@ -50,6 +50,9 @@ class AgentSelectionService:
         from services.agent_matcher import AgentMatcher
         self._matcher = AgentMatcher()
 
+    def bind_facade(self, facade) -> None:
+        self._matcher.bind_facade(facade)
+
     async def select_agents_for_message(
         self,
         message_text: str,
@@ -155,4 +158,3 @@ class AgentSelectionService:
 
 # Singleton instance
 agent_selection_service = AgentSelectionService()
-

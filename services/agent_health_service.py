@@ -68,10 +68,14 @@ class AgentHealthService:
         # Track active retry tasks per agent to avoid duplicates
         self._retry_tasks: dict[str, asyncio.Task] = {}
         self._leader: LeaderElection | None = None
+        self._facade = None
 
     def set_leader_election(self, leader: LeaderElection | None) -> None:
         """Attach a LeaderElection instance for distributed leader gating."""
         self._leader = leader
+
+    def bind_facade(self, facade) -> None:
+        self._facade = facade
 
     async def check_agent_health(
         self, agent: Agent, *, timeout: float | None = None
@@ -201,6 +205,15 @@ class AgentHealthService:
             bool: True if update was successful
         """
         try:
+            if self._facade is not None:
+                await self._facade.update_health(
+                    agent_id,
+                    new_status == AgentStatus.active,
+                )
+                logger.info(
+                    f"Agent {agent_id} status updated to {new_status.value}"
+                )
+                return True
             agent = await mongodb.get_agent_by_agent_id(agent_id)
             if agent and agent.agent_status != new_status:
                 agent.agent_status = new_status

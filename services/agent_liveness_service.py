@@ -13,6 +13,15 @@ from models.agent import Agent, AgentStatus
 
 logger = get_logger(__name__)
 
+_hub_liveness_reader = None
+_agent_registry_writer = None
+
+
+def bind_agent_liveness_deps(*, hub_liveness_reader=None, agent_registry_writer=None) -> None:
+    global _hub_liveness_reader, _agent_registry_writer
+    _hub_liveness_reader = hub_liveness_reader
+    _agent_registry_writer = agent_registry_writer
+
 
 async def check_and_sync_liveness(agent: Agent) -> Agent:
     """Probe the agent and sync ``agent_status`` in the DB if it changed.
@@ -67,16 +76,11 @@ async def _check_cloud_agent(agent: Agent) -> Agent:
 
 
 async def _check_hub_agent(agent: Agent) -> Agent:
-    try:
-        from services.relay_service import relay_service as _svc
-    except ImportError:
+    if _hub_liveness_reader is None or _agent_registry_writer is None:
         return agent
 
-    if _svc is None:
-        return agent
-
-    if not await _svc.is_hub_alive(agent.hub_id):
-        await _svc.mark_hub_agents_offline(agent.hub_id)
+    if not _hub_liveness_reader.is_hub_online(agent.hub_id):
+        await _agent_registry_writer.mark_hub_agents_offline(agent.hub_id)
         agent.agent_status = AgentStatus.inactive
         logger.info(
             "Liveness: hub %s disconnected — agent %s marked inactive",

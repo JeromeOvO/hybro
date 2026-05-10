@@ -24,6 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from a2a.types import AgentCard, AgentSkill, AgentCapabilities, Task, TaskStatus, TaskState
 
 from common.auth import ClerkUser
+from common.dto.agent import AgentInfo
 from models.agent import Agent, AgentStatus
 from models.room import Room, RoomUserMessage, RoomAgentMessage, MessageContent
 from models.hitl import HITLRequest, HITLStatus, HITLPromptType
@@ -325,9 +326,19 @@ class TestAgentLifecycleFlow:
         )
 
         svc = AgentService()
-        mock_db = MagicMock()
-        mock_db.get_agent_by_agent_id = AsyncMock(return_value=private_agent)
-        svc.database_service = mock_db
+        facade = MagicMock()
+        facade.get_agent = AsyncMock(
+            return_value=AgentInfo(
+                agent_id=private_agent.agent_id,
+                provider_id=private_agent.provider_id,
+                name=private_agent.agent_card.name,
+                description=private_agent.agent_card.description,
+                url=private_agent.agent_card.url,
+                status=private_agent.agent_status.value,
+                is_public=False,
+            )
+        )
+        svc.bind_facade(facade)
 
         owner_resp = await svc.query_agent_by_agent_id(
             AgentCenterRequest(agent_id=agent_id, user_id=flow_user.user_id)
@@ -574,11 +585,11 @@ class TestErrorHandlingFlow:
         from models.request import AgentCenterRequest
 
         svc = AgentService()
-        mock_db = MagicMock()
-        mock_db.get_all_active_agents = AsyncMock(
+        facade = MagicMock()
+        facade.list_visible_agents = AsyncMock(
             side_effect=Exception("Database connection failed"),
         )
-        svc.database_service = mock_db
+        svc.bind_facade(facade)
 
         result = await svc.get_all_active_agents(AgentCenterRequest())
         assert result.success is False
