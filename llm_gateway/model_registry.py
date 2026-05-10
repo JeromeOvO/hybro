@@ -24,6 +24,8 @@ class ModelRegistryImpl:
             return models
         return [model for model in models if capability in model.capabilities]
 
+    # Phase 2 is intentionally static: model registration is derived from settings
+    # until later container/integration phases define runtime extension points.
     def _register_defaults(self) -> None:
         self._register(
             logical_name="lead_ai_model",

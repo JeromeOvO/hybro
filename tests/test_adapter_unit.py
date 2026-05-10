@@ -1,4 +1,5 @@
 import json
+import logging
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -216,6 +217,18 @@ async def test_card_resolver_returns_none_for_malformed_agent_card():
     resolver = AgentCardResolverImpl(client=_FakeCardClient([{"name": "broken"}]))
 
     assert await resolver.resolve_card("https://agent.example") is None
+
+
+@pytest.mark.asyncio
+async def test_card_resolver_logs_warning_when_resolution_fails(caplog):
+    from a2a_adapter.card_resolver import AgentCardResolverImpl
+
+    resolver = AgentCardResolverImpl(client=_FakeCardClient([{"name": "broken"}]))
+
+    with caplog.at_level(logging.WARNING, logger="a2a_adapter.card_resolver"):
+        assert await resolver.resolve_card("https://agent.example") is None
+
+    assert "Failed to resolve A2A agent card for https://agent.example" in caplog.text
 
 
 def test_card_resolver_owned_client_uses_default_timeout(monkeypatch):
@@ -609,6 +622,11 @@ async def test_gemini_provider_generates_structured_responses_and_embeddings():
             generate_content=AsyncMock(
                 return_value=SimpleNamespace(
                     text='{"ok": true}',
+                    usage_metadata=SimpleNamespace(
+                        prompt_token_count=2,
+                        candidates_token_count=3,
+                        total_token_count=5,
+                    ),
                     model_dump=lambda mode="json": {"id": "gemini-1"},
                 )
             ),
@@ -635,7 +653,13 @@ async def test_gemini_provider_generates_structured_responses_and_embeddings():
     embeddings = await provider.embed_batch(["a", "b"], "gemini-embed")
 
     assert text.content == '{"ok": true}'
+    assert text.usage == LLMUsage(prompt_tokens=2, completion_tokens=3, total_tokens=5)
     assert structured.data == {"ok": True}
+    assert structured.usage == LLMUsage(
+        prompt_tokens=2,
+        completion_tokens=3,
+        total_tokens=5,
+    )
     assert embedding == [0.1, 0.2]
     assert embeddings == [[0.1, 0.2], [0.3, 0.4]]
 
@@ -908,7 +932,7 @@ def test_llm_gateway_preserves_explicit_empty_provider_mapping():
     gateway = LLMGatewayImpl(model_registry=registry, providers={})
 
     with pytest.raises(RuntimeError, match="No provider configured for openai"):
-        gateway._provider_for("logical_model")
+        gateway._resolve_provider("logical_model")
 
 
 class _FakeResponse:
@@ -929,6 +953,8 @@ class _FakeCardClient:
 
     async def get(self, url):
         self.requested_urls.append(url)
+        if not self._payloads:
+            raise AssertionError(f"No fake card payloads remaining for GET {url}")
         return _FakeResponse(self._payloads.pop(0))
 
 

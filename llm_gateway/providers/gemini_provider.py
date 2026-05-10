@@ -6,7 +6,7 @@ from google import genai
 from google.genai import types
 
 from common.config.settings import settings
-from common.dto import LLMResponse, LLMStructuredResponse
+from common.dto import LLMResponse, LLMStructuredResponse, LLMUsage
 
 
 class GeminiProvider:
@@ -42,6 +42,7 @@ class GeminiProvider:
         return LLMResponse(
             content=getattr(response, "text", "") or "",
             model=model or self._default_model,
+            usage=_usage_from_gemini(response),
             raw_response=_raw_response(response),
         )
 
@@ -66,6 +67,7 @@ class GeminiProvider:
         return LLMStructuredResponse(
             data=json.loads(content),
             model=model or self._default_model,
+            usage=_usage_from_gemini(response),
             raw_response=_raw_response(response),
         )
 
@@ -104,6 +106,33 @@ def _models_client(client: Any) -> Any:
     if aio_client is not None and hasattr(aio_client, "models"):
         return aio_client.models
     return client.models
+
+
+def _usage_from_gemini(response: Any) -> LLMUsage | None:
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        usage = getattr(response, "usageMetadata", None)
+    if usage is None:
+        return None
+
+    prompt_tokens = int(_read_usage(usage, "prompt_token_count", "promptTokenCount"))
+    completion_tokens = int(
+        _read_usage(usage, "candidates_token_count", "candidatesTokenCount")
+    )
+    total_tokens = int(_read_usage(usage, "total_token_count", "totalTokenCount"))
+    if total_tokens == 0:
+        total_tokens = prompt_tokens + completion_tokens
+    return LLMUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+    )
+
+
+def _read_usage(usage: Any, snake_name: str, camel_name: str) -> int:
+    if isinstance(usage, dict):
+        return int(usage.get(snake_name) or usage.get(camel_name) or 0)
+    return int(getattr(usage, snake_name, None) or getattr(usage, camel_name, None) or 0)
 
 
 def _with_schema_instruction(messages: list[dict], schema: dict) -> list[dict]:

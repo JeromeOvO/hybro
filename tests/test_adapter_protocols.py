@@ -2,6 +2,7 @@ import ast
 import sys
 import tomllib
 from pathlib import Path
+from typing import get_type_hints
 from unittest.mock import MagicMock
 
 from common.protocols import (
@@ -40,6 +41,14 @@ def test_adapter_top_level_exports_are_explicit():
     assert ModelRegistryImpl is llm_gateway.ModelRegistryImpl
     assert set(a2a_adapter.__all__) == {"AgentTransportImpl", "AgentCardResolverImpl"}
     assert set(llm_gateway.__all__) == {"LLMGatewayImpl", "ModelRegistryImpl"}
+
+
+def test_llm_gateway_provider_mapping_is_typed_to_provider_protocol():
+    from llm_gateway.gateway import LLMGatewayImpl
+
+    hints = get_type_hints(LLMGatewayImpl.__init__)
+
+    assert hints["providers"] == dict[str, LLMProvider] | None
 
 
 def test_adapter_subpackages_are_packaged():

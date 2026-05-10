@@ -1,3 +1,4 @@
+import logging
 import time
 
 import httpx
@@ -6,6 +7,9 @@ from a2a.types import AgentCard
 from common.dto import AgentCardSnapshot
 
 from .translators import a2a_card_to_snapshot
+
+
+logger = logging.getLogger(__name__)
 
 
 class AgentCardResolverImpl:
@@ -39,7 +43,13 @@ class AgentCardResolverImpl:
             payload = response.json()
             card = AgentCard(**payload)
             snapshot = a2a_card_to_snapshot(card, normalized_url)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Failed to resolve A2A agent card for %s: %s",
+                normalized_url,
+                exc,
+                exc_info=True,
+            )
             return None
 
         self._cache[normalized_url] = (now, snapshot)
