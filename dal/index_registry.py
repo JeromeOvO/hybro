@@ -38,9 +38,18 @@ class IndexRegistryImpl:
         )
 
     async def ensure_all(self) -> None:
+        errors: list[tuple[str, Exception]] = []
         for registration in self._registrations:
-            collection = self._mongo.collection(registration.collection)
-            await collection.create_index(
-                registration.index_spec,
-                **registration.kwargs,
-            )
+            try:
+                collection = self._mongo.collection(registration.collection)
+                await collection.create_index(
+                    registration.index_spec,
+                    **registration.kwargs,
+                )
+            except Exception as exc:
+                errors.append(
+                    (f"{registration.module_name}:{registration.collection}", exc)
+                )
+        if errors:
+            msg = "; ".join(f"{name}: {exc}" for name, exc in errors)
+            raise RuntimeError(f"Index creation failures: {msg}")

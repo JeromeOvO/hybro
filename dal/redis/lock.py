@@ -50,6 +50,14 @@ class _RedisOwnerClient:
         except Exception:
             return False
 
+    async def close(self) -> None:
+        if self._client is not None:
+            try:
+                await self._client.aclose()
+            except Exception:
+                pass
+        self._client = None
+
 
 class DistributedLockImpl(_RedisOwnerClient):
     """Short-lived Redis lock with owner-checked release and renew."""

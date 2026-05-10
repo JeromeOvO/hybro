@@ -78,7 +78,9 @@ async def _message_iterator(pubsub: Any, channel: str) -> AsyncIterator[str]:
         async for message in pubsub.listen():
             if message.get("type") != "message":
                 continue
-            yield message.get("data")
+            data = message.get("data")
+            if data is not None:
+                yield data
     finally:
         try:
             await pubsub.unsubscribe(channel)

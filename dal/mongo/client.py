@@ -21,7 +21,7 @@ class MongoCollectionAdapter:
         limit = kwargs.pop("limit", None)
         skip = kwargs.pop("skip", None)
         sort = kwargs.pop("sort", None)
-        length = limit or 1000
+        length = limit if limit is not None else 1000
 
         if projection is not None:
             cursor = self._collection.find(query, projection=projection, **kwargs)

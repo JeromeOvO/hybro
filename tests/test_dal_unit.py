@@ -80,6 +80,24 @@ async def test_mongo_collection_adapter_materializes_find_and_aggregate():
 
 
 @pytest.mark.asyncio
+async def test_mongo_collection_adapter_preserves_zero_limit():
+    from dal.mongo.client import MongoCollectionAdapter
+
+    find_cursor = MagicMock()
+    find_cursor.limit.return_value = find_cursor
+    find_cursor.to_list = AsyncMock(return_value=[])
+
+    collection = MagicMock()
+    collection.find.return_value = find_cursor
+
+    adapter = MongoCollectionAdapter(collection)
+
+    assert await adapter.find({}, limit=0) == []
+    find_cursor.limit.assert_called_once_with(0)
+    find_cursor.to_list.assert_awaited_once_with(length=0)
+
+
+@pytest.mark.asyncio
 async def test_redis_kv_impl_uses_direct_redis_client():
     from dal.redis.kv import RedisKVImpl
 
@@ -147,6 +165,19 @@ async def test_redis_streams_impl_normalizes_xread():
 
 
 @pytest.mark.asyncio
+async def test_redis_streams_impl_gracefully_degrades_without_url(monkeypatch):
+    from dal.redis import streams as streams_module
+
+    monkeypatch.setattr(streams_module.settings, "redis_url", "")
+
+    streams = streams_module.RedisStreamsImpl()
+
+    assert await streams.xadd("stream-a", {"payload": "one"}) == ""
+    assert await streams.xread({"stream-a": "0-0"}) == []
+    assert await streams.ping() is False
+
+
+@pytest.mark.asyncio
 async def test_redis_pubsub_impl_yields_only_messages():
     from dal.redis.pubsub import RedisPubSubImpl
 
@@ -159,6 +190,7 @@ async def test_redis_pubsub_impl_yields_only_messages():
 
     async def listen():
         yield {"type": "subscribe", "data": 1}
+        yield {"type": "message"}
         yield {"type": "message", "data": "payload"}
 
     pubsub.listen = listen
@@ -175,6 +207,37 @@ async def test_redis_pubsub_impl_yields_only_messages():
     pubsub.subscribe.assert_awaited_once_with("events")
     pubsub.unsubscribe.assert_awaited_once_with("events")
     pubsub.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_redis_pubsub_impl_publishes_with_direct_client():
+    from dal.redis.pubsub import RedisPubSubImpl
+
+    client = MagicMock()
+    client.publish = AsyncMock(return_value=1)
+
+    pubsub_impl = RedisPubSubImpl(client=client)
+
+    await pubsub_impl.publish("events", "payload")
+
+    client.publish.assert_awaited_once_with("events", "payload")
+
+
+@pytest.mark.asyncio
+async def test_redis_pubsub_impl_gracefully_degrades_without_url(monkeypatch):
+    from dal.redis import pubsub as pubsub_module
+
+    monkeypatch.setattr(pubsub_module.settings, "redis_url", "")
+
+    pubsub_impl = pubsub_module.RedisPubSubImpl()
+
+    await pubsub_impl.publish("events", "payload")
+    iterator = await pubsub_impl.subscribe("events")
+
+    with pytest.raises(StopAsyncIteration):
+        await anext(iterator)
+
+    assert await pubsub_impl.ping() is False
 
 
 @pytest.mark.asyncio
@@ -200,6 +263,33 @@ async def test_distributed_lock_impl_uses_owner_checked_lua():
 
 
 @pytest.mark.asyncio
+async def test_distributed_lock_impl_gracefully_degrades_without_url(monkeypatch):
+    from dal.redis import lock as lock_module
+
+    monkeypatch.setattr(lock_module.settings, "redis_url", "")
+
+    lock = lock_module.DistributedLockImpl()
+
+    assert await lock.acquire("resource", "owner") is False
+    assert await lock.release("resource", "owner") is False
+    assert await lock.renew("resource", "owner") is False
+
+
+@pytest.mark.asyncio
+async def test_distributed_lock_impl_close_closes_client():
+    from dal.redis.lock import DistributedLockImpl
+
+    client = MagicMock()
+    client.aclose = AsyncMock()
+
+    lock = DistributedLockImpl(client=client)
+
+    await lock.close()
+
+    client.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_leader_elector_impl_uses_instance_id_owner_checks():
     from dal.redis.lock import LeaderElectorImpl
 
@@ -216,6 +306,33 @@ async def test_leader_elector_impl_uses_instance_id_owner_checks():
 
     client.set.assert_awaited_once_with("leader:job", "inst", nx=True, ex=30)
     assert client.eval.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_leader_elector_impl_gracefully_degrades_without_url(monkeypatch):
+    from dal.redis import lock as lock_module
+
+    monkeypatch.setattr(lock_module.settings, "redis_url", "")
+
+    elector = lock_module.LeaderElectorImpl(instance_id="inst")
+
+    assert await elector.try_acquire("job") is False
+    assert await elector.renew("job") is False
+    assert await elector.release("job") is None
+
+
+@pytest.mark.asyncio
+async def test_leader_elector_impl_close_closes_client():
+    from dal.redis.lock import LeaderElectorImpl
+
+    client = MagicMock()
+    client.aclose = AsyncMock()
+
+    elector = LeaderElectorImpl(client, instance_id="inst")
+
+    await elector.close()
+
+    client.aclose.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -254,6 +371,21 @@ async def test_vector_dal_impl_maps_pinecone_matches():
         vectors=[{"id": "v3", "values": [0.2], "metadata": {"m": 1}}]
     )
     index.delete.assert_called_once_with(ids=["v3"])
+
+
+@pytest.mark.asyncio
+async def test_vector_dal_impl_ping_uses_instance_default_index():
+    from dal.pinecone.client import VectorDALImpl
+
+    index = MagicMock()
+    index.describe_index_stats.return_value = {}
+    client = MagicMock()
+    client.Index.return_value = index
+
+    vector = VectorDALImpl(client=client, index_name="custom-index")
+
+    assert await vector.ping() is True
+    client.Index.assert_called_once_with("custom-index")
 
 
 @pytest.mark.asyncio
@@ -302,4 +434,27 @@ async def test_index_registry_ensures_registered_indexes_in_order():
     assert mongo.collection.call_args_list[0].args == ("agents",)
     assert mongo.collection.call_args_list[1].args == ("rooms",)
     collection_a.create_index.assert_awaited_once_with([("agent_id", 1)], unique=True)
+    collection_b.create_index.assert_awaited_once_with([("room_id", 1)])
+
+
+@pytest.mark.asyncio
+async def test_index_registry_attempts_all_indexes_before_raising():
+    from dal.index_registry import IndexRegistryImpl
+
+    collection_a = MagicMock()
+    collection_a.create_index = AsyncMock(side_effect=ValueError("bad index"))
+    collection_b = MagicMock()
+    collection_b.create_index = AsyncMock(return_value="idx-b")
+    mongo = MagicMock()
+    mongo.collection.side_effect = [collection_a, collection_b]
+
+    registry = IndexRegistryImpl(mongo=mongo)
+    registry.register("agent", "agents", [("agent_id", 1)])
+    registry.register("room", "rooms", [("room_id", 1)])
+
+    with pytest.raises(RuntimeError, match="agent:agents: bad index"):
+        await registry.ensure_all()
+
+    assert mongo.collection.call_count == 2
+    collection_a.create_index.assert_awaited_once_with([("agent_id", 1)])
     collection_b.create_index.assert_awaited_once_with([("room_id", 1)])

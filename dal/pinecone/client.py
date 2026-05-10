@@ -12,9 +12,16 @@ from common.dto import VectorRecord, VectorSearchResult
 class VectorDALImpl:
     """Vector DAL backed directly by the synchronous Pinecone SDK."""
 
-    def __init__(self, *, client: Any | None = None, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        client: Any | None = None,
+        api_key: str | None = None,
+        index_name: str | None = None,
+    ) -> None:
         self._client = client
         self._api_key = settings.pinecone_api_key if api_key is None else api_key
+        self._default_index = index_name or settings.pinecone_index_name
         self._indexes: dict[str, Any] = {}
 
     def _get_client(self) -> Any:
@@ -70,7 +77,7 @@ class VectorDALImpl:
 
     async def ping(self) -> bool:
         try:
-            pinecone_index = self._get_index(settings.pinecone_index_name)
+            pinecone_index = self._get_index(self._default_index)
             await asyncio.to_thread(pinecone_index.describe_index_stats)
             return True
         except Exception:
