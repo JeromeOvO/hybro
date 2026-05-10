@@ -75,8 +75,8 @@ class LeaderElectorImpl(_RedisOwnerClient):
 
     def __init__(
         self,
-        *,
         client: Any | None = None,
+        *,
         instance_id: str | None = None,
         url: str | None = None,
     ) -> None:

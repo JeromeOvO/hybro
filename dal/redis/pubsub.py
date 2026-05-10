@@ -44,19 +44,9 @@ class RedisPubSubImpl:
     async def subscribe(self, channel: str) -> AsyncIterator[str]:
         client = self._ensure_client()
         if client is None:
-            return
+            return _empty_iterator()
         pubsub = client.pubsub()
-        await pubsub.subscribe(channel)
-        try:
-            async for message in pubsub.listen():
-                if message.get("type") != "message":
-                    continue
-                yield message.get("data")
-        finally:
-            try:
-                await pubsub.unsubscribe(channel)
-            finally:
-                await pubsub.aclose()
+        return _message_iterator(pubsub, channel)
 
     async def ping(self) -> bool:
         client = self._ensure_client()
@@ -75,3 +65,22 @@ class RedisPubSubImpl:
             except Exception:
                 pass
         self._client = None
+
+
+async def _empty_iterator() -> AsyncIterator[str]:
+    if False:
+        yield ""
+
+
+async def _message_iterator(pubsub: Any, channel: str) -> AsyncIterator[str]:
+    await pubsub.subscribe(channel)
+    try:
+        async for message in pubsub.listen():
+            if message.get("type") != "message":
+                continue
+            yield message.get("data")
+    finally:
+        try:
+            await pubsub.unsubscribe(channel)
+        finally:
+            await pubsub.aclose()

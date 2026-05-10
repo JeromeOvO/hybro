@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import inspect
 import pytest
 
 from common.dto import VectorRecord
@@ -149,6 +150,8 @@ async def test_redis_streams_impl_normalizes_xread():
 async def test_redis_pubsub_impl_yields_only_messages():
     from dal.redis.pubsub import RedisPubSubImpl
 
+    assert inspect.iscoroutinefunction(RedisPubSubImpl.subscribe)
+
     pubsub = MagicMock()
     pubsub.subscribe = AsyncMock()
     pubsub.unsubscribe = AsyncMock()
@@ -165,7 +168,7 @@ async def test_redis_pubsub_impl_yields_only_messages():
 
     pubsub_impl = RedisPubSubImpl(client=client)
 
-    iterator = pubsub_impl.subscribe("events")
+    iterator = await pubsub_impl.subscribe("events")
     assert await anext(iterator) == "payload"
     await iterator.aclose()
 
@@ -204,7 +207,7 @@ async def test_leader_elector_impl_uses_instance_id_owner_checks():
     client.set = AsyncMock(return_value=True)
     client.eval = AsyncMock(return_value=1)
 
-    elector = LeaderElectorImpl(client=client, instance_id="inst")
+    elector = LeaderElectorImpl(client, instance_id="inst")
 
     assert await elector.try_acquire("job", ttl=30) is True
     assert await elector.renew("job", ttl=45) is True
