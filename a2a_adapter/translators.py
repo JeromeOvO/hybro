@@ -1,0 +1,255 @@
+import json
+from typing import Any
+
+from common.dto import (
+    AgentCardSnapshot,
+    AgentStreamEvent,
+    AgentTaskResult,
+    InternalAgentMessage,
+)
+
+
+TERMINAL_STATES = {"completed", "failed", "canceled", "cancelled", "rejected"}
+
+
+def internal_message_to_a2a(msg: InternalAgentMessage) -> dict[str, Any]:
+    return {
+        "role": msg.role,
+        "parts": _jsonable(msg.parts),
+        "metadata": {"agent_id": msg.agent_id, **_jsonable(msg.metadata)},
+    }
+
+
+def a2a_task_to_result(task_data: dict[str, Any], agent_id: str) -> AgentTaskResult:
+    status_data = _read(task_data, "status")
+    status = _normalize_status(status_data)
+    error = _extract_error_text(_read(task_data, "error"))
+    if error is None and status in {"failed", "canceled", "cancelled"}:
+        error = _stringify_message(_read(status_data, "message"))
+
+    result: dict[str, Any] = {"raw": task_data}
+    for key in ("artifacts", "message", "result"):
+        value = _read(task_data, key)
+        if value is not None:
+            result[key] = value
+
+    return AgentTaskResult(
+        task_id=_first_non_empty(
+            _read(task_data, "id"),
+            _read(task_data, "taskId"),
+            _read(task_data, "task_id"),
+            "",
+        ),
+        agent_id=agent_id,
+        status=status,
+        result=result,
+        error=error,
+    )
+
+
+def a2a_event_to_stream_event(
+    event_data: dict[str, Any],
+    agent_id: str,
+) -> AgentStreamEvent:
+    nested_task = _read(event_data, "task") or {}
+    status_data = _read(event_data, "status")
+    status = _normalize_status(status_data)
+    payload: dict[str, Any] = {"raw": event_data}
+    for key in ("status", "artifact", "message"):
+        value = _read(event_data, key)
+        if value is not None:
+            payload[key] = value
+
+    final = bool(_read(event_data, "final")) or status in TERMINAL_STATES
+
+    return AgentStreamEvent(
+        task_id=_first_non_empty(
+            _read(event_data, "task_id"),
+            _read(event_data, "taskId"),
+            _read(event_data, "id"),
+            _read(nested_task, "id"),
+            "",
+        ),
+        agent_id=agent_id,
+        event_type=_first_non_empty(
+            _read(event_data, "event_type"),
+            _read(event_data, "type"),
+            _read(event_data, "kind"),
+            "message",
+        ),
+        payload=payload,
+        final=final,
+    )
+
+
+def a2a_card_to_snapshot(card: Any, agent_url: str) -> AgentCardSnapshot:
+    raw_card = _to_raw_dict(card)
+    capabilities_data = _read(card, "capabilities") or {}
+    input_modes = _read(card, "default_input_modes", "defaultInputModes", "input_modes")
+    output_modes = _read(
+        card,
+        "default_output_modes",
+        "defaultOutputModes",
+        "output_modes",
+    )
+
+    return AgentCardSnapshot(
+        agent_id=_first_non_empty(
+            _read(card, "id"),
+            _read(card, "agent_id"),
+            _read(card, "name"),
+            agent_url,
+        ),
+        url=_first_non_empty(_read(card, "url"), agent_url),
+        name=_read(card, "name"),
+        description=_read(card, "description"),
+        capabilities=_normalize_capabilities(
+            capabilities_data,
+            input_modes or [],
+            output_modes or [],
+        ),
+        raw_card=raw_card,
+    )
+
+
+def _normalize_status(status_data: Any) -> str:
+    state = _read(status_data, "state")
+    if state is not None:
+        return _string_value(state)
+    if status_data is not None:
+        return _string_value(status_data)
+    return "unknown"
+
+
+def _extract_error_text(error_data: Any) -> str | None:
+    if error_data is None:
+        return None
+    message = _read(error_data, "message")
+    if message is not None:
+        return _stringify_message(message)
+    return _stringify_message(error_data)
+
+
+def _stringify_message(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    text = _read(value, "text")
+    if text is not None:
+        return _string_value(text)
+    parts = _read(value, "parts")
+    if isinstance(parts, list):
+        texts = [_stringify_message(part) for part in parts]
+        return "\n".join(text for text in texts if text)
+    root = _read(value, "root")
+    if root is not None:
+        return _stringify_message(root)
+    message = _read(value, "message")
+    if message is not None:
+        return _stringify_message(message)
+    try:
+        return json.dumps(_jsonable(value), sort_keys=True)
+    except TypeError:
+        return str(value)
+
+
+def _normalize_capabilities(
+    capabilities_data: Any,
+    input_modes: list[Any],
+    output_modes: list[Any],
+) -> list[str]:
+    capabilities: set[str] = set()
+    if isinstance(capabilities_data, list):
+        capabilities.update(_string_value(item) for item in capabilities_data)
+    elif isinstance(capabilities_data, dict):
+        capabilities.update(
+            _string_value(item)
+            for item in capabilities_data.get("capabilities", [])
+            if item
+        )
+        capabilities.update(_extension_names(capabilities_data.get("extensions")))
+    else:
+        capabilities.update(_extension_names(_read(capabilities_data, "extensions")))
+
+    for key in ("streaming", "stream"):
+        if bool(_read(capabilities_data, key)):
+            capabilities.add("streaming")
+    for key in ("push_notifications", "pushNotifications", "push-notifications"):
+        if bool(_read(capabilities_data, key)):
+            capabilities.add("push_notifications")
+
+    capabilities.update(f"input:{_string_value(mode)}" for mode in input_modes)
+    capabilities.update(f"output:{_string_value(mode)}" for mode in output_modes)
+    return sorted(cap for cap in capabilities if cap)
+
+
+def _extension_names(extensions: Any) -> set[str]:
+    if not isinstance(extensions, list):
+        return set()
+    names: set[str] = set()
+    for extension in extensions:
+        name = _read(extension, "name")
+        if name:
+            names.add(_string_value(name))
+    return names
+
+
+def _to_raw_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return _jsonable(value)
+    if hasattr(value, "model_dump"):
+        try:
+            return _jsonable(value.model_dump(mode="json", by_alias=True))
+        except TypeError:
+            return _jsonable(value.model_dump())
+    if hasattr(value, "__dict__"):
+        return _jsonable(vars(value))
+    return {}
+
+
+def _read(value: Any, *names: str) -> Any:
+    if value is None:
+        return None
+    for name in names:
+        if isinstance(value, dict) and name in value:
+            return value[name]
+        if hasattr(value, name):
+            return getattr(value, name)
+    return None
+
+
+def _first_non_empty(*values: Any) -> str:
+    for value in values:
+        if value is not None and value != "":
+            return _string_value(value)
+    return ""
+
+
+def _string_value(value: Any) -> str:
+    if hasattr(value, "value"):
+        return str(value.value)
+    return str(value)
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, set | frozenset):
+        return sorted(_jsonable(item) for item in value)
+    if hasattr(value, "model_dump"):
+        try:
+            return value.model_dump(mode="json", by_alias=True)
+        except TypeError:
+            return value.model_dump()
+    return value
+
+
+__all__ = [
+    "a2a_card_to_snapshot",
+    "a2a_event_to_stream_event",
+    "a2a_task_to_result",
+    "internal_message_to_a2a",
+]
