@@ -339,7 +339,8 @@ class SSEManager:
                         room_conns.pop(connection_id, None)
 
         if len(snapshot) - len(disconnected_ids) > 0:
-            logger.info(
+            log_fn = logger.debug if message_type == "artifact_update" else logger.info
+            log_fn(
                 f"SSE local delivery [{message_type}] to {len(snapshot) - len(disconnected_ids)} connection(s) in room {room_id}"
             )
 

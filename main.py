@@ -57,8 +57,27 @@ class InterceptHandler(logging.Handler):
         )
 
 
+class HighFrequencyAccessLogFilter(logging.Filter):
+    """Filter out high-frequency endpoints from uvicorn access logs.
+
+    Suppresses successful (2xx) requests to relay publish/heartbeat endpoints
+    which can generate 20-50+ log lines per agent response during streaming.
+    Errors (non-2xx) are still logged for debugging.
+    """
+
+    SUPPRESSED_PATHS = ("/relay/hub/", "/heartbeat")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if any(path in message for path in self.SUPPRESSED_PATHS):
+            return "\" 2" not in message
+        return True
+
+
 logging_config = LOGGING_CONFIG.copy()
 logging_config["loggers"]["uvicorn.access"]["handlers"] = ["default"]
+
+logging.getLogger("uvicorn.access").addFilter(HighFrequencyAccessLogFilter())
 
 logger.remove()
 if settings.app_env == "development":
