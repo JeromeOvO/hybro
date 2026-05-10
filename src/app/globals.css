@@ -330,24 +330,31 @@
 }
 
 .shimmer-text {
-  --shimmer-highlight: 0.55;
+  --shimmer-highlight: 0.75;
   background: linear-gradient(
     90deg,
     currentColor 0%,
-    currentColor 40%,
-    hsl(0 0% 100% / var(--shimmer-highlight)) 50%,
-    currentColor 60%,
+    currentColor 35%,
+    hsl(0 0% 0% / var(--shimmer-highlight)) 50%,
+    currentColor 65%,
     currentColor 100%
   );
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: shimmer-sweep 5s ease-in-out infinite;
+  animation: shimmer-sweep 2s ease-in-out infinite;
 }
 
 .dark .shimmer-text {
-  --shimmer-highlight: 0.7;
+  background-image: linear-gradient(
+    90deg,
+    currentColor 0%,
+    currentColor 35%,
+    hsl(0 0% 100% / 0.85) 50%,
+    currentColor 65%,
+    currentColor 100%
+  );
 }
 
 /* Shimmer sweep for small solid elements (dots, icons) */
@@ -355,55 +362,64 @@
   background: linear-gradient(
     90deg,
     hsl(var(--color-muted-foreground) / 0.35) 0%,
-    hsl(var(--color-muted-foreground) / 0.35) 40%,
-    hsl(var(--color-muted-foreground) / 0.7) 50%,
-    hsl(var(--color-muted-foreground) / 0.35) 60%,
+    hsl(var(--color-muted-foreground) / 0.35) 35%,
+    hsl(var(--color-muted-foreground) / 0.85) 50%,
+    hsl(var(--color-muted-foreground) / 0.35) 65%,
     hsl(var(--color-muted-foreground) / 0.35) 100%
   );
   background-size: 200% 100%;
-  animation: shimmer-sweep 5s ease-in-out infinite;
+  animation: shimmer-sweep 2s ease-in-out infinite;
 }
 
 /* Blue/primary shimmer for orchestration rail — uses the theme primary
    color hue for a branded sweep effect with strong contrast. */
 .shimmer-rail {
-  --shimmer-base: hsl(192 60% 35%);
-  --shimmer-highlight: hsl(192 90% 58%);
+  --shimmer-base: hsl(192 50% 25%);
+  --shimmer-highlight: hsl(192 95% 45%);
   background: linear-gradient(
     90deg,
     var(--shimmer-base) 0%,
-    var(--shimmer-base) 30%,
+    var(--shimmer-base) 25%,
     var(--shimmer-highlight) 50%,
-    var(--shimmer-base) 70%,
+    var(--shimmer-base) 75%,
     var(--shimmer-base) 100%
   );
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: shimmer-sweep 2.5s ease-in-out infinite;
+  animation: shimmer-sweep 1.5s ease-in-out infinite;
 }
 
 .dark .shimmer-rail {
-  --shimmer-base: hsl(180 50% 40%);
-  --shimmer-highlight: hsl(180 100% 70%);
+  --shimmer-base: hsl(180 45% 35%);
+  --shimmer-highlight: hsl(180 100% 75%);
 }
 
 /* Yellow "Needs input" shimmer for HITL states */
 .shimmer-text-yellow {
+  --shimmer-dark: hsl(35, 85%, 25%);
+  --shimmer-mid: hsl(42, 95%, 45%);
+  --shimmer-bright: hsl(48, 100%, 60%);
   background: linear-gradient(
     90deg,
-    hsl(30, 80%, 30%) 0%,
-    hsl(40, 90%, 50%) 25%,
-    hsl(45, 95%, 65%) 50%,
-    hsl(40, 90%, 50%) 75%,
-    hsl(30, 80%, 30%) 100%
+    var(--shimmer-dark) 0%,
+    var(--shimmer-mid) 20%,
+    var(--shimmer-bright) 50%,
+    var(--shimmer-mid) 80%,
+    var(--shimmer-dark) 100%
   );
   background-size: 200% auto;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: shimmer-sweep 2.5s ease-in-out infinite;
+  animation: shimmer-sweep 1.5s ease-in-out infinite;
+}
+
+.dark .shimmer-text-yellow {
+  --shimmer-dark: hsl(40, 80%, 35%);
+  --shimmer-mid: hsl(45, 95%, 55%);
+  --shimmer-bright: hsl(50, 100%, 70%);
 }
 
 /* ── Timeline event animations ── */

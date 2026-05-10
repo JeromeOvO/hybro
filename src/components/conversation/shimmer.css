@@ -8,6 +8,10 @@
   50% { opacity: 0; }
 }
 
+@keyframes conversation-avatar-spin {
+  to { transform: rotate(360deg); }
+}
+
 .conversation-card-shimmer::before {
   content: '';
   position: absolute;
@@ -15,9 +19,9 @@
   background: linear-gradient(
     90deg,
     transparent 0%,
-    rgba(255, 255, 255, 0.03) 40%,
-    rgba(255, 255, 255, 0.06) 50%,
-    rgba(255, 255, 255, 0.03) 60%,
+    rgba(0, 0, 0, 0.06) 35%,
+    rgba(0, 0, 0, 0.12) 50%,
+    rgba(0, 0, 0, 0.06) 65%,
     transparent 100%
   );
   background-size: 300% 100%;
@@ -26,9 +30,38 @@
   border-radius: 12px;
 }
 
+.dark .conversation-card-shimmer::before {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.08) 35%,
+    rgba(255, 255, 255, 0.15) 50%,
+    rgba(255, 255, 255, 0.08) 65%,
+    transparent 100%
+  );
+}
+
 .conversation-streaming-cursor::after {
   content: '|';
   color: var(--conversation-agent-blue);
   font-weight: 300;
   animation: conversation-cursor-blink var(--conversation-cursor-duration) step-end infinite;
+}
+
+.conversation-avatar-working::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: calc(var(--chat-input-radius) + 3px);
+  border: 2px solid transparent;
+  border-top-color: hsl(var(--color-primary));
+  animation: conversation-avatar-spin 1.2s linear infinite;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-avatar-working::before {
+    animation: none;
+    border-top-color: transparent;
+  }
 }

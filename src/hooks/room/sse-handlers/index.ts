@@ -197,7 +197,9 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             // - allow only append-only upgrades
             if (hasExistingRenderable && (looksDuplicateContent || isDivergentRewrite)) {
               const canFinalizeExisting = !existing.taskStatus || !isTerminalState(existing.taskStatus)
-              if (canFinalizeExisting) {
+              // Only upsert if we're actually changing the taskStatus to terminal
+              const needsStatusUpdate = existing.taskStatus !== TASK_STATE.COMPLETED
+              if (canFinalizeExisting && needsStatusUpdate) {
                 store.upsertMessage({
                   id: messageId,
                   roomId,

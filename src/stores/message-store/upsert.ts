@@ -279,6 +279,21 @@ function arraysShallowEqual(a: unknown, b: unknown): boolean {
   return true
 }
 
+function artifactsEqual(
+  a: ArtifactData[] | undefined,
+  b: ArtifactData[] | undefined
+): boolean {
+  if (a === b) return true
+  if (!a || !b) return a === b
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].artifactId !== b[i].artifactId) return false
+    if (a[i].isStreaming !== b[i].isStreaming) return false
+    if ((a[i].parts?.length ?? 0) !== (b[i].parts?.length ?? 0)) return false
+  }
+  return true
+}
+
 /**
  * Detect whether an incoming update changes any rendering-visible fields.
  * Returns true if nothing visible changed — the store should skip this update.
@@ -313,7 +328,7 @@ export function isNoOpUpdate(
     existing.hitlUserAnswer    === coalesce(incoming.hitlUserAnswer, existing.hitlUserAnswer) &&
     existing.clientRequestId   === coalesce(incoming.clientRequestId, existing.clientRequestId) &&
     existing.isEphemeral       === (incoming.isEphemeral ?? existing.isEphemeral) &&
-    existing.artifacts         === coalesce(incoming.artifacts, existing.artifacts) &&
+    artifactsEqual(existing.artifacts, coalesce(incoming.artifacts, existing.artifacts)) &&
     existing.attachments       === coalesce(incoming.attachments, existing.attachments) &&
     existing.turnTerminalStatus === coalesce(incoming.turnTerminalStatus, existing.turnTerminalStatus)
   )

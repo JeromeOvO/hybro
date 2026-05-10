@@ -75,7 +75,7 @@
   --chat-input-radius: 12px;
   --chat-input-editor-collapsed-max-height: 56px;
 
-  --conversation-shimmer-duration: 3.5s;
+  --conversation-shimmer-duration: 2s;
   --conversation-chevron-duration: 150ms;
   --conversation-cursor-duration: 800ms;
 }
