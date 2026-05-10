@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import uuid
+from collections import Counter
 from typing import TYPE_CHECKING
 
 from a2a.types import (
@@ -142,13 +143,20 @@ async def _notify_task_update_impl(
     )
 
     # --- Diagnostic: log what we read from DB ---
+    def _summarize_kinds(parts):
+        """Summarize part kinds as counts instead of listing all."""
+        if not parts:
+            return "none"
+        kinds = Counter(getattr(getattr(p, 'root', p), 'kind', '?') for p in parts)
+        return ",".join(f"{k}:{v}" for k, v in kinds.items())
+
     if task:
         _art_count = len(task.artifacts) if task.artifacts else 0
         _task_state = task.status.state if task.status else "no-status"
         _parts_detail = ""
         if task.artifacts:
             _parts_detail = "; ".join(
-                f"art[{i}]={len(a.parts) if a.parts else 0}p,kinds=[{','.join(getattr(getattr(p,'root',p),'kind','?') for p in (a.parts or []))}]"
+                f"art[{i}]={len(a.parts) if a.parts else 0}p,kinds=[{_summarize_kinds(a.parts)}]"
                 for i, a in enumerate(task.artifacts)
             )
         logger.info(
