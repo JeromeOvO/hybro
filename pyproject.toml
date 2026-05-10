@@ -101,6 +101,11 @@ docstring-code-format = true
 
 [tool.setuptools]
 packages = [
+    "dal",
+    "dal.mongo",
+    "dal.pinecone",
+    "dal.redis",
+    "dal.s3",
     "models",
     "common",
     "common.config",
