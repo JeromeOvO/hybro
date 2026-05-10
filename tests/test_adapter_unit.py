@@ -210,6 +210,60 @@ async def test_card_resolver_expires_cached_card_after_ttl():
 
 
 @pytest.mark.asyncio
+async def test_card_resolver_returns_none_for_malformed_agent_card():
+    from a2a_adapter.card_resolver import AgentCardResolverImpl
+
+    resolver = AgentCardResolverImpl(client=_FakeCardClient([{"name": "broken"}]))
+
+    assert await resolver.resolve_card("https://agent.example") is None
+
+
+def test_card_resolver_owned_client_uses_default_timeout(monkeypatch):
+    from a2a_adapter import card_resolver as resolver_module
+
+    created = {}
+
+    class FakeAsyncClient:
+        def __init__(self, timeout=None):
+            created["timeout"] = timeout
+
+    monkeypatch.setattr(resolver_module.httpx, "AsyncClient", FakeAsyncClient)
+
+    resolver_module.AgentCardResolverImpl()
+
+    assert created["timeout"] == 10
+
+
+@pytest.mark.asyncio
+async def test_card_resolver_aclose_closes_owned_client(monkeypatch):
+    from a2a_adapter import card_resolver as resolver_module
+
+    client = SimpleNamespace(aclose=AsyncMock())
+    monkeypatch.setattr(
+        resolver_module.httpx,
+        "AsyncClient",
+        lambda timeout=None: client,
+    )
+    resolver = resolver_module.AgentCardResolverImpl()
+
+    await resolver.aclose()
+
+    client.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_card_resolver_aclose_leaves_injected_client_open():
+    from a2a_adapter.card_resolver import AgentCardResolverImpl
+
+    client = SimpleNamespace(aclose=AsyncMock())
+    resolver = AgentCardResolverImpl(client=client)
+
+    await resolver.aclose()
+
+    client.aclose.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_transport_send_message_posts_a2a_request_and_returns_task_result():
     from a2a_adapter.transport import AgentTransportImpl
 
@@ -264,6 +318,35 @@ async def test_transport_send_message_returns_error_result_on_http_error():
 
 
 @pytest.mark.asyncio
+async def test_transport_aclose_closes_owned_client(monkeypatch):
+    from a2a_adapter import transport as transport_module
+
+    client = SimpleNamespace(aclose=AsyncMock())
+    monkeypatch.setattr(
+        transport_module.httpx,
+        "AsyncClient",
+        lambda timeout=None: client,
+    )
+    transport = transport_module.AgentTransportImpl()
+
+    await transport.aclose()
+
+    client.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_transport_aclose_leaves_injected_client_open():
+    from a2a_adapter.transport import AgentTransportImpl
+
+    client = SimpleNamespace(aclose=AsyncMock())
+    transport = AgentTransportImpl(client=client)
+
+    await transport.aclose()
+
+    client.aclose.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_transport_stream_message_yields_one_event_per_sse_frame(monkeypatch):
     from a2a_adapter import transport as transport_module
 
@@ -298,6 +381,47 @@ async def test_transport_stream_message_yields_one_event_per_sse_frame(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_transport_stream_message_unwraps_jsonrpc_sse_results(monkeypatch):
+    from a2a_adapter import transport as transport_module
+
+    @asynccontextmanager
+    async def fake_aconnect_sse(client, method, url, **kwargs):
+        yield _FakeEventSource(
+            [
+                {
+                    "jsonrpc": "2.0",
+                    "id": "rpc-1",
+                    "result": {
+                        "taskId": "task-1",
+                        "contextId": "ctx-1",
+                        "kind": "status-update",
+                        "status": {"state": "completed"},
+                        "final": True,
+                    },
+                }
+            ]
+        )
+
+    monkeypatch.setattr(transport_module, "aconnect_sse", fake_aconnect_sse)
+    transport = transport_module.AgentTransportImpl(timeout=1, client=MagicMock())
+    message = InternalAgentMessage(
+        agent_id="agent-1",
+        role="user",
+        parts=[{"kind": "text", "text": "hello"}],
+    )
+
+    events = [
+        event
+        async for event in transport.stream_message("https://agent.example/a2a", message)
+    ]
+
+    assert len(events) == 1
+    assert events[0].task_id == "task-1"
+    assert events[0].event_type == "status-update"
+    assert events[0].final is True
+
+
+@pytest.mark.asyncio
 async def test_transport_stream_message_yields_error_event_before_first_frame(monkeypatch):
     from a2a_adapter import transport as transport_module
 
@@ -323,6 +447,35 @@ async def test_transport_stream_message_yields_error_event_before_first_frame(mo
     assert events[0].event_type == "error"
     assert events[0].payload == {"error": "stream failed"}
     assert events[0].final is True
+
+
+@pytest.mark.asyncio
+async def test_transport_stream_message_yields_error_event_after_first_frame(monkeypatch):
+    from a2a_adapter import transport as transport_module
+
+    @asynccontextmanager
+    async def fake_aconnect_sse(client, method, url, **kwargs):
+        yield _FailingEventSource(
+            [{"taskId": "task-1", "type": "delta", "message": {"text": "one"}}],
+            httpx.RequestError("stream died"),
+        )
+
+    monkeypatch.setattr(transport_module, "aconnect_sse", fake_aconnect_sse)
+    transport = transport_module.AgentTransportImpl(timeout=1, client=MagicMock())
+    message = InternalAgentMessage(
+        agent_id="agent-1",
+        role="user",
+        parts=[{"kind": "text", "text": "hello"}],
+    )
+
+    events = [
+        event
+        async for event in transport.stream_message("https://agent.example/a2a", message)
+    ]
+
+    assert [event.event_type for event in events] == ["delta", "error"]
+    assert events[1].payload == {"error": "stream died"}
+    assert events[1].final is True
 
 
 def test_model_registry_looks_up_models_capabilities_and_lists_unique_models(
@@ -408,6 +561,46 @@ async def test_openai_provider_generates_structured_responses_and_embeddings():
 
 
 @pytest.mark.asyncio
+async def test_openai_provider_generate_structured_propagates_invalid_json():
+    from llm_gateway.providers.openai_provider import OpenAIProvider
+
+    completion = SimpleNamespace(
+        model="gpt-test",
+        usage=None,
+        choices=[SimpleNamespace(message=SimpleNamespace(content="not json"))],
+        model_dump=lambda mode="json": {"id": "completion-1"},
+    )
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=AsyncMock(return_value=completion))
+        )
+    )
+    provider = OpenAIProvider(client=client)
+
+    with pytest.raises(json.JSONDecodeError):
+        await provider.generate_structured(
+            [{"role": "user", "content": "hello"}],
+            {"type": "object"},
+            "gpt-test",
+        )
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_embed_batch_returns_empty_for_empty_texts():
+    from llm_gateway.providers.openai_provider import OpenAIProvider
+
+    client = SimpleNamespace(
+        embeddings=SimpleNamespace(
+            create=AsyncMock(side_effect=AssertionError("embedding API called"))
+        )
+    )
+    provider = OpenAIProvider(client=client)
+
+    assert await provider.embed_batch([], "embed-test") == []
+    client.embeddings.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_gemini_provider_generates_structured_responses_and_embeddings():
     from llm_gateway.providers.gemini_provider import GeminiProvider
 
@@ -448,6 +641,59 @@ async def test_gemini_provider_generates_structured_responses_and_embeddings():
 
 
 @pytest.mark.asyncio
+async def test_gemini_provider_prefers_async_sdk_generation_when_available():
+    from llm_gateway.providers.gemini_provider import GeminiProvider
+
+    sync_models = SimpleNamespace(
+        generate_content=MagicMock(side_effect=AssertionError("sync generation called"))
+    )
+    async_models = SimpleNamespace(
+        generate_content=AsyncMock(
+            return_value=SimpleNamespace(
+                text="async response",
+                model_dump=lambda mode="json": {"id": "gemini-async"},
+            )
+        )
+    )
+    client = SimpleNamespace(models=sync_models, aio=SimpleNamespace(models=async_models))
+    provider = GeminiProvider(client=client)
+
+    response = await provider.generate(
+        [{"role": "user", "content": "hello"}],
+        "gemini",
+    )
+
+    assert response.content == "async response"
+    async_models.generate_content.assert_awaited_once()
+    sync_models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_gemini_provider_prefers_async_sdk_embeddings_when_available():
+    from llm_gateway.providers.gemini_provider import GeminiProvider
+
+    sync_models = SimpleNamespace(
+        embed_content=MagicMock(side_effect=AssertionError("sync embedding called"))
+    )
+    async_models = SimpleNamespace(
+        embed_content=AsyncMock(
+            return_value=SimpleNamespace(
+                embeddings=[SimpleNamespace(values=[0.1, 0.2])],
+                model_dump=lambda mode="json": {"id": "gemini-embed-async"},
+            )
+        )
+    )
+    client = SimpleNamespace(models=sync_models, aio=SimpleNamespace(models=async_models))
+    provider = GeminiProvider(client=client)
+
+    embedding = await provider.embed("hello", "gemini-embed")
+
+    assert embedding == [0.1, 0.2]
+    async_models.embed_content.assert_awaited_once()
+    sync_models.embed_content.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_bedrock_provider_generates_text_and_structured_json():
     from llm_gateway.providers.bedrock_provider import BedrockProvider
 
@@ -474,6 +720,86 @@ async def test_bedrock_provider_generates_text_and_structured_json():
     assert text.usage == LLMUsage(prompt_tokens=5, completion_tokens=6, total_tokens=11)
     with pytest.raises(NotImplementedError):
         await provider.embed("hello", "bedrock")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_provider_uses_content_blocks_and_merges_consecutive_roles():
+    from llm_gateway.providers.bedrock_provider import BedrockProvider
+
+    session = _FakeBedrockSession({"content": [{"text": "ok"}]})
+    provider = BedrockProvider(session=session, region="us-west-2")
+
+    await provider.generate(
+        [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "one"},
+            {"role": "user", "content": "two"},
+            {"role": "assistant", "content": "three"},
+            {"role": "assistant", "content": "four"},
+        ],
+        "bedrock",
+    )
+
+    body = json.loads(session.client_instance.calls[0]["body"])
+    assert body["system"] == "system"
+    assert body["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "one"},
+                {"type": "text", "text": "two"},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "three"},
+                {"type": "text", "text": "four"},
+            ],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_provider_extracts_first_balanced_json_object():
+    from llm_gateway.providers.bedrock_provider import BedrockProvider
+
+    session = _FakeBedrockSession(
+        {
+            "content": [
+                {
+                    "text": 'preface {"outer": {"inner": true}} trailing {"ignored": true}'
+                }
+            ],
+        }
+    )
+    provider = BedrockProvider(session=session, region="us-west-2")
+
+    response = await provider.generate_structured(
+        [{"role": "user", "content": "hello"}],
+        {"type": "object"},
+        "bedrock",
+    )
+
+    assert response.data == {"outer": {"inner": True}}
+
+
+@pytest.mark.asyncio
+async def test_bedrock_provider_extracts_json_from_code_fence():
+    from llm_gateway.providers.bedrock_provider import BedrockProvider
+
+    session = _FakeBedrockSession(
+        {"content": [{"text": '```json\n{"ok": true}\n```\nignored'}]}
+    )
+    provider = BedrockProvider(session=session, region="us-west-2")
+
+    response = await provider.generate_structured(
+        [{"role": "user", "content": "hello"}],
+        {"type": "object"},
+        "bedrock",
+    )
+
+    assert response.data == {"ok": True}
 
 
 @pytest.mark.asyncio
@@ -565,6 +891,26 @@ async def test_llm_gateway_rejects_non_embedding_model_for_embeddings():
         await gateway.embed("hello", model="logical_model")
 
 
+def test_llm_gateway_preserves_explicit_empty_provider_mapping():
+    from llm_gateway.gateway import LLMGatewayImpl
+
+    registry = _FakeModelRegistry(
+        {
+            "logical_model": ModelInfo(
+                logical_name="logical_model",
+                model_id="concrete-model",
+                provider="openai",
+                capabilities=["json_schema"],
+                max_context_tokens=128000,
+            ),
+        }
+    )
+    gateway = LLMGatewayImpl(model_registry=registry, providers={})
+
+    with pytest.raises(RuntimeError, match="No provider configured for openai"):
+        gateway._provider_for("logical_model")
+
+
 class _FakeResponse:
     def __init__(self, payload):
         self._payload = payload
@@ -605,6 +951,17 @@ class _FakeEventSource:
     async def aiter_sse(self):
         for payload in self._payloads:
             yield SimpleNamespace(data=json.dumps(payload))
+
+
+class _FailingEventSource(_FakeEventSource):
+    def __init__(self, payloads, error):
+        super().__init__(payloads)
+        self._error = error
+
+    async def aiter_sse(self):
+        async for event in super().aiter_sse():
+            yield event
+        raise self._error
 
 
 class _FakeModelRegistry:

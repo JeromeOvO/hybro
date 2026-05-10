@@ -96,14 +96,18 @@ def _to_bedrock_messages(messages: list[dict]) -> tuple[str, list[dict[str, Any]
         if role == "system":
             system_parts.append(content)
         else:
-            bedrock_messages.append(
-                {
-                    "role": "assistant" if role == "assistant" else "user",
-                    "content": content,
-                }
-            )
+            mapped_role = "assistant" if role == "assistant" else "user"
+            content_block = [{"type": "text", "text": content}]
+            if bedrock_messages and bedrock_messages[-1]["role"] == mapped_role:
+                bedrock_messages[-1]["content"].extend(content_block)
+            else:
+                bedrock_messages.append(
+                    {"role": mapped_role, "content": content_block}
+                )
     if not bedrock_messages:
-        bedrock_messages.append({"role": "user", "content": ""})
+        bedrock_messages.append(
+            {"role": "user", "content": [{"type": "text", "text": ""}]}
+        )
     return "\n\n".join(part for part in system_parts if part), bedrock_messages
 
 
@@ -154,14 +158,33 @@ def _bedrock_usage(raw: dict[str, Any]) -> LLMUsage | None:
 
 def _extract_json(text: str) -> dict[str, Any]:
     stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = stripped.strip("`").removeprefix("json").strip()
     if stripped.startswith("{"):
         return json.loads(stripped)
+    if stripped.startswith("```"):
+        lines = stripped.split("\n")
+        inner_lines = []
+        in_fence = False
+        for line in lines:
+            if line.strip().startswith("```") and not in_fence:
+                in_fence = True
+                continue
+            if line.strip() == "```" and in_fence:
+                break
+            if in_fence:
+                inner_lines.append(line)
+        if inner_lines:
+            return json.loads("\n".join(inner_lines))
     start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start >= 0 and end > start:
-        return json.loads(stripped[start : end + 1])
+    if start < 0:
+        raise ValueError("No valid JSON found in response")
+    depth = 0
+    for i in range(start, len(stripped)):
+        if stripped[i] == "{":
+            depth += 1
+        elif stripped[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return json.loads(stripped[start : i + 1])
     raise ValueError("No valid JSON found in response")
 
 

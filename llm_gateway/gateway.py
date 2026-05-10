@@ -12,11 +12,13 @@ class LLMGatewayImpl:
         providers: dict[str, object] | None = None,
     ) -> None:
         self._model_registry = model_registry or ModelRegistryImpl()
-        self._providers = providers or {
-            "openai": OpenAIProvider(),
-            "gemini": GeminiProvider(),
-            "bedrock": BedrockProvider(),
-        }
+        if providers is None:
+            providers = {
+                "openai": OpenAIProvider(),
+                "gemini": GeminiProvider(),
+                "bedrock": BedrockProvider(),
+            }
+        self._providers = providers
 
     async def generate(
         self,

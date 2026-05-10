@@ -34,6 +34,10 @@ class AgentTransportImpl:
         self._client = client or httpx.AsyncClient(timeout=timeout)
         self._owns_client = client is None
 
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
+
     async def send_message(
         self,
         agent_url: str,
@@ -65,7 +69,6 @@ class AgentTransportImpl:
         message: InternalAgentMessage,
         **kwargs,
     ) -> AsyncIterator[AgentStreamEvent]:
-        yielded = False
         try:
             request_payload = _build_send_request(message, streaming=True)
             async with aconnect_sse(
@@ -76,17 +79,16 @@ class AgentTransportImpl:
             ) as event_source:
                 async for sse in event_source.aiter_sse():
                     event_data = json.loads(sse.data)
-                    yielded = True
+                    event_data = _stream_event_payload(event_data)
                     yield a2a_event_to_stream_event(event_data, message.agent_id)
         except Exception as exc:
-            if not yielded:
-                yield AgentStreamEvent(
-                    task_id="",
-                    agent_id=message.agent_id,
-                    event_type="error",
-                    payload={"error": str(exc)},
-                    final=True,
-                )
+            yield AgentStreamEvent(
+                task_id="",
+                agent_id=message.agent_id,
+                event_type="error",
+                payload={"error": str(exc)},
+                final=True,
+            )
 
 
 def _build_send_request(
@@ -118,6 +120,18 @@ def _to_part(part: dict[str, Any]) -> Part:
     if kind == "text" or "text" in part:
         return Part(root=TextPart(text=str(part.get("text", "")), metadata=metadata))
     return Part(root=TextPart(text=json.dumps(part, sort_keys=True)))
+
+
+def _stream_event_payload(event_data: dict[str, Any]) -> dict[str, Any]:
+    result = event_data.get("result")
+    if isinstance(result, dict):
+        return result
+
+    error = event_data.get("error")
+    if error is not None:
+        return {"type": "error", "error": error, "final": True}
+
+    return event_data
 
 
 __all__ = ["AgentTransportImpl"]

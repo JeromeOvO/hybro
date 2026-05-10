@@ -79,6 +79,8 @@ class OpenAIProvider:
         texts: list[str],
         model: str | None = None,
     ) -> list[list[float]]:
+        if not texts:
+            return []
         response = await self._client.embeddings.create(
             model=model or self._default_embedding_model,
             input=texts,

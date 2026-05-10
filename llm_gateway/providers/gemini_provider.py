@@ -31,8 +31,9 @@ class GeminiProvider:
         model: str | None = None,
         **kwargs,
     ) -> LLMResponse:
+        models = _models_client(self._client)
         response = await _maybe_await(
-            self._client.models.generate_content(
+            models.generate_content(
                 model=model or self._default_model,
                 contents=_messages_to_contents(messages),
                 **kwargs,
@@ -53,8 +54,9 @@ class GeminiProvider:
     ) -> LLMStructuredResponse:
         kwargs = dict(kwargs)
         kwargs.setdefault("config", _json_config())
+        models = _models_client(self._client)
         response = await _maybe_await(
-            self._client.models.generate_content(
+            models.generate_content(
                 model=model or self._default_model,
                 contents=_messages_to_contents(_with_schema_instruction(messages, schema)),
                 **kwargs,
@@ -76,8 +78,9 @@ class GeminiProvider:
         texts: list[str],
         model: str | None = None,
     ) -> list[list[float]]:
+        models = _models_client(self._client)
         response = await _maybe_await(
-            self._client.models.embed_content(
+            models.embed_content(
                 model=model or self._default_embedding_model,
                 contents=texts,
             )
@@ -94,6 +97,13 @@ def _messages_to_contents(messages: list[dict]) -> list[str]:
             content = "\n".join(str(part) for part in content)
         contents.append(f"{role}: {content}" if role else str(content))
     return contents
+
+
+def _models_client(client: Any) -> Any:
+    aio_client = getattr(client, "aio", None)
+    if aio_client is not None and hasattr(aio_client, "models"):
+        return aio_client.models
+    return client.models
 
 
 def _with_schema_instruction(messages: list[dict], schema: dict) -> list[dict]:

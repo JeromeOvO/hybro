@@ -13,11 +13,16 @@ class AgentCardResolverImpl:
         self,
         client: httpx.AsyncClient | None = None,
         cache_ttl: int = 300,
+        timeout: int = 10,
     ) -> None:
-        self._client = client or httpx.AsyncClient()
+        self._client = client or httpx.AsyncClient(timeout=timeout)
         self._owns_client = client is None
         self._cache_ttl = cache_ttl
         self._cache: dict[str, tuple[float, AgentCardSnapshot]] = {}
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
 
     async def resolve_card(self, agent_url: str) -> AgentCardSnapshot | None:
         normalized_url = agent_url.rstrip("/")
