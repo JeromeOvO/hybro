@@ -77,6 +77,13 @@ class AgentHealthService:
     def bind_facade(self, facade) -> None:
         self._facade = facade
 
+    def _require_facade(self):
+        if self._facade is None:
+            raise RuntimeError(
+                "AgentHealthService.bind_facade() not called - startup incomplete"
+            )
+        return self._facade
+
     async def check_agent_health(
         self, agent: Agent, *, timeout: float | None = None
     ) -> tuple[bool, AgentCard | None]:
@@ -204,26 +211,16 @@ class AgentHealthService:
         Returns:
             bool: True if update was successful
         """
+        facade = self._require_facade()
         try:
-            if self._facade is not None:
-                await self._facade.update_health(
-                    agent_id,
-                    new_status == AgentStatus.active,
-                )
-                logger.info(
-                    f"Agent {agent_id} status updated to {new_status.value}"
-                )
-                return True
-            agent = await mongodb.get_agent_by_agent_id(agent_id)
-            if agent and agent.agent_status != new_status:
-                agent.agent_status = new_status
-                success = await mongodb.update_agent_by_agent_id(agent_id, agent)
-                if success:
-                    logger.info(
-                        f"Agent {agent_id} status updated to {new_status.value}"
-                    )
-                return success
-            return True  # No update needed
+            await facade.update_health(
+                agent_id,
+                new_status == AgentStatus.active,
+            )
+            logger.info(
+                f"Agent {agent_id} status updated to {new_status.value}"
+            )
+            return True
         except Exception as e:
             logger.error(f"Failed to update agent {agent_id} status: {e}")
             return False

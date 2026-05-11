@@ -645,7 +645,7 @@ def test_protocol_methods_match_design_doc():
             "is_debate_mode",
         ],
     )
-    assert inspect.iscoroutinefunction(protocols.HubLivenessReader.is_hub_online)
+    assert not inspect.iscoroutinefunction(protocols.HubLivenessReader.is_hub_online)
     _assert_params(protocols.RoomManagement.create_room, ["self", "request"])
     _assert_params(protocols.ExecutionEngine.cancel, ["self", "room_id", "message_id"])
     _assert_params(protocols.MongoCollection.find, ["self", "query", "kwargs"])

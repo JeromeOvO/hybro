@@ -147,6 +147,51 @@ class TestGetRetryDelay:
 
 
 # =============================================================================
+# AgentHealthCheckService.update_agent_status Tests
+# =============================================================================
+
+
+class TestUpdateAgentStatus:
+    @pytest.fixture
+    def svc(self):
+        from services.agent_health_service import AgentHealthService
+        return AgentHealthService()
+
+    @pytest.mark.asyncio
+    async def test_requires_bound_facade_before_status_write(self, svc):
+        from models.agent import AgentStatus
+
+        with patch("services.agent_health_service.mongodb") as mock_mongodb:
+            mock_mongodb.get_agent_by_agent_id = AsyncMock()
+
+            with pytest.raises(RuntimeError, match="bind_facade"):
+                await svc.update_agent_status("agent-123", AgentStatus.active)
+
+        mock_mongodb.get_agent_by_agent_id.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_routes_status_write_through_facade(self, svc):
+        from models.agent import AgentStatus
+
+        facade = MagicMock()
+        facade.update_health = AsyncMock()
+        svc.bind_facade(facade)
+
+        with patch("services.agent_health_service.mongodb") as mock_mongodb:
+            mock_mongodb.get_agent_by_agent_id = AsyncMock()
+            mock_mongodb.update_agent_by_agent_id = AsyncMock()
+
+            success = await svc.update_agent_status(
+                "agent-123", AgentStatus.inactive
+            )
+
+        assert success is True
+        facade.update_health.assert_awaited_once_with("agent-123", False)
+        mock_mongodb.get_agent_by_agent_id.assert_not_awaited()
+        mock_mongodb.update_agent_by_agent_id.assert_not_awaited()
+
+
+# =============================================================================
 # AgentHealthCheckService._update_agent_card_in_db Tests
 # =============================================================================
 

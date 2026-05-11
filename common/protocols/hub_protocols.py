@@ -1,4 +1,5 @@
-from typing import AsyncIterator, Protocol, runtime_checkable
+from collections.abc import AsyncIterator, Awaitable
+from typing import Protocol, runtime_checkable
 
 from common.dto import HubDispatchCommand, HubDispatchResult, HubInfo
 
@@ -16,7 +17,7 @@ class HubManagement(Protocol):
 
 @runtime_checkable
 class HubLivenessReader(Protocol):
-    async def is_hub_online(self, hub_id: str) -> bool: ...
+    def is_hub_online(self, hub_id: str) -> bool | Awaitable[bool]: ...
     async def get_hub_owner_id(self, hub_id: str) -> str | None: ...
 
 

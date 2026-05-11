@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -753,8 +753,10 @@ class RelayHubLivenessReader:
     def __init__(self, relay: RelayService) -> None:
         self._relay = relay
 
-    async def is_hub_online(self, hub_id: str) -> bool:
-        return await self._relay.is_hub_alive(hub_id)
+    def is_hub_online(self, hub_id: str) -> bool | Awaitable[bool]:
+        if self._relay._streams is None:
+            return self._relay._is_hub_connected_locally(hub_id)
+        return self._relay.is_hub_alive(hub_id)
 
     async def get_hub_owner_id(self, hub_id: str) -> str | None:
         hub = await self._relay._mongo.get_hub(hub_id)
