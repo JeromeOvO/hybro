@@ -64,9 +64,10 @@ export function useRoomHydration(
         useStreamingStore.getState().clearByMessageIds(appliedIds)
         markInitialHydrationComplete(targetRoomId)
         console.log(
-          `[NormalizedStore] DB hydration: ${filtered.length} messages written ` +
+          `[NormalizedStore] DB hydration: ${appliedIds.size}/${filtered.length} messages written ` +
           `(${response.message_list.length} raw, ${incomingMessages.length} converted, ` +
-          `${incomingMessages.length - filtered.length} filtered)`
+          `${incomingMessages.length - filtered.length} filtered, ` +
+          `${filtered.length - appliedIds.size} rejected by upsert rules)`
         )
       }
 

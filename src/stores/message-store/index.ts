@@ -76,6 +76,12 @@ export const useMessageStore = create<MessageStoreState>()(
       // Determine which IDs will actually be written before calling set(),
       // so callers can safely use the returned set for downstream operations
       // (e.g. clearing streaming buffers only for truly-applied messages).
+      //
+      // INVARIANT: there must be NO await between get() and set() below.
+      // Both calls are synchronous and JavaScript is single-threaded, so no
+      // other Zustand action can mutate state in between. Any future refactor
+      // that adds an await here would break the guarantee that appliedIds
+      // matches what set() actually applies.
       const appliedIds = new Set<string>()
       const currentState = get()
       let entities = currentState.entities
