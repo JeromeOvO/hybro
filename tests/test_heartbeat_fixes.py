@@ -51,6 +51,12 @@ def _make_streams():
     return streams
 
 
+def _make_writer():
+    writer = MagicMock()
+    writer.mark_hub_agents_offline = AsyncMock()
+    return writer
+
+
 def _make_service(mongo=None, streams=None):
     if mongo is None:
         mongo = _make_mongo()
@@ -229,12 +235,15 @@ class TestHeartbeatCheckConnectionIdGuard:
 
         mongo.hubs_collection.find = MagicMock(side_effect=find_router)
         svc = _make_service(mongo=mongo, streams=streams)
+        writer = _make_writer()
+        svc.bind_agent_registry_writer(writer)
 
         await svc._do_heartbeat_check(stale_threshold=90)
 
         mongo.update_hub_status_if_current.assert_awaited_with(
             "hub-stale", connection_id="conn-old-123", is_online=False,
         )
+        writer.mark_hub_agents_offline.assert_awaited_once_with("hub-stale")
 
     async def test_pass1_skips_mark_if_connection_superseded(self):
         """If connection_id doesn't match (new connect_hub raced), skip offline mark."""
@@ -377,24 +386,41 @@ class TestMarkHubAgentsOfflineGuard:
         """Without connection_id, mark_hub_agents_offline is unconditional."""
         mongo = _make_mongo()
         svc = _make_service(mongo=mongo)
+        writer = _make_writer()
+        svc.bind_agent_registry_writer(writer)
 
         await svc.mark_hub_agents_offline("hub-1")
 
         mongo.update_hub_status.assert_awaited_with("hub-1", is_online=False)
-        mongo.agents_collection.update_many.assert_awaited_once()
+        writer.mark_hub_agents_offline.assert_awaited_once_with("hub-1")
+        mongo.agents_collection.update_many.assert_not_awaited()
 
     async def test_conditional_offline_with_matching_connection_id(self):
         """With matching connection_id, offline proceeds."""
         mongo = _make_mongo()
         mongo.update_hub_status_if_current = AsyncMock(return_value=True)
         svc = _make_service(mongo=mongo)
+        writer = _make_writer()
+        svc.bind_agent_registry_writer(writer)
 
         await svc.mark_hub_agents_offline("hub-1", connection_id="conn-123")
 
         mongo.update_hub_status_if_current.assert_awaited_with(
             "hub-1", connection_id="conn-123", is_online=False,
         )
-        mongo.agents_collection.update_many.assert_awaited_once()
+        writer.mark_hub_agents_offline.assert_awaited_once_with("hub-1")
+        mongo.agents_collection.update_many.assert_not_awaited()
+
+    async def test_offline_requires_registry_writer_for_agent_status(self):
+        """Hub status can be updated here, but agent status writes require the writer."""
+        mongo = _make_mongo()
+        svc = _make_service(mongo=mongo)
+
+        with pytest.raises(RuntimeError, match="AgentRegistryWriter"):
+            await svc.mark_hub_agents_offline("hub-1")
+
+        mongo.update_hub_status.assert_awaited_with("hub-1", is_online=False)
+        mongo.agents_collection.update_many.assert_not_awaited()
 
     async def test_skips_offline_when_connection_superseded(self):
         """When connection_id doesn't match (superseded), offline is skipped."""
@@ -436,6 +462,7 @@ class TestHeartbeatExpiryDisconnect:
         mongo.hubs_collection.find = MagicMock(side_effect=find_router)
 
         svc = _make_service(mongo=mongo, streams=streams)
+        svc.bind_agent_registry_writer(_make_writer())
 
         disconnect_event = asyncio.Event()
         svc._hub_disconnect_events["hub-stale"] = disconnect_event
@@ -465,6 +492,7 @@ class TestHeartbeatExpiryDisconnect:
         mongo.hubs_collection.find = MagicMock(side_effect=find_router)
 
         svc = _make_service(mongo=mongo, streams=streams)
+        svc.bind_agent_registry_writer(_make_writer())
         # No disconnect event registered for hub-remote
         await svc._do_heartbeat_check(stale_threshold=90)  # should not raise
 

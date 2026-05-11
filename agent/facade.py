@@ -303,11 +303,6 @@ class AgentFacade:
                 )
 
             agent_id = existing["agent_id"] if existing is not None else self._id_factory()
-            if self._gateway_base_url:
-                public_url = (
-                    f"{self._gateway_base_url.rstrip('/')}"
-                    f"/gateway/agents/{agent_id}/message/send"
-                )
 
             doc = hub_descriptor_to_doc(
                 hub_id=hub_id,
@@ -655,6 +650,8 @@ def _merge_existing_hub_doc(existing: dict[str, Any], incoming: dict[str, Any]) 
     merged = dict(incoming)
     if "is_public" in existing:
         merged["is_public"] = existing["is_public"]
+    if incoming.get("public_url") is None and "public_url" in existing:
+        merged["public_url"] = existing["public_url"]
 
     existing_card = dict(existing.get("agent_card") or {})
     incoming_card = dict(incoming.get("agent_card") or {})

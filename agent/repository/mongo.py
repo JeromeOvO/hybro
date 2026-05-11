@@ -184,13 +184,17 @@ class AgentMongoRepository:
 def _hub_agent_upsert_update(data: dict) -> dict:
     set_data = dict(data)
     agent_id = set_data.pop("agent_id")
+    is_public = set_data.pop("is_public", None)
     incoming_card = dict(set_data.pop("agent_card", {}) or {})
     for key, value in incoming_card.items():
         if key not in AGENT_CARD_NO_OVERWRITE:
             set_data[f"agent_card.{key}"] = value
+    set_on_insert = {"agent_id": agent_id}
+    if is_public is not None:
+        set_on_insert["is_public"] = is_public
     return {
         "$set": set_data,
-        "$setOnInsert": {"agent_id": agent_id},
+        "$setOnInsert": set_on_insert,
     }
 
 

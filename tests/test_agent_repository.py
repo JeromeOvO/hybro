@@ -309,6 +309,38 @@ async def test_upsert_hub_agent_uses_atomic_set_on_insert_for_agent_identity():
 
 
 @pytest.mark.asyncio
+async def test_upsert_hub_agent_preserves_existing_is_public_on_resync():
+    repo, collection = _repo([
+        {
+            "agent_id": "existing",
+            "hub_id": "hub-1",
+            "local_agent_id": "local-1",
+            "is_public": True,
+            "agent_card": {"name": "Local Agent", "url": "http://localhost:9000"},
+        }
+    ])
+
+    stored_id = await repo.upsert_hub_agent(
+        "hub-1",
+        "local-1",
+        {
+            "agent_id": "new",
+            "provider_id": "u1",
+            "is_public": False,
+            "normalized_url": None,
+            "agent_status": "active",
+            "agent_card": {"name": "Local Agent", "url": "http://localhost:9000"},
+        },
+    )
+
+    assert stored_id == "existing"
+    assert (await repo.get_by_id("existing"))["is_public"] is True
+    _, update, _ = collection.find_one_and_update_calls[-1]
+    assert "is_public" not in update["$set"]
+    assert update["$setOnInsert"]["is_public"] is False
+
+
+@pytest.mark.asyncio
 async def test_mark_hub_agents_offline_marks_active_hub_agents():
     repo, _ = _repo([
         {"agent_id": "a1", "hub_id": "hub-1", "agent_status": "active"},

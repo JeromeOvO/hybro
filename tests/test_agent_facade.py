@@ -358,6 +358,46 @@ async def test_facade_sync_hub_agents_reuses_stored_id_for_local_proxy_url():
 
 
 @pytest.mark.asyncio
+async def test_facade_sync_hub_agents_preserves_existing_public_url_without_gateway():
+    facade, repo, _, _, _ = _facade_with_docs(
+        [
+            {
+                "agent_id": "existing",
+                "provider_id": "u1",
+                "source": "self",
+                "is_public": True,
+                "public_url": "https://writer.hybro.ai",
+                "normalized_url": "https://existing.example",
+                "agent_card": {
+                    "name": "Existing",
+                    "description": "Existing description",
+                    "url": "https://existing.example",
+                },
+            }
+        ],
+    )
+
+    synced = await facade.sync_hub_agents(
+        "hub-1",
+        "u1",
+        [
+            HubAgentDescriptor(
+                hub_id="hub-1",
+                agent_id="local-existing",
+                raw_card={
+                    "name": "Existing From Hub",
+                    "description": "Updated description",
+                    "url": "https://existing.example",
+                },
+            )
+        ],
+    )
+
+    assert [item.agent_id for item in synced] == ["existing"]
+    assert repo.docs["existing"]["public_url"] == "https://writer.hybro.ai"
+
+
+@pytest.mark.asyncio
 async def test_facade_sync_hub_agents_empty_inventory_prunes_all_hub_agents():
     facade, repo, _, _, _ = _facade_with_docs([
         {

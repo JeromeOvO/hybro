@@ -22,6 +22,7 @@ from models.error import (
     AgentIdRequiredError,
     AgentNotFoundError,
 )
+from models.response import AgentCenterResponse
 from services.agent_service import (
     AgentService,
     _agent_info_to_legacy_agent,
@@ -200,6 +201,27 @@ def _info_from_agent(agent: Agent) -> AgentInfo:
 
 class TestRegisterAgent:
     """Tests for register_agent method."""
+
+    @pytest.mark.asyncio
+    async def test_agent_center_register_agent_delegates_without_a2a_prefetch(self):
+        from modules.AgentCenter import AgentCenter
+
+        center = AgentCenter()
+        center.agent_service = MagicMock()
+        center.agent_service.register_agent = AsyncMock(
+            return_value=AgentCenterResponse(success=True, agent_id="agent-123")
+        )
+        center.a2a_service = MagicMock()
+        center.a2a_service.get_agent_card_from_url = AsyncMock()
+        request = AgentCenterRequest(agent_url="https://agent.example")
+
+        result = await center.register_agent(request)
+
+        assert result.success is True
+        assert result.agent_id == "agent-123"
+        center.agent_service.register_agent.assert_awaited_once_with(request)
+        center.a2a_service.get_agent_card_from_url.assert_not_awaited()
+        assert request.agent_card is None
 
     @pytest.mark.asyncio
     async def test_registers_new_agent(
