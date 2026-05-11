@@ -118,13 +118,13 @@ class TestIsHubAlive:
         svc._hub_queues["hub-1"] = asyncio.Queue()
         assert await svc.is_hub_alive("hub-1") is True
 
-    async def test_liveness_reader_adapter_delegates_to_relay(self):
+    async def test_liveness_reader_adapter_delegates_to_relay_is_hub_alive(self):
         streams = _make_streams()
         streams.is_hub_alive = AsyncMock(return_value=True)
         svc = _make_service(streams=streams)
         reader = RelayHubLivenessReader(svc)
 
-        assert not asyncio.iscoroutinefunction(reader.is_hub_online)
+        assert asyncio.iscoroutinefunction(reader.is_hub_online)
         assert await reader.is_hub_online("hub-1") is True
         assert await reader.get_hub_owner_id("hub-1") == "user-001"
         streams.is_hub_alive.assert_awaited_once_with("hub-1")
@@ -133,9 +133,9 @@ class TestIsHubAlive:
         svc = _make_service(streams=None)
         reader = RelayHubLivenessReader(svc)
 
-        assert reader.is_hub_online("hub-1") is False
+        assert await reader.is_hub_online("hub-1") is False
         svc._hub_queues["hub-1"] = asyncio.Queue()
-        assert reader.is_hub_online("hub-1") is True
+        assert await reader.is_hub_online("hub-1") is True
 
 
 @pytest.mark.asyncio

@@ -61,14 +61,10 @@ def compute_final_score(
     capability_weight: float | None = None,
 ) -> float:
     resolved_vector_weight = (
-        _env_float("MATCH_VECTOR_WEIGHT", VECTOR_WEIGHT)
-        if vector_weight is None
-        else vector_weight
+        VECTOR_WEIGHT if vector_weight is None else vector_weight
     )
     resolved_capability_weight = (
-        _env_float("MATCH_CAPABILITY_WEIGHT", CAPABILITY_WEIGHT)
-        if capability_weight is None
-        else capability_weight
+        CAPABILITY_WEIGHT if capability_weight is None else capability_weight
     )
     return (
         resolved_vector_weight * vector_score
@@ -85,7 +81,7 @@ def select_top_matches(
         return []
 
     if is_debate_mode:
-        debate_threshold = _env_float("MATCH_DEBATE_THRESHOLD", DEBATE_THRESHOLD)
+        debate_threshold = DEBATE_THRESHOLD
         above_threshold = [
             match for match in ranked if match["final_score"] > debate_threshold
         ]
@@ -97,14 +93,14 @@ def select_top_matches(
         return above_threshold[:count] if len(above_threshold) >= 3 else above_threshold
 
     top = ranked[0]
-    gap_threshold = _env_float("MATCH_GAP_THRESHOLD", GAP_THRESHOLD)
+    gap_threshold = GAP_THRESHOLD
     if (
         len(ranked) >= 2
         and (top["final_score"] - ranked[1]["final_score"]) > gap_threshold
     ):
         return [top]
 
-    quality_threshold = _env_float("MATCH_QUALITY_THRESHOLD", QUALITY_THRESHOLD)
+    quality_threshold = QUALITY_THRESHOLD
     qualified = [match for match in ranked if match["final_score"] > quality_threshold]
     return qualified[:3] if qualified else [top]
 

@@ -603,7 +603,11 @@ def patch_agent_deps(mock_agent_center):
         side_effect=lambda r, _: r
     )
     with patch(PATCH["agent.agent_center"], mock_agent_center):
-        yield mock_agent_center
+        with patch(
+            "services.agent_liveness_service.check_and_sync_liveness",
+            new=AsyncMock(side_effect=lambda agent: agent),
+        ):
+            yield mock_agent_center
 
 
 # =============================================================================

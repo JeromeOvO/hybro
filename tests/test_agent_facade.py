@@ -827,13 +827,38 @@ async def test_facade_lists_owned_and_public_agents_with_hub_liveness():
     assert hub.checked == ["hub-1", "hub-2"]
 
 
-def test_matching_weights_are_read_at_call_time(monkeypatch):
-    from agent.matching import compute_final_score
+def test_matching_weights_and_thresholds_use_module_constants(monkeypatch):
+    from agent import matching
 
+    monkeypatch.setattr(matching, "VECTOR_WEIGHT", 0.25)
+    monkeypatch.setattr(matching, "CAPABILITY_WEIGHT", 0.75)
     monkeypatch.setenv("MATCH_VECTOR_WEIGHT", "1.0")
     monkeypatch.setenv("MATCH_CAPABILITY_WEIGHT", "0.0")
 
-    assert compute_final_score(0.2, 1.0) == pytest.approx(0.2)
+    assert matching.compute_final_score(0.2, 1.0) == pytest.approx(0.8)
+
+    monkeypatch.setattr(matching, "GAP_THRESHOLD", 0.5)
+    monkeypatch.setattr(matching, "QUALITY_THRESHOLD", 0.5)
+    monkeypatch.setenv("MATCH_GAP_THRESHOLD", "0.01")
+    monkeypatch.setenv("MATCH_QUALITY_THRESHOLD", "0.99")
+    ranked = [
+        {"agent_id": "a1", "final_score": 0.8},
+        {"agent_id": "a2", "final_score": 0.6},
+        {"agent_id": "a3", "final_score": 0.31},
+    ]
+
+    assert [m["agent_id"] for m in matching.select_top_matches(ranked)] == [
+        "a1",
+        "a2",
+    ]
+
+    monkeypatch.setattr(matching, "DEBATE_THRESHOLD", 0.3)
+    monkeypatch.setenv("MATCH_DEBATE_THRESHOLD", "0.95")
+
+    assert [
+        m["agent_id"]
+        for m in matching.select_top_matches(ranked, is_debate_mode=True)
+    ] == ["a1", "a2", "a3"]
 
 
 @pytest.mark.asyncio
@@ -921,7 +946,7 @@ async def test_facade_direct_callability_fails_closed_for_inactive_and_offline_h
 
 
 @pytest.mark.asyncio
-async def test_facade_supports_async_hub_liveness_reader():
+async def test_facade_uses_async_hub_liveness_reader():
     from agent import AgentFacade
 
     repo = FakeRepository(
@@ -939,7 +964,7 @@ async def test_facade_supports_async_hub_liveness_reader():
             }
         ]
     )
-    hub = AsyncFakeHubLiveness({"hub-1": True})
+    hub = FakeHubLiveness({"hub-1": True})
     facade = AgentFacade(
         repository=repo,
         vector=FakeVector(),
@@ -1156,16 +1181,6 @@ class FakeCardResolver:
 
 
 class FakeHubLiveness:
-    def __init__(self, online: dict[str, bool]) -> None:
-        self._online = online
-        self.checked: list[str] = []
-
-    def is_hub_online(self, hub_id: str) -> bool:
-        self.checked.append(hub_id)
-        return self._online.get(hub_id, False)
-
-
-class AsyncFakeHubLiveness:
     def __init__(self, online: dict[str, bool]) -> None:
         self._online = online
         self.checked: list[str] = []

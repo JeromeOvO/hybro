@@ -272,33 +272,37 @@ class TestAgentLifecycleFlow:
 
         with patch(PATCH["agent.agent_center"], mock_ac):
             with patch(PATCH["agent.agent_service"], mock_as):
-                # Step 1: Register (real endpoint extracts agent_url,
-                # sets provider_id from auth user, calls agent_center)
-                req1 = MagicMock()
-                req1.json = AsyncMock(return_value={
-                    "agent_url": "https://flow-agent.example.com/.well-known/agent.json",
-                })
-                reg_resp = await register_agent(req1, flow_user)
-                assert reg_resp.success is True
-                assert reg_resp.agent_id == agent_id
+                with patch(
+                    "services.agent_liveness_service.check_and_sync_liveness",
+                    new=AsyncMock(return_value=mock_agent),
+                ):
+                    # Step 1: Register (real endpoint extracts agent_url,
+                    # sets provider_id from auth user, calls agent_center)
+                    req1 = MagicMock()
+                    req1.json = AsyncMock(return_value={
+                        "agent_url": "https://flow-agent.example.com/.well-known/agent.json",
+                    })
+                    reg_resp = await register_agent(req1, flow_user)
+                    assert reg_resp.success is True
+                    assert reg_resp.agent_id == agent_id
 
-                reg_call = mock_ac.register_agent.call_args[0][0]
-                assert reg_call.provider_id == flow_user.user_id
+                    reg_call = mock_ac.register_agent.call_args[0][0]
+                    assert reg_call.provider_id == flow_user.user_id
 
-                # Step 2: Query (real endpoint constructs AgentCenterRequest)
-                query_resp = await get_agent(agent_id, user=flow_user)
-                assert query_resp.success is True
-                assert query_resp.agent.agent_id == agent_id
+                    # Step 2: Query (real endpoint constructs AgentCenterRequest)
+                    query_resp = await get_agent(agent_id, user=flow_user)
+                    assert query_resp.success is True
+                    assert query_resp.agent.agent_id == agent_id
 
-                query_call = mock_ac.query_agent_by_agent_id.call_args[0][0]
-                assert query_call.user_id == flow_user.user_id
+                    query_call = mock_ac.query_agent_by_agent_id.call_args[0][0]
+                    assert query_call.user_id == flow_user.user_id
 
-                # Step 3: Delete (real endpoint verifies ownership,
-                # then calls agent_center.remove_agent)
-                req3 = MagicMock()
-                req3.json = AsyncMock(return_value={"agent_id": agent_id})
-                del_resp = await delete_agent(req3, flow_user)
-                assert del_resp.success is True
+                    # Step 3: Delete (real endpoint verifies ownership,
+                    # then calls agent_center.remove_agent)
+                    req3 = MagicMock()
+                    req3.json = AsyncMock(return_value={"agent_id": agent_id})
+                    del_resp = await delete_agent(req3, flow_user)
+                    assert del_resp.success is True
 
     @pytest.mark.asyncio
     async def test_private_agent_visibility(self, flow_user):

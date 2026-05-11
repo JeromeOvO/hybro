@@ -4,7 +4,6 @@ import asyncio
 from collections.abc import Callable
 from datetime import datetime
 import hashlib
-import inspect
 import logging
 from typing import Any
 
@@ -452,10 +451,7 @@ class AgentFacade:
     async def _is_hub_online(self, hub_id: str) -> bool:
         if self._hub_liveness is None:
             return False
-        result = self._hub_liveness.is_hub_online(hub_id)
-        if inspect.isawaitable(result):
-            result = await result
-        return bool(result)
+        return bool(await self._hub_liveness.is_hub_online(hub_id))
 
     async def _get_excluded_agent_ids(self) -> frozenset[str]:
         if self._exclusion_reader is None:
