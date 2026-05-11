@@ -479,6 +479,11 @@ export function GroupManagementModal({
               <DialogTitle>
                 {mode === 'create' ? 'Create New Group' : 'Edit Group'}
               </DialogTitle>
+              <DialogDescription>
+                {mode === 'create'
+                  ? 'Name your group and choose which agents to include.'
+                  : 'Update the group name, description, or agent selection.'}
+              </DialogDescription>
             </DialogHeader>
 
             <div className="py-4 space-y-4">
@@ -688,7 +693,7 @@ export function GroupManagementModal({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent aria-describedby={undefined} className="sm:max-w-[720px] max-h-[85vh] overflow-y-auto bg-background backdrop-blur-md border border-border/50 shadow-lg">
+      <DialogContent className="sm:max-w-[720px] max-h-[85vh] overflow-y-auto bg-background backdrop-blur-md border border-border/50 shadow-lg">
         {renderContent()}
       </DialogContent>
     </Dialog>

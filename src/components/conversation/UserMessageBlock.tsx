@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback, type ReactNode } from 'react'
 import type { MessageEntity } from '@/stores/message-store/types'
 import { UserAttachmentCard } from './UserAttachmentCard'
+import { copySelectionWithMentions } from '@/components/markdown-content'
 
 const MENTION_RE = /<@([^|]+)\|([^>]+)>/g
 
@@ -38,6 +39,7 @@ interface UserMessageBlockProps {
 export function UserMessageBlock({ entity }: UserMessageBlockProps) {
   const [expanded, setExpanded] = useState(false)
   const textRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
   const [isOverflowing, setIsOverflowing] = useState(false)
 
   useEffect(() => {
@@ -48,8 +50,14 @@ export function UserMessageBlock({ entity }: UserMessageBlockProps) {
 
   const rendered = useMemo(() => renderContent(entity.content ?? ''), [entity.content])
 
+  const handleCopy = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+    if (containerRef.current) copySelectionWithMentions(e, containerRef.current)
+  }, [])
+
   return (
     <div
+      ref={containerRef}
+      onCopy={handleCopy}
       className={`conversation-user-message bg-muted overflow-hidden transition-shadow duration-200 ${
         isOverflowing ? 'cursor-pointer' : ''
       }`}

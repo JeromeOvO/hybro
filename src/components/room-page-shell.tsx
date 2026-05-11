@@ -22,7 +22,7 @@ import type { MessageEntity } from '@/stores/message-store/types'
 
 const EMPTY_ENTITIES: Record<string, MessageEntity> = {}
 const EMPTY_ORDERED_IDS: string[] = []
-const DETAIL_PANE_QUERY = '(min-width: 1280px)'
+const DETAIL_PANE_QUERY = '(min-width: 1024px)'
 const DETAIL_PANE_LAYOUT = {
   'conversation-primary-panel': 66,
   'conversation-detail-panel': 34,
@@ -208,7 +208,7 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
         <Sheet open={!!detail} onOpenChange={(open) => { if (!open) handleCloseDetail() }}>
           <SheetContent
             side="bottom"
-            className="h-[85dvh] p-0 flex flex-col gap-0 rounded-t-xl overflow-hidden"
+            className="h-[85dvh] p-0 flex flex-col gap-0 rounded-t-xl overflow-hidden sm:min-w-[480px] sm:max-w-2xl sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2"
             data-mobile-sheet
           >
             <SheetTitle className="sr-only">Agent response detail</SheetTitle>

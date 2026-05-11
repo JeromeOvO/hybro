@@ -153,20 +153,20 @@ export function copySelectionWithMentions(
   fragment.childNodes.forEach(visit)
 
   let mentionStorageText = plainText
-  const mentionLinks = Array.from(container.querySelectorAll<HTMLAnchorElement>('a.room-mention'))
-    .filter((link) => {
+  const mentionEls = Array.from(container.querySelectorAll<HTMLElement>('.room-mention'))
+    .filter((el) => {
       try {
-        return range.intersectsNode(link)
+        return range.intersectsNode(el)
       } catch {
         return false
       }
     })
 
-  mentionLinks.forEach((link) => {
-    const href = link.getAttribute('href') || ''
-    const match = href.match(/\/c\/agents\/([^/?#]+)/)
-    const agentId = match?.[1]
-    const mentionText = (link.textContent || '').trim()
+  mentionEls.forEach((el) => {
+    const agentId =
+      el.dataset.id ||
+      (el.getAttribute('href') || '').match(/\/c\/agents\/([^/?#]+)/)?.[1]
+    const mentionText = (el.textContent || '').trim()
     const agentName = mentionText.startsWith('@') ? mentionText.slice(1) : mentionText
     if (!agentId || !mentionText) return
     mentionStorageText = mentionStorageText.replace(mentionText, `<@${agentId}|${agentName}>`)

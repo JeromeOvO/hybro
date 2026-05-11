@@ -58,24 +58,9 @@ function partsToArtifacts(
   return mergeArtifacts(existing?.artifacts, inline, false)
 }
 
-function isNonInformativeTextChunk(text: string | undefined, hasExistingContent = false): boolean {
-  if (text === undefined || text === null) return true
-  if (text === '') return true
-  const t = text.trim()
-  // NOTE: pure-whitespace tokens (e.g. a single " ") are meaningful
-  // inter-token separators in streaming content and must NOT be treated
-  // as non-informative. Only drop the recognised placeholder markers.
-  //
-  // IMPORTANT: only treat ".", "...", "…" as non-informative when we have
-  // NO existing content yet (i.e., this is the very first chunk). Mid-stream
-  // these are real sentence punctuation and must be preserved, otherwise the
-  // streaming content diverges from the DB canonical text.
-  if (hasExistingContent) return false
-  return t === '.' || t === '...' || t === '…'
-}
-
-function isRenderableArtifactPart(part: ArtifactPart, hasExistingContent = false): boolean {
-  if (part.kind === 'text') return !isNonInformativeTextChunk(part.text, hasExistingContent)
+// Used by partsToArtifacts to filter non-text parts from task_update/agent_response payloads.
+// Text parts are handled separately (promoted to entity.content) so only file/data parts reach here.
+function isRenderableArtifactPart(part: ArtifactPart): boolean {
   if (part.kind === 'file') return !!(part.file?.uri || part.file?.bytes)
   if (part.kind === 'data') return !!part.data && Object.keys(part.data).length > 0
   return false

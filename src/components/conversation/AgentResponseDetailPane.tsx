@@ -1,7 +1,8 @@
 'use client'
 
+import { useState } from 'react'
 import Link from 'next/link'
-import { X } from 'lucide-react'
+import { X, ChevronDown } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { MarkdownContent } from '@/components/markdown-content'
 import { ArtifactList } from '@/components/artifact-list'
@@ -35,6 +36,7 @@ function AgentResponseDetailHeader({ detail, onClose }: AgentResponseDetailPaneP
   const catalogAgent = useAgentFromCatalog(detail.agentId)
   const iconUrl = catalogAgent?.agent_card?.iconUrl || undefined
   const isHubOnline = catalogAgent?.is_hub_online
+  const [taskExpanded, setTaskExpanded] = useState(true)
 
   const toneColors: Record<AgentDisplayProps['tone'], string> = {
     accent: 'hsl(var(--color-primary))',
@@ -76,10 +78,10 @@ function AgentResponseDetailHeader({ detail, onClose }: AgentResponseDetailPaneP
       </div>
 
       <div className="conversation-detail-agent-main">
-        <div className="conversation-detail-agent-name flex items-center gap-1.5">
+        <div className="conversation-detail-agent-name">
           <Link
             href={`/c/agents/${detail.agentId}`}
-            className="hover:underline focus-visible:outline-none"
+            className="hover:underline focus-visible:outline-none truncate"
           >
             {detail.agentName}
           </Link>
@@ -87,36 +89,54 @@ function AgentResponseDetailHeader({ detail, onClose }: AgentResponseDetailPaneP
             <AgentSourceBadge
               source={detail.agentSource}
               isHubOnline={isHubOnline}
-              className="h-3.5 w-3.5"
+              className="h-3.5 w-3.5 shrink-0"
             />
           )}
+          <span
+            className="conversation-detail-status-pill ml-auto"
+            role="status"
+            aria-label={detail.display.ariaLabel}
+            style={{ color: toneColors[detail.display.tone] }}
+          >
+            {detail.display.label}
+          </span>
+          <button
+            type="button"
+            aria-label="Close agent response"
+            className="conversation-detail-close-button shrink-0"
+            onClick={onClose}
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
         {detail.taskDescription && (
-          <div className="conversation-detail-agent-task">
-            <span className="conversation-detail-agent-branch">&#x2514;</span>
-            <span className="conversation-detail-agent-task-text">
-              {detail.taskDescription}
-            </span>
-          </div>
+          <button
+            type="button"
+            aria-label={taskExpanded ? 'Collapse task' : 'Expand task'}
+            aria-expanded={taskExpanded}
+            className="conversation-detail-agent-task-toggle"
+            onClick={() => setTaskExpanded(v => !v)}
+          >
+            <ChevronDown
+              className={cn(
+                'conversation-detail-agent-branch-icon h-3.5 w-3.5 shrink-0 transition-transform',
+                !taskExpanded && '-rotate-90',
+              )}
+              style={{ transitionDuration: 'var(--conversation-chevron-duration)' }}
+            />
+            <div
+              className="conversation-detail-agent-task-collapsible"
+            >
+              <span className={cn(
+                "conversation-detail-agent-task-text",
+                !taskExpanded && "conversation-detail-agent-task-text-collapsed",
+              )}>
+                {detail.taskDescription}
+              </span>
+            </div>
+          </button>
         )}
       </div>
-
-      <span
-        className="conversation-detail-status-pill"
-        role="status"
-        aria-label={detail.display.ariaLabel}
-        style={{ color: toneColors[detail.display.tone] }}
-      >
-        {detail.display.label}
-      </span>
-      <button
-        type="button"
-        aria-label="Close agent response"
-        className="conversation-detail-close-button"
-        onClick={onClose}
-      >
-        <X className="h-4 w-4" />
-      </button>
     </div>
   )
 }

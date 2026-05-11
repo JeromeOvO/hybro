@@ -67,7 +67,7 @@
   --conversation-turn-content-top-gap: 8px;
   --conversation-frame-max-width: 800px;
   --conversation-detail-width: 520px;
-  --conversation-body-inset: 16px;
+  --conversation-body-inset: 8px;
 
   --conversation-gutter-x: 2rem;
   --conversation-sticky-top: 12px;
@@ -465,7 +465,7 @@
   overflow-y: auto;
 }
 
-@media (min-width: 1280px) {
+@media (min-width: 1024px) {
   .conversation-workspace[data-detail-open="true"] {
     grid-template-columns: minmax(0, 1fr) minmax(420px, var(--conversation-detail-width));
   }
@@ -556,6 +556,10 @@
   font-size: 13px;
   font-weight: 600;
   line-height: 18px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .conversation-detail-agent-task {
@@ -565,12 +569,35 @@
   gap: 6px;
 }
 
-.conversation-detail-agent-branch {
-  flex: 0 0 auto;
-  color: var(--conversation-text-dim);
-  font-size: 14px;
-  line-height: 20px;
+.conversation-detail-agent-task-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  min-width: 0;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 1px 2px;
+  margin: -1px -2px;
+  transition: background-color var(--conversation-chevron-duration) ease;
 }
+
+.conversation-detail-agent-task-toggle:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.conversation-detail-agent-branch-icon {
+  color: var(--conversation-text-dim);
+  margin-top: 2px;
+}
+
+.conversation-detail-agent-task-collapsible {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1;
+}
+
 
 .conversation-detail-agent-task-text {
   min-width: 0;
@@ -580,27 +607,33 @@
   line-height: 18px;
 }
 
+.conversation-detail-agent-task-text-collapsed {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .conversation-detail-status-pill {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-  min-height: 28px;
   border-radius: 8px;
-  padding: 0 10px;
+  padding: 2px 8px;
   background: rgba(255, 255, 255, 0.07);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 650;
   line-height: 18px;
 }
 
 .conversation-detail-close-button {
   display: inline-flex;
-  height: 28px;
-  width: 28px;
+  height: 24px;
+  width: 24px;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: 6px;
   color: var(--conversation-text-muted);
   transition: color 150ms ease, background-color 150ms ease;
 }
