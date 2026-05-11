@@ -599,9 +599,12 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               ...taskFields,
               ...(artifacts ? { artifacts } : {}),
             }, 'sse')
-            // Clear the streaming buffer — render transitions from live buffer
-            // to the DB-canonical entity content written above.
-            streaming.clear(messageId)
+            // Do NOT clear the buffer here. The agent is still streaming and
+            // subsequent artifact_update chunks must keep appending to the
+            // existing buffer. Clearing here would force a fresh buffer on the
+            // next chunk, losing all content accumulated before this checkpoint.
+            // The terminal branch above handles the final clear once the task
+            // is truly done.
           }
         }
         break

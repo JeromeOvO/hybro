@@ -27,7 +27,7 @@ interface MessageStoreState {
 
   // ── Write operations ─────────────────────────────────────
   upsertMessage: (msg: IncomingMessage, source: MessageSource) => void
-  upsertMany: (msgs: IncomingMessage[], source: MessageSource) => void
+  upsertMany: (msgs: IncomingMessage[], source: MessageSource) => ReadonlySet<string>
   replaceMessageId: (oldId: string, newId: string) => void
   replaceAndPatchMessageId: (
     oldId: string,
@@ -73,32 +73,46 @@ export const useMessageStore = create<MessageStoreState>()(
     },
 
     upsertMany: (msgs, source) => {
-      set((state) => {
-        let newEntities = { ...state.entities }
-        let idsChanged = false
-        let anyChanged = false
+      // Determine which IDs will actually be written before calling set(),
+      // so callers can safely use the returned set for downstream operations
+      // (e.g. clearing streaming buffers only for truly-applied messages).
+      const appliedIds = new Set<string>()
+      const currentState = get()
+      let entities = currentState.entities
+      for (const incoming of msgs) {
+        const result = applyUpsert(entities, currentState.orderedIds, incoming, source)
+        if (result) {
+          appliedIds.add(incoming.id)
+          entities = result.entities
+        }
+      }
 
-        for (const incoming of msgs) {
-          const result = applyUpsert(newEntities, state.orderedIds, incoming, source)
-          if (result) {
-            newEntities = result.entities
-            idsChanged = idsChanged || result.idsChanged
-            anyChanged = true
+      if (appliedIds.size > 0) {
+        set((state) => {
+          let newEntities = { ...state.entities }
+          let idsChanged = false
+
+          for (const incoming of msgs) {
+            const result = applyUpsert(newEntities, state.orderedIds, incoming, source)
+            if (result) {
+              newEntities = result.entities
+              idsChanged = idsChanged || result.idsChanged
+            }
           }
-        }
 
-        if (!anyChanged) return state
+          const newOrderedIds = idsChanged
+            ? buildSortedIds(newEntities)
+            : state.orderedIds
 
-        const newOrderedIds = idsChanged
-          ? buildSortedIds(newEntities)
-          : state.orderedIds
+          return {
+            entities: newEntities,
+            orderedIds: newOrderedIds,
+            version: state.version + 1,
+          }
+        })
+      }
 
-        return {
-          entities: newEntities,
-          orderedIds: newOrderedIds,
-          version: state.version + 1,
-        }
-      })
+      return appliedIds
     },
 
     replaceMessageId: (oldId, newId) => set((state) => {

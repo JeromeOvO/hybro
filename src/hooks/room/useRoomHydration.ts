@@ -56,15 +56,12 @@ export function useRoomHydration(
 
       const msgStore = useMessageStore.getState()
       if (msgStore.roomId === targetRoomId) {
-        msgStore.upsertMany(filtered, 'db')
-        // Mirror the reconcileOnce pattern: DB content is now canonical for
-        // any message that was already in the DB when the page loaded.
-        // SSE artifact_update chunks may have arrived during the async fetch
-        // and populated streamingStore buffers for these same messages.
-        // Clear only the messages we just wrote — buffers for messages still
-        // actively streaming (not yet in DB) are intentionally preserved.
-        const writtenIds = new Set(filtered.map(m => m.id))
-        useStreamingStore.getState().clearByMessageIds(writtenIds)
+        const appliedIds = msgStore.upsertMany(filtered, 'db')
+        // Clear streaming buffers only for messages that were actually written.
+        // applyUpsert rejects writes for actively-streaming entities (Rule 2:
+        // SSE wins over DB for non-terminal state), so using filtered.map(m=>m.id)
+        // would clear live buffers for messages where the DB write was a no-op.
+        useStreamingStore.getState().clearByMessageIds(appliedIds)
         markInitialHydrationComplete(targetRoomId)
         console.log(
           `[NormalizedStore] DB hydration: ${filtered.length} messages written ` +
@@ -137,13 +134,11 @@ export function useRoomHydration(
 
     const store = useMessageStore.getState()
     if (store.roomId === targetRoomId) {
-      store.upsertMany(filtered, 'db')
+      const appliedIds = store.upsertMany(filtered, 'db')
       store.markDbSynced()
-      // DB reconcile supersedes streaming buffers for persisted messages only.
-      // clearByMessageIds preserves buffers for messages still actively streaming
-      // (not yet in DB), so their live display is not interrupted.
-      const writtenIds = new Set(filtered.map(m => m.id))
-      useStreamingStore.getState().clearByMessageIds(writtenIds)
+      // Clear streaming buffers only for messages that were actually written.
+      // See hydrateFromDb for rationale — same rule applies here.
+      useStreamingStore.getState().clearByMessageIds(appliedIds)
     }
     return filtered.length
   }, [getToken, userId, userName, getAgentName, getAgentSource])

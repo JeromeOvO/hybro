@@ -29,13 +29,18 @@ export function useRoomReset(
     // Initialize normalized store for this room.
     useMessageStore.getState().setRoom(roomId)
 
-    // Clear any streaming buffers left from the previous room.
-    // clearRoom filters by roomId so buffers from other rooms are never touched.
+    // Clear stale buffers from any prior visit to this room. This is distinct
+    // from the cleanup below: the cleanup (which runs with the old roomId in
+    // closure) clears buffers when leaving a room; this call clears buffers
+    // that survived a previous visit to the room now being entered.
     useStreamingStore.getState().clearRoom(roomId)
 
     return () => {
-      // Clean up per-room UI flags when leaving this room.
+      // Clean up per-room state when leaving this room. The roomId captured
+      // here is the room being left (React closes over the value at the time
+      // this effect registered), so both calls target the correct room.
       useRoomUiStore.getState().resetRoom(roomId)
+      useStreamingStore.getState().clearRoom(roomId)
     }
   }, [roomId, lifecycle, hitlRequestIndex, setSending, setCancelling, setSseConnected, setSseError, resetAgentNameCache])
 }
