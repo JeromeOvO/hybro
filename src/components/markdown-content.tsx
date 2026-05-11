@@ -199,7 +199,7 @@ function makeComponents(isStreaming: boolean) {
         href={href}
         target="_blank"
         rel="noopener noreferrer"
-        className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 hover:underline underline-offset-2 transition-colors duration-150"
+        className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 hover:underline underline-offset-2 transition-colors duration-150 break-words"
         {...props}
       >
         {children}
