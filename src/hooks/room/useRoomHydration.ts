@@ -3,6 +3,7 @@ import type { MutableRefObject } from 'react'
 import { inquiryRoomMessagesByRoomId } from '@/lib/api/room'
 import { fetchPendingHitlRequests } from '@/lib/api/hitl'
 import { useMessageStore, detectAndMarkStaleTasks, filterHydrationMessages, convertApiMessageToIncoming } from '@/stores/message-store'
+import { useStreamingStore } from '@/stores/streaming-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { overlayPendingHitlRequests } from './overlay-pending-hitl'
 
@@ -130,6 +131,10 @@ export function useRoomHydration(
     if (store.roomId === targetRoomId) {
       store.upsertMany(filtered, 'db')
       store.markDbSynced()
+      // DB reconcile supersedes all active streaming buffers in the room.
+      // Build the set of message IDs written so clearRoom can prune them.
+      const writtenIds = new Set(filtered.map(m => m.id))
+      useStreamingStore.getState().clearRoom(writtenIds)
     }
     return filtered.length
   }, [getToken, userId, userName, getAgentName, getAgentSource])

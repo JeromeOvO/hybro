@@ -1,5 +1,6 @@
 import React from 'react'
 import { useMessageStore } from '@/stores/message-store'
+import { useStreamingStore } from '@/stores/streaming-store'
 import { selectConversationTurns } from '@/lib/selectors'
 import type { ConversationTurnView, ConversationBlock } from '@/lib/selectors/conversation-types'
 
@@ -14,6 +15,7 @@ function blocksEqual(a: ConversationBlock, b: ConversationBlock): boolean {
         && a.display.tone === bc.display.tone
         && a.display.isAnimated === bc.display.isAnimated
         && a.agentSource === bc.agentSource
+        && a.isStreaming === bc.isStreaming
     }
     case 'agent_content': {
       const bc = b as typeof a
@@ -58,12 +60,37 @@ function turnsEqual(a: ConversationTurnView[], b: ConversationTurnView[]): boole
   return true
 }
 
+/**
+ * Subscribes to both messageStore (entity state) and streamingStore (live
+ * chunk buffers) and assembles ConversationTurnView[] for rendering.
+ *
+ * During streaming, only streamingStore fires on every chunk — messageStore
+ * is completely quiet. After task_update fires the checkpoint, both stores
+ * update together in one re-render: buffer cleared, entity has canonical content.
+ *
+ * The useMemo ensures selectConversationTurns only re-runs when either store
+ * actually changes. turnsEqual provides reference stability: a new array is
+ * only returned (triggering downstream re-renders) when visible content changed.
+ */
 export function useConversationTurnViews(roomId: string): ConversationTurnView[] {
   const prev = React.useRef<ConversationTurnView[]>([])
-  return useMessageStore(s => {
-    const next = selectConversationTurns(roomId, s.entities, s.orderedIds)
-    if (turnsEqual(prev.current, next)) return prev.current
-    prev.current = next
-    return next
-  })
+
+  // Independent subscriptions — React re-renders when EITHER store changes.
+  // streamingStore fires on every chunk; messageStore fires on entity writes.
+  // Subscribe to each field individually to avoid inline-object reference churn
+  // (an inline `s => ({ a, b })` creates a new object every call, which Zustand
+  // treats as always-changed and produces an infinite re-render loop).
+  const buffers = useStreamingStore(s => s.buffers)
+  const entities = useMessageStore(s => s.entities)
+  const orderedIds = useMessageStore(s => s.orderedIds)
+
+  const next = React.useMemo(
+    () => selectConversationTurns(roomId, entities, orderedIds, buffers),
+    [roomId, entities, orderedIds, buffers],
+  )
+
+  // Reference-stable: only propagate a new array when content actually changed.
+  const stableNext = turnsEqual(prev.current, next) ? prev.current : next
+  prev.current = stableNext
+  return stableNext
 }

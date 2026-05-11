@@ -1,5 +1,5 @@
 import type { MessageEntity } from '@/stores/message-store/types'
-import { TASK_STATE } from '@/lib/types/sse'
+import type { StreamBuffer } from '@/stores/streaming-store'
 import type { AgentResponseDetail } from './conversation-types'
 import { getAgentTheme, UNRESOLVED_THEME } from './conversation-types'
 import { mapAgentDisplayProps } from './map-agent-display'
@@ -55,6 +55,7 @@ export function selectAgentResponseDetail(
   messageId: string | null | undefined,
   entities: Record<string, MessageEntity>,
   orderedIds: string[],
+  buffers: Record<string, StreamBuffer> = {},
 ): AgentResponseDetail | null {
   if (!messageId) return null
   const agent = entities[messageId]
@@ -64,16 +65,37 @@ export function selectAgentResponseDetail(
     ? getAgentTheme(agent.agentId, agent.senderName)
     : UNRESOLVED_THEME
 
+  const buffer = buffers[agent.id]
+  const content = buffer ? buffer.text : (agent.content ?? '').trim()
+  // isStreaming: active buffer takes precedence; without a buffer fall back to
+  // the entity's non-terminal task status so pre-stream "working" state still
+  // shows as streaming in the detail pane.
+  const isStreaming = buffer
+    ? !buffer.isComplete
+    : (agent.taskStatus == null || agent.taskStatus === 'working' || agent.taskStatus === 'submitted')
+  // While a streaming buffer is active, suppress raw artifacts: buffer.text
+  // already contains the extracted text so showing both would duplicate content.
+  const artifacts = buffer ? undefined : agent.artifacts
+
+  const isActivelyWorking = agent.taskStatus == null || agent.taskStatus === 'working' || agent.taskStatus === 'submitted'
+  const staticDescription = agent.taskContent ?? agent.taskStatusMessage ?? ''
+  const taskDescription = staticDescription || (isActivelyWorking ? 'Working on your request…' : '')
+
+  const baseDisplay = mapAgentDisplayProps(agent)
+  const display = buffer && !buffer.isComplete && agent.taskStatus === 'working'
+    ? { ...baseDisplay, label: 'Streaming' }
+    : baseDisplay
+
   return {
     messageId: agent.id,
     agentId: agent.agentId ?? agent.id,
     agentName: agent.senderName,
-    display: mapAgentDisplayProps(agent),
-    taskDescription: agent.taskContent ?? agent.taskStatusMessage ?? '',
+    display,
+    taskDescription,
     theme,
-    content: (agent.content ?? '').trim(),
-    isStreaming: agent.taskStatus === TASK_STATE.WORKING && (agent.content ?? '').trim().length > 0,
-    artifacts: agent.artifacts,
+    content,
+    isStreaming,
+    artifacts,
     taskStatus: agent.taskStatus,
     taskStatusMessage: agent.taskStatusMessage,
     taskError: agent.taskError,

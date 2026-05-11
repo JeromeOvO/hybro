@@ -7,6 +7,7 @@ import { MarkdownContent } from '@/components/markdown-content'
 import { ArtifactList } from '@/components/artifact-list'
 import { AgentSourceBadge } from '@/components/agent-source-badge'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
+import { cn } from '@/lib/utils'
 import type { AgentDisplayProps, AgentResponseDetail } from '@/lib/selectors/conversation-types'
 import type { Agent } from '@/lib/types/agent'
 
@@ -36,7 +37,7 @@ function AgentResponseDetailHeader({ detail, onClose }: AgentResponseDetailPaneP
   const isHubOnline = catalogAgent?.is_hub_online
 
   const toneColors: Record<AgentDisplayProps['tone'], string> = {
-    accent: 'rgb(0, 255, 255)',
+    accent: 'hsl(var(--color-primary))',
     muted: 'var(--conversation-agent-green)',
     danger: 'var(--conversation-danger)',
     warning: 'var(--conversation-agent-yellow)',
@@ -49,25 +50,29 @@ function AgentResponseDetailHeader({ detail, onClose }: AgentResponseDetailPaneP
       style={{ backgroundColor: detail.theme.cardBg }}
     >
       <div
-        className="conversation-detail-agent-avatar relative overflow-hidden"
-        style={{ backgroundColor: detail.theme.avatarLightBg }}
+        className={cn(
+          "conversation-detail-agent-avatar",
+          detail.isStreaming && "conversation-avatar-working",
+        )}
       >
-        {iconUrl ? (
+        <div className="conversation-detail-agent-avatar-inner relative" style={{ backgroundColor: detail.theme.avatarLightBg }}>
+          {iconUrl ? (
+            <img
+              src={iconUrl}
+              alt=""
+              className="absolute inset-0 w-full h-full object-cover"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.display = 'none'
+              }}
+            />
+          ) : null}
           <img
-            src={iconUrl}
+            src={getAgentAvatarUri(detail.agentId)}
             alt=""
-            className="absolute inset-0 w-full h-full object-cover"
-            onError={(e) => {
-              (e.currentTarget as HTMLImageElement).style.display = 'none'
-            }}
+            className="w-full h-full"
+            style={{ display: iconUrl ? 'none' : 'block' }}
           />
-        ) : null}
-        <img
-          src={getAgentAvatarUri(detail.agentId)}
-          alt=""
-          className="w-full h-full"
-          style={{ display: iconUrl ? 'none' : 'block' }}
-        />
+        </div>
       </div>
 
       <div className="conversation-detail-agent-main">

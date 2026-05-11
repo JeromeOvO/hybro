@@ -135,8 +135,8 @@ export function AgentCard({
         )}
       </div>
       {taskDescription && (
-        <div className="conversation-agent-task-row flex items-center gap-1.5 pl-[42px]" style={{ position: 'relative', zIndex: 1 }}>
-          <span className="text-sm leading-none" style={{ color: 'var(--conversation-text-dim)' }}>&#x2514;</span>
+        <div className="conversation-agent-task-row flex items-start gap-1.5 pl-[42px]" style={{ position: 'relative', zIndex: 1 }}>
+          <span className="text-sm leading-none mt-px shrink-0" style={{ color: 'var(--conversation-text-dim)' }}>&#x2514;</span>
           <span className="conversation-agent-task-text text-[13px] font-medium truncate" style={{ color: 'var(--conversation-text-primary)' }}>
             {taskDescription}
           </span>

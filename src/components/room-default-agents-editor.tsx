@@ -11,6 +11,7 @@ import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -195,6 +196,7 @@ export function RoomDefaultAgentsEditor({
                 <Badge variant="secondary" className="ml-1">{totalSelected}</Badge>
               )}
             </DialogTitle>
+            <DialogDescription>Choose which agents are available by default in this room</DialogDescription>
           </DialogHeader>
 
           <div className="px-6 pb-2">

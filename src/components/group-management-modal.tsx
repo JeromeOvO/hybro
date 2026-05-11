@@ -688,7 +688,7 @@ export function GroupManagementModal({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-[720px] max-h-[85vh] overflow-y-auto bg-background backdrop-blur-md border border-border/50 shadow-lg">
+      <DialogContent aria-describedby={undefined} className="sm:max-w-[720px] max-h-[85vh] overflow-y-auto bg-background backdrop-blur-md border border-border/50 shadow-lg">
         {renderContent()}
       </DialogContent>
     </Dialog>

@@ -45,7 +45,7 @@ export interface AgentDisplayProps {
 // ── Conversation blocks ─────────────────────────────────────
 
 export type ConversationBlock =
-  | { type: 'agent_card'; messageId: string; agentId: string; agentName: string; display: AgentDisplayProps; taskDescription: string; theme: AgentTheme; agentSource?: 'cloud' | 'hub' }
+  | { type: 'agent_card'; messageId: string; agentId: string; agentName: string; display: AgentDisplayProps; taskDescription: string; theme: AgentTheme; agentSource?: 'cloud' | 'hub'; isStreaming?: boolean }
   | { type: 'agent_content'; agentId: string; agentName: string; content: string; isStreaming: boolean; artifacts?: ArtifactData[] }
   | { type: 'user_answer'; agentName: string; question: string; answer: string }
   | { type: 'agent_divider' }

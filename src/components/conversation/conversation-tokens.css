@@ -526,11 +526,18 @@
   width: 24px;
   height: 24px;
   flex: 0 0 auto;
+  position: relative;
+  border-radius: var(--chat-input-radius);
+}
+
+.conversation-detail-agent-avatar-inner {
+  width: 100%;
+  height: 100%;
   overflow: hidden;
   border-radius: var(--chat-input-radius);
 }
 
-.conversation-detail-agent-avatar img {
+.conversation-detail-agent-avatar-inner img {
   width: 100%;
   height: 100%;
   display: block;
@@ -568,13 +575,9 @@
 .conversation-detail-agent-task-text {
   min-width: 0;
   color: var(--conversation-text-primary);
-  font-size: 15px;
-  font-weight: 650;
-  line-height: 20px;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
 }
 
 .conversation-detail-status-pill {

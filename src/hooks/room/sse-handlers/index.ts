@@ -2,8 +2,9 @@ import { banner } from '@/components/ui/banner'
 import type { SSEMessage, TaskState, ProcessingStatus } from '@/lib/types/sse'
 import { isTerminalState, PROCESSING_STATUS, isProcessingDone, TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
+import { useStreamingStore } from '@/stores/streaming-store'
 import type { ArtifactPart, ArtifactData, MessageEntity } from '@/stores/message-store/types'
-import { mergeArtifacts, extractTextFromArtifacts } from '@/stores/message-store/upsert'
+import { mergeArtifacts } from '@/stores/message-store/upsert'
 import { normalizeTimestampOrNow } from '@/lib/time'
 import { appendEvent } from '@/lib/room-timeline/event-log'
 import type { SSEHandlerDeps } from './types'
@@ -57,48 +58,29 @@ function partsToArtifacts(
   return mergeArtifacts(existing?.artifacts, inline, false)
 }
 
-function isNonInformativeTextChunk(text: string | undefined): boolean {
-  if (!text) return true
+function isNonInformativeTextChunk(text: string | undefined, hasExistingContent = false): boolean {
+  if (text === undefined || text === null) return true
+  if (text === '') return true
   const t = text.trim()
-  return t === '' || t === '.' || t === '...' || t === '…'
+  // NOTE: pure-whitespace tokens (e.g. a single " ") are meaningful
+  // inter-token separators in streaming content and must NOT be treated
+  // as non-informative. Only drop the recognised placeholder markers.
+  //
+  // IMPORTANT: only treat ".", "...", "…" as non-informative when we have
+  // NO existing content yet (i.e., this is the very first chunk). Mid-stream
+  // these are real sentence punctuation and must be preserved, otherwise the
+  // streaming content diverges from the DB canonical text.
+  if (hasExistingContent) return false
+  return t === '.' || t === '...' || t === '…'
 }
 
-function isRenderableArtifactPart(part: ArtifactPart): boolean {
-  if (part.kind === 'text') return !isNonInformativeTextChunk(part.text)
+function isRenderableArtifactPart(part: ArtifactPart, hasExistingContent = false): boolean {
+  if (part.kind === 'text') return !isNonInformativeTextChunk(part.text, hasExistingContent)
   if (part.kind === 'file') return !!(part.file?.uri || part.file?.bytes)
   if (part.kind === 'data') return !!part.data && Object.keys(part.data).length > 0
   return false
 }
 
-function resolveSingleWriteContent(
-  existing: MessageEntity | undefined,
-  incomingContent: string,
-  status: TaskState,
-): { content: string; droppedRewrite: boolean } {
-  const existingContent = existing?.content ?? ''
-  const trimmedIncoming = incomingContent.trim()
-
-  // Single-write invariant: task_update can create the first visible answer,
-  // but never rewrite it later (including terminal updates).
-  if (existingContent.trim().length === 0) {
-    return {
-      content: trimmedIncoming.length > 0 ? incomingContent : existingContent,
-      droppedRewrite: false,
-    }
-  }
-
-  if (trimmedIncoming.length > 0 && incomingContent !== existingContent) {
-    console.warn(
-      '🔒 Dropping task_update content rewrite for',
-      existing?.id,
-      'status=',
-      status,
-    )
-    return { content: existingContent, droppedRewrite: true }
-  }
-
-  return { content: existingContent, droppedRewrite: false }
-}
 
 export function createSSEDispatcher(deps: SSEHandlerDeps) {
   const { roomId, lifecycle, getAgentName, getAgentSource,
@@ -107,6 +89,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
   return async (sseMessage: SSEMessage) => {
     console.log('🔔 Room webhook received SSE message:', sseMessage)
     const store = useMessageStore.getState()
+    const streaming = useStreamingStore.getState()
 
     const resolveCorrelation = (): {
       clientReqId?: string
@@ -215,6 +198,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
                   isEphemeral: false,
                   ...(existing.artifacts ? { artifacts: existing.artifacts } : {}),
                 }, 'sse')
+                streaming.clear(messageId)
               }
               console.log('🔄 Skipping duplicate agent_response for', messageId, '— streamed content already present')
               break
@@ -265,6 +249,9 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               isEphemeral: false,
               ...(artifacts ? { artifacts } : {}),
             }, 'sse')
+            // agent_response is a terminal write — clear any live streaming buffer
+            // so the render transitions from the (now stale) buffer to this entity.
+            streaming.clear(messageId)
           }
         }
         break
@@ -522,7 +509,16 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
           }
 
           const existing = store.entities[messageId]
-          const { content: resolvedContent } = resolveSingleWriteContent(existing, content, status)
+          // Prefer DB checkpoint content. If the checkpoint has no content (e.g.
+          // a status-only task_update), fall back first to the live streaming
+          // buffer (which has accumulated all chunks) and only then to whatever
+          // the entity currently holds. This prevents a blank flash when
+          // task_update arrives before entity content was ever written (pure
+          // streaming agents where artifact_update wrote only to streamingStore).
+          const bufferText = useStreamingStore.getState().buffers[messageId]?.text
+          const resolvedContent = (content ?? '').trim().length > 0
+            ? content
+            : (bufferText && bufferText.length > 0 ? bufferText : (existing?.content ?? ''))
           const artifacts = partsToArtifacts(
             sseMessage.data.parts as Record<string, unknown>[] | undefined,
             messageId,
@@ -540,6 +536,8 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               ...taskFields,
               ...(artifacts ? { artifacts } : {}),
             }, 'sse')
+            // Buffer cleared — render transitions from live buffer to DB-canonical entity.
+            streaming.clear(messageId)
 
             // Capture timeline events for terminal states
             if (status === TASK_STATE.COMPLETED) {
@@ -595,6 +593,9 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               ...taskFields,
               ...(artifacts ? { artifacts } : {}),
             }, 'sse')
+            // Clear the streaming buffer — render transitions from live buffer
+            // to the DB-canonical entity content written above.
+            streaming.clear(messageId)
           }
         }
         break
@@ -614,7 +615,6 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
 
         if (sseMessage.data?.message_id && sseMessage.data?.artifact) {
           const { message_id, artifact, append: isAppend, last_chunk } = sseMessage.data
-          const existing = store.entities[message_id]
           const artifactData = {
             artifactId: artifact.artifact_id || (artifact as Record<string, unknown>).artifactId as string,
             name: artifact.name,
@@ -635,58 +635,20 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             }),
             isStreaming: isAppend ? !last_chunk : false,
           }
-          const parts = artifactData.parts
-          const textOnlyParts = parts.filter(p => p.kind === 'text')
-          const allTextOnly = parts.length > 0 && textOnlyParts.length === parts.length
-          const joinedText = textOnlyParts
-            .map(p => p.text ?? '')
-            .join('')
-            .trim()
-          const canUpdateExistingStreamState =
-            isAppend &&
-            parts.length === 0 &&
-            !!existing?.artifacts?.some(a => a.artifactId === artifactData.artifactId)
-          const shouldDropArtifact =
-            !canUpdateExistingStreamState &&
-            (
-              parts.length === 0 ||
-              !parts.some(isRenderableArtifactPart) ||
-              (allTextOnly && isNonInformativeTextChunk(joinedText))
-            )
 
-          const merged = shouldDropArtifact
-            ? (existing?.artifacts ?? [])
-            : mergeArtifacts(existing?.artifacts, artifactData, isAppend)
+          // Target architecture (Step 3): streaming chunks write ONLY to
+          // streamingStore. messageStore is never touched during streaming.
+          // The render layer reads from streamingStore.buffers for live display.
+          // task_update will write DB-canonical content to messageStore and
+          // clear the buffer in one commit.
+          streaming.append(message_id, artifactData, isAppend ?? false)
+          if (last_chunk) streaming.markComplete(message_id)
 
-          // Promote text from text-only artifacts into content so the
-          // bubble renders it inline instead of as a separate artifact card.
-          const existingContent = existing?.content || ''
-          const promotedText = extractTextFromArtifacts(merged)
-          const safePromotedText = isNonInformativeTextChunk(promotedText)
-            ? ''
-            : promotedText
-          const content = safePromotedText.length > existingContent.length
-            ? safePromotedText
-            : existingContent
-
-          store.upsertMessage({
-            id: message_id,
-            roomId,
-            messageType: 'agent',
-            content,
-            senderName: existing?.senderName || 'Agent',
-            agentId: existing?.agentId || sseMessage.data.agent_id,
-            agentSource: existing?.agentSource || getAgentSource(sseMessage.data.agent_id),
-            clientRequestId: existing?.clientRequestId || sseMessage.data.client_request_id,
-            timestamp: existing?.timestamp || normalizeTimestampOrNow(sseMessage.timestamp),
-            artifacts: merged,
-          }, 'sse')
-
-          if (!isAppend && !shouldDropArtifact) {
+          if (!isAppend) {
             appendEvent(roomId, {
               kind: 'artifact_emitted',
               timestamp: sseMessage.timestamp,
-              agentId: existing?.agentId || sseMessage.data.agent_id,
+              agentId: sseMessage.data.agent_id,
               label: `Artifact: ${artifact.name ?? 'output'}`,
             })
           }
