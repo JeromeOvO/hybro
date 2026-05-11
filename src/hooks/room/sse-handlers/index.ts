@@ -2,8 +2,9 @@ import { banner } from '@/components/ui/banner'
 import type { SSEMessage, TaskState, ProcessingStatus } from '@/lib/types/sse'
 import { isTerminalState, PROCESSING_STATUS, isProcessingDone, TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
+import { useStreamingStore } from '@/stores/streaming-store'
 import type { ArtifactPart, ArtifactData, MessageEntity } from '@/stores/message-store/types'
-import { mergeArtifacts, extractTextFromArtifacts } from '@/stores/message-store/upsert'
+import { mergeArtifacts } from '@/stores/message-store/upsert'
 import { normalizeTimestampOrNow } from '@/lib/time'
 import { appendEvent } from '@/lib/room-timeline/event-log'
 import type { SSEHandlerDeps } from './types'
@@ -57,48 +58,14 @@ function partsToArtifacts(
   return mergeArtifacts(existing?.artifacts, inline, false)
 }
 
-function isNonInformativeTextChunk(text: string | undefined): boolean {
-  if (!text) return true
-  const t = text.trim()
-  return t === '' || t === '.' || t === '...' || t === '…'
-}
-
+// Used by partsToArtifacts to filter non-text parts from task_update/agent_response payloads.
+// Text parts are handled separately (promoted to entity.content) so only file/data parts reach here.
 function isRenderableArtifactPart(part: ArtifactPart): boolean {
-  if (part.kind === 'text') return !isNonInformativeTextChunk(part.text)
   if (part.kind === 'file') return !!(part.file?.uri || part.file?.bytes)
   if (part.kind === 'data') return !!part.data && Object.keys(part.data).length > 0
   return false
 }
 
-function resolveSingleWriteContent(
-  existing: MessageEntity | undefined,
-  incomingContent: string,
-  status: TaskState,
-): { content: string; droppedRewrite: boolean } {
-  const existingContent = existing?.content ?? ''
-  const trimmedIncoming = incomingContent.trim()
-
-  // Single-write invariant: task_update can create the first visible answer,
-  // but never rewrite it later (including terminal updates).
-  if (existingContent.trim().length === 0) {
-    return {
-      content: trimmedIncoming.length > 0 ? incomingContent : existingContent,
-      droppedRewrite: false,
-    }
-  }
-
-  if (trimmedIncoming.length > 0 && incomingContent !== existingContent) {
-    console.warn(
-      '🔒 Dropping task_update content rewrite for',
-      existing?.id,
-      'status=',
-      status,
-    )
-    return { content: existingContent, droppedRewrite: true }
-  }
-
-  return { content: existingContent, droppedRewrite: false }
-}
 
 export function createSSEDispatcher(deps: SSEHandlerDeps) {
   const { roomId, lifecycle, getAgentName, getAgentSource,
@@ -107,6 +74,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
   return async (sseMessage: SSEMessage) => {
     console.log('🔔 Room webhook received SSE message:', sseMessage)
     const store = useMessageStore.getState()
+    const streaming = useStreamingStore.getState()
 
     const resolveCorrelation = (): {
       clientReqId?: string
@@ -215,6 +183,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
                   isEphemeral: false,
                   ...(existing.artifacts ? { artifacts: existing.artifacts } : {}),
                 }, 'sse')
+                streaming.clear(messageId)
               }
               console.log('🔄 Skipping duplicate agent_response for', messageId, '— streamed content already present')
               break
@@ -265,6 +234,9 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               isEphemeral: false,
               ...(artifacts ? { artifacts } : {}),
             }, 'sse')
+            // agent_response is a terminal write — clear any live streaming buffer
+            // so the render transitions from the (now stale) buffer to this entity.
+            streaming.clear(messageId)
           }
         }
         break
@@ -522,7 +494,22 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
           }
 
           const existing = store.entities[messageId]
-          const { content: resolvedContent } = resolveSingleWriteContent(existing, content, status)
+          // Prefer DB checkpoint content. If the checkpoint has no content (e.g.
+          // a status-only task_update), fall back first to the live streaming
+          // buffer (which has accumulated all chunks) and only then to whatever
+          // the entity currently holds. This prevents a blank flash when
+          // task_update arrives before entity content was ever written (pure
+          // streaming agents where artifact_update wrote only to streamingStore).
+          //
+          // INVARIANT: bufferText must be read and streaming.clear() must be
+          // called in the same synchronous microtask — NO await between them.
+          // Any await here would open a window where a concurrent artifact_update
+          // could extend the buffer after the read but before the clear, causing
+          // that chunk to be permanently dropped from the entity content.
+          const bufferText = useStreamingStore.getState().buffers[messageId]?.text
+          const resolvedContent = (content ?? '').trim().length > 0
+            ? content
+            : (bufferText && bufferText.length > 0 ? bufferText : (existing?.content ?? ''))
           const artifacts = partsToArtifacts(
             sseMessage.data.parts as Record<string, unknown>[] | undefined,
             messageId,
@@ -540,6 +527,8 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               ...taskFields,
               ...(artifacts ? { artifacts } : {}),
             }, 'sse')
+            // Buffer cleared — render transitions from live buffer to DB-canonical entity.
+            streaming.clear(messageId)
 
             // Capture timeline events for terminal states
             if (status === TASK_STATE.COMPLETED) {
@@ -595,6 +584,12 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               ...taskFields,
               ...(artifacts ? { artifacts } : {}),
             }, 'sse')
+            // Do NOT clear the buffer here. The agent is still streaming and
+            // subsequent artifact_update chunks must keep appending to the
+            // existing buffer. Clearing here would force a fresh buffer on the
+            // next chunk, losing all content accumulated before this checkpoint.
+            // The terminal branch above handles the final clear once the task
+            // is truly done.
           }
         }
         break
@@ -614,7 +609,6 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
 
         if (sseMessage.data?.message_id && sseMessage.data?.artifact) {
           const { message_id, artifact, append: isAppend, last_chunk } = sseMessage.data
-          const existing = store.entities[message_id]
           const artifactData = {
             artifactId: artifact.artifact_id || (artifact as Record<string, unknown>).artifactId as string,
             name: artifact.name,
@@ -635,58 +629,20 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             }),
             isStreaming: isAppend ? !last_chunk : false,
           }
-          const parts = artifactData.parts
-          const textOnlyParts = parts.filter(p => p.kind === 'text')
-          const allTextOnly = parts.length > 0 && textOnlyParts.length === parts.length
-          const joinedText = textOnlyParts
-            .map(p => p.text ?? '')
-            .join('')
-            .trim()
-          const canUpdateExistingStreamState =
-            isAppend &&
-            parts.length === 0 &&
-            !!existing?.artifacts?.some(a => a.artifactId === artifactData.artifactId)
-          const shouldDropArtifact =
-            !canUpdateExistingStreamState &&
-            (
-              parts.length === 0 ||
-              !parts.some(isRenderableArtifactPart) ||
-              (allTextOnly && isNonInformativeTextChunk(joinedText))
-            )
 
-          const merged = shouldDropArtifact
-            ? (existing?.artifacts ?? [])
-            : mergeArtifacts(existing?.artifacts, artifactData, isAppend)
+          // Streaming chunks write ONLY to streamingStore. messageStore is never
+          // touched during streaming. The render layer reads streamingStore.buffers
+          // for live display. task_update writes DB-canonical content to messageStore
+          // and clears the buffer in one synchronous commit (no await between the
+          // two — see INVARIANT comment in the task_update handler below).
+          streaming.append(message_id, roomId, artifactData, isAppend ?? false)
+          if (last_chunk) streaming.markComplete(message_id)
 
-          // Promote text from text-only artifacts into content so the
-          // bubble renders it inline instead of as a separate artifact card.
-          const existingContent = existing?.content || ''
-          const promotedText = extractTextFromArtifacts(merged)
-          const safePromotedText = isNonInformativeTextChunk(promotedText)
-            ? ''
-            : promotedText
-          const content = safePromotedText.length > existingContent.length
-            ? safePromotedText
-            : existingContent
-
-          store.upsertMessage({
-            id: message_id,
-            roomId,
-            messageType: 'agent',
-            content,
-            senderName: existing?.senderName || 'Agent',
-            agentId: existing?.agentId || sseMessage.data.agent_id,
-            agentSource: existing?.agentSource || getAgentSource(sseMessage.data.agent_id),
-            clientRequestId: existing?.clientRequestId || sseMessage.data.client_request_id,
-            timestamp: existing?.timestamp || normalizeTimestampOrNow(sseMessage.timestamp),
-            artifacts: merged,
-          }, 'sse')
-
-          if (!isAppend && !shouldDropArtifact) {
+          if (!isAppend) {
             appendEvent(roomId, {
               kind: 'artifact_emitted',
               timestamp: sseMessage.timestamp,
-              agentId: existing?.agentId || sseMessage.data.agent_id,
+              agentId: sseMessage.data.agent_id,
               label: `Artifact: ${artifact.name ?? 'output'}`,
             })
           }

@@ -138,10 +138,10 @@ describe('applyUpsert', () => {
       expect(result!.entities['msg-1'].content).toBe('Final answer from DB')
     })
 
-    it('blocks DB update when SSE agent entity is completed with content (Rule 2b: prevents post-stream duplicate re-render)', () => {
-      // Rule 2b: DB reconcile must not overwrite already-completed SSE agent content
-      // unless the DB body is materially longer (truncated stream). This prevents
-      // a re-render after streaming finishes that looks like a duplicate message.
+    it('allows DB to overwrite SSE-completed agent content (DB is canonical source of truth)', () => {
+      // Under the new architecture messageStore is purely DB-canonical.
+      // DB reconcile may freely update a completed SSE entity; the streamingStore
+      // buffer is cleared separately on reconcile so there is no duplicate flash.
       const entities = {
         'msg-1': makeEntity({
           source: 'sse', taskStatus: 'completed',
@@ -153,12 +153,12 @@ describe('applyUpsert', () => {
         makeIncoming({ taskStatus: 'completed', content: 'DB content (canonical)' }),
         'db',
       )
-      expect(result).toBeNull()
+      expect(result).not.toBeNull()
+      expect(result!.entities['msg-1'].content).toBe('DB content (canonical)')
     })
 
-    it('blocks DB to non-materially extend SSE agent body on reconcile (Rule 2b)', () => {
-      // DB body is only slightly longer than SSE (< DB_RECONCILE_MATERIAL_LENGTH_DELTA chars)
-      // → treat as cosmetic/normalization difference, skip to avoid re-render.
+    it('allows DB to update completed SSE entity with slightly different content', () => {
+      // No length-delta guard exists; DB always wins for terminal states.
       const entities = {
         'msg-1': makeEntity({
           source: 'sse', taskStatus: 'completed',
@@ -170,18 +170,17 @@ describe('applyUpsert', () => {
         makeIncoming({ taskStatus: 'completed', content: 'Hello world' }),
         'db',
       )
-      expect(result).toBeNull()
+      expect(result).not.toBeNull()
+      expect(result!.entities['msg-1'].content).toBe('Hello world')
     })
 
-    it('blocks DB update when SSE agent entity is completed with artifacts only (Rule 2b: Hermes-style agent)', () => {
-      // Hermes-style agents stream entirely via artifacts with empty content field.
-      // Rule 2b must use artifact text length as the "renderable" measure, not
-      // just content length, otherwise the rule is bypassed and DB reconcile
-      // re-renders a duplicate message after streaming finishes.
+    it('allows DB to overwrite completed SSE Hermes-style agent (artifacts-only streaming)', () => {
+      // Hermes-style agents stream via artifacts. DB reconcile writes the canonical
+      // text content; streamingStore is cleared on reconcile so no duplication occurs.
       const entities = {
         'msg-1': makeEntity({
           source: 'sse', taskStatus: 'completed',
-          content: '', // empty — Hermes delivers via artifacts
+          content: '',
           artifacts: [{ artifactId: 'a1', name: 'result', parts: [{ kind: 'text' as const, text: 'Long Hermes response text here' }] }],
           displayType: 'agent-bubble',
         }),
@@ -191,7 +190,8 @@ describe('applyUpsert', () => {
         makeIncoming({ taskStatus: 'completed', content: 'Long Hermes response text here' }),
         'db',
       )
-      expect(result).toBeNull()
+      expect(result).not.toBeNull()
+      expect(result!.entities['msg-1'].content).toBe('Long Hermes response text here')
     })
 
     it('allows DB failed→completed upgrade even if SSE already has content (Rule 2b exception)', () => {
@@ -211,7 +211,8 @@ describe('applyUpsert', () => {
       expect(result!.entities['msg-1'].taskStatus).toBe('completed')
     })
 
-    it('prefers DB body when materially longer than SSE (truncated stream)', () => {
+    it('DB always wins for terminal state (canonical reconcile)', () => {
+      // DB is the canonical source of truth; any DB terminal write is accepted.
       const longDb = `${'x'.repeat(60)} full ending`
       const entities = {
         'msg-1': makeEntity({

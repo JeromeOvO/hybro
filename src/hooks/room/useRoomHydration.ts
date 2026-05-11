@@ -3,6 +3,7 @@ import type { MutableRefObject } from 'react'
 import { inquiryRoomMessagesByRoomId } from '@/lib/api/room'
 import { fetchPendingHitlRequests } from '@/lib/api/hitl'
 import { useMessageStore, detectAndMarkStaleTasks, filterHydrationMessages, convertApiMessageToIncoming } from '@/stores/message-store'
+import { useStreamingStore } from '@/stores/streaming-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { overlayPendingHitlRequests } from './overlay-pending-hitl'
 
@@ -55,12 +56,18 @@ export function useRoomHydration(
 
       const msgStore = useMessageStore.getState()
       if (msgStore.roomId === targetRoomId) {
-        msgStore.upsertMany(filtered, 'db')
+        const appliedIds = msgStore.upsertMany(filtered, 'db')
+        // Clear streaming buffers only for messages that were actually written.
+        // applyUpsert rejects writes for actively-streaming entities (Rule 2:
+        // SSE wins over DB for non-terminal state), so using filtered.map(m=>m.id)
+        // would clear live buffers for messages where the DB write was a no-op.
+        useStreamingStore.getState().clearByMessageIds(appliedIds)
         markInitialHydrationComplete(targetRoomId)
         console.log(
-          `[NormalizedStore] DB hydration: ${filtered.length} messages written ` +
+          `[NormalizedStore] DB hydration: ${appliedIds.size}/${filtered.length} messages written ` +
           `(${response.message_list.length} raw, ${incomingMessages.length} converted, ` +
-          `${incomingMessages.length - filtered.length} filtered)`
+          `${incomingMessages.length - filtered.length} filtered, ` +
+          `${filtered.length - appliedIds.size} rejected by upsert rules)`
         )
       }
 
@@ -128,8 +135,11 @@ export function useRoomHydration(
 
     const store = useMessageStore.getState()
     if (store.roomId === targetRoomId) {
-      store.upsertMany(filtered, 'db')
+      const appliedIds = store.upsertMany(filtered, 'db')
       store.markDbSynced()
+      // Clear streaming buffers only for messages that were actually written.
+      // See hydrateFromDb for rationale — same rule applies here.
+      useStreamingStore.getState().clearByMessageIds(appliedIds)
     }
     return filtered.length
   }, [getToken, userId, userName, getAgentName, getAgentSource])

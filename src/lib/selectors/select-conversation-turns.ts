@@ -1,4 +1,5 @@
 import type { MessageEntity } from '@/stores/message-store/types'
+import type { StreamBuffer } from '@/stores/streaming-store'
 import type { ConversationTurnView, ConversationBlock } from './conversation-types'
 import { getAgentTheme, UNRESOLVED_THEME } from './conversation-types'
 import { routeAgentToTurn } from './route-agent'
@@ -9,6 +10,7 @@ export function selectConversationTurns(
   roomId: string,
   entities: Record<string, MessageEntity>,
   orderedIds: string[],
+  buffers: Record<string, StreamBuffer> = {},
 ): ConversationTurnView[] {
   const userMessageIds = new Set<string>()
   const userEntitiesOrdered: MessageEntity[] = []
@@ -66,29 +68,43 @@ export function selectConversationTurns(
       : getAgentTheme(agent.agentId, agent.senderName)
 
     // Agent card
+    const cardBuffer = buffers[agent.id]
+    const cardIsStreaming = cardBuffer !== undefined && !cardBuffer.isComplete
+    const cardDisplay = cardIsStreaming && agent.taskStatus === 'working'
+      ? { ...mapAgentDisplayProps(agent), label: 'Streaming' }
+      : mapAgentDisplayProps(agent)
+    // Use entity description fields; when actively streaming and no description
+    // is available yet (task_content not populated by this agent path), show a
+    // live placeholder so the description row is always visible while working.
+    const isActivelyWorking = agent.taskStatus === 'working' || agent.taskStatus === 'submitted' || agent.taskStatus == null
+    const staticDescription = agent.taskContent ?? agent.taskStatusMessage ?? ''
+    const taskDescription = staticDescription || (isActivelyWorking ? 'Working on your request…' : '')
     blocks.push({
       type: 'agent_card',
       messageId: agent.id,
       agentId: agent.agentId ?? agent.id,
       agentName: agent.senderName,
-      display: mapAgentDisplayProps(agent),
-      taskDescription: agent.taskContent ?? agent.taskStatusMessage ?? '',
+      display: cardDisplay,
+      taskDescription,
       theme,
       agentSource: agent.agentSource,
+      isStreaming: cardIsStreaming,
     })
 
     // Agent content (if non-empty content or has artifacts)
-    const content = (agent.content ?? '').trim()
-    const hasArtifacts = agent.artifacts && agent.artifacts.length > 0
+    const buffer = buffers[agent.id]
+    const content = buffer ? buffer.text : (agent.content ?? '').trim()
+    const displayArtifacts = buffer ? buffer.artifacts : agent.artifacts
+    const hasArtifacts = (displayArtifacts?.length ?? 0) > 0
     if (content || hasArtifacts) {
-      const isStreaming = agent.taskStatus === 'working' && content.length > 0
+      const isStreaming = buffer ? !buffer.isComplete : false
       blocks.push({
         type: 'agent_content',
         agentId: agent.agentId ?? agent.id,
         agentName: agent.senderName,
         content,
         isStreaming,
-        artifacts: agent.artifacts,
+        artifacts: displayArtifacts,
       })
     }
 

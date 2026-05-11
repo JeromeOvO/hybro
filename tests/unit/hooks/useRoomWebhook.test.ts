@@ -473,7 +473,8 @@ describe('useRoomWebhook SSE message handling', () => {
 
     const entity = useMessageStore.getState().entities['task-empty-artifact']
     expect(entity.content).toBe('Here is the employee CSV report.')
-    expect(entity.artifacts).toEqual([])
+    // artifact_update goes to streamingStore only; messageStore entity is unchanged
+    expect(entity.artifacts).toBeUndefined()
   })
 
   it('normalizes root-wrapped file parts from task_update before storing artifacts', async () => {

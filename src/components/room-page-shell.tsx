@@ -13,15 +13,16 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from '@/components/ui/resizable'
-import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 import { useMessageStore } from '@/stores/message-store'
+import { useStreamingStore } from '@/stores/streaming-store'
 import { useRoomUiStore, useSelectedAgentMessageId } from '@/stores/room-ui-store'
 import { selectAgentResponseDetail } from '@/lib/selectors'
 import type { MessageEntity } from '@/stores/message-store/types'
 
 const EMPTY_ENTITIES: Record<string, MessageEntity> = {}
 const EMPTY_ORDERED_IDS: string[] = []
-const DETAIL_PANE_QUERY = '(min-width: 1280px)'
+const DETAIL_PANE_QUERY = '(min-width: 1024px)'
 const DETAIL_PANE_LAYOUT = {
   'conversation-primary-panel': 66,
   'conversation-detail-panel': 34,
@@ -95,12 +96,15 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
   // Always read entities so the mobile sheet has data too
   const entities = useMessageStore(s => selectedMessageId ? s.entities : EMPTY_ENTITIES)
   const orderedIds = useMessageStore(s => selectedMessageId ? s.orderedIds : EMPTY_ORDERED_IDS)
+  // Subscribe to streaming buffers so the detail pane shows live content
+  // during streaming (entity.content is empty until task_update checkpoint).
+  const buffers = useStreamingStore(s => s.buffers)
 
   // Compute detail regardless of breakpoint — needed for both side pane and mobile sheet
   const detail = useMemo(() => {
     if (!selectedMessageId) return null
-    return selectAgentResponseDetail(adapter.roomId, selectedMessageId, entities, orderedIds)
-  }, [adapter.roomId, selectedMessageId, entities, orderedIds])
+    return selectAgentResponseDetail(adapter.roomId, selectedMessageId, entities, orderedIds, buffers)
+  }, [adapter.roomId, selectedMessageId, entities, orderedIds, buffers])
 
   const prevRoomIdRef = useRef(adapter.roomId)
   useEffect(() => {
@@ -204,10 +208,11 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
         <Sheet open={!!detail} onOpenChange={(open) => { if (!open) handleCloseDetail() }}>
           <SheetContent
             side="bottom"
-            className="h-[85dvh] p-0 flex flex-col gap-0 rounded-t-xl overflow-hidden"
+            className="h-[85dvh] p-0 flex flex-col gap-0 rounded-t-xl overflow-hidden sm:min-w-[480px] sm:max-w-2xl sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2"
             data-mobile-sheet
           >
             <SheetTitle className="sr-only">Agent response detail</SheetTitle>
+            <SheetDescription className="sr-only">View the full response from the agent</SheetDescription>
             {detail && (
               <AgentResponseDetailPane detail={detail} onClose={handleCloseDetail} />
             )}

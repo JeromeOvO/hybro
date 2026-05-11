@@ -2,47 +2,6 @@ import { isTerminalState } from '@/lib/types/sse'
 import { resolveDisplayType } from './resolve-display-type'
 import type { MessageEntity, IncomingMessage, MessageSource, ArtifactData } from './types'
 
-/** Extra chars on the persisted body beyond the stream → treat DB as completion source. */
-const DB_RECONCILE_MATERIAL_LENGTH_DELTA = 24
-
-/**
- * When reconciling from DB after live SSE streaming, the persisted body may
- * differ from what the user already saw (normalization, whitespace, etc.).
- * Prefer keeping the visible SSE text unless DB is clearly extending it
- * (append-only), which matches the task_update single-write upgrade rule.
- *
- * If the DB body is materially longer than SSE without a shared prefix, the
- * stream was likely truncated while persistence has the full reply — prefer DB.
- */
-function resolveDbReconcileAgentContent(
-  existing: MessageEntity,
-  incoming: IncomingMessage,
-): string | undefined {
-  if (existing.messageType !== 'agent') return incoming.content
-  if (existing.source !== 'sse') return incoming.content
-  if (incoming.content === undefined) return incoming.content
-
-  const rawPrev = existing.content ?? ''
-  const rawNext = incoming.content ?? ''
-  const prevTrim = rawPrev.trim()
-  const nextTrim = rawNext.trim()
-  if (prevTrim.length === 0) return incoming.content
-  if (nextTrim === prevTrim) return incoming.content
-
-  const rawDelta = rawNext.length - rawPrev.length
-  const trimDelta = nextTrim.length - prevTrim.length
-  if (
-    rawDelta >= DB_RECONCILE_MATERIAL_LENGTH_DELTA ||
-    trimDelta >= DB_RECONCILE_MATERIAL_LENGTH_DELTA
-  ) {
-    return incoming.content
-  }
-
-  if (rawNext.length > rawPrev.length && rawNext.startsWith(rawPrev)) return incoming.content
-  if (nextTrim.length > prevTrim.length && nextTrim.startsWith(prevTrim)) return incoming.content
-  return existing.content
-}
-
 /**
  * Core upsert logic, extracted so it can be used by both single and batch writes.
  * Returns null if the update was rejected or is a no-op.
@@ -92,44 +51,6 @@ export function applyUpsert(
       return null
     }
 
-    // ── Rule 2b: Protect terminal SSE agent content from DB reconcile rewrites ──
-    // After streaming completes, the SSE entity is already terminal with the
-    // accumulated content the user saw. If the DB reconcile then arrives with
-    // different content (normalization, whitespace, slightly different text),
-    // it causes a visible re-render that looks like a duplicate message appearing
-    // after streaming finishes. Skip DB writes that would only change content on
-    // an already-completed SSE agent entity that already has renderable content,
-    // UNLESS the DB body is materially longer (indicating a truncated stream).
-    // Does NOT apply when existing is 'failed' — DB may carry the successful result.
-    //
-    // "Renderable content" includes both the content field AND artifacts, because
-    // agents like Hermes stream entirely via artifacts with an empty content field.
-    if (
-      existing.source === 'sse' &&
-      source === 'db' &&
-      existing.messageType === 'agent' &&
-      existing.taskStatus === 'completed'
-    ) {
-      const existingContentLen = (existing.content ?? '').trim().length
-      const existingArtifactText = existing.artifacts
-        ? extractTextFromArtifacts(existing.artifacts)
-        : ''
-      const existingRenderableLen = existingContentLen + existingArtifactText.length
-
-      if (existingRenderableLen > 0) {
-        const incomingContentLen = (incoming.content ?? '').trim().length
-        const incomingArtifactText = incoming.artifacts
-          ? extractTextFromArtifacts(incoming.artifacts)
-          : '' // DB reconcile often omits artifacts; treat as 0 for comparison
-        const incomingRenderableLen = incomingContentLen + incomingArtifactText.length
-
-        // Only let DB through if it's materially longer (truncated stream recovery)
-        if (incomingRenderableLen - existingRenderableLen < DB_RECONCILE_MATERIAL_LENGTH_DELTA) {
-          return null
-        }
-      }
-    }
-
     // ── Rule 4: Skip no-op updates ──
     if (isNoOpUpdate(existing, incoming, source)) {
       return null
@@ -138,17 +59,7 @@ export function applyUpsert(
 
   // ── Build the new entity ──
   const resolvedEphemeral = incoming.isEphemeral ?? existing?.isEphemeral ?? false
-
-  // Merge first so displayType is computed from the *final* field values,
-  // not the raw incoming (which may omit taskStatus, causing a false
-  // agent-bubble resolution when the existing entity has input-required).
-  let merged = mergeIncoming(existing, incoming)
-  if (source === 'db' && existing) {
-    const preserved = resolveDbReconcileAgentContent(existing, incoming)
-    if (preserved !== undefined && preserved !== merged.content) {
-      merged = { ...merged, content: preserved }
-    }
-  }
+  const merged = mergeIncoming(existing, incoming)
 
   const displayType = resolveDisplayType({
     messageType: merged.messageType,
@@ -427,18 +338,21 @@ export function mergeArtifacts(
 
 /**
  * Extract the combined text from all text-only artifacts.
- * Returns the longest single artifact's text (not concatenated across
- * artifacts) to handle cumulative-snapshot patterns where each artifact
- * contains all prior text plus the latest token.
+ * Returns the last text-only artifact's text — artifacts are appended in
+ * emission order, so the last one is always the most recently started stream.
+ * For single-artifact agents this is identical to returning the only artifact.
  */
 export function extractTextFromArtifacts(artifacts: ArtifactData[]): string {
-  let longest = ''
+  // Prefer the last text-only artifact: artifacts are appended in emission
+  // order, so the last one is always the most recently started stream (the
+  // answer artifact for agents that emit thinking before answering).
+  // For single-artifact agents this is identical to the previous behaviour.
+  let last = ''
   for (const a of artifacts) {
     if (!isTextOnlyArtifact(a)) continue
-    const text = a.parts.map(p => p.text || '').join('')
-    if (text.length > longest.length) longest = text
+    last = a.parts.map(p => p.text || '').join('')
   }
-  return longest
+  return last
 }
 
 /**

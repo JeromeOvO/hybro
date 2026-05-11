@@ -479,6 +479,11 @@ export function GroupManagementModal({
               <DialogTitle>
                 {mode === 'create' ? 'Create New Group' : 'Edit Group'}
               </DialogTitle>
+              <DialogDescription>
+                {mode === 'create'
+                  ? 'Name your group and choose which agents to include.'
+                  : 'Update the group name, description, or agent selection.'}
+              </DialogDescription>
             </DialogHeader>
 
             <div className="py-4 space-y-4">
