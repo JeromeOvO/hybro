@@ -2,6 +2,11 @@ import { create } from 'zustand'
 import type { ArtifactData } from '@/stores/message-store/types'
 import { mergeArtifacts, extractTextFromArtifacts } from '@/stores/message-store/upsert'
 
+// Buffers not updated within this window are considered orphaned (backend crash
+// before task_update was sent). They are evicted on the next append() call.
+// 5 minutes is generous enough to cover slow streaming agents.
+const STALE_BUFFER_TTL_MS = 5 * 60_000
+
 /**
  * Ephemeral display buffer for a single streaming message.
  * Lives only in this store — never written to messageStore.
@@ -14,6 +19,18 @@ export interface StreamBuffer {
   artifacts: ArtifactData[]
   /** True after last_chunk=true is received. Render uses this for isStreaming flag. */
   isComplete: boolean
+  /**
+   * Room this buffer belongs to. Set on first append and used by clearRoom()
+   * to prevent operations on one room from accidentally clearing buffers
+   * that belong to a different room.
+   */
+  roomId: string
+  /**
+   * Monotonic timestamp (Date.now()) updated on every append and markComplete.
+   * Used for TTL-based eviction of orphaned buffers (backend crash before
+   * task_update was delivered).
+   */
+  lastUpdatedAt: number
 }
 
 interface StreamingState {
@@ -25,8 +42,11 @@ interface StreamingState {
    * Mirrors the mergeArtifacts + extractTextFromArtifacts pipeline from
    * message-store/upsert.ts but without any token filtering — buffer
    * corruption only affects the transient display, never permanent entity state.
+   *
+   * Also evicts stale buffers (older than STALE_BUFFER_TTL_MS) whose
+   * task_update was never received (e.g. backend crash mid-stream).
    */
-  append: (id: string, chunk: ArtifactData, isAppend: boolean) => void
+  append: (id: string, roomId: string, chunk: ArtifactData, isAppend: boolean) => void
 
   /** Mark the buffer complete after last_chunk=true arrives. */
   markComplete: (id: string) => void
@@ -38,32 +58,64 @@ interface StreamingState {
   clear: (id: string) => void
 
   /**
-   * Clear all buffers that belong to a given room.
-   * Called after reconcileWithDb writes DB-canonical content to messageStore
-   * (processing_status terminal, run_failed/completed/canceled, room switch).
-   * Only room-keyed buffers are cleared; buffers from other rooms are preserved.
-   *
-   * Note: StreamBuffer does not carry roomId. This action clears ALL buffers
-   * whose message_id is listed in the provided set.
+   * Clear all buffers that belong to the given roomId.
+   * Use for room-switch cleanup (useRoomReset) where ALL buffers for the
+   * room must be discarded unconditionally.
+   * Room affiliation is enforced via StreamBuffer.roomId — buffers from
+   * other rooms are never touched.
    */
-  clearRoom: (messageIds: ReadonlySet<string>) => void
+  clearRoom: (roomId: string) => void
+
+  /**
+   * Clear only the buffers whose message_id appears in the provided set.
+   * Use after reconcileWithDb (useRoomHydration) where only messages that
+   * are confirmed-persisted in the DB should have their buffers superseded.
+   * Buffers for messages still actively streaming (not yet in DB) are preserved.
+   */
+  clearByMessageIds: (messageIds: ReadonlySet<string>) => void
 }
 
 export const useStreamingStore = create<StreamingState>()((set) => ({
   buffers: {},
 
-  append: (id, chunk, isAppend) => set((state) => {
-    const existing = state.buffers[id]
+  append: (id, roomId, chunk, isAppend) => set((state) => {
+    const now = Date.now()
+
+    // Evict orphaned buffers — those not updated within STALE_BUFFER_TTL_MS.
+    // These are left over from backend crashes that never sent task_update.
+    // Eviction happens passively on each append so no separate timer is needed.
+    let evicted = false
+    const afterEviction: Record<string, StreamBuffer> = {}
+    for (const [bufferId, buf] of Object.entries(state.buffers)) {
+      if (bufferId !== id && now - buf.lastUpdatedAt > STALE_BUFFER_TTL_MS) {
+        evicted = true
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn(
+            '[streamingStore] evicted stale buffer for message %s (room %s, idle %ds)',
+            bufferId,
+            buf.roomId,
+            Math.round((now - buf.lastUpdatedAt) / 1000),
+          )
+        }
+      } else {
+        afterEviction[bufferId] = buf
+      }
+    }
+    const base = evicted ? afterEviction : state.buffers
+
+    const existing = base[id]
     const prevArtifacts = existing?.artifacts ?? []
     const nextArtifacts = mergeArtifacts(prevArtifacts, chunk, isAppend)
     const text = extractTextFromArtifacts(nextArtifacts)
     return {
       buffers: {
-        ...state.buffers,
+        ...base,
         [id]: {
           text,
           artifacts: nextArtifacts,
           isComplete: existing?.isComplete ?? false,
+          roomId,
+          lastUpdatedAt: now,
         },
       },
     }
@@ -75,7 +127,7 @@ export const useStreamingStore = create<StreamingState>()((set) => ({
     return {
       buffers: {
         ...state.buffers,
-        [id]: { ...existing, isComplete: true },
+        [id]: { ...existing, isComplete: true, lastUpdatedAt: Date.now() },
       },
     }
   }),
@@ -87,7 +139,20 @@ export const useStreamingStore = create<StreamingState>()((set) => ({
     return { buffers: rest }
   }),
 
-  clearRoom: (messageIds) => set((state) => {
+  clearRoom: (roomId) => set((state) => {
+    const nextBuffers: Record<string, StreamBuffer> = {}
+    let changed = false
+    for (const [id, buf] of Object.entries(state.buffers)) {
+      if (buf.roomId === roomId) {
+        changed = true
+      } else {
+        nextBuffers[id] = buf
+      }
+    }
+    return changed ? { buffers: nextBuffers } : state
+  }),
+
+  clearByMessageIds: (messageIds) => set((state) => {
     const nextBuffers: Record<string, StreamBuffer> = {}
     let changed = false
     for (const [id, buf] of Object.entries(state.buffers)) {

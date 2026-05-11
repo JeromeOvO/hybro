@@ -515,6 +515,12 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
           // the entity currently holds. This prevents a blank flash when
           // task_update arrives before entity content was ever written (pure
           // streaming agents where artifact_update wrote only to streamingStore).
+          //
+          // INVARIANT: bufferText must be read and streaming.clear() must be
+          // called in the same synchronous microtask — NO await between them.
+          // Any await here would open a window where a concurrent artifact_update
+          // could extend the buffer after the read but before the clear, causing
+          // that chunk to be permanently dropped from the entity content.
           const bufferText = useStreamingStore.getState().buffers[messageId]?.text
           const resolvedContent = (content ?? '').trim().length > 0
             ? content
@@ -636,12 +642,12 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             isStreaming: isAppend ? !last_chunk : false,
           }
 
-          // Target architecture (Step 3): streaming chunks write ONLY to
-          // streamingStore. messageStore is never touched during streaming.
-          // The render layer reads from streamingStore.buffers for live display.
-          // task_update will write DB-canonical content to messageStore and
-          // clear the buffer in one commit.
-          streaming.append(message_id, artifactData, isAppend ?? false)
+          // Streaming chunks write ONLY to streamingStore. messageStore is never
+          // touched during streaming. The render layer reads streamingStore.buffers
+          // for live display. task_update writes DB-canonical content to messageStore
+          // and clears the buffer in one synchronous commit (no await between the
+          // two — see INVARIANT comment in the task_update handler below).
+          streaming.append(message_id, roomId, artifactData, isAppend ?? false)
           if (last_chunk) streaming.markComplete(message_id)
 
           if (!isAppend) {

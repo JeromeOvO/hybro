@@ -57,6 +57,14 @@ export function useRoomHydration(
       const msgStore = useMessageStore.getState()
       if (msgStore.roomId === targetRoomId) {
         msgStore.upsertMany(filtered, 'db')
+        // Mirror the reconcileOnce pattern: DB content is now canonical for
+        // any message that was already in the DB when the page loaded.
+        // SSE artifact_update chunks may have arrived during the async fetch
+        // and populated streamingStore buffers for these same messages.
+        // Clear only the messages we just wrote — buffers for messages still
+        // actively streaming (not yet in DB) are intentionally preserved.
+        const writtenIds = new Set(filtered.map(m => m.id))
+        useStreamingStore.getState().clearByMessageIds(writtenIds)
         markInitialHydrationComplete(targetRoomId)
         console.log(
           `[NormalizedStore] DB hydration: ${filtered.length} messages written ` +
@@ -131,10 +139,11 @@ export function useRoomHydration(
     if (store.roomId === targetRoomId) {
       store.upsertMany(filtered, 'db')
       store.markDbSynced()
-      // DB reconcile supersedes all active streaming buffers in the room.
-      // Build the set of message IDs written so clearRoom can prune them.
+      // DB reconcile supersedes streaming buffers for persisted messages only.
+      // clearByMessageIds preserves buffers for messages still actively streaming
+      // (not yet in DB), so their live display is not interrupted.
       const writtenIds = new Set(filtered.map(m => m.id))
-      useStreamingStore.getState().clearRoom(writtenIds)
+      useStreamingStore.getState().clearByMessageIds(writtenIds)
     }
     return filtered.length
   }, [getToken, userId, userName, getAgentName, getAgentSource])

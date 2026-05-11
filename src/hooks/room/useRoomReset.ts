@@ -30,12 +30,8 @@ export function useRoomReset(
     useMessageStore.getState().setRoom(roomId)
 
     // Clear any streaming buffers left from the previous room.
-    // On room switch the previous room's messageIds are no longer in the store,
-    // so we prune by collecting every buffer ID that belongs to the old room.
-    // The simplest safe approach: clear ALL buffers — no cross-room streaming
-    // is possible and any surviving buffer is stale.
-    const allIds = new Set(Object.keys(useStreamingStore.getState().buffers))
-    useStreamingStore.getState().clearRoom(allIds)
+    // clearRoom filters by roomId so buffers from other rooms are never touched.
+    useStreamingStore.getState().clearRoom(roomId)
 
     return () => {
       // Clean up per-room UI flags when leaving this room.
