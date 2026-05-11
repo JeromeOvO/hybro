@@ -490,6 +490,19 @@ class DirectTransport(AgentTransport):
                 task_content=task_content,
                 client_request_id=current_message.client_request_id,
             )
+            # Emit an initial working status so the agent card shows a live
+            # status description immediately after task_submitted.
+            # Agents that emit their own A2A status-update messages will
+            # overwrite this with more specific text.
+            initial_status_msg = task_content or "Working on your request…"
+            await self.sse_manager.send_task_update(
+                room_id=room_id,
+                message_id=current_message.message_id,
+                status="working",
+                status_message=initial_status_msg,
+                agent_id=current_message.agent_id,
+                client_request_id=current_message.client_request_id,
+            )
             return task_info
         except Exception as exc:
             logger.warning("Failed to setup task tracking: %s", exc)
