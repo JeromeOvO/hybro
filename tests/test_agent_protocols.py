@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 from common.protocols import (
     AgentManagement,
     AgentMatcher,
+    AgentMessageMatcher,
     AgentRegistry,
     AgentRegistryWriter,
     AgentRepository,
@@ -32,6 +33,7 @@ def test_agent_facade_satisfies_runtime_protocols():
 
     assert isinstance(facade, AgentRegistry)
     assert isinstance(facade, AgentMatcher)
+    assert isinstance(facade, AgentMessageMatcher)
     assert isinstance(facade, AgentManagement)
     assert isinstance(facade, AgentRegistryWriter)
 
@@ -90,6 +92,7 @@ def test_agent_container_binds_single_facade_to_all_protocols():
     from common.protocols import (
         AgentManagement,
         AgentMatcher,
+        AgentMessageMatcher,
         AgentRegistry,
         AgentRegistryWriter,
     )
@@ -107,6 +110,7 @@ def test_agent_container_binds_single_facade_to_all_protocols():
 
     assert isinstance(deps.agent_registry, AgentRegistry)
     assert isinstance(deps.agent_matcher, AgentMatcher)
+    assert isinstance(deps.agent_matcher, AgentMessageMatcher)
     assert isinstance(deps.agent_management, AgentManagement)
     assert isinstance(deps.agent_registry_writer, AgentRegistryWriter)
     assert deps.agent_registry is deps.agent_matcher

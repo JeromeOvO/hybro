@@ -1,7 +1,9 @@
 from common.protocols.a2a_protocols import AgentCardResolver, AgentTransport
 from common.protocols.agent_protocols import (
+    AgentExclusionReader,
     AgentManagement,
     AgentMatcher,
+    AgentMessageMatcher,
     AgentRegistry,
     AgentRegistryWriter,
 )
@@ -55,8 +57,10 @@ from common.protocols.room_protocols import (
 
 __all__ = [
     "AgentCardResolver",
+    "AgentExclusionReader",
     "AgentManagement",
     "AgentMatcher",
+    "AgentMessageMatcher",
     "AgentRegistry",
     "AgentRegistryWriter",
     "AgentRepository",

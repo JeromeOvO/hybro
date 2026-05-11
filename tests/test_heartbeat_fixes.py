@@ -6,7 +6,8 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from models.api_key import APIKey
-from services.relay_service import RelayService
+from models.hub import HubAgentSync
+from services.relay_service import RelayHubLivenessReader, RelayService
 from tests.conftest import FROZEN_TIME
 
 
@@ -110,6 +111,40 @@ class TestIsHubAlive:
 
         svc._hub_queues["hub-1"] = asyncio.Queue()
         assert await svc.is_hub_alive("hub-1") is True
+
+    async def test_liveness_reader_adapter_delegates_to_relay(self):
+        streams = _make_streams()
+        streams.is_hub_alive = AsyncMock(return_value=True)
+        svc = _make_service(streams=streams)
+        reader = RelayHubLivenessReader(svc)
+
+        assert await reader.is_hub_online("hub-1") is True
+        assert await reader.get_hub_owner_id("hub-1") == "user-001"
+        streams.is_hub_alive.assert_awaited_once_with("hub-1")
+
+
+@pytest.mark.asyncio
+async def test_sync_agents_validates_cards_before_writer_path():
+    svc = _make_service(streams=_make_streams())
+    writer = MagicMock()
+    writer.sync_hub_agents = AsyncMock(return_value=[])
+    svc.bind_agent_registry_writer(writer)
+
+    synced = await svc.sync_agents(
+        "hub-1",
+        [
+            HubAgentSync(
+                local_agent_id="bad-local",
+                name="Bad",
+                description="Missing required A2A card fields",
+                agent_card={"name": "Bad"},
+            )
+        ],
+        _make_api_key(),
+    )
+
+    assert synced == []
+    writer.sync_hub_agents.assert_not_awaited()
 
 
 # ===========================================================================

@@ -13,11 +13,16 @@ FILE_CAPABLE_MIMES = frozenset({
     "application/gzip",
 })
 
-VECTOR_WEIGHT = float(os.getenv("MATCH_VECTOR_WEIGHT", "0.85"))
-CAPABILITY_WEIGHT = float(os.getenv("MATCH_CAPABILITY_WEIGHT", "0.15"))
-DEBATE_THRESHOLD = float(os.getenv("MATCH_DEBATE_THRESHOLD", "0.3"))
-GAP_THRESHOLD = float(os.getenv("MATCH_GAP_THRESHOLD", "0.15"))
-QUALITY_THRESHOLD = float(os.getenv("MATCH_QUALITY_THRESHOLD", "0.4"))
+
+def _env_float(name: str, default: float) -> float:
+    return float(os.getenv(name, str(default)))
+
+
+VECTOR_WEIGHT = _env_float("MATCH_VECTOR_WEIGHT", 0.85)
+CAPABILITY_WEIGHT = _env_float("MATCH_CAPABILITY_WEIGHT", 0.15)
+DEBATE_THRESHOLD = _env_float("MATCH_DEBATE_THRESHOLD", 0.3)
+GAP_THRESHOLD = _env_float("MATCH_GAP_THRESHOLD", 0.15)
+QUALITY_THRESHOLD = _env_float("MATCH_QUALITY_THRESHOLD", 0.4)
 
 
 def supports_files(agent: dict[str, Any]) -> bool:
@@ -52,10 +57,23 @@ def compute_final_score(
     vector_score: float,
     capability_score: float,
     *,
-    vector_weight: float = VECTOR_WEIGHT,
-    capability_weight: float = CAPABILITY_WEIGHT,
+    vector_weight: float | None = None,
+    capability_weight: float | None = None,
 ) -> float:
-    return vector_weight * vector_score + capability_weight * capability_score
+    resolved_vector_weight = (
+        _env_float("MATCH_VECTOR_WEIGHT", VECTOR_WEIGHT)
+        if vector_weight is None
+        else vector_weight
+    )
+    resolved_capability_weight = (
+        _env_float("MATCH_CAPABILITY_WEIGHT", CAPABILITY_WEIGHT)
+        if capability_weight is None
+        else capability_weight
+    )
+    return (
+        resolved_vector_weight * vector_score
+        + resolved_capability_weight * capability_score
+    )
 
 
 def select_top_matches(
@@ -67,8 +85,9 @@ def select_top_matches(
         return []
 
     if is_debate_mode:
+        debate_threshold = _env_float("MATCH_DEBATE_THRESHOLD", DEBATE_THRESHOLD)
         above_threshold = [
-            match for match in ranked if match["final_score"] > DEBATE_THRESHOLD
+            match for match in ranked if match["final_score"] > debate_threshold
         ]
         if not above_threshold:
             return ranked[: min(2, len(ranked))]
@@ -78,13 +97,15 @@ def select_top_matches(
         return above_threshold[:count] if len(above_threshold) >= 3 else above_threshold
 
     top = ranked[0]
+    gap_threshold = _env_float("MATCH_GAP_THRESHOLD", GAP_THRESHOLD)
     if (
         len(ranked) >= 2
-        and (top["final_score"] - ranked[1]["final_score"]) > GAP_THRESHOLD
+        and (top["final_score"] - ranked[1]["final_score"]) > gap_threshold
     ):
         return [top]
 
-    qualified = [match for match in ranked if match["final_score"] > QUALITY_THRESHOLD]
+    quality_threshold = _env_float("MATCH_QUALITY_THRESHOLD", QUALITY_THRESHOLD)
+    qualified = [match for match in ranked if match["final_score"] > quality_threshold]
     return qualified[:3] if qualified else [top]
 
 

@@ -6,6 +6,7 @@ from uuid import uuid4
 from agent import AgentFacade, AgentMongoRepository
 from common.protocols import (
     AgentCardResolver,
+    AgentExclusionReader,
     AgentManagement,
     AgentMatcher,
     AgentRegistry,
@@ -33,6 +34,7 @@ def create_agent_deps(
     llm_provider: LLMProvider,
     card_resolver: AgentCardResolver,
     hub_liveness: HubLivenessReader | None = None,
+    exclusion_reader: AgentExclusionReader | None = None,
     gateway_base_url: str | None = None,
 ) -> AgentDeps:
     repository = AgentMongoRepository(mongo=mongo)
@@ -42,6 +44,7 @@ def create_agent_deps(
         llm_provider=llm_provider,
         card_resolver=card_resolver,
         hub_liveness=hub_liveness,
+        exclusion_reader=exclusion_reader,
         gateway_base_url=gateway_base_url,
         id_factory=lambda: uuid4().hex,
         now=utcnow,

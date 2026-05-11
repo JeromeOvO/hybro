@@ -414,6 +414,8 @@ def test_protocol_methods_match_design_doc():
             "is_directly_callable",
         },
         protocols.AgentMatcher: {"match_agents"},
+        protocols.AgentMessageMatcher: {"match_for_message"},
+        protocols.AgentExclusionReader: {"get_excluded_agent_ids"},
         protocols.AgentManagement: {
             "register_agent",
             "delete_agent",
@@ -522,6 +524,7 @@ def test_protocol_methods_match_design_doc():
         protocols.MongoCollection: {
             "find_one",
             "find",
+            "find_one_and_update",
             "insert_one",
             "insert_many",
             "update_one",
@@ -630,6 +633,19 @@ def test_protocol_methods_match_design_doc():
             "requesting_user_id",
         ],
     )
+    _assert_params(
+        protocols.AgentMessageMatcher.match_for_message,
+        [
+            "self",
+            "query",
+            "limit",
+            "filter_ids",
+            "requesting_user_id",
+            "required_input_modes",
+            "is_debate_mode",
+        ],
+    )
+    assert inspect.iscoroutinefunction(protocols.HubLivenessReader.is_hub_online)
     _assert_params(protocols.RoomManagement.create_room, ["self", "request"])
     _assert_params(protocols.ExecutionEngine.cancel, ["self", "room_id", "message_id"])
     _assert_params(protocols.MongoCollection.find, ["self", "query", "kwargs"])

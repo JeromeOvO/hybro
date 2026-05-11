@@ -21,6 +21,7 @@ class AgentInfo(FrozenDTO):
     rate_limit_per_user_per_hour: int | None = None
     rate_limit_system_per_hour: int | None = None
     call_count: int = 0
+    raw_card: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentCardSnapshot(FrozenDTO):

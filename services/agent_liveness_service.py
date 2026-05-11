@@ -7,6 +7,8 @@ always sees an accurate ``agent_status``.
 
 from __future__ import annotations
 
+import inspect
+
 from common.utils.logger import get_logger
 from config.settings import settings
 from models.agent import Agent, AgentStatus
@@ -79,7 +81,7 @@ async def _check_hub_agent(agent: Agent) -> Agent:
     if _hub_liveness_reader is None or _agent_registry_writer is None:
         return agent
 
-    if not _hub_liveness_reader.is_hub_online(agent.hub_id):
+    if not await _is_hub_online(agent.hub_id):
         await _agent_registry_writer.mark_hub_agents_offline(agent.hub_id)
         agent.agent_status = AgentStatus.inactive
         logger.info(
@@ -89,3 +91,10 @@ async def _check_hub_agent(agent: Agent) -> Agent:
         )
 
     return agent
+
+
+async def _is_hub_online(hub_id: str) -> bool:
+    result = _hub_liveness_reader.is_hub_online(hub_id)
+    if inspect.isawaitable(result):
+        result = await result
+    return bool(result)

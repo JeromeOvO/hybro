@@ -7,6 +7,7 @@ from agent.matching import (
     select_top_matches,
     supports_files,
 )
+from common.protocols import AgentMessageMatcher
 from models.agent import Agent
 
 
@@ -81,7 +82,7 @@ class AgentMatcher:
         required_input_modes: list[str] | None = None,
     ) -> MatchResult:
         facade = self._require_facade()
-        if hasattr(facade, "match_for_message"):
+        if isinstance(facade, AgentMessageMatcher):
             matches = await facade.match_for_message(
                 message_text,
                 requesting_user_id=user_id,

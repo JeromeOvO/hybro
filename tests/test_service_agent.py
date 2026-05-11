@@ -24,6 +24,7 @@ from models.error import (
 )
 from services.agent_service import (
     AgentService,
+    _agent_info_to_legacy_agent,
     is_local_agent_url,
     normalize_agent_url,
 )
@@ -231,7 +232,28 @@ class TestRegisterAgent:
             sample_agent_card.url,
             mock_user.user_id,
             preferred_subdomain=None,
+            resolved_card=facade.register_agent.call_args.kwargs["resolved_card"],
         )
+        resolved = facade.register_agent.call_args.kwargs["resolved_card"]
+        assert resolved.raw_card["skills"][0]["id"] == "test-skill"
+
+    def test_agent_info_conversion_preserves_raw_agent_card(self, sample_agent_card):
+        from agent.translators import agent_info_from_doc
+
+        info = agent_info_from_doc(
+            {
+                "agent_id": "agent-123",
+                "provider_id": "user-123",
+                "agent_status": "active",
+                "agent_card": sample_agent_card.model_dump(mode="json"),
+            }
+        )
+
+        agent = _agent_info_to_legacy_agent(info)
+
+        assert agent.agent_card.skills[0].id == "test-skill"
+        assert agent.agent_card.capabilities.streaming is True
+        assert agent.agent_card.default_input_modes == ["text"]
 
     @pytest.mark.asyncio
     async def test_raises_error_when_agent_card_missing(self, agent_service):

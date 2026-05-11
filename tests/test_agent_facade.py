@@ -240,12 +240,14 @@ async def test_facade_sync_hub_agents_enriches_existing_and_upserts_new_agents()
             {
                 "agent_id": "existing",
                 "provider_id": "u1",
+                "is_public": True,
                 "normalized_url": "https://existing.example",
                 "description_hash": existing_hash,
                 "agent_card": {
                     "name": "Existing",
                     "description": "Existing description",
                     "url": "https://existing.example",
+                    "iconUrl": "https://assets.example/custom.png",
                 },
             }
         ],
@@ -292,6 +294,10 @@ async def test_facade_sync_hub_agents_enriches_existing_and_upserts_new_agents()
     assert repo.docs["existing"]["source"] == "hub"
     assert repo.docs["existing"]["local_agent_id"] == "local-existing"
     assert repo.docs["existing"]["agent_card"]["name"] == "Existing From Hub"
+    assert repo.docs["existing"]["agent_card"]["iconUrl"] == (
+        "https://assets.example/custom.png"
+    )
+    assert repo.docs["existing"]["is_public"] is True
     assert repo.docs["new-agent"]["normalized_url"] is None
     assert repo.docs["new-agent"]["is_public"] is False
     assert repo.docs["new-agent"]["public_url"] == (
@@ -305,6 +311,71 @@ async def test_facade_sync_hub_agents_enriches_existing_and_upserts_new_agents()
     assert await repo.get_indexed_description_hash("new-agent") == hashlib.sha256(
         "Local description".encode()
     ).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_facade_sync_hub_agents_reuses_stored_id_for_local_proxy_url():
+    facade, repo, _, _, _ = _facade_with_docs(
+        [
+            {
+                "agent_id": "existing-local",
+                "provider_id": "u1",
+                "source": "hub",
+                "hub_id": "hub-1",
+                "local_agent_id": "local-1",
+                "agent_status": "active",
+                "agent_card": {
+                    "name": "Local Agent",
+                    "description": "Old",
+                    "url": "http://localhost:9000",
+                },
+            }
+        ],
+        gateway_base_url="https://gateway.example",
+    )
+
+    synced = await facade.sync_hub_agents(
+        "hub-1",
+        "u1",
+        [
+            HubAgentDescriptor(
+                hub_id="hub-1",
+                agent_id="local-1",
+                raw_card={
+                    "name": "Local Agent",
+                    "description": "New",
+                    "url": "http://localhost:9000",
+                },
+            )
+        ],
+    )
+
+    assert [item.agent_id for item in synced] == ["existing-local"]
+    assert repo.docs["existing-local"]["public_url"] == (
+        "https://gateway.example/gateway/agents/existing-local/message/send"
+    )
+    assert "new-agent" not in repo.docs
+
+
+@pytest.mark.asyncio
+async def test_facade_sync_hub_agents_empty_inventory_prunes_all_hub_agents():
+    facade, repo, _, _, _ = _facade_with_docs([
+        {
+            "agent_id": "old-hub-agent",
+            "provider_id": "u1",
+            "source": "hub",
+            "hub_id": "hub-1",
+            "local_agent_id": "local-old",
+            "agent_status": "active",
+            "agent_card": {"name": "Old", "url": "https://old.example"},
+        }
+    ])
+
+    synced = await facade.sync_hub_agents("hub-1", "u1", [], prune_missing=True)
+
+    assert synced == []
+    assert repo.prune_calls == [("hub-1", [])]
+    assert repo.docs["old-hub-agent"]["agent_status"] == "inactive"
 
 
 @pytest.mark.asyncio
@@ -433,6 +504,36 @@ async def test_facade_match_applies_visibility_filter_and_returns_agent_results(
 
 
 @pytest.mark.asyncio
+async def test_facade_match_excludes_agents_with_open_capability_issues():
+    facade, _, vector, _, _ = _facade_with_docs(
+        [
+            {
+                "agent_id": "good",
+                "is_public": True,
+                "agent_status": "active",
+                "agent_card": {"name": "Good", "url": "https://good"},
+            },
+            {
+                "agent_id": "bad",
+                "is_public": True,
+                "agent_status": "active",
+                "agent_card": {"name": "Bad", "url": "https://bad"},
+            },
+        ],
+        exclusion_reader=FakeExclusionReader({"bad"}),
+    )
+    vector.results = [
+        VectorSearchResult(id="bad", score=0.99),
+        VectorSearchResult(id="good", score=0.60),
+    ]
+
+    matches = await facade.match_agents("query", limit=5)
+
+    assert [match.agent_id for match in matches] == ["good"]
+    assert vector.searches[-1]["filter"] == {"agent_id": {"$in": ["good"]}}
+
+
+@pytest.mark.asyncio
 async def test_facade_match_respect_visibility_false_still_excludes_private_agents():
     facade, _, vector, _, _ = _facade_with_docs([
         {
@@ -536,6 +637,37 @@ async def test_facade_register_rejects_missing_duplicate_unresolved_and_rolls_ba
 
 
 @pytest.mark.asyncio
+async def test_facade_sync_hub_agents_does_not_abort_when_indexing_fails():
+    vector = FakeVector()
+    vector.fail_upsert = True
+    facade, repo, _, _, _ = _facade_with_docs(
+        [],
+        vector=vector,
+        gateway_base_url="https://gateway.example",
+    )
+
+    synced = await facade.sync_hub_agents(
+        "hub-1",
+        "u1",
+        [
+            HubAgentDescriptor(
+                hub_id="hub-1",
+                agent_id="local-1",
+                raw_card={
+                    "name": "Local",
+                    "description": "Index me",
+                    "url": "http://localhost:9000",
+                },
+            )
+        ],
+    )
+
+    assert [item.agent_id for item in synced] == ["new-agent"]
+    assert repo.docs["new-agent"]["agent_status"] == "active"
+    assert await repo.get_indexed_description_hash("new-agent") is None
+
+
+@pytest.mark.asyncio
 async def test_facade_delete_enforces_owner_and_deletes_vector_record():
     facade, repo, vector, _, _ = _facade_with_docs([
         {"agent_id": "a1", "provider_id": "u1", "agent_card": {"url": "https://a1"}},
@@ -544,6 +676,20 @@ async def test_facade_delete_enforces_owner_and_deletes_vector_record():
 
     assert await facade.delete_agent("missing", "u1") is False
     assert await facade.delete_agent("a2", "u1") is False
+    assert await facade.delete_agent("a1", "u1") is True
+    assert "a1" not in repo.docs
+    assert vector.deletes == [("a2a-agents", ["a1"])]
+
+
+@pytest.mark.asyncio
+async def test_facade_delete_returns_success_when_vector_cleanup_fails_after_db_delete():
+    vector = FakeVector()
+    vector.fail_delete = True
+    facade, repo, vector, _, _ = _facade_with_docs(
+        [{"agent_id": "a1", "provider_id": "u1", "agent_card": {"url": "https://a1"}}],
+        vector=vector,
+    )
+
     assert await facade.delete_agent("a1", "u1") is True
     assert "a1" not in repo.docs
     assert vector.deletes == [("a2a-agents", ["a1"])]
@@ -591,7 +737,7 @@ async def test_facade_update_validates_rate_limits_and_reindexes_card_descriptio
 
 @pytest.mark.asyncio
 async def test_facade_lists_owned_and_public_agents_with_hub_liveness():
-    facade, _, _, _, _ = _facade_with_docs(
+    facade, _, _, _, hub = _facade_with_docs(
         [
             {
                 "agent_id": "owned",
@@ -607,16 +753,47 @@ async def test_facade_lists_owned_and_public_agents_with_hub_liveness():
                 "hub_id": "hub-1",
                 "agent_card": {"name": "Hub", "url": "https://h"},
             },
+            {
+                "agent_id": "hub-same",
+                "is_public": True,
+                "source": "hub",
+                "hub_id": "hub-1",
+                "agent_card": {"name": "Same Hub", "url": "https://h-same"},
+            },
+            {
+                "agent_id": "hub-offline",
+                "is_public": True,
+                "source": "hub",
+                "hub_id": "hub-2",
+                "agent_card": {"name": "Offline Hub", "url": "https://h2"},
+            },
         ],
-        hub_online={"hub-1": True},
+        hub_online={"hub-1": True, "hub-2": False},
     )
 
     owned = await facade.list_agents("u1")
     public = await facade.list_public_agents(limit=10)
 
     assert [agent.agent_id for agent in owned] == ["owned"]
-    assert [agent.agent_id for agent in public] == ["public", "hub"]
+    assert [agent.agent_id for agent in public] == [
+        "public",
+        "hub",
+        "hub-same",
+        "hub-offline",
+    ]
     assert public[1].is_hub_online is True
+    assert public[2].is_hub_online is True
+    assert public[3].is_hub_online is False
+    assert hub.checked == ["hub-1", "hub-2"]
+
+
+def test_matching_weights_are_read_at_call_time(monkeypatch):
+    from agent.matching import compute_final_score
+
+    monkeypatch.setenv("MATCH_VECTOR_WEIGHT", "1.0")
+    monkeypatch.setenv("MATCH_CAPABILITY_WEIGHT", "0.0")
+
+    assert compute_final_score(0.2, 1.0) == pytest.approx(0.2)
 
 
 @pytest.mark.asyncio
@@ -703,6 +880,43 @@ async def test_facade_direct_callability_fails_closed_for_inactive_and_offline_h
     assert hub.checked == ["hub-1", "hub-2"]
 
 
+@pytest.mark.asyncio
+async def test_facade_supports_async_hub_liveness_reader():
+    from agent import AgentFacade
+
+    repo = FakeRepository(
+        [
+            {
+                "agent_id": "hub",
+                "agent_status": "active",
+                "source": "hub",
+                "hub_id": "hub-1",
+                "agent_card": {
+                    "name": "Hub Agent",
+                    "description": "Desc",
+                    "url": "https://hub-agent.example",
+                },
+            }
+        ]
+    )
+    hub = AsyncFakeHubLiveness({"hub-1": True})
+    facade = AgentFacade(
+        repository=repo,
+        vector=FakeVector(),
+        llm_provider=FakeLLM(),
+        card_resolver=FakeCardResolver(),
+        hub_liveness=hub,
+        id_factory=lambda: "new-agent",
+        now=lambda: datetime(2026, 5, 10, tzinfo=timezone.utc),
+    )
+
+    info = await facade.get_agent("hub")
+
+    assert info.is_hub_online is True
+    assert await facade.is_directly_callable("hub") is True
+    assert hub.checked == ["hub-1", "hub-1"]
+
+
 class FakeRepository:
     def __init__(self, docs: list[dict]) -> None:
         self.docs = {doc["agent_id"]: _copy_doc(doc) for doc in docs}
@@ -748,7 +962,7 @@ class FakeRepository:
         current = self.docs.get(agent_id)
         if current is None:
             return None
-        _deep_update(current, updates)
+        current.update(_copy_doc(updates))
         return _copy_doc(current)
 
     async def upsert_hub_agent(
@@ -857,6 +1071,7 @@ class FakeVector:
         self.searches = []
         self.results = []
         self.fail_upsert = False
+        self.fail_delete = False
 
     async def search(
         self,
@@ -877,6 +1092,8 @@ class FakeVector:
 
     async def delete(self, index: str, ids: list[str]) -> None:
         self.deletes.append((index, ids))
+        if self.fail_delete:
+            raise RuntimeError("vector delete failed")
 
 
 class FakeLLM:
@@ -908,6 +1125,26 @@ class FakeHubLiveness:
         return self._online.get(hub_id, False)
 
 
+class AsyncFakeHubLiveness:
+    def __init__(self, online: dict[str, bool]) -> None:
+        self._online = online
+        self.checked: list[str] = []
+
+    async def is_hub_online(self, hub_id: str) -> bool:
+        self.checked.append(hub_id)
+        return self._online.get(hub_id, False)
+
+
+class FakeExclusionReader:
+    def __init__(self, excluded: set[str]) -> None:
+        self.excluded = frozenset(excluded)
+        self.calls = 0
+
+    async def get_excluded_agent_ids(self) -> frozenset[str]:
+        self.calls += 1
+        return self.excluded
+
+
 def _facade_with_docs(
     docs: list[dict],
     *,
@@ -915,6 +1152,7 @@ def _facade_with_docs(
     resolved_card: AgentCardSnapshot | None = None,
     vector: FakeVector | None = None,
     gateway_base_url: str | None = None,
+    exclusion_reader: FakeExclusionReader | None = None,
 ):
     from agent import AgentFacade
 
@@ -930,6 +1168,7 @@ def _facade_with_docs(
             llm_provider=llm,
             card_resolver=resolver,
             hub_liveness=hub,
+            exclusion_reader=exclusion_reader,
             gateway_base_url=gateway_base_url,
             id_factory=lambda: "new-agent",
             now=lambda: datetime(2026, 5, 10, tzinfo=timezone.utc),
@@ -953,11 +1192,3 @@ def _copy_doc(doc: dict | None) -> dict | None:
         else:
             copied[key] = value
     return copied
-
-
-def _deep_update(doc: dict, updates: dict) -> None:
-    for key, value in updates.items():
-        if isinstance(value, dict) and isinstance(doc.get(key), dict):
-            _deep_update(doc[key], value)
-        else:
-            doc[key] = value

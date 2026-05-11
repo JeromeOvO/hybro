@@ -371,6 +371,29 @@ class RelayService:
             await self._streams.record_heartbeat(hub_id)
 
         if self._agent_registry_writer is not None:
+            valid_agents: list[HubAgentSync] = []
+            for ag in agents:
+                try:
+                    AgentCard(**ag.agent_card)
+                except Exception:
+                    logger.warning(
+                        "Hub %s: skipping agent %s with invalid card: %s",
+                        hub_id,
+                        ag.local_agent_id,
+                        ag.agent_card,
+                    )
+                    continue
+                valid_agents.append(ag)
+
+            if agents and not valid_agents:
+                logger.warning(
+                    "Hub %s: skipping sync — %d agent(s) in request but none "
+                    "passed AgentCard validation",
+                    hub_id,
+                    len(agents),
+                )
+                return []
+
             descriptors = [
                 HubAgentDescriptor(
                     hub_id=hub_id,
@@ -380,7 +403,7 @@ class RelayService:
                     capabilities=list(ag.capabilities or []),
                     raw_card=dict(ag.agent_card or {}),
                 )
-                for ag in agents
+                for ag in valid_agents
             ]
             synced = await self._agent_registry_writer.sync_hub_agents(
                 hub_id,
@@ -984,6 +1007,18 @@ class RelayService:
 # ---------------------------------------------------------------------------
 
 relay_service: RelayService | None = None
+
+
+class RelayHubLivenessReader:
+    def __init__(self, relay: RelayService) -> None:
+        self._relay = relay
+
+    async def is_hub_online(self, hub_id: str) -> bool:
+        return await self._relay.is_hub_alive(hub_id)
+
+    async def get_hub_owner_id(self, hub_id: str) -> str | None:
+        hub = await self._relay._mongo.get_hub(hub_id)
+        return hub.get("user_id") if hub else None
 
 
 def init_relay_service(

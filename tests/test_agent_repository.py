@@ -14,10 +14,13 @@ class FakeCollection:
         self.docs = [deepcopy(doc) for doc in docs or []]
         self.find_one_calls: list[dict] = []
         self.find_calls: list[tuple[dict, dict]] = []
+        self.find_one_and_update_calls: list[tuple[dict, dict, dict]] = []
         self.update_one_calls: list[tuple[dict, dict, dict]] = []
         self.update_many_calls: list[tuple[dict, dict]] = []
         self.delete_one_calls: list[dict] = []
         self.count_calls: list[dict] = []
+        self.duplicate_normalized_urls: set[str] = set()
+        self.return_false_for_noop = False
 
     async def find_one(self, query: dict, **kwargs) -> dict | None:
         self.find_one_calls.append(deepcopy(query))
@@ -32,15 +35,46 @@ class FakeCollection:
         limit = kwargs.get("limit")
         return matches[:limit] if limit else matches
 
+    async def find_one_and_update(self, query: dict, update: dict, **kwargs) -> dict | None:
+        self.find_one_and_update_calls.append(
+            (deepcopy(query), deepcopy(update), deepcopy(kwargs))
+        )
+        for doc in self.docs:
+            if _matches(doc, query):
+                updated = deepcopy(doc)
+                _apply_update(updated, update, inserting=False)
+                if _duplicates_normalized_url(updated, self.duplicate_normalized_urls):
+                    raise DuplicateKeyError("duplicate normalized_url")
+                doc.clear()
+                doc.update(updated)
+                return deepcopy(doc)
+        if kwargs.get("upsert"):
+            new_doc = _query_identity(query)
+            _apply_update(new_doc, update, inserting=True)
+            if _duplicates_normalized_url(new_doc, self.duplicate_normalized_urls):
+                raise DuplicateKeyError("duplicate normalized_url")
+            self.docs.append(new_doc)
+            return deepcopy(new_doc)
+        return None
+
     async def update_one(self, query: dict, update: dict, **kwargs) -> bool:
         self.update_one_calls.append((deepcopy(query), deepcopy(update), deepcopy(kwargs)))
         for doc in self.docs:
             if _matches(doc, query):
-                _apply_update(doc, update)
+                updated = deepcopy(doc)
+                _apply_update(updated, update)
+                if _duplicates_normalized_url(updated, self.duplicate_normalized_urls):
+                    raise DuplicateKeyError("duplicate normalized_url")
+                if updated == doc and self.return_false_for_noop:
+                    return False
+                doc.clear()
+                doc.update(updated)
                 return True
         if kwargs.get("upsert"):
             new_doc = _query_identity(query)
             _apply_update(new_doc, update)
+            if _duplicates_normalized_url(new_doc, self.duplicate_normalized_urls):
+                raise DuplicateKeyError("duplicate normalized_url")
             self.docs.append(new_doc)
             return True
         return False
@@ -176,6 +210,12 @@ async def test_public_url_exists_update_delete_and_health():
         "public_url": "https://story.hybro.ai",
         "agent_status": "inactive",
     }
+    collection.return_false_for_noop = True
+    assert await repo.update("a1", {"agent_status": "inactive"}) == {
+        "agent_id": "a1",
+        "public_url": "https://story.hybro.ai",
+        "agent_status": "inactive",
+    }
     assert await repo.update("missing", {"agent_status": "inactive"}) is None
 
     await repo.update_health("a1", healthy=True)
@@ -216,6 +256,56 @@ async def test_hub_agent_upsert_prune_activate_and_index_hash():
     assert await repo.get_indexed_description_hash("existing") == "old"
     await repo.set_indexed_description_hash("existing", "new-hash")
     assert await repo.get_indexed_description_hash("existing") == "new-hash"
+
+
+@pytest.mark.asyncio
+async def test_upsert_hub_agent_retries_without_normalized_url_on_duplicate_collision():
+    repo, collection = _repo()
+    collection.duplicate_normalized_urls.add("https://shared.example")
+
+    stored_id = await repo.upsert_hub_agent(
+        "hub-1",
+        "local-1",
+        {
+            "agent_id": "new",
+            "provider_id": "u1",
+            "normalized_url": "https://shared.example",
+            "agent_status": "active",
+            "agent_card": {"name": "Shared", "url": "https://shared.example"},
+        },
+    )
+
+    assert stored_id == "new"
+    assert collection.docs[0]["normalized_url"] is None
+    assert collection.find_one_and_update_calls[0][1]["$set"]["normalized_url"] == (
+        "https://shared.example"
+    )
+    assert collection.find_one_and_update_calls[1][1]["$set"]["normalized_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_upsert_hub_agent_uses_atomic_set_on_insert_for_agent_identity():
+    repo, collection = _repo()
+
+    stored_id = await repo.upsert_hub_agent(
+        "hub-1",
+        "local-1",
+        {
+            "agent_id": "new",
+            "provider_id": "u1",
+            "normalized_url": "https://agent.example",
+            "agent_status": "active",
+            "agent_card": {"name": "Agent", "url": "https://agent.example"},
+        },
+    )
+
+    assert stored_id == "new"
+    assert collection.find_one_and_update_calls
+    query, update, kwargs = collection.find_one_and_update_calls[-1]
+    assert query == {"hub_id": "hub-1", "local_agent_id": "local-1"}
+    assert update["$setOnInsert"] == {"agent_id": "new"}
+    assert "agent_id" not in update["$set"]
+    assert kwargs["upsert"] is True
 
 
 @pytest.mark.asyncio
@@ -274,7 +364,10 @@ def _path_exists(doc: dict, path: str) -> bool:
     return True
 
 
-def _apply_update(doc: dict, update: dict) -> None:
+def _apply_update(doc: dict, update: dict, *, inserting: bool = False) -> None:
+    if inserting:
+        for path, value in update.get("$setOnInsert", {}).items():
+            _set_path(doc, path, value)
     for path, value in update.get("$set", {}).items():
         _set_path(doc, path, value)
     for path in update.get("$unset", {}):
@@ -299,3 +392,12 @@ def _unset_path(doc: dict, path: str) -> None:
 
 def _query_identity(query: dict) -> dict:
     return {key: value for key, value in query.items() if not isinstance(value, dict)}
+
+
+def _duplicates_normalized_url(doc: dict, duplicate_normalized_urls: set[str]) -> bool:
+    normalized_url = doc.get("normalized_url")
+    return normalized_url is not None and normalized_url in duplicate_normalized_urls
+
+
+class DuplicateKeyError(Exception):
+    pass

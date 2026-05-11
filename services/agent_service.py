@@ -4,6 +4,9 @@ from typing import Any
 
 from a2a.types import AgentCapabilities, AgentCard
 
+from a2a_adapter.translators import a2a_card_to_snapshot
+# Deprecated compatibility re-export for legacy service imports.
+# New code should import URL helpers from agent.url_utils directly.
 from agent.url_utils import is_local_agent_url, normalize_agent_url
 from common.dto.agent import AgentCardSnapshot, AgentInfo
 from common.utils.logger import get_logger
@@ -60,10 +63,18 @@ class AgentService:
             raise IllgalParameterError()
 
         try:
+            kwargs = {
+                "preferred_subdomain": getattr(request, "preferred_subdomain", None),
+            }
+            if request.agent_card is not None:
+                kwargs["resolved_card"] = a2a_card_to_snapshot(
+                    request.agent_card,
+                    agent_url,
+                )
             info = await facade.register_agent(
                 agent_url,
                 request.provider_id,
-                preferred_subdomain=getattr(request, "preferred_subdomain", None),
+                **kwargs,
             )
         except ValueError as exc:
             status = 400 if "already registered" in str(exc).lower() else 500
@@ -388,6 +399,18 @@ def _agent_info_to_legacy_agent(info: AgentInfo | None) -> Agent | None:
 
 
 def _agent_info_to_card(info: AgentInfo) -> AgentCard:
+    raw_card = getattr(info, "raw_card", None)
+    if raw_card:
+        raw = _plain_data(raw_card)
+        raw.setdefault("name", info.name or "")
+        raw.setdefault("description", info.description or "")
+        raw.setdefault("url", info.url or "")
+        raw.setdefault("version", "1.0.0")
+        raw.setdefault("capabilities", {})
+        raw.setdefault("defaultInputModes", ["text"])
+        raw.setdefault("defaultOutputModes", ["text"])
+        raw.setdefault("skills", [])
+        return _legacy_card_from_raw(raw)
     return _legacy_card_from_raw(
         {
             "name": info.name or "",
@@ -418,7 +441,7 @@ def _card_snapshot_to_legacy_card(card: AgentCardSnapshot | None) -> AgentCard |
 
 
 def _legacy_card_from_raw(raw: dict) -> AgentCard:
-    raw = dict(raw)
+    raw = _plain_data(raw)
     raw.setdefault("capabilities", {})
     if raw["capabilities"] is None:
         raw["capabilities"] = {}
@@ -430,6 +453,14 @@ def _legacy_card_from_raw(raw: dict) -> AgentCard:
 def _status_to_string(status: Any) -> str:
     value = getattr(status, "value", status)
     return str(value) if value is not None else "active"
+
+
+def _plain_data(value):
+    if isinstance(value, dict):
+        return {key: _plain_data(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_plain_data(item) for item in value]
+    return value
 
 
 agent_service = AgentService()

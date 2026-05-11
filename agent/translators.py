@@ -24,6 +24,7 @@ def agent_info_from_doc(doc: dict[str, Any]) -> AgentInfo:
         rate_limit_per_user_per_hour=doc.get("rate_limit_per_user_per_hour"),
         rate_limit_system_per_hour=doc.get("rate_limit_system_per_hour"),
         call_count=doc.get("call_count", 0),
+        raw_card=dict(card),
     )
 
 

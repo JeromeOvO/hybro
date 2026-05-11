@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from common.protocols import MongoDAL
 
+from agent.constants import AGENT_CARD_NO_OVERWRITE
 from agent.url_utils import normalize_agent_url
 
 
@@ -76,12 +77,10 @@ class AgentMongoRepository:
         return await self._agents.delete_one({"agent_id": agent_id})
 
     async def update(self, agent_id: str, updates: dict) -> dict | None:
-        updated = await self._agents.update_one(
+        await self._agents.update_one(
             {"agent_id": agent_id},
             {"$set": updates},
         )
-        if not updated:
-            return None
         return await self.get_by_id(agent_id)
 
     async def public_url_exists(self, subdomain: str, base_domain: str) -> bool:
@@ -108,22 +107,41 @@ class AgentMongoRepository:
         self, hub_id: str, local_agent_id: str, data: dict
     ) -> str:
         query = {"hub_id": hub_id, "local_agent_id": local_agent_id}
-        existing = await self._agents.find_one(query)
-        if existing is not None:
-            agent_id = existing["agent_id"]
-            await self._agents.update_one(
-                {"agent_id": agent_id},
-                {"$set": {**data, "agent_id": agent_id, **query}},
-            )
-            return agent_id
-
-        agent_id = data["agent_id"]
-        await self._agents.update_one(
+        update = _hub_agent_upsert_update({**data, **query})
+        doc = await self._find_one_and_update_retrying_normalized_url_collision(
             query,
-            {"$set": {**data, **query}},
+            update,
             upsert=True,
+            return_document=True,
         )
-        return agent_id
+        return doc["agent_id"]
+
+    async def _find_one_and_update_retrying_normalized_url_collision(
+        self,
+        query: dict,
+        update: dict,
+        **kwargs,
+    ) -> dict:
+        try:
+            doc = await self._agents.find_one_and_update(query, update, **kwargs)
+        except Exception as exc:
+            if (
+                update.get("$set", {}).get("normalized_url") is None
+                or not _is_duplicate_key_error(exc)
+            ):
+                raise
+            retry_update = {
+                **update,
+                "$set": {**update["$set"], "normalized_url": None},
+            }
+            doc = await self._agents.find_one_and_update(
+                query,
+                retry_update,
+                **kwargs,
+            )
+        if doc is None:
+            raise RuntimeError("hub agent upsert did not return a document")
+        return doc
 
     async def prune_missing_hub_agents(
         self, hub_id: str, active_agent_ids: list[str]
@@ -161,3 +179,23 @@ class AgentMongoRepository:
                 }
             },
         )
+
+
+def _hub_agent_upsert_update(data: dict) -> dict:
+    set_data = dict(data)
+    agent_id = set_data.pop("agent_id")
+    incoming_card = dict(set_data.pop("agent_card", {}) or {})
+    for key, value in incoming_card.items():
+        if key not in AGENT_CARD_NO_OVERWRITE:
+            set_data[f"agent_card.{key}"] = value
+    return {
+        "$set": set_data,
+        "$setOnInsert": {"agent_id": agent_id},
+    }
+
+
+def _is_duplicate_key_error(exc: Exception) -> bool:
+    return (
+        exc.__class__.__name__ == "DuplicateKeyError"
+        or getattr(exc, "code", None) == 11000
+    )

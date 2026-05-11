@@ -6,7 +6,7 @@ LOCAL_HOST_ALIASES = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 WELL_KNOWN_PATHS = ("/.well-known/agent-card.json", "/.well-known/agent.json")
 
 
-def is_local_agent_url(url: str) -> bool:
+def is_local_agent_url(url: str | None) -> bool:
     if not url:
         return False
     try:
@@ -16,7 +16,7 @@ def is_local_agent_url(url: str) -> bool:
     return hostname in LOCAL_HOST_ALIASES
 
 
-def normalize_agent_url(url: str) -> str:
+def normalize_agent_url(url: str | None) -> str | None:
     if not url:
         return url
 

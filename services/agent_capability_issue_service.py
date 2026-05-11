@@ -203,5 +203,13 @@ class AgentCapabilityIssueService:
         return result.modified_count
 
 
+class CapabilityIssueExclusionReader:
+    def __init__(self, service: AgentCapabilityIssueService | None = None) -> None:
+        self._service = service or capability_issue_service
+
+    async def get_excluded_agent_ids(self) -> frozenset[str]:
+        return await self._service.get_excluded_agent_ids()
+
+
 # Singleton
 capability_issue_service = AgentCapabilityIssueService()
