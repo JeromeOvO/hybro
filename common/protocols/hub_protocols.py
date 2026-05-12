@@ -22,6 +22,11 @@ class HubLivenessReader(Protocol):
     async def get_hub_owner_id(self, hub_id: str) -> str | None: ...
 
 
+@runtime_checkable
+class HubLivenessProbe(Protocol):
+    async def is_hub_online(self, hub_id: str) -> bool: ...
+
+
 def validate_hub_liveness_reader(reader: Any | None) -> None:
     if reader is None:
         return
@@ -35,6 +40,16 @@ def validate_hub_liveness_reader(reader: Any | None) -> None:
         )
 
 
+def validate_hub_liveness_probe(probe: Any | None) -> None:
+    if probe is None:
+        return
+    method = getattr(probe, "is_hub_online", None)
+    if not callable(method):
+        raise TypeError("HubLivenessProbe.is_hub_online must be callable")
+    if not inspect.iscoroutinefunction(method):
+        raise TypeError("HubLivenessProbe.is_hub_online must be async")
+
+
 @runtime_checkable
 class HubDispatchPort(Protocol):
     async def send_to_hub(self, command: HubDispatchCommand) -> HubDispatchResult: ...
@@ -45,4 +60,9 @@ class HubDispatchPort(Protocol):
     def is_hub_online(self, hub_id: str) -> bool: ...
 
 
-__all__ = ["HubDispatchPort", "HubLivenessReader", "HubManagement"]
+__all__ = [
+    "HubDispatchPort",
+    "HubLivenessProbe",
+    "HubLivenessReader",
+    "HubManagement",
+]

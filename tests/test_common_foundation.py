@@ -269,7 +269,10 @@ def test_protocols_are_runtime_checkable():
 
 def test_hub_liveness_validation_rejects_async_runtime_protocol_match():
     import common.protocols as protocols
-    from common.protocols.hub_protocols import validate_hub_liveness_reader
+    from common.protocols.hub_protocols import (
+        validate_hub_liveness_probe,
+        validate_hub_liveness_reader,
+    )
 
     class AsyncHubLivenessReader:
         async def is_hub_online(self, hub_id: str) -> bool:
@@ -283,6 +286,33 @@ def test_hub_liveness_validation_rejects_async_runtime_protocol_match():
     assert isinstance(reader, protocols.HubLivenessReader)
     with pytest.raises(TypeError, match="is_hub_online must be synchronous"):
         validate_hub_liveness_reader(reader)
+
+    class SyncHubLivenessProbe:
+        def is_hub_online(self, hub_id: str) -> bool:
+            return True
+
+    probe = SyncHubLivenessProbe()
+
+    assert isinstance(probe, protocols.HubLivenessProbe)
+    with pytest.raises(TypeError, match="is_hub_online must be async"):
+        validate_hub_liveness_probe(probe)
+
+
+def test_hub_liveness_probe_validation_rejects_non_callable_method():
+    import common.protocols as protocols
+    from common.protocols.hub_protocols import validate_hub_liveness_probe
+
+    class NonCallableHubLivenessProbe:
+        is_hub_online = True
+
+    probe = NonCallableHubLivenessProbe()
+
+    assert isinstance(probe, protocols.HubLivenessProbe)
+    with pytest.raises(
+        TypeError,
+        match="HubLivenessProbe.is_hub_online must be callable",
+    ):
+        validate_hub_liveness_probe(probe)
 
 
 def test_event_exports_are_distinct():
@@ -512,6 +542,7 @@ def test_protocol_methods_match_design_doc():
             "stop",
         },
         protocols.HubLivenessReader: {"is_hub_online", "get_hub_owner_id"},
+        protocols.HubLivenessProbe: {"is_hub_online"},
         protocols.HubDispatchPort: {
             "send_to_hub",
             "cancel_hub_task",
@@ -664,6 +695,7 @@ def test_protocol_methods_match_design_doc():
         ],
     )
     assert not inspect.iscoroutinefunction(protocols.HubLivenessReader.is_hub_online)
+    assert inspect.iscoroutinefunction(protocols.HubLivenessProbe.is_hub_online)
     _assert_params(protocols.RoomManagement.create_room, ["self", "request"])
     _assert_params(protocols.ExecutionEngine.cancel, ["self", "room_id", "message_id"])
     _assert_params(protocols.MongoCollection.find, ["self", "query", "kwargs"])

@@ -7,7 +7,10 @@ always sees an accurate ``agent_status``.
 
 from __future__ import annotations
 
-from common.protocols.hub_protocols import validate_hub_liveness_reader
+from common.protocols.hub_protocols import (
+    validate_hub_liveness_probe,
+    validate_hub_liveness_reader,
+)
 from common.utils.logger import get_logger
 from config.settings import settings
 from models.agent import Agent, AgentStatus
@@ -15,18 +18,30 @@ from models.agent import Agent, AgentStatus
 logger = get_logger(__name__)
 
 _hub_liveness_reader = None
+_hub_liveness_probe = None
 _agent_registry_writer = None
 
 
-def bind_agent_liveness_deps(*, hub_liveness_reader=None, agent_registry_writer=None) -> None:
-    global _hub_liveness_reader, _agent_registry_writer
+def bind_agent_liveness_deps(
+    *,
+    hub_liveness_reader=None,
+    hub_liveness_probe=None,
+    agent_registry_writer=None,
+) -> None:
+    global _hub_liveness_probe, _hub_liveness_reader, _agent_registry_writer
     validate_hub_liveness_reader(hub_liveness_reader)
+    validate_hub_liveness_probe(hub_liveness_probe)
     _hub_liveness_reader = hub_liveness_reader
+    _hub_liveness_probe = hub_liveness_probe
     _agent_registry_writer = agent_registry_writer
 
 
 def reset_agent_liveness_deps() -> None:
-    bind_agent_liveness_deps(hub_liveness_reader=None, agent_registry_writer=None)
+    bind_agent_liveness_deps(
+        hub_liveness_reader=None,
+        hub_liveness_probe=None,
+        agent_registry_writer=None,
+    )
 
 
 async def check_and_sync_liveness(agent: Agent) -> Agent:
@@ -82,7 +97,8 @@ async def _check_cloud_agent(agent: Agent) -> Agent:
 
 
 async def _check_hub_agent(agent: Agent) -> Agent:
-    if _hub_liveness_reader is None or _agent_registry_writer is None:
+    no_hub_liveness = _hub_liveness_reader is None and _hub_liveness_probe is None
+    if no_hub_liveness or _agent_registry_writer is None:
         return agent
 
     if not await _is_hub_online(agent.hub_id):
@@ -98,7 +114,6 @@ async def _check_hub_agent(agent: Agent) -> Agent:
 
 
 async def _is_hub_online(hub_id: str) -> bool:
-    async_reader = getattr(_hub_liveness_reader, "is_hub_online_async", None)
-    if async_reader is not None:
-        return bool(await async_reader(hub_id))
+    if _hub_liveness_probe is not None:
+        return bool(await _hub_liveness_probe.is_hub_online(hub_id))
     return bool(_hub_liveness_reader.is_hub_online(hub_id))

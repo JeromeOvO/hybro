@@ -8,8 +8,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from models.api_key import APIKey
 from models.hub import HubAgentSync, RelayToHubEvent
-from services.agent_liveness_service import bind_agent_liveness_deps
-from services.relay_service import RelayHubLivenessReader, RelayService
+from services.agent_liveness_service import (
+    bind_agent_liveness_deps,
+    check_and_sync_liveness,
+    reset_agent_liveness_deps,
+)
+from services.relay_service import (
+    RelayHubLivenessProbe,
+    RelayHubLivenessReader,
+    RelayService,
+)
 from tests.conftest import FROZEN_TIME
 
 
@@ -66,6 +74,34 @@ class AsyncHubLivenessReader:
 
     async def get_hub_owner_id(self, hub_id: str) -> str | None:
         return "user-001"
+
+
+class SyncHubLivenessProbe:
+    def is_hub_online(self, hub_id: str) -> bool:
+        return True
+
+
+class FakeHubLivenessReader:
+    def __init__(self, online: bool) -> None:
+        self.online = online
+        self.checked: list[str] = []
+
+    def is_hub_online(self, hub_id: str) -> bool:
+        self.checked.append(hub_id)
+        return self.online
+
+    async def get_hub_owner_id(self, hub_id: str) -> str | None:
+        return "user-001"
+
+
+class FakeHubLivenessProbe:
+    def __init__(self, online: bool) -> None:
+        self.online = online
+        self.checked: list[str] = []
+
+    async def is_hub_online(self, hub_id: str) -> bool:
+        self.checked.append(hub_id)
+        return self.online
 
 
 def _make_service(mongo=None, streams=None):
@@ -129,16 +165,19 @@ class TestIsHubAlive:
         svc._hub_queues["hub-1"] = asyncio.Queue()
         assert await svc.is_hub_alive("hub-1") is True
 
-    async def test_liveness_reader_adapter_keeps_sync_protocol_and_async_authoritative_path(self):
+    async def test_liveness_reader_and_probe_split_sync_cache_from_async_authoritative_path(self):
         streams = _make_streams()
         streams.is_hub_alive = AsyncMock(return_value=True)
         svc = _make_service(streams=streams)
         svc.get_hub_owner_id = AsyncMock(return_value="user-001")
         reader = RelayHubLivenessReader(svc)
+        probe = RelayHubLivenessProbe(svc)
 
         assert not asyncio.iscoroutinefunction(reader.is_hub_online)
         assert reader.is_hub_online("hub-1") is False
-        assert await reader.is_hub_online_async("hub-1") is True
+        assert not hasattr(reader, "is_hub_online_async")
+        assert asyncio.iscoroutinefunction(probe.is_hub_online)
+        assert await probe.is_hub_online("hub-1") is True
         assert reader.is_hub_online("hub-1") is True
         assert await reader.get_hub_owner_id("hub-1") == "user-001"
         streams.is_hub_alive.assert_awaited_once_with("hub-1")
@@ -165,6 +204,43 @@ class TestIsHubAlive:
                 hub_liveness_reader=AsyncHubLivenessReader(),
                 agent_registry_writer=_make_writer(),
             )
+
+    async def test_agent_liveness_bind_rejects_sync_liveness_probe(self):
+        with pytest.raises(TypeError, match="is_hub_online must be async"):
+            bind_agent_liveness_deps(
+                hub_liveness_reader=FakeHubLivenessReader(True),
+                hub_liveness_probe=SyncHubLivenessProbe(),
+                agent_registry_writer=_make_writer(),
+            )
+
+    async def test_agent_liveness_uses_explicit_probe_before_sync_reader(self):
+        from types import SimpleNamespace
+        from models.agent import AgentStatus
+
+        reader = FakeHubLivenessReader(False)
+        probe = FakeHubLivenessProbe(True)
+        writer = _make_writer()
+        bind_agent_liveness_deps(
+            hub_liveness_reader=reader,
+            hub_liveness_probe=probe,
+            agent_registry_writer=writer,
+        )
+        agent = SimpleNamespace(
+            agent_id="agent-1",
+            hub_id="hub-1",
+            source="hub",
+            agent_status=AgentStatus.active,
+        )
+
+        try:
+            result = await check_and_sync_liveness(agent)
+        finally:
+            reset_agent_liveness_deps()
+
+        assert result.agent_status == AgentStatus.active
+        assert reader.checked == []
+        assert probe.checked == ["hub-1"]
+        writer.mark_hub_agents_offline.assert_not_awaited()
 
 
 @pytest.mark.asyncio
