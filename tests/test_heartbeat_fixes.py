@@ -131,6 +131,7 @@ class TestIsHubAlive:
         streams = _make_streams()
         streams.is_hub_alive = AsyncMock(return_value=True)
         svc = _make_service(streams=streams)
+        svc.get_hub_owner_id = AsyncMock(return_value="user-001")
         reader = RelayHubLivenessReader(svc)
 
         assert not asyncio.iscoroutinefunction(reader.is_hub_online)
@@ -139,6 +140,14 @@ class TestIsHubAlive:
         assert reader.is_hub_online("hub-1") is True
         assert await reader.get_hub_owner_id("hub-1") == "user-001"
         streams.is_hub_alive.assert_awaited_once_with("hub-1")
+        svc.get_hub_owner_id.assert_awaited_once_with("hub-1")
+
+    async def test_relay_get_hub_owner_id_uses_public_relay_method(self):
+        mongo = _make_mongo()
+        svc = _make_service(mongo=mongo)
+
+        assert await svc.get_hub_owner_id("hub-1") == "user-001"
+        mongo.get_hub.assert_awaited_once_with("hub-1")
 
     async def test_liveness_reader_in_memory_path_returns_bool(self):
         svc = _make_service(streams=None)

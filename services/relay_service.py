@@ -153,6 +153,10 @@ class RelayService:
         logger.info("Hub %s registered for user %s", hub_id, api_key.user_id)
         return hub
 
+    async def get_hub_owner_id(self, hub_id: str) -> str | None:
+        hub = await self._mongo.get_hub(hub_id)
+        return hub.get("user_id") if hub else None
+
     # ------------------------------------------------------------------
     # SSE connection
     # ------------------------------------------------------------------
@@ -773,8 +777,7 @@ class RelayHubLivenessReader:
         return await self._relay.is_hub_alive(hub_id)
 
     async def get_hub_owner_id(self, hub_id: str) -> str | None:
-        hub = await self._relay._mongo.get_hub(hub_id)
-        return hub.get("user_id") if hub else None
+        return await self._relay.get_hub_owner_id(hub_id)
 
 
 def init_relay_service(
