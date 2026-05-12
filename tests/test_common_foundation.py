@@ -267,21 +267,21 @@ def test_protocols_are_runtime_checkable():
             assert getattr(obj, "_is_runtime_protocol", False), name
 
 
-def test_hub_liveness_validation_rejects_sync_runtime_protocol_match():
+def test_hub_liveness_validation_rejects_async_runtime_protocol_match():
     import common.protocols as protocols
     from common.protocols.hub_protocols import validate_hub_liveness_reader
 
-    class SyncHubLivenessReader:
-        def is_hub_online(self, hub_id: str) -> bool:
+    class AsyncHubLivenessReader:
+        async def is_hub_online(self, hub_id: str) -> bool:
             return True
 
         async def get_hub_owner_id(self, hub_id: str) -> str | None:
             return "user-1"
 
-    reader = SyncHubLivenessReader()
+    reader = AsyncHubLivenessReader()
 
     assert isinstance(reader, protocols.HubLivenessReader)
-    with pytest.raises(TypeError, match="is_hub_online must be async"):
+    with pytest.raises(TypeError, match="is_hub_online must be synchronous"):
         validate_hub_liveness_reader(reader)
 
 
@@ -663,7 +663,7 @@ def test_protocol_methods_match_design_doc():
             "is_debate_mode",
         ],
     )
-    assert inspect.iscoroutinefunction(protocols.HubLivenessReader.is_hub_online)
+    assert not inspect.iscoroutinefunction(protocols.HubLivenessReader.is_hub_online)
     _assert_params(protocols.RoomManagement.create_room, ["self", "request"])
     _assert_params(protocols.ExecutionEngine.cancel, ["self", "room_id", "message_id"])
     _assert_params(protocols.MongoCollection.find, ["self", "query", "kwargs"])

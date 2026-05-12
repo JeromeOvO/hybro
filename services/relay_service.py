@@ -87,6 +87,7 @@ class RelayService:
         self._streams: RelayStreamService | None = None
         # For Redis Streams path: local disconnect signaling
         self._hub_disconnect_events: dict[str, asyncio.Event] = {}
+        self._hub_liveness_cache: dict[str, bool] = {}
 
         self._leader: LeaderElection | None = None
         self._agent_registry_writer = None
@@ -179,6 +180,7 @@ class RelayService:
         if self._streams:
             # --- Redis Streams path ---
             await self._streams.record_heartbeat(hub_id)
+            self._hub_liveness_cache[hub_id] = True
 
             # Signal any stale local connection on this instance
             old_event = self._hub_disconnect_events.get(hub_id)
@@ -213,6 +215,8 @@ class RelayService:
                 )
                 if not result:
                     logger.info("Hub %s: connection superseded", hub_id)
+                else:
+                    self._hub_liveness_cache[hub_id] = False
         else:
             # --- In-memory Queue path (existing code, unchanged) ---
             queue: asyncio.Queue = asyncio.Queue()
@@ -293,6 +297,7 @@ class RelayService:
             if not hub_doc or hub_doc["user_id"] != api_key.user_id:
                 raise PermissionError("Hub not owned by this API key")
             await self._streams.record_heartbeat(hub_id)
+            self._hub_liveness_cache[hub_id] = True
         else:
             if hub_id not in self._hub_queues:
                 raise PermissionError(
@@ -317,7 +322,15 @@ class RelayService:
         reading MongoDB ``is_online`` directly.
         """
         if self._streams:
-            return await self._streams.is_hub_alive(hub_id)
+            is_alive = await self._streams.is_hub_alive(hub_id)
+        else:
+            is_alive = self._is_hub_connected_locally(hub_id)
+        self._hub_liveness_cache[hub_id] = is_alive
+        return is_alive
+
+    def is_hub_alive_cached(self, hub_id: str) -> bool:
+        if self._streams:
+            return self._hub_liveness_cache.get(hub_id, False)
         return self._is_hub_connected_locally(hub_id)
 
     async def mark_hub_agents_offline(
@@ -753,7 +766,10 @@ class RelayHubLivenessReader:
     def __init__(self, relay: RelayService) -> None:
         self._relay = relay
 
-    async def is_hub_online(self, hub_id: str) -> bool:
+    def is_hub_online(self, hub_id: str) -> bool:
+        return self._relay.is_hub_alive_cached(hub_id)
+
+    async def is_hub_online_async(self, hub_id: str) -> bool:
         return await self._relay.is_hub_alive(hub_id)
 
     async def get_hub_owner_id(self, hub_id: str) -> str | None:

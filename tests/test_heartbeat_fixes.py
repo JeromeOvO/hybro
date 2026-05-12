@@ -58,8 +58,8 @@ def _make_writer():
     return writer
 
 
-class SyncHubLivenessReader:
-    def is_hub_online(self, hub_id: str) -> bool:
+class AsyncHubLivenessReader:
+    async def is_hub_online(self, hub_id: str) -> bool:
         return True
 
     async def get_hub_owner_id(self, hub_id: str) -> str | None:
@@ -127,14 +127,16 @@ class TestIsHubAlive:
         svc._hub_queues["hub-1"] = asyncio.Queue()
         assert await svc.is_hub_alive("hub-1") is True
 
-    async def test_liveness_reader_adapter_delegates_to_relay_is_hub_alive(self):
+    async def test_liveness_reader_adapter_keeps_sync_protocol_and_async_authoritative_path(self):
         streams = _make_streams()
         streams.is_hub_alive = AsyncMock(return_value=True)
         svc = _make_service(streams=streams)
         reader = RelayHubLivenessReader(svc)
 
-        assert asyncio.iscoroutinefunction(reader.is_hub_online)
-        assert await reader.is_hub_online("hub-1") is True
+        assert not asyncio.iscoroutinefunction(reader.is_hub_online)
+        assert reader.is_hub_online("hub-1") is False
+        assert await reader.is_hub_online_async("hub-1") is True
+        assert reader.is_hub_online("hub-1") is True
         assert await reader.get_hub_owner_id("hub-1") == "user-001"
         streams.is_hub_alive.assert_awaited_once_with("hub-1")
 
@@ -142,14 +144,14 @@ class TestIsHubAlive:
         svc = _make_service(streams=None)
         reader = RelayHubLivenessReader(svc)
 
-        assert await reader.is_hub_online("hub-1") is False
+        assert reader.is_hub_online("hub-1") is False
         svc._hub_queues["hub-1"] = asyncio.Queue()
-        assert await reader.is_hub_online("hub-1") is True
+        assert reader.is_hub_online("hub-1") is True
 
-    async def test_agent_liveness_bind_rejects_sync_liveness_reader(self):
-        with pytest.raises(TypeError, match="is_hub_online must be async"):
+    async def test_agent_liveness_bind_rejects_async_liveness_reader(self):
+        with pytest.raises(TypeError, match="is_hub_online must be synchronous"):
             bind_agent_liveness_deps(
-                hub_liveness_reader=SyncHubLivenessReader(),
+                hub_liveness_reader=AsyncHubLivenessReader(),
                 agent_registry_writer=_make_writer(),
             )
 

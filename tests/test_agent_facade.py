@@ -956,7 +956,7 @@ async def test_facade_direct_callability_fails_closed_for_inactive_and_offline_h
 
 
 @pytest.mark.asyncio
-async def test_facade_uses_async_hub_liveness_reader():
+async def test_facade_uses_sync_hub_liveness_reader():
     from agent import AgentFacade
 
     repo = FakeRepository(
@@ -992,11 +992,11 @@ async def test_facade_uses_async_hub_liveness_reader():
     assert hub.checked == ["hub-1", "hub-1"]
 
 
-def test_facade_rejects_sync_hub_liveness_reader_at_bind_time():
+def test_facade_rejects_async_hub_liveness_reader_at_bind_time():
     facade, _, _, _, _ = _facade_with_docs([])
 
-    with pytest.raises(TypeError, match="is_hub_online must be async"):
-        facade.bind_hub_liveness(SyncFakeHubLiveness())
+    with pytest.raises(TypeError, match="is_hub_online must be synchronous"):
+        facade.bind_hub_liveness(AsyncFakeHubLiveness())
 
 
 class FakeRepository:
@@ -1208,7 +1208,7 @@ class FakeHubLiveness:
         self._online = online
         self.checked: list[str] = []
 
-    async def is_hub_online(self, hub_id: str) -> bool:
+    def is_hub_online(self, hub_id: str) -> bool:
         self.checked.append(hub_id)
         return self._online.get(hub_id, False)
 
@@ -1216,8 +1216,8 @@ class FakeHubLiveness:
         return "user-1"
 
 
-class SyncFakeHubLiveness:
-    def is_hub_online(self, hub_id: str) -> bool:
+class AsyncFakeHubLiveness:
+    async def is_hub_online(self, hub_id: str) -> bool:
         return True
 
     async def get_hub_owner_id(self, hub_id: str) -> str | None:
