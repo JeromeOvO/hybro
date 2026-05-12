@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from models.api_key import APIKey
 from models.hub import HubAgentSync
+from services.agent_liveness_service import bind_agent_liveness_deps
 from services.relay_service import RelayHubLivenessReader, RelayService
 from tests.conftest import FROZEN_TIME
 
@@ -55,6 +56,14 @@ def _make_writer():
     writer = MagicMock()
     writer.mark_hub_agents_offline = AsyncMock()
     return writer
+
+
+class SyncHubLivenessReader:
+    def is_hub_online(self, hub_id: str) -> bool:
+        return True
+
+    async def get_hub_owner_id(self, hub_id: str) -> str | None:
+        return "user-001"
 
 
 def _make_service(mongo=None, streams=None):
@@ -136,6 +145,13 @@ class TestIsHubAlive:
         assert await reader.is_hub_online("hub-1") is False
         svc._hub_queues["hub-1"] = asyncio.Queue()
         assert await reader.is_hub_online("hub-1") is True
+
+    async def test_agent_liveness_bind_rejects_sync_liveness_reader(self):
+        with pytest.raises(TypeError, match="is_hub_online must be async"):
+            bind_agent_liveness_deps(
+                hub_liveness_reader=SyncHubLivenessReader(),
+                agent_registry_writer=_make_writer(),
+            )
 
 
 @pytest.mark.asyncio

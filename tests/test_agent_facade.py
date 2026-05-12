@@ -992,6 +992,13 @@ async def test_facade_uses_async_hub_liveness_reader():
     assert hub.checked == ["hub-1", "hub-1"]
 
 
+def test_facade_rejects_sync_hub_liveness_reader_at_bind_time():
+    facade, _, _, _, _ = _facade_with_docs([])
+
+    with pytest.raises(TypeError, match="is_hub_online must be async"):
+        facade.bind_hub_liveness(SyncFakeHubLiveness())
+
+
 class FakeRepository:
     def __init__(self, docs: list[dict]) -> None:
         self.docs = {doc["agent_id"]: _copy_doc(doc) for doc in docs}
@@ -1204,6 +1211,17 @@ class FakeHubLiveness:
     async def is_hub_online(self, hub_id: str) -> bool:
         self.checked.append(hub_id)
         return self._online.get(hub_id, False)
+
+    async def get_hub_owner_id(self, hub_id: str) -> str | None:
+        return "user-1"
+
+
+class SyncFakeHubLiveness:
+    def is_hub_online(self, hub_id: str) -> bool:
+        return True
+
+    async def get_hub_owner_id(self, hub_id: str) -> str | None:
+        return "user-1"
 
 
 class FakeExclusionReader:

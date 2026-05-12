@@ -7,6 +7,7 @@ always sees an accurate ``agent_status``.
 
 from __future__ import annotations
 
+from common.protocols.hub_protocols import validate_hub_liveness_reader
 from common.utils.logger import get_logger
 from config.settings import settings
 from models.agent import Agent, AgentStatus
@@ -19,6 +20,7 @@ _agent_registry_writer = None
 
 def bind_agent_liveness_deps(*, hub_liveness_reader=None, agent_registry_writer=None) -> None:
     global _hub_liveness_reader, _agent_registry_writer
+    validate_hub_liveness_reader(hub_liveness_reader)
     _hub_liveness_reader = hub_liveness_reader
     _agent_registry_writer = agent_registry_writer
 

@@ -267,6 +267,24 @@ def test_protocols_are_runtime_checkable():
             assert getattr(obj, "_is_runtime_protocol", False), name
 
 
+def test_hub_liveness_validation_rejects_sync_runtime_protocol_match():
+    import common.protocols as protocols
+    from common.protocols.hub_protocols import validate_hub_liveness_reader
+
+    class SyncHubLivenessReader:
+        def is_hub_online(self, hub_id: str) -> bool:
+            return True
+
+        async def get_hub_owner_id(self, hub_id: str) -> str | None:
+            return "user-1"
+
+    reader = SyncHubLivenessReader()
+
+    assert isinstance(reader, protocols.HubLivenessReader)
+    with pytest.raises(TypeError, match="is_hub_online must be async"):
+        validate_hub_liveness_reader(reader)
+
+
 def test_event_exports_are_distinct():
     assert DeliveryEvent is not InternalDomainEvent
     assert InternalDomainEvent.__name__ == "InternalDomainEvent"

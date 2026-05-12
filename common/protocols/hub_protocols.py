@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
-from typing import Protocol, runtime_checkable
+import inspect
+from typing import Any, Protocol, runtime_checkable
 
 from common.dto import HubDispatchCommand, HubDispatchResult, HubInfo
 
@@ -19,6 +20,18 @@ class HubManagement(Protocol):
 class HubLivenessReader(Protocol):
     async def is_hub_online(self, hub_id: str) -> bool: ...
     async def get_hub_owner_id(self, hub_id: str) -> str | None: ...
+
+
+def validate_hub_liveness_reader(reader: Any | None) -> None:
+    if reader is None:
+        return
+    for method_name in ("is_hub_online", "get_hub_owner_id"):
+        method = getattr(reader, method_name, None)
+        if not inspect.iscoroutinefunction(method):
+            raise TypeError(
+                f"HubLivenessReader.{method_name} must be async; "
+                "sync implementations pass runtime Protocol checks but cannot be awaited"
+            )
 
 
 @runtime_checkable

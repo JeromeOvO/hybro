@@ -36,6 +36,7 @@ from common.protocols import (
     LLMProvider,
     VectorDAL,
 )
+from common.protocols.hub_protocols import validate_hub_liveness_reader
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ class AgentFacade:
         self._vector = vector
         self._llm_provider = llm_provider
         self._card_resolver = card_resolver
+        validate_hub_liveness_reader(hub_liveness)
         self._hub_liveness = hub_liveness
         self._exclusion_reader = exclusion_reader
         self._agent_index = agent_index
@@ -81,6 +83,7 @@ class AgentFacade:
         self._tracer = tracer or NoopTracingProvider()
 
     def bind_hub_liveness(self, hub_liveness: HubLivenessReader | None) -> None:
+        validate_hub_liveness_reader(hub_liveness)
         self._hub_liveness = hub_liveness
 
     def bind_exclusion_reader(
