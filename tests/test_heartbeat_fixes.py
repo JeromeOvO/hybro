@@ -1,12 +1,13 @@
 """Tests for hub heartbeat fixes: SSE refresh, self-heal, connection guard, ownership check."""
 
 import asyncio
+import logging
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from models.api_key import APIKey
-from models.hub import HubAgentSync
+from models.hub import HubAgentSync, RelayToHubEvent
 from services.agent_liveness_service import bind_agent_liveness_deps
 from services.relay_service import RelayHubLivenessReader, RelayService
 from tests.conftest import FROZEN_TIME
@@ -49,6 +50,7 @@ def _make_streams():
     streams.record_heartbeat = AsyncMock()
     streams.is_hub_alive = AsyncMock(return_value=True)
     streams.read_events = AsyncMock(return_value=[])
+    streams.push_event = AsyncMock(return_value="1-0")
     return streams
 
 
@@ -308,6 +310,58 @@ class TestHeartbeatCheckConnectionIdGuard:
         mongo.update_hub_status_if_current.assert_awaited_once()
         mongo.agents_collection.update_many.assert_not_awaited()
 
+    async def test_pass1_logs_expiry_with_connection_and_local_context(self, caplog):
+        mongo = _make_mongo()
+        streams = _make_streams()
+        streams.is_hub_alive = AsyncMock(return_value=False)
+
+        online_cursor = MagicMock()
+        online_cursor.to_list = AsyncMock(return_value=[
+            {"hub_id": "hub-stale", "connection_id": "conn-old-123"},
+        ])
+        offline_cursor = MagicMock()
+        offline_cursor.to_list = AsyncMock(return_value=[])
+
+        def find_router(query, projection):
+            if query.get("is_online") is True:
+                return online_cursor
+            return offline_cursor
+
+        mongo.hubs_collection.find = MagicMock(side_effect=find_router)
+        svc = _make_service(mongo=mongo, streams=streams)
+        svc.bind_agent_registry_writer(_make_writer())
+        svc._hub_disconnect_events["hub-stale"] = asyncio.Event()
+
+        with caplog.at_level(logging.WARNING, logger="services.relay_service"):
+            await svc._do_heartbeat_check(stale_threshold=90)
+
+        assert "hub-stale" in caplog.text
+        assert "connection_id=conn-old-123" in caplog.text
+        assert "redis_alive=False" in caplog.text
+        assert "local_disconnect_event=True" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_streams_push_logs_redis_dead_rejection(caplog):
+    streams = _make_streams()
+    streams.is_hub_alive = AsyncMock(return_value=False)
+    svc = _make_service(streams=streams)
+    event = RelayToHubEvent(
+        type="user_message",
+        room_id="room-1",
+        agent_message_id="msg-1",
+        local_agent_id="local-1",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="services.relay_service"):
+        delivered = await svc.push_to_hub("hub-dead", event)
+
+    assert delivered is False
+    assert "hub-dead" in caplog.text
+    assert "event_type=user_message" in caplog.text
+    assert "agent_message_id=msg-1" in caplog.text
+    assert "redis_alive=False" in caplog.text
+
 
 # ===========================================================================
 # Fix 1: SSE loop refreshes heartbeat on every iteration
@@ -565,6 +619,24 @@ class TestHeartbeatOwnershipCheck:
 
         with pytest.raises(PermissionError, match="not owned"):
             await svc.record_hub_heartbeat("hub-1", api_key)
+
+    async def test_rejected_heartbeat_logs_hub_owner_and_caller(self, caplog):
+        mongo = _make_mongo()
+        mongo.get_hub = AsyncMock(
+            return_value={"hub_id": "hub-1", "user_id": "user-001"}
+        )
+        streams = _make_streams()
+        svc = _make_service(mongo=mongo, streams=streams)
+        api_key = _make_api_key(user_id="user-attacker")
+
+        with caplog.at_level(logging.WARNING, logger="services.relay_service"):
+            with pytest.raises(PermissionError, match="not owned"):
+                await svc.record_hub_heartbeat("hub-1", api_key)
+
+        assert "hub-1" in caplog.text
+        assert "owner_id=user-001" in caplog.text
+        assert "caller_user_id=user-attacker" in caplog.text
+        assert "heartbeat rejected" in caplog.text
 
     async def test_rejects_heartbeat_for_nonexistent_hub(self):
         """Heartbeat for a hub that doesn't exist is rejected."""
