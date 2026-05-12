@@ -14,7 +14,7 @@ def agent_info_from_doc(doc: dict[str, Any]) -> AgentInfo:
         description=card.get("description"),
         url=card.get("url"),
         provider_id=doc.get("provider_id"),
-        status=_status_value(doc.get("agent_status", "active")),
+        status=_status_value(doc.get("agent_status", "active")) or "active",
         capabilities=list(doc.get("capabilities") or _card_capabilities(card)),
         source=doc.get("source", "cloud"),
         hub_id=doc.get("hub_id"),
@@ -126,6 +126,6 @@ def _card_capabilities(card: dict[str, Any]) -> list[str]:
     ]
 
 
-def _status_value(status: Any) -> str:
+def _status_value(status: Any, *, default: str | None = "active") -> str | None:
     value = getattr(status, "value", status)
-    return str(value) if value is not None else "active"
+    return str(value) if value is not None else default

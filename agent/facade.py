@@ -11,6 +11,7 @@ from agent.constants import AGENT_CARD_NO_OVERWRITE
 from agent.matching import rank_agent_docs, select_top_matches
 from agent.public_url import PublicUrlGenerator
 from agent.translators import (
+    _status_value,
     agent_card_from_doc,
     agent_info_from_doc,
     docs_by_vector_order,
@@ -112,11 +113,17 @@ class AgentFacade:
 
     async def is_agent_healthy(self, agent_id: str) -> bool:
         doc = await self._repository.get_by_id(agent_id)
-        return doc is not None and _status_value(doc.get("agent_status")) == "active"
+        return (
+            doc is not None
+            and _status_value(doc.get("agent_status"), default=None) == "active"
+        )
 
     async def is_directly_callable(self, agent_id: str) -> bool:
         doc = await self._repository.get_by_id(agent_id)
-        if doc is None or _status_value(doc.get("agent_status")) != "active":
+        if (
+            doc is None
+            or _status_value(doc.get("agent_status"), default=None) != "active"
+        ):
             return False
         if doc.get("source") != "hub" and not doc.get("hub_id"):
             return True
@@ -397,11 +404,13 @@ class AgentFacade:
         *,
         user_id: str | None = None,
         active_only: bool = False,
+        query: dict[str, Any] | None = None,
         limit: int = 0,
     ) -> list[AgentInfo]:
         docs = await self._repository.list_visible(
             user_id=user_id,
             active_only=active_only,
+            query=query,
             limit=limit,
         )
         enriched = await self._with_hub_liveness_many(docs)
@@ -608,11 +617,6 @@ class AgentFacade:
             value = doc.get(key)
             if value is not None and (not isinstance(value, int) or value <= 0):
                 raise ValueError(f"{key} must be a positive integer or None")
-
-
-def _status_value(status: Any) -> str | None:
-    value = getattr(status, "value", status)
-    return str(value) if value is not None else None
 
 
 def _description_changed(before: dict, after: dict) -> bool:

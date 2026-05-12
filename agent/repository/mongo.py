@@ -5,6 +5,8 @@ from common.protocols import MongoDAL
 from agent.constants import AGENT_CARD_NO_OVERWRITE
 from agent.url_utils import normalize_agent_url
 
+_LEGACY_NORMALIZED_URL_SCAN_LIMIT = 500
+
 
 class AgentMongoRepository:
     def __init__(self, mongo: MongoDAL, collection_name: str = "agents") -> None:
@@ -38,7 +40,10 @@ class AgentMongoRepository:
         legacy_query: dict = {"normalized_url": {"$exists": False}}
         if provider_id is not None:
             legacy_query["provider_id"] = provider_id
-        legacy_docs = await self._agents.find(legacy_query)
+        legacy_docs = await self._agents.find(
+            legacy_query,
+            limit=_LEGACY_NORMALIZED_URL_SCAN_LIMIT,
+        )
         for doc in legacy_docs:
             card_url = (doc.get("agent_card") or {}).get("url")
             if card_url and normalize_agent_url(card_url) == normalized_url:
@@ -51,20 +56,26 @@ class AgentMongoRepository:
         user_id: str | None = None,
         active_only: bool = False,
         agent_ids: list[str] | None = None,
+        query: dict | None = None,
         limit: int = 0,
     ) -> list[dict]:
         visibility = [{"is_public": True}, {"is_public": {"$exists": False}}]
         if user_id is not None:
             visibility.append({"provider_id": user_id})
 
-        query: dict = {"$or": visibility}
+        conditions: list[dict] = []
+        if query:
+            conditions.append(dict(query))
+        conditions.append({"$or": visibility})
         if active_only:
-            query["agent_status"] = "active"
+            conditions.append({"agent_status": "active"})
         if agent_ids is not None:
-            query["agent_id"] = {"$in": agent_ids}
+            conditions.append({"agent_id": {"$in": agent_ids}})
+
+        final_query = conditions[0] if len(conditions) == 1 else {"$and": conditions}
 
         kwargs = {"limit": limit} if limit else {}
-        return await self._agents.find(query, **kwargs)
+        return await self._agents.find(final_query, **kwargs)
 
     async def upsert(self, agent_id: str, data: dict) -> None:
         await self._agents.update_one(
@@ -146,7 +157,7 @@ class AgentMongoRepository:
     async def prune_missing_hub_agents(
         self, hub_id: str, active_agent_ids: list[str]
     ) -> int:
-        return await self._agents.update_many(
+        hub_pruned = await self._agents.update_many(
             {
                 "hub_id": hub_id,
                 "source": "hub",
@@ -154,6 +165,18 @@ class AgentMongoRepository:
             },
             {"$set": {"agent_status": "inactive"}},
         )
+        enriched_pruned = await self._agents.update_many(
+            {
+                "hub_id": hub_id,
+                "source": {"$ne": "hub"},
+                "agent_id": {"$nin": active_agent_ids},
+            },
+            {
+                "$set": {"agent_status": "inactive"},
+                "$unset": {"hub_id": "", "local_agent_id": ""},
+            },
+        )
+        return hub_pruned + enriched_pruned
 
     async def activate_agents(self, agent_ids: list[str]) -> int:
         if not agent_ids:

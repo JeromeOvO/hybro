@@ -23,6 +23,10 @@ def bind_agent_liveness_deps(*, hub_liveness_reader=None, agent_registry_writer=
     _agent_registry_writer = agent_registry_writer
 
 
+def reset_agent_liveness_deps() -> None:
+    bind_agent_liveness_deps(hub_liveness_reader=None, agent_registry_writer=None)
+
+
 async def check_and_sync_liveness(agent: Agent) -> Agent:
     """Probe the agent and sync ``agent_status`` in the DB if it changed.
 

@@ -80,6 +80,15 @@ async def test_public_url_generation_uses_uuid_fallback_when_hash_is_taken():
     ) == "https://writer-12345678.hybro.ai"
 
 
+def test_public_url_normalization_only_strips_standalone_ai():
+    from agent.public_url import normalize_subdomain
+
+    assert normalize_subdomain("Aiden") == "aiden"
+    assert normalize_subdomain("Maintenance") == "maintenance"
+    assert normalize_subdomain("AI Assistant") == "assistant"
+    assert normalize_subdomain("my ai bot") == "my"
+
+
 def test_matching_helpers_score_capabilities_and_cutoffs():
     from agent.matching import (
         compute_capability_score,
@@ -539,6 +548,7 @@ async def test_facade_match_applies_visibility_filter_and_returns_agent_results(
         "user_id": "u1",
         "active_only": True,
         "agent_ids": ["public", "owned-private", "other-private", "inactive"],
+        "query": None,
         "limit": 0,
     }
 
@@ -1053,10 +1063,12 @@ class FakeRepository:
         for doc in self.docs.values():
             if (
                 doc.get("hub_id") == hub_id
-                and doc.get("source") == "hub"
                 and doc["agent_id"] not in active_agent_ids
             ):
                 doc["agent_status"] = "inactive"
+                if doc.get("source") != "hub":
+                    doc.pop("hub_id", None)
+                    doc.pop("local_agent_id", None)
                 count += 1
         return count
 
@@ -1105,6 +1117,7 @@ class FakeRepository:
         user_id: str | None = None,
         active_only: bool = False,
         agent_ids: list[str] | None = None,
+        query: dict | None = None,
         limit: int = 0,
     ) -> list[dict]:
         self.list_visible_calls.append(
@@ -1112,6 +1125,7 @@ class FakeRepository:
                 "user_id": user_id,
                 "active_only": active_only,
                 "agent_ids": agent_ids,
+                "query": query,
                 "limit": limit,
             }
         )
@@ -1121,6 +1135,8 @@ class FakeRepository:
             if allowed_ids is not None and doc["agent_id"] not in allowed_ids:
                 continue
             if active_only and doc.get("agent_status") != "active":
+                continue
+            if query and not _matches_doc(doc, query):
                 continue
             if doc.get("is_public", True) or (
                 user_id is not None and doc.get("provider_id") == user_id
@@ -1233,6 +1249,21 @@ def _facade_with_docs(
         llm,
         hub,
     )
+
+
+def _matches_doc(doc: dict, query: dict) -> bool:
+    for key, expected in query.items():
+        if key == "$and":
+            if not all(_matches_doc(doc, branch) for branch in expected):
+                return False
+            continue
+        if key == "$or":
+            if not any(_matches_doc(doc, branch) for branch in expected):
+                return False
+            continue
+        if doc.get(key) != expected:
+            return False
+    return True
 
 
 def _copy_doc(doc: dict | None) -> dict | None:

@@ -172,6 +172,28 @@ async def test_list_visible_filters_public_owned_and_active_agents():
 
 
 @pytest.mark.asyncio
+async def test_list_visible_combines_query_with_visibility_filters():
+    repo, collection = _repo([
+        {"agent_id": "matching", "is_public": True, "agent_status": "active"},
+        {"agent_id": "hidden", "is_public": True, "agent_status": "inactive"},
+        {"agent_id": "private", "is_public": False, "agent_status": "active"},
+    ])
+
+    result = await repo.list_visible(query={"agent_status": "active"})
+
+    assert [doc["agent_id"] for doc in result] == ["matching"]
+    assert collection.find_calls[-1] == (
+        {
+            "$and": [
+                {"agent_status": "active"},
+                {"$or": [{"is_public": True}, {"is_public": {"$exists": False}}]},
+            ]
+        },
+        {},
+    )
+
+
+@pytest.mark.asyncio
 async def test_find_by_normalized_url_checks_field_then_legacy_card_url():
     repo, collection = _repo([
         {
@@ -234,6 +256,13 @@ async def test_hub_agent_upsert_prune_activate_and_index_hash():
             "description_hash": "old",
         },
         {"agent_id": "missing", "hub_id": "hub-1", "source": "hub", "agent_status": "active"},
+        {
+            "agent_id": "enriched",
+            "hub_id": "hub-1",
+            "local_agent_id": "local-enriched",
+            "source": "cloud",
+            "agent_status": "active",
+        },
     ])
 
     stable_id = await repo.upsert_hub_agent(
@@ -251,11 +280,34 @@ async def test_hub_agent_upsert_prune_activate_and_index_hash():
 
     assert stable_id == "existing"
     assert new_id == "new"
-    assert pruned == 1
+    assert pruned == 2
     assert activated == 2
+    enriched = await repo.get_by_id("enriched")
+    assert enriched["agent_status"] == "inactive"
+    assert "hub_id" not in enriched
+    assert "local_agent_id" not in enriched
     assert await repo.get_indexed_description_hash("existing") == "old"
     await repo.set_indexed_description_hash("existing", "new-hash")
     assert await repo.get_indexed_description_hash("existing") == "new-hash"
+
+
+@pytest.mark.asyncio
+async def test_find_by_normalized_url_limits_legacy_fallback_scan():
+    repo, collection = _repo([
+        {
+            "agent_id": "legacy",
+            "provider_id": "u1",
+            "agent_card": {"url": "https://legacy.example/.well-known/agent.json"},
+        }
+    ])
+
+    found = await repo.find_by_normalized_url("https://legacy.example", provider_id="u1")
+
+    assert found["agent_id"] == "legacy"
+    assert collection.find_calls[-1] == (
+        {"normalized_url": {"$exists": False}, "provider_id": "u1"},
+        {"limit": 500},
+    )
 
 
 @pytest.mark.asyncio

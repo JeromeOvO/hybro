@@ -21,6 +21,7 @@ class AgentRepository(Protocol):
         user_id: str | None = None,
         active_only: bool = False,
         agent_ids: list[str] | None = None,
+        query: dict | None = None,
         limit: int = 0,
     ) -> list[dict]: ...
     async def update(self, agent_id: str, updates: dict) -> dict | None: ...

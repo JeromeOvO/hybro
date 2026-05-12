@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from a2a.types import AgentCapabilities, AgentCard
+from a2a.types import AgentCard
 
 from a2a_adapter.translators import a2a_card_to_snapshot
 # Deprecated compatibility re-export for legacy service imports.
@@ -227,7 +227,8 @@ class AgentService:
         infos = await self._require_facade().list_visible_agents(
             user_id=request.user_id,
             active_only=False,
-            limit=request.limit if hasattr(request, "limit") else 0,
+            query=request.query,
+            limit=request.limit,
         )
         return AgentCenterResponse(
             agents=[_agent_info_to_legacy_agent(info) for info in infos],
@@ -445,8 +446,6 @@ def _legacy_card_from_raw(raw: dict) -> AgentCard:
     raw.setdefault("capabilities", {})
     if raw["capabilities"] is None:
         raw["capabilities"] = {}
-    if isinstance(raw["capabilities"], AgentCapabilities):
-        return AgentCard(**raw)
     return AgentCard(**raw)
 
 

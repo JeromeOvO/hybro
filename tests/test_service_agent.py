@@ -448,6 +448,31 @@ class TestGetAllActiveAgents:
             active_only=True,
         )
 
+    @pytest.mark.asyncio
+    async def test_get_agents_with_conditions_passes_query_and_limit(
+        self, agent_service, mock_user
+    ):
+        """Should preserve legacy query filtering for conditional agent lists."""
+        facade = MagicMock()
+        facade.list_visible_agents = AsyncMock(return_value=[])
+        agent_service.bind_facade(facade)
+        query = {"agent_status": "active"}
+
+        request = AgentCenterRequest(
+            user_id=mock_user.user_id,
+            query=query,
+            limit=7,
+        )
+        result = await agent_service.get_agents_with_conditions(request)
+
+        assert result.success is True
+        facade.list_visible_agents.assert_called_once_with(
+            user_id=mock_user.user_id,
+            active_only=False,
+            query=query,
+            limit=7,
+        )
+
 
 # =============================================================================
 # Agent Update Tests

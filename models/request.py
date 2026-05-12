@@ -130,6 +130,8 @@ class AgentCenterRequest(BaseModel):
     agent_url: str | None = None
     provider_id: str | None = None
     user_id: str | None = None  # For visibility filtering (optional auth)
+    query: dict[str, Any] | None = None
+    limit: int = 0
     agent_card: AgentCard | None = None
     call_increment: int | None = 0
     call_success_increment: int | None = 0
