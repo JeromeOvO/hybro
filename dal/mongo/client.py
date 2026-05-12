@@ -37,6 +37,14 @@ class MongoCollectionAdapter:
 
         return await cursor.to_list(length=length)
 
+    async def find_one_and_update(
+        self,
+        query: dict,
+        update: dict,
+        **kwargs,
+    ) -> dict | None:
+        return await self._collection.find_one_and_update(query, update, **kwargs)
+
     async def insert_one(self, document: dict) -> str:
         result = await self._collection.insert_one(document)
         return str(result.inserted_id)

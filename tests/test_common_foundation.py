@@ -267,6 +267,24 @@ def test_protocols_are_runtime_checkable():
             assert getattr(obj, "_is_runtime_protocol", False), name
 
 
+def test_hub_liveness_validation_rejects_async_runtime_protocol_match():
+    import common.protocols as protocols
+    from common.protocols.hub_protocols import validate_hub_liveness_reader
+
+    class AsyncHubLivenessReader:
+        async def is_hub_online(self, hub_id: str) -> bool:
+            return True
+
+        async def get_hub_owner_id(self, hub_id: str) -> str | None:
+            return "user-1"
+
+    reader = AsyncHubLivenessReader()
+
+    assert isinstance(reader, protocols.HubLivenessReader)
+    with pytest.raises(TypeError, match="is_hub_online must be synchronous"):
+        validate_hub_liveness_reader(reader)
+
+
 def test_event_exports_are_distinct():
     assert DeliveryEvent is not InternalDomainEvent
     assert InternalDomainEvent.__name__ == "InternalDomainEvent"
@@ -414,6 +432,8 @@ def test_protocol_methods_match_design_doc():
             "is_directly_callable",
         },
         protocols.AgentMatcher: {"match_agents"},
+        protocols.AgentMessageMatcher: {"match_for_message"},
+        protocols.AgentExclusionReader: {"get_excluded_agent_ids"},
         protocols.AgentManagement: {
             "register_agent",
             "delete_agent",
@@ -522,6 +542,7 @@ def test_protocol_methods_match_design_doc():
         protocols.MongoCollection: {
             "find_one",
             "find",
+            "find_one_and_update",
             "insert_one",
             "insert_many",
             "update_one",
@@ -559,6 +580,15 @@ def test_protocol_methods_match_design_doc():
             "delete",
             "update_health",
             "mark_hub_agents_offline",
+            "find_by_normalized_url",
+            "list_visible",
+            "update",
+            "public_url_exists",
+            "upsert_hub_agent",
+            "prune_missing_hub_agents",
+            "activate_agents",
+            "get_indexed_description_hash",
+            "set_indexed_description_hash",
         },
         protocols.RoomRepository: {
             "get_by_id",
@@ -621,6 +651,19 @@ def test_protocol_methods_match_design_doc():
             "requesting_user_id",
         ],
     )
+    _assert_params(
+        protocols.AgentMessageMatcher.match_for_message,
+        [
+            "self",
+            "query",
+            "limit",
+            "filter_ids",
+            "requesting_user_id",
+            "required_input_modes",
+            "is_debate_mode",
+        ],
+    )
+    assert not inspect.iscoroutinefunction(protocols.HubLivenessReader.is_hub_online)
     _assert_params(protocols.RoomManagement.create_room, ["self", "request"])
     _assert_params(protocols.ExecutionEngine.cancel, ["self", "room_id", "message_id"])
     _assert_params(protocols.MongoCollection.find, ["self", "query", "kwargs"])

@@ -1,12 +1,15 @@
 """Tests for hub heartbeat fixes: SSE refresh, self-heal, connection guard, ownership check."""
 
 import asyncio
+import logging
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from models.api_key import APIKey
-from services.relay_service import RelayService
+from models.hub import HubAgentSync, RelayToHubEvent
+from services.agent_liveness_service import bind_agent_liveness_deps
+from services.relay_service import RelayHubLivenessReader, RelayService
 from tests.conftest import FROZEN_TIME
 
 
@@ -47,7 +50,22 @@ def _make_streams():
     streams.record_heartbeat = AsyncMock()
     streams.is_hub_alive = AsyncMock(return_value=True)
     streams.read_events = AsyncMock(return_value=[])
+    streams.push_event = AsyncMock(return_value="1-0")
     return streams
+
+
+def _make_writer():
+    writer = MagicMock()
+    writer.mark_hub_agents_offline = AsyncMock()
+    return writer
+
+
+class AsyncHubLivenessReader:
+    async def is_hub_online(self, hub_id: str) -> bool:
+        return True
+
+    async def get_hub_owner_id(self, hub_id: str) -> str | None:
+        return "user-001"
 
 
 def _make_service(mongo=None, streams=None):
@@ -110,6 +128,67 @@ class TestIsHubAlive:
 
         svc._hub_queues["hub-1"] = asyncio.Queue()
         assert await svc.is_hub_alive("hub-1") is True
+
+    async def test_liveness_reader_adapter_keeps_sync_protocol_and_async_authoritative_path(self):
+        streams = _make_streams()
+        streams.is_hub_alive = AsyncMock(return_value=True)
+        svc = _make_service(streams=streams)
+        svc.get_hub_owner_id = AsyncMock(return_value="user-001")
+        reader = RelayHubLivenessReader(svc)
+
+        assert not asyncio.iscoroutinefunction(reader.is_hub_online)
+        assert reader.is_hub_online("hub-1") is False
+        assert await reader.is_hub_online_async("hub-1") is True
+        assert reader.is_hub_online("hub-1") is True
+        assert await reader.get_hub_owner_id("hub-1") == "user-001"
+        streams.is_hub_alive.assert_awaited_once_with("hub-1")
+        svc.get_hub_owner_id.assert_awaited_once_with("hub-1")
+
+    async def test_relay_get_hub_owner_id_uses_public_relay_method(self):
+        mongo = _make_mongo()
+        svc = _make_service(mongo=mongo)
+
+        assert await svc.get_hub_owner_id("hub-1") == "user-001"
+        mongo.get_hub.assert_awaited_once_with("hub-1")
+
+    async def test_liveness_reader_in_memory_path_returns_bool(self):
+        svc = _make_service(streams=None)
+        reader = RelayHubLivenessReader(svc)
+
+        assert reader.is_hub_online("hub-1") is False
+        svc._hub_queues["hub-1"] = asyncio.Queue()
+        assert reader.is_hub_online("hub-1") is True
+
+    async def test_agent_liveness_bind_rejects_async_liveness_reader(self):
+        with pytest.raises(TypeError, match="is_hub_online must be synchronous"):
+            bind_agent_liveness_deps(
+                hub_liveness_reader=AsyncHubLivenessReader(),
+                agent_registry_writer=_make_writer(),
+            )
+
+
+@pytest.mark.asyncio
+async def test_sync_agents_validates_cards_before_writer_path():
+    svc = _make_service(streams=_make_streams())
+    writer = MagicMock()
+    writer.sync_hub_agents = AsyncMock(return_value=[])
+    svc.bind_agent_registry_writer(writer)
+
+    synced = await svc.sync_agents(
+        "hub-1",
+        [
+            HubAgentSync(
+                local_agent_id="bad-local",
+                name="Bad",
+                description="Missing required A2A card fields",
+                agent_card={"name": "Bad"},
+            )
+        ],
+        _make_api_key(),
+    )
+
+    assert synced == []
+    writer.sync_hub_agents.assert_not_awaited()
 
 
 # ===========================================================================
@@ -194,12 +273,15 @@ class TestHeartbeatCheckConnectionIdGuard:
 
         mongo.hubs_collection.find = MagicMock(side_effect=find_router)
         svc = _make_service(mongo=mongo, streams=streams)
+        writer = _make_writer()
+        svc.bind_agent_registry_writer(writer)
 
         await svc._do_heartbeat_check(stale_threshold=90)
 
         mongo.update_hub_status_if_current.assert_awaited_with(
             "hub-stale", connection_id="conn-old-123", is_online=False,
         )
+        writer.mark_hub_agents_offline.assert_awaited_once_with("hub-stale")
 
     async def test_pass1_skips_mark_if_connection_superseded(self):
         """If connection_id doesn't match (new connect_hub raced), skip offline mark."""
@@ -227,6 +309,58 @@ class TestHeartbeatCheckConnectionIdGuard:
 
         mongo.update_hub_status_if_current.assert_awaited_once()
         mongo.agents_collection.update_many.assert_not_awaited()
+
+    async def test_pass1_logs_expiry_with_connection_and_local_context(self, caplog):
+        mongo = _make_mongo()
+        streams = _make_streams()
+        streams.is_hub_alive = AsyncMock(return_value=False)
+
+        online_cursor = MagicMock()
+        online_cursor.to_list = AsyncMock(return_value=[
+            {"hub_id": "hub-stale", "connection_id": "conn-old-123"},
+        ])
+        offline_cursor = MagicMock()
+        offline_cursor.to_list = AsyncMock(return_value=[])
+
+        def find_router(query, projection):
+            if query.get("is_online") is True:
+                return online_cursor
+            return offline_cursor
+
+        mongo.hubs_collection.find = MagicMock(side_effect=find_router)
+        svc = _make_service(mongo=mongo, streams=streams)
+        svc.bind_agent_registry_writer(_make_writer())
+        svc._hub_disconnect_events["hub-stale"] = asyncio.Event()
+
+        with caplog.at_level(logging.WARNING, logger="services.relay_service"):
+            await svc._do_heartbeat_check(stale_threshold=90)
+
+        assert "hub-stale" in caplog.text
+        assert "connection_id=conn-old-123" in caplog.text
+        assert "redis_alive=False" in caplog.text
+        assert "local_disconnect_event=True" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_streams_push_logs_redis_dead_rejection(caplog):
+    streams = _make_streams()
+    streams.is_hub_alive = AsyncMock(return_value=False)
+    svc = _make_service(streams=streams)
+    event = RelayToHubEvent(
+        type="user_message",
+        room_id="room-1",
+        agent_message_id="msg-1",
+        local_agent_id="local-1",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="services.relay_service"):
+        delivered = await svc.push_to_hub("hub-dead", event)
+
+    assert delivered is False
+    assert "hub-dead" in caplog.text
+    assert "event_type=user_message" in caplog.text
+    assert "agent_message_id=msg-1" in caplog.text
+    assert "redis_alive=False" in caplog.text
 
 
 # ===========================================================================
@@ -342,24 +476,41 @@ class TestMarkHubAgentsOfflineGuard:
         """Without connection_id, mark_hub_agents_offline is unconditional."""
         mongo = _make_mongo()
         svc = _make_service(mongo=mongo)
+        writer = _make_writer()
+        svc.bind_agent_registry_writer(writer)
 
         await svc.mark_hub_agents_offline("hub-1")
 
         mongo.update_hub_status.assert_awaited_with("hub-1", is_online=False)
-        mongo.agents_collection.update_many.assert_awaited_once()
+        writer.mark_hub_agents_offline.assert_awaited_once_with("hub-1")
+        mongo.agents_collection.update_many.assert_not_awaited()
 
     async def test_conditional_offline_with_matching_connection_id(self):
         """With matching connection_id, offline proceeds."""
         mongo = _make_mongo()
         mongo.update_hub_status_if_current = AsyncMock(return_value=True)
         svc = _make_service(mongo=mongo)
+        writer = _make_writer()
+        svc.bind_agent_registry_writer(writer)
 
         await svc.mark_hub_agents_offline("hub-1", connection_id="conn-123")
 
         mongo.update_hub_status_if_current.assert_awaited_with(
             "hub-1", connection_id="conn-123", is_online=False,
         )
-        mongo.agents_collection.update_many.assert_awaited_once()
+        writer.mark_hub_agents_offline.assert_awaited_once_with("hub-1")
+        mongo.agents_collection.update_many.assert_not_awaited()
+
+    async def test_offline_requires_registry_writer_for_agent_status(self):
+        """Hub status can be updated here, but agent status writes require the writer."""
+        mongo = _make_mongo()
+        svc = _make_service(mongo=mongo)
+
+        with pytest.raises(RuntimeError, match="AgentRegistryWriter"):
+            await svc.mark_hub_agents_offline("hub-1")
+
+        mongo.update_hub_status.assert_awaited_with("hub-1", is_online=False)
+        mongo.agents_collection.update_many.assert_not_awaited()
 
     async def test_skips_offline_when_connection_superseded(self):
         """When connection_id doesn't match (superseded), offline is skipped."""
@@ -401,6 +552,7 @@ class TestHeartbeatExpiryDisconnect:
         mongo.hubs_collection.find = MagicMock(side_effect=find_router)
 
         svc = _make_service(mongo=mongo, streams=streams)
+        svc.bind_agent_registry_writer(_make_writer())
 
         disconnect_event = asyncio.Event()
         svc._hub_disconnect_events["hub-stale"] = disconnect_event
@@ -430,6 +582,7 @@ class TestHeartbeatExpiryDisconnect:
         mongo.hubs_collection.find = MagicMock(side_effect=find_router)
 
         svc = _make_service(mongo=mongo, streams=streams)
+        svc.bind_agent_registry_writer(_make_writer())
         # No disconnect event registered for hub-remote
         await svc._do_heartbeat_check(stale_threshold=90)  # should not raise
 
@@ -466,6 +619,24 @@ class TestHeartbeatOwnershipCheck:
 
         with pytest.raises(PermissionError, match="not owned"):
             await svc.record_hub_heartbeat("hub-1", api_key)
+
+    async def test_rejected_heartbeat_logs_hub_owner_and_caller(self, caplog):
+        mongo = _make_mongo()
+        mongo.get_hub = AsyncMock(
+            return_value={"hub_id": "hub-1", "user_id": "user-001"}
+        )
+        streams = _make_streams()
+        svc = _make_service(mongo=mongo, streams=streams)
+        api_key = _make_api_key(user_id="user-attacker")
+
+        with caplog.at_level(logging.WARNING, logger="services.relay_service"):
+            with pytest.raises(PermissionError, match="not owned"):
+                await svc.record_hub_heartbeat("hub-1", api_key)
+
+        assert "hub-1" in caplog.text
+        assert "owner_id=user-001" in caplog.text
+        assert "caller_user_id=user-attacker" in caplog.text
+        assert "heartbeat rejected" in caplog.text
 
     async def test_rejects_heartbeat_for_nonexistent_hub(self):
         """Heartbeat for a hub that doesn't exist is rejected."""

@@ -101,6 +101,8 @@ docstring-code-format = true
 
 [tool.setuptools]
 packages = [
+    "agent",
+    "agent.repository",
     "dal",
     "dal.mongo",
     "dal.pinecone",

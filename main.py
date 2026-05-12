@@ -154,6 +154,7 @@ async def lifespan(app: FastAPI):
     _redis_streams_service = None
     _leader = None
     _relay_svc = None
+    _agent_deps = None
     _change_stream_started = False
     _bg_started = False
 
@@ -162,6 +163,36 @@ async def lifespan(app: FastAPI):
 
         await mongodb.connect()
         pinecone_db.connect()
+
+        if mongodb.client is not None:
+            from a2a_adapter import AgentCardResolverImpl
+            from container import create_agent_deps
+            from dal.mongo import MongoDALImpl
+            from dal.pinecone import VectorDALImpl
+            from llm_gateway import LLMGatewayImpl
+            from services.agent_capability_issue_service import (
+                CapabilityIssueExclusionReader,
+            )
+            from services.agent_matcher import agent_matcher
+            from services.agent_selection_service import agent_selection_service
+            from services.agent_service import agent_service
+
+            _agent_deps = create_agent_deps(
+                mongo=MongoDALImpl(database=mongodb.db),
+                vector=VectorDALImpl(),
+                llm_provider=LLMGatewayImpl(),
+                card_resolver=AgentCardResolverImpl(),
+                hub_liveness=None,
+                exclusion_reader=CapabilityIssueExclusionReader(),
+                gateway_base_url=settings.gateway_base_url,
+            )
+            _agent_facade = _agent_deps.agent_registry
+            agent_service.bind_facade(_agent_facade)
+            agent_matcher.bind_facade(_agent_facade)
+            agent_selection_service.bind_facade(_agent_facade)
+            agent_health_service.bind_facade(_agent_facade)
+        else:
+            logger.warning("AgentDeps binding skipped: MongoDB client is unavailable")
 
         await mongodb.create_context_memory_indexes()
         await mongodb.ensure_agent_indexes()
@@ -249,8 +280,9 @@ async def lifespan(app: FastAPI):
         await orphaned_upload_cleaner.start()
 
         # Initialize relay service
+        from services.agent_liveness_service import bind_agent_liveness_deps
         from services.database_service import db_service as _db_svc
-        from services.relay_service import init_relay_service
+        from services.relay_service import RelayHubLivenessReader, init_relay_service
         from modules.RoomMessageCenter import room_message_center as _rmc
         _rmc.set_redis_service(_redis_service)
         _relay_svc = init_relay_service(
@@ -258,6 +290,15 @@ async def lifespan(app: FastAPI):
             room_message_center=_rmc,
         )
         _relay_svc.set_leader_election(_leader)
+        if _agent_deps is not None:
+            hub_liveness_reader = RelayHubLivenessReader(_relay_svc)
+            if hasattr(_agent_deps.agent_registry, "bind_hub_liveness"):
+                _agent_deps.agent_registry.bind_hub_liveness(hub_liveness_reader)
+            _relay_svc.bind_agent_registry_writer(_agent_deps.agent_registry_writer)
+            bind_agent_liveness_deps(
+                hub_liveness_reader=hub_liveness_reader,
+                agent_registry_writer=_agent_deps.agent_registry_writer,
+            )
         await _relay_svc.start()
         logger.info("Relay service initialized and heartbeat checker started")
 

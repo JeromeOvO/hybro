@@ -3,6 +3,10 @@ import time
 
 import httpx
 from a2a.types import AgentCard
+from a2a.utils.constants import (
+    AGENT_CARD_WELL_KNOWN_PATH,
+    PREV_AGENT_CARD_WELL_KNOWN_PATH,
+)
 
 from common.dto import AgentCardSnapshot
 
@@ -35,20 +39,31 @@ class AgentCardResolverImpl:
         if cached and now - cached[0] < self._cache_ttl:
             return cached[1]
 
-        try:
-            response = await self._client.get(
-                f"{normalized_url}/.well-known/agent.json"
-            )
-            response.raise_for_status()
-            payload = response.json()
-            card = AgentCard(**payload)
-            snapshot = a2a_card_to_snapshot(card, normalized_url)
-        except Exception as exc:
+        snapshot = None
+        last_error: Exception | None = None
+        for path in (AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH):
+            try:
+                response = await self._client.get(f"{normalized_url}{path}")
+                response.raise_for_status()
+                payload = response.json()
+                card = AgentCard(**payload)
+                snapshot = a2a_card_to_snapshot(card, normalized_url)
+                break
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                if exc.response.status_code == 404 and path == AGENT_CARD_WELL_KNOWN_PATH:
+                    continue
+                break
+            except Exception as exc:
+                last_error = exc
+                break
+
+        if snapshot is None:
             logger.warning(
                 "Failed to resolve A2A agent card for %s: %s",
                 normalized_url,
-                exc,
-                exc_info=True,
+                last_error,
+                exc_info=False,
             )
             return None
 

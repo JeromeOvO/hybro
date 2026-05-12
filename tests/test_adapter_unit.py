@@ -165,9 +165,39 @@ async def test_card_resolver_fetches_translates_and_caches_agent_card():
     assert first.url == "https://agent.example/a2a"
     assert "streaming" in first.capabilities
     assert "push_notifications" in first.capabilities
-    assert client.requested_urls == ["https://agent.example/.well-known/agent.json"]
+    assert client.requested_urls == [
+        "https://agent.example/.well-known/agent-card.json"
+    ]
     assert await resolver.supports_streaming("https://agent.example")
     assert await resolver.supports_push_notifications("https://agent.example")
+
+
+@pytest.mark.asyncio
+async def test_card_resolver_falls_back_to_legacy_agent_json_path():
+    from a2a_adapter.card_resolver import AgentCardResolverImpl
+
+    client = _FallbackCardClient(
+        {
+            "name": "Legacy Card Agent",
+            "description": "Remote agent",
+            "url": "https://agent.example/a2a",
+            "version": "1.0.0",
+            "capabilities": {},
+            "defaultInputModes": ["text/plain"],
+            "defaultOutputModes": ["text/plain"],
+            "skills": [],
+        }
+    )
+    resolver = AgentCardResolverImpl(client=client, cache_ttl=300)
+
+    card = await resolver.resolve_card("https://agent.example")
+
+    assert card is not None
+    assert card.name == "Legacy Card Agent"
+    assert client.requested_urls == [
+        "https://agent.example/.well-known/agent-card.json",
+        "https://agent.example/.well-known/agent.json",
+    ]
 
 
 @pytest.mark.asyncio
@@ -956,6 +986,21 @@ class _FakeCardClient:
         if not self._payloads:
             raise AssertionError(f"No fake card payloads remaining for GET {url}")
         return _FakeResponse(self._payloads.pop(0))
+
+
+class _FallbackCardClient:
+    def __init__(self, payload):
+        self._payload = payload
+        self.requested_urls = []
+
+    async def get(self, url):
+        self.requested_urls.append(url)
+        if url.endswith("/.well-known/agent-card.json"):
+            return httpx.Response(
+                404,
+                request=httpx.Request("GET", url),
+            )
+        return _FakeResponse(self._payload)
 
 
 class _FakePostClient:

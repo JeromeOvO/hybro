@@ -1,9 +1,6 @@
-from models.error import IllgalParameterError
 from models.request import AgentCenterRequest
 from models.response import AgentCenterResponse
-from services.a2a_service import a2a_service
 from services.agent_service import agent_service
-from services.database_service import db_service
 
 # Implementation of agent management service
 
@@ -26,25 +23,18 @@ class AgentCenter:
        - Similar agent search and matching
        - Complete agent catalog access
 
-    3. Agent Card Management:
-       - Automatic agent card retrieval from URLs
-       - Agent capability and skill validation
-       - Agent metadata management
-
-    4. External Interface Controller:
+    3. External Interface Controller:
        - Provides RESTful API endpoints for agent operations
        - Handles request validation and response formatting
        - Manages cross-service communication and coordination
 
-    5. Business Logic Orchestration:
-       - Coordinates between different services (Database, Agent, A2A)
+    4. Business Logic Orchestration:
+       - Delegates legacy controller calls to AgentService
        - Implements business rules and validation logic
        - Ensures data consistency and integrity
 
     Service Dependencies:
-    - DatabaseService: For persistent agent data storage
     - AgentService: For core agent business logic
-    - A2AService: For agent card retrieval and A2A protocol communication
 
     Usage:
     This center is typically used by external clients, other centers (like WorkflowCenter),
@@ -55,13 +45,9 @@ class AgentCenter:
         """
         Initialize AgentCenter with required service dependencies.
 
-        Initializes the database service for data persistence,
-        agent service for business logic, and A2A service for
-        agent communication capabilities.
+        Initializes the agent service singleton for business logic.
         """
-        self.database_service = db_service  # Use singleton
         self.agent_service = agent_service  # Use singleton
-        self.a2a_service = a2a_service  # Use singleton
 
     async def get_agent_card_from_url(
         self, request: AgentCenterRequest
@@ -75,11 +61,8 @@ class AgentCenter:
         """
         Register a new agent in the system.
 
-        This method handles the complete agent registration process:
-        1. Validates the provided agent URL
-        2. Retrieves the agent card from the URL using A2A service
-        3. Registers the agent with all necessary metadata
-        4. Returns the registration result
+        This legacy adapter delegates to AgentService. AgentService and the
+        agent facade handle URL validation and card resolution.
 
         Args:
             request: AgentCenterRequest containing agent_url and other registration details
@@ -87,17 +70,7 @@ class AgentCenter:
         Returns:
             AgentCenterResponse with registration status and agent information
 
-        Raises:
-            IllgalParameterError: If agent_url is missing or invalid
         """
-        agent_url = request.agent_url
-
-        if not agent_url:
-            raise IllgalParameterError()
-
-        agent_card = await self.a2a_service.get_agent_card_from_url(agent_url)
-        request.agent_card = agent_card
-
         return await self.agent_service.register_agent(request)
 
     async def update_agent(self, request: AgentCenterRequest) -> AgentCenterResponse:

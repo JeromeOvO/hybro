@@ -1,4 +1,4 @@
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from common.dto import (
     AgentCardSnapshot,
@@ -31,6 +31,25 @@ class AgentMatcher(Protocol):
 
 
 @runtime_checkable
+class AgentMessageMatcher(Protocol):
+    async def match_for_message(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        filter_ids: list[str] | None = None,
+        requesting_user_id: str | None = None,
+        required_input_modes: list[str] | None = None,
+        is_debate_mode: bool = False,
+    ) -> list[dict[str, Any]]: ...
+
+
+@runtime_checkable
+class AgentExclusionReader(Protocol):
+    async def get_excluded_agent_ids(self) -> frozenset[str]: ...
+
+
+@runtime_checkable
 class AgentManagement(Protocol):
     async def register_agent(self, url: str, provider_id: str, **kwargs) -> AgentInfo: ...
     async def delete_agent(self, agent_id: str, provider_id: str) -> bool: ...
@@ -54,7 +73,9 @@ class AgentRegistryWriter(Protocol):
 
 __all__ = [
     "AgentManagement",
+    "AgentExclusionReader",
     "AgentMatcher",
+    "AgentMessageMatcher",
     "AgentRegistry",
     "AgentRegistryWriter",
 ]

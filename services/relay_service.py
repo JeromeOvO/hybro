@@ -12,7 +12,6 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import time
 from collections import deque
 from collections.abc import AsyncGenerator
@@ -20,11 +19,11 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from a2a.types import AgentCard
+from common.dto.agent import HubAgentDescriptor
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from config.settings import settings
 from jobs.constants import RELAY_HEARTBEAT_MONITOR
-from models.agent import AGENT_CARD_HUB_NO_OVERWRITE
 from models.hub import (
     Hub,
     HubAgentSync,
@@ -32,8 +31,6 @@ from models.hub import (
     HubStatus,
     RelayToHubEvent,
 )
-from pymongo.errors import DuplicateKeyError
-from services.agent_service import is_local_agent_url, normalize_agent_url
 
 if TYPE_CHECKING:
     from database.mongodb import MongoDB
@@ -74,9 +71,6 @@ class RelayService:
         # hub_id -> deque[_OfflineQueueEntry]
         self._offline_queues: dict[str, deque[_OfflineQueueEntry]] = {}
 
-        # Background indexing tasks kept alive to prevent GC
-        self._background_tasks: set[asyncio.Task] = set()
-
         # hub_id -> monotonic timestamp of last hub-initiated heartbeat
         self._last_hub_heartbeat: dict[str, float] = {}
 
@@ -93,12 +87,24 @@ class RelayService:
         self._streams: RelayStreamService | None = None
         # For Redis Streams path: local disconnect signaling
         self._hub_disconnect_events: dict[str, asyncio.Event] = {}
+        self._hub_liveness_cache: dict[str, bool] = {}
 
         self._leader: LeaderElection | None = None
+        self._agent_registry_writer = None
 
     def set_leader_election(self, leader: LeaderElection | None) -> None:
         """Attach a LeaderElection instance for distributed leader gating."""
         self._leader = leader
+
+    def bind_agent_registry_writer(self, writer) -> None:
+        self._agent_registry_writer = writer
+
+    def _require_agent_registry_writer(self):
+        if self._agent_registry_writer is None:
+            raise RuntimeError(
+                "AgentRegistryWriter is not bound; hub agent writes are unavailable"
+            )
+        return self._agent_registry_writer
 
     def set_relay_transport(self, transport: Any) -> None:
         """Wire up the RelayTransport so publish events can be delegated."""
@@ -147,6 +153,10 @@ class RelayService:
         logger.info("Hub %s registered for user %s", hub_id, api_key.user_id)
         return hub
 
+    async def get_hub_owner_id(self, hub_id: str) -> str | None:
+        hub = await self._mongo.get_hub(hub_id)
+        return hub.get("user_id") if hub else None
+
     # ------------------------------------------------------------------
     # SSE connection
     # ------------------------------------------------------------------
@@ -170,14 +180,34 @@ class RelayService:
             last_connected_at=utcnow(),
             connection_id=connection_id,
         )
+        logger.info(
+            "Hub %s connected: connection_id=%s mode=%s last_event_id=%s",
+            hub_id,
+            connection_id,
+            "redis_streams" if self._streams else "in_memory",
+            last_event_id,
+        )
 
         if self._streams:
             # --- Redis Streams path ---
             await self._streams.record_heartbeat(hub_id)
+            self._hub_liveness_cache[hub_id] = True
+            logger.debug(
+                "Hub %s heartbeat refreshed: connection_id=%s mode=redis_streams "
+                "source=connect cache_online=True",
+                hub_id,
+                connection_id,
+            )
 
             # Signal any stale local connection on this instance
             old_event = self._hub_disconnect_events.get(hub_id)
             if old_event is not None:
+                logger.info(
+                    "Hub %s reconnecting: signaling stale redis-stream connection "
+                    "connection_id=%s",
+                    hub_id,
+                    connection_id,
+                )
                 old_event.set()
 
             disconnect = asyncio.Event()
@@ -194,6 +224,13 @@ class RelayService:
                         block_ms=settings.relay_heartbeat_interval * 1000,
                     )
                     await self._streams.record_heartbeat(hub_id)
+                    logger.debug(
+                        "Hub %s heartbeat refreshed: connection_id=%s "
+                        "mode=redis_streams source=sse_loop entries=%d",
+                        hub_id,
+                        connection_id,
+                        len(entries),
+                    )
                     if entries:
                         for entry_id, payload in entries:
                             payload["_stream_id"] = entry_id
@@ -208,6 +245,14 @@ class RelayService:
                 )
                 if not result:
                     logger.info("Hub %s: connection superseded", hub_id)
+                else:
+                    self._hub_liveness_cache[hub_id] = False
+                    logger.info(
+                        "Hub %s redis-stream connection closed: connection_id=%s "
+                        "cache_online=False",
+                        hub_id,
+                        connection_id,
+                    )
         else:
             # --- In-memory Queue path (existing code, unchanged) ---
             queue: asyncio.Queue = asyncio.Queue()
@@ -220,6 +265,13 @@ class RelayService:
             self._hub_queues[hub_id] = queue
             self._last_hub_heartbeat[hub_id] = time.monotonic()
             self._hub_disconnected_at.pop(hub_id, None)
+            logger.info(
+                "Hub %s in-memory connection ready: connection_id=%s "
+                "offline_queue_size=%d",
+                hub_id,
+                connection_id,
+                len(self._offline_queues.get(hub_id, ())),
+            )
 
             yield {"type": "connection_ready"}
 
@@ -274,11 +326,13 @@ class RelayService:
                 hub_id,
             )
             return
-        await self._mongo.agents_collection.update_many(
-            {"hub_id": hub_id},
-            {"$set": {"agent_status": "inactive"}},
+        await self._require_agent_registry_writer().mark_hub_agents_offline(hub_id)
+        logger.info(
+            "Hub %s disconnected: connection_id=%s rescued_offline_queue_size=%d",
+            hub_id,
+            connection_id,
+            len(self._offline_queues.get(hub_id, ())),
         )
-        logger.info("Hub %s disconnected", hub_id)
 
     # ------------------------------------------------------------------
     # Hub heartbeat (hub-initiated liveness signal)
@@ -289,14 +343,40 @@ class RelayService:
         if self._streams:
             hub_doc = await self._mongo.get_hub(hub_id)
             if not hub_doc or hub_doc["user_id"] != api_key.user_id:
+                logger.warning(
+                    "Hub %s heartbeat rejected: owner_id=%s caller_user_id=%s "
+                    "hub_exists=%s",
+                    hub_id,
+                    hub_doc.get("user_id") if hub_doc else None,
+                    api_key.user_id,
+                    hub_doc is not None,
+                )
                 raise PermissionError("Hub not owned by this API key")
             await self._streams.record_heartbeat(hub_id)
+            self._hub_liveness_cache[hub_id] = True
+            logger.debug(
+                "Hub %s heartbeat accepted: mode=redis_streams caller_user_id=%s "
+                "cache_online=True",
+                hub_id,
+                api_key.user_id,
+            )
         else:
             if hub_id not in self._hub_queues:
+                logger.warning(
+                    "Hub %s heartbeat rejected: mode=in_memory caller_user_id=%s "
+                    "reason=not_connected",
+                    hub_id,
+                    api_key.user_id,
+                )
                 raise PermissionError(
                     f"Hub {hub_id} is not connected — heartbeat rejected"
                 )
             self._last_hub_heartbeat[hub_id] = time.monotonic()
+            logger.debug(
+                "Hub %s heartbeat accepted: mode=in_memory caller_user_id=%s",
+                hub_id,
+                api_key.user_id,
+            )
 
     def _is_hub_connected_locally(self, hub_id: str) -> bool:
         """Process-local check — only valid for connection management on this worker.
@@ -315,7 +395,22 @@ class RelayService:
         reading MongoDB ``is_online`` directly.
         """
         if self._streams:
-            return await self._streams.is_hub_alive(hub_id)
+            is_alive = await self._streams.is_hub_alive(hub_id)
+        else:
+            is_alive = self._is_hub_connected_locally(hub_id)
+        self._hub_liveness_cache[hub_id] = is_alive
+        logger.debug(
+            "Hub %s liveness checked: mode=%s is_online=%s cache_online=%s",
+            hub_id,
+            "redis_streams" if self._streams else "in_memory",
+            is_alive,
+            self._hub_liveness_cache.get(hub_id),
+        )
+        return is_alive
+
+    def is_hub_alive_cached(self, hub_id: str) -> bool:
+        if self._streams:
+            return self._hub_liveness_cache.get(hub_id, False)
         return self._is_hub_connected_locally(hub_id)
 
     async def mark_hub_agents_offline(
@@ -338,10 +433,7 @@ class RelayService:
                 return
         else:
             await self._mongo.update_hub_status(hub_id, is_online=False)
-        await self._mongo.agents_collection.update_many(
-            {"hub_id": hub_id, "agent_status": "active"},
-            {"$set": {"agent_status": "inactive"}},
-        )
+        await self._require_agent_registry_writer().mark_hub_agents_offline(hub_id)
 
     # ------------------------------------------------------------------
     # Agent sync
@@ -365,15 +457,8 @@ class RelayService:
         if self._streams:
             await self._streams.record_heartbeat(hub_id)
 
-        user_id = api_key.user_id
-        gateway_base = settings.gateway_base_url
-
-        # Fields in agent_card that Hybro manages and must never be overwritten
-        # by data coming from the hub. See AGENT_CARD_HUB_NO_OVERWRITE in
-        # models/agent.py for the rationale.
-
-        synced: list[dict] = []
-        to_index: list[tuple[str, str, str]] = []
+        writer = self._require_agent_registry_writer()
+        valid_agents: list[HubAgentSync] = []
         for ag in agents:
             try:
                 AgentCard(**ag.agent_card)
@@ -383,239 +468,41 @@ class RelayService:
                     hub_id, ag.local_agent_id, ag.agent_card,
                 )
                 continue
+            valid_agents.append(ag)
 
-            agent_url = ag.agent_card.get("url", "")
-            normalized = normalize_agent_url(agent_url) if agent_url else None
-
-            # Local URLs (localhost, 127.x, etc.) are only meaningful on the
-            # hub's machine — two different users can legitimately run agents
-            # on the same local port.  Storing a local URL in the global
-            # normalized_url dedup index would cause a DuplicateKeyError when
-            # a second user syncs an agent at the same port.  Per-hub
-            # deduplication for local agents is handled by (hub_id,
-            # local_agent_id) in upsert_hub_agent, so normalized_url is not
-            # needed here.
-            if normalized and is_local_agent_url(agent_url):
-                normalized = None
-
-            # Check if an agent with this URL already exists (e.g. registered
-            # via the web UI).  If so, enrich it with hub metadata and mark it
-            # as a hub agent so the frontend correctly shows its source.
-            existing = None
-            if normalized:
-                existing = await self._mongo.agents_collection.find_one(
-                    {"normalized_url": normalized, "provider_id": user_id}
-                )
-
-            if existing:
-                # Spread agent_card as dot-notation $set keys so that
-                # Hybro-managed fields stored in the DB are never overwritten.
-                # iconUrl is set by the avatar upload endpoint and must be
-                # preserved across hub re-syncs.
-                agent_card_update = {
-                    f"agent_card.{k}": v
-                    for k, v in ag.agent_card.items()
-                    if k not in AGENT_CARD_HUB_NO_OVERWRITE
-                }
-                await self._mongo.agents_collection.update_one(
-                    {"agent_id": existing["agent_id"]},
-                    {"$set": {
-                        "source": "hub",
-                        "hub_id": hub_id,
-                        "local_agent_id": ag.local_agent_id,
-                        "agent_status": "active",
-                        **agent_card_update,
-                    }},
-                )
-                stored_id = existing["agent_id"]
-            else:
-                new_agent_id = str(uuid4().hex)
-                # Spread agent_card as dot-notation keys so that Hybro-managed
-                # fields (e.g. iconUrl set by the avatar-upload endpoint) are
-                # never overwritten on subsequent re-syncs.  upsert_hub_agent
-                # uses $set for these keys, so an existing iconUrl is preserved
-                # even though upsert_hub_agent is also the initial-insert path.
-                agent_card_data = {
-                    f"agent_card.{k}": v
-                    for k, v in ag.agent_card.items()
-                    if k not in AGENT_CARD_HUB_NO_OVERWRITE
-                }
-                agent_data = {
-                    "agent_id": new_agent_id,
-                    "source": "hub",
-                    "hub_id": hub_id,
-                    "local_agent_id": ag.local_agent_id,
-                    "provider_id": user_id,
-                    "normalized_url": normalized,
-                    "agent_status": "active",
-                    "is_public": False,
-                    **agent_card_data,
-                }
-                try:
-                    stored_id = await self._mongo.upsert_hub_agent(
-                        hub_id, ag.local_agent_id, agent_data
-                    )
-                except DuplicateKeyError:
-                    # normalized_url collision with another user's agent
-                    # (should not happen after the is_local_agent_url guard
-                    # above, but defend against edge cases like private IPs).
-                    # Retry without normalized_url so the upsert can proceed.
-                    logger.warning(
-                        "Hub %s: normalized_url collision for agent %s url=%s — "
-                        "storing without normalized_url",
-                        hub_id, ag.local_agent_id, agent_url,
-                    )
-                    agent_data["normalized_url"] = None
-                    stored_id = await self._mongo.upsert_hub_agent(
-                        hub_id, ag.local_agent_id, agent_data
-                    )
-
-            # Re-index in Pinecone whenever the description changed or was
-            # never successfully indexed.  We store a hash of the last-indexed
-            # description so that transient Pinecone failures are retried on
-            # the next sync and description updates are always picked up.
-            description = ag.agent_card.get("description") or ag.description
-            if description:
-                new_hash = hashlib.sha256(description.encode()).hexdigest()
-                doc = await self._mongo.agents_collection.find_one(
-                    {"agent_id": stored_id},
-                    {"indexed_description_hash": 1},
-                )
-                old_hash = (doc or {}).get("indexed_description_hash")
-                if new_hash != old_hash:
-                    to_index.append((stored_id, description, new_hash))
-
-            # Set public_url to the gateway proxy so external consumers can
-            # discover agents via the gateway API.  Never overwrite
-            # agent_card.url — it must remain the real agent endpoint for
-            # internal health checks, probes, and direct-call fallback.
-            if gateway_base:
-                proxy_url = (
-                    f"{gateway_base}/gateway/agents/{stored_id}/message/send"
-                )
-                await self._mongo.agents_collection.update_one(
-                    {"agent_id": stored_id},
-                    {"$set": {"public_url": proxy_url}},
-                )
-
-            synced.append({
-                "agent_id": stored_id,
-                "local_agent_id": ag.local_agent_id,
-            })
-
-        if to_index:
-            task = asyncio.create_task(self._index_agents(hub_id, to_index))
-            self._background_tasks.add(task)
-            task.add_done_callback(self._background_tasks.discard)
-
-        # Prune agents that the hub no longer reports.
-        if prune_missing:
-            synced_ids = [item["agent_id"] for item in synced]
-            # If the hub sent agents but every card failed validation, synced_ids
-            # is empty: ``$nin: []`` would match *all* hub agents — skip prune.
-            if len(agents) > 0 and not synced_ids:
-                logger.warning(
-                    "Hub %s: skipping prune — %d agent(s) in request but none "
-                    "passed AgentCard validation",
-                    hub_id,
-                    len(agents),
-                )
-            else:
-                await self._mongo.agents_collection.update_many(
-                    {
-                        "hub_id": hub_id,
-                        "source": "hub",
-                        "agent_id": {"$nin": synced_ids},
-                    },
-                    {"$set": {"agent_status": "inactive"}},
-                )
-
-                await self._mongo.agents_collection.update_many(
-                    {
-                        "hub_id": hub_id,
-                        "source": {"$ne": "hub"},
-                        "agent_id": {"$nin": synced_ids},
-                    },
-                    {
-                        "$set": {"agent_status": "inactive"},
-                        "$unset": {
-                            "hub_id": "",
-                            "local_agent_id": "",
-                        },
-                    },
-                )
-
-        logger.info("Hub %s synced %d agents", hub_id, len(synced))
-
-        # Activate synced agents if this hub is still connected.
-        if await self.is_hub_alive(hub_id) and synced:
-            synced_ids = [item["agent_id"] for item in synced]
-            await self._mongo.agents_collection.update_many(
-                {"hub_id": hub_id, "agent_id": {"$in": synced_ids}},
-                {"$set": {"agent_status": "active"}},
+        if agents and not valid_agents:
+            logger.warning(
+                "Hub %s: skipping sync — %d agent(s) in request but none "
+                "passed AgentCard validation",
+                hub_id,
+                len(agents),
             )
+            return []
 
-        return synced
-
-    async def _index_agents(
-        self, hub_id: str, to_index: list[tuple[str, str, str]]
-    ) -> None:
-        """Embed descriptions and upsert to Pinecone in the background.
-
-        Each entry in *to_index* is ``(agent_id, description, desc_hash)``.
-        After a successful Pinecone upsert the corresponding
-        ``indexed_description_hash`` is written back to Mongo so that
-        unchanged descriptions are not re-embedded on subsequent syncs and
-        transient failures are automatically retried.
-        """
-        try:
-            embed_tasks = [
-                self._db.ai_service.get_embedding(desc)
-                for _, desc, _ in to_index
-            ]
-            embeddings = await asyncio.gather(
-                *embed_tasks, return_exceptions=True
+        descriptors = [
+            HubAgentDescriptor(
+                hub_id=hub_id,
+                agent_id=ag.local_agent_id,
+                name=ag.name,
+                url=ag.agent_card.get("url"),
+                capabilities=list(ag.capabilities or []),
+                raw_card=dict(ag.agent_card or {}),
             )
-
-            vectors: list[dict] = []
-            succeeded: list[tuple[str, str]] = []
-            failed: list[str] = []
-            for (agent_id, _, desc_hash), emb in zip(
-                to_index, embeddings, strict=True
-            ):
-                if isinstance(emb, BaseException):
-                    failed.append(agent_id)
-                    continue
-                vectors.append({
-                    "id": agent_id,
-                    "values": emb,
-                    "metadata": {"type": "a2a_agent", "agent_id": agent_id},
-                })
-                succeeded.append((agent_id, desc_hash))
-
-            if vectors:
-                await asyncio.to_thread(self._db.pinecone.upsert, vectors)
-
-            for agent_id, desc_hash in succeeded:
-                await self._mongo.agents_collection.update_one(
-                    {"agent_id": agent_id},
-                    {"$set": {"indexed_description_hash": desc_hash}},
-                )
-
-            if failed:
-                logger.warning(
-                    "Hub %s: failed to index %d/%d agents in Pinecone: %s",
-                    hub_id, len(failed), len(to_index), failed,
-                )
-            else:
-                logger.info(
-                    "Hub %s: indexed %d agents in Pinecone",
-                    hub_id, len(vectors),
-                )
-        except Exception:
-            logger.exception(
-                "Hub %s: Pinecone batch index failed", hub_id
-            )
+            for ag in valid_agents
+        ]
+        synced = await writer.sync_hub_agents(
+            hub_id,
+            api_key.user_id,
+            descriptors,
+            prune_missing=prune_missing,
+        )
+        return [
+            {
+                "agent_id": item.agent_id,
+                "local_agent_id": item.descriptor.agent_id if item.descriptor else None,
+            }
+            for item in synced
+        ]
 
     # ------------------------------------------------------------------
     # Push event to hub
@@ -630,10 +517,40 @@ class RelayService:
         without queuing so the caller can reject.
         """
         if self._streams:
-            if not await self._streams.is_hub_alive(hub_id):
+            redis_alive = await self._streams.is_hub_alive(hub_id)
+            self._hub_liveness_cache[hub_id] = redis_alive
+            if not redis_alive:
+                logger.warning(
+                    "Hub %s push rejected: redis_alive=False event_type=%s "
+                    "agent_message_id=%s room_id=%s local_agent_id=%s",
+                    hub_id,
+                    event.type,
+                    event.agent_message_id,
+                    event.room_id,
+                    event.local_agent_id,
+                )
                 await self._fail_offline_message(event, error_text="Agent is offline")
                 return False
             result = await self._streams.push_event(hub_id, event.model_dump(mode="json"))
+            if result is None:
+                logger.warning(
+                    "Hub %s push failed: redis_alive=True event_type=%s "
+                    "agent_message_id=%s room_id=%s local_agent_id=%s",
+                    hub_id,
+                    event.type,
+                    event.agent_message_id,
+                    event.room_id,
+                    event.local_agent_id,
+                )
+            else:
+                logger.debug(
+                    "Hub %s push queued: stream_id=%s event_type=%s "
+                    "agent_message_id=%s",
+                    hub_id,
+                    result,
+                    event.type,
+                    event.agent_message_id,
+                )
             return result is not None
         else:
             # --- Existing in-memory queue logic (unchanged) ---
@@ -889,12 +806,18 @@ class RelayService:
             stale_hubs = await self._mongo.hubs_collection.find(
                 {"is_online": True}, {"hub_id": 1, "connection_id": 1}
             ).to_list(length=None)
+            expired_count = 0
             for doc in stale_hubs:
                 hub_id = doc["hub_id"]
                 if not await self._streams.is_hub_alive(hub_id):
+                    expired_count += 1
+                    has_local_disconnect = hub_id in self._hub_disconnect_events
                     logger.warning(
-                        "Hub %s heartbeat expired in Redis — marking offline",
+                        "Hub %s heartbeat expired in Redis: redis_alive=False "
+                        "connection_id=%s local_disconnect_event=%s — marking offline",
                         hub_id,
+                        doc.get("connection_id"),
+                        has_local_disconnect,
                     )
                     await self.mark_hub_agents_offline(
                         hub_id, connection_id=doc.get("connection_id"),
@@ -907,23 +830,43 @@ class RelayService:
             recovering_hubs = await self._mongo.hubs_collection.find(
                 {"is_online": False}, {"hub_id": 1}
             ).to_list(length=100)
+            recovered_count = 0
             for doc in recovering_hubs:
                 hub_id = doc["hub_id"]
                 if await self._streams.is_hub_alive(hub_id):
+                    recovered_count += 1
                     logger.info(
                         "Hub %s recovered — Redis heartbeat alive, re-marking online",
                         hub_id,
                     )
                     await self._mongo.update_hub_status(hub_id, is_online=True)
+            if expired_count or recovered_count:
+                logger.info(
+                    "Relay heartbeat monitor completed: mode=redis_streams "
+                    "online_checked=%d expired=%d offline_checked=%d recovered=%d",
+                    len(stale_hubs),
+                    expired_count,
+                    len(recovering_hubs),
+                    recovered_count,
+                )
+            else:
+                logger.debug(
+                    "Relay heartbeat monitor completed: mode=redis_streams "
+                    "online_checked=%d expired=0 offline_checked=%d recovered=0",
+                    len(stale_hubs),
+                    len(recovering_hubs),
+                )
         else:
             now = time.monotonic()
             for hub_id in list(self._hub_queues.keys()):
                 last = self._last_hub_heartbeat.get(hub_id)
                 if last is not None and (now - last) > stale_threshold:
                     logger.warning(
-                        "Hub %s has not sent a heartbeat for %.0fs — disconnecting",
+                        "Hub %s has not sent a heartbeat for %.0fs "
+                        "(threshold=%.0fs) — disconnecting",
                         hub_id,
                         now - last,
+                        stale_threshold,
                     )
                     q = self._hub_queues.get(hub_id)
                     if q:
@@ -953,6 +896,20 @@ class RelayService:
 # ---------------------------------------------------------------------------
 
 relay_service: RelayService | None = None
+
+
+class RelayHubLivenessReader:
+    def __init__(self, relay: RelayService) -> None:
+        self._relay = relay
+
+    def is_hub_online(self, hub_id: str) -> bool:
+        return self._relay.is_hub_alive_cached(hub_id)
+
+    async def is_hub_online_async(self, hub_id: str) -> bool:
+        return await self._relay.is_hub_alive(hub_id)
+
+    async def get_hub_owner_id(self, hub_id: str) -> str | None:
+        return await self._relay.get_hub_owner_id(hub_id)
 
 
 def init_relay_service(

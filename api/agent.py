@@ -6,6 +6,7 @@ from common.auth import ClerkUser, get_current_user, get_optional_user, resolve_
 from database.mongodb import mongodb
 from models.agent import IssueStatus
 from models.request import AgentCenterRequest, AgentSettingsUpdateRequest
+from models.response import AgentCenterResponse
 from modules.AgentCenter import AgentCenter
 from services.agent_capability_issue_service import capability_issue_service
 from services.agent_service import agent_service
@@ -86,7 +87,7 @@ async def delete_agent(
     request_data = await request.json()
     agent_id = request_data.get("agent_id")
 
-    if not agent_id:
+    if not agent_id or not agent_id.strip():
         raise HTTPException(status_code=400, detail="agent_id is required")
 
     # Verify the agent exists and user owns it
@@ -121,7 +122,7 @@ async def update_agent(
     - rate_limit_system_per_hour: Max total requests per hour (null = unlimited)
     - agent_status: Agent status (active/inactive)
     """
-    if not agent_id:
+    if not agent_id or not agent_id.strip():
         raise HTTPException(status_code=400, detail="agent_id is required")
 
     # Verify the agent exists and user owns it
@@ -349,6 +350,13 @@ async def get_agent(
     """Get agent by ID - PUBLIC (authentication optional)"""
     if not agent_id:
         raise HTTPException(status_code=400, detail="agent_id is required")
+    if not agent_id.strip():
+        return AgentCenterResponse(
+            agent_id=agent_id,
+            success=False,
+            error="agent_id is required",
+            status_code=400,
+        )
 
     user_id = user.user_id if user else None
     agent_center_request = AgentCenterRequest(agent_id=agent_id, user_id=user_id)
