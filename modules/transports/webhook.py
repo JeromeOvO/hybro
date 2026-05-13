@@ -228,6 +228,67 @@ class WebhookTransport(AgentTransport):
         )
 
 
+_PROTO_STATE_MAP: dict[str, str] = {
+    "TASK_STATE_SUBMITTED": "submitted",
+    "TASK_STATE_WORKING": "working",
+    "TASK_STATE_INPUT_REQUIRED": "input-required",
+    "TASK_STATE_AUTH_REQUIRED": "auth-required",
+    "TASK_STATE_COMPLETED": "completed",
+    "TASK_STATE_FAILED": "failed",
+    "TASK_STATE_CANCELED": "canceled",
+    "TASK_STATE_REJECTED": "rejected",
+}
+
+
+def _normalize_proto_payload(data: dict[str, Any]) -> dict[str, Any]:
+    """Normalize protobuf-serialized camelCase payload to Pydantic snake_case.
+
+    A2A SDK v1.x uses protobuf and serializes via MessageToDict which produces
+    camelCase keys and TASK_STATE_* enum strings. Our Pydantic models (SDK v0.3.x)
+    expect snake_case keys and short enum names like "completed".
+    """
+    import re
+
+    def _to_snake(name: str) -> str:
+        s1 = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", name)
+        return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+
+    def _convert(obj: Any, *, parent_key: str = "") -> Any:
+        if isinstance(obj, dict):
+            result = {}
+            for k, v in obj.items():
+                new_key = _to_snake(k)
+                new_val = _convert(v, parent_key=new_key)
+                if new_key == "state" and isinstance(new_val, str) and new_val in _PROTO_STATE_MAP:
+                    new_val = _PROTO_STATE_MAP[new_val]
+                result[new_key] = new_val
+            # Proto text parts lack `kind` — add it for Pydantic discriminator
+            if "text" in result and "kind" not in result and parent_key == "parts":
+                result["kind"] = "text"
+            elif "file" in result and "kind" not in result and parent_key == "parts":
+                result["kind"] = "file"
+            elif "data" in result and "kind" not in result and parent_key == "parts":
+                result["kind"] = "data"
+            return result
+        if isinstance(obj, list):
+            return [_convert(item, parent_key=parent_key) for item in obj]
+        return obj
+
+    return _convert(data)
+
+
+def _is_proto_format(data: dict[str, Any]) -> bool:
+    """Detect if payload uses protobuf-style camelCase format."""
+    if "contextId" in data or "artifactId" in data:
+        return True
+    status = data.get("status", {})
+    if isinstance(status, dict):
+        state_val = status.get("state", "")
+        if isinstance(state_val, str) and state_val.startswith("TASK_STATE_"):
+            return True
+    return False
+
+
 def parse_stream_response(payload: dict[str, Any], message_id: str) -> Task:
     """Parse A2A StreamResponse format into a Task object.
 
@@ -236,14 +297,22 @@ def parse_stream_response(payload: dict[str, Any], message_id: str) -> Task:
     - statusUpdate: TaskStatusUpdateEvent (status only)
     - artifactUpdate: TaskArtifactUpdateEvent (streaming)
     - message: Message object
+
+    Handles both SDK v0.x (Pydantic/snake_case) and v1.x (protobuf/camelCase) formats.
     """
     if "task" in payload:
         logger.debug("Webhook for task %s: Received full Task in StreamResponse", message_id)
-        return Task.model_validate(payload["task"])
+        task_data = payload["task"]
+        if _is_proto_format(task_data):
+            task_data = _normalize_proto_payload(task_data)
+        return Task.model_validate(task_data)
 
-    if "statusUpdate" in payload:
+    if "statusUpdate" in payload or "status_update" in payload:
         logger.debug("Webhook for task %s: Received statusUpdate in StreamResponse", message_id)
-        status_event = TaskStatusUpdateEvent.model_validate(payload["statusUpdate"])
+        raw = payload.get("statusUpdate") or payload.get("status_update")
+        if _is_proto_format(raw):
+            raw = _normalize_proto_payload(raw)
+        status_event = TaskStatusUpdateEvent.model_validate(raw)
         return Task(
             id=status_event.task_id,
             context_id=status_event.context_id,
@@ -254,7 +323,10 @@ def parse_stream_response(payload: dict[str, Any], message_id: str) -> Task:
         logger.debug("Webhook for task %s: Received message in StreamResponse", message_id)
         import uuid
 
-        message = Message.model_validate(payload["message"])
+        msg_data = payload["message"]
+        if isinstance(msg_data, dict) and "contextId" in msg_data:
+            msg_data = _normalize_proto_payload(msg_data)
+        message = Message.model_validate(msg_data)
         return Task(
             id=str(uuid.uuid4()),
             context_id=message.context_id or "",
@@ -268,9 +340,12 @@ def parse_stream_response(payload: dict[str, Any], message_id: str) -> Task:
             ],
         )
 
-    if "artifactUpdate" in payload:
+    if "artifactUpdate" in payload or "artifact_update" in payload:
         logger.debug("Webhook for task %s: Received artifactUpdate in StreamResponse", message_id)
-        artifact_event = TaskArtifactUpdateEvent.model_validate(payload["artifactUpdate"])
+        raw = payload.get("artifactUpdate") or payload.get("artifact_update")
+        if isinstance(raw, dict) and ("artifactId" in raw or "contextId" in raw):
+            raw = _normalize_proto_payload(raw)
+        artifact_event = TaskArtifactUpdateEvent.model_validate(raw)
         return Task(
             id=artifact_event.task_id,
             context_id=artifact_event.context_id,
@@ -281,6 +356,8 @@ def parse_stream_response(payload: dict[str, Any], message_id: str) -> Task:
     # Fallback: raw Task (backwards compatibility)
     if "id" in payload and "status" in payload:
         logger.debug("Webhook for task %s: Received raw Task (not StreamResponse envelope)", message_id)
+        if _is_proto_format(payload):
+            payload = _normalize_proto_payload(payload)
         return Task.model_validate(payload)
 
     raise HTTPException(
