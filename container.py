@@ -14,9 +14,16 @@ from common.protocols import (
     HubLivenessReader,
     LLMProvider,
     MongoDAL,
+    RoomHistoryReader,
+    RoomManagement,
+    RoomMembershipSeedSource,
+    RoomMessageStore,
+    RoomOwnershipReader,
+    RoomRegistry,
     VectorDAL,
 )
 from common.utils.time import utcnow
+from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
 
 
 @dataclass(frozen=True)
@@ -25,6 +32,15 @@ class AgentDeps:
     agent_matcher: AgentMatcher
     agent_management: AgentManagement
     agent_registry_writer: AgentRegistryWriter
+
+
+@dataclass(frozen=True)
+class RoomDeps:
+    room_registry: RoomRegistry
+    room_management: RoomManagement
+    room_message_store: RoomMessageStore
+    room_history_reader: RoomHistoryReader
+    room_ownership_reader: RoomOwnershipReader
 
 
 def create_agent_deps(
@@ -54,4 +70,29 @@ def create_agent_deps(
         agent_matcher=facade,
         agent_management=facade,
         agent_registry_writer=facade,
+    )
+
+
+def create_room_deps(
+    *,
+    mongo: MongoDAL,
+    agent_registry: AgentRegistry,
+    membership_source: RoomMembershipSeedSource,
+) -> RoomDeps:
+    repository = RoomMongoRepository(mongo=mongo)
+    message_repository = MessageMongoRepository(mongo=mongo)
+    facade = RoomFacade(
+        repository=repository,
+        message_repository=message_repository,
+        agent_registry=agent_registry,
+        membership_source=membership_source,
+        id_factory=lambda: uuid4().hex,
+        now=utcnow,
+    )
+    return RoomDeps(
+        room_registry=facade,
+        room_management=facade,
+        room_message_store=facade,
+        room_history_reader=facade,
+        room_ownership_reader=facade,
     )

@@ -103,6 +103,8 @@ docstring-code-format = true
 packages = [
     "agent",
     "agent.repository",
+    "room",
+    "room.repository",
     "dal",
     "dal.mongo",
     "dal.pinecone",

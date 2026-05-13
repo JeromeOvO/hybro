@@ -50,6 +50,7 @@ from common.protocols.repository_protocols import (
 from common.protocols.room_protocols import (
     RoomHistoryReader,
     RoomManagement,
+    RoomMembershipSeedSource,
     RoomMessageStore,
     RoomOwnershipReader,
     RoomRegistry,
@@ -95,6 +96,7 @@ __all__ = [
     "RedisStreams",
     "RoomHistoryReader",
     "RoomManagement",
+    "RoomMembershipSeedSource",
     "RoomMessageStore",
     "RoomOwnershipReader",
     "RoomRegistry",

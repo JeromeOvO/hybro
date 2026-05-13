@@ -29,6 +29,7 @@ from api.room_center import (
     send_message,
     suggest_agents,
 )
+from modules.RoomCenter import RoomCenter
 from models.room import Room
 from models.response import (
     ActiveRunRef,
@@ -43,6 +44,28 @@ from tests.conftest import PATCH
 # =============================================================================
 # Room Ownership Verification Tests
 # =============================================================================
+
+
+class TestRoomCenterAdapter:
+    @pytest.mark.asyncio
+    async def test_fails_before_bind_when_service_unbound(self):
+        center = RoomCenter(room_services=None)
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"RoomCenter\.bind_facade\(\) not called - startup incomplete",
+        ):
+            await center.create_new_room(MagicMock())
+
+    @pytest.mark.asyncio
+    async def test_delegates_to_bound_room_services(self):
+        service = MagicMock()
+        service._bound = True
+        service.create_new_room = AsyncMock(return_value="created")
+        center = RoomCenter(room_services=service)
+
+        assert await center.create_new_room(MagicMock()) == "created"
+        service.create_new_room.assert_awaited_once()
 
 
 class TestVerifyRoomOwnership:
