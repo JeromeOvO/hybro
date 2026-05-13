@@ -267,21 +267,41 @@ def test_protocols_are_runtime_checkable():
             assert getattr(obj, "_is_runtime_protocol", False), name
 
 
-def test_hub_liveness_validation_rejects_async_runtime_protocol_match():
+def test_hub_liveness_validation_rejects_sync_runtime_protocol_match():
     import common.protocols as protocols
     from common.protocols.hub_protocols import validate_hub_liveness_reader
 
-    class AsyncHubLivenessReader:
-        async def is_hub_online(self, hub_id: str) -> bool:
+    class SyncHubLivenessReader:
+        def is_hub_online(self, hub_id: str) -> bool:
             return True
 
         async def get_hub_owner_id(self, hub_id: str) -> str | None:
             return "user-1"
 
-    reader = AsyncHubLivenessReader()
+    reader = SyncHubLivenessReader()
 
     assert isinstance(reader, protocols.HubLivenessReader)
-    with pytest.raises(TypeError, match="is_hub_online must be synchronous"):
+    with pytest.raises(TypeError, match="is_hub_online must be async"):
+        validate_hub_liveness_reader(reader)
+
+
+def test_hub_liveness_reader_validation_rejects_non_callable_method():
+    import common.protocols as protocols
+    from common.protocols.hub_protocols import validate_hub_liveness_reader
+
+    class NonCallableHubLivenessReader:
+        is_hub_online = True
+
+        async def get_hub_owner_id(self, hub_id: str) -> str | None:
+            return "user-1"
+
+    reader = NonCallableHubLivenessReader()
+
+    assert isinstance(reader, protocols.HubLivenessReader)
+    with pytest.raises(
+        TypeError,
+        match="HubLivenessReader.is_hub_online must be callable",
+    ):
         validate_hub_liveness_reader(reader)
 
 
@@ -663,7 +683,7 @@ def test_protocol_methods_match_design_doc():
             "is_debate_mode",
         ],
     )
-    assert not inspect.iscoroutinefunction(protocols.HubLivenessReader.is_hub_online)
+    assert inspect.iscoroutinefunction(protocols.HubLivenessReader.is_hub_online)
     _assert_params(protocols.RoomManagement.create_room, ["self", "request"])
     _assert_params(protocols.ExecutionEngine.cancel, ["self", "room_id", "message_id"])
     _assert_params(protocols.MongoCollection.find, ["self", "query", "kwargs"])

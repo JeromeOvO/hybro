@@ -282,7 +282,10 @@ async def lifespan(app: FastAPI):
         # Initialize relay service
         from services.agent_liveness_service import bind_agent_liveness_deps
         from services.database_service import db_service as _db_svc
-        from services.relay_service import RelayHubLivenessReader, init_relay_service
+        from services.relay_service import (
+            RelayHubLivenessReader,
+            init_relay_service,
+        )
         from modules.RoomMessageCenter import room_message_center as _rmc
         _rmc.set_redis_service(_redis_service)
         _relay_svc = init_relay_service(

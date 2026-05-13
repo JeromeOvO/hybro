@@ -18,7 +18,11 @@ _hub_liveness_reader = None
 _agent_registry_writer = None
 
 
-def bind_agent_liveness_deps(*, hub_liveness_reader=None, agent_registry_writer=None) -> None:
+def bind_agent_liveness_deps(
+    *,
+    hub_liveness_reader=None,
+    agent_registry_writer=None,
+) -> None:
     global _hub_liveness_reader, _agent_registry_writer
     validate_hub_liveness_reader(hub_liveness_reader)
     _hub_liveness_reader = hub_liveness_reader
@@ -98,7 +102,4 @@ async def _check_hub_agent(agent: Agent) -> Agent:
 
 
 async def _is_hub_online(hub_id: str) -> bool:
-    async_reader = getattr(_hub_liveness_reader, "is_hub_online_async", None)
-    if async_reader is not None:
-        return bool(await async_reader(hub_id))
-    return bool(_hub_liveness_reader.is_hub_online(hub_id))
+    return bool(await _hub_liveness_reader.is_hub_online(hub_id))

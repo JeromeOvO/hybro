@@ -463,10 +463,7 @@ class AgentFacade:
     async def _is_hub_online(self, hub_id: str) -> bool:
         if self._hub_liveness is None:
             return False
-        async_reader = getattr(self._hub_liveness, "is_hub_online_async", None)
-        if async_reader is not None:
-            return bool(await async_reader(hub_id))
-        return bool(self._hub_liveness.is_hub_online(hub_id))
+        return bool(await self._hub_liveness.is_hub_online(hub_id))
 
     async def _get_excluded_agent_ids(self) -> frozenset[str]:
         if self._exclusion_reader is None:

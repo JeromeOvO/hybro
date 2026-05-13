@@ -902,10 +902,7 @@ class RelayHubLivenessReader:
     def __init__(self, relay: RelayService) -> None:
         self._relay = relay
 
-    def is_hub_online(self, hub_id: str) -> bool:
-        return self._relay.is_hub_alive_cached(hub_id)
-
-    async def is_hub_online_async(self, hub_id: str) -> bool:
+    async def is_hub_online(self, hub_id: str) -> bool:
         return await self._relay.is_hub_alive(hub_id)
 
     async def get_hub_owner_id(self, hub_id: str) -> str | None:
