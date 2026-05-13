@@ -18,13 +18,8 @@ class HubManagement(Protocol):
 
 @runtime_checkable
 class HubLivenessReader(Protocol):
-    def is_hub_online(self, hub_id: str) -> bool: ...
-    async def get_hub_owner_id(self, hub_id: str) -> str | None: ...
-
-
-@runtime_checkable
-class HubLivenessProbe(Protocol):
     async def is_hub_online(self, hub_id: str) -> bool: ...
+    async def get_hub_owner_id(self, hub_id: str) -> str | None: ...
 
 
 def validate_hub_liveness_reader(reader: Any | None) -> None:
@@ -33,21 +28,8 @@ def validate_hub_liveness_reader(reader: Any | None) -> None:
     method = getattr(reader, "is_hub_online", None)
     if not callable(method):
         raise TypeError("HubLivenessReader.is_hub_online must be callable")
-    if inspect.iscoroutinefunction(method):
-        raise TypeError(
-            "HubLivenessReader.is_hub_online must be synchronous; "
-            "async implementations return truthy coroutine objects for sync consumers"
-        )
-
-
-def validate_hub_liveness_probe(probe: Any | None) -> None:
-    if probe is None:
-        return
-    method = getattr(probe, "is_hub_online", None)
-    if not callable(method):
-        raise TypeError("HubLivenessProbe.is_hub_online must be callable")
     if not inspect.iscoroutinefunction(method):
-        raise TypeError("HubLivenessProbe.is_hub_online must be async")
+        raise TypeError("HubLivenessReader.is_hub_online must be async")
 
 
 @runtime_checkable
@@ -62,7 +44,6 @@ class HubDispatchPort(Protocol):
 
 __all__ = [
     "HubDispatchPort",
-    "HubLivenessProbe",
     "HubLivenessReader",
     "HubManagement",
 ]

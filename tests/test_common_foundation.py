@@ -267,52 +267,42 @@ def test_protocols_are_runtime_checkable():
             assert getattr(obj, "_is_runtime_protocol", False), name
 
 
-def test_hub_liveness_validation_rejects_async_runtime_protocol_match():
+def test_hub_liveness_validation_rejects_sync_runtime_protocol_match():
     import common.protocols as protocols
-    from common.protocols.hub_protocols import (
-        validate_hub_liveness_probe,
-        validate_hub_liveness_reader,
-    )
+    from common.protocols.hub_protocols import validate_hub_liveness_reader
 
-    class AsyncHubLivenessReader:
-        async def is_hub_online(self, hub_id: str) -> bool:
+    class SyncHubLivenessReader:
+        def is_hub_online(self, hub_id: str) -> bool:
             return True
 
         async def get_hub_owner_id(self, hub_id: str) -> str | None:
             return "user-1"
 
-    reader = AsyncHubLivenessReader()
+    reader = SyncHubLivenessReader()
 
     assert isinstance(reader, protocols.HubLivenessReader)
-    with pytest.raises(TypeError, match="is_hub_online must be synchronous"):
+    with pytest.raises(TypeError, match="is_hub_online must be async"):
         validate_hub_liveness_reader(reader)
 
-    class SyncHubLivenessProbe:
-        def is_hub_online(self, hub_id: str) -> bool:
-            return True
 
-    probe = SyncHubLivenessProbe()
-
-    assert isinstance(probe, protocols.HubLivenessProbe)
-    with pytest.raises(TypeError, match="is_hub_online must be async"):
-        validate_hub_liveness_probe(probe)
-
-
-def test_hub_liveness_probe_validation_rejects_non_callable_method():
+def test_hub_liveness_reader_validation_rejects_non_callable_method():
     import common.protocols as protocols
-    from common.protocols.hub_protocols import validate_hub_liveness_probe
+    from common.protocols.hub_protocols import validate_hub_liveness_reader
 
-    class NonCallableHubLivenessProbe:
+    class NonCallableHubLivenessReader:
         is_hub_online = True
 
-    probe = NonCallableHubLivenessProbe()
+        async def get_hub_owner_id(self, hub_id: str) -> str | None:
+            return "user-1"
 
-    assert isinstance(probe, protocols.HubLivenessProbe)
+    reader = NonCallableHubLivenessReader()
+
+    assert isinstance(reader, protocols.HubLivenessReader)
     with pytest.raises(
         TypeError,
-        match="HubLivenessProbe.is_hub_online must be callable",
+        match="HubLivenessReader.is_hub_online must be callable",
     ):
-        validate_hub_liveness_probe(probe)
+        validate_hub_liveness_reader(reader)
 
 
 def test_event_exports_are_distinct():
@@ -542,7 +532,6 @@ def test_protocol_methods_match_design_doc():
             "stop",
         },
         protocols.HubLivenessReader: {"is_hub_online", "get_hub_owner_id"},
-        protocols.HubLivenessProbe: {"is_hub_online"},
         protocols.HubDispatchPort: {
             "send_to_hub",
             "cancel_hub_task",
@@ -694,8 +683,7 @@ def test_protocol_methods_match_design_doc():
             "is_debate_mode",
         ],
     )
-    assert not inspect.iscoroutinefunction(protocols.HubLivenessReader.is_hub_online)
-    assert inspect.iscoroutinefunction(protocols.HubLivenessProbe.is_hub_online)
+    assert inspect.iscoroutinefunction(protocols.HubLivenessReader.is_hub_online)
     _assert_params(protocols.RoomManagement.create_room, ["self", "request"])
     _assert_params(protocols.ExecutionEngine.cancel, ["self", "room_id", "message_id"])
     _assert_params(protocols.MongoCollection.find, ["self", "query", "kwargs"])

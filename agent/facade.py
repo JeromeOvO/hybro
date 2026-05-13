@@ -32,15 +32,11 @@ from common.protocols import (
     AgentCardResolver,
     AgentExclusionReader,
     AgentRepository,
-    HubLivenessProbe,
     HubLivenessReader,
     LLMProvider,
     VectorDAL,
 )
-from common.protocols.hub_protocols import (
-    validate_hub_liveness_probe,
-    validate_hub_liveness_reader,
-)
+from common.protocols.hub_protocols import validate_hub_liveness_reader
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +58,6 @@ class AgentFacade:
         llm_provider: LLMProvider,
         card_resolver: AgentCardResolver,
         hub_liveness: HubLivenessReader | None = None,
-        hub_liveness_probe: HubLivenessProbe | None = None,
         exclusion_reader: AgentExclusionReader | None = None,
         agent_index: str = "a2a-agents",
         gateway_base_url: str | None = None,
@@ -77,9 +72,7 @@ class AgentFacade:
         self._llm_provider = llm_provider
         self._card_resolver = card_resolver
         validate_hub_liveness_reader(hub_liveness)
-        validate_hub_liveness_probe(hub_liveness_probe)
         self._hub_liveness = hub_liveness
-        self._hub_liveness_probe = hub_liveness_probe
         self._exclusion_reader = exclusion_reader
         self._agent_index = agent_index
         self._gateway_base_url = gateway_base_url
@@ -92,13 +85,6 @@ class AgentFacade:
     def bind_hub_liveness(self, hub_liveness: HubLivenessReader | None) -> None:
         validate_hub_liveness_reader(hub_liveness)
         self._hub_liveness = hub_liveness
-
-    def bind_hub_liveness_probe(
-        self,
-        hub_liveness_probe: HubLivenessProbe | None,
-    ) -> None:
-        validate_hub_liveness_probe(hub_liveness_probe)
-        self._hub_liveness_probe = hub_liveness_probe
 
     def bind_exclusion_reader(
         self,
@@ -144,10 +130,7 @@ class AgentFacade:
             return False
         if doc.get("source") != "hub" and not doc.get("hub_id"):
             return True
-        no_hub_liveness = (
-            self._hub_liveness is None and self._hub_liveness_probe is None
-        )
-        if no_hub_liveness or not doc.get("hub_id"):
+        if self._hub_liveness is None or not doc.get("hub_id"):
             return False
         return await self._is_hub_online(doc["hub_id"])
 
@@ -396,10 +379,7 @@ class AgentFacade:
                     hub_id,
                 )
 
-        has_hub_liveness = (
-            self._hub_liveness is not None or self._hub_liveness_probe is not None
-        )
-        is_online = await self._is_hub_online(hub_id) if has_hub_liveness else False
+        is_online = await self._is_hub_online(hub_id) if self._hub_liveness else False
         if is_online and synced:
             await self._repository.activate_agents([item.agent_id for item in synced])
 
@@ -450,17 +430,14 @@ class AgentFacade:
         await self._repository.update_health(agent_id, healthy)
 
     async def _with_hub_liveness(self, doc: dict) -> dict:
-        no_hub_liveness = (
-            self._hub_liveness is None and self._hub_liveness_probe is None
-        )
-        if not doc.get("hub_id") or no_hub_liveness:
+        if not doc.get("hub_id") or self._hub_liveness is None:
             return doc
         enriched = dict(doc)
         enriched["is_hub_online"] = await self._is_hub_online(doc["hub_id"])
         return enriched
 
     async def _with_hub_liveness_many(self, docs: list[dict]) -> list[dict]:
-        if self._hub_liveness is None and self._hub_liveness_probe is None:
+        if self._hub_liveness is None:
             return docs
         hub_ids = list(
             dict.fromkeys(doc.get("hub_id") for doc in docs if doc.get("hub_id"))
@@ -484,11 +461,9 @@ class AgentFacade:
         return enriched
 
     async def _is_hub_online(self, hub_id: str) -> bool:
-        if self._hub_liveness_probe is not None:
-            return bool(await self._hub_liveness_probe.is_hub_online(hub_id))
         if self._hub_liveness is None:
             return False
-        return bool(self._hub_liveness.is_hub_online(hub_id))
+        return bool(await self._hub_liveness.is_hub_online(hub_id))
 
     async def _get_excluded_agent_ids(self) -> frozenset[str]:
         if self._exclusion_reader is None:

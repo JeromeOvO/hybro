@@ -283,7 +283,6 @@ async def lifespan(app: FastAPI):
         from services.agent_liveness_service import bind_agent_liveness_deps
         from services.database_service import db_service as _db_svc
         from services.relay_service import (
-            RelayHubLivenessProbe,
             RelayHubLivenessReader,
             init_relay_service,
         )
@@ -296,15 +295,11 @@ async def lifespan(app: FastAPI):
         _relay_svc.set_leader_election(_leader)
         if _agent_deps is not None:
             hub_liveness_reader = RelayHubLivenessReader(_relay_svc)
-            hub_liveness_probe = RelayHubLivenessProbe(_relay_svc)
             if hasattr(_agent_deps.agent_registry, "bind_hub_liveness"):
                 _agent_deps.agent_registry.bind_hub_liveness(hub_liveness_reader)
-            if hasattr(_agent_deps.agent_registry, "bind_hub_liveness_probe"):
-                _agent_deps.agent_registry.bind_hub_liveness_probe(hub_liveness_probe)
             _relay_svc.bind_agent_registry_writer(_agent_deps.agent_registry_writer)
             bind_agent_liveness_deps(
                 hub_liveness_reader=hub_liveness_reader,
-                hub_liveness_probe=hub_liveness_probe,
                 agent_registry_writer=_agent_deps.agent_registry_writer,
             )
         await _relay_svc.start()

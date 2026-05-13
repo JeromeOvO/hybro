@@ -32,7 +32,6 @@ from common.protocols.execution_protocols import (
 )
 from common.protocols.hub_protocols import (
     HubDispatchPort,
-    HubLivenessProbe,
     HubLivenessReader,
     HubManagement,
 )
@@ -76,7 +75,6 @@ __all__ = [
     "HITLRepository",
     "HubAgentResponseSink",
     "HubDispatchPort",
-    "HubLivenessProbe",
     "HubLivenessReader",
     "HubManagement",
     "HubRepository",
