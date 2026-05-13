@@ -69,6 +69,27 @@ class TestValidateRoomMessageRequest:
         assert result.success is False
 
 
+class TestRoomFacadeBinding:
+    def test_unbound_room_facade_fails_fast(self):
+        rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+        rmc._room_facade = None
+        rmc._room_bound = False
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"RoomMessageCenter\.bind_facade\(\) not called - startup incomplete",
+        ):
+            rmc._require_room_facade()
+
+    def test_bind_facade_makes_room_persistence_available(self):
+        rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+        facade = MagicMock()
+
+        rmc.bind_facade(facade)
+
+        assert rmc._require_room_facade() is facade
+
+
 # =============================================================================
 # _find_paused_agent Tests
 # =============================================================================

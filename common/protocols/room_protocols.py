@@ -3,10 +3,12 @@ from typing import Protocol, runtime_checkable
 
 from common.dto import (
     AgentMessageInput,
+    AgentInfo,
     CreateRoomRequest,
     MembershipUpdateRequest,
     RoomInfo,
     RoomMessageInfo,
+    SavedAgentGroupSnapshot,
     SavedUserMessage,
     UserMessageInput,
 )
@@ -61,9 +63,16 @@ class RoomOwnershipReader(Protocol):
     async def verify_room_hub_ownership(self, room_id: str, hub_id: str) -> bool: ...
 
 
+@runtime_checkable
+class RoomMembershipSeedSource(Protocol):
+    async def get_saved_group(self, group_id: str) -> SavedAgentGroupSnapshot | None: ...
+    async def list_current_agents(self, user_id: str | None) -> list[AgentInfo]: ...
+
+
 __all__ = [
     "RoomHistoryReader",
     "RoomManagement",
+    "RoomMembershipSeedSource",
     "RoomMessageStore",
     "RoomOwnershipReader",
     "RoomRegistry",

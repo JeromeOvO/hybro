@@ -258,6 +258,12 @@ def test_common_foundation_dtos_can_be_instantiated():
     )
 
 
+def test_room_info_preserves_legacy_membership_status_default():
+    room = RoomInfo(room_id="r1", room_name="Room", owner_id="u1")
+
+    assert room.membership_origin_status == "active"
+
+
 def test_protocols_are_runtime_checkable():
     import common.protocols as protocols
 
@@ -615,6 +621,8 @@ def test_protocol_methods_match_design_doc():
             "get_by_owner",
             "create",
             "update",
+            "update_fields",
+            "set_membership",
             "delete",
         },
         protocols.MessageRepository: {
@@ -625,6 +633,9 @@ def test_protocol_methods_match_design_doc():
             "get_for_room",
             "get_thread",
             "update_status",
+            "delete_for_room",
+            "get_user_messages_for_room",
+            "get_agent_messages_for_room",
         },
         protocols.RunRepository: {
             "create",

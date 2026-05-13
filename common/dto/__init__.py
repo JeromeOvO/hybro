@@ -94,6 +94,7 @@ from common.dto.room import (
     RoomMembership,
     RoomMessageInfo,
     RoomSummary,
+    SavedAgentGroupSnapshot,
     SavedUserMessage,
     UserMessageInput,
 )
@@ -172,6 +173,7 @@ __all__ = [
     "RunState",
     "RunStateChanged",
     "SSEEvent",
+    "SavedAgentGroupSnapshot",
     "SavedUserMessage",
     "SortOrder",
     "SyncedHubAgent",

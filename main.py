@@ -166,7 +166,7 @@ async def lifespan(app: FastAPI):
 
         if mongodb.client is not None:
             from a2a_adapter import AgentCardResolverImpl
-            from container import create_agent_deps
+            from container import create_agent_deps, create_room_deps
             from dal.mongo import MongoDALImpl
             from dal.pinecone import VectorDALImpl
             from llm_gateway import LLMGatewayImpl
@@ -176,9 +176,12 @@ async def lifespan(app: FastAPI):
             from services.agent_matcher import agent_matcher
             from services.agent_selection_service import agent_selection_service
             from services.agent_service import agent_service
+            from services.room_membership_source import LegacyRoomMembershipSeedSource
+            from services.room_services import room_services
 
+            mongo_dal = MongoDALImpl(database=mongodb.db)
             _agent_deps = create_agent_deps(
-                mongo=MongoDALImpl(database=mongodb.db),
+                mongo=mongo_dal,
                 vector=VectorDALImpl(),
                 llm_provider=LLMGatewayImpl(),
                 card_resolver=AgentCardResolverImpl(),
@@ -191,6 +194,16 @@ async def lifespan(app: FastAPI):
             agent_matcher.bind_facade(_agent_facade)
             agent_selection_service.bind_facade(_agent_facade)
             agent_health_service.bind_facade(_agent_facade)
+
+            _room_deps = create_room_deps(
+                mongo=mongo_dal,
+                agent_registry=_agent_deps.agent_registry,
+                membership_source=LegacyRoomMembershipSeedSource(),
+            )
+            _room_facade = _room_deps.room_registry
+            room_services.bind_facade(_room_facade)
+            room_center.room_center.bind_facade(_room_facade)
+            room_center.room_message_center.bind_facade(_room_facade)
         else:
             logger.warning("AgentDeps binding skipped: MongoDB client is unavailable")
 

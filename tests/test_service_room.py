@@ -12,6 +12,8 @@ Tests cover:
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+from common.dto import RoomInfo
+from models.request import RoomCenterRoomSettingRequest
 from services.room_services import RoomServices
 
 
@@ -27,6 +29,92 @@ def room_center():
     rc.sse_manager = MagicMock()
     rc.task_service = MagicMock()
     return rc
+
+
+@pytest.mark.asyncio
+async def test_room_services_delegated_methods_fail_before_bind():
+    svc = object.__new__(RoomServices)
+    svc._facade = None
+    svc._bound = False
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"RoomServices\.bind_facade\(\) not called - startup incomplete",
+    ):
+        await svc.create_new_room(RoomCenterRoomSettingRequest(room_name="Room"))
+
+
+@pytest.mark.asyncio
+async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
+    svc = object.__new__(RoomServices)
+    svc.database_service = MagicMock()
+    svc.database_service.get_active_runs_by_room_id = AsyncMock(return_value=[])
+    svc._bound = False
+    svc._facade = None
+    facade = AsyncMock()
+    facade.create_room.return_value = RoomInfo(
+        room_id="r1",
+        room_name="Room",
+        owner_id="owner",
+        owner_name="Owner",
+        agent_ids=["a1"],
+        agent_set={"a1": "Agent One"},
+    )
+    facade.get_room.return_value = facade.create_room.return_value
+    facade.list_rooms_for_owner.return_value = [facade.create_room.return_value]
+    facade.replace_membership.return_value = facade.create_room.return_value
+    facade.update_room.return_value = facade.create_room.return_value
+    facade.delete_room.return_value = True
+
+    svc.bind_facade(facade)
+
+    create_response = await svc.create_new_room(
+        RoomCenterRoomSettingRequest(
+            room_name="Room",
+            room_owner_id="owner",
+            room_owner_name="Owner",
+            room_agent_set={"a1": "Agent One"},
+            requesting_user_id="owner",
+        )
+    )
+    inquiry_response = await svc.inquiry_room_setting(
+        RoomCenterRoomSettingRequest(room_id="r1", requesting_user_id="owner")
+    )
+    list_response = await svc.inquiry_rooms_by_room_owner_id(
+        RoomCenterRoomSettingRequest(room_owner_id="owner")
+    )
+    replace_response = await svc.update_room_agent_set(
+        RoomCenterRoomSettingRequest(
+            room_id="r1",
+            room_agent_set={"a1": "Agent One"},
+            requesting_user_id="owner",
+        )
+    )
+    rename_response = await svc.update_room_name(
+        RoomCenterRoomSettingRequest(room_id="r1", room_name="Renamed")
+    )
+    extend_response = await svc.update_room_extend_info(
+        RoomCenterRoomSettingRequest(room_id="r1", extend_info={"x": 1})
+    )
+    delete_response = await svc.delete_room_by_room_id(
+        RoomCenterRoomSettingRequest(room_id="r1", requesting_user_id="owner")
+    )
+
+    assert create_response.success is True
+    assert create_response.room.room_id == "r1"
+    assert inquiry_response.room.room_agent_set == {"a1": "Agent One"}
+    assert list_response.room_list[0].room_id == "r1"
+    assert replace_response.success is True
+    assert rename_response.success is True
+    assert extend_response.success is True
+    assert delete_response.success is True
+    facade.create_room.assert_awaited_once()
+    facade.get_room.assert_awaited()
+    facade.list_rooms_for_owner.assert_awaited_once_with("owner")
+    facade.replace_membership.assert_awaited_once()
+    facade.update_room.assert_any_await("r1", {"room_name": "Renamed"})
+    facade.update_room.assert_any_await("r1", {"extend_info": {"x": 1}})
+    facade.delete_room.assert_awaited_once_with("r1", "owner")
 
 
 # =============================================================================
