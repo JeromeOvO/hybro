@@ -62,7 +62,7 @@ class RoomInfo(FrozenDTO):
     agent_ids: list[str] = Field(default_factory=list)
     agent_set: dict[str, str] = Field(default_factory=dict)
     membership_origin: str = "manual"
-    membership_origin_status: str = "manual"
+    membership_origin_status: str = "active"
     source_group_id: str | None = None
     source_group_name: str | None = None
     created_at: datetime | None = None

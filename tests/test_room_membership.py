@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -20,6 +21,7 @@ from room.translators import (
     user_message_doc_from_input,
     room_info_from_doc,
 )
+from services.room_membership_source import LegacyRoomMembershipSeedSource
 
 
 def test_room_translator_maps_legacy_fields_and_defaults_provenance():
@@ -148,6 +150,44 @@ def test_user_message_doc_from_input_preserves_metadata():
     assert doc["message_content"]["message_text"] == "hello"
     assert doc["client_request_id"] == "client-1"
     assert doc["scope_resolution_error"] == {"code": "empty_scope"}
+
+
+@pytest.mark.asyncio
+async def test_legacy_membership_source_logs_agent_service_fallback():
+    agent = SimpleNamespace(
+        agent_id="a1",
+        agent_card=SimpleNamespace(name="Agent One", description=None, url=None),
+        provider_id="owner",
+        agent_status="active",
+        source="cloud",
+        hub_id=None,
+        is_public=True,
+        public_url=None,
+    )
+    source = LegacyRoomMembershipSeedSource(
+        database_service=SimpleNamespace(
+            get_all_active_agents=AsyncMock(return_value=[agent])
+        ),
+        agent_service_adapter=SimpleNamespace(
+            get_agents_with_conditions=AsyncMock(side_effect=RuntimeError("boom"))
+        ),
+    )
+
+    with patch("services.room_membership_source.logger", create=True) as logger:
+        agents = await source.list_current_agents("owner")
+
+    assert [agent.agent_id for agent in agents] == ["a1"]
+    logger.debug.assert_called_once()
+
+
+def test_legacy_membership_source_warns_for_missing_critical_agent_fields():
+    agent = SimpleNamespace(agent_id="a1", agent_card=None)
+
+    with patch("services.room_membership_source.logger", create=True) as logger:
+        info = LegacyRoomMembershipSeedSource.agent_info_from_legacy(agent)
+
+    assert info.agent_id == "a1"
+    logger.warning.assert_called_once()
 
 
 def test_message_graph_sort_thread_and_status_payload_helpers():

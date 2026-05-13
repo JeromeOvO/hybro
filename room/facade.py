@@ -69,7 +69,7 @@ class RoomFacade:
 
     async def get_room_owner(self, room_id: str) -> str | None:
         doc = await self._repository.get_by_id(room_id)
-        return str(doc["room_owner_id"]) if doc is not None and doc.get("room_owner_id") else None
+        return _owner_id_from_doc(doc)
 
     async def create_room(self, request: CreateRoomRequest) -> RoomInfo:
         self._validate_create_room_request(request)
@@ -97,7 +97,7 @@ class RoomFacade:
 
     async def delete_room(self, room_id: str, owner_id: str) -> bool:
         doc = await self._repository.get_by_id(room_id)
-        if doc is None or doc.get("room_owner_id") != owner_id:
+        if _owner_id_from_doc(doc) != owner_id:
             return False
         await self._message_repository.delete_for_room(room_id)
         return await self._repository.delete(room_id)
@@ -308,3 +308,9 @@ class RoomFacade:
 
 def _is_visible(agent: AgentInfo, user_id: str | None) -> bool:
     return agent.is_public or (user_id is not None and agent.provider_id == user_id)
+
+
+def _owner_id_from_doc(doc: dict | None) -> str | None:
+    if doc is None or not doc.get("room_owner_id"):
+        return None
+    return str(doc["room_owner_id"])

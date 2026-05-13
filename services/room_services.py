@@ -174,12 +174,20 @@ class RoomServices:
             else {agent_id: agent_id for agent_id in info.agent_ids},
             room_created_at=info.created_at or utcnow(),
             membership_origin=info.membership_origin,
-            membership_origin_status=info.membership_origin_status,
+            membership_origin_status=RoomServices._legacy_membership_origin_status(
+                info.membership_origin_status
+            ),
             source_group_id=info.source_group_id,
             source_group_name=info.source_group_name,
             extend_info=info.extend_info,
             processing_message_id=info.processing_message_id,
         )
+
+    @staticmethod
+    def _legacy_membership_origin_status(status: str | None) -> str:
+        if status == "active":
+            return MembershipOriginStatus.MANUAL.value
+        return status or MembershipOriginStatus.MANUAL.value
 
     def _room_setting_response_from_info(
         self,
@@ -1044,6 +1052,8 @@ class RoomServices:
         try:
             from database.mongodb import mongodb
 
+            # TODO(Phase 9): Move this transitional cleanup behind a repository/DAL
+            # boundary when the remaining legacy room data paths are retired.
             await mongodb.room_memories_collection.delete_many({"room_id": room_id})
             if s3_cleanup_ok:
                 await mongodb.file_uploads_collection.delete_many({"room_id": room_id})

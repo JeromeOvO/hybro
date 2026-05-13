@@ -3,9 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from common.dto import AgentInfo, SavedAgentGroupSnapshot
+from common.utils.logger import get_logger
 from models.request import AgentCenterRequest
 from services.agent_service import agent_service
 from services.database_service import db_service
+
+logger = get_logger(__name__)
 
 
 class LegacyRoomMembershipSeedSource:
@@ -40,24 +43,42 @@ class LegacyRoomMembershipSeedSource:
                 )
             )
             if response.success and response.agents is not None:
-                return [_agent_info_from_legacy(agent) for agent in response.agents]
-        except Exception:
-            pass
+                return [self.agent_info_from_legacy(agent) for agent in response.agents]
+        except Exception as exc:
+            logger.debug(
+                "Legacy room membership source falling back to database active agents: %s",
+                exc,
+            )
 
         agents = await self._database_service.get_all_active_agents(user_id=user_id)
-        return [_agent_info_from_legacy(agent) for agent in agents or []]
+        return [self.agent_info_from_legacy(agent) for agent in agents or []]
+
+    @staticmethod
+    def agent_info_from_legacy(agent: Any) -> AgentInfo:
+        return _agent_info_from_legacy(agent)
 
 
 def _agent_info_from_legacy(agent: Any) -> AgentInfo:
     card = getattr(agent, "agent_card", None)
-    status = getattr(getattr(agent, "agent_status", None), "value", None)
+    raw_status = getattr(agent, "agent_status", None)
+    status = getattr(raw_status, "value", None)
+    agent_id = getattr(agent, "agent_id", None)
+    name = getattr(card, "name", None)
+    resolved_status = status or str(raw_status or "active")
+    if not agent_id or name is None or raw_status is None or not resolved_status:
+        logger.warning(
+            "Legacy room membership agent missing critical fields: agent_id=%r name=%r status=%r",
+            agent_id,
+            name,
+            resolved_status,
+        )
     return AgentInfo(
-        agent_id=agent.agent_id,
-        name=getattr(card, "name", None),
+        agent_id=agent_id,
+        name=name,
         description=getattr(card, "description", None),
         url=getattr(card, "url", None),
         provider_id=getattr(agent, "provider_id", None),
-        status=status or str(getattr(agent, "agent_status", "active")),
+        status=resolved_status,
         capabilities=[],
         source=getattr(agent, "source", "cloud"),
         hub_id=getattr(agent, "hub_id", None),

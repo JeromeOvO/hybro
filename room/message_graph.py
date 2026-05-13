@@ -27,7 +27,7 @@ def sort_messages(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def status_update_payload(status: str, fields: dict[str, Any]) -> dict[str, Any]:
     return {
         "message_content.message_task.status.state": status,
-        **dict(fields),
+        **fields,
     }
 
 

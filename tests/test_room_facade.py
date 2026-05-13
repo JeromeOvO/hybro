@@ -201,6 +201,30 @@ async def test_update_and_delete_room_lifecycle_rules():
 
 
 @pytest.mark.asyncio
+async def test_delete_room_uses_normalized_owner_id_from_repository_doc():
+    class OwnerId:
+        def __str__(self) -> str:
+            return "owner"
+
+    facade, rooms, messages, _, _ = _facade(
+        room_docs=[
+            {
+                "room_id": "r1",
+                "room_name": "Room",
+                "room_owner_id": OwnerId(),
+                "room_owner_name": "Owner",
+                "room_agent_set": {},
+            }
+        ]
+    )
+
+    assert await facade.get_room_owner("r1") == "owner"
+    assert await facade.delete_room("r1", "owner") is True
+    assert messages.deleted_rooms == ["r1"]
+    assert rooms.deleted_ids == ["r1"]
+
+
+@pytest.mark.asyncio
 async def test_update_membership_add_remove_validation_and_provenance():
     facade, rooms, _, _, _ = _facade(
         room_docs=[
