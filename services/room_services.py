@@ -24,6 +24,7 @@ from common.utils.context_utils import (
     build_minimal_context,
     migrate_legacy_memory,
 )
+from common.dto import CreateRoomRequest, MembershipSeed, RoomInfo
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from dataclasses import dataclass
@@ -139,6 +140,8 @@ class RoomServices:
         self.sse_manager = sse_manager  # Use singleton
         self.task_service = task_service  # Use singleton
         self._s3_service = None
+        self._facade = None
+        self._bound = False
 
     @property
     def s3_service(self):
@@ -147,6 +150,107 @@ class RoomServices:
 
             self._s3_service = s3_service
         return self._s3_service
+
+    def bind_facade(self, facade) -> None:
+        self._facade = facade
+        self._bound = True
+
+    def _require_facade(self):
+        if not getattr(self, "_bound", False) or getattr(self, "_facade", None) is None:
+            raise RuntimeError(
+                "RoomServices.bind_facade() not called - startup incomplete"
+            )
+        return self._facade
+
+    @staticmethod
+    def _legacy_room_from_info(info: RoomInfo) -> Room:
+        return Room(
+            room_id=info.room_id,
+            room_name=info.room_name,
+            room_owner_id=info.owner_id,
+            room_owner_name=info.owner_name or "",
+            room_agent_set=dict(info.agent_set)
+            if info.agent_set
+            else {agent_id: agent_id for agent_id in info.agent_ids},
+            room_created_at=info.created_at or utcnow(),
+            membership_origin=info.membership_origin,
+            membership_origin_status=info.membership_origin_status,
+            source_group_id=info.source_group_id,
+            source_group_name=info.source_group_name,
+            extend_info=info.extend_info,
+            processing_message_id=info.processing_message_id,
+        )
+
+    def _room_setting_response_from_info(
+        self,
+        info: RoomInfo,
+        *,
+        active_runs: list[dict] | None = None,
+    ) -> RoomCenterRoomSettingResponse:
+        room = self._legacy_room_from_info(info)
+        return RoomCenterRoomSettingResponse(
+            room_id=room.room_id,
+            room=room,
+            active_runs=active_runs,
+            success=True,
+            error=None,
+            status_code=200,
+        )
+
+    def _membership_seed_from_request(
+        self,
+        request: RoomCenterRoomSettingRequest,
+    ) -> MembershipSeed:
+        requesting_user_id = request.requesting_user_id or request.room_owner_id
+        if request.membership_seed_input is not None:
+            return MembershipSeed(
+                mode=request.membership_seed_input,
+                agent_ids=request.room_agent_ids,
+                group_id=request.seed_group_id,
+                requesting_user_id=requesting_user_id,
+            )
+        if request.seed_all_current_agents:
+            return MembershipSeed(
+                mode="all_current_agents",
+                requesting_user_id=requesting_user_id,
+            )
+        if request.applied_from_group:
+            return MembershipSeed(
+                mode="saved_group",
+                group_id=request.applied_from_group,
+                requesting_user_id=requesting_user_id,
+            )
+        agent_ids = None
+        if request.room_agent_set is not None:
+            agent_ids = list(self._normalize_room_agent_set(request.room_agent_set))
+        return MembershipSeed(
+            mode="manual",
+            agent_ids=agent_ids,
+            requesting_user_id=requesting_user_id,
+        )
+
+    @staticmethod
+    def _room_error_response(
+        *,
+        room_id: str | None = None,
+        error: str,
+        status_code: int | None = None,
+    ) -> RoomCenterRoomSettingResponse:
+        if status_code is None:
+            lower = error.lower()
+            if "permission" in lower or "access denied" in lower:
+                status_code = 403
+            elif "not found" in lower:
+                status_code = 404
+            else:
+                status_code = 400
+        return RoomCenterRoomSettingResponse(
+            room_id=room_id,
+            room=None,
+            success=False,
+            error=error,
+            status_code=status_code,
+        )
 
     # === room_agent_set normalization helpers ===
     @staticmethod
@@ -357,6 +461,7 @@ class RoomServices:
     async def create_new_room(
         self, room_create_request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
+        facade = self._require_facade()
         if room_create_request.room_name is None:
             return RoomCenterRoomSettingResponse(
                 room_id=None,
@@ -378,6 +483,21 @@ class RoomServices:
                 error="Room owner name is required",
                 status_code=400,
             )
+
+        try:
+            info = await facade.create_room(
+                CreateRoomRequest(
+                    owner_id=room_create_request.room_owner_id,
+                    owner_name=room_create_request.room_owner_name,
+                    room_name=room_create_request.room_name,
+                    membership_seed=self._membership_seed_from_request(
+                        room_create_request
+                    ),
+                )
+            )
+        except ValueError as exc:
+            return self._room_error_response(error=str(exc))
+        return self._room_setting_response_from_info(info)
 
         # Resolve membership input (canonical or legacy)
         result = await self._resolve_membership_input(room_create_request)
@@ -442,6 +562,7 @@ class RoomServices:
     async def inquiry_room_setting(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
+        facade = self._require_facade()
         if request.room_id is None:
             return RoomCenterRoomSettingResponse(
                 room_id=None,
@@ -452,6 +573,23 @@ class RoomServices:
             )
 
         room_id = request.room_id
+        info = await facade.get_room(room_id)
+        if info is None:
+            return RoomCenterRoomSettingResponse(
+                room_id=None,
+                room=None,
+                success=False,
+                error="Room not found",
+                status_code=404,
+            )
+        active_runs_raw = await self.database_service.get_active_runs_by_room_id(
+            room_id
+        )
+        return self._room_setting_response_from_info(
+            info,
+            active_runs=self._active_run_payloads_from_raw(active_runs_raw),
+        )
+
         room = await self.database_service.get_room_by_room_id(room_id)
         if room is None:
             return RoomCenterRoomSettingResponse(
@@ -543,6 +681,7 @@ class RoomServices:
     async def inquiry_rooms_by_room_owner_id(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
+        facade = self._require_facade()
         if request.room_owner_id is None:
             return RoomCenterRoomSettingResponse(
                 room_list=None,
@@ -552,6 +691,14 @@ class RoomServices:
             )
 
         room_owner_id = request.room_owner_id
+        infos = await facade.list_rooms_for_owner(room_owner_id)
+        return RoomCenterRoomSettingResponse(
+            room_list=[self._legacy_room_from_info(info) for info in infos],
+            success=True,
+            error=None,
+            status_code=200,
+        )
+
         rooms = await self.database_service.get_rooms_by_room_owner_id(room_owner_id)
         return RoomCenterRoomSettingResponse(
             room_list=rooms, success=True, error=None, status_code=200
@@ -560,6 +707,7 @@ class RoomServices:
     async def update_room_agent_set(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
+        facade = self._require_facade()
         if request.room_id is None:
             return RoomCenterRoomSettingResponse(
                 room_id=None,
@@ -570,6 +718,28 @@ class RoomServices:
             )
 
         room_id = request.room_id
+        has_membership_input = (
+            request.membership_seed_input is not None
+            or request.room_agent_set is not None
+            or request.seed_all_current_agents
+            or request.applied_from_group is not None
+        )
+        if not has_membership_input:
+            return RoomCenterRoomSettingResponse(
+                room_id=None, room=None, success=False,
+                error="Room agent set or canonical membership input is required",
+                status_code=400,
+            )
+        try:
+            info = await facade.replace_membership(
+                room_id,
+                self._membership_seed_from_request(request),
+                requesting_user_id=request.requesting_user_id,
+            )
+        except ValueError as exc:
+            return self._room_error_response(room_id=room_id, error=str(exc))
+        return self._room_setting_response_from_info(info)
+
         room = await self.database_service.get_room_by_room_id(room_id)
         if room is None:
             return RoomCenterRoomSettingResponse(
@@ -649,6 +819,7 @@ class RoomServices:
     async def update_room_name(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
+        facade = self._require_facade()
         if request.room_id is None:
             return RoomCenterRoomSettingResponse(
                 room_id=None,
@@ -659,6 +830,26 @@ class RoomServices:
             )
 
         room_id = request.room_id
+        if request.room_name is None:
+            return RoomCenterRoomSettingResponse(
+                room_id=None,
+                room=None,
+                success=False,
+                error="Room name is required",
+                status_code=400,
+            )
+        try:
+            info = await facade.update_room(room_id, {"room_name": request.room_name})
+        except ValueError as exc:
+            return self._room_error_response(room_id=room_id, error=str(exc))
+        if info is None:
+            return self._room_error_response(
+                room_id=None,
+                error="Room not found",
+                status_code=404,
+            )
+        return self._room_setting_response_from_info(info)
+
         room = await self.database_service.get_room_by_room_id(room_id)
         if room is None:
             return RoomCenterRoomSettingResponse(
@@ -696,6 +887,7 @@ class RoomServices:
     async def update_room_extend_info(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
+        facade = self._require_facade()
         if request.room_id is None:
             return RoomCenterRoomSettingResponse(
                 room_id=None,
@@ -706,6 +898,26 @@ class RoomServices:
             )
 
         room_id = request.room_id
+        if request.extend_info is None:
+            return RoomCenterRoomSettingResponse(
+                room_id=None,
+                room=None,
+                success=False,
+                error="Extend info is required",
+                status_code=400,
+            )
+        try:
+            info = await facade.update_room(room_id, {"extend_info": request.extend_info})
+        except ValueError as exc:
+            return self._room_error_response(room_id=room_id, error=str(exc))
+        if info is None:
+            return self._room_error_response(
+                room_id=None,
+                error="Room not found",
+                status_code=404,
+            )
+        return self._room_setting_response_from_info(info)
+
         room = await self.database_service.get_room_by_room_id(room_id)
         if room is None:
             return RoomCenterRoomSettingResponse(
@@ -743,6 +955,7 @@ class RoomServices:
     async def delete_room_by_room_id(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
+        facade = self._require_facade()
         if request.room_id is None:
             return RoomCenterRoomSettingResponse(
                 room_id=None,
@@ -753,6 +966,30 @@ class RoomServices:
             )
 
         room_id = request.room_id
+        owner_id = (
+            request.requesting_user_id
+            or request.room_owner_id
+            or await facade.get_room_owner(room_id)
+        )
+        if owner_id is None:
+            return self._room_error_response(
+                room_id=room_id,
+                error="Room not found",
+                status_code=404,
+            )
+        success = await facade.delete_room(room_id, owner_id)
+        if not success:
+            return RoomCenterRoomSettingResponse(
+                room_id=room_id,
+                room=None,
+                success=False,
+                error="Failed to delete room",
+                status_code=500,
+            )
+        await self._delete_transitional_non_room_data(room_id)
+        return RoomCenterRoomSettingResponse(
+            room_id=room_id, room=None, success=True, error=None, status_code=200
+        )
 
         # Delete the room record first to confirm ownership/existence
         success = await self.database_service.delete_room_by_room_id(room_id)
@@ -792,6 +1029,30 @@ class RoomServices:
         return RoomCenterRoomSettingResponse(
             room_id=room_id, room=None, success=True, error=None, status_code=200
         )
+
+    async def _delete_transitional_non_room_data(self, room_id: str) -> None:
+        s3_cleanup_ok = True
+        try:
+            await self.s3_service.delete_prefix(f"uploads/{room_id}/")
+            await self.s3_service.delete_prefix(f"artifacts/{room_id}/")
+        except Exception:
+            s3_cleanup_ok = False
+            logger.warning(
+                "S3 cleanup failed for room %s; orphan job will retry", room_id
+            )
+
+        try:
+            from database.mongodb import mongodb
+
+            await mongodb.room_memories_collection.delete_many({"room_id": room_id})
+            if s3_cleanup_ok:
+                await mongodb.file_uploads_collection.delete_many({"room_id": room_id})
+            await mongodb.conversation_content_collection.delete_many({"room_id": room_id})
+        except Exception:
+            logger.warning(
+                "Transitional non-room cleanup failed for room %s", room_id,
+                exc_info=True,
+            )
 
     # --- Attachment resolution helpers ---
 

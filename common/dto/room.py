@@ -41,6 +41,14 @@ class MembershipSeed(FrozenDTO):
     requesting_user_id: str | None = None
 
 
+class SavedAgentGroupSnapshot(FrozenDTO):
+    group_id: str
+    name: str
+    owner_id: str | None = None
+    type: str | None = None
+    agent_ids: list[str] = Field(default_factory=list)
+
+
 class MembershipUpdateRequest(FrozenDTO):
     add_agent_ids: list[str] | None = None
     remove_agent_ids: list[str] | None = None
@@ -50,14 +58,16 @@ class RoomInfo(FrozenDTO):
     room_id: str
     room_name: str
     owner_id: str
-    owner_name: str
+    owner_name: str | None = None
     agent_ids: list[str] = Field(default_factory=list)
-    membership_origin: str = "MANUAL"
-    membership_origin_status: str = "active"
+    agent_set: dict[str, str] = Field(default_factory=dict)
+    membership_origin: str = "manual"
+    membership_origin_status: str = "manual"
     source_group_id: str | None = None
     source_group_name: str | None = None
     created_at: datetime | None = None
     processing_message_id: str | None = None
+    extend_info: dict[str, Any] | None = None
 
 
 class CreateRoomRequest(FrozenDTO):
@@ -111,6 +121,7 @@ __all__ = [
     "RoomMembership",
     "RoomMessageInfo",
     "RoomSummary",
+    "SavedAgentGroupSnapshot",
     "SavedUserMessage",
     "UserMessageInput",
 ]

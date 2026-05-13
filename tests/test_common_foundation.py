@@ -615,6 +615,8 @@ def test_protocol_methods_match_design_doc():
             "get_by_owner",
             "create",
             "update",
+            "update_fields",
+            "set_membership",
             "delete",
         },
         protocols.MessageRepository: {
@@ -625,6 +627,9 @@ def test_protocol_methods_match_design_doc():
             "get_for_room",
             "get_thread",
             "update_status",
+            "delete_for_room",
+            "get_user_messages_for_room",
+            "get_agent_messages_for_room",
         },
         protocols.RunRepository: {
             "create",

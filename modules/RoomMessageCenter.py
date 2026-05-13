@@ -146,10 +146,26 @@ class RoomMessageCenter:
         # the critical section (single-worker only).
         self._room_locks: dict[str, asyncio.Lock] = {}
         self._redis: RedisService | None = None
+        self._room_facade = None
+        self._room_bound = False
         # Turn-event infrastructure is retired; keep placeholders to
         # preserve defensive getattr/None checks in legacy code paths.
 
     # -- Redis wiring (called from main.py at startup) ---------------------
+
+    def bind_facade(self, facade) -> None:
+        self._room_facade = facade
+        self._room_bound = True
+
+    def _require_room_facade(self):
+        if (
+            not getattr(self, "_room_bound", False)
+            or getattr(self, "_room_facade", None) is None
+        ):
+            raise RuntimeError(
+                "RoomMessageCenter.bind_facade() not called - startup incomplete"
+            )
+        return self._room_facade
 
     def set_redis_service(self, redis_service: RedisService | None) -> None:
         self._redis = redis_service
