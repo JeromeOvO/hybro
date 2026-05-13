@@ -10,6 +10,10 @@
 
 ---
 
+## Post-Review Hub Liveness Update
+
+Final implementation note: the hub liveness fix did not keep the original split-protocol approach. `HubLivenessReader.is_hub_online(hub_id)` is now async and authoritative. `HubLivenessProbe` and `RelayHubLivenessProbe` were never needed and were removed. `validate_hub_liveness_reader()` now rejects sync implementations, `RelayHubLivenessReader.is_hub_online()` delegates directly to `RelayService.is_hub_alive()`, all `getattr(..., "is_hub_online_async", ...)` duck-typing was removed from the Agent facade and liveness service, and startup uses one adapter, one bind path, and one Common protocol.
+
 ## Scope
 
 Include:
@@ -86,7 +90,7 @@ Reference-only:
 - `common/protocols/dal_protocols.py`: `MongoDAL` and `VectorDAL`.
 - `common/protocols/a2a_protocols.py`: `AgentCardResolver`.
 - `common/protocols/llm_protocols.py`: `LLMProvider.embed()`.
-- `common/protocols/hub_protocols.py`: `HubLivenessReader`.
+- `common/protocols/hub_protocols.py`: async `HubLivenessReader` and `validate_hub_liveness_reader()`.
 
 ## Dependency Diagram
 
@@ -173,6 +177,17 @@ class AgentFacade:
 ```
 
 Do not include the old delegation parameters from `dev`: `agent_reader`, `agent_matcher`, `agent_management`, or `registry_writer`. Keep tracing by using `tracer or default_tracer` from `common.observability`; importing observability from `common` is allowed by the module boundary.
+
+Final hub liveness contract after review fixes:
+
+```python
+@runtime_checkable
+class HubLivenessReader(Protocol):
+    async def is_hub_online(self, hub_id: str) -> bool: ...
+    async def get_hub_owner_id(self, hub_id: str) -> str | None: ...
+```
+
+`HubLivenessProbe` is not part of the final design. `validate_hub_liveness_reader()` must reject sync `is_hub_online()` implementations so sync readers cannot accidentally satisfy the runtime protocol and return truthy coroutine mismatches in async consumers.
 
 Protocol methods implemented exactly:
 - `get_agent(agent_id: str) -> AgentInfo | None`
@@ -579,7 +594,7 @@ Note: If product policy says hub-source agents must never be called directly, up
 
 - [ ] **Step 2: Implement registry methods**
 
-Use repository reads only. Hydrate `is_hub_online` using `hub_liveness.is_hub_online(hub_id)` when `hub_id` exists.
+Use repository reads only. Hydrate `is_hub_online` using `await hub_liveness.is_hub_online(hub_id)` when `hub_id` exists.
 
 - [ ] **Step 3: Implement `is_directly_callable()`**
 
@@ -590,7 +605,7 @@ Algorithm:
 4. If hub-backed and `hub_liveness` is missing, return false fail-closed.
 5. Return the hub liveness result.
 
-`HubLivenessReader.is_hub_online()` is synchronous, not a coroutine. Inside async facade methods, call `self._hub_liveness.is_hub_online(hub_id)` directly without `await`. Do not change the protocol to async.
+`HubLivenessReader.is_hub_online()` is async in the final implementation. Inside async facade methods, call `await self._hub_liveness.is_hub_online(hub_id)`. Do not add `HubLivenessProbe`, `is_hub_online_async`, or duck-typed fallback paths.
 
 - [ ] **Step 4: Run registry tests**
 
@@ -820,7 +835,7 @@ Port behavior from `services/relay_service.py`:
 6. Set proxy `public_url` from `gateway_base_url`.
 7. Hash description and index only when changed.
 8. Prune missing agents when requested.
-9. If `hub_liveness.is_hub_online(hub_id)`, activate synced ids.
+9. If `await hub_liveness.is_hub_online(hub_id)`, activate synced ids.
 10. Return `SyncedHubAgent` DTOs.
 
 - [ ] **Step 4: Run hub sync tests**
@@ -922,7 +937,8 @@ Keep `RoutingStrategy`, `AgentSelection`, and `AgentSelectionResult`. Delegate s
 
 `services/agent_liveness_service.py` should:
 - For cloud agents: keep HTTP probe behavior in health service.
-- For hub agents: call `AgentRegistryWriter.mark_hub_agents_offline()` and synchronous `HubLivenessReader.is_hub_online()` through bound dependencies; do not import `services.relay_service` inside liveness code.
+- For hub agents: call `AgentRegistryWriter.mark_hub_agents_offline()` and `await HubLivenessReader.is_hub_online()` through bound dependencies; do not import `services.relay_service` inside liveness code.
+- Use the single bound `HubLivenessReader` adapter. Do not introduce `HubLivenessProbe`, `RelayHubLivenessProbe`, or `getattr(..., "is_hub_online_async", ...)` duck-typing.
 
 - [ ] **Step 8: Run legacy adapter tests**
 
@@ -997,7 +1013,7 @@ In `main.py`, after Mongo/Pinecone/adapter services are ready:
 - Build `VectorDALImpl(client=...)` or use existing Phase 1 DAL construction.
 - Build/use `LLMGatewayImpl` as `LLMProvider`.
 - Build/use `AgentCardResolverImpl` as `AgentCardResolver`.
-- Use relay/hub adapter as `HubLivenessReader` once available; before relay init, allow `hub_liveness=None` and bind it after relay construction if needed.
+- Use `RelayHubLivenessReader` as the single `HubLivenessReader` once relay is available; before relay init, allow `hub_liveness=None` and bind it after relay construction if needed. `RelayHubLivenessReader.is_hub_online()` delegates directly to `RelayService.is_hub_alive()`.
 - Bind `agent_service.bind_facade(facade)`.
 - Bind `services.agent_matcher`, `services.agent_selection_service`, health service, and liveness service as needed.
 - Pass `AgentRegistryWriter` into relay sync path.
@@ -1159,7 +1175,7 @@ Recommended binding order during startup:
 5. Bind `services.agent_matcher` and `services.agent_selection_service` compatibility adapters.
 6. Bind health/liveness compatibility services.
 7. Initialize relay service and provide `AgentRegistryWriter` for hub sync.
-8. If relay is the initial `HubLivenessReader`, update or rebuild the facade with that dependency before serving traffic.
+8. Bind `RelayHubLivenessReader` as the single async `HubLivenessReader` before serving traffic.
 
 Avoid circular imports:
 - `container.py` can import concrete implementations.
@@ -1291,6 +1307,9 @@ Impact: Agent facade needs `HubLivenessReader`, while relay startup may need `Ag
 
 Mitigation:
 - Use protocol binding, not direct imports.
+- Keep the final contract simple: one async `HubLivenessReader`, one `RelayHubLivenessReader`, one bind path.
+- Do not split into `HubLivenessReader` plus `HubLivenessProbe`; that was superseded by the final implementation.
+- Do not use cached relay liveness for Agent hydration. `RelayHubLivenessReader.is_hub_online()` delegates to `RelayService.is_hub_alive()`.
 - Allow two-phase startup binding if needed:
   - Build facade with `hub_liveness=None`.
   - Initialize relay/hub liveness.
