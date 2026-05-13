@@ -582,10 +582,9 @@ class RoomServices:
                 error="Room not found",
                 status_code=404,
             )
-        active_runs_raw = []
-        database_service = getattr(self, "database_service", None)
-        if database_service is not None:
-            active_runs_raw = await database_service.get_active_runs_by_room_id(room_id)
+        active_runs_raw = await self.database_service.get_active_runs_by_room_id(
+            room_id
+        )
         return self._room_setting_response_from_info(
             info,
             active_runs=self._active_run_payloads_from_raw(active_runs_raw),
