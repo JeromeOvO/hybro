@@ -354,6 +354,8 @@ async def list_room_ids_with_memory(self, limit: int = 1000) -> list[str]: ...
 
 Keep repository inputs and outputs as dicts. The repository must not return `models.memory.RoomMemory`, `ConversationTurn`, or other legacy models.
 
+`push_and_trim_conversation_turn()` returns `(modified, matched)`. Implement it with `MongoCollection.find_one_and_update(..., upsert=False, return_document=True)` and a minimal projection, not `MongoCollection.update_one()`, because the Common `update_one()` contract currently returns only `bool` and does not expose `matched_count`. Treat `matched = returned_doc is not None`; treat `modified = matched` because the pipeline always pushes a new turn and updates memory metadata when a room memory exists. Write failures should raise. Test fakes must cover both `None` return for missing room and returned document for successful mutation.
+
 ### ContentStorageRepository Protocol
 
 Add this protocol to `common/protocols/repository_protocols.py` or a new Common protocol file, then export it from `common.protocols`:
@@ -386,11 +388,14 @@ class ContentStorageRepository(Protocol):
 
 `ContentStorageMongoRepository` owns the `conversation_content` collection. It may use deterministic `find_one_and_update(..., upsert=True, return_document=True)` through the `MongoCollection` protocol to preserve idempotent upsert semantics without exposing Motor or PyMongo to `context_memory/**`.
 
+`text_search()` must preserve legacy BM25 coverage over full stored `content` plus `turn_notes.keywords`, `turn_notes.entities`, and `turn_notes.one_liner`.
+
 The repository method intentionally requires `document_id`, `content_hash`, `stored_at`, and `expires_at`. Do not call it directly from compaction with only the raw turn fields. Add a pure `context_memory.content_storage.store_full_content(...)` helper that computes `document_id = f"conversation_content:{room_id}:{turn_id}"`, `content_hash = hash_content(content)`, `stored_at = now()`, and `expires_at` from compaction config, then calls `ContentStorageRepository.upsert_full_content(...)` with the full argument set.
 
 Document ID strategy:
 - New `conversation_content` documents MUST store a stable string `document_id` field. The returned document id and `content_ref.document_id` should use this string field, not rely solely on Mongo `_id`.
 - This intentionally means new compact pointer id values may differ from legacy pointers that used Mongo-returned `_id` strings. Preserve the legacy pointer format and prove expandability; do not require exact pointer id equality for newly compacted turns.
+- If `upsert_full_content()` matches an existing legacy document by `(room_id, turn_id)` that lacks `document_id`, it MUST backfill the stable `document_id` on that existing document and return the stable id. Do not return the legacy Mongo `_id` in this case, because new compact pointers will use the stable id and must expand through `get_content_by_document_id()`.
 - `get_content_by_document_id(document_id)` must query `{"document_id": document_id}` first.
 - For legacy compacted turns whose `content_ref.document_id` is a Mongo ObjectId string and whose stored document lacks `document_id`, add `common/mongo_ids.py` with `object_id_query(document_id: str) -> dict | None`. That Common helper may contain the optional `bson.ObjectId` import. `context_memory/**` may import the Common helper but must not import `bson` directly.
 - Repository tests must cover both stable string `document_id` lookup and legacy `_id`/ObjectId-string fallback.
@@ -653,6 +658,7 @@ Cover:
 Cover:
 - `push_and_trim_conversation_turn()` preserves the existing pipeline update shape from `database/mongodb.py`.
 - The method returns `(modified, matched)` and distinguishes missing room from write failure.
+- The method uses `find_one_and_update(..., upsert=False, return_document=True)` rather than `update_one()`, deriving `matched` from whether a document is returned and `modified` from `matched`.
 - `update_turn_notes()` uses positional `$` update for `memory_content.conversation_history.$.turn_notes`.
 - `get_room_summary_projection()` fetches only `room_summary` and `room_facts`.
 - `update_room_summary_atomic()` sets `room_summary`, optionally pushes new facts, and slices to `max_facts`.
@@ -664,13 +670,14 @@ Cover:
 Cover:
 - `ContentStorageMongoRepository(mongo=fake_mongo)` calls `mongo.collection("conversation_content")`.
 - `upsert_full_content()` is idempotent for `(room_id, turn_id)`, stores a stable string `document_id` field, and returns the existing `document_id` on repeat.
+- `upsert_full_content()` backfills `document_id` and returns the stable id when it finds an existing legacy `(room_id, turn_id)` document missing `document_id`.
 - `get_content_by_document_id()` first queries `{"document_id": document_id}` for new documents.
 - `get_content_by_document_id()` falls back to a legacy `_id` lookup using `common.mongo_ids.object_id_query(document_id)` for existing compacted content that only has an ObjectId string in `content_ref.document_id`.
 - `get_content_by_turn_id()` queries `{"room_id": room_id, "turn_id": turn_id}`.
 - `delete_content_by_turn_id()` deletes by room and turn.
 - `delete_content_by_room_id()` deletes all stored content for a room and returns count.
 - `get_content_stats_for_room()` mirrors current aggregate output.
-- `text_search()` performs Mongo `$text` query with score projection and limit.
+- `text_search()` performs Mongo `$text` query with score projection and limit over `content`, `turn_notes.keywords`, `turn_notes.entities`, and `turn_notes.one_liner`.
 - `hydrate_turn_notes()` fetches `turn_id` and `turn_notes` for a set of turn ids.
 
 - [ ] **Step 4: Extend repository protocols only as needed**
@@ -684,6 +691,7 @@ Implementation notes:
 - Store `self._memories = mongo.collection(collection_name)`.
 - Store `self._user_memories = mongo.collection(user_collection_name)`.
 - Use `MongoCollection.find_one`, `find`, `insert_one`, `update_one`, `find_one_and_update`, `delete_one`, and `aggregate`.
+- For `push_and_trim_conversation_turn()`, use `find_one_and_update()` to preserve matched/missing-room semantics; do not rely on `update_one()` because it returns only `bool`.
 - Do not import `database.mongodb`, `pymongo`, `motor`, or `models.memory`.
 - For `compact_turns_bulk()`, prefer Common protocol support for ordered update operations if added; otherwise use ordered `update_one(..., array_filters=[...])` calls and document the equivalence to the current ordered `bulk_write`.
 
@@ -696,10 +704,11 @@ Implementation notes:
 - Preserve unique `(room_id, turn_id)` upsert semantics.
 - Preserve current `content_hash`, `stored_at`, `expires_at`, and `turn_notes` fields.
 - Store and return a stable string `document_id` field for new documents. If the collection already has legacy docs without `document_id`, support ObjectId-string fallback through `common.mongo_ids.object_id_query()`.
+- For an existing legacy document matched by `(room_id, turn_id)` but missing `document_id`, backfill the stable `document_id` in the upsert path and return that stable id. Use `find_one_and_update()` with `$set` for `document_id` plus `$setOnInsert` for content fields, or an equivalent two-step operation covered by tests.
 - Do not import `services.content_storage_service`, `database.mongodb`, `bson`, `pymongo`, or `models.compaction` inside `context_memory/**`.
-- Text index creation: The `conversation_content` collection requires a MongoDB text index on `turn_notes` fields for BM25 keyword search. Use one of:
+- Text index creation: The `conversation_content` collection requires a MongoDB text index on full content and compact turn notes for BM25 keyword search: `content`, `turn_notes.keywords`, `turn_notes.entities`, and `turn_notes.one_liner`. Use one of:
   - Preferred: Accept an optional `IndexRegistry` in the repository constructor and register the index spec. Application shell calls `index_registry.ensure_all()` during startup.
-  - Alternative: Document that the index is pre-existing in production and test fakes simulate text search behavior without a real index.
+  - Alternative: Document that the index is pre-existing in production and test fakes simulate text search over both `content` and the three `turn_notes` fields without a real index.
   Document the chosen approach in tests.
 
 - [ ] **Step 7: Run repository tests**
@@ -1044,6 +1053,7 @@ Port coverage from `tests/test_compaction_service.py`:
 - `hash_content()` deterministic SHA-256.
 - `store_full_content()` computes deterministic `document_id`, `content_hash`, `stored_at`, and `expires_at`, calls `ContentStorageRepository.upsert_full_content()` with the full protocol argument set, and returns the stable `document_id`.
 - Idempotent upsert returns the stable string `document_id`.
+- Existing legacy content doc missing `document_id` is backfilled by repository upsert and expands by the returned stable id.
 - Expand by stable `document_id`.
 - Expand by legacy ObjectId-string document id via `common.mongo_ids.object_id_query()`.
 - Expand by turn id.
