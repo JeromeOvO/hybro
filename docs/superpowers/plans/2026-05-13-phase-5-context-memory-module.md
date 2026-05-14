@@ -568,7 +568,6 @@ Expected: PASS before Phase 5 changes, or document existing failures before edit
 **Files:**
 - Create: `tests/test_context_memory_protocols.py`
 - Modify: `pyproject.toml`
-- Modify: `container.py`
 
 - [ ] **Step 1: Add runtime protocol conformance test**
 
@@ -620,15 +619,7 @@ Forbidden roots:
 - `room`
 - `services`
 
-- [ ] **Step 5: Add ContextMemoryDeps container test**
-
-Assert:
-- `create_context_memory_deps(...)` returns one facade instance bound to all three protocol fields.
-- `ContextMemoryDeps.context_assembler is ContextMemoryDeps.memory_manager`.
-- `ContextMemoryDeps.context_assembler is ContextMemoryDeps.memory_projector`.
-- The constructor accepts fakes for `RoomHistoryReader`, `MemoryRepository`, `ContentStorageRepository`, `VectorDAL`, and `LLMProvider`.
-
-- [ ] **Step 6: Run and verify failure**
+- [ ] **Step 5: Run and verify failure**
 
 ```bash
 uv run python -m pytest tests/test_context_memory_protocols.py -q
@@ -870,9 +861,9 @@ Algorithm:
 
 These helpers are the only path used by synchronous legacy `ContextAssemblyService` adapter methods. They must remain sync and must not perform repository reads, RoomHistoryReader calls, LLM calls, or memory search.
 
-- [ ] **Step 6: Design `assemble_context()` algorithm and add integration test**
+- [ ] **Step 6: Design `assemble_context()` algorithm**
 
-This step defines the algorithm and writes an integration test proving assembly works end-to-end with fakes. Keep the mapping below as the design spec that Task 8 Step 5 implements on `ContextMemoryFacade`; do not implement `assemble_context()` on the facade in Task 4.
+This step documents the algorithm as a design spec for Task 8 Step 5. No test targeting `ContextMemoryFacade.assemble_context()` should be added in Task 4 - Task 4 tests cover only the pure synchronous assembly helper functions directly.
 
 Mapping:
 - Load room memory via `MemoryRepository.get_room_memory(room_id)` - this is the PRIMARY data source for context assembly (conversation history, summary, facts).
@@ -1003,6 +994,9 @@ Expected: PASS.
 - Create/modify: `tests/test_context_memory_search.py`
 - Modify: `tests/test_memory_search_service.py`
 - Modify: `tests/test_context_memory_bugfixes.py`
+- Modify if extending `VectorDAL` with `delete_by_filter()`: `common/protocols/dal_protocols.py`
+- Modify if extending `VectorDAL` with `delete_by_filter()`: `dal/pinecone/client.py`
+- Modify if extending `VectorDAL` with `delete_by_filter()`: `tests/test_common_foundation.py`
 Do not modify `context_memory/facade.py` in this task; Task 8 owns facade integration.
 
 - [ ] **Step 1: Write failing search unit tests**
@@ -1054,6 +1048,7 @@ Cover:
 
 Current `VectorDAL.delete(index, ids)` cannot express Pinecone delete-by-filter used by legacy `delete_room_index()`. Choose one:
 - Preferred: extend `VectorDAL` with `delete_by_filter(index: str, filter: dict) -> None` and implement it in `dal/pinecone`.
+- If choosing the preferred path, update `common/protocols/dal_protocols.py`, implement `delete_by_filter()` in `dal/pinecone/client.py`, and update `tests/test_common_foundation.py` to include the new method in the expected `VectorDAL` method set.
 - Temporary: repository tracks vector ids per room and deletes by ids, with golden tests proving current behavior. Use this only if extending `VectorDAL` is blocked.
 
 Document the chosen option in tests and in the final handoff.
@@ -1173,6 +1168,7 @@ Expected: PASS.
 ### Task 8: Implement ContextMemoryFacade and Event Handler
 
 **Files:**
+- Create/modify: `context_memory/__init__.py`
 - Create/modify: `context_memory/facade.py`
 - Create: `context_memory/events.py`
 - Modify: `tests/test_context_memory_facade.py`
@@ -1245,7 +1241,7 @@ Do not import Delivery implementation. Accept only `MemoryProjector` and `Messag
 - [ ] **Step 10: Run facade and event tests**
 
 ```bash
-uv run python -m pytest tests/test_context_memory_facade.py tests/test_context_memory_events.py tests/test_context_memory_protocols.py -q
+uv run python -m pytest tests/test_context_memory_facade.py tests/test_context_memory_events.py tests/test_context_memory_protocols.py -k "not container and not deps" -q
 ```
 
 Expected: PASS.
@@ -1374,11 +1370,13 @@ Expected: PASS with legacy response/dataclass shapes unchanged.
 - [ ] **Step 1: Add container assembly tests**
 
 Create tests that instantiate the container with fakes and assert:
+- `create_context_memory_deps(...)` returns one facade instance bound to all three protocol fields.
 - `ContextMemoryDeps.context_assembler` is a `ContextAssembler`.
 - `ContextMemoryDeps.memory_manager` is a `MemoryManager`.
 - `ContextMemoryDeps.memory_projector` is a `MemoryProjector`.
 - All three fields are the same `ContextMemoryFacade` instance.
 - `create_context_memory_deps()` accepts `room_history_reader` from `RoomDeps`.
+- The constructor accepts fakes for `RoomHistoryReader`, `MemoryRepository`, `ContentStorageRepository`, `VectorDAL`, and `LLMProvider`.
 
 - [ ] **Step 2: Implement `container.py` ContextMemoryDeps assembly**
 
