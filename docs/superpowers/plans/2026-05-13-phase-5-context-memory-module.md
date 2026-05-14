@@ -1069,7 +1069,7 @@ Port coverage from `tests/test_compaction_service.py`:
 - Missing content raises a Context & Memory local `ContentExpiredError`.
 - Delete by turn and by room.
 - Content stats match legacy shape.
-- Facade compatibility helpers return legacy string/boolean/integer/dict shapes, not raw repository documents.
+- Pure helpers and repository-backed content storage functions return internal dicts or primitive storage values only; facade compatibility return-shape conversion is owned by Task 8.
 
 - [ ] **Step 8: Implement content storage helpers**
 
@@ -1211,7 +1211,24 @@ Cover:
 - Fakes can drive exact token-budget output in tests.
 - Missing message returns empty context with metadata error or raises a clear `ValueError`; choose behavior and test it.
 
-- [ ] **Step 6: Add `ContextMemoryEventHandler` tests**
+- [ ] **Step 6: Add facade content compatibility helper tests**
+
+Cover:
+- `content_upsert_full_content()` delegates to content storage helper and returns the stable document id string.
+- `content_get_content_by_document_id()` converts repository dicts to legacy `str | None`.
+- `content_get_content_by_turn_id()` converts repository dicts to legacy `str | None`.
+- `content_expand_mongodb_reference()` accepts primitive content reference dicts, expands MongoDB content, and raises Context & Memory `ContentExpiredError` when missing.
+- `content_delete_content_by_turn_id()`, `content_delete_content_by_room_id()`, and `content_get_content_stats_for_room()` return legacy `bool`, `int`, and stats-dict shapes.
+- These tests live with `tests/test_context_memory_facade.py`; do not add facade assertions to Task 6 content storage tests.
+
+- [ ] **Step 7: Implement facade content compatibility helpers**
+
+Rules:
+- Implement the `content_*` helpers listed in "Interface Definitions".
+- Convert raw repository documents to legacy return shapes at the facade boundary.
+- Support MongoDB content expansion only; S3 and URL behavior remain in `services.content_storage_service`.
+
+- [ ] **Step 8: Add `ContextMemoryEventHandler` tests**
 
 Cover:
 - `handle_message_committed()` calls `project_message()` with event room/message.
@@ -1219,11 +1236,11 @@ Cover:
 - It handles projection failure according to the existing EventPublisher contract: log and let the caller/bus dead-letter if appropriate. If the handler catches exceptions, tests must assert logging and no re-raise.
 - It is safe for user and agent message types.
 
-- [ ] **Step 7: Implement event handler**
+- [ ] **Step 9: Implement event handler**
 
 Do not import Delivery implementation. Accept only `MemoryProjector` and `MessageCommitted`.
 
-- [ ] **Step 8: Run facade and event tests**
+- [ ] **Step 10: Run facade and event tests**
 
 ```bash
 uv run python -m pytest tests/test_context_memory_facade.py tests/test_context_memory_events.py tests/test_context_memory_protocols.py -q
@@ -1320,6 +1337,8 @@ room_memory_service = RoomMemoryService()
 - [ ] **Step 9: Write content storage adapter tests**
 
 Cover:
+- Before bind, migrated MongoDB-backed methods raise `RuntimeError("ContentStorageService.bind_facade() not called - startup incomplete")`: `upsert_full_content()`, `get_content_by_document_id()`, `get_content_by_turn_id()`, MongoDB `expand_content_reference()`, `delete_content_by_turn_id()`, `delete_content_by_room_id()`, and `get_content_stats_for_room()`.
+- Before bind, S3 and URL `expand_content_reference()` behavior remains legacy-local: S3 uses `services.s3_service`, and URL raises `NotImplementedError`.
 - `ContentStorageService.upsert_full_content()` delegates after bind and returns the stable document id string.
 - `ContentStorageService.get_content_by_document_id()` delegates after bind and returns the full content string or `None`, not the repository dict.
 - `ContentStorageService.get_content_by_turn_id()` delegates after bind and returns the full content string or `None`, not the repository dict.
