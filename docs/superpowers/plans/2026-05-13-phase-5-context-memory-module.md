@@ -74,7 +74,6 @@ Create:
 - `context_memory/events.py`: `ContextMemoryEventHandler` with `handle_message_committed(event: MessageCommitted)`.
 - `context_memory/repository/__init__.py`: exports repository implementations.
 - `context_memory/repository/mongo.py`: `MemoryRepository` and `ContentStorageRepository` implementations using `MongoDAL`.
-- `common/mongo_ids.py`: Common helper for safe ObjectId-string fallback queries used by content storage repository legacy lookup.
 - `tests/test_context_memory_protocols.py`: runtime protocol conformance, exports, package list, container assembly, and import-boundary tests.
 - `tests/test_context_memory_repository.py`: repository tests against fake `MongoCollection` instances.
 - `tests/test_context_memory_projection.py`: raw message projection and legacy turn helper tests.
@@ -93,14 +92,15 @@ Delete if porting from another branch:
 Modify:
 - `common/protocols/repository_protocols.py`: extend `MemoryRepository` with domain-specific room memory operations needed by projection, compaction, and summary updates.
 - `common/protocols/context_memory_protocols.py`: keep `ContextAssembler`, `MemoryManager`, and `MemoryProjector` signatures unchanged unless Task 2 proves a missing method is unavoidable; prefer non-protocol facade helpers for legacy compatibility.
-- `common/protocols/dal_protocols.py`: allow Mongo pipeline updates in `MongoCollection` write signatures and add `VectorDAL.delete_by_filter()` for room-level vector cleanup. Do not add `VectorDAL.ping_index()` in Phase 5.
+- `common/protocols/dal_protocols.py`: allow Mongo pipeline updates in `MongoCollection` write signatures, add a DAL-owned native-id fallback lookup method on `MongoCollection`, and add `VectorDAL.delete_by_filter()` for room-level vector cleanup. Do not add `VectorDAL.ping_index()` in Phase 5.
 - `common/errors/base.py` and `common/errors/__init__.py`: add `VectorIndexUnavailableError` so DAL implementations can report memory-index availability without leaking Pinecone exceptions into `context_memory/**`.
 - `common/protocols/__init__.py`: export `ContentStorageRepository` and any new Common protocol names.
 - `common/dto/context_memory.py`: add fields only if golden tests show current DTOs cannot carry legacy metadata without unsafe `metadata` overloading.
 - `common/dto/__init__.py`: export any added DTOs.
 - `pyproject.toml`: add `context_memory` and `context_memory.repository` to `[tool.setuptools].packages`.
-- `container.py`: add `ContextMemoryDeps` and `create_context_memory_deps()` alongside `AgentDeps` and `RoomDeps`.
+- `container.py`: add protocol-only `ContextMemoryDeps`, startup-local `create_context_memory_facade()`, and `create_context_memory_deps(facade)` alongside `AgentDeps` and `RoomDeps`.
 - `main.py`: build ContextMemory deps after Room deps and bind legacy service adapters before background work can run.
+- `docs/MODULAR_DECOUPLING_DESIGN.md`: update Phase 5 protocol/repository/DAL changes in the same tasks that introduce them; do not defer known design deviations to final cleanup.
 - `database/mongodb.py`: update `create_context_memory_indexes()` with the new `conversation_content.document_id` and expanded text indexes; this remains the production Phase 5 index owner.
 - `services/context_assembly_service.py`: convert public methods to C3 facade delegation while retaining legacy dataclasses and response shape.
 - `services/compaction_service.py`: convert public methods to C3 facade delegation while retaining legacy `CompactionResult` conversion.
@@ -110,12 +110,11 @@ Modify:
 - `modules/RoomMessageCenter.py`: keep direct `_trigger_compaction_safe()` call, but route through the bound legacy `compaction_service` wrapper; optionally bind the ContextMemory facade for future event-handler registration if a local pattern exists.
 - `modules/QueueExecutor.py`: no direct import of `context_memory`; continue calling `room_memory_service`, which delegates after bind.
 - `modules/SupervisorExecutor.py`: no direct import of `context_memory`; continue calling `room_memory_service`, which delegates after bind.
-- `services/room_services.py`: keep existing calls to legacy context/memory service singletons; add separate Context & Memory binding for room deletion cleanup.
+- `services/room_services.py`: keep existing calls to legacy context/memory service singletons; add temporary C3 cleanup binding that accepts the `MemoryManager` protocol, not the concrete facade.
 - `jobs/compaction_sweep.py`: stay outside `context_memory/`; either keep importing `services.compaction_service` after it delegates or add a `bind_projector()` seam for `MemoryProjector`.
 - Existing Context & Memory tests: update to bind fake facades where they construct migrated legacy services directly.
 
 Reference-only:
-- `docs/MODULAR_DECOUPLING_DESIGN.md`: Phase 5 description, Context & Memory protocols, `MemoryRepository`, `ContextMemoryDeps`, internal event design, and import rules.
 - `docs/CONTEXT_MEMORY_SYSTEM_DESIGN.md`: context assembly, compaction, search, turn notes, content storage, and summary design.
 - `docs/superpowers/plans/2026-05-11-phase-4-room-module.md`: exact plan structure and C3 migration style.
 - `common/protocols/context_memory_protocols.py`: target facade protocols.
@@ -290,6 +289,8 @@ Non-protocol compatibility helpers allowed on `ContextMemoryFacade`:
 These helpers exist only to keep legacy callers stable. New cross-module consumers should use the three Common protocols.
 
 Signature convention: `assemble_supervisor_context_from_memory()` and `assemble_agent_execution_context_from_memory()` are synchronous pure helpers. Every other non-protocol facade helper in this list is `async def` because it may touch repositories, vector search, LLM calls, content storage, or legacy async service adapters. Synchronous legacy adapters must not call those async helpers unless their public method is already async and can `await`.
+
+The two synchronous assembly helpers are a temporary C3 migration exception to the design invariant that cross-module methods are async/protocol-based. Only `services.context_assembly_service.ContextAssemblyService` may call them, and only to preserve existing synchronous legacy callers until those callers migrate to async protocol methods. No Room, Execution, module, API, job, or new service code may call these helpers directly. Add an import/call-boundary test that greps for these helper names and fails on call sites outside `services/context_assembly_service.py` and `tests/`.
 
 Content-storage compatibility helpers convert repository dicts to legacy service return shapes. `content_get_content_by_document_id()` and `content_get_content_by_turn_id()` return `doc["content"]` or `None`, never the raw repository dict. `content_expand_mongodb_reference()` accepts a primitive dict form of the legacy `ContentReference`, supports only `storage_type="mongodb"`, raises the Context & Memory `ContentExpiredError` when missing, and leaves S3/URL behavior to the legacy service adapter.
 
@@ -466,8 +467,8 @@ Document ID strategy:
 - New `conversation_content` documents MUST store a stable string `document_id` field. The returned document id and `content_ref.document_id` should use this string field, not rely solely on Mongo `_id`.
 - This intentionally means new compact pointer id values may differ from legacy pointers that used Mongo-returned `_id` strings. Preserve the legacy pointer format and prove expandability; do not require exact pointer id equality for newly compacted turns.
 - If `upsert_full_content()` matches an existing legacy document by `(room_id, turn_id)` that lacks `document_id`, it MUST backfill the stable `document_id` on that existing document and return the stable id. Do not return the legacy Mongo `_id` in this case, because new compact pointers will use the stable id and must expand through `get_content_by_document_id()`.
-- `get_content_by_document_id(document_id)` must query `{"document_id": document_id}` first.
-- For legacy compacted turns whose `content_ref.document_id` is a Mongo ObjectId string and whose stored document lacks `document_id`, add `common/mongo_ids.py` with `object_id_query(document_id: str) -> dict | None`. That Common helper may contain the optional `bson.ObjectId` import. `context_memory/**` may import the Common helper but must not import `bson` directly.
+- `get_content_by_document_id(document_id)` must call a DAL-owned stable-or-native-id lookup, not construct provider-native `_id` queries in Common or `context_memory/**`.
+- For legacy compacted turns whose `content_ref.document_id` is a Mongo ObjectId string and whose stored document lacks `document_id`, add `MongoCollection.find_one_by_stable_or_native_id(stable_id_field: str, id_value: str) -> dict | None` to the Common DAL protocol and implement the optional BSON/ObjectId conversion inside `dal/mongo/client.py`. Common defines only the protocol shape; it must not import `bson`, mention `ObjectId` in helper code, or expose provider-specific query builders.
 - Repository tests must cover both stable string `document_id` lookup and legacy `_id`/ObjectId-string fallback.
 - Add a `conversation_content.document_id` index. Preferred: unique partial index on `document_id` for documents where the field exists, so legacy documents without `document_id` remain valid while new stable ids are protected.
 
@@ -515,17 +516,15 @@ Extend `container.py` rather than creating a parallel container:
 from dataclasses import dataclass
 
 from common.protocols import ContextAssembler, MemoryManager, MemoryProjector
-from context_memory.facade import ContextMemoryFacade
 
 @dataclass(frozen=True)
 class ContextMemoryDeps:
-    facade: ContextMemoryFacade
     context_assembler: ContextAssembler
     memory_manager: MemoryManager
     memory_projector: MemoryProjector
 ```
 
-Because one `ContextMemoryFacade` implements all three protocols and also exposes migration compatibility helpers, the container must retain the concrete `facade` field for adapter binding before narrowing it to protocol fields.
+`ContextMemoryDeps` stays protocol-only to match the design doc. The application shell may keep a startup-local `context_memory_facade` variable for C3 adapter binding before narrowing the same object into `ContextMemoryDeps`, but the concrete facade must not be exposed through the deps object or passed to new module consumers.
 
 ### Event Handler
 
@@ -724,16 +723,18 @@ Expected before implementation: FAIL because `context_memory` package, repositor
 ### Task 2: Extend and Implement Memory and Content Repositories
 
 **Files:**
-- Create: `common/mongo_ids.py`
 - Modify: `common/protocols/repository_protocols.py`
 - Modify: `common/protocols/dal_protocols.py`
+- Modify: `dal/mongo/client.py`
 - Modify: `common/errors/base.py`
 - Modify: `common/errors/__init__.py`
 - Modify: `common/protocols/__init__.py`
+- Modify: `docs/MODULAR_DECOUPLING_DESIGN.md`
 - Create/modify: `context_memory/repository/mongo.py`
 - Create/modify: `context_memory/repository/__init__.py`
 - Create: `tests/test_context_memory_repository.py`
 - Modify: `tests/test_common_foundation.py`
+- Modify: `tests/test_dal_unit.py`
 
 - [ ] **Step 1: Write memory repository contract tests**
 
@@ -772,7 +773,7 @@ Cover:
 - `upsert_full_content()` is idempotent for `(room_id, turn_id)`, stores a stable string `document_id` field, and returns the existing `document_id` on repeat.
 - `upsert_full_content()` backfills `document_id` and returns the stable id when it finds an existing legacy `(room_id, turn_id)` document missing `document_id`.
 - `get_content_by_document_id()` first queries `{"document_id": document_id}` for new documents.
-- `get_content_by_document_id()` falls back to a legacy `_id` lookup using `common.mongo_ids.object_id_query(document_id)` for existing compacted content that only has an ObjectId string in `content_ref.document_id`.
+- `get_content_by_document_id()` falls back through `MongoCollection.find_one_by_stable_or_native_id("document_id", document_id)` for existing compacted content that only has a provider-native `_id` string in `content_ref.document_id`; `context_memory/**` and Common helper modules must not import `bson` or construct native `_id` queries.
 - `get_content_by_turn_id()` queries `{"room_id": room_id, "turn_id": turn_id}`.
 - `delete_content_by_turn_id()` deletes by room and turn.
 - `delete_content_by_room_id()` deletes all stored content for a room and returns count.
@@ -792,7 +793,14 @@ Also update `tests/test_common_foundation.py` in the same task:
 Also update `MongoCollection` in `common/protocols/dal_protocols.py` and fakes:
 - `find_one_and_update(query: dict, update: dict | list[dict], **kwargs) -> dict | None`
 - `update_one(query: dict, update: dict | list[dict], **kwargs) -> bool`
+- `find_one_by_stable_or_native_id(stable_id_field: str, id_value: str) -> dict | None`
 - Test fakes must accept pipeline-list updates because the legacy room-memory push/trim operation uses MongoDB aggregation pipeline updates.
+- `dal/mongo/client.py` owns provider-native id fallback. Its implementation may use `bson.ObjectId` internally after first querying `{stable_id_field: id_value}`; no Common module may import or expose BSON.
+
+Also update `docs/MODULAR_DECOUPLING_DESIGN.md` in Task 2:
+- Add the accepted `MemoryRepository` additions.
+- Add `ContentStorageRepository`.
+- Add the DAL-owned stable-or-native-id lookup method and state that BSON/ObjectId conversion stays inside the Mongo DAL implementation, not Common or business modules.
 
 Also add `VectorIndexUnavailableError` to `common.errors`:
 - DAL implementations catch provider-specific missing-index/unavailable-index exceptions and raise `VectorIndexUnavailableError(index_name, operation)`.
@@ -834,7 +842,7 @@ Implementation notes:
 - Constructor accepts `mongo: MongoDAL`, optional `collection_name: str = "conversation_content"`, and optional `index_registry` only for tests/future registry migration. Production Phase 5 index creation remains in `database/mongodb.py`.
 - Preserve unique `(room_id, turn_id)` upsert semantics.
 - Preserve current `content_hash`, `stored_at`, `expires_at`, and `turn_notes` fields.
-- Store and return a stable string `document_id` field for new documents. If the collection already has legacy docs without `document_id`, support ObjectId-string fallback through `common.mongo_ids.object_id_query()`.
+- Store and return a stable string `document_id` field for new documents. If the collection already has legacy docs without `document_id`, support provider-native id fallback only through `MongoCollection.find_one_by_stable_or_native_id("document_id", document_id)`.
 - For an existing legacy document matched by `(room_id, turn_id)` but missing `document_id`, backfill the stable `document_id` in the upsert path and return that stable id. Use `find_one_and_update()` with `$set` for `document_id` plus `$setOnInsert` for content fields, or an equivalent two-step operation covered by tests.
 - Do not import `services.content_storage_service`, `database.mongodb`, `bson`, `pymongo`, or `models.compaction` inside `context_memory/**`.
 - Ensure the production index path creates a unique partial index for `document_id` in addition to the existing unique `(room_id, turn_id)` and text indexes.
@@ -846,7 +854,7 @@ Implementation notes:
 - [ ] **Step 7: Run repository tests**
 
 ```bash
-uv run python -m pytest tests/test_context_memory_repository.py tests/test_context_memory_protocols.py tests/test_common_foundation.py -k "repository or package or protocol_methods" -q
+uv run python -m pytest tests/test_context_memory_repository.py tests/test_context_memory_protocols.py tests/test_common_foundation.py tests/test_dal_unit.py -k "repository or package or protocol_methods or stable_or_native_id" -q
 ```
 
 Expected: repository tests PASS; facade conformance may still fail until Task 8.
@@ -879,7 +887,7 @@ Rules:
 - Keep property names aligned with legacy `models.context_config`.
 - Allow dataclass overrides for golden tests.
 - Do not mutate global settings.
-- Keep config objects injectable through `ContextMemoryFacade` and `create_context_memory_deps()`; do not read global settings inside assembly, compaction, search, or LLM helper functions after construction.
+- Keep config objects injectable through `ContextMemoryFacade` and `create_context_memory_facade()`; do not read global settings inside assembly, compaction, search, or LLM helper functions after construction.
 
 - [ ] **Step 3: Audit `common/utils/context_utils.py` pure subset**
 
@@ -1148,6 +1156,7 @@ Expected: PASS.
 - Reference/run `tests/test_memory_search_service.py` and `tests/test_context_memory_bugfixes.py`; adapter expectation updates belong to Task 9/12.
 - Modify: `common/protocols/dal_protocols.py`
 - Modify: `dal/pinecone/client.py`
+- Modify: `docs/MODULAR_DECOUPLING_DESIGN.md`
 - Modify: `tests/test_common_foundation.py`
 - Modify: `tests/test_dal_protocols.py`
 - Modify: `tests/test_dal_unit.py`
@@ -1209,6 +1218,7 @@ Required changes:
 - Add `delete_by_filter(index: str, filter: dict) -> None` to `VectorDAL`.
 - Implement it in `dal/pinecone/client.py`.
 - Add `VectorIndexUnavailableError` handling in `dal/pinecone/client.py` for search, upsert, and delete-by-filter index-unavailable failures.
+- Update `docs/MODULAR_DECOUPLING_DESIGN.md` in this same step so the VectorDAL protocol shown there includes `delete_by_filter()` and the Common error contract for unavailable vector indexes.
 - Update `tests/test_common_foundation.py` expected `VectorDAL` method set.
 - Update `tests/test_dal_protocols.py` runtime conformance for `VectorDALImpl`.
 - Update `tests/test_dal_unit.py` so concrete delete tests cover both id-based delete and filter delete.
@@ -1221,7 +1231,7 @@ Port coverage from `tests/test_compaction_service.py`:
 - Idempotent upsert returns the stable string `document_id`.
 - Existing legacy content doc missing `document_id` is backfilled by repository upsert and expands by the returned stable id.
 - Expand by stable `document_id`.
-- Expand by legacy ObjectId-string document id via `common.mongo_ids.object_id_query()`.
+- Expand by legacy provider-native `_id` string through the repository/DAL stable-or-native-id lookup; no Common ID helper exists.
 - Expand by turn id.
 - Missing content raises a Context & Memory local `ContentExpiredError`.
 - Delete by turn and by room.
@@ -1554,16 +1564,16 @@ Expected: PASS with legacy response/dataclass shapes unchanged.
 - [ ] **Step 1: Add container assembly tests**
 
 Create tests that instantiate the container with fakes and assert:
-- `create_context_memory_deps(...)` returns one facade instance bound to all three protocol fields.
-- `ContextMemoryDeps.facade` is the concrete `ContextMemoryFacade` instance used for adapter binding.
+- `create_context_memory_facade(...)` returns the concrete `ContextMemoryFacade` instance used only by application-shell adapter binding.
+- `create_context_memory_deps(context_memory_facade)` returns protocol fields only and does not expose a `.facade` attribute.
 - `ContextMemoryDeps.context_assembler` is a `ContextAssembler`.
 - `ContextMemoryDeps.memory_manager` is a `MemoryManager`.
 - `ContextMemoryDeps.memory_projector` is a `MemoryProjector`.
-- All three protocol fields are the same object as `ContextMemoryDeps.facade`.
-- `create_context_memory_deps()` accepts `room_history_reader` from `RoomDeps`.
-- `create_context_memory_deps()` accepts optional `memory_repository` and `content_repository` overrides for tests; when omitted, it constructs concrete repositories from `mongo`.
-- `create_context_memory_deps()` may accept optional `index_registry` for repository unit tests/future refactor only; production startup in Phase 5 passes `None` and uses `database.mongodb.create_context_memory_indexes()`.
-- `create_context_memory_deps()` accepts optional `token_budget`, `compaction_config`, `search_config`, `llm_config`, and `background_task_runner` overrides and passes them to the facade.
+- All three protocol fields are the same object as the startup-local facade passed into `create_context_memory_deps(...)`.
+- `create_context_memory_facade()` accepts `room_history_reader` from `RoomDeps`.
+- `create_context_memory_facade()` accepts optional `memory_repository` and `content_repository` overrides for tests; when omitted, it constructs concrete repositories from `mongo`.
+- `create_context_memory_facade()` may accept optional `index_registry` for repository unit tests/future refactor only; production startup in Phase 5 passes `None` and uses `database.mongodb.create_context_memory_indexes()`.
+- `create_context_memory_facade()` accepts optional `token_budget`, `compaction_config`, `search_config`, `llm_config`, and `background_task_runner` overrides and passes them to the facade.
 - Default `id_factory` produces `str(uuid4())` with hyphens to preserve legacy `memory_id`, turn id, and fact id format; do not use `uuid4().hex`.
 
 - [ ] **Step 2: Implement `container.py` ContextMemoryDeps assembly**
@@ -1571,7 +1581,7 @@ Create tests that instantiate the container with fakes and assert:
 Target:
 
 ```python
-def create_context_memory_deps(
+def create_context_memory_facade(
     *,
     mongo: MongoDAL,
     vector: VectorDAL,
@@ -1585,7 +1595,7 @@ def create_context_memory_deps(
     search_config: MemorySearchConfig | None = None,
     llm_config: ContextMemoryLLMConfig | None = None,
     background_task_runner: Callable[[Awaitable[Any]], None] | None = None,
-) -> ContextMemoryDeps:
+) -> ContextMemoryFacade:
     memory_repository = memory_repository or MemoryMongoRepository(mongo=mongo)
     content_repository = content_repository or ContentStorageMongoRepository(mongo=mongo, index_registry=index_registry)
     facade = ContextMemoryFacade(
@@ -1602,8 +1612,11 @@ def create_context_memory_deps(
         llm_config=llm_config,
         background_task_runner=background_task_runner,
     )
+    return facade
+
+
+def create_context_memory_deps(facade: ContextMemoryFacade) -> ContextMemoryDeps:
     return ContextMemoryDeps(
-        facade=facade,
         context_assembler=facade,
         memory_manager=facade,
         memory_projector=facade,
@@ -1617,17 +1630,17 @@ In `main.py`, after Mongo is available and before adapter binding:
 - Call updated `mongodb.create_context_memory_indexes()` inside the Mongo-available branch before building/binding Context & Memory adapters. Do not construct `IndexRegistryImpl` or call `index_registry.ensure_all()` in `main.py` for Phase 5.
 - Extend `ModelRegistryImpl._register_defaults()` with `context_memory_legacy_json_model`, `model_id="gpt-4o-mini"`, provider `"openai"`, and `json_schema` capability.
 - Instantiate `model_registry = ModelRegistryImpl()` in startup after that registration exists.
-- Hoist `vector_dal = VectorDALImpl()` and `llm_provider = LLMGatewayImpl(model_registry=model_registry)` before constructing `AgentDeps`, then pass those same variables to both `create_agent_deps()` and `create_context_memory_deps()`.
-- Build `RoomDeps`, then pass `_room_deps.room_history_reader` to `create_context_memory_deps()`.
+- Hoist `vector_dal = VectorDALImpl()` and `llm_provider = LLMGatewayImpl(model_registry=model_registry)` before constructing `AgentDeps`, then pass those same variables to both `create_agent_deps()` and `create_context_memory_facade()`.
+- Build `RoomDeps`, then pass `_room_deps.room_history_reader` to `create_context_memory_facade()`.
 - Pass `ContextMemoryLLMConfig(turn_notes_model="context_memory_legacy_json_model", summary_model="context_memory_legacy_json_model")`. Tests must assert `OpenAIProvider.generate_structured()` receives effective model id `gpt-4o-mini`.
-- Build `ContextMemoryDeps`.
-- Set `context_memory_facade = _context_memory_deps.facade`; this is the concrete object used for C3 adapter binding before any protocol narrowing.
+- Build startup-local `context_memory_facade = create_context_memory_facade(...)`; this concrete object is application-shell binding state only and must not be stored on `ContextMemoryDeps`.
+- Build `_context_memory_deps = create_context_memory_deps(context_memory_facade)` to expose only `ContextAssembler`, `MemoryManager`, and `MemoryProjector` protocol fields to module consumers.
 - Bind `context_assembly_service.bind_facade(context_memory_facade)`.
 - Bind `compaction_service.bind_facade(context_memory_facade)`.
 - Bind `memory_search_service.bind_facade(context_memory_facade)`.
 - Bind `room_memory_service.bind_facade(context_memory_facade)`.
 - Bind `content_storage_service.bind_facade(context_memory_facade)`.
-- Bind `room_services.bind_context_memory(context_memory_facade)` for room deletion cleanup. Do not introduce an alternate binding name in Phase 5, and do not overload the existing Room facade binding.
+- Bind `room_services.bind_context_memory(_context_memory_deps.memory_manager)` for temporary room deletion cleanup. This binding accepts only the `MemoryManager` protocol; do not pass the concrete facade into Room services, do not introduce an alternate binding name in Phase 5, and do not overload the existing Room facade binding.
 - Register `ContextMemoryEventHandler` only if a concrete Common `EventPublisher` already exists in startup. Do not register it against `_event_broker` / `infrastructure.event_broker.EventBroker`; if only EventBroker exists, leave registration documented and covered with fakes.
 - Keep current Redis/SSE/relay/leader-election startup order unchanged. Context & Memory adapters must be bound before traffic can run, and compaction sweep must not start until both adapter binding and the existing leader-election dependencies are ready.
 
@@ -1666,8 +1679,8 @@ Cover:
 - `modules/QueueExecutor.py` still calls `room_memory_service.add_agent_response_to_memory()`.
 - `modules/SupervisorExecutor.py` still calls `room_memory_service.add_agent_response_to_memory()`.
 - `services/room_services.py` still calls `context_assembly_service.build_supervisor_context()` and `build_agent_execution_context()`.
-- Room deletion cleanup in `services/room_services.py` routes Context & Memory cleanup through the bound legacy adapter/facade, not direct `room_memories` or `conversation_content` collection deletes.
-- Room deletion tests assert memory deletion also attempts content storage cleanup and vector index cleanup through `ContextMemoryFacade.delete_room_memory()`.
+- Room deletion cleanup in `services/room_services.py` routes Context & Memory cleanup through a temporary bound `MemoryManager` protocol, not direct `room_memories` or `conversation_content` collection deletes and not the concrete `ContextMemoryFacade`.
+- Room deletion tests assert memory deletion also attempts content storage cleanup and vector index cleanup through `MemoryManager.delete_room_memory()`.
 - Room deletion tests assert existing S3 prefix cleanup and `file_uploads_collection` cleanup remain in the Room/application-shell deletion flow, because those resources are not owned by Context & Memory.
 - Room deletion tests assert any stale or unreachable direct-delete block for `room_memories` / `conversation_content` is removed or updated so there is only one Context & Memory cleanup path.
 - User-message write paths in `services/room_services.py` still call `room_memory_service.initialize_or_update_room_memory()` through the legacy service.
@@ -1675,7 +1688,7 @@ Cover:
 
 - [ ] **Step 2: Route room deletion Context & Memory cleanup through adapter**
 
-Replace direct cleanup of `room_memories` and `conversation_content` in room deletion paths with `ContextMemoryFacade.delete_room_memory(room_id)` through `room_services.bind_context_memory(context_memory_facade)`. Keep Room-owned raw message, membership, S3/file-upload cleanup, and other application-shell cleanup in Room. This prevents room deletion from bypassing Context & Memory vector index cleanup while preserving existing non-memory resource cleanup.
+Replace direct cleanup of `room_memories` and `conversation_content` in room deletion paths with `MemoryManager.delete_room_memory(room_id)` through `room_services.bind_context_memory(memory_manager)`. Keep Room-owned raw message, membership, S3/file-upload cleanup, and other application-shell cleanup in Room. This is a documented temporary C3 dependency from Room services to the Context & Memory protocol during migration; do not import `context_memory`, bind the concrete facade, or call non-protocol helpers from Room. This prevents room deletion from bypassing Context & Memory vector index cleanup while preserving existing non-memory resource cleanup.
 
 Failure semantics:
 - Context & Memory cleanup is best-effort after the Room record deletion is confirmed, matching current transitional cleanup behavior.
@@ -1784,7 +1797,6 @@ Expected: PASS with no golden token-budget drift.
 
 **Files:**
 - Modify: `tests/test_context_memory_protocols.py`
-- Maybe modify: `docs/MODULAR_DECOUPLING_DESIGN.md` only if documenting actual Phase 5 deviations
 - Modify: `database/mongodb.py` for the required `create_context_memory_indexes()` updates
 
 - [ ] **Step 1: Run Context & Memory module tests**
@@ -1868,7 +1880,7 @@ Services to bind:
 - `services.memory_search_service.memory_search_service`
 - `services.memory_service.room_memory_service`
 - `services.content_storage_service.content_storage_service`
-- `services.room_services.room_services` through a separate Context & Memory cleanup binding, if the singleton/object pattern is available there
+- `services.room_services.room_services` through `bind_context_memory(memory_manager: MemoryManager)` for temporary deletion cleanup
 
 Services not bound:
 - `services.memory_service.chat_memory_service`
@@ -1878,17 +1890,18 @@ Recommended binding order during startup:
 2. Run updated `mongodb.create_context_memory_indexes()` inside the Mongo-available branch.
 3. Build `AgentDeps` exactly as Phase 3 does.
 4. Build `RoomDeps` exactly as Phase 4 does.
-5. Build `ContextMemoryDeps` with `room_history_reader=_room_deps.room_history_reader`.
-6. Bind `context_assembly_service`.
-7. Bind `memory_search_service`.
-8. Bind `content_storage_service`.
-9. Bind `compaction_service`.
-10. Bind `room_memory_service`.
-11. Bind `room_services.bind_context_memory(context_memory_facade)`.
-12. Initialize Redis/SSE/event broker and leader-election dependencies exactly as current startup does.
-13. Register `ContextMemoryEventHandler` with a concrete Common `EventPublisher` if one exists; do not use `_event_broker` / `EventBroker`. Otherwise leave direct calls as the active runtime path.
-14. Start compaction sweep and other background work only after adapters are bound and leader-election dependencies are ready.
-15. Serve traffic only after Agent, Room, and Context & Memory adapters are bound.
+5. Build startup-local `context_memory_facade` with `room_history_reader=_room_deps.room_history_reader`.
+6. Build `_context_memory_deps = create_context_memory_deps(context_memory_facade)` so module consumers receive protocol fields only.
+7. Bind `context_assembly_service`.
+8. Bind `memory_search_service`.
+9. Bind `content_storage_service`.
+10. Bind `compaction_service`.
+11. Bind `room_memory_service`.
+12. Bind `room_services.bind_context_memory(_context_memory_deps.memory_manager)` for the temporary deletion cleanup path.
+13. Initialize Redis/SSE/event broker and leader-election dependencies exactly as current startup does.
+14. Register `ContextMemoryEventHandler` with a concrete Common `EventPublisher` if one exists; do not use `_event_broker` / `EventBroker`. Otherwise leave direct calls as the active runtime path.
+15. Start compaction sweep and other background work only after adapters are bound and leader-election dependencies are ready.
+16. Serve traffic only after Agent, Room, and Context & Memory adapters are bound.
 
 Avoid circular imports:
 - `container.py` can import concrete implementations.
@@ -1945,11 +1958,13 @@ uv run python -m pytest tests/test_common_foundation.py tests/test_dal_protocols
 - [ ] `MemoryMongoRepository` satisfies `MemoryRepository` at runtime.
 - [ ] `ContentStorageMongoRepository` satisfies `ContentStorageRepository` at runtime.
 - [ ] `ContextMemoryDeps` exists in `container.py` alongside `AgentDeps` and `RoomDeps`.
-- [ ] `create_context_memory_deps()` binds one `ContextMemoryFacade` to all three Context & Memory protocol fields.
+- [ ] `create_context_memory_facade()` creates the startup-local concrete facade, and `create_context_memory_deps(facade)` exposes only protocol fields with no concrete `.facade` field.
 - [ ] `context_memory/**` import-boundary test passes.
 - [ ] No `context_memory/**` imports from `agent`, `room`, `services`, `modules`, `api`, `database`, `models`, `main`, `container`, `config`, `llm_gateway`, `pinecone`, `openai`, `pymongo`, or `motor`.
+- [ ] No Common module imports `bson`; legacy native-id lookup for compacted content is implemented behind `MongoCollection` / `dal/mongo/client.py`.
 - [ ] `assemble_context()` uses projected `room_memories` as its primary context source and uses `RoomHistoryReader` only as a fallback to recover current message text when projection has not completed.
 - [ ] Legacy supervisor and agent context helpers are available only as non-protocol compatibility helpers or service adapter methods.
+- [ ] Synchronous assembly compatibility helpers are called only by `services/context_assembly_service.py` and tests; no module, API, job, Room, or Execution code calls them directly.
 - [ ] Synchronous supervisor and agent compatibility helpers produce identical token-budget results for golden fixtures.
 - [ ] Protocol `assemble_context()` produces deterministic Common-input output and does not claim equality for legacy-only inputs it cannot receive.
 - [ ] Stable prefix and dynamic suffix strings match legacy output exactly in compatibility-helper golden tests.
@@ -1965,7 +1980,9 @@ uv run python -m pytest tests/test_common_foundation.py tests/test_dal_protocols
 - [ ] Direct `compaction_service.compact_if_needed(room_id)` path remains live in Phase 5.
 - [ ] `jobs/compaction_sweep.py` remains outside `context_memory/` and still uses leader election.
 - [ ] `ChatMemoryService` remains legacy and is not moved into `context_memory/`.
+- [ ] `services/room_services.py` binds only the `MemoryManager` protocol for temporary Context & Memory room deletion cleanup; it does not import `context_memory` or receive the concrete facade.
 - [ ] `RoomMemoryService` room-based methods use `bind_facade()` and raise `RuntimeError` before bind for migrated methods.
+- [ ] `docs/MODULAR_DECOUPLING_DESIGN.md` is updated in Task 2/6 for accepted protocol/DAL changes and documented migration-only exceptions.
 - [ ] Existing RoomMessageCenter, QueueExecutor, SupervisorExecutor, and RoomServices callers continue to pass compatibility tests.
 - [ ] Existing Phase 0-4 tests still pass.
 
