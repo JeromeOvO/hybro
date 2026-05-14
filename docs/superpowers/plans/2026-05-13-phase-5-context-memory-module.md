@@ -390,6 +390,7 @@ The repository method intentionally requires `document_id`, `content_hash`, `sto
 
 Document ID strategy:
 - New `conversation_content` documents MUST store a stable string `document_id` field. The returned document id and `content_ref.document_id` should use this string field, not rely solely on Mongo `_id`.
+- This intentionally means new compact pointer id values may differ from legacy pointers that used Mongo-returned `_id` strings. Preserve the legacy pointer format and prove expandability; do not require exact pointer id equality for newly compacted turns.
 - `get_content_by_document_id(document_id)` must query `{"document_id": document_id}` first.
 - For legacy compacted turns whose `content_ref.document_id` is a Mongo ObjectId string and whose stored document lacks `document_id`, add `common/mongo_ids.py` with `object_id_query(document_id: str) -> dict | None`. That Common helper may contain the optional `bson.ObjectId` import. `context_memory/**` may import the Common helper but must not import `bson` directly.
 - Repository tests must cover both stable string `document_id` lookup and legacy `_id`/ObjectId-string fallback.
@@ -707,7 +708,7 @@ Implementation notes:
 uv run python -m pytest tests/test_context_memory_repository.py tests/test_context_memory_protocols.py -k "repository or package" -q
 ```
 
-Expected: repository tests PASS; facade conformance may still fail until Task 7.
+Expected: repository tests PASS; facade conformance may still fail until Task 8.
 
 ### Task 3: Add Internal Config, Models, and Translators
 
@@ -754,7 +755,7 @@ Cover:
 - Legacy nested `memory_content.conversation_history` and direct `conversation_history` both read correctly.
 - `room_summary`, `room_facts`, `total_messages`, `total_compactions`, and `memory_id` preserve field names.
 - Conversation turn dicts handle `role`, `representation`, `content_ref`, `content_type`, `turn_type`, `turn_notes`, `was_successful`, and token estimates.
-- Compact turns render the same pointer strings as legacy `ContentReference.to_compact_string()`.
+- Compact turns render the same pointer format as legacy `ContentReference.to_compact_string()` and expand successfully; new deterministic `document_id` values may differ from legacy Mongo `_id` strings.
 - `AssembledContext` conversion stores stable/dynamic blocks and legacy metadata.
 - Common `MemorySearchResult` conversion preserves `turn_id` in metadata or `source_message_id` as appropriate.
 - Common `CompactionResult` conversion preserves `room_id`, `compacted_count`, `tokens_saved`, errors, and compacted timestamp in metadata.
@@ -809,7 +810,7 @@ Port coverage from `tests/test_context_assembly_service.py`:
 - Over-budget turns truncate oldest first.
 - Stable prefix over-budget edge logs but continues.
 - `MAX_CONTEXT_CHARS` hard cap truncates and updates token count.
-- Compact turns render pointer strings and count as compact turns.
+- Compact turns render legacy-compatible pointer strings and count as compact turns.
 
 - [ ] **Step 2: Implement stable prefix builder**
 
@@ -1055,7 +1056,7 @@ Port coverage from `tests/test_compaction_service.py`:
 Rules:
 - `ContentExpiredError` lives in `context_memory/content_storage.py`.
 - `store_full_content()` is the only helper compaction should call for full-content storage; it computes deterministic `document_id` and storage metadata before calling the repository.
-- Pointer string rendering must match legacy exactly for MongoDB references.
+- Pointer string rendering must preserve the legacy `ContentReference.to_compact_string()` format for MongoDB references. For newly compacted turns, the `document_id` segment comes from the stable `document_id` field and may differ from legacy Mongo `_id` values.
 - S3 and URL references remain unsupported unless existing tests require pass-through; do not import `services.s3_service`.
 
 - [ ] **Step 9: Run search and content storage tests**
@@ -1478,9 +1479,9 @@ Assert:
 - Same turns selected for compaction.
 - Same compacted count.
 - Same token savings.
-- Same content reference shape.
-- Same compact pointer string.
-- Same content storage document fields.
+- Same content reference field set, storage type, collection, and content hash.
+- Same compact pointer format and successful expansion. Exact pointer id equality is required only for captured legacy ObjectId fixtures, not for newly compacted turns that use deterministic `document_id`.
+- Same content storage document field set, including deterministic `document_id`, `content_hash`, `stored_at`, and `expires_at` rules.
 - Same non-blocking behavior when vector indexing fails.
 
 - [ ] **Step 4: Add golden memory search tests**
@@ -1678,7 +1679,7 @@ uv run python -m pytest tests/test_common_foundation.py tests/test_agent_protoco
 - [ ] Stable prefix and dynamic suffix strings match legacy output exactly.
 - [ ] Token counts, stable prefix tokens, dynamic suffix tokens, truncation reason, and turn counts match legacy output exactly.
 - [ ] Lossless compaction stores full content in `conversation_content` before writing compact pointers.
-- [ ] Compaction pointer strings match legacy output exactly.
+- [ ] Compaction pointer strings preserve legacy format and expand successfully; deterministic new `document_id` values may differ from legacy Mongo-returned ids.
 - [ ] Compaction preserves recent turns exactly as legacy.
 - [ ] Vector indexing at compaction time uses `VectorDAL` and `LLMProvider`, not concrete Pinecone or OpenAI services.
 - [ ] Memory search preserves hybrid vector+BM25 behavior, temporal decay, and MMR ordering.
