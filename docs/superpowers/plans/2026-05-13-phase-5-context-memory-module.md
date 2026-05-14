@@ -870,7 +870,9 @@ Algorithm:
 
 These helpers are the only path used by synchronous legacy `ContextAssemblyService` adapter methods. They must remain sync and must not perform repository reads, RoomHistoryReader calls, LLM calls, or memory search.
 
-- [ ] **Step 6: Implement protocol `assemble_context()`**
+- [ ] **Step 6: Design `assemble_context()` algorithm and add integration test**
+
+This step defines the algorithm and writes an integration test proving assembly works end-to-end with fakes. Keep the mapping below as the design spec that Task 8 Step 5 implements on `ContextMemoryFacade`; do not implement `assemble_context()` on the facade in Task 4.
 
 Mapping:
 - Load room memory via `MemoryRepository.get_room_memory(room_id)` - this is the PRIMARY data source for context assembly (conversation history, summary, facts).
