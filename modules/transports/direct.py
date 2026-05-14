@@ -173,6 +173,7 @@ class DirectTransport(AgentTransport):
 
         full_response_text = ""
         paused_message_id = None
+        agent_task_id = None
         if support_streaming:
             try:
                 (
@@ -242,6 +243,7 @@ class DirectTransport(AgentTransport):
                 success,
                 full_response_text,
                 paused_message_id,
+                agent_task_id,
             ) = await self.handle_sync_response(
                 message,
                 agent.agent_card,
@@ -286,7 +288,7 @@ class DirectTransport(AgentTransport):
                     ProcessingStatus.AWAITING_INPUT,
                     response_text="",
                     message_id=paused_message_id,
-                    a2a_task_id=task_data.get("id") or (task.id if hasattr(task, "id") else None),
+                    a2a_task_id=agent_task_id or task_data.get("id") or (task.id if hasattr(task, "id") else None),
                     a2a_context_id=task_data.get("context_id") or (task.context_id if hasattr(task, "context_id") else None),
                     status_message=status_msg,
                 )
@@ -1261,11 +1263,11 @@ class DirectTransport(AgentTransport):
         token: CancellationToken | None = None,
         step_number: int | None = None,
         total_steps: int | None = None,
-    ) -> tuple[bool, str | None, str | None]:
+    ) -> tuple[bool, str | None, str | None, str | None]:
         """Handle synchronous (non-streaming) response from an agent.
 
         Returns:
-            Tuple of (success, response_text, paused_message_id).
+            Tuple of (success, response_text, paused_message_id, task_id).
         """
         task_info, ctx = await self._setup_tracking_context(
             current_message,
@@ -1308,7 +1310,7 @@ class DirectTransport(AgentTransport):
             )
             if task_info:
                 await self._emit_terminal(ctx, TaskState.canceled)
-            return False, "", None
+            return False, "", None, None
 
         # Call the agent
         try:
@@ -1349,7 +1351,7 @@ class DirectTransport(AgentTransport):
             if task_info:
                 await self._emit_terminal(ctx, TaskState.canceled)
             await self._try_cancel_remote_task(current_message, agent_card)
-            return False, "", None
+            return False, "", None, None
         except Exception as exc:
             logger.error("Agent error: %s", exc, exc_info=True)
             await self.tsm.transition_task(
@@ -1385,7 +1387,7 @@ class DirectTransport(AgentTransport):
                     rec_exc,
                 )
 
-            return False, "", None
+            return False, "", None, None
 
         # Post-call cancellation check
         if token and token.is_cancelled:
@@ -1400,7 +1402,7 @@ class DirectTransport(AgentTransport):
             if task_info:
                 await self._emit_terminal(ctx, TaskState.canceled)
             await self._try_cancel_remote_task(current_message, agent_card)
-            return False, "", None
+            return False, "", None, None
 
         return await self._process_sync_response(
             response,
@@ -1428,8 +1430,11 @@ class DirectTransport(AgentTransport):
         *,
         step_number: int | None = None,
         total_steps: int | None = None,
-    ) -> tuple[bool, str | None, str | None]:
-        """Process the parsed sync response (message or task type)."""
+    ) -> tuple[bool, str | None, str | None, str | None]:
+        """
+            Process the parsed sync response (message or task type).
+            Returns: Tuple of (success, response_text, paused_message_id, agent_task_id).
+        """
         # Handle "message" response (fast path)
         if response.get("type") == "message":
             full_response_text = response.get("content") or ""
@@ -1515,7 +1520,7 @@ class DirectTransport(AgentTransport):
             # P1: Non-completed terminal states are dispatch failures so
             # QueueExecutor / SupervisorExecutor treat them correctly.
             is_success = actual_state == TaskState.completed
-            return is_success, full_response_text or error_text, None
+            return is_success, full_response_text or error_text, None,None
 
         # Handle "task" response (async path)
         if response.get("type") == "task":
@@ -1536,13 +1541,10 @@ class DirectTransport(AgentTransport):
                 task_obj = get_task(current_message)
                 if task_obj and task_obj.status:
                     task_obj.status.state = TaskState(status) if isinstance(status, str) else status
-                real_task_id = response.get("task_id")
-                if real_task_id and task_obj:
-                    task_obj.id = real_task_id
-                return True, None, message_id
+                return True, None, message_id, response.get("task_id")
 
             if self.a2a_service.has_push_notification_capability(agent_card):
-                return True, None, message_id
+                return True, None, message_id,None
 
             # Non-push agent: poll for completion
             agent_task_id = response.get("task_id")
@@ -1550,7 +1552,7 @@ class DirectTransport(AgentTransport):
                 logger.warning(
                     "DirectTransport: Non-push agent task response without task_id"
                 )
-                return True, None, None
+                return True, None, None,None
 
             logger.info(
                 "DirectTransport: Polling non-push agent task %s", agent_task_id
@@ -1575,7 +1577,7 @@ class DirectTransport(AgentTransport):
                 if task_info:
                     await self._emit_terminal(ctx, TaskState.canceled)
                 await self._try_cancel_remote_task(current_message, agent_card)
-                return False, "", None
+                return False, "", None,None
 
             if completed_task:
                 return await self._finalize_polled_task(
@@ -1600,10 +1602,10 @@ class DirectTransport(AgentTransport):
                     persist=True,
                 )
                 await self._emit_terminal(ctx, TaskState.failed, error="Task polling timed out")
-                return True, None, None
+                return True, None, None,None
 
         logger.error("Unexpected response type from task tracking: %s", response)
-        return False, "", None
+        return False, "", None,None
 
     async def _finalize_polled_task(
         self,
@@ -1617,7 +1619,7 @@ class DirectTransport(AgentTransport):
         *,
         step_number: int | None = None,
         total_steps: int | None = None,
-    ) -> tuple[bool, str | None, str | None]:
+    ) -> tuple[bool, str | None, str | None,str | None]:
         """Finalize a polled task that reached a terminal state."""
         state = completed_task.status.state
         state_value = state_str(state)
@@ -1649,7 +1651,7 @@ class DirectTransport(AgentTransport):
                 message_id,
                 state_value,
             )
-            return True, None, message_id
+            return True, None, message_id, completed_task.id
 
         final_content = None
         final_error = None
@@ -1688,4 +1690,4 @@ class DirectTransport(AgentTransport):
                 total_steps=total_steps,
                 client_request_id=current_message.client_request_id,
             )
-        return True, final_content, None
+        return True, final_content, None, None
