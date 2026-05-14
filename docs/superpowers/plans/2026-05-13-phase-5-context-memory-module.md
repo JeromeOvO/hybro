@@ -290,7 +290,16 @@ These helpers exist only to keep legacy callers stable. New cross-module consume
 
 Signature convention: `assemble_supervisor_context_from_memory()` and `assemble_agent_execution_context_from_memory()` are synchronous pure helpers. Every other non-protocol facade helper in this list is `async def` because it may touch repositories, vector search, LLM calls, content storage, or legacy async service adapters. Synchronous legacy adapters must not call those async helpers unless their public method is already async and can `await`.
 
-The two synchronous assembly helpers are a temporary C3 migration exception to the design invariant that cross-module methods are async/protocol-based. Only `services.context_assembly_service.ContextAssemblyService` may call them, and only to preserve existing synchronous legacy callers until those callers migrate to async protocol methods. No Room, Execution, module, API, job, or new service code may call these helpers directly. Add an import/call-boundary test that greps for these helper names and fails on call sites outside `services/context_assembly_service.py` and `tests/`.
+All non-protocol compatibility helpers listed above are temporary C3 migration APIs. Add an AST call-boundary test that builds its helper-name set from this list and fails if any helper is called outside its intended legacy adapter file or tests. Allowed call sites:
+- `services/context_assembly_service.py`: `assemble_supervisor_context_from_memory()`, `assemble_agent_execution_context_from_memory()`.
+- `services/memory_service.py`: `legacy_create_room_memory()`, `legacy_get_room_memory_by_room_id()`, `legacy_get_room_memory_by_memory_id()`, `legacy_update_room_memory_by_room_id()`, `legacy_get_room_memory_for_update_by_memory_id()`, `legacy_delete_room_memory_by_room_id()`, `legacy_delete_room_memory_by_memory_id()`, `initialize_or_update_room_memory()`, `add_agent_response_to_memory()`, `add_synthesis_to_history()`, `update_room_summary()`.
+- `services/memory_search_service.py`: `legacy_search()`, `index_turn_for_search()`, `delete_room_index()`.
+- `services/compaction_service.py`: `should_compact()`, `compact_if_needed()`, `compact_room_memory()`, `expand_turn_content()`, `expand_turn_content_from_turn()`, `fetch_turn_content()`, `get_compaction_stats()`.
+- `services/content_storage_service.py`: every `content_*` helper.
+- `context_memory/events.py`: `project_message_for_event()` only.
+- `tests/**`: all helpers for adapter, facade, and boundary tests.
+
+No Room, Execution, API, module, job, or new service code may call these helpers directly. The synchronous assembly helpers are a narrower temporary exception to the design invariant that cross-module methods are async/protocol-based; they exist only because the legacy `ContextAssemblyService` public API is synchronous until callers migrate to async protocol methods.
 
 Content-storage compatibility helpers convert repository dicts to legacy service return shapes. `content_get_content_by_document_id()` and `content_get_content_by_turn_id()` return `doc["content"]` or `None`, never the raw repository dict. `content_expand_mongodb_reference()` accepts a primitive dict form of the legacy `ContentReference`, supports only `storage_type="mongodb"`, raises the Context & Memory `ContentExpiredError` when missing, and leaves S3/URL behavior to the legacy service adapter.
 
@@ -711,6 +720,12 @@ Forbidden roots:
 - `pymongo`
 - `room`
 - `services`
+
+Also add a repo-wide non-protocol facade helper call-boundary test:
+- Build the helper-name set from the "Non-protocol compatibility helpers allowed on `ContextMemoryFacade`" list in this plan, or keep a test constant with the exact same names and fail if the lists drift.
+- Scan AST calls across Python files and reject any call to those helper names outside the allowed adapter paths listed in "Interface Definitions".
+- Allow `project_message_for_event()` only from `context_memory/events.py` and tests.
+- Fail if Room, Execution, API, module, job, or new service code calls helpers such as `legacy_search()`, `compact_if_needed()`, `index_turn_for_search()`, or `content_*()` directly; those paths must go through Common protocols or legacy service adapters.
 
 - [ ] **Step 5: Run and verify failure**
 
@@ -1972,7 +1987,7 @@ uv run python -m pytest tests/test_common_foundation.py tests/test_dal_protocols
 - [ ] No Common module imports `bson`; legacy native-id lookup for compacted content is implemented behind `MongoCollection` / `dal/mongo/client.py`.
 - [ ] `assemble_context()` uses projected `room_memories` as its primary context source and uses `RoomHistoryReader` only as a fallback to recover current message text when projection has not completed.
 - [ ] Legacy supervisor and agent context helpers are available only as non-protocol compatibility helpers or service adapter methods.
-- [ ] Synchronous assembly compatibility helpers are called only by `services/context_assembly_service.py` and tests; no module, API, job, Room, or Execution code calls them directly.
+- [ ] Every non-protocol `ContextMemoryFacade` compatibility helper is covered by the call-boundary test and is called only from its intended legacy adapter file or tests; `project_message_for_event()` is additionally allowed from `context_memory/events.py`.
 - [ ] Synchronous supervisor and agent compatibility helpers produce identical token-budget results for golden fixtures.
 - [ ] Protocol `assemble_context()` produces deterministic Common-input output and does not claim equality for legacy-only inputs it cannot receive.
 - [ ] Stable prefix and dynamic suffix strings match legacy output exactly in compatibility-helper golden tests.
