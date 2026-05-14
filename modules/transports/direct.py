@@ -1536,6 +1536,9 @@ class DirectTransport(AgentTransport):
                 task_obj = get_task(current_message)
                 if task_obj and task_obj.status:
                     task_obj.status.state = TaskState(status) if isinstance(status, str) else status
+                real_task_id = response.get("task_id")
+                if real_task_id and task_obj:
+                    task_obj.id = real_task_id
                 return True, None, message_id
 
             if self.a2a_service.has_push_notification_capability(agent_card):
