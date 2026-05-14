@@ -107,7 +107,7 @@ Modify:
 - `services/memory_search_service.py`: convert public methods to C3 facade delegation while retaining legacy `MemorySearchResponse` conversion.
 - `services/memory_service.py`: add facade binding to `RoomMemoryService` only; leave `ChatMemoryService` unchanged.
 - `services/content_storage_service.py`: convert public content-storage methods to C3 facade/repository delegation where needed by tests and legacy callers.
-- `modules/RoomMessageCenter.py`: keep direct `_trigger_compaction_safe()` call, but route through the bound legacy `compaction_service` wrapper; optionally bind the ContextMemory facade for future event-handler registration if a local pattern exists.
+- `modules/RoomMessageCenter.py`: keep direct `_trigger_compaction_safe()` call, but route through the bound legacy `compaction_service` wrapper.
 - `modules/QueueExecutor.py`: no direct import of `context_memory`; continue calling `room_memory_service`, which delegates after bind.
 - `modules/SupervisorExecutor.py`: no direct import of `context_memory`; continue calling `room_memory_service`, which delegates after bind.
 - `services/room_services.py`: keep existing calls to legacy context/memory service singletons; add temporary C3 cleanup binding that accepts the `MemoryManager` protocol, not the concrete facade.
@@ -1670,6 +1670,7 @@ Expected: PASS.
 - Modify: `modules/SupervisorExecutor.py` only if constructor tests require explicit bind setup
 - Modify: `services/room_services.py`
 - Modify: `jobs/compaction_sweep.py`
+- Modify: `docs/MODULAR_DECOUPLING_DESIGN.md`
 - Modify: existing module tests
 
 - [ ] **Step 1: Add caller preservation tests**
@@ -1695,18 +1696,25 @@ Failure semantics:
 - If content or vector cleanup has an actual failure or returns `False`, log a warning with `room_id` and keep the user-visible room delete successful. No-op cleanup because memory/content/vectors did not exist is success and should not log as a failure.
 - Tests must cover vector-index-unavailable cleanup returning `False` without failing room deletion.
 
-- [ ] **Step 3: Keep direct compaction call in RoomMessageCenter**
+- [ ] **Step 3: Document temporary Room cleanup dependency in design doc**
+
+Update `docs/MODULAR_DECOUPLING_DESIGN.md` cross-module communication rules with a Phase 5 migration-only exception:
+- `Room services -> Context & Memory` may call `MemoryManager.delete_room_memory(room_id)` only for room deletion cleanup while legacy Room deletion owns orchestration.
+- The dependency is protocol-only, startup-bound by the application shell, and must not expose the concrete `ContextMemoryFacade` to Room.
+- The exception is removed when deletion cleanup orchestration moves to the application shell or a later lifecycle owner.
+
+- [ ] **Step 4: Keep direct compaction call in RoomMessageCenter**
 
 Do not replace `_trigger_compaction_safe()` with a new event bus. Keep:
 - Inline await while the per-room lock is held.
 - Exception swallowing/logging behavior.
 - Call through `services.compaction_service.compaction_service`, which delegates after bind.
 
-- [ ] **Step 4: Add optional future event registration only in startup**
+- [ ] **Step 5: Add optional future event registration only in startup**
 
 If a concrete Common `EventPublisher` exists in the implementation branch, register `ContextMemoryEventHandler` there. Do not register against `_event_broker` / `infrastructure.event_broker.EventBroker`, and do not import Delivery implementation into `context_memory/`.
 
-- [ ] **Step 5: Keep compaction sweep outside the module**
+- [ ] **Step 6: Keep compaction sweep outside the module**
 
 Chosen Phase 5 path: leave `jobs/compaction_sweep.py` importing `services.compaction_service`; the service delegates to facade after bind. Do not add `CompactionSweep.bind_projector()` in Phase 5.
 
@@ -1716,7 +1724,7 @@ If the existing sweep keeps a direct read of `database.mongodb.room_memories_col
 
 Because the chosen sweep path keeps the existing job-owned room-id scan, `list_room_ids_with_memory()` is not used by the production sweep in Phase 5; it still must be implemented without the 1000-row DAL cap for future cleaner wiring and tests.
 
-- [ ] **Step 6: Run caller compatibility tests**
+- [ ] **Step 7: Run caller compatibility tests**
 
 ```bash
 uv run python -m pytest tests/test_module_room_message_center.py tests/test_module_queue_executor.py tests/test_module_supervisor_executor.py tests/test_service_room.py tests/test_context_memory_bugfixes.py -q
@@ -1982,7 +1990,7 @@ uv run python -m pytest tests/test_common_foundation.py tests/test_dal_protocols
 - [ ] `ChatMemoryService` remains legacy and is not moved into `context_memory/`.
 - [ ] `services/room_services.py` binds only the `MemoryManager` protocol for temporary Context & Memory room deletion cleanup; it does not import `context_memory` or receive the concrete facade.
 - [ ] `RoomMemoryService` room-based methods use `bind_facade()` and raise `RuntimeError` before bind for migrated methods.
-- [ ] `docs/MODULAR_DECOUPLING_DESIGN.md` is updated in Task 2/6 for accepted protocol/DAL changes and documented migration-only exceptions.
+- [ ] `docs/MODULAR_DECOUPLING_DESIGN.md` is updated in Task 2/6 for accepted protocol/DAL changes and in Task 11 for the documented Room cleanup migration-only exception.
 - [ ] Existing RoomMessageCenter, QueueExecutor, SupervisorExecutor, and RoomServices callers continue to pass compatibility tests.
 - [ ] Existing Phase 0-4 tests still pass.
 
