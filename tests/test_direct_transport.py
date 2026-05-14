@@ -273,7 +273,7 @@ class TestHandleSyncResponseWithPolling:
         completed_task.model_dump = MagicMock(return_value={})
 
         proc._poll_task_until_complete = AsyncMock(return_value=completed_task)
-        proc._finalize_polled_task = AsyncMock(return_value=(True, "done", None,None))
+        proc._finalize_polled_task = AsyncMock(return_value=(True, "done", None, None))
         proc.response_handler.handle = AsyncMock()
 
         success, text, paused, agent_task_id = await proc.handle_sync_response(
