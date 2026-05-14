@@ -251,6 +251,12 @@ Protocol methods implemented exactly:
 Non-protocol compatibility helpers allowed on `ContextMemoryFacade`:
 - `assemble_supervisor_context_from_memory(room_memory_doc: dict, current_task: str, *, agent_registry: list[dict] | None = None, max_turns: int = 5, memory_search_results: list | None = None) -> AssembledContext`
 - `assemble_agent_execution_context_from_memory(room_memory_doc: dict, current_task: str, *, agent_id: str | None = None, agent_name: str | None = None, room_awareness: str | None = None, quoted_text: str | None = None, include_system_instruction: bool = True) -> AssembledContext`
+- `legacy_create_room_memory(memory_doc: dict) -> dict | None`
+- `legacy_get_room_memory_by_room_id(room_id: str) -> dict | None`
+- `legacy_get_room_memory_by_memory_id(memory_id: str) -> dict | None`
+- `legacy_update_room_memory_by_room_id(room_id: str, memory_doc: dict) -> bool`
+- `legacy_update_room_memory_by_memory_id(memory_id: str, memory_doc: dict) -> bool`
+- `legacy_delete_room_memory_by_memory_id(memory_id: str) -> bool`
 - `initialize_or_update_room_memory(room_id: str, *, memory_content: str | None, room_agent_set: dict | None, user_id: str | None, attachments: list | None = None) -> RoomMemoryInfo`
 - `add_agent_response_to_memory(room_id: str, agent_id: str, agent_name: str, response_text: str, was_successful: bool = True) -> bool`
 - `add_synthesis_to_history(room_id: str, synthesis_text: str, trajectory: Any | None = None) -> str | None`
@@ -272,6 +278,8 @@ Non-protocol compatibility helpers allowed on `ContextMemoryFacade`:
 These helpers exist only to keep legacy callers stable. New cross-module consumers should use the three Common protocols.
 
 Content-storage compatibility helpers convert repository dicts to legacy service return shapes. `content_get_content_by_document_id()` and `content_get_content_by_turn_id()` return `doc["content"]` or `None`, never the raw repository dict. `content_expand_mongodb_reference()` accepts a primitive dict form of the legacy `ContentReference`, supports only `storage_type="mongodb"`, raises the Context & Memory `ContentExpiredError` when missing, and leaves S3/URL behavior to the legacy service adapter.
+
+Room-memory CRUD compatibility helpers accept and return primitive room-memory dicts. `services.memory_service.RoomMemoryService` owns conversion between `models.memory.RoomMemory` and dicts so `context_memory/**` does not import `models.*`. Adapter tests must assert `RoomCenterMemoryResponse.memory` remains a legacy `RoomMemory` instance for create/get/update paths and `None` for delete paths.
 
 Assembly compatibility helpers must be synchronous and pure. They accept an already-loaded room memory document and optional precomputed memory search results; they must not call `MemoryRepository`, `RoomHistoryReader`, `LLMProvider`, or search helpers. Legacy `build_supervisor_context()` and `build_agent_execution_context()` are synchronous and current callers do not await them, so repository-backed loading belongs only in async protocol methods such as `assemble_context()`.
 
@@ -637,6 +645,7 @@ Expected before implementation: FAIL because `context_memory` package, repositor
 - Create/modify: `context_memory/repository/mongo.py`
 - Create/modify: `context_memory/repository/__init__.py`
 - Create: `tests/test_context_memory_repository.py`
+- Modify: `tests/test_common_foundation.py`
 
 - [ ] **Step 1: Write memory repository contract tests**
 
@@ -684,6 +693,11 @@ Cover:
 
 Use the additions listed in "MemoryRepository Additions" and "ContentStorageRepository Protocol". Keep protocols domain-scoped; do not expose generic `find(query)`, raw collection access, or direct Motor/PyMongo result objects.
 
+Also update `tests/test_common_foundation.py` in the same task:
+- Add any accepted `MemoryRepository` additions to the exact expected method set.
+- Add `ContentStorageRepository` to the expected repository protocol method-set assertions if the protocol is exported from `common.protocols`.
+- Keep this test in Task 2 so protocol drift fails with the repository work, not late in final gates.
+
 - [ ] **Step 5: Implement `MemoryMongoRepository`**
 
 Implementation notes:
@@ -714,7 +728,7 @@ Implementation notes:
 - [ ] **Step 7: Run repository tests**
 
 ```bash
-uv run python -m pytest tests/test_context_memory_repository.py tests/test_context_memory_protocols.py -k "repository or package" -q
+uv run python -m pytest tests/test_context_memory_repository.py tests/test_context_memory_protocols.py tests/test_common_foundation.py -k "repository or package or protocol_methods" -q
 ```
 
 Expected: repository tests PASS; facade conformance may still fail until Task 8.
@@ -923,16 +937,19 @@ Cover:
 - `project_message(room_id, message_id)` reads raw message through `RoomHistoryReader.get_messages_by_ids()`.
 - User raw message creates a room memory if missing.
 - User text is cleaned of `@mention` UUIDs the same way legacy code does.
+- User mention cleanup uses `RoomMessageInfo.metadata["room_agent_set"]` when present. If the Phase 4 reader does not populate this metadata, extend the reader adapter/fakes to carry it or document event projection as best-effort while keeping direct `initialize_or_update_room_memory()` compatibility authoritative in Phase 5.
 - Attachments are represented by the same `build_turn_content()` output as legacy adapter conversion.
 - Turn contains `role="user"`, `user_id`, content, token estimate, turn notes, timestamp, and default representation `full`.
+- Agent message projection preserves `agent_name` from `RoomMessageInfo.sender_name` or `RoomMessageInfo.metadata["agent_name"]`; if neither is available, document the fallback and keep direct `add_agent_response_to_memory()` compatibility tests exact.
 - `total_messages` and `last_activity_at` update through repository atomic mutation.
 
 - [ ] **Step 2: Implement raw message to turn projection**
 
 Rules:
-- Consume `RoomMessageInfo` only.
+- Consume `RoomMessageInfo` and its `metadata` only.
 - Do not import `models.room` or `services.room_services`.
 - If a legacy helper such as `build_turn_content()` is needed, port a pure equivalent into `context_memory/projection.py` and prove equivalence with tests.
+- Do not fetch room membership directly from Room, database, or services for `room_agent_set`; require it through `RoomMessageInfo.metadata` or explicitly mark the `MessageCommitted` projection path best-effort until a Common reader metadata path exists.
 - Missing raw message should be logged and treated as no-op.
 
 - [ ] **Step 3: Write failing legacy room memory lifecycle tests**
@@ -1194,6 +1211,7 @@ Cover:
 - `search_memory()` delegates to search helper and returns Common DTO list.
 - `get_user_memories()` maps repository user-memory docs to Common `UserMemory` using the explicit synthetic `memory_id`, stable rendered `content`, and metadata mapping from "UserMemory DTO Mapping".
 - `delete_room_memory()` deletes room memory, content storage documents, and vector index entries owned by Context & Memory.
+- `legacy_*` room-memory CRUD helpers delegate to `MemoryRepository` and return primitive dict/bool results for `RoomMemoryService` adapter conversion.
 
 - [ ] **Step 4: Implement MemoryProjector methods**
 
@@ -1319,6 +1337,8 @@ Keep pure static helpers only if legacy tests import them directly; otherwise ro
 Cover:
 - `RoomMemoryService` room-based methods fail before bind.
 - `ChatMemoryService` remains unchanged and does not require facade binding.
+- `create_room_memory()`, `get_room_memory_by_room_id()`, `get_room_memory_by_memory_id()`, `update_room_memory_by_room_id()`, `update_room_memory_by_memory_id()`, and `delete_room_memory_by_memory_id()` delegate through the `legacy_*` facade helpers after bind.
+- The adapter converts legacy `RoomMemory` request/response models to primitive dicts before calling the facade, then reconstructs `models.memory.RoomMemory` for `RoomCenterMemoryResponse.memory`.
 - `room_memory_service.add_agent_response_to_memory()` delegates to facade after bind.
 - `add_synthesis_to_history()` and `update_room_summary()` delegate after bind.
 - CRUD-style room memory methods return `RoomCenterMemoryResponse` with legacy fields.
@@ -1457,20 +1477,26 @@ Cover:
 - `modules/QueueExecutor.py` still calls `room_memory_service.add_agent_response_to_memory()`.
 - `modules/SupervisorExecutor.py` still calls `room_memory_service.add_agent_response_to_memory()`.
 - `services/room_services.py` still calls `context_assembly_service.build_supervisor_context()` and `build_agent_execution_context()`.
+- Room deletion cleanup in `services/room_services.py` routes Context & Memory cleanup through the bound legacy adapter/facade, not direct `room_memories` or `conversation_content` collection deletes.
+- Room deletion tests assert memory deletion also attempts content storage cleanup and vector index cleanup through `ContextMemoryFacade.delete_room_memory()`.
 - `jobs/compaction_sweep.py` still runs sweep and compacts idle rooms.
 
-- [ ] **Step 2: Keep direct compaction call in RoomMessageCenter**
+- [ ] **Step 2: Route room deletion Context & Memory cleanup through adapter**
+
+Replace direct cleanup of `room_memories` and `conversation_content` in room deletion paths with the bound Context & Memory adapter/facade path. Keep Room-owned raw message and membership cleanup in Room. This prevents room deletion from bypassing Context & Memory vector index cleanup.
+
+- [ ] **Step 3: Keep direct compaction call in RoomMessageCenter**
 
 Do not replace `_trigger_compaction_safe()` with a new event bus. Keep:
 - Inline await while the per-room lock is held.
 - Exception swallowing/logging behavior.
 - Call through `services.compaction_service.compaction_service`, which delegates after bind.
 
-- [ ] **Step 3: Add optional future event registration only in startup**
+- [ ] **Step 4: Add optional future event registration only in startup**
 
 If a concrete `EventPublisher` exists in the implementation branch, register `ContextMemoryEventHandler` there. Do not import Delivery implementation into `context_memory/`.
 
-- [ ] **Step 4: Keep compaction sweep outside the module**
+- [ ] **Step 5: Keep compaction sweep outside the module**
 
 Preferred options:
 - Minimal: leave `jobs/compaction_sweep.py` importing `services.compaction_service`; the service delegates to facade after bind.
@@ -1478,7 +1504,7 @@ Preferred options:
 
 Either way, the job stays in `jobs/` because leader election, active-run skip checks, sleep loops, and worker pools are application-shell concerns.
 
-- [ ] **Step 5: Run caller compatibility tests**
+- [ ] **Step 6: Run caller compatibility tests**
 
 ```bash
 uv run python -m pytest tests/test_module_room_message_center.py tests/test_module_queue_executor.py tests/test_module_supervisor_executor.py tests/test_service_room.py tests/test_context_memory_bugfixes.py -q
@@ -1612,7 +1638,7 @@ Expected: PASS. If too slow, record the targeted commands above and any skipped 
 
 ```bash
 git status --short
-git add context_memory common/protocols common/dto pyproject.toml container.py main.py services modules jobs tests
+git add context_memory common dal pyproject.toml container.py main.py services modules jobs tests
 git commit -m "feat: extract context memory module facade"
 ```
 
