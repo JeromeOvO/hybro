@@ -15,13 +15,13 @@
 Include:
 - Create the `context_memory/` package on `phase-5-context-memory-module`.
 - Implement `ContextMemoryFacade` as the concrete implementation for `ContextAssembler`, `MemoryManager`, and `MemoryProjector` in `common/protocols/context_memory_protocols.py`.
-- Implement `MemoryMongoRepository` against `MongoDAL` for `room_memories` and any protocol-required memory reads, extending `MemoryRepository` only for missing Context & Memory atomic operations.
+- Implement `MemoryMongoRepository` against `MongoDAL` for `room_memories` plus explicit `user_memories` reads required by `MemoryManager.get_user_memories()`, extending `MemoryRepository` only for missing Context & Memory atomic operations.
 - Implement `ContentStorageMongoRepository` against `MongoDAL` for `conversation_content`; add a separate `ContentStorageRepository` protocol instead of overloading `MemoryRepository`.
 - Port token-budget, stable-prefix, dynamic-suffix, truncation, char-cap, and context metric logic from `services/context_assembly_service.py` without semantic changes.
 - Port lossless pointer compaction from `services/compaction_service.py`, including preserve-recent behavior, idempotent content storage, compact pointer rendering, expansion, and compaction stats.
 - Port hybrid memory search from `services/memory_search_service.py`, including vector search through `VectorDAL`, Mongo text search, weighted merge, temporal decay, MMR diversity, hydration, and vector deletion.
 - Port room-memory lifecycle and projection behavior from `RoomMemoryService`, including user turns, agent response turns, synthesis turns, turn-note enrichment, room summary updates, and room fact deduplication.
-- Use `RoomHistoryReader` from Phase 4 for raw message reads in `MemoryProjector.project_message()` and canonical `ContextAssembler.assemble_context()`.
+- Use `RoomHistoryReader` from Phase 4 for raw message reads in `MemoryProjector.project_message()` and only as a fallback in `ContextAssembler.assemble_context()` when the requested message has not yet been projected into room memory.
 - Add a Context & Memory event handler for `MessageCommitted` that calls `project_message()` and then `run_compaction()` where appropriate.
 - Keep the current direct compaction call path during Phase 5 while adding the event-handler seam. Do not introduce a new in-process event bus in Phase 5.
 - Keep `jobs/compaction_sweep.py` outside `context_memory/` as application-shell scheduling and leader-election infrastructure; bind it to the facade or to a delegated legacy compaction service.
@@ -123,7 +123,7 @@ Reference-only:
 - `common/protocols/llm_protocols.py`: `LLMProvider`.
 - `common/protocols/delivery_protocols.py`: existing `EventPublisher.emit_internal()` and handler registration.
 - `common/dto/internal_events.py`: `MessageCommitted`.
-- `common/utils/context_utils.py`: token estimation, max char cap, turn note extraction helpers; allowed import from `context_memory/**`.
+- `common/utils/context_utils.py`: ONLY the pure subset is allowed from `context_memory/**`: `estimate_tokens()`, `extract_turn_notes()`, `MAX_CONTEXT_CHARS`, `CHARS_PER_TOKEN_ESTIMATE`, `MAX_HISTORY_TURNS`, `MAX_SUMMARY_CHARS`, `LLM_TURN_NOTES_THRESHOLD`, `clean_mention_format()`. Functions that have deferred imports from `models.*` or `services.*` (`add_turn_to_history`, `extract_turn_notes_llm`, `build_turn_content`, turn-rendering helpers) must NOT be called from `context_memory/**`. Re-implement needed logic as pure equivalents in `context_memory/projection.py`.
 - `common/config/settings.py`: current config defaults for token budget, compaction, and memory search.
 - `services/context_assembly_service.py`: exact token budget and stable/dynamic context behavior.
 - `services/compaction_service.py`: lossless compaction behavior and pointer semantics.
@@ -248,8 +248,8 @@ Protocol methods implemented exactly:
 - `run_compaction(room_id: str) -> CompactionResult`
 
 Non-protocol compatibility helpers allowed on `ContextMemoryFacade`:
-- `assemble_supervisor_context(room_id: str, current_task: str, *, message_id: str | None = None, agent_registry: list[dict] | None = None, max_turns: int = 5, memory_search_results: list | None = None, room_memory_doc: dict | None = None) -> AssembledContext`
-- `assemble_agent_execution_context(room_id: str, current_task: str, *, message_id: str | None = None, agent_id: str | None = None, agent_name: str | None = None, room_awareness: str | None = None, quoted_text: str | None = None, include_system_instruction: bool = True, room_memory_doc: dict | None = None) -> AssembledContext`
+- `assemble_supervisor_context_from_memory(room_memory_doc: dict, current_task: str, *, agent_registry: list[dict] | None = None, max_turns: int = 5, memory_search_results: list | None = None) -> AssembledContext`
+- `assemble_agent_execution_context_from_memory(room_memory_doc: dict, current_task: str, *, agent_id: str | None = None, agent_name: str | None = None, room_awareness: str | None = None, quoted_text: str | None = None, include_system_instruction: bool = True) -> AssembledContext`
 - `initialize_or_update_room_memory(room_id: str, *, memory_content: str | None, room_agent_set: dict | None, user_id: str | None, attachments: list | None = None) -> RoomMemoryInfo`
 - `add_agent_response_to_memory(room_id: str, agent_id: str, agent_name: str, response_text: str, was_successful: bool = True) -> bool`
 - `add_synthesis_to_history(room_id: str, synthesis_text: str, trajectory: Any | None = None) -> str | None`
@@ -262,6 +262,8 @@ Non-protocol compatibility helpers allowed on `ContextMemoryFacade`:
 - `delete_room_index(room_id: str) -> bool`
 
 These helpers exist only to keep legacy callers stable. New cross-module consumers should use the three Common protocols.
+
+Assembly compatibility helpers must be synchronous and pure. They accept an already-loaded room memory document and optional precomputed memory search results; they must not call `MemoryRepository`, `RoomHistoryReader`, `LLMProvider`, or search helpers. Legacy `build_supervisor_context()` and `build_agent_execution_context()` are synchronous and current callers do not await them, so repository-backed loading belongs only in async protocol methods such as `assemble_context()`.
 
 ### Context Assembly Output Mapping
 
@@ -413,6 +415,8 @@ class ContextMemoryEventHandler:
         await self._projector.project_message(event.room_id, event.message_id)
         await self._projector.run_compaction(event.room_id)
 ```
+
+`MemoryProjector.run_compaction()` is threshold-gated in Phase 5: it must check compaction eligibility and return a zero-count `CompactionResult` when compaction is not needed. The event handler must not force compaction after every message.
 
 If `EventPublisher` is available during startup, register the handler:
 
@@ -597,9 +601,10 @@ Expected before implementation: FAIL because `context_memory` package, repositor
 - [ ] **Step 1: Write memory repository contract tests**
 
 Cover:
-- `MemoryMongoRepository(mongo=fake_mongo)` calls `mongo.collection("room_memories")`.
+- `MemoryMongoRepository(mongo=fake_mongo)` calls `mongo.collection("room_memories")` and `mongo.collection("user_memories")`.
 - `get_room_memory(room_id)` queries `{"room_id": room_id}` and returns a raw dict.
 - `get_room_memory_by_memory_id(memory_id)` queries `{"memory_id": memory_id}`.
+- `get_user_memories(user_id)` queries `user_memories` by `{"user_id": user_id}` and returns raw dicts for the Common `MemoryManager.get_user_memories()` protocol.
 - `create_room_memory(memory)` inserts the supplied dict and returns the stored insert id.
 - `upsert_room_memory(room_id, memory)` writes with upsert semantics.
 - `update_room_memory_by_room_id()` applies `$set` by `room_id`.
@@ -639,11 +644,14 @@ Use the additions listed in "MemoryRepository Additions" and "ContentStorageRepo
 - [ ] **Step 5: Implement `MemoryMongoRepository`**
 
 Implementation notes:
-- Constructor accepts `mongo: MongoDAL` and optional `collection_name: str = "room_memories"`.
+- Constructor accepts `mongo: MongoDAL`, optional `collection_name: str = "room_memories"`, and optional `user_collection_name: str = "user_memories"`.
 - Store `self._memories = mongo.collection(collection_name)`.
+- Store `self._user_memories = mongo.collection(user_collection_name)`.
 - Use `MongoCollection.find_one`, `find`, `insert_one`, `update_one`, `find_one_and_update`, `delete_one`, and `aggregate`.
 - Do not import `database.mongodb`, `pymongo`, `motor`, or `models.memory`.
 - For `compact_turns_bulk()`, prefer Common protocol support for ordered update operations if added; otherwise use ordered `update_one(..., array_filters=[...])` calls and document the equivalence to the current ordered `bulk_write`.
+
+NOTE: `MongoCollection.update_one(query, update, **kwargs)` passes `array_filters` through `**kwargs`. Fake `MongoCollection` implementations in tests MUST support `array_filters` kwarg to test compaction updates. If this implicit contract is insufficient, extend the `MongoCollection` protocol with an explicit `array_filters: list[dict] | None = None` parameter in Phase 5. Document the decision in Task 2 Step 4.
 
 - [ ] **Step 6: Implement `ContentStorageMongoRepository`**
 
@@ -652,6 +660,10 @@ Implementation notes:
 - Preserve unique `(room_id, turn_id)` upsert semantics.
 - Preserve current `content_hash`, `stored_at`, `expires_at`, and `turn_notes` fields.
 - Do not import `services.content_storage_service`, `database.mongodb`, `bson`, `pymongo`, or `models.compaction` inside `context_memory/**`.
+- Text index creation: The `conversation_content` collection requires a MongoDB text index on `turn_notes` fields for BM25 keyword search. Use one of:
+  - Preferred: Accept an optional `IndexRegistry` in the repository constructor and register the index spec. Application shell calls `index_registry.ensure_all()` during startup.
+  - Alternative: Document that the index is pre-existing in production and test fakes simulate text search behavior without a real index.
+  Document the chosen approach in tests.
 
 - [ ] **Step 7: Run repository tests**
 
@@ -688,7 +700,18 @@ Rules:
 - Allow dataclass overrides for golden tests.
 - Do not mutate global settings.
 
-- [ ] **Step 3: Write internal model and translator tests**
+- [ ] **Step 3: Audit `common/utils/context_utils.py` pure subset**
+
+Identify which functions from `common/utils/context_utils.py` can be safely called from `context_memory/**`:
+- SAFE (no deferred model/service imports): `estimate_tokens()`, `extract_turn_notes()`, `MAX_CONTEXT_CHARS`, `CHARS_PER_TOKEN_ESTIMATE`, `MAX_HISTORY_TURNS`, `MAX_SUMMARY_CHARS`, `LLM_TURN_NOTES_THRESHOLD`, `clean_mention_format()`
+- UNSAFE (deferred `from models.memory import ...` or `from services.*`): `add_turn_to_history()`, `extract_turn_notes_llm()`, `build_turn_content()`, and any function importing `TurnRole`, `TurnType`, `ConversationTurn`, or `ContentType`
+
+For each UNSAFE function needed by context assembly or projection:
+- Port a pure equivalent into `context_memory/projection.py` or `context_memory/assembly.py` using only primitive types and internal models
+- Add a golden test proving the re-implementation matches legacy output for the same inputs
+- Do NOT import the legacy function from `context_memory/**`
+
+- [ ] **Step 4: Write internal model and translator tests**
 
 Cover:
 - Raw `room_memories` dict to normalized `RoomMemoryState`.
@@ -700,7 +723,7 @@ Cover:
 - Common `MemorySearchResult` conversion preserves `turn_id` in metadata or `source_message_id` as appropriate.
 - Common `CompactionResult` conversion preserves `room_id`, `compacted_count`, `tokens_saved`, errors, and compacted timestamp in metadata.
 
-- [ ] **Step 4: Implement `context_memory/models.py`**
+- [ ] **Step 5: Implement `context_memory/models.py`**
 
 Suggested internal shapes:
 - `TruncationReason(str, Enum)`
@@ -713,7 +736,7 @@ Suggested internal shapes:
 
 Keep these focused and plain. Do not recreate the full legacy Pydantic `models.memory` tree inside `context_memory/`.
 
-- [ ] **Step 5: Implement `context_memory/translators.py`**
+- [ ] **Step 6: Implement `context_memory/translators.py`**
 
 Rules:
 - Accept and return dicts/Common DTOs only.
@@ -722,7 +745,7 @@ Rules:
 - Generate ids through injected `id_factory`, not direct `uuid4()` in translators unless explicitly passed.
 - Preserve legacy `memory_content.summary` fallback behavior.
 
-- [ ] **Step 6: Run config and translator tests**
+- [ ] **Step 7: Run config and translator tests**
 
 ```bash
 uv run python -m pytest tests/test_context_memory_projection.py tests/test_context_memory_assembly.py -k "config or translator or normalized" -q
@@ -773,36 +796,42 @@ Port exactly:
 - `_select_turns_within_budget()`.
 - Turn rendering behavior, summary fallback, quoted text section, and system instruction text.
 
-- [ ] **Step 4: Implement `assemble_supervisor_context()` helper path**
+- [ ] **Step 4: Implement synchronous supervisor assembly helper path**
 
 Algorithm:
-1. Load room memory doc from `MemoryRepository` unless `room_memory_doc` is supplied by a legacy adapter.
-2. Normalize room memory through translators.
-3. Optionally run/search memory snippets if not supplied and query/current task exists.
+1. Accept an already-loaded `room_memory_doc` or normalized `RoomMemoryState`.
+2. Normalize room memory through translators if needed.
+3. Accept precomputed `memory_search_results`; do not run async search from this helper.
 4. Build stable prefix and dynamic suffix with the exact legacy algorithm.
 5. Return `AssembledContext` with ordered blocks and legacy metadata.
 
-- [ ] **Step 5: Implement `assemble_agent_execution_context()` helper path**
+- [ ] **Step 5: Implement synchronous agent execution assembly helper path**
 
 Algorithm:
-1. Load room memory doc from `MemoryRepository` unless `room_memory_doc` is supplied.
-2. Normalize room memory.
+1. Accept an already-loaded `room_memory_doc` or normalized `RoomMemoryState`.
+2. Normalize room memory if needed.
 3. Build room facts stable prefix and agent dynamic suffix with exact legacy budget rules.
 4. Return `AssembledContext` with ordered blocks and legacy metadata.
+
+These helpers are the only path used by synchronous legacy `ContextAssemblyService` adapter methods. They must remain sync and must not perform repository reads, RoomHistoryReader calls, LLM calls, or memory search.
 
 - [ ] **Step 6: Implement protocol `assemble_context()`**
 
 Mapping:
-- Use `RoomHistoryReader.get_messages_by_ids([message_id])` to get the current message.
-- Extract current task text from `RoomMessageInfo.content`.
+- Load room memory via `MemoryRepository.get_room_memory(room_id)` - this is the PRIMARY data source for context assembly (conversation history, summary, facts).
+- Extract current task text from the most recent user turn in the room memory matching `message_id`, OR use `RoomHistoryReader.get_messages_by_ids([message_id])` as fallback if the turn has not yet been projected.
 - If `agent_id is None`, call supervisor helper.
 - If `agent_id` is provided, call agent helper and pass `agent_id`.
 - Override token budget by constructing a per-call budget object whose available content is compatible with `token_budget` while retaining fixed reserves in metadata.
 - Store `message_id` and `agent_id` in `AssembledContext.metadata`.
 
+NOTE: `RoomHistoryReader` is used primarily by `project_message()` (MemoryProjector), NOT by the assembly step. Context assembly works on PROJECTED conversation turns stored in room_memories, not raw room messages.
+
 - [ ] **Step 7: Add golden equivalence fixtures**
 
-For each fixture, compare legacy `ContextAssemblyService` output to new facade/helper output:
+Before Task 9 wraps `ContextAssemblyService`, capture fixed legacy golden outputs from the pre-wrapper implementation into committed fixture data, or preserve a test-only legacy oracle that is not affected by the C3 adapter. After Task 9, golden tests must compare new output to those fixed outputs/oracle, not to the wrapped `ContextAssemblyService` singleton.
+
+For each fixture, compare fixed legacy output to new synchronous assembly helper output:
 - Small supervisor context.
 - Supervisor with agent registry and memory search snippets.
 - Supervisor over budget with turn truncation.
@@ -1022,7 +1051,11 @@ Port coverage:
 
 Use `MemoryRepository.get_room_memory()` and normalized room memory state. Preserve current short-circuit behavior.
 
-- [ ] **Step 3: Write failing compaction operation tests**
+- [ ] **Step 3: Define `run_compaction()` threshold behavior**
+
+`MemoryProjector.run_compaction(room_id)` must be threshold-gated in Phase 5. It should call the same eligibility check as `compact_if_needed()` and return `CompactionResult(room_id=room_id, compacted_count=0, tokens_saved=0, metadata={"skipped": True, "reason": "below_threshold"})` when compaction is not needed. Do not introduce a force-compaction path unless a separate internal helper is explicitly named and tested.
+
+- [ ] **Step 4: Write failing compaction operation tests**
 
 Cover:
 - Older full turns are selected; recent full turns are preserved.
@@ -1035,7 +1068,7 @@ Cover:
 - `tokens_saved` is sum of `estimated_tokens_full - estimated_tokens_compact`.
 - Errors are included in metadata or local result state without failing the entire operation.
 
-- [ ] **Step 4: Implement compaction preparation**
+- [ ] **Step 5: Implement compaction preparation**
 
 Algorithm:
 1. Compute turns to compact using legacy preserve-recent and threshold rules.
@@ -1044,7 +1077,7 @@ Algorithm:
 4. Build `content_ref` dict with `storage_type="mongodb"`, `collection="conversation_content"`, `document_id`, `content_hash`, and created timestamp.
 5. Build compacted entries for repository update.
 
-- [ ] **Step 5: Implement `run_compaction()`**
+- [ ] **Step 6: Implement `run_compaction()`**
 
 Return Common `CompactionResult`:
 - `room_id`
@@ -1056,7 +1089,7 @@ Return Common `CompactionResult`:
 
 Legacy `services.compaction_service` converts this to legacy `models.compaction.CompactionResult` for old tests and callers.
 
-- [ ] **Step 6: Write expansion and stats tests**
+- [ ] **Step 7: Write expansion and stats tests**
 
 Cover:
 - `expand_turn_content()` returns full content for compact turn.
@@ -1064,11 +1097,11 @@ Cover:
 - `fetch_turn_content()` returns full content or compact pointer fallback according to current behavior.
 - `get_compaction_stats()` returns total turns, full turns, compact turns, tokens saved, total compactions, and content storage stats.
 
-- [ ] **Step 7: Implement expansion and stats**
+- [ ] **Step 8: Implement expansion and stats**
 
 Use `ContentStorageRepository` and normalized content references. Do not import legacy content storage service.
 
-- [ ] **Step 8: Run compaction tests**
+- [ ] **Step 9: Run compaction tests**
 
 ```bash
 uv run python -m pytest tests/test_context_memory_compaction.py tests/test_compaction_service.py tests/test_context_memory_bugfixes.py -k "compaction or content" -q
@@ -1109,13 +1142,13 @@ Cover:
 
 Cover:
 - `project_message()` uses `RoomHistoryReader`.
-- `run_compaction()` delegates to compaction helper.
+- `run_compaction()` delegates to the threshold-gated compaction helper and returns a zero-count result when below threshold.
 - Idempotency: projecting the same raw message twice does not create duplicate turns if the repository already has a turn with matching source metadata. If legacy schema lacks source metadata, add it in projected turns and preserve existing legacy turns.
 
 - [ ] **Step 5: Implement ContextAssembler method**
 
 Cover:
-- `assemble_context()` loads current message via `RoomHistoryReader`.
+- `assemble_context()` loads projected room memory via `MemoryRepository` first, then uses `RoomHistoryReader` only to recover current message text if the matching projected turn is missing.
 - Fakes can drive exact token-budget output in tests.
 - Missing message returns empty context with metadata error or raises a clear `ValueError`; choose behavior and test it.
 
@@ -1123,7 +1156,7 @@ Cover:
 
 Cover:
 - `handle_message_committed()` calls `project_message()` with event room/message.
-- It calls `run_compaction()` after projection.
+- It calls threshold-gated `run_compaction()` after projection and does not force compaction after every message.
 - It handles projection failure according to the existing EventPublisher contract: log and let the caller/bus dead-letter if appropriate. If the handler catches exceptions, tests must assert logging and no re-raise.
 - It is safe for user and agent message types.
 
@@ -1156,7 +1189,7 @@ Cover:
 - New `ContextAssemblyService()` has `_bound is False`.
 - Calling `build_supervisor_context()` before `bind_facade()` raises `RuntimeError("ContextAssemblyService.bind_facade() not called - startup incomplete")`.
 - Calling `build_agent_execution_context()` before bind raises the same error.
-- After bind, methods call the facade compatibility helpers.
+- After bind, methods call synchronous pure assembly compatibility helpers only; they must not call async repository-backed facade methods.
 - Returned object is the legacy `ContextAssemblyResult` dataclass.
 
 - [ ] **Step 2: Add `ContextAssemblyService.bind_facade()`**
@@ -1182,6 +1215,8 @@ class ContextAssemblyService:
 ```
 
 Keep `ContextAssemblyResult`, `ContextMetrics`, and `TruncationReason` exports in this file for compatibility.
+
+The adapter methods stay synchronous. They convert the supplied legacy `RoomMemory` object to a primitive dict/state, pass through any already-computed `memory_search_results`, call the sync assembly helper, and convert `AssembledContext.metadata` back to `ContextAssemblyResult`. They must not perform repository reads, memory search, or `await` internally.
 
 - [ ] **Step 3: Write fail-fast binding tests for `CompactionService`**
 
@@ -1377,7 +1412,9 @@ Expected: PASS. Call sites remain behavior-compatible.
 - Modify: `tests/test_phase5_supervisor_integration.py`
 - Modify: `tests/test_context_memory_bugfixes.py`
 
-- [ ] **Step 1: Add golden context assembly fixtures**
+- [ ] **Step 1: Add fixed golden context assembly fixtures**
+
+Capture expected context assembly outputs before wrapping `services.context_assembly_service.ContextAssemblyService`, or preserve a test-only copy/oracle of the legacy implementation that does not delegate to the new facade. Store fixed expected values in fixture data so post-adapter tests cannot compare the new implementation to itself.
 
 Fixture families:
 - Supervisor, small memory.
@@ -1388,7 +1425,7 @@ Fixture families:
 - Compact turn pointers.
 - Direct `conversation_history` and legacy `memory_content.conversation_history`.
 
-Assert `assemble_context()` and compatibility helpers produce identical token-budget results to legacy for the fixture data.
+Assert `assemble_context()` and compatibility helpers produce identical token-budget results to fixed legacy fixture output for the same data.
 
 - [ ] **Step 2: Add golden projection tests**
 
@@ -1597,7 +1634,7 @@ uv run python -m pytest tests/test_common_foundation.py tests/test_agent_protoco
 - [ ] `create_context_memory_deps()` binds one `ContextMemoryFacade` to all three Context & Memory protocol fields.
 - [ ] `context_memory/**` import-boundary test passes.
 - [ ] No `context_memory/**` imports from `agent`, `room`, `services`, `modules`, `api`, `database`, `models`, `main`, `container`, `config`, `llm_gateway`, `pinecone`, `openai`, `pymongo`, or `motor`.
-- [ ] Context assembly reads raw room messages through `RoomHistoryReader` in `assemble_context()`.
+- [ ] `assemble_context()` uses projected `room_memories` as its primary context source and uses `RoomHistoryReader` only as a fallback to recover current message text when projection has not completed.
 - [ ] Legacy supervisor and agent context helpers are available only as non-protocol compatibility helpers or service adapter methods.
 - [ ] `assemble_context()` produces identical token-budget results for golden fixtures.
 - [ ] Stable prefix and dynamic suffix strings match legacy output exactly.
@@ -1607,6 +1644,7 @@ uv run python -m pytest tests/test_common_foundation.py tests/test_agent_protoco
 - [ ] Compaction preserves recent turns exactly as legacy.
 - [ ] Vector indexing at compaction time uses `VectorDAL` and `LLMProvider`, not concrete Pinecone or OpenAI services.
 - [ ] Memory search preserves hybrid vector+BM25 behavior, temporal decay, and MMR ordering.
+- [ ] `MemoryManager.get_user_memories()` has explicit `user_memories` repository coverage and DTO mapping tests.
 - [ ] Content storage remains owned by Context & Memory, not Room.
 - [ ] `MessageCommitted` handler exists and calls projection/compaction.
 - [ ] Direct `compaction_service.compact_if_needed(room_id)` path remains live in Phase 5.
