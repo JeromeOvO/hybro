@@ -94,6 +94,7 @@ Modify:
 - `common/protocols/repository_protocols.py`: extend `MemoryRepository` with domain-specific room memory operations needed by projection, compaction, and summary updates.
 - `common/protocols/context_memory_protocols.py`: keep `ContextAssembler`, `MemoryManager`, and `MemoryProjector` signatures unchanged unless Task 2 proves a missing method is unavoidable; prefer non-protocol facade helpers for legacy compatibility.
 - `common/protocols/dal_protocols.py`: allow Mongo pipeline updates in `MongoCollection` write signatures and add `VectorDAL.delete_by_filter()` for room-level vector cleanup. Do not add `VectorDAL.ping_index()` in Phase 5.
+- `common/errors/base.py` and `common/errors/__init__.py`: add `VectorIndexUnavailableError` so DAL implementations can report memory-index availability without leaking Pinecone exceptions into `context_memory/**`.
 - `common/protocols/__init__.py`: export `ContentStorageRepository` and any new Common protocol names.
 - `common/dto/context_memory.py`: add fields only if golden tests show current DTOs cannot carry legacy metadata without unsafe `metadata` overloading.
 - `common/dto/__init__.py`: export any added DTOs.
@@ -288,6 +289,8 @@ Non-protocol compatibility helpers allowed on `ContextMemoryFacade`:
 
 These helpers exist only to keep legacy callers stable. New cross-module consumers should use the three Common protocols.
 
+Signature convention: `assemble_supervisor_context_from_memory()` and `assemble_agent_execution_context_from_memory()` are synchronous pure helpers. Every other non-protocol facade helper in this list is `async def` because it may touch repositories, vector search, LLM calls, content storage, or legacy async service adapters. Synchronous legacy adapters must not call those async helpers unless their public method is already async and can `await`.
+
 Content-storage compatibility helpers convert repository dicts to legacy service return shapes. `content_get_content_by_document_id()` and `content_get_content_by_turn_id()` return `doc["content"]` or `None`, never the raw repository dict. `content_expand_mongodb_reference()` accepts a primitive dict form of the legacy `ContentReference`, supports only `storage_type="mongodb"`, raises the Context & Memory `ContentExpiredError` when missing, and leaves S3/URL behavior to the legacy service adapter.
 
 Room-memory CRUD and lifecycle compatibility helpers accept and return primitive full room-memory dicts. `initialize_or_update_room_memory()` returns the full updated room-memory document so `RoomMemoryService` can reconstruct `RoomCenterMemoryResponse.memory`; `RoomMemoryInfo` remains only for the Common `MemoryManager.get_room_memory()` protocol. `add_agent_response_to_memory()` returns `(modified, matched)` so the adapter can preserve legacy `404` for missing memory and `500` for failed update. `services.memory_service.RoomMemoryService` owns conversion between `models.memory.RoomMemory` and dicts so `context_memory/**` does not import `models.*`. Adapter tests must assert `RoomCenterMemoryResponse.memory` remains a legacy `RoomMemory` instance for create/get/update/initialize paths and `None` for delete paths.
@@ -354,6 +357,7 @@ Verify completeness in Task 2. If missing, add only these domain-specific method
 
 ```python
 async def create_room_memory(self, memory: dict) -> str: ...
+async def ensure_room_memory(self, room_id: str, defaults: dict) -> dict: ...
 async def get_room_memory_by_memory_id(self, memory_id: str) -> dict | None: ...
 async def update_room_memory_by_room_id(self, room_id: str, updates: dict) -> bool: ...
 async def update_room_memory_by_memory_id(self, memory_id: str, updates: dict) -> bool: ...
@@ -396,6 +400,8 @@ async def list_room_ids_with_memory(self, limit: int | None = None) -> list[str]
 ```
 
 `create_room_memory()` stores and returns the legacy `memory_id` field from the supplied primitive document. If the adapter did not provide one, the facade/helper generates `memory_id` with the injected `id_factory()` before calling the repository. Do not substitute the Mongo insert `_id` for `memory_id` in legacy responses.
+
+`ensure_room_memory(room_id, defaults)` is the only repository API used for race-safe first-message projection. It must perform `$setOnInsert` upsert semantics keyed by `room_id`, then return the stored room-memory document. It must not overwrite an existing room memory with `defaults`. Tests must cover two concurrent callers receiving the same stored memory document and only one inserted room-memory row.
 
 Keep repository inputs and outputs as dicts. The repository must not return `models.memory.RoomMemory`, `ConversationTurn`, or other legacy models.
 
@@ -488,7 +494,7 @@ UserMemory(
 
 `render_user_memory_content(doc)` must use this exact stable format, omitting empty sections and joining remaining lines with `"\n"`:
 - `Communication Style: {communication_style}`
-- `Preferences: {key1}={value1}; {key2}={value2}` with preference keys sorted lexicographically
+- `Preferences: {key1}={value1}; {key2}={value2}` with preference keys sorted lexicographically and each value rendered by stable JSON serialization (`json.dumps(value, sort_keys=True, separators=(",", ":"))`) for dict/list values
 - `Preferred Agents: {agent1}, {agent2}` in stored order
 - `Facts: {fact_content_1}; {fact_content_2}` in stored order, reading each fact's `content`
 
@@ -561,7 +567,7 @@ This registration is future-facing only until Room/Execution actually emit `Mess
 
 Parallelization note: Tasks 2 and 3 are contract prerequisites for the implementation slices. Complete or stabilize repository protocols, DAL protocol decisions, DTO/model translators, and fake contracts before workers implement Tasks 4-7. After those contracts are stable, Tasks 4, 5, and 6 can run in parallel only if they keep writes to disjoint helper modules and tests. Task 7 depends on the Task 6 `store_full_content()` helper contract; do not start Task 7 implementation until that helper signature and fake behavior are fixed. `context_memory/facade.py` is owned by Task 8 as the integration point; earlier workers should not edit it. Do not parallelize edits to the same legacy service file. The golden assembly tests in Task 4 should not be updated in parallel with context assembly code unless ownership is split between fixture generation and implementation.
 
-Task granularity note: each numbered task is a work package, not a single coding step. Before editing files for any task, the implementer must create a local micro-plan with rows in this exact format: `micro-step`, `test file/function`, `expected failing assertion`, `implementation file`, `verification command`. Each micro-step should be 2-5 minutes: write or adjust the smallest failing test, make the minimal production change, run the task-local command, then continue. Do not treat a broad checkbox such as "Implement compaction preparation" as one coding action. Subagents must include their micro-plan in their final handoff before code review.
+Task granularity note: each numbered task is a work package, and the checkboxes below are the authoritative execution units. When a checkbox is broad, its "Cover", "Rules", "Implementation notes", and "Required TDD micro-steps" bullets define the smaller 2-5 minute TDD actions: write or adjust the smallest failing test, make the minimal production change, run the task-local command, then continue. Do not replace these steps with a separate high-level plan, and do not treat a broad checkbox such as "Implement compaction preparation" as one coding action. Subagents must report which listed checkbox or required micro-step they completed in their final handoff before code review.
 
 Legacy test timeline note: before Task 9, existing legacy service tests are regression oracles and should stay unchanged except for fixture/oracle capture. Tasks 4, 5, 6, and 7 may run those tests to detect drift, but migrated adapter expectations are added only in Task 9 after `bind_facade()` exists.
 
@@ -721,6 +727,8 @@ Expected before implementation: FAIL because `context_memory` package, repositor
 - Create: `common/mongo_ids.py`
 - Modify: `common/protocols/repository_protocols.py`
 - Modify: `common/protocols/dal_protocols.py`
+- Modify: `common/errors/base.py`
+- Modify: `common/errors/__init__.py`
 - Modify: `common/protocols/__init__.py`
 - Create/modify: `context_memory/repository/mongo.py`
 - Create/modify: `context_memory/repository/__init__.py`
@@ -735,6 +743,7 @@ Cover:
 - `get_room_memory_by_memory_id(memory_id)` queries `{"memory_id": memory_id}`.
 - `get_user_memories(user_id)` queries `user_memories` by `{"user_id": user_id}` and returns raw dicts for the Common `MemoryManager.get_user_memories()` protocol.
 - `create_room_memory(memory)` inserts the supplied dict and returns the stored legacy `memory_id` field, not the Mongo inserted `_id`. Tests must fail if the repository returns `MongoCollection.insert_one()` directly.
+- `ensure_room_memory(room_id, defaults)` uses `$setOnInsert` upsert semantics, returns the stored document, and does not overwrite existing memory fields.
 - `upsert_room_memory(room_id, memory)` writes with upsert semantics.
 - `update_room_memory_by_room_id()` applies `$set` by `room_id` after stripping `_id` and any other immutable fields from the update document.
 - `update_room_memory_by_memory_id()` applies `$set` by `memory_id` only for repository-level coverage after stripping `_id` and immutable fields; the legacy adapter behavior is specified separately in Task 9 because the current public method is effectively read-only.
@@ -754,7 +763,7 @@ Cover:
 - `update_room_summary_atomic()` sets `room_summary`, optionally pushes new facts, and slices to `max_facts`.
 - `compact_turns_bulk()` marks only matching full turns compact, clears `content`, sets `content_ref`, sets `estimated_tokens_compact`, increments `total_compactions`, and updates `last_activity_at`.
 - If `compact_turns_bulk()` uses ordered `update_one(..., array_filters=[...])` instead of Common bulk operations, preserve legacy ordered `bulk_write` semantics as closely as the Common DAL allows: attempt turn updates in order, then attempt the final `total_compactions`/`last_activity_at` update even if earlier array-filter updates matched no turn. Raise/return `False` only on actual write exceptions. This means missing turn ids can produce fewer modified turn elements while still incrementing the compaction counter, matching legacy behavior.
-- `list_room_ids_with_memory(limit=None)` returns all room ids from `room_memories` without loading full documents. If a limit is supplied by a test or maintenance command, apply it explicitly; do not default to `1000` for the compaction sweep path.
+- `list_room_ids_with_memory(limit=None)` returns all room ids from `room_memories` without loading full documents and without relying on a single uncapped `MongoCollection.find()` call. Because `MongoCollectionAdapter.find()` currently caps unbounded results at 1000, implement this method with explicit pagination in batches, or first change the DAL contract and tests so `find(..., limit=None)` truly means unbounded. Tests must seed more than 1000 ids and prove none are skipped.
 
 - [ ] **Step 3: Write content storage repository tests**
 
@@ -785,6 +794,10 @@ Also update `MongoCollection` in `common/protocols/dal_protocols.py` and fakes:
 - `update_one(query: dict, update: dict | list[dict], **kwargs) -> bool`
 - Test fakes must accept pipeline-list updates because the legacy room-memory push/trim operation uses MongoDB aggregation pipeline updates.
 
+Also add `VectorIndexUnavailableError` to `common.errors`:
+- DAL implementations catch provider-specific missing-index/unavailable-index exceptions and raise `VectorIndexUnavailableError(index_name, operation)`.
+- `context_memory/search.py` catches only this Common error for unavailable-index fallback metadata; it must not inspect Pinecone exception classes or strings.
+
 - [ ] **Step 5: Implement `MemoryMongoRepository`**
 
 Implementation notes:
@@ -794,11 +807,24 @@ Implementation notes:
 - Store `self._user_memories = mongo.collection(user_collection_name)`.
 - Use `MongoCollection.find_one`, `find`, `insert_one`, `update_one`, `find_one_and_update`, `delete_one`, and `aggregate`.
 - `create_room_memory()` calls `insert_one()` but returns `memory["memory_id"]`; if absent, raise a clear error because id generation belongs in the facade/helper.
+- `ensure_room_memory()` uses `find_one_and_update({"room_id": room_id}, {"$setOnInsert": defaults_with_room_id}, upsert=True, return_document=True)` or an equivalent DAL-supported pattern, then returns the stored document.
 - `update_room_memory_by_room_id()` and repository-level `update_room_memory_by_memory_id()` sanitize update dicts by removing `_id` and immutable identity fields before `$set`.
 - For `push_and_trim_conversation_turn()`, use `find_one_and_update()` to preserve matched/missing-room semantics; do not rely on `update_one()` because it returns only `bool`.
 - For `push_and_trim_conversation_turn_if_absent()`, use the conditional update plus follow-up read described above; fake collections must support both nested history paths.
 - Do not import `database.mongodb`, `pymongo`, `motor`, or `models.memory`.
 - For `compact_turns_bulk()`, prefer Common protocol support for ordered update operations if added; otherwise use ordered `update_one(..., array_filters=[...])` calls and document the equivalence to the current ordered `bulk_write`.
+
+Required TDD micro-steps for this checkbox:
+1. Add/green constructor collection-selection test.
+2. Add/green read method tests: `get_room_memory()`, `get_room_memory_by_memory_id()`, `get_user_memories()`.
+3. Add/green create/ensure tests: `create_room_memory()` returns `memory_id`; `ensure_room_memory()` uses `$setOnInsert`.
+4. Add/green sanitized update tests for room id and memory id.
+5. Add/green delete tests for room id and memory id.
+6. Add/green `push_and_trim_conversation_turn()` matched/modified tests.
+7. Add/green `push_and_trim_conversation_turn_if_absent()` duplicate/missing-room tests across both history shapes.
+8. Add/green summary projection/update tests.
+9. Add/green `compact_turns_bulk()` ordered update tests.
+10. Add/green paginated `list_room_ids_with_memory()` test with more than 1000 ids.
 
 NOTE: `MongoCollection.update_one(query, update, **kwargs)` passes `array_filters` through `**kwargs`. Fake `MongoCollection` implementations in tests MUST support `array_filters` kwarg to test compaction updates. If this implicit contract is insufficient, extend the `MongoCollection` protocol with an explicit `array_filters: list[dict] | None = None` parameter in Phase 5. Document the decision in Task 2 Step 4.
 
@@ -1042,7 +1068,7 @@ Cover:
 - Turn contains `role="user"`, `user_id`, content, token estimate, turn notes, timestamp, and default representation `full`.
 - Agent event projection returns no-op with a logged warning when room memory is missing, matching legacy 404 semantics rather than creating memory.
 - Agent message projection is best-effort for `agent_name` because current `RoomHistoryReader` does not populate agent-name metadata; preserve `agent_id`, use `sender_name` if present, otherwise document fallback and keep direct `add_agent_response_to_memory()` compatibility tests exact.
-- Agent message response text extraction from `RoomMessageInfo.content` is deterministic: if content is a string, use it; if it is a dict, prefer `response_text`, then `response`, then `content`, then `message`, then `text`; otherwise render a stable JSON string with sorted keys. Missing/empty text logs and no-ops.
+- Agent message response text extraction from `RoomMessageInfo.content` is deterministic: if content is a string, use it; if it is a dict, prefer `message_text`, then `response_text`, then `response`, then `content`, then `message`, then `text`; otherwise render a stable JSON string with sorted keys. Missing/empty text logs and no-ops.
 - Projected raw-message turns use deterministic `turn_id = f"message:{message_id}"` so projection idempotency survives legacy `RoomMemory` reconstruction.
 - `total_messages` and `last_activity_at` update through repository atomic push-if-absent mutation.
 
@@ -1055,7 +1081,7 @@ Rules:
 - Do not fetch room membership directly from Room, database, or services for `room_agent_set`; `MessageCommitted` projection is best-effort until a Common reader metadata path exists.
 - Do not rely on arbitrary extra turn fields such as `source_message_id`; legacy `ConversationTurn` drops unknown fields. Use deterministic `turn_id` for source idempotency.
 - Missing raw message should be logged and treated as no-op.
-- Missing-room creation in event projection must be race-safe: first attempt a room-id upsert/create with `$setOnInsert` and a generated legacy-form `memory_id`, then load the existing memory and continue through `push_and_trim_conversation_turn_if_absent()`. Do not catch PyMongo duplicate-key classes in `context_memory/**`.
+- Missing-room creation in event projection must be race-safe: call `MemoryRepository.ensure_room_memory(room_id, defaults)` with `$setOnInsert` defaults including a generated legacy-form `memory_id`, then continue through `push_and_trim_conversation_turn_if_absent()`. Do not catch PyMongo duplicate-key classes in `context_memory/**`.
 
 - [ ] **Step 3: Write failing legacy room memory lifecycle tests**
 
@@ -1173,7 +1199,7 @@ Cover:
 - Upsert uses `VectorDAL.upsert(index, [VectorRecord(...)])`.
 - Metadata includes `room_id`, `turn_id`, `role`, `agent_name`, and timestamp.
 - `delete_room_index()` deletes all room vectors through `VectorDAL.delete_by_filter(index, {"room_id": {"$eq": room_id}})`.
-- Memory vector availability is inferred from operations against the configured memory search index name, not from `VectorDAL.ping()` because that method has no index parameter. Preserve legacy "index unavailable" response metadata when `search(memory_index, ...)`, `upsert(memory_index, ...)`, or `delete_by_filter(memory_index, ...)` raises an index-unavailable error. Do not add `VectorDAL.ping_index()` in Phase 5 unless a later review explicitly requires preflight checks.
+- Memory vector availability is inferred from operations against the configured memory search index name, not from `VectorDAL.ping()` because that method has no index parameter. Preserve legacy "index unavailable" response metadata when `search(memory_index, ...)`, `upsert(memory_index, ...)`, or `delete_by_filter(memory_index, ...)` raises Common `VectorIndexUnavailableError`. Do not add `VectorDAL.ping_index()` in Phase 5 unless a later review explicitly requires preflight checks.
 
 - [ ] **Step 6: Extend `VectorDAL` with delete-by-filter**
 
@@ -1182,6 +1208,7 @@ Current `VectorDAL.delete(index, ids)` cannot express Pinecone delete-by-filter 
 Required changes:
 - Add `delete_by_filter(index: str, filter: dict) -> None` to `VectorDAL`.
 - Implement it in `dal/pinecone/client.py`.
+- Add `VectorIndexUnavailableError` handling in `dal/pinecone/client.py` for search, upsert, and delete-by-filter index-unavailable failures.
 - Update `tests/test_common_foundation.py` expected `VectorDAL` method set.
 - Update `tests/test_dal_protocols.py` runtime conformance for `VectorDALImpl`.
 - Update `tests/test_dal_unit.py` so concrete delete tests cover both id-based delete and filter delete.
@@ -1205,6 +1232,7 @@ Port coverage from `tests/test_compaction_service.py`:
 
 Rules:
 - `ContentExpiredError` lives in `context_memory/content_storage.py`.
+- `services.content_storage_service` must import and re-export this exact class object (`from context_memory.content_storage import ContentExpiredError`) after migration. Do not keep a separate service-local exception class, or callers catching `services.content_storage_service.ContentExpiredError` will miss exceptions raised by `context_memory/**`.
 - `store_full_content()` is the only helper compaction should call for full-content storage; it computes deterministic `document_id` and storage metadata before calling the repository.
 - Pointer string rendering must preserve the legacy `ContentReference.to_compact_string()` format for MongoDB references. For newly compacted turns, the `document_id` segment comes from the stable `document_id` field and may differ from legacy Mongo `_id` values.
 - `context_memory/**` supports MongoDB content expansion only. Do not import `services.s3_service`. S3 expansion pass-through remains in the legacy `ContentStorageService` adapter, and URL expansion remains `NotImplementedError`.
@@ -1255,6 +1283,8 @@ Use `MemoryRepository.get_room_memory()` and normalized room memory state. Prese
 - [ ] **Step 4: Write failing compaction operation tests**
 
 Cover:
+- Direct compatibility `compact_room_memory(room_id, room_memory_doc=None)` preserves legacy force behavior and compacts eligible older turns even when `should_compact()` would return false because thresholds are below limit.
+- Protocol `run_compaction(room_id)` remains threshold-gated and returns skipped metadata below threshold.
 - Older full turns are selected; recent full turns are preserved.
 - Already compact turns are skipped.
 - Turns with missing content are skipped.
@@ -1335,7 +1365,7 @@ Cover:
 - `get_room_memory()` maps repository docs to `RoomMemoryInfo` with `content` rendered as a stable compact string from `room_summary`, recent conversation one-liners, and sorted room facts. The full structured document remains available only through `legacy_get_room_memory_*()` helpers.
 - `search_memory()` delegates to search helper and returns Common DTO list.
 - `get_user_memories()` maps repository user-memory docs to Common `UserMemory` using the explicit synthetic `memory_id`, stable rendered `content`, and metadata mapping from "UserMemory DTO Mapping".
-- `delete_room_memory()` attempts room memory, content storage, and vector index cleanup owned by Context & Memory. It is best-effort for cleanup dependencies: log failures and attempt all cleanup categories. Return `False` only for actual cleanup errors such as repository/vector exceptions or explicit delete failure; "no room memory existed", "no content existed", and "no vectors existed" are successful no-op cleanup states. Callers that delete the Room record decide whether a false cleanup result fails the user-visible room delete.
+- `delete_room_memory()` pre-reads `MemoryRepository.get_room_memory(room_id)` before deletion so it can distinguish missing memory from failed deletion while the repository delete method still returns `bool`. Missing memory is a successful no-op for the memory-delete category. If memory existed and `delete_room_memory(room_id)` returns false, treat that as an actual cleanup failure. Content delete count `0` and vector not-found/no-vector states are successful no-ops; repository/vector exceptions are failures. Callers that delete the Room record decide whether a false cleanup result fails the user-visible room delete.
 - `legacy_*` room-memory CRUD helpers delegate to `MemoryRepository` and return primitive dict/bool results for `RoomMemoryService` adapter conversion.
 
 - [ ] **Step 4: Implement MemoryProjector methods**
@@ -1497,7 +1527,7 @@ Cover:
 - `ContentStorageService.expand_content_reference()` preserves existing S3 pass-through behavior locally: call `services.s3_service.s3_service.download_text(s3_key)`, return the downloaded string, and raise `ContentExpiredError(turn_id, s3_key)` when it returns `None`.
 - `ContentStorageService.expand_content_reference()` continues to raise `NotImplementedError` for URL references.
 - `ContentStorageService.delete_content_by_turn_id()`, `delete_content_by_room_id()`, and `get_content_stats_for_room()` delegate after bind with the same `bool`, `int`, and stats-dict return shapes.
-- `ContentExpiredError` remains import-compatible from `services.content_storage_service`.
+- `services.content_storage_service.ContentExpiredError is context_memory.content_storage.ContentExpiredError` after migration, so old imports catch new Context & Memory expansion failures.
 - `hash_content()` remains import-compatible and deterministic.
 
 - [ ] **Step 10: Add `ContentStorageService.bind_facade()`**
@@ -1586,6 +1616,7 @@ In `main.py`, after Mongo is available and before adapter binding:
 - Reuse `mongo_dal`.
 - Call updated `mongodb.create_context_memory_indexes()` inside the Mongo-available branch before building/binding Context & Memory adapters. Do not construct `IndexRegistryImpl` or call `index_registry.ensure_all()` in `main.py` for Phase 5.
 - Extend `ModelRegistryImpl._register_defaults()` with `context_memory_legacy_json_model`, `model_id="gpt-4o-mini"`, provider `"openai"`, and `json_schema` capability.
+- Instantiate `model_registry = ModelRegistryImpl()` in startup after that registration exists.
 - Hoist `vector_dal = VectorDALImpl()` and `llm_provider = LLMGatewayImpl(model_registry=model_registry)` before constructing `AgentDeps`, then pass those same variables to both `create_agent_deps()` and `create_context_memory_deps()`.
 - Build `RoomDeps`, then pass `_room_deps.room_history_reader` to `create_context_memory_deps()`.
 - Pass `ContextMemoryLLMConfig(turn_notes_model="context_memory_legacy_json_model", summary_model="context_memory_legacy_json_model")`. Tests must assert `OpenAIProvider.generate_structured()` receives effective model id `gpt-4o-mini`.
@@ -1596,7 +1627,7 @@ In `main.py`, after Mongo is available and before adapter binding:
 - Bind `memory_search_service.bind_facade(context_memory_facade)`.
 - Bind `room_memory_service.bind_facade(context_memory_facade)`.
 - Bind `content_storage_service.bind_facade(context_memory_facade)`.
-- Bind `room_services.bind_context_memory(context_memory_facade)` or an equivalent separate Context & Memory binding path for room deletion cleanup. Do not overload the existing Room facade binding.
+- Bind `room_services.bind_context_memory(context_memory_facade)` for room deletion cleanup. Do not introduce an alternate binding name in Phase 5, and do not overload the existing Room facade binding.
 - Register `ContextMemoryEventHandler` only if a concrete Common `EventPublisher` already exists in startup. Do not register it against `_event_broker` / `infrastructure.event_broker.EventBroker`; if only EventBroker exists, leave registration documented and covered with fakes.
 - Keep current Redis/SSE/relay/leader-election startup order unchanged. Context & Memory adapters must be bound before traffic can run, and compaction sweep must not start until both adapter binding and the existing leader-election dependencies are ready.
 
@@ -1644,7 +1675,7 @@ Cover:
 
 - [ ] **Step 2: Route room deletion Context & Memory cleanup through adapter**
 
-Replace direct cleanup of `room_memories` and `conversation_content` in room deletion paths with `ContextMemoryFacade.delete_room_memory(room_id)` through `room_services.bind_context_memory(...)` or an equivalent separate binding. Keep Room-owned raw message, membership, S3/file-upload cleanup, and other application-shell cleanup in Room. This prevents room deletion from bypassing Context & Memory vector index cleanup while preserving existing non-memory resource cleanup.
+Replace direct cleanup of `room_memories` and `conversation_content` in room deletion paths with `ContextMemoryFacade.delete_room_memory(room_id)` through `room_services.bind_context_memory(context_memory_facade)`. Keep Room-owned raw message, membership, S3/file-upload cleanup, and other application-shell cleanup in Room. This prevents room deletion from bypassing Context & Memory vector index cleanup while preserving existing non-memory resource cleanup.
 
 Failure semantics:
 - Context & Memory cleanup is best-effort after the Room record deletion is confirmed, matching current transitional cleanup behavior.
@@ -1664,15 +1695,13 @@ If a concrete Common `EventPublisher` exists in the implementation branch, regis
 
 - [ ] **Step 5: Keep compaction sweep outside the module**
 
-Preferred options:
-- Minimal: leave `jobs/compaction_sweep.py` importing `services.compaction_service`; the service delegates to facade after bind.
-- Cleaner: add `CompactionSweep.bind_projector(memory_projector: MemoryProjector)` and use it inside `sweep()`.
+Chosen Phase 5 path: leave `jobs/compaction_sweep.py` importing `services.compaction_service`; the service delegates to facade after bind. Do not add `CompactionSweep.bind_projector()` in Phase 5.
 
-Either way, the job stays in `jobs/` because leader election, active-run skip checks, sleep loops, and worker pools are application-shell concerns.
+The job stays in `jobs/` because leader election, active-run skip checks, sleep loops, and worker pools are application-shell concerns.
 
 If the existing sweep keeps a direct read of `database.mongodb.room_memories_collection` to discover candidate room ids, document it as an application-shell exception in the job: the job may identify room ids and enforce active-run skipping, but the actual compaction operation must go through the bound compaction service/facade so Context & Memory still owns memory mutation, content storage, and vector indexing.
 
-If using the cleaner repository/facade sweep option, do not call `list_room_ids_with_memory()` with the default test limit. Use `limit=None` or explicit pagination/streaming so the sweep cannot silently skip rooms beyond 1000.
+Because the chosen sweep path keeps the existing job-owned room-id scan, `list_room_ids_with_memory()` is not used by the production sweep in Phase 5; it still must be implemented without the 1000-row DAL cap for future cleaner wiring and tests.
 
 - [ ] **Step 6: Run caller compatibility tests**
 
@@ -1810,11 +1839,11 @@ Expected: PASS. This suite is required for Phase 5 unless the user explicitly ac
 
 ```bash
 git status --short
-git add context_memory common dal database docs llm_gateway pyproject.toml container.py main.py services modules jobs tests
+git add <exact files changed for Phase 5, as shown by git status --short>
 git commit -m "feat: extract context memory module facade"
 ```
 
-Expected: one focused Phase 5 implementation commit, or several commits matching task boundaries if using subagents.
+Expected: one final integration commit only if earlier task commits were not made. Do not run broad directory `git add` in a shared worktree; stage exact changed files so unrelated user edits are not included.
 
 - [ ] **Step 8: Re-run final Context & Memory gate after commit**
 
@@ -1855,7 +1884,7 @@ Recommended binding order during startup:
 8. Bind `content_storage_service`.
 9. Bind `compaction_service`.
 10. Bind `room_memory_service`.
-11. Bind `room_services.bind_context_memory(context_memory_facade)` or the equivalent separate cleanup binding.
+11. Bind `room_services.bind_context_memory(context_memory_facade)`.
 12. Initialize Redis/SSE/event broker and leader-election dependencies exactly as current startup does.
 13. Register `ContextMemoryEventHandler` with a concrete Common `EventPublisher` if one exists; do not use `_event_broker` / `EventBroker`. Otherwise leave direct calls as the active runtime path.
 14. Start compaction sweep and other background work only after adapters are bound and leader-election dependencies are ready.
@@ -2111,5 +2140,7 @@ Implement Phase 5 in small commits:
 10. Container/startup wiring.
 11. Caller compatibility and compaction sweep boundary.
 12. Final golden tests and boundary gates.
+
+Commit checkpoint rule: after each numbered task's verification command passes, run `git status --short`, stage only the exact files changed for that task, and commit with a task-scoped message. The final commit step is only for any remaining integration changes.
 
 Do not start by editing `modules/RoomMessageCenter.py`. The safest path is to make the new facade match legacy behavior behind the existing service singletons, then run existing caller tests unchanged. Keep direct compaction calls and the compaction sweep job in place until Delivery/Execution phases wire runtime `MessageCommitted` events.
