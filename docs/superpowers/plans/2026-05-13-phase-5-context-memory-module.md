@@ -74,6 +74,7 @@ Create:
 - `context_memory/events.py`: `ContextMemoryEventHandler` with `handle_message_committed(event: MessageCommitted)`.
 - `context_memory/repository/__init__.py`: exports repository implementations.
 - `context_memory/repository/mongo.py`: `MemoryRepository` and `ContentStorageRepository` implementations using `MongoDAL`.
+- `common/mongo_ids.py`: Common helper for safe ObjectId-string fallback queries used by content storage repository legacy lookup.
 - `tests/test_context_memory_protocols.py`: runtime protocol conformance, exports, package list, container assembly, and import-boundary tests.
 - `tests/test_context_memory_repository.py`: repository tests against fake `MongoCollection` instances.
 - `tests/test_context_memory_projection.py`: raw message projection and legacy turn helper tests.
@@ -363,6 +364,7 @@ class ContentStorageRepository(Protocol):
     async def upsert_full_content(
         self,
         *,
+        document_id: str,
         room_id: str,
         turn_id: str,
         content: str,
@@ -383,6 +385,37 @@ class ContentStorageRepository(Protocol):
 ```
 
 `ContentStorageMongoRepository` owns the `conversation_content` collection. It may use deterministic `find_one_and_update(..., upsert=True, return_document=True)` through the `MongoCollection` protocol to preserve idempotent upsert semantics without exposing Motor or PyMongo to `context_memory/**`.
+
+The repository method intentionally requires `document_id`, `content_hash`, `stored_at`, and `expires_at`. Do not call it directly from compaction with only the raw turn fields. Add a pure `context_memory.content_storage.store_full_content(...)` helper that computes `document_id = f"conversation_content:{room_id}:{turn_id}"`, `content_hash = hash_content(content)`, `stored_at = now()`, and `expires_at` from compaction config, then calls `ContentStorageRepository.upsert_full_content(...)` with the full argument set.
+
+Document ID strategy:
+- New `conversation_content` documents MUST store a stable string `document_id` field. The returned document id and `content_ref.document_id` should use this string field, not rely solely on Mongo `_id`.
+- `get_content_by_document_id(document_id)` must query `{"document_id": document_id}` first.
+- For legacy compacted turns whose `content_ref.document_id` is a Mongo ObjectId string and whose stored document lacks `document_id`, add `common/mongo_ids.py` with `object_id_query(document_id: str) -> dict | None`. That Common helper may contain the optional `bson.ObjectId` import. `context_memory/**` may import the Common helper but must not import `bson` directly.
+- Repository tests must cover both stable string `document_id` lookup and legacy `_id`/ObjectId-string fallback.
+
+### UserMemory DTO Mapping
+
+Common `UserMemory` requires `memory_id` and `content`, but the legacy `models.memory.UserMemory` document currently has neither. Map legacy docs deterministically:
+
+```python
+UserMemory(
+    user_id=doc["user_id"],
+    memory_id=doc.get("memory_id") or f"user_memory:{doc['user_id']}",
+    content=render_user_memory_content(doc),
+    created_at=doc.get("created_at"),
+    metadata={
+        "preferences": doc.get("preferences", {}),
+        "preferred_agents": doc.get("preferred_agents", []),
+        "communication_style": doc.get("communication_style"),
+        "user_facts": doc.get("user_facts", []),
+        "last_active_at": doc.get("last_active_at"),
+        "total_interactions": doc.get("total_interactions", 0),
+    },
+)
+```
+
+`render_user_memory_content(doc)` should produce a stable human-readable string from `communication_style`, sorted preferences, preferred agents, and user fact contents. If all fields are empty, return `""`. Add DTO mapping tests before implementation. Do not change the Common DTO unless these tests prove the existing shape is unusable.
 
 ### ContextMemoryDeps Sub-Container
 
@@ -431,7 +464,7 @@ This registration is future-facing only until Room/Execution actually emit `Mess
 
 ## Implementation Order
 
-Parallelization note: Tasks 2, 3, 4, and 5 are independent after Task 1 lands if workers keep disjoint write sets. Do not parallelize edits to the same legacy service file. The golden assembly tests in Task 6 should not be updated in parallel with context assembly code unless ownership is split between fixture generation and implementation.
+Parallelization note: Tasks 2, 3, 4, 5, 6, and 7 can run in parallel only if they keep writes to helper modules and tests. `context_memory/facade.py` is owned by Task 8 as the integration point; earlier workers should not edit it. Do not parallelize edits to the same legacy service file. The golden assembly tests in Task 4 should not be updated in parallel with context assembly code unless ownership is split between fixture generation and implementation.
 
 ### Task 0: Branch, Baseline, and Context Memory Inventory Reconciliation
 
@@ -591,6 +624,7 @@ Expected before implementation: FAIL because `context_memory` package, repositor
 ### Task 2: Extend and Implement Memory and Content Repositories
 
 **Files:**
+- Create: `common/mongo_ids.py`
 - Modify: `common/protocols/repository_protocols.py`
 - Modify: `common/protocols/dal_protocols.py` only if exact ordered compact updates require a Common operation DTO
 - Modify: `common/protocols/__init__.py`
@@ -628,8 +662,9 @@ Cover:
 
 Cover:
 - `ContentStorageMongoRepository(mongo=fake_mongo)` calls `mongo.collection("conversation_content")`.
-- `upsert_full_content()` is idempotent for `(room_id, turn_id)` and returns the existing document id on repeat.
-- `get_content_by_document_id()` accepts string ids without importing `bson` in `context_memory/**`; if ObjectId conversion is needed, it belongs in the repository adapter using Common-safe helpers or query fallback.
+- `upsert_full_content()` is idempotent for `(room_id, turn_id)`, stores a stable string `document_id` field, and returns the existing `document_id` on repeat.
+- `get_content_by_document_id()` first queries `{"document_id": document_id}` for new documents.
+- `get_content_by_document_id()` falls back to a legacy `_id` lookup using `common.mongo_ids.object_id_query(document_id)` for existing compacted content that only has an ObjectId string in `content_ref.document_id`.
 - `get_content_by_turn_id()` queries `{"room_id": room_id, "turn_id": turn_id}`.
 - `delete_content_by_turn_id()` deletes by room and turn.
 - `delete_content_by_room_id()` deletes all stored content for a room and returns count.
@@ -659,6 +694,7 @@ Implementation notes:
 - Constructor accepts `mongo: MongoDAL` and optional `collection_name: str = "conversation_content"`.
 - Preserve unique `(room_id, turn_id)` upsert semantics.
 - Preserve current `content_hash`, `stored_at`, `expires_at`, and `turn_notes` fields.
+- Store and return a stable string `document_id` field for new documents. If the collection already has legacy docs without `document_id`, support ObjectId-string fallback through `common.mongo_ids.object_id_query()`.
 - Do not import `services.content_storage_service`, `database.mongodb`, `bson`, `pymongo`, or `models.compaction` inside `context_memory/**`.
 - Text index creation: The `conversation_content` collection requires a MongoDB text index on `turn_notes` fields for BM25 keyword search. Use one of:
   - Preferred: Accept an optional `IndexRegistry` in the repository constructor and register the index spec. Application shell calls `index_registry.ensure_all()` during startup.
@@ -757,10 +793,10 @@ Expected: PASS.
 
 **Files:**
 - Create: `context_memory/assembly.py`
-- Modify: `context_memory/facade.py`
 - Create/modify: `tests/test_context_memory_assembly.py`
 - Create: `tests/test_context_memory_assembly_golden.py`
 - Modify: `tests/test_context_assembly_service.py` only for adapter binding updates
+Do not modify `context_memory/facade.py` in this task; Task 8 owns facade integration.
 
 - [ ] **Step 1: Write failing direct assembly tests**
 
@@ -865,10 +901,9 @@ Expected: PASS with exact legacy token-budget results.
 **Files:**
 - Create: `context_memory/projection.py`
 - Create: `context_memory/summary.py`
-- Modify: `context_memory/facade.py`
 - Create/modify: `tests/test_context_memory_projection.py`
-- Create/modify: `tests/test_context_memory_facade.py`
 - Modify: `tests/test_phase5_supervisor_integration.py`
+Do not modify `context_memory/facade.py` in this task; Task 8 owns facade integration.
 
 - [ ] **Step 1: Write failing user-message projection tests**
 
@@ -934,7 +969,7 @@ Use injected `LLMProvider.generate_structured()` or a small adapter method that 
 - [ ] **Step 9: Run projection and summary tests**
 
 ```bash
-uv run python -m pytest tests/test_context_memory_projection.py tests/test_context_memory_facade.py tests/test_phase5_supervisor_integration.py -k "memory or synthesis or summary or projection" -q
+uv run python -m pytest tests/test_context_memory_projection.py tests/test_phase5_supervisor_integration.py -k "memory or synthesis or summary or projection" -q
 ```
 
 Expected: PASS.
@@ -944,10 +979,10 @@ Expected: PASS.
 **Files:**
 - Create: `context_memory/search.py`
 - Create: `context_memory/content_storage.py`
-- Modify: `context_memory/facade.py`
 - Create/modify: `tests/test_context_memory_search.py`
 - Modify: `tests/test_memory_search_service.py`
 - Modify: `tests/test_context_memory_bugfixes.py`
+Do not modify `context_memory/facade.py` in this task; Task 8 owns facade integration.
 
 - [ ] **Step 1: Write failing search unit tests**
 
@@ -1006,8 +1041,10 @@ Document the chosen option in tests and in the final handoff.
 
 Port coverage from `tests/test_compaction_service.py`:
 - `hash_content()` deterministic SHA-256.
-- Idempotent upsert returns document id.
-- Expand by document id.
+- `store_full_content()` computes deterministic `document_id`, `content_hash`, `stored_at`, and `expires_at`, calls `ContentStorageRepository.upsert_full_content()` with the full protocol argument set, and returns the stable `document_id`.
+- Idempotent upsert returns the stable string `document_id`.
+- Expand by stable `document_id`.
+- Expand by legacy ObjectId-string document id via `common.mongo_ids.object_id_query()`.
 - Expand by turn id.
 - Missing content raises a Context & Memory local `ContentExpiredError`.
 - Delete by turn and by room.
@@ -1017,6 +1054,7 @@ Port coverage from `tests/test_compaction_service.py`:
 
 Rules:
 - `ContentExpiredError` lives in `context_memory/content_storage.py`.
+- `store_full_content()` is the only helper compaction should call for full-content storage; it computes deterministic `document_id` and storage metadata before calling the repository.
 - Pointer string rendering must match legacy exactly for MongoDB references.
 - S3 and URL references remain unsupported unless existing tests require pass-through; do not import `services.s3_service`.
 
@@ -1032,10 +1070,10 @@ Expected: PASS.
 
 **Files:**
 - Create: `context_memory/compaction.py`
-- Modify: `context_memory/facade.py`
 - Create/modify: `tests/test_context_memory_compaction.py`
 - Modify: `tests/test_compaction_service.py`
 - Modify: `tests/test_context_memory_bugfixes.py`
+Do not modify `context_memory/facade.py` in this task; Task 8 owns facade integration.
 
 - [ ] **Step 1: Write failing compaction eligibility tests**
 
@@ -1072,7 +1110,7 @@ Cover:
 
 Algorithm:
 1. Compute turns to compact using legacy preserve-recent and threshold rules.
-2. For each turn, call content storage upsert with `room_id`, `turn_id`, `content`, `content_type`, and `turn_notes`.
+2. For each turn, call `context_memory.content_storage.store_full_content()` with `room_id`, `turn_id`, `content`, `content_type`, and `turn_notes`. That helper computes `document_id`, `content_hash`, `stored_at`, and `expires_at`, then calls `ContentStorageRepository.upsert_full_content()` with the full protocol argument set.
 3. Call search indexing for that turn.
 4. Build `content_ref` dict with `storage_type="mongodb"`, `collection="conversation_content"`, `document_id`, `content_hash`, and created timestamp.
 5. Build compacted entries for repository update.
@@ -1135,7 +1173,7 @@ Store dependencies and configs. Use `NoopTracingProvider` if a tracer is not pro
 Cover:
 - `get_room_memory()` maps repository docs to `RoomMemoryInfo`.
 - `search_memory()` delegates to search helper and returns Common DTO list.
-- `get_user_memories()` maps repository user-memory docs to Common `UserMemory`.
+- `get_user_memories()` maps repository user-memory docs to Common `UserMemory` using the explicit synthetic `memory_id`, stable rendered `content`, and metadata mapping from "UserMemory DTO Mapping".
 - `delete_room_memory()` deletes room memory, content storage documents, and vector index entries owned by Context & Memory.
 
 - [ ] **Step 4: Implement MemoryProjector methods**
