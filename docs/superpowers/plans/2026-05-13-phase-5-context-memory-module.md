@@ -261,8 +261,17 @@ Non-protocol compatibility helpers allowed on `ContextMemoryFacade`:
 - `get_compaction_stats(room_id: str) -> dict`
 - `index_turn_for_search(room_id: str, turn_doc: dict) -> bool`
 - `delete_room_index(room_id: str) -> bool`
+- `content_upsert_full_content(room_id: str, turn_id: str, content: str, content_type: str, turn_notes: dict | None = None) -> str`
+- `content_get_content_by_document_id(document_id: str) -> str | None`
+- `content_get_content_by_turn_id(room_id: str, turn_id: str) -> str | None`
+- `content_expand_mongodb_reference(content_ref: dict, turn_id: str) -> str`
+- `content_delete_content_by_turn_id(room_id: str, turn_id: str) -> bool`
+- `content_delete_content_by_room_id(room_id: str) -> int`
+- `content_get_content_stats_for_room(room_id: str) -> dict`
 
 These helpers exist only to keep legacy callers stable. New cross-module consumers should use the three Common protocols.
+
+Content-storage compatibility helpers convert repository dicts to legacy service return shapes. `content_get_content_by_document_id()` and `content_get_content_by_turn_id()` return `doc["content"]` or `None`, never the raw repository dict. `content_expand_mongodb_reference()` accepts a primitive dict form of the legacy `ContentReference`, supports only `storage_type="mongodb"`, raises the Context & Memory `ContentExpiredError` when missing, and leaves S3/URL behavior to the legacy service adapter.
 
 Assembly compatibility helpers must be synchronous and pure. They accept an already-loaded room memory document and optional precomputed memory search results; they must not call `MemoryRepository`, `RoomHistoryReader`, `LLMProvider`, or search helpers. Legacy `build_supervisor_context()` and `build_agent_execution_context()` are synchronous and current callers do not await them, so repository-backed loading belongs only in async protocol methods such as `assemble_context()`.
 
@@ -1060,6 +1069,7 @@ Port coverage from `tests/test_compaction_service.py`:
 - Missing content raises a Context & Memory local `ContentExpiredError`.
 - Delete by turn and by room.
 - Content stats match legacy shape.
+- Facade compatibility helpers return legacy string/boolean/integer/dict shapes, not raw repository documents.
 
 - [ ] **Step 8: Implement content storage helpers**
 
@@ -1067,7 +1077,7 @@ Rules:
 - `ContentExpiredError` lives in `context_memory/content_storage.py`.
 - `store_full_content()` is the only helper compaction should call for full-content storage; it computes deterministic `document_id` and storage metadata before calling the repository.
 - Pointer string rendering must preserve the legacy `ContentReference.to_compact_string()` format for MongoDB references. For newly compacted turns, the `document_id` segment comes from the stable `document_id` field and may differ from legacy Mongo `_id` values.
-- S3 and URL references remain unsupported unless existing tests require pass-through; do not import `services.s3_service`.
+- `context_memory/**` supports MongoDB content expansion only. Do not import `services.s3_service`. S3 expansion pass-through remains in the legacy `ContentStorageService` adapter, and URL expansion remains `NotImplementedError`.
 
 - [ ] **Step 9: Run search and content storage tests**
 
@@ -1310,13 +1320,19 @@ room_memory_service = RoomMemoryService()
 - [ ] **Step 9: Write content storage adapter tests**
 
 Cover:
-- `ContentStorageService` public methods delegate after bind.
+- `ContentStorageService.upsert_full_content()` delegates after bind and returns the stable document id string.
+- `ContentStorageService.get_content_by_document_id()` delegates after bind and returns the full content string or `None`, not the repository dict.
+- `ContentStorageService.get_content_by_turn_id()` delegates after bind and returns the full content string or `None`, not the repository dict.
+- `ContentStorageService.expand_content_reference()` delegates MongoDB references after bind and preserves `ContentExpiredError` behavior for missing MongoDB content.
+- `ContentStorageService.expand_content_reference()` preserves existing S3 pass-through behavior locally: call `services.s3_service.s3_service.download_text(s3_key)`, return the downloaded string, and raise `ContentExpiredError(turn_id, s3_key)` when it returns `None`.
+- `ContentStorageService.expand_content_reference()` continues to raise `NotImplementedError` for URL references.
+- `ContentStorageService.delete_content_by_turn_id()`, `delete_content_by_room_id()`, and `get_content_stats_for_room()` delegate after bind with the same `bool`, `int`, and stats-dict return shapes.
 - `ContentExpiredError` remains import-compatible from `services.content_storage_service`.
 - `hash_content()` remains import-compatible and deterministic.
 
 - [ ] **Step 10: Add `ContentStorageService.bind_facade()`**
 
-Keep compatibility imports stable for existing compaction tests.
+Keep compatibility imports stable for existing compaction tests. The adapter may import `services.s3_service` only inside the S3 branch to preserve legacy behavior; `context_memory/**` must never import it.
 
 - [ ] **Step 11: Run adapter and legacy tests**
 
