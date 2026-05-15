@@ -825,7 +825,7 @@ class TestProcessSyncResponseRespectsStatus:
             "persisted": True,
         }
 
-        success, text, _ , agent_task_id= await proc._process_sync_response(
+        success, text, _, agent_task_id= await proc._process_sync_response(
             response=response,
             current_message=current_message,
             agent_card=agent_card,
@@ -870,7 +870,7 @@ class TestProcessSyncResponseRespectsStatus:
             "persisted": True,
         }
 
-        success, text, _ , agent_task_id = await proc._process_sync_response(
+        success, text, _, agent_task_id = await proc._process_sync_response(
             response=response,
             current_message=current_message,
             agent_card=agent_card,
