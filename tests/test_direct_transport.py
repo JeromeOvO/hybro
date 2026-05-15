@@ -210,7 +210,7 @@ class TestHandleSyncResponseSuccess:
         proc.tsm.persist_message = AsyncMock(return_value=True)
         proc.response_handler.handle = AsyncMock()
 
-        success, text, paused = await proc.handle_sync_response(
+        success, text, paused, agent_task_id = await proc.handle_sync_response(
             current_message=current_message,
             agent_card=agent_card,
             prepared_message=prepared_message,
@@ -273,10 +273,10 @@ class TestHandleSyncResponseWithPolling:
         completed_task.model_dump = MagicMock(return_value={})
 
         proc._poll_task_until_complete = AsyncMock(return_value=completed_task)
-        proc._finalize_polled_task = AsyncMock(return_value=(True, "done", None))
+        proc._finalize_polled_task = AsyncMock(return_value=(True, "done", None, None))
         proc.response_handler.handle = AsyncMock()
 
-        success, text, paused = await proc.handle_sync_response(
+        success, text, paused, agent_task_id = await proc.handle_sync_response(
             current_message=current_message,
             agent_card=agent_card,
             prepared_message=prepared_message,
@@ -825,7 +825,7 @@ class TestProcessSyncResponseRespectsStatus:
             "persisted": True,
         }
 
-        success, text, _ = await proc._process_sync_response(
+        success, text, _, agent_task_id= await proc._process_sync_response(
             response=response,
             current_message=current_message,
             agent_card=agent_card,
@@ -870,7 +870,7 @@ class TestProcessSyncResponseRespectsStatus:
             "persisted": True,
         }
 
-        success, text, _ = await proc._process_sync_response(
+        success, text, _, agent_task_id = await proc._process_sync_response(
             response=response,
             current_message=current_message,
             agent_card=agent_card,
@@ -884,3 +884,57 @@ class TestProcessSyncResponseRespectsStatus:
         call_args = proc.tsm.transition_task.call_args
         assert call_args[0][1] == TaskState.completed
         assert success is True
+
+class TestHandleSyncResponseInteractive:
+    """handle_sync_response returns agent_task_id for input_required responses."""
+
+    @pytest.mark.asyncio
+    async def test_input_required_returns_agent_task_id(self):
+        proc = _make_processor()
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        prepared_message = MagicMock()
+
+        task_info = {
+            "webhook_token": "tok-123",
+            "context_id": "ctx-1",
+            "created_at": "2025-01-01T00:00:00Z",
+        }
+        proc._setup_tracking_context = AsyncMock(
+            return_value=(
+                task_info,
+                MagicMock(
+                    room_id="room-1",
+                    current_message=current_message,
+                    agent_card=agent_card,
+                    user_message_id="msg-1",
+                    task_info=task_info,
+                    send_sse=False,
+                ),
+            )
+        )
+        proc.a2a_service.send_message_to_tracked_agent = AsyncMock(
+            return_value={
+                "type": "task",
+                "status": "input-required",
+                "requires_input": True,
+                "task_id": "real-agent-task-abc123",
+                "message": "Please approve.",
+            }
+        )
+        proc.tsm.notify_task = AsyncMock()
+
+        success, text, paused, agent_task_id = await proc.handle_sync_response(
+            current_message=current_message,
+            agent_card=agent_card,
+            prepared_message=prepared_message,
+            room_id="room-1",
+            _user_id="user-1",
+            user_message_id="msg-1",
+        )
+
+        assert success is True
+        assert text is None
+        assert paused == current_message.message_id
+        assert agent_task_id == "real-agent-task-abc123"
