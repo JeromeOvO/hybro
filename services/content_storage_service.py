@@ -15,6 +15,10 @@ from common.utils.time import utcnow
 from config.settings import settings
 from database.mongodb import mongodb
 from models.compaction import ContentReference, StorageType, StoredContent
+from context_memory.content_storage import (
+    ContentExpiredError as ContextMemoryContentExpiredError,
+)
+from context_memory.content_storage import hash_content as context_memory_hash_content
 
 logger = get_logger(__name__)
 
@@ -65,6 +69,12 @@ class ContentStorageService:
 
     def __init__(self):
         self._collection_name = "conversation_content"
+        self._facade = None
+        self._bound = False
+
+    def bind_facade(self, facade) -> None:
+        self._facade = facade
+        self._bound = True
 
     @property
     def collection(self):
@@ -98,6 +108,15 @@ class ContentStorageService:
         Returns:
             The document ID (string)
         """
+        if self._bound and self._facade is not None:
+            return await self._facade.content_upsert_full_content(
+                room_id=room_id,
+                turn_id=turn_id,
+                content=content,
+                content_type=content_type,
+                turn_notes=turn_notes,
+            )
+
         content_hash = hash_content(content)
         now = utcnow()
 
@@ -163,6 +182,9 @@ class ContentStorageService:
         Returns:
             The full content string, or None if not found
         """
+        if self._bound and self._facade is not None:
+            return await self._facade.content_get_content_by_document_id(document_id)
+
         from bson import ObjectId
 
         try:
@@ -187,6 +209,9 @@ class ContentStorageService:
         Returns:
             The full content string, or None if not found
         """
+        if self._bound and self._facade is not None:
+            return await self._facade.content_get_content_by_turn_id(room_id, turn_id)
+
         doc = await self.collection.find_one(
             {"room_id": room_id, "turn_id": turn_id}
         )
@@ -212,6 +237,16 @@ class ContentStorageService:
             NotImplementedError: If the storage type is not yet implemented (URL)
             ValueError: If the content reference is malformed
         """
+        if (
+            self._bound
+            and self._facade is not None
+            and content_ref.storage_type == StorageType.MONGODB
+        ):
+            return await self._facade.content_expand_mongodb_reference(
+                content_ref.model_dump(mode="json"),
+                turn_id,
+            )
+
         if content_ref.storage_type == StorageType.MONGODB:
             if not content_ref.document_id:
                 raise ValueError(
@@ -261,6 +296,11 @@ class ContentStorageService:
         Returns:
             True if content was deleted, False if not found
         """
+        if self._bound and self._facade is not None:
+            return await self._facade.content_delete_content_by_turn_id(
+                room_id, turn_id
+            )
+
         result = await self.collection.delete_one(
             {"room_id": room_id, "turn_id": turn_id}
         )
@@ -276,6 +316,9 @@ class ContentStorageService:
         Returns:
             Number of documents deleted
         """
+        if self._bound and self._facade is not None:
+            return await self._facade.content_delete_content_by_room_id(room_id)
+
         result = await self.collection.delete_many({"room_id": room_id})
         logger.info(
             f"ContentStorageService: Deleted {result.deleted_count} content documents "
@@ -293,6 +336,9 @@ class ContentStorageService:
         Returns:
             Dict with content statistics
         """
+        if self._bound and self._facade is not None:
+            return await self._facade.content_get_content_stats_for_room(room_id)
+
         pipeline = [
             {"$match": {"room_id": room_id}},
             {
@@ -328,3 +374,7 @@ class ContentStorageService:
 
 # Singleton export
 content_storage_service = ContentStorageService()
+
+# Preserve old import paths while using the Context & Memory exception/helper.
+ContentExpiredError = ContextMemoryContentExpiredError
+hash_content = context_memory_hash_content

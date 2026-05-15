@@ -68,6 +68,12 @@ class CompactionService:
     def __init__(self):
         self.content_storage = content_storage_service
         self.db_service = db_service
+        self._facade = None
+        self._bound = False
+
+    def bind_facade(self, facade) -> None:
+        self._facade = facade
+        self._bound = True
 
     async def should_compact(self, room_id: str) -> bool:
         """
@@ -85,6 +91,9 @@ class CompactionService:
         Returns:
             True if compaction should be triggered
         """
+        if self._bound and self._facade is not None:
+            return await self._facade.should_compact(room_id)
+
         config = compaction_config
 
         if not config.enabled:
@@ -131,6 +140,11 @@ class CompactionService:
         Returns the CompactionResult if compaction ran, or None if it was
         not needed (or disabled).
         """
+        if self._bound and self._facade is not None:
+            return _legacy_compaction_result_or_none(
+                await self._facade.compact_if_needed(room_id)
+            )
+
         config = compaction_config
         if not config.enabled:
             return None
@@ -184,6 +198,16 @@ class CompactionService:
         2. Trigger location matters: This function is safe to call within the
            per-room processing lock (on-demand after synthesis).
         """
+        if self._bound and self._facade is not None:
+            return _legacy_compaction_result(
+                await self._facade.compact_room_memory(
+                    room_id,
+                    room_memory_doc=room_memory.model_dump(mode="json")
+                    if room_memory is not None
+                    else None,
+                )
+            )
+
         config = compaction_config
 
         if not config.enabled:
@@ -393,6 +417,11 @@ class CompactionService:
             ContentExpiredError: If the stored document is missing
             ValueError: If the turn is compact but has no content_ref
         """
+        if self._bound and self._facade is not None:
+            return await self._facade.expand_turn_content_from_turn(
+                turn.model_dump(mode="json")
+            )
+
         if turn.representation == TurnRepresentation.FULL:
             return turn.content or ""
 
@@ -422,6 +451,9 @@ class CompactionService:
         Returns:
             The full content string, or an error message
         """
+        if self._bound and self._facade is not None:
+            return await self._facade.fetch_turn_content(turn_id, room_id)
+
         room_memory = await self.db_service.get_room_memory_by_room_id(room_id)
         if not room_memory:
             return f"[Error: Room {room_id} not found]"
@@ -481,6 +513,9 @@ class CompactionService:
         Returns:
             Dict with compaction statistics
         """
+        if self._bound and self._facade is not None:
+            return await self._facade.get_compaction_stats(room_id)
+
         room_memory = await self.db_service.get_room_memory_by_room_id(room_id)
         if not room_memory:
             return {"error": f"Room {room_id} not found"}
@@ -518,3 +553,22 @@ class CompactionService:
 
 # Singleton export
 compaction_service = CompactionService()
+
+
+def _legacy_compaction_result(result) -> CompactionResult:
+    metadata = result.metadata or {}
+    return CompactionResult(
+        room_id=result.room_id,
+        compacted_count=result.compacted_count,
+        tokens_saved=result.tokens_saved,
+        errors=list(metadata.get("errors") or []),
+        compacted_at=metadata.get("compacted_at") or utcnow(),
+    )
+
+
+def _legacy_compaction_result_or_none(result) -> CompactionResult | None:
+    if result is None:
+        return None
+    if (result.metadata or {}).get("skipped"):
+        return None
+    return _legacy_compaction_result(result)

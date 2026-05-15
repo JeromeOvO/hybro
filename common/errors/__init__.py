@@ -8,6 +8,7 @@ from common.errors.base import (
     TransientError,
     UpstreamError,
     ValidationError,
+    VectorIndexUnavailableError,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "TransientError",
     "UpstreamError",
     "ValidationError",
+    "VectorIndexUnavailableError",
 ]

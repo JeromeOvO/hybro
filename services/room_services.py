@@ -142,6 +142,7 @@ class RoomServices:
         self._s3_service = None
         self._facade = None
         self._bound = False
+        self._context_memory_manager = None
 
     @property
     def s3_service(self):
@@ -154,6 +155,9 @@ class RoomServices:
     def bind_facade(self, facade) -> None:
         self._facade = facade
         self._bound = True
+
+    def bind_context_memory(self, memory_manager) -> None:
+        self._context_memory_manager = memory_manager
 
     def _require_facade(self):
         if not getattr(self, "_bound", False) or getattr(self, "_facade", None) is None:
@@ -1054,10 +1058,15 @@ class RoomServices:
 
             # TODO(Phase 9): Move this transitional cleanup behind a repository/DAL
             # boundary when the remaining legacy room data paths are retired.
-            await mongodb.room_memories_collection.delete_many({"room_id": room_id})
+            if self._context_memory_manager is not None:
+                ok = await self._context_memory_manager.delete_room_memory(room_id)
+                if not ok:
+                    logger.warning(
+                        "Context & Memory cleanup reported failure for room %s",
+                        room_id,
+                    )
             if s3_cleanup_ok:
                 await mongodb.file_uploads_collection.delete_many({"room_id": room_id})
-            await mongodb.conversation_content_collection.delete_many({"room_id": room_id})
         except Exception:
             logger.warning(
                 "Transitional non-room cleanup failed for room %s", room_id,

@@ -69,6 +69,12 @@ class MemorySearchService:
         self.openai_service = openai_service
         self.pinecone = pinecone_db
         self._index_available: bool | None = None
+        self._facade = None
+        self._bound = False
+
+    def bind_facade(self, facade) -> None:
+        self._facade = facade
+        self._bound = True
 
     @property
     def config(self):
@@ -140,6 +146,11 @@ class MemorySearchService:
         Returns:
             MemorySearchResponse with ranked results
         """
+        if self._bound and self._facade is not None:
+            return _legacy_search_response(
+                await self._facade.legacy_search(query, room_id, user_id=user_id)
+            )
+
         start_time = time.monotonic()
 
         if not self.config.enabled:
@@ -256,6 +267,10 @@ class MemorySearchService:
         Returns:
             True if indexed successfully, False otherwise
         """
+        if self._bound and self._facade is not None:
+            turn_doc = turn.model_dump(mode="json") if hasattr(turn, "model_dump") else turn
+            return await self._facade.index_turn_for_search(room_id, turn_doc)
+
         content = turn.content
         if not content:
             logger.debug(
@@ -317,6 +332,9 @@ class MemorySearchService:
         Returns:
             True if deletion succeeded, False otherwise
         """
+        if self._bound and self._facade is not None:
+            return await self._facade.delete_room_index(room_id)
+
         if not self._is_index_available():
             return False
 
@@ -672,3 +690,43 @@ class MemorySearchService:
 
 # Singleton export
 memory_search_service = MemorySearchService()
+
+
+def _legacy_search_response(payload: dict) -> MemorySearchResponse:
+    results = []
+    for item in payload.get("results") or []:
+        metadata = getattr(item, "metadata", {}) or {}
+        source_type = metadata.get("source_type") or MemorySourceType.TURN
+        if isinstance(source_type, str):
+            source_type = MemorySourceType(source_type)
+        results.append(
+            MemorySearchResult(
+                turn_id=metadata.get("turn_id") or getattr(item, "source_message_id", None),
+                fact_id=metadata.get("fact_id"),
+                room_id=getattr(item, "room_id", payload.get("room_id")),
+                source_type=source_type,
+                content=getattr(item, "content", ""),
+                content_preview=metadata.get("content_preview"),
+                vector_score=metadata.get("vector_score", 0.0),
+                keyword_score=metadata.get("keyword_score", 0.0),
+                combined_score=getattr(item, "score", 0.0),
+                temporal_decay_factor=metadata.get("temporal_decay_factor", 1.0),
+                timestamp=metadata.get("timestamp"),
+                role=metadata.get("role"),
+                agent_name=metadata.get("agent_name"),
+                is_compact=metadata.get("is_compact", False),
+                can_expand=metadata.get("can_expand", False),
+            )
+        )
+    return MemorySearchResponse(
+        query=payload.get("query", ""),
+        room_id=payload.get("room_id", ""),
+        results=results,
+        total_matches=payload.get("total_matches", len(results)),
+        search_time_ms=payload.get("search_time_ms", 0.0),
+        searched_at=payload.get("searched_at") or utcnow(),
+        vector_search_used=payload.get("vector_search_used", True),
+        keyword_search_used=payload.get("keyword_search_used", True),
+        temporal_decay_applied=payload.get("temporal_decay_applied", True),
+        mmr_applied=payload.get("mmr_applied", True),
+    )

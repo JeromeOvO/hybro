@@ -204,6 +204,12 @@ class RoomMemoryService:
     def __init__(self):
         self.database_service = db_service  # Use singleton
         self.openai_service = openai_service  # Use singleton
+        self._facade = None
+        self._bound = False
+
+    def bind_facade(self, facade) -> None:
+        self._facade = facade
+        self._bound = True
 
     async def create_room_memory(
         self, request: RoomCenterMemoryRequest
@@ -211,6 +217,35 @@ class RoomMemoryService:
         """
         Create a room memory in the database with new structured format.
         """
+        if self._bound and self._facade is not None:
+            memory_doc = (
+                request.memory.model_dump(mode="json")
+                if request.memory is not None
+                else {
+                    "room_id": request.room_id,
+                    "memory_id": request.memory_id or str(uuid4()),
+                    "memory_content": {
+                        "summary": None,
+                        "conversation_history": [],
+                    },
+                    "conversation_history": [],
+                    "room_summary": {},
+                    "room_facts": [],
+                    "memory_created_at": request.memory_created_at or utcnow(),
+                    "extend_info": request.extend_info,
+                }
+            )
+            created = await self._facade.legacy_create_room_memory(memory_doc)
+            memory = _room_memory_from_doc(created) if created else None
+            return RoomCenterMemoryResponse(
+                room_id=request.room_id,
+                memory_id=memory.memory_id if memory else request.memory_id,
+                memory=memory,
+                success=memory is not None,
+                error=None if memory else "Failed to create room memory",
+                status_code=200 if memory else 500,
+            )
+
         try:
             # Create new structured MemoryContent
             memory_content = MemoryContent()
@@ -265,6 +300,18 @@ class RoomMemoryService:
         """
         Get a room memory by room_id
         """
+        if self._bound and self._facade is not None:
+            doc = await self._facade.legacy_get_room_memory_by_room_id(request.room_id)
+            memory = _room_memory_from_doc(doc) if doc else None
+            return RoomCenterMemoryResponse(
+                room_id=request.room_id,
+                memory_id=memory.memory_id if memory else None,
+                memory=memory,
+                success=memory is not None,
+                error=None if memory else "Room memory not found",
+                status_code=200 if memory else 404,
+            )
+
         try:
             room_memory = await self.database_service.get_room_memory_by_room_id(
                 request.room_id
@@ -303,6 +350,20 @@ class RoomMemoryService:
         """
         Update a room memory by room_id
         """
+        if self._bound and self._facade is not None:
+            doc = request.memory.model_dump(mode="json") if request.memory else {}
+            ok = await self._facade.legacy_update_room_memory_by_room_id(
+                request.room_id, doc
+            )
+            return RoomCenterMemoryResponse(
+                room_id=request.room_id,
+                memory_id=request.memory_id,
+                memory=request.memory if ok else None,
+                success=ok,
+                error=None if ok else "Room memory not found",
+                status_code=200 if ok else 404,
+            )
+
         try:
             room_memory_response = (
                 await self.database_service.update_room_memory_by_room_id(
@@ -343,6 +404,20 @@ class RoomMemoryService:
         """
         Get a room memory by memory_id
         """
+        if self._bound and self._facade is not None:
+            doc = await self._facade.legacy_get_room_memory_by_memory_id(
+                request.memory_id
+            )
+            memory = _room_memory_from_doc(doc) if doc else None
+            return RoomCenterMemoryResponse(
+                room_id=request.room_id,
+                memory_id=memory.memory_id if memory else request.memory_id,
+                memory=memory,
+                success=memory is not None,
+                error=None if memory else "Room memory not found",
+                status_code=200 if memory else 404,
+            )
+
         try:
             room_memory = await self.database_service.get_room_memory_by_memory_id(
                 request.memory_id
@@ -381,6 +456,20 @@ class RoomMemoryService:
         """
         Update a room memory by memory_id
         """
+        if self._bound and self._facade is not None:
+            doc = await self._facade.legacy_get_room_memory_for_update_by_memory_id(
+                request.memory_id
+            )
+            memory = _room_memory_from_doc(doc) if doc else None
+            return RoomCenterMemoryResponse(
+                room_id=request.room_id,
+                memory_id=memory.memory_id if memory else request.memory_id,
+                memory=memory,
+                success=memory is not None,
+                error=None if memory else "Room memory not found",
+                status_code=200 if memory else 404,
+            )
+
         try:
             room_memory = await self.database_service.get_room_memory_by_memory_id(
                 request.memory_id
@@ -419,6 +508,19 @@ class RoomMemoryService:
         """
         Delete a room memory by memory_id
         """
+        if self._bound and self._facade is not None:
+            ok = await self._facade.legacy_delete_room_memory_by_memory_id(
+                request.memory_id
+            )
+            return RoomCenterMemoryResponse(
+                room_id=request.room_id,
+                memory_id=request.memory_id if ok else None,
+                memory=None,
+                success=ok,
+                error=None if ok else "Room memory not found",
+                status_code=200 if ok else 404,
+            )
+
         try:
             success = await self.database_service.delete_room_memory_by_memory_id(
                 request.memory_id
@@ -460,6 +562,25 @@ class RoomMemoryService:
 
         The message is cleaned of @mention UUIDs before storage.
         """
+        if self._bound and self._facade is not None:
+            doc = await self._facade.initialize_or_update_room_memory(
+                request.room_id,
+                memory_content=request.memory_content,
+                room_agent_set=request.room_agent_set,
+                user_id=request.user_id,
+                attachments=request.attachments,
+            )
+            await self._track_user_interaction(request.user_id)
+            memory = _room_memory_from_doc(doc) if doc else None
+            return RoomCenterMemoryResponse(
+                room_id=request.room_id,
+                memory_id=memory.memory_id if memory else None,
+                memory=memory,
+                success=memory is not None,
+                error=None if memory else "Failed to update room memory",
+                status_code=200 if memory else 500,
+            )
+
         room_id = request.room_id
         new_message = request.memory_content
         room_agent_set = request.room_agent_set or {}
@@ -618,6 +739,29 @@ class RoomMemoryService:
 
         Uses atomic $push instead of loading the full document.
         """
+        if self._bound and self._facade is not None:
+            modified, matched = await self._facade.add_agent_response_to_memory(
+                room_id,
+                agent_id,
+                agent_name,
+                response_text,
+                was_successful=was_successful,
+            )
+            if not modified:
+                return RoomCenterMemoryResponse(
+                    room_id=room_id,
+                    success=False,
+                    error="Room memory not found" if not matched else "Failed to update room memory",
+                    status_code=404 if not matched else 500,
+                )
+            await self._track_agent_call(agent_id=agent_id, success=was_successful)
+            return RoomCenterMemoryResponse(
+                room_id=room_id,
+                success=True,
+                error=None,
+                status_code=200,
+            )
+
         from common.utils.context_utils import (
             MAX_HISTORY_TURNS,
             MAX_SUMMARY_CHARS,
@@ -707,6 +851,13 @@ class RoomMemoryService:
         When trajectory is provided, agent contributions are extracted into the
         turn for richer turn_notes (forward-compatibility with Phase 4B search).
         """
+        if self._bound and self._facade is not None:
+            return await self._facade.add_synthesis_to_history(
+                room_id,
+                synthesis_text,
+                trajectory=trajectory,
+            )
+
         from common.utils.context_utils import (
             MAX_HISTORY_TURNS,
             MAX_SUMMARY_CHARS,
@@ -804,6 +955,13 @@ class RoomMemoryService:
         Returns:
             True if successfully updated, False if extraction or persistence failed
         """
+        if self._bound and self._facade is not None:
+            return await self._facade.update_room_summary(
+                room_id,
+                synthesis_text,
+                synthesis_turn_id=synthesis_turn_id,
+            )
+
         extraction_prompt = (
             "Extract structured room summary fields from the following synthesis. "
             "Return ONLY valid JSON with these keys:\n"
@@ -912,3 +1070,9 @@ class RoomMemoryService:
 # Singleton exports
 chat_memory_service = ChatMemoryService()
 room_memory_service = RoomMemoryService()
+
+
+def _room_memory_from_doc(doc: dict | None) -> RoomMemory | None:
+    if not doc:
+        return None
+    return RoomMemory(**doc)
