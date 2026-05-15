@@ -199,7 +199,7 @@ Additional import-boundary detail:
 - `context_memory/**` must not import `room/**`; all room reads go through `RoomHistoryReader`.
 - `context_memory/**` must not import `services.openai_service`; embedding and structured generation go through `LLMProvider`.
 - `context_memory/**` must not import `database.pinecone_db`; vector calls go through `VectorDAL`.
-- Legacy adapters in `services/**`, `modules/**`, `jobs/**`, and `main.py` may import `context_memory` during migration, but `context_memory` must never import them.
+- Only `container.py`, `main.py`, `context_memory/**`, intended legacy service adapters (`services/context_assembly_service.py`, `services/compaction_service.py`, `services/memory_search_service.py`, `services/memory_service.py`, `services/content_storage_service.py`), and tests may import `context_memory` during migration. `modules/**` and `jobs/**` must not import `context_memory` directly; they keep using service wrappers or Common protocols.
 
 ## Interface Definitions
 
@@ -554,11 +554,12 @@ class ContextMemoryEventHandler:
                 await self._projector.run_compaction(event.room_id)
         except Exception:
             logger.exception("Context & Memory projection failed", extra={"room_id": event.room_id, "message_id": event.message_id})
+            raise
 ```
 
 `MemoryProjector.run_compaction()` is threshold-gated in Phase 5: it must check compaction eligibility and return a zero-count `CompactionResult` when compaction is not needed. The event handler must not force compaction after every message.
 
-Failure behavior is intentionally catch-and-log with no re-raise. The current Common `EventPublisher` protocol has no dead-letter contract, and direct legacy compaction/projection paths already swallow/log background failures.
+Failure behavior for the registered `EventPublisher` handler is log-and-re-raise. EventPublisher owns retry/dead-letter visibility, so the handler must not swallow exceptions once registered. If Phase 5 adds a direct best-effort wrapper for tests or transitional manual calls, that wrapper may catch/log and suppress failures, but it must not be the callable registered with `EventPublisher`.
 
 If a concrete implementation of the Common `EventPublisher` protocol is available during startup, register the handler:
 
@@ -726,6 +727,10 @@ Also add a repo-wide non-protocol facade helper call-boundary test:
 - Scan AST calls across Python files and reject any call to those helper names outside the allowed adapter paths listed in "Interface Definitions".
 - Allow `project_message_for_event()` only from `context_memory/events.py` and tests.
 - Fail if Room, Execution, API, module, job, or new service code calls helpers such as `legacy_search()`, `compact_if_needed()`, `index_turn_for_search()`, or `content_*()` directly; those paths must go through Common protocols or legacy service adapters.
+
+Also add a repo-wide inbound import-boundary test for `context_memory`:
+- Allowed importers: `context_memory/**`, `container.py`, `main.py`, tests, and the intended legacy service adapter files only (`services/context_assembly_service.py`, `services/compaction_service.py`, `services/memory_search_service.py`, `services/memory_service.py`, `services/content_storage_service.py`).
+- Fail if `modules/**`, `jobs/**`, `api/**`, Room, Execution, or unrelated services import `context_memory` directly.
 
 - [ ] **Step 5: Run and verify failure**
 
@@ -1431,7 +1436,8 @@ Rules:
 Cover:
 - `handle_message_committed()` calls `project_message_for_event()` on the concrete facade/helper when available, or a supplied projection-status callable in tests.
 - It calls threshold-gated `run_compaction()` when projection status says a message was projected or the event was a duplicate. Duplicate retries may be recovering from a prior compaction failure, and `run_compaction()` is already below-threshold safe. It skips compaction only for missing-message and room-mismatch no-op statuses.
-- It catches projection or compaction exceptions, logs them with room/message identifiers, and does not re-raise because `EventPublisher` has no dead-letter contract in Phase 5.
+- The registered handler catches projection or compaction exceptions only to log room/message identifiers, then re-raises so `EventPublisher` owns retry/dead-letter visibility.
+- If a separate direct-call best-effort wrapper is added, tests must prove that wrapper is not registered with `EventPublisher`.
 - It is safe for user and agent message types.
 
 - [ ] **Step 9: Implement event handler**
@@ -1932,7 +1938,7 @@ Avoid circular imports:
 - `context_memory/**` must never import `container.py` or `main.py`.
 - `context_memory/**` must never import `room/**`; use `RoomHistoryReader`.
 - `context_memory/**` must never import `services/**`; services are wrappers.
-- Legacy `services/**`, `modules/**`, and `jobs/**` may import `context_memory` during migration because they are wrappers, but `context_memory` must not import them.
+- Only `container.py`, `main.py`, `context_memory/**`, the intended legacy service adapter files, and tests may import `context_memory` during migration. `modules/**` and `jobs/**` must continue using service wrappers or Common protocols and must not import concrete Context & Memory implementation code.
 
 Current direct-call decision:
 - Keep `RoomMessageCenter._trigger_compaction_safe()` calling `compaction_service.compact_if_needed(room_id)` in Phase 5.
@@ -1984,6 +1990,7 @@ uv run python -m pytest tests/test_common_foundation.py tests/test_dal_protocols
 - [ ] `create_context_memory_facade()` creates the startup-local concrete facade, and `create_context_memory_deps(facade)` exposes only protocol fields with no concrete `.facade` field.
 - [ ] `context_memory/**` import-boundary test passes.
 - [ ] No `context_memory/**` imports from `agent`, `room`, `services`, `modules`, `api`, `database`, `models`, `main`, `container`, `config`, `llm_gateway`, `pinecone`, `openai`, `pymongo`, or `motor`.
+- [ ] No `modules/**`, `jobs/**`, `api/**`, Room, Execution, or unrelated services import `context_memory` directly; concrete imports stay limited to `container.py`, `main.py`, `context_memory/**`, intended legacy service adapters, and tests.
 - [ ] No Common module imports `bson`; legacy native-id lookup for compacted content is implemented behind `MongoCollection` / `dal/mongo/client.py`.
 - [ ] `assemble_context()` uses projected `room_memories` as its primary context source and uses `RoomHistoryReader` only as a fallback to recover current message text when projection has not completed.
 - [ ] Legacy supervisor and agent context helpers are available only as non-protocol compatibility helpers or service adapter methods.
