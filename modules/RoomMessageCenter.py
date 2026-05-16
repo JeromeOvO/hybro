@@ -1187,6 +1187,7 @@ class RoomMessageCenter:
                     agent_name=paused_agent_name or "Agent",
                     response_text=task_result_text,
                     was_successful=True,
+                    message_id=paused_message_id,
                 )
 
         elif interrupt_kind == InterruptKind.HITL_SUPERVISOR:

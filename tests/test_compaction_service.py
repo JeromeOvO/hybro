@@ -11,13 +11,16 @@ Tests cover:
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6 for design specification.
 """
 
+import asyncio
+
 import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+from common.dto import CompactionResult as DtoCompactionResult
+from common.utils.time import utcnow
 from models.compaction import (
-    CompactionResult,
     ContentReference,
     StorageType,
     StoredContent,
@@ -45,6 +48,288 @@ from services.content_storage_service import (
 # =============================================================================
 
 
+class BoundContentStorageFacade:
+    def __init__(self, service: ContentStorageService):
+        self.service = service
+
+    async def content_upsert_full_content(
+        self,
+        *,
+        room_id: str,
+        turn_id: str,
+        content: str,
+        content_type: str,
+        turn_notes: dict | None = None,
+    ) -> str:
+        from config.settings import settings
+
+        content_hash = hash_content(content)
+        now = utcnow()
+        expires_at = None
+        if settings.compaction_content_ttl_days > 0:
+            from datetime import timedelta
+
+            expires_at = now + timedelta(
+                days=settings.compaction_content_ttl_days
+            )
+
+        insert_doc = {
+            "room_id": room_id,
+            "turn_id": turn_id,
+            "content": content,
+            "content_type": content_type,
+            "content_hash": content_hash,
+            "stored_at": now,
+            "expires_at": expires_at,
+        }
+        if turn_notes:
+            insert_doc["turn_notes"] = turn_notes
+
+        result = await self.service.collection.update_one(
+            {"room_id": room_id, "turn_id": turn_id},
+            {"$setOnInsert": insert_doc},
+            upsert=True,
+        )
+        if result.upserted_id:
+            return str(result.upserted_id)
+
+        existing = await self.service.collection.find_one(
+            {"room_id": room_id, "turn_id": turn_id}, {"_id": 1}
+        )
+        if existing:
+            return str(existing["_id"])
+
+        raise RuntimeError(f"Failed to upsert content for turn {turn_id}")
+
+    async def content_get_content_by_document_id(self, document_id: str) -> str | None:
+        from bson import ObjectId
+
+        try:
+            doc = await self.service.collection.find_one({"_id": ObjectId(document_id)})
+            if doc:
+                return doc.get("content")
+            return None
+        except Exception:
+            return None
+
+    async def content_get_content_by_turn_id(self, room_id: str, turn_id: str) -> str | None:
+        doc = await self.service.collection.find_one({"room_id": room_id, "turn_id": turn_id})
+        return doc.get("content") if doc else None
+
+    async def content_expand_mongodb_reference(self, content_ref: dict, turn_id: str) -> str:
+        document_id = content_ref.get("document_id")
+        if not document_id:
+            raise ValueError(f"ContentReference for turn {turn_id} has no document_id")
+        content = await self.content_get_content_by_document_id(document_id)
+        if content is None:
+            raise ContentExpiredError(turn_id, document_id)
+        return content
+
+    async def content_delete_content_by_turn_id(self, room_id: str, turn_id: str) -> bool:
+        result = await self.service.collection.delete_one({"room_id": room_id, "turn_id": turn_id})
+        return result.deleted_count > 0
+
+    async def content_delete_content_by_room_id(self, room_id: str) -> int:
+        result = await self.service.collection.delete_many({"room_id": room_id})
+        return result.deleted_count
+
+    async def content_get_content_stats_for_room(self, room_id: str) -> dict:
+        pipeline = [
+            {"$match": {"room_id": room_id}},
+            {
+                "$group": {
+                    "_id": "$content_type",
+                    "count": {"$sum": 1},
+                    "total_size": {"$sum": {"$strLenBytes": "$content"}},
+                }
+            },
+        ]
+        cursor = self.service.collection.aggregate(pipeline)
+        rows = await cursor.to_list(length=None)
+        stats = {
+            "room_id": room_id,
+            "by_type": {},
+            "total_documents": 0,
+            "total_size_bytes": 0,
+        }
+        for row in rows:
+            stats["by_type"][row["_id"]] = {
+                "count": row["count"],
+                "size_bytes": row["total_size"],
+            }
+            stats["total_documents"] += row["count"]
+            stats["total_size_bytes"] += row["total_size"]
+        return stats
+
+
+def bind_content_storage_facade(service: ContentStorageService) -> ContentStorageService:
+    service.bind_facade(BoundContentStorageFacade(service))
+    return service
+
+
+class BoundCompactionFacade:
+    def __init__(self, service: CompactionService):
+        self.service = service
+
+    async def should_compact(self, room_id: str) -> bool:
+        from models.context_config import compaction_config
+        from services import compaction_service as compaction_module
+
+        config = compaction_config
+        if not config.enabled:
+            return False
+        room_memory = await self.service.db_service.get_room_memory_by_room_id(room_id)
+        if not room_memory:
+            return False
+        history = room_memory.get_conversation_history()
+        full_turns = [
+            turn
+            for turn in history
+            if turn.representation == TurnRepresentation.FULL
+        ]
+        if not full_turns:
+            return False
+        if len(full_turns) > config.max_full_turns:
+            return True
+        token_estimate = sum(compaction_module._safe_tokens_full(turn) for turn in full_turns)
+        return token_estimate > config.max_total_tokens
+
+    async def compact_room_memory(
+        self,
+        room_id: str,
+        room_memory_doc: dict | RoomMemory | None = None,
+    ):
+        from models.context_config import compaction_config
+        from services import compaction_service as compaction_module
+
+        config = compaction_config
+        if not config.enabled:
+            return DtoCompactionResult(
+                room_id=room_id,
+                compacted_count=0,
+                tokens_saved=0,
+                metadata={"errors": ["Compaction is disabled"]},
+            )
+
+        room_memory = room_memory_doc
+        if isinstance(room_memory, dict):
+            room_memory = RoomMemory(**room_memory)
+        if not room_memory:
+            room_memory = await self.service.db_service.get_room_memory_by_room_id(room_id)
+        if not room_memory:
+            return DtoCompactionResult(
+                room_id=room_id,
+                compacted_count=0,
+                tokens_saved=0,
+                metadata={"errors": [f"Room memory not found for room {room_id}"]},
+            )
+
+        history = room_memory.get_conversation_history()
+        if not history:
+            return DtoCompactionResult(room_id=room_id, compacted_count=0, tokens_saved=0)
+
+        preserve_count = config.preserve_recent_turns
+        if preserve_count == 0:
+            turns_to_compact = [
+                turn
+                for turn in history
+                if turn.representation == TurnRepresentation.FULL
+            ]
+        else:
+            turns_to_compact = [
+                turn
+                for turn in history[:-preserve_count]
+                if turn.representation == TurnRepresentation.FULL
+            ]
+
+        if not turns_to_compact:
+            return DtoCompactionResult(room_id=room_id, compacted_count=0, tokens_saved=0)
+
+        sem = asyncio.Semaphore(compaction_module.COMPACTION_CONCURRENCY)
+
+        async def compact_one(turn: ConversationTurn):
+            async with sem:
+                try:
+                    ref_data = await self.service._prepare_compaction(turn, room_id)
+                    if ref_data:
+                        saved = max(
+                            0,
+                            turn.estimated_tokens_full
+                            - turn.estimated_tokens_compact,
+                        )
+                        return ref_data, saved, None
+                    return None, 0, None
+                except Exception as exc:
+                    return None, 0, f"Failed to compact turn {turn.turn_id}: {exc}"
+
+        prepared = await asyncio.gather(*(compact_one(turn) for turn in turns_to_compact))
+        compacted_entries = [entry for entry, _saved, _error in prepared if entry]
+        tokens_saved = sum(saved for entry, saved, _error in prepared if entry)
+        errors = [error for _entry, _saved, error in prepared if error]
+
+        if compacted_entries:
+            save_success = await self.service.db_service.compact_turns_bulk(
+                room_id,
+                compacted_entries,
+            )
+            if not save_success:
+                errors.append(
+                    f"Prepared {len(compacted_entries)} turns in-memory "
+                    f"but atomic write failed for room {room_id}"
+                )
+                compacted_entries = []
+                tokens_saved = 0
+
+        return DtoCompactionResult(
+            room_id=room_id,
+            compacted_count=len(compacted_entries),
+            tokens_saved=tokens_saved,
+            metadata={"errors": errors, "compacted_at": utcnow()},
+        )
+
+    async def expand_turn_content_from_turn(self, turn_doc: dict) -> str:
+        return await self.expand_turn_content(ConversationTurn(**turn_doc))
+
+    async def expand_turn_content(self, turn_doc: dict | ConversationTurn) -> str:
+        turn = turn_doc if isinstance(turn_doc, ConversationTurn) else ConversationTurn(**turn_doc)
+        if turn.representation == TurnRepresentation.FULL:
+            return turn.content or ""
+        if not turn.content_ref:
+            raise ValueError(f"Compact turn {turn.turn_id} missing content reference")
+        return await self.service.content_storage.expand_content_reference(
+            turn.content_ref,
+            turn.turn_id,
+        )
+
+    async def fetch_turn_content(self, turn_id: str, room_id: str) -> str:
+        room_memory = await self.service.db_service.get_room_memory_by_room_id(room_id)
+        if not room_memory:
+            return f"[Error: Room {room_id} not found]"
+        turn = next(
+            (
+                item
+                for item in room_memory.get_conversation_history()
+                if item.turn_id == turn_id
+            ),
+            None,
+        )
+        if turn is None:
+            return f"[Error: Turn {turn_id} not found in room history]"
+        try:
+            return await self.expand_turn_content(turn)
+        except ContentExpiredError:
+            return f"[Error: Content for turn {turn_id} is no longer available (expired)]"
+        except NotImplementedError as exc:
+            return f"[Error: Content for turn {turn_id} uses unsupported storage: {exc}]"
+        except ValueError as exc:
+            return f"[Error: {exc}]"
+
+
+def bind_compaction_facade(service: CompactionService) -> CompactionService:
+    service.bind_facade(BoundCompactionFacade(service))
+    return service
+
+
 @pytest.fixture
 def mock_settings():
     """Mock settings for compaction configuration."""
@@ -69,7 +354,7 @@ def mock_settings():
 @pytest.fixture
 def mock_content_settings():
     """Mock settings for content storage."""
-    with patch("services.content_storage_service.settings") as mock:
+    with patch("config.settings.settings") as mock:
         mock.compaction_content_ttl_days = 0
         yield mock
 
@@ -172,7 +457,7 @@ class TestContentStorageService:
     @pytest.fixture
     def service(self):
         """Create a ContentStorageService instance."""
-        return ContentStorageService()
+        return bind_content_storage_facade(ContentStorageService())
 
     @pytest.fixture
     def mock_mongodb(self):
@@ -372,7 +657,7 @@ class TestCompactionService:
     @pytest.fixture
     def service(self):
         """Create a CompactionService instance."""
-        return CompactionService()
+        return bind_compaction_facade(CompactionService())
 
     @pytest.fixture(autouse=True)
     def mock_memory_search(self):
@@ -609,6 +894,39 @@ class TestCompactionService:
         mock_expand.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_expand_turn_content_uses_content_storage_for_s3_turn(
+        self, service
+    ):
+        compact_turn = ConversationTurn(
+            turn_id="turn-s3",
+            role=TurnRole.USER,
+            content=None,
+            representation=TurnRepresentation.COMPACT,
+            content_ref=ContentReference(
+                storage_type=StorageType.S3,
+                s3_bucket="bucket",
+                s3_key="key",
+                created_at=datetime.now(),
+            ),
+            timestamp=datetime.now(),
+        )
+        service._facade.expand_turn_content_from_turn = AsyncMock(
+            side_effect=NotImplementedError("s3")
+        )
+        mock_expand = AsyncMock(return_value="Retrieved S3 content")
+
+        with patch.object(
+            service.content_storage,
+            "expand_content_reference",
+            mock_expand,
+        ):
+            content = await service.expand_turn_content(compact_turn)
+
+        assert content == "Retrieved S3 content"
+        mock_expand.assert_awaited_once()
+        service._facade.expand_turn_content_from_turn.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_expand_turn_content_raises_for_missing_ref(self, service):
         """Should raise ValueError for compact turn without content_ref."""
         compact_turn = ConversationTurn(
@@ -640,6 +958,25 @@ class TestCompactionService:
             content = await service.fetch_turn_content(turn_id, "test-room-123")
 
         assert "Message 0" in content
+
+    @pytest.mark.asyncio
+    async def test_fetch_turn_content_uses_facade_for_mongo_backed_fetch(
+        self, service
+    ):
+        service._facade.fetch_turn_content = AsyncMock(return_value="Facade content")
+
+        with patch.object(
+            service.db_service,
+            "get_room_memory_by_room_id",
+            AsyncMock(side_effect=AssertionError("legacy DB should not be used")),
+        ):
+            content = await service.fetch_turn_content("turn-123", "test-room-123")
+
+        assert content == "Facade content"
+        service._facade.fetch_turn_content.assert_awaited_once_with(
+            "turn-123",
+            "test-room-123",
+        )
 
     @pytest.mark.asyncio
     async def test_fetch_turn_content_returns_error_for_missing_room(self, service):
@@ -695,6 +1032,46 @@ class TestCompactionService:
         assert "[Error:" in content
         assert "unsupported storage" in content.lower()
 
+    @pytest.mark.asyncio
+    async def test_fetch_turn_content_uses_content_storage_for_s3_turn(
+        self, service, sample_room_memory
+    ):
+        turn = sample_room_memory.memory_content.conversation_history[0]
+        turn.representation = TurnRepresentation.COMPACT
+        turn.content = None
+        turn.content_ref = ContentReference(
+            storage_type=StorageType.S3,
+            s3_bucket="bucket",
+            s3_key="key",
+            created_at=datetime.now(),
+        )
+        service._facade.fetch_turn_content = AsyncMock(
+            return_value="[Error: Content for turn turn-s3 uses unsupported storage: s3]"
+        )
+        mock_expand = AsyncMock(return_value="S3 content")
+
+        with patch.object(
+            service.db_service,
+            "get_room_memory_by_room_id",
+            return_value=sample_room_memory,
+        ):
+            with patch.object(
+                service.content_storage,
+                "expand_content_reference",
+                mock_expand,
+            ):
+                content = await service.fetch_turn_content(
+                    turn.turn_id,
+                    "test-room-123",
+                )
+
+        assert content == "S3 content"
+        service._facade.fetch_turn_content.assert_awaited_once_with(
+            turn.turn_id,
+            "test-room-123",
+        )
+        mock_expand.assert_awaited_once_with(turn.content_ref, turn.turn_id)
+
 
 # =============================================================================
 # Round-Trip Tests
@@ -707,7 +1084,7 @@ class TestCompactionRoundTrip:
     @pytest.fixture
     def service(self):
         """Create a CompactionService instance."""
-        return CompactionService()
+        return bind_compaction_facade(CompactionService())
 
     @pytest.fixture(autouse=True)
     def mock_memory_search(self):
@@ -866,7 +1243,7 @@ class TestTokenSavings:
     @pytest.fixture
     def service(self):
         """Create a CompactionService instance."""
-        return CompactionService()
+        return bind_compaction_facade(CompactionService())
 
     @pytest.fixture(autouse=True)
     def mock_memory_search(self):
@@ -938,7 +1315,7 @@ class TestErrorHandling:
     @pytest.fixture
     def service(self):
         """Create a CompactionService instance."""
-        return CompactionService()
+        return bind_compaction_facade(CompactionService())
 
     @pytest.fixture(autouse=True)
     def mock_memory_search(self):
@@ -1199,7 +1576,7 @@ class TestWriteBackPath:
 
     @pytest.fixture
     def service(self):
-        return CompactionService()
+        return bind_compaction_facade(CompactionService())
 
     @pytest.fixture(autouse=True)
     def mock_memory_search(self):

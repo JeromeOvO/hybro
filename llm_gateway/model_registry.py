@@ -49,6 +49,13 @@ class ModelRegistryImpl:
             max_context_tokens=8192,
         )
         self._register(
+            logical_name="context_memory_legacy_json_model",
+            model_id="gpt-4o-mini",
+            provider="openai",
+            capabilities=["json_schema"],
+            max_context_tokens=128000,
+        )
+        self._register(
             logical_name="gemini_model_name",
             model_id=settings.gemini_model_name,
             provider="gemini",

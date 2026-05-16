@@ -39,6 +39,7 @@ from common.protocols.llm_protocols import LLMProvider, ModelRegistry
 from common.protocols.platform_protocols import FileStorage, GatewayService, RateLimiter
 from common.protocols.repository_protocols import (
     AgentRepository,
+    ContentStorageRepository,
     HITLRepository,
     HubRepository,
     MemoryRepository,
@@ -67,6 +68,7 @@ __all__ = [
     "AgentRepository",
     "AgentTransport",
     "ContextAssembler",
+    "ContentStorageRepository",
     "DistributedLock",
     "EventPublisher",
     "ExecutionEngine",

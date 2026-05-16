@@ -166,24 +166,39 @@ async def lifespan(app: FastAPI):
 
         if mongodb.client is not None:
             from a2a_adapter import AgentCardResolverImpl
-            from container import create_agent_deps, create_room_deps
+            from container import (
+                create_agent_deps,
+                create_context_memory_deps,
+                create_context_memory_facade,
+                create_room_deps,
+            )
+            from context_memory.config import ContextMemoryLLMConfig
             from dal.mongo import MongoDALImpl
             from dal.pinecone import VectorDALImpl
-            from llm_gateway import LLMGatewayImpl
+            from llm_gateway import LLMGatewayImpl, ModelRegistryImpl
             from services.agent_capability_issue_service import (
                 CapabilityIssueExclusionReader,
             )
             from services.agent_matcher import agent_matcher
             from services.agent_selection_service import agent_selection_service
             from services.agent_service import agent_service
+            from services.compaction_service import compaction_service
+            from services.content_storage_service import content_storage_service
+            from services.context_assembly_service import context_assembly_service
+            from services.memory_search_service import memory_search_service
+            from services.memory_service import room_memory_service
             from services.room_membership_source import LegacyRoomMembershipSeedSource
             from services.room_services import room_services
 
+            await mongodb.create_context_memory_indexes()
             mongo_dal = MongoDALImpl(database=mongodb.db)
+            model_registry = ModelRegistryImpl()
+            vector_dal = VectorDALImpl()
+            llm_provider = LLMGatewayImpl(model_registry=model_registry)
             _agent_deps = create_agent_deps(
                 mongo=mongo_dal,
-                vector=VectorDALImpl(),
-                llm_provider=LLMGatewayImpl(),
+                vector=vector_dal,
+                llm_provider=llm_provider,
                 card_resolver=AgentCardResolverImpl(),
                 hub_liveness=None,
                 exclusion_reader=CapabilityIssueExclusionReader(),
@@ -204,10 +219,30 @@ async def lifespan(app: FastAPI):
             room_services.bind_facade(_room_facade)
             room_center.room_center.bind_facade(_room_facade)
             room_center.room_message_center.bind_facade(_room_facade)
+
+            context_memory_facade = create_context_memory_facade(
+                mongo=mongo_dal,
+                vector=vector_dal,
+                llm_provider=llm_provider,
+                room_history_reader=_room_deps.room_history_reader,
+                llm_config=ContextMemoryLLMConfig(
+                    turn_notes_model="context_memory_legacy_json_model",
+                    summary_model="context_memory_legacy_json_model",
+                ),
+            )
+            # TODO(phase-6/7): Register ContextMemoryEventHandler with EventPublisher
+            # once Delivery wires runtime MessageCommitted delivery. Phase 5 keeps the
+            # direct compaction call path via legacy services.
+            _context_memory_deps = create_context_memory_deps(context_memory_facade)
+            context_assembly_service.bind_facade(context_memory_facade)
+            memory_search_service.bind_facade(context_memory_facade)
+            content_storage_service.bind_facade(context_memory_facade)
+            compaction_service.bind_facade(context_memory_facade)
+            room_memory_service.bind_facade(context_memory_facade)
+            room_services.bind_context_memory(_context_memory_deps.memory_manager)
         else:
             logger.warning("AgentDeps binding skipped: MongoDB client is unavailable")
 
-        await mongodb.create_context_memory_indexes()
         await mongodb.ensure_agent_indexes()
         await mongodb.create_capability_issue_indexes()
         await mongodb.create_run_lifecycle_indexes()

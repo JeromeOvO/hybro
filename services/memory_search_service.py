@@ -69,6 +69,19 @@ class MemorySearchService:
         self.openai_service = openai_service
         self.pinecone = pinecone_db
         self._index_available: bool | None = None
+        self._facade = None
+        self._bound = False
+
+    def bind_facade(self, facade) -> None:
+        self._facade = facade
+        self._bound = True
+
+    def _require_facade(self):
+        if not self._bound or self._facade is None:
+            raise RuntimeError(
+                "MemorySearchService.bind_facade() not called - startup incomplete"
+            )
+        return self._facade
 
     @property
     def config(self):
@@ -140,98 +153,16 @@ class MemorySearchService:
         Returns:
             MemorySearchResponse with ranked results
         """
-        start_time = time.monotonic()
-
-        if not self.config.enabled:
-            return MemorySearchResponse(
-                query=query,
-                room_id=room_id,
-                results=[],
-                vector_search_used=False,
-                keyword_search_used=False,
-                temporal_decay_applied=False,
-                mmr_applied=False,
+        facade = self._require_facade()
+        facade_config = getattr(facade, "search_config", None)
+        max_results = getattr(facade_config, "max_results", self.config.max_results)
+        return _legacy_search_response(
+            await facade.legacy_search(
+                query,
+                room_id,
+                user_id=user_id,
+                limit=max_results,
             )
-
-        # Run vector and keyword searches in parallel
-        vector_task = self._vector_search(query, room_id)
-        keyword_task = self._keyword_search(query, room_id)
-        raw_results = await asyncio.gather(
-            vector_task, keyword_task, return_exceptions=True
-        )
-
-        vector_results: list[MemorySearchResult] = []
-        keyword_results: list[MemorySearchResult] = []
-        vector_used = True
-        keyword_used = True
-
-        if isinstance(raw_results[0], Exception):
-            logger.warning(
-                f"MemorySearch: vector search failed for room {room_id}: "
-                f"{raw_results[0]}"
-            )
-            vector_used = False
-        else:
-            vector_results = raw_results[0]
-            if not self._is_index_available():
-                vector_used = False
-
-        if isinstance(raw_results[1], Exception):
-            logger.warning(
-                f"MemorySearch: keyword search failed for room {room_id}: "
-                f"{raw_results[1]}"
-            )
-            keyword_used = False
-        else:
-            keyword_results = raw_results[1]
-
-        # Merge with weights
-        merged = self._merge_results(
-            vector_results,
-            keyword_results,
-            vector_weight=self.config.vector_weight,
-            keyword_weight=self.config.keyword_weight,
-        )
-
-        # Temporal decay
-        decay_applied = False
-        if self.config.temporal_decay_enabled and merged:
-            merged = self._apply_temporal_decay(
-                merged,
-                half_life_days=self.config.half_life_days,
-            )
-            decay_applied = True
-
-        # MMR for diversity
-        mmr_applied = False
-        if merged:
-            merged = self._apply_mmr(
-                merged,
-                lambda_param=self.config.mmr_lambda,
-            )
-            mmr_applied = True
-
-        final = merged[: self.config.max_results]
-
-        # Hydrate results that have empty content (vector-only matches)
-        # by fetching one_liner from conversation_content collection
-        empty_content_ids = [r.turn_id for r in final if not r.content and r.turn_id]
-        if empty_content_ids:
-            await self._hydrate_results_from_storage(final, room_id)
-
-        elapsed_ms = (time.monotonic() - start_time) * 1000
-
-        return MemorySearchResponse(
-            query=query,
-            room_id=room_id,
-            results=final,
-            total_matches=len(merged),
-            search_time_ms=round(elapsed_ms, 2),
-            searched_at=utcnow(),
-            vector_search_used=vector_used,
-            keyword_search_used=keyword_used,
-            temporal_decay_applied=decay_applied,
-            mmr_applied=mmr_applied,
         )
 
     # =========================================================================
@@ -256,57 +187,9 @@ class MemorySearchService:
         Returns:
             True if indexed successfully, False otherwise
         """
-        content = turn.content
-        if not content:
-            logger.debug(
-                f"MemorySearch: skipping index for turn {turn.turn_id} "
-                f"— no content"
-            )
-            return False
-
-        if not self._is_index_available():
-            return False
-
-        try:
-            embedding = await self.openai_service.get_embedding(content)
-
-            metadata = {
-                "room_id": room_id,
-                "turn_id": turn.turn_id,
-                "role": turn.role.value if turn.role else "unknown",
-                "agent_name": turn.agent_name or "",
-                "timestamp": turn.timestamp.isoformat()
-                if turn.timestamp
-                else "",
-            }
-
-            await asyncio.to_thread(
-                self._pinecone_index.upsert,
-                vectors=[
-                    {
-                        "id": turn.turn_id,
-                        "values": embedding,
-                        "metadata": metadata,
-                    }
-                ],
-            )
-
-            logger.debug(
-                f"MemorySearch: indexed turn {turn.turn_id} for room {room_id}"
-            )
-            return True
-
-        except PineconeNotFoundException:
-            logger.debug(
-                "MemorySearch: Pinecone index '%s' not found — skipping indexing",
-                self.config.index_name,
-            )
-            return False
-        except Exception as e:
-            logger.warning(
-                f"MemorySearch: failed to index turn {turn.turn_id}: {e}"
-            )
-            return False
+        facade = self._require_facade()
+        turn_doc = turn.model_dump(mode="json") if hasattr(turn, "model_dump") else turn
+        return await facade.index_turn_for_search(room_id, turn_doc)
 
     async def delete_room_index(self, room_id: str) -> bool:
         """Delete all indexed vectors for a room.
@@ -317,29 +200,8 @@ class MemorySearchService:
         Returns:
             True if deletion succeeded, False otherwise
         """
-        if not self._is_index_available():
-            return False
-
-        try:
-            await asyncio.to_thread(
-                self._pinecone_index.delete,
-                filter={"room_id": {"$eq": room_id}},
-            )
-            logger.info(
-                f"MemorySearch: deleted index entries for room {room_id}"
-            )
-            return True
-        except PineconeNotFoundException:
-            logger.debug(
-                "MemorySearch: Pinecone index '%s' not found — skipping deletion",
-                self.config.index_name,
-            )
-            return False
-        except Exception as e:
-            logger.warning(
-                f"MemorySearch: failed to delete index for room {room_id}: {e}"
-            )
-            return False
+        facade = self._require_facade()
+        return await facade.delete_room_index(room_id)
 
     # =========================================================================
     # Private: Result hydration
@@ -672,3 +534,43 @@ class MemorySearchService:
 
 # Singleton export
 memory_search_service = MemorySearchService()
+
+
+def _legacy_search_response(payload: dict) -> MemorySearchResponse:
+    results = []
+    for item in payload.get("results") or []:
+        metadata = getattr(item, "metadata", {}) or {}
+        source_type = metadata.get("source_type") or MemorySourceType.TURN
+        if isinstance(source_type, str):
+            source_type = MemorySourceType(source_type)
+        results.append(
+            MemorySearchResult(
+                turn_id=metadata.get("turn_id") or getattr(item, "source_message_id", None),
+                fact_id=metadata.get("fact_id"),
+                room_id=getattr(item, "room_id", payload.get("room_id")),
+                source_type=source_type,
+                content=getattr(item, "content", ""),
+                content_preview=metadata.get("content_preview"),
+                vector_score=metadata.get("vector_score", 0.0),
+                keyword_score=metadata.get("keyword_score", 0.0),
+                combined_score=getattr(item, "score", 0.0),
+                temporal_decay_factor=metadata.get("temporal_decay_factor", 1.0),
+                timestamp=metadata.get("timestamp"),
+                role=metadata.get("role"),
+                agent_name=metadata.get("agent_name"),
+                is_compact=metadata.get("is_compact", False),
+                can_expand=metadata.get("can_expand", False),
+            )
+        )
+    return MemorySearchResponse(
+        query=payload.get("query", ""),
+        room_id=payload.get("room_id", ""),
+        results=results,
+        total_matches=payload.get("total_matches", len(results)),
+        search_time_ms=payload.get("search_time_ms", 0.0),
+        searched_at=payload.get("searched_at") or utcnow(),
+        vector_search_used=payload.get("vector_search_used", True),
+        keyword_search_used=payload.get("keyword_search_used", True),
+        temporal_decay_applied=payload.get("temporal_decay_applied", True),
+        mmr_applied=payload.get("mmr_applied", True),
+    )

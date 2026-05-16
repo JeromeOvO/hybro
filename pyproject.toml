@@ -105,6 +105,8 @@ packages = [
     "agent.repository",
     "room",
     "room.repository",
+    "context_memory",
+    "context_memory.repository",
     "dal",
     "dal.mongo",
     "dal.pinecone",

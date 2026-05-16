@@ -89,6 +89,18 @@ class UpstreamError(ExternalServiceError):
         self.code = "UPSTREAM"
 
 
+class VectorIndexUnavailableError(ExternalServiceError):
+    def __init__(self, index_name: str, operation: str):
+        self.index_name = index_name
+        self.operation = operation
+        super().__init__(
+            f"Vector index unavailable for {operation}: {index_name}",
+            service="vector_index",
+            details={"index_name": index_name, "operation": operation},
+        )
+        self.code = "VECTOR_INDEX_UNAVAILABLE"
+
+
 __all__ = [
     "AppError",
     "AuthorizationError",
@@ -99,4 +111,5 @@ __all__ = [
     "TransientError",
     "UpstreamError",
     "ValidationError",
+    "VectorIndexUnavailableError",
 ]

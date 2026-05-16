@@ -40,7 +40,7 @@ class MongoCollectionAdapter:
     async def find_one_and_update(
         self,
         query: dict,
-        update: dict,
+        update: dict | list[dict],
         **kwargs,
     ) -> dict | None:
         return await self._collection.find_one_and_update(query, update, **kwargs)
@@ -53,7 +53,7 @@ class MongoCollectionAdapter:
         result = await self._collection.insert_many(documents)
         return [str(inserted_id) for inserted_id in result.inserted_ids]
 
-    async def update_one(self, query: dict, update: dict, **kwargs) -> bool:
+    async def update_one(self, query: dict, update: dict | list[dict], **kwargs) -> bool:
         result = await self._collection.update_one(query, update, **kwargs)
         return result.modified_count > 0 or result.upserted_id is not None
 
@@ -78,6 +78,22 @@ class MongoCollectionAdapter:
 
     async def create_index(self, keys: list[tuple], **kwargs) -> str:
         return await self._collection.create_index(keys, **kwargs)
+
+    async def find_one_by_stable_or_native_id(
+        self, stable_id_field: str, id_value: str
+    ) -> dict | None:
+        doc = await self._collection.find_one({stable_id_field: id_value})
+        if doc is not None:
+            return doc
+
+        try:
+            from bson import ObjectId
+
+            if ObjectId.is_valid(id_value):
+                return await self._collection.find_one({"_id": ObjectId(id_value)})
+        except Exception:
+            return None
+        return None
 
     def watch(
         self, pipeline: list[dict] | None = None, **kwargs
