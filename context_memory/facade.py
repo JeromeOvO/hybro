@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from common.dto import AssembledContext, CompactionResult, MemorySearchResult, RoomMemoryInfo, UserMemory
+from common.observability import NoopTracingProvider
 from common.protocols import (
     ContentStorageRepository,
     LLMProvider,
@@ -65,7 +66,7 @@ class ContextMemoryFacade:
         self.search_config = search_config or MemorySearchConfig()
         self.llm_config = llm_config or ContextMemoryLLMConfig()
         self.background_task_runner = background_task_runner or _background_task
-        self.tracer = tracer
+        self.tracer = tracer or NoopTracingProvider()
 
     async def assemble_context(
         self,

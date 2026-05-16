@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from common.errors import VectorIndexUnavailableError
+from common.observability import NoopTracingProvider
 from context_memory.config import CompactionConfig, MemorySearchConfig, TokenBudgetConfig
 from context_memory.facade import ContextMemoryFacade
 from context_memory.projection import new_room_memory_doc
@@ -254,6 +255,12 @@ def test_token_budget_with_model_window_preserves_small_caller_budget():
     scoped = budget.with_model_window(5000)
 
     assert scoped.model_context_window == 5000
+
+
+def test_facade_uses_noop_tracer_by_default():
+    service = facade()
+
+    assert isinstance(service.tracer, NoopTracingProvider)
 
 
 def existing_doc():
