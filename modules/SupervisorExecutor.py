@@ -43,6 +43,7 @@ from models.supervisor_v2 import (
 from config.settings import settings
 from models.processing import ProcessingStatus
 from services.a2a_constants import SSEProcessingStatus
+from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
 
 if TYPE_CHECKING:
     from modules.AgentDispatcher import AgentDispatcher
@@ -232,6 +233,13 @@ class SupervisorExecutor:
             # Skip if already cancelled — avoids duplicate PROCESSING after cancel.
             if not (token and token.is_cancelled):
                 try:
+                    await record_and_maybe_broadcast_run_event(
+                        room_id,
+                        SSEProcessingStatus.PROCESSING,
+                        user_message_id,
+                        details="Planning next action...",
+                        sse=self.sse_manager,
+                    )
                     await self.sse_manager.send_processing_status(
                         room_id, SSEProcessingStatus.PROCESSING, user_message_id,
                         details="Planning next action...",
@@ -532,6 +540,13 @@ class SupervisorExecutor:
                     if not (token and token.is_cancelled):
                         try:
                             agent_names = [t.agent_name for t in action.targets]
+                            await record_and_maybe_broadcast_run_event(
+                                room_id,
+                                SSEProcessingStatus.PROCESSING,
+                                user_message_id,
+                                details=f"Delegating to {len(action.targets)} agent(s)...",
+                                sse=self.sse_manager,
+                            )
                             await self.sse_manager.send_processing_status(
                                 room_id, SSEProcessingStatus.PROCESSING, user_message_id,
                                 details=f"Delegating to {len(action.targets)} agent(s)...",
@@ -685,6 +700,12 @@ class SupervisorExecutor:
                                 ),
                             )
 
+                        await record_and_maybe_broadcast_run_event(
+                            room_id,
+                            SSEProcessingStatus.AWAITING_INPUT,
+                            user_message_id,
+                            sse=self.sse_manager,
+                        )
                         await self.sse_manager.send_processing_status(
                             room_id,
                             SSEProcessingStatus.AWAITING_INPUT,
@@ -710,6 +731,13 @@ class SupervisorExecutor:
                     # SSE: notify frontend of evaluation stage
                     if not (token and token.is_cancelled):
                         try:
+                            await record_and_maybe_broadcast_run_event(
+                                room_id,
+                                SSEProcessingStatus.PROCESSING,
+                                user_message_id,
+                                details="Evaluating agent results...",
+                                sse=self.sse_manager,
+                            )
                             await self.sse_manager.send_processing_status(
                                 room_id, SSEProcessingStatus.PROCESSING, user_message_id,
                                 details="Evaluating agent results...",
@@ -747,6 +775,13 @@ class SupervisorExecutor:
                     # SSE: notify frontend of synthesis stage
                     if not (token and token.is_cancelled):
                         try:
+                            await record_and_maybe_broadcast_run_event(
+                                room_id,
+                                SSEProcessingStatus.PROCESSING,
+                                user_message_id,
+                                details="Synthesizing responses...",
+                                sse=self.sse_manager,
+                            )
                             await self.sse_manager.send_processing_status(
                                 room_id, SSEProcessingStatus.PROCESSING, user_message_id,
                                 details="Synthesizing responses...",
@@ -919,6 +954,12 @@ class SupervisorExecutor:
                             ),
                         )
 
+                    await record_and_maybe_broadcast_run_event(
+                        room_id,
+                        SSEProcessingStatus.AWAITING_INPUT,
+                        user_message_id,
+                        sse=self.sse_manager,
+                    )
                     await self.sse_manager.send_processing_status(
                         room_id,
                         SSEProcessingStatus.AWAITING_INPUT,
@@ -978,6 +1019,13 @@ class SupervisorExecutor:
             # SSE: notify frontend of budget-exhaustion synthesis
             if not (token and token.is_cancelled):
                 try:
+                    await record_and_maybe_broadcast_run_event(
+                        room_id,
+                        SSEProcessingStatus.PROCESSING,
+                        user_message_id,
+                        details="Synthesizing responses...",
+                        sse=self.sse_manager,
+                    )
                     await self.sse_manager.send_processing_status(
                         room_id, SSEProcessingStatus.PROCESSING, user_message_id,
                         details="Synthesizing responses...",

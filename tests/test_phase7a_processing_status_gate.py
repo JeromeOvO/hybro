@@ -260,7 +260,10 @@ def _assert_pre_recorded_payload(item: ProcessingStatusCall, entry: dict[str, An
     assert any(
         isinstance(stmt, ast.Assign)
         and any(_unparse(target) == entry["payload_variable"] for target in stmt.targets)
-        and _expr_equal(_unparse(stmt.value), entry["pre_record_call_expression"])
+        and _expr_equal(
+            _unparse(stmt.value.value if isinstance(stmt.value, ast.Await) else stmt.value),
+            entry["pre_record_call_expression"],
+        )
         for stmt in prior
     ), f"{entry['call_id']} missing pre-record assignment"
     assert any(

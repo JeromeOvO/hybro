@@ -9,6 +9,7 @@ from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from database.mongodb import mongodb
 from services.database_service import db_service
+from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
 from services.sse_services import sse_manager
 
 logger = get_logger(__name__)
@@ -150,6 +151,12 @@ async def cancel_message(
         logger.info(f"Message {message_id} cancelled by user {user.user_id}")
 
         # Clear room processing status for the user message (must use user message ID)
+        await record_and_maybe_broadcast_run_event(
+            message.room_id,
+            "canceled",
+            message_id,
+            sse=sse_manager,
+        )
         await sse_manager.send_processing_status(
             message.room_id, "canceled", message_id
         )

@@ -12,6 +12,7 @@ from a2a.types import TaskState
 
 from common.utils.logger import get_logger
 from modules.agent_event import AgentEvent
+from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
 
 if TYPE_CHECKING:
     from services.database_service import DatabaseService
@@ -314,6 +315,12 @@ class AgentResponseHandler:
             display_message_id=msg.message_id if msg else e.message_id,
         )
         if hitl_req:
+            await record_and_maybe_broadcast_run_event(
+                e.room_id,
+                "awaiting_input",
+                user_message_id,
+                sse=self._sse,
+            )
             await self._sse.send_processing_status(
                 e.room_id,
                 "awaiting_input",
@@ -362,13 +369,30 @@ class AgentResponseHandler:
         kw: dict = {}
         if e.client_request_id:
             kw["client_request_id"] = e.client_request_id
-        await self._sse.send_processing_status(
-            e.room_id,
-            e.state,
-            message_id=e.message_id,
-            details=e.details,
-            **kw,
-        )
+        if e.lifecycle_message_id:
+            await record_and_maybe_broadcast_run_event(
+                e.room_id,
+                e.state,
+                e.lifecycle_message_id,
+                client_request_id=e.client_request_id,
+                details=e.details,
+                sse=self._sse,
+            )
+            await self._sse.send_processing_status(
+                e.room_id,
+                e.state,
+                message_id=e.message_id,
+                details=e.details,
+                client_request_id=e.client_request_id,
+            )
+        else:
+            await self._sse.send_processing_status(
+                e.room_id,
+                e.state,
+                message_id=e.message_id,
+                details=e.details,
+                **kw,
+            )
 
     # --- Helpers ---
 

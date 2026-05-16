@@ -28,6 +28,7 @@ from modules.AgentMessageProcessor import AgentMessageProcessor
 from modules.TaskStateManager import TaskStateManager
 from models.processing import ProcessingResult, ProcessingStatus
 from services.a2a_constants import SSEProcessingStatus
+from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
 
 if TYPE_CHECKING:
     from modules.agent_response_handler import AgentResponseHandler
@@ -327,6 +328,12 @@ class QueueExecutor:
                             )
                             queue_result = QueueResult.FAILED
                             break
+                        await record_and_maybe_broadcast_run_event(
+                            room_id,
+                            SSEProcessingStatus.AWAITING_INPUT,
+                            user_message_id,
+                            sse=self.sse_manager,
+                        )
                         await self.sse_manager.send_processing_status(
                             room_id,
                             SSEProcessingStatus.AWAITING_INPUT,
@@ -398,6 +405,12 @@ class QueueExecutor:
         # Phase 2: deferred SSE notification
         if deferred_sse:
             sse_status, clear_cancel = deferred_sse
+            await record_and_maybe_broadcast_run_event(
+                room_id,
+                sse_status,
+                user_message_id,
+                sse=self.sse_manager,
+            )
             await self.sse_manager.send_processing_status(
                 room_id, sse_status, user_message_id
             )
@@ -765,6 +778,12 @@ class QueueExecutor:
             if queue_processing_result.result == QueueResult.PAUSED:
                 return ResumeResult(success=True)
             if queue_processing_result.result == QueueResult.FAILED:
+                await record_and_maybe_broadcast_run_event(
+                    room_id,
+                    SSEProcessingStatus.FAILED,
+                    user_message_id,
+                    sse=self.sse_manager,
+                )
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.FAILED, user_message_id
                 )

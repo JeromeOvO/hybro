@@ -173,7 +173,27 @@ class RelayTransport(AgentTransport):
             )
             return
 
-        agent_event = self._normalize(event_type, agent_message_id, data, msg)
+        lifecycle_message_id = None
+        if event_type == "processing_status":
+            lifecycle_message_id = await self._resolve_processing_status_lifecycle_id(
+                msg, data
+            )
+            if data.get("user_message_id") and lifecycle_message_id is None:
+                logger.warning(
+                    "Dropping processing_status for agent_message_id %s with "
+                    "mismatched user_message_id %s",
+                    agent_message_id,
+                    data.get("user_message_id"),
+                )
+                return
+
+        agent_event = self._normalize(
+            event_type,
+            agent_message_id,
+            data,
+            msg,
+            lifecycle_message_id=lifecycle_message_id,
+        )
         if agent_event is None:
             return
 
@@ -219,6 +239,8 @@ class RelayTransport(AgentTransport):
         agent_message_id: str,
         data: dict,
         msg: RoomAgentMessage,
+        *,
+        lifecycle_message_id: str | None = None,
     ) -> AgentEvent | None:
         """Convert hub publish dict -> AgentEvent."""
         base = dict(
@@ -280,17 +302,46 @@ class RelayTransport(AgentTransport):
             return self._normalize_task_interactive(data, base)
 
         if event_type == "processing_status":
+            event_message_id = lifecycle_message_id or agent_message_id
             return AgentEvent(
                 kind="processing_status",
-                **{**base, "message_id": data.get("user_message_id") or agent_message_id},
+                **{**base, "message_id": event_message_id},
                 state=data.get("status", "completed"),
                 details=data.get("details"),
+                lifecycle_message_id=lifecycle_message_id,
             )
 
         logger.warning(
             "Unknown publish event type '%s' for message %s",
             event_type, agent_message_id,
         )
+        return None
+
+    async def _resolve_processing_status_lifecycle_id(
+        self,
+        msg: RoomAgentMessage,
+        data: dict,
+    ) -> str | None:
+        candidate = data.get("user_message_id")
+        if not candidate:
+            return None
+        if candidate == getattr(msg, "turn_id", None):
+            return candidate
+
+        cursor = getattr(msg, "related_message_id", None)
+        visited: set[str] = set()
+        for _ in range(20):
+            if not cursor or cursor in visited:
+                break
+            visited.add(cursor)
+            if cursor == candidate:
+                return candidate
+            parent = await self._db.get_room_agent_message_by_message_id(cursor)
+            if parent is None:
+                break
+            if candidate == getattr(parent, "turn_id", None):
+                return candidate
+            cursor = getattr(parent, "related_message_id", None)
         return None
 
     @staticmethod
