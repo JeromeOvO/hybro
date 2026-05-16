@@ -2551,6 +2551,14 @@ class MongoDB:
             critical=True,
         )
 
+        await _create_index(
+            content_coll,
+            [("document_id", 1)],
+            name="document_id_unique",
+            unique=True,
+            partialFilterExpression={"document_id": {"$exists": True}},
+        )
+
         # Fast room-level queries for content retrieval
         await _create_index(
             content_coll,

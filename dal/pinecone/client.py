@@ -7,6 +7,7 @@ import pinecone
 
 from common.config import settings
 from common.dto import VectorRecord, VectorSearchResult
+from common.errors import VectorIndexUnavailableError
 
 
 class VectorDALImpl:
@@ -42,13 +43,18 @@ class VectorDALImpl:
         filter: dict | None = None,
     ) -> list[VectorSearchResult]:
         pinecone_index = self._get_index(index)
-        response = await asyncio.to_thread(
-            pinecone_index.query,
-            vector=vector,
-            top_k=top_k,
-            include_metadata=True,
-            filter=filter,
-        )
+        try:
+            response = await asyncio.to_thread(
+                pinecone_index.query,
+                vector=vector,
+                top_k=top_k,
+                include_metadata=True,
+                filter=filter,
+            )
+        except Exception as exc:
+            if _is_index_unavailable(exc):
+                raise VectorIndexUnavailableError(index, "search") from exc
+            raise
         matches = _response_value(response, "matches", [])
         return [
             VectorSearchResult(
@@ -69,11 +75,25 @@ class VectorDALImpl:
             }
             for record in records
         ]
-        await asyncio.to_thread(pinecone_index.upsert, vectors=vectors)
+        try:
+            await asyncio.to_thread(pinecone_index.upsert, vectors=vectors)
+        except Exception as exc:
+            if _is_index_unavailable(exc):
+                raise VectorIndexUnavailableError(index, "upsert") from exc
+            raise
 
     async def delete(self, index: str, ids: list[str]) -> None:
         pinecone_index = self._get_index(index)
         await asyncio.to_thread(pinecone_index.delete, ids=ids)
+
+    async def delete_by_filter(self, index: str, filter: dict) -> None:
+        pinecone_index = self._get_index(index)
+        try:
+            await asyncio.to_thread(pinecone_index.delete, filter=filter)
+        except Exception as exc:
+            if _is_index_unavailable(exc):
+                raise VectorIndexUnavailableError(index, "delete_by_filter") from exc
+            raise
 
     async def ping(self) -> bool:
         try:
@@ -88,3 +108,9 @@ def _response_value(obj: Any, key: str, default: Any = None) -> Any:
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _is_index_unavailable(exc: Exception) -> bool:
+    name = exc.__class__.__name__.lower()
+    message = str(exc).lower()
+    return "notfound" in name or "not found" in message or "404" in message

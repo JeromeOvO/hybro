@@ -10,6 +10,7 @@ Tests cover:
 """
 
 import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from common.dto import RoomInfo
@@ -64,9 +65,14 @@ async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
     facade.list_rooms_for_owner.return_value = [facade.create_room.return_value]
     facade.replace_membership.return_value = facade.create_room.return_value
     facade.update_room.return_value = facade.create_room.return_value
+    facade.get_room_owner.return_value = "owner"
     facade.delete_room.return_value = True
 
     svc.bind_facade(facade)
+    svc.bind_context_memory(
+        SimpleNamespace(delete_room_memory=AsyncMock(return_value=True))
+    )
+    svc._s3_service = SimpleNamespace(delete_prefix=AsyncMock())
 
     create_response = await svc.create_new_room(
         RoomCenterRoomSettingRequest(
@@ -114,6 +120,58 @@ async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
     facade.replace_membership.assert_awaited_once()
     facade.update_room.assert_any_await("r1", {"room_name": "Renamed"})
     facade.update_room.assert_any_await("r1", {"extend_info": {"x": 1}})
+    facade.delete_room.assert_awaited_once_with("r1", "owner")
+
+
+@pytest.mark.asyncio
+async def test_delete_room_does_not_cleanup_when_requester_is_not_owner():
+    svc = object.__new__(RoomServices)
+    svc.database_service = MagicMock()
+    svc.database_service.get_active_runs_by_room_id = AsyncMock(return_value=[])
+    svc._bound = False
+    svc._facade = None
+    svc._s3_service = SimpleNamespace(delete_prefix=AsyncMock())
+    facade = AsyncMock()
+    facade.get_room_owner.return_value = "owner"
+    facade.delete_room.return_value = True
+    svc.bind_facade(facade)
+    memory_manager = SimpleNamespace(delete_room_memory=AsyncMock(return_value=True))
+    svc.bind_context_memory(memory_manager)
+
+    response = await svc.delete_room_by_room_id(
+        RoomCenterRoomSettingRequest(room_id="r1", requesting_user_id="intruder")
+    )
+
+    assert response.success is False
+    assert response.status_code == 403
+    assert response.error == "Forbidden"
+    facade.delete_room.assert_not_awaited()
+    memory_manager.delete_room_memory.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_room_success_when_post_delete_context_memory_cleanup_fails():
+    svc = object.__new__(RoomServices)
+    svc.database_service = MagicMock()
+    svc.database_service.get_active_runs_by_room_id = AsyncMock(return_value=[])
+    svc._bound = False
+    svc._facade = None
+    svc._s3_service = SimpleNamespace(delete_prefix=AsyncMock())
+    facade = AsyncMock()
+    facade.get_room_owner.return_value = "owner"
+    facade.delete_room.return_value = True
+    svc.bind_facade(facade)
+    svc.bind_context_memory(
+        SimpleNamespace(delete_room_memory=AsyncMock(return_value=False))
+    )
+
+    response = await svc.delete_room_by_room_id(
+        RoomCenterRoomSettingRequest(room_id="r1", requesting_user_id="owner")
+    )
+
+    assert response.success is True
+    assert response.status_code == 200
+    assert response.error is None
     facade.delete_room.assert_awaited_once_with("r1", "owner")
 
 

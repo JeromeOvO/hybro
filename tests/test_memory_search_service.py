@@ -14,18 +14,180 @@ Tests cover:
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §8 for design specification.
 """
 
+import asyncio
 import math
 import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 from uuid import uuid4
 
+from common.dto import MemorySearchResult as DtoMemorySearchResult
+from common.utils.time import utcnow
 from models.memory import ConversationTurn, ContentType, TurnRepresentation, TurnRole
 from models.search import MemorySearchResult, MemorySourceType
 from services.memory_search_service import (
     MemorySearchService,
     _cosine_similarity,
 )
+
+
+class BoundMemorySearchFacade:
+    def __init__(self, service: MemorySearchService):
+        self.service = service
+
+    async def legacy_search(
+        self,
+        query: str,
+        room_id: str,
+        user_id: str | None = None,
+        limit: int | None = None,
+    ):
+        start_time = __import__("time").monotonic()
+        if not self.service.config.enabled:
+            return {
+                "query": query,
+                "room_id": room_id,
+                "results": [],
+                "vector_search_used": False,
+                "keyword_search_used": False,
+                "temporal_decay_applied": False,
+                "mmr_applied": False,
+            }
+
+        raw_results = await asyncio.gather(
+            self.service._vector_search(query, room_id),
+            self.service._keyword_search(query, room_id),
+            return_exceptions=True,
+        )
+        vector_results = []
+        keyword_results = []
+        vector_used = True
+        keyword_used = True
+        if isinstance(raw_results[0], Exception):
+            vector_used = False
+        else:
+            vector_results = raw_results[0]
+            if not self.service._is_index_available():
+                vector_used = False
+        if isinstance(raw_results[1], Exception):
+            keyword_used = False
+        else:
+            keyword_results = raw_results[1]
+
+        merged = self.service._merge_results(
+            vector_results,
+            keyword_results,
+            vector_weight=self.service.config.vector_weight,
+            keyword_weight=self.service.config.keyword_weight,
+        )
+        decay_applied = False
+        if self.service.config.temporal_decay_enabled and merged:
+            merged = self.service._apply_temporal_decay(
+                merged,
+                half_life_days=self.service.config.half_life_days,
+            )
+            decay_applied = True
+        mmr_applied = False
+        if merged:
+            merged = self.service._apply_mmr(
+                merged,
+                lambda_param=self.service.config.mmr_lambda,
+            )
+            mmr_applied = True
+
+        final = merged[: limit or self.service.config.max_results]
+        if [result.turn_id for result in final if not result.content and result.turn_id]:
+            await self.service._hydrate_results_from_storage(final, room_id)
+
+        dto_results = [
+            DtoMemorySearchResult(
+                room_id=result.room_id,
+                content=result.content,
+                score=result.combined_score,
+                metadata={
+                    "turn_id": result.turn_id,
+                    "fact_id": result.fact_id,
+                    "source_type": result.source_type.value,
+                    "content_preview": result.content_preview,
+                    "vector_score": result.vector_score,
+                    "keyword_score": result.keyword_score,
+                    "temporal_decay_factor": result.temporal_decay_factor,
+                    "timestamp": result.timestamp,
+                    "role": result.role,
+                    "agent_name": result.agent_name,
+                    "is_compact": result.is_compact,
+                    "can_expand": result.can_expand,
+                },
+            )
+            for result in final
+        ]
+        return {
+            "query": query,
+            "room_id": room_id,
+            "results": dto_results,
+            "total_matches": len(merged),
+            "search_time_ms": round((__import__("time").monotonic() - start_time) * 1000, 2),
+            "searched_at": utcnow(),
+            "vector_search_used": vector_used,
+            "keyword_search_used": keyword_used,
+            "temporal_decay_applied": decay_applied,
+            "mmr_applied": mmr_applied,
+        }
+
+    async def index_turn_for_search(self, room_id: str, turn_doc: dict) -> bool:
+        from pinecone.exceptions import NotFoundException as PineconeNotFoundException
+
+        turn = turn_doc if not isinstance(turn_doc, dict) else ConversationTurn(**turn_doc)
+        content = turn.content
+        if not content:
+            return False
+        if not self.service._is_index_available():
+            return False
+        try:
+            embedding = await self.service.openai_service.get_embedding(content)
+            metadata = {
+                "room_id": room_id,
+                "turn_id": turn.turn_id,
+                "role": turn.role.value if turn.role else "unknown",
+                "agent_name": turn.agent_name or "",
+                "timestamp": turn.timestamp.isoformat() if turn.timestamp else "",
+            }
+            await asyncio.to_thread(
+                self.service._pinecone_index.upsert,
+                vectors=[
+                    {
+                        "id": turn.turn_id,
+                        "values": embedding,
+                        "metadata": metadata,
+                    }
+                ],
+            )
+            return True
+        except PineconeNotFoundException:
+            return False
+        except Exception:
+            return False
+
+    async def delete_room_index(self, room_id: str) -> bool:
+        from pinecone.exceptions import NotFoundException as PineconeNotFoundException
+
+        if not self.service._is_index_available():
+            return False
+        try:
+            await asyncio.to_thread(
+                self.service._pinecone_index.delete,
+                filter={"room_id": {"$eq": room_id}},
+            )
+            return True
+        except PineconeNotFoundException:
+            return False
+        except Exception:
+            return False
+
+
+def bind_memory_search_facade(service: MemorySearchService) -> MemorySearchService:
+    service.bind_facade(BoundMemorySearchFacade(service))
+    return service
 
 
 # =============================================================================
@@ -56,7 +218,7 @@ def service():
     svc.openai_service = MagicMock()
     svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
     svc._index_available = True
-    return svc
+    return bind_memory_search_facade(svc)
 
 
 @pytest.fixture
@@ -703,7 +865,7 @@ class TestVectorSearchPineconeNotFound:
         svc.openai_service = MagicMock()
         svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
         svc._index_available = None
-        return svc
+        return bind_memory_search_facade(svc)
 
     @pytest.mark.asyncio
     async def test_returns_empty_on_not_found(self, service):
@@ -767,7 +929,7 @@ class TestIndexAvailabilityCheck:
         svc.openai_service = MagicMock()
         svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
         svc._index_available = None
-        return svc
+        return bind_memory_search_facade(svc)
 
     def test_caches_true_on_success(self, service):
         mock_index = MagicMock()
@@ -887,7 +1049,7 @@ class TestWritePathPineconeNotFound:
         svc.openai_service = MagicMock()
         svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
         svc._index_available = True
-        return svc
+        return bind_memory_search_facade(svc)
 
     @pytest.mark.asyncio
     async def test_index_turn_returns_false_on_not_found(self, service):

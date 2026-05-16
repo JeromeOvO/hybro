@@ -569,6 +569,7 @@ class SupervisorExecutor:
                                 agent_name=result.agent_name,
                                 response_text=result.response_text,
                                 was_successful=result.success,
+                                message_id=getattr(result, "agent_message_id", None),
                             )
 
                     # Check for PAUSED (push notification agent)

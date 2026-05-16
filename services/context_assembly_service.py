@@ -86,9 +86,22 @@ class ContextAssemblyService:
 
     def __init__(self):
         self._budget: TokenBudget = token_budget
+        self._facade = None
+        self._bound = False
 
         # Truncation tracking for metrics
         self._truncation_count = 0
+
+    def bind_facade(self, facade) -> None:
+        self._facade = facade
+        self._bound = True
+
+    def _require_facade(self):
+        if not self._bound or self._facade is None:
+            raise RuntimeError(
+                "ContextAssemblyService.bind_facade() not called - startup incomplete"
+            )
+        return self._facade
 
     @property
     def budget(self) -> TokenBudget:
@@ -127,6 +140,26 @@ class ContextAssemblyService:
         Returns:
             ContextAssemblyResult with assembled context and metrics
         """
+        self._require_facade()
+        if self._bound and self._facade is not None:
+            from context_memory.translators import primitive
+
+            assembled = self._facade.assemble_supervisor_context_from_memory(
+                primitive(room_memory),
+                current_task,
+                agent_registry=agent_registry,
+                max_turns=max_turns,
+                memory_search_results=memory_search_results,
+            )
+            result = _legacy_context_result(assembled)
+            self._record_bound_context_metrics(
+                room_id=room_memory.room_id,
+                result=result,
+                context_type="supervisor",
+                metadata=assembled.metadata,
+            )
+            return result
+
         memory_content = self._get_memory_content(room_memory)
 
         # Format memory search results into snippets
@@ -265,6 +298,27 @@ class ContextAssemblyService:
         Returns:
             ContextAssemblyResult with assembled context and metrics
         """
+        self._require_facade()
+        if self._bound and self._facade is not None:
+            from context_memory.translators import primitive
+
+            assembled = self._facade.assemble_agent_execution_context_from_memory(
+                primitive(room_memory),
+                current_task,
+                agent_name=agent_name,
+                room_awareness=room_awareness,
+                quoted_text=quoted_text,
+                include_system_instruction=include_system_instruction,
+            )
+            result = _legacy_context_result(assembled)
+            self._record_bound_context_metrics(
+                room_id=room_memory.room_id,
+                result=result,
+                context_type="agent",
+                metadata=assembled.metadata,
+            )
+            return result
+
         memory_content = self._get_memory_content(room_memory)
 
         # Calculate available budget for each component
@@ -812,6 +866,31 @@ class ContextAssemblyService:
                 f"turns={turns_included} (full={full_turns}, compact={compact_turns})"
             )
 
+    def _record_bound_context_metrics(
+        self,
+        *,
+        room_id: str,
+        result: ContextAssemblyResult,
+        context_type: str,
+        metadata: dict | None = None,
+    ) -> None:
+        if result.was_truncated:
+            self._truncation_count += 1
+        metadata = metadata or {}
+        self._log_context_metrics(
+            room_id=room_id,
+            total_tokens=result.total_tokens,
+            occupancy_pct=result.occupancy_pct,
+            was_truncated=result.was_truncated,
+            truncation_reason=result.truncation_reason,
+            turns_included=result.turns_included,
+            turns_truncated=result.turns_truncated,
+            context_type=context_type,
+            full_turns=metadata.get("full_turns", 0),
+            compact_turns=metadata.get("compact_turns", 0),
+            stable_prefix_tokens=result.stable_prefix_tokens,
+        )
+
     def get_budget_summary(self) -> dict:
         """Get a summary of the current token budget configuration."""
         return self._budget.get_budget_summary()
@@ -819,3 +898,19 @@ class ContextAssemblyService:
 
 # Singleton export
 context_assembly_service = ContextAssemblyService()
+
+
+def _legacy_context_result(assembled) -> ContextAssemblyResult:
+    metadata = assembled.metadata
+    reason = metadata.get("truncation_reason")
+    return ContextAssemblyResult(
+        context=metadata.get("context", ""),
+        total_tokens=assembled.total_tokens,
+        occupancy_pct=metadata.get("occupancy_pct", 0.0),
+        was_truncated=metadata.get("was_truncated", False),
+        truncation_reason=TruncationReason(reason) if reason else None,
+        turns_included=metadata.get("turns_included", 0),
+        turns_truncated=metadata.get("turns_truncated", 0),
+        stable_prefix_tokens=metadata.get("stable_prefix_tokens", 0),
+        dynamic_suffix_tokens=metadata.get("dynamic_suffix_tokens", 0),
+    )

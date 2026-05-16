@@ -395,6 +395,7 @@ class TestSequentialDebateDispatch:
                 response_text=f"response from {targets[0].agent_name}",
                 success=True,
                 status=StepStatus.SUCCESS,
+                agent_message_id=f"agent-msg-{targets[0].agent_id}",
             )]
 
         se._dispatch_targets = fake_dispatch
@@ -413,6 +414,10 @@ class TestSequentialDebateDispatch:
         assert len(dispatch_calls) == 2
         assert dispatch_calls[0] == ["a1"]
         assert dispatch_calls[1] == ["a2"]
+        assert [
+            call.kwargs["message_id"]
+            for call in se.room_memory_service.add_agent_response_to_memory.await_args_list
+        ] == ["agent-msg-a1", "agent-msg-a2"]
 
     @pytest.mark.asyncio
     async def test_done_after_all_agents(self, se):
@@ -792,4 +797,3 @@ class TestResumePreservesDebateParticipants:
         assert "a3" in registry_ids  # restored from continuation
         assert "a4" in registry_ids  # new agent still present
         assert len(current_registry) == 4
-

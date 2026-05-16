@@ -551,7 +551,11 @@ def test_model_registry_looks_up_models_capabilities_and_lists_unique_models(
         "embedding_model",
         "gemini_embedding_model_name",
     ]
-    assert len(registry.list_models()) == 6
+    assert len(registry.list_models()) == 7
+    assert registry.get_model("context_memory_legacy_json_model").model_id == "gpt-4o-mini"
+    assert registry.supports_capability(
+        "context_memory_legacy_json_model", "json_schema"
+    )
 
 
 @pytest.mark.asyncio

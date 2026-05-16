@@ -1,9 +1,7 @@
-import asyncio
 from uuid import uuid4
 
 from common.utils.context_utils import (
     add_turn_to_history,
-    clean_mention_format,
 )
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -204,6 +202,19 @@ class RoomMemoryService:
     def __init__(self):
         self.database_service = db_service  # Use singleton
         self.openai_service = openai_service  # Use singleton
+        self._facade = None
+        self._bound = False
+
+    def bind_facade(self, facade) -> None:
+        self._facade = facade
+        self._bound = True
+
+    def _require_facade(self):
+        if not self._bound or self._facade is None:
+            raise RuntimeError(
+                "RoomMemoryService.bind_facade() not called - startup incomplete"
+            )
+        return self._facade
 
     async def create_room_memory(
         self, request: RoomCenterMemoryRequest
@@ -211,53 +222,37 @@ class RoomMemoryService:
         """
         Create a room memory in the database with new structured format.
         """
+        facade = self._require_facade()
         try:
-            # Create new structured MemoryContent
-            memory_content = MemoryContent()
-
-            # If there's initial content, add it as first user turn
-            if request.memory_content:
-                memory_content = add_turn_to_history(
-                    memory_content=memory_content,
-                    role="user",
-                    content=request.memory_content,
-                )
-
-            new_room_memory = RoomMemory(
-                room_id=request.room_id,
-                memory_id=request.memory_id or str(uuid4()),
-                memory_content=memory_content,
-                memory_created_at=request.memory_created_at or utcnow(),
-                extend_info=request.extend_info,
-            )
-            success = await self.database_service.add_room_memory(new_room_memory)
-            if success:
-                return RoomCenterMemoryResponse(
-                    room_id=request.room_id,
-                    memory_id=new_room_memory.memory_id,
-                    memory=new_room_memory,
-                    success=True,
-                    error=None,
-                    status_code=200,
-                )
+            if request.memory is not None:
+                memory_doc = request.memory.model_dump(mode="json")
             else:
-                return RoomCenterMemoryResponse(
+                memory_content = MemoryContent()
+                if request.memory_content:
+                    memory_content = add_turn_to_history(
+                        memory_content=memory_content,
+                        role="user",
+                        content=request.memory_content,
+                    )
+                memory_doc = RoomMemory(
                     room_id=request.room_id,
-                    memory_id=request.memory_id,
-                    memory=None,
-                    success=False,
-                    error="Failed to create room memory",
-                    status_code=500,
-                )
-        except Exception as e:
+                    memory_id=request.memory_id or str(uuid4()),
+                    memory_content=memory_content,
+                    memory_created_at=request.memory_created_at or utcnow(),
+                    extend_info=request.extend_info,
+                ).model_dump(mode="json")
+            created = await facade.legacy_create_room_memory(memory_doc)
+            memory = _room_memory_from_doc(created) if created else None
             return RoomCenterMemoryResponse(
                 room_id=request.room_id,
-                memory_id=request.memory_id,
-                memory=None,
-                success=False,
-                error=str(e),
-                status_code=500,
+                memory_id=memory.memory_id if memory else request.memory_id,
+                memory=memory,
+                success=memory is not None,
+                error=None if memory else "Failed to create room memory",
+                status_code=200 if memory else 500,
             )
+        except Exception as exc:
+            return _room_memory_error_response(request, exc)
 
     async def get_room_memory_by_room_id(
         self, request: RoomCenterMemoryRequest
@@ -265,37 +260,20 @@ class RoomMemoryService:
         """
         Get a room memory by room_id
         """
+        facade = self._require_facade()
         try:
-            room_memory = await self.database_service.get_room_memory_by_room_id(
-                request.room_id
-            )
-            if room_memory:
-                return RoomCenterMemoryResponse(
-                    room_id=request.room_id,
-                    memory_id=room_memory.memory_id,
-                    memory=room_memory,
-                    success=True,
-                    error=None,
-                    status_code=200,
-                )
-            else:
-                return RoomCenterMemoryResponse(
-                    room_id=request.room_id,
-                    memory_id=None,
-                    memory=None,
-                    success=False,
-                    error="Room memory not found",
-                    status_code=404,
-                )
-        except Exception as e:
+            doc = await facade.legacy_get_room_memory_by_room_id(request.room_id)
+            memory = _room_memory_from_doc(doc) if doc else None
             return RoomCenterMemoryResponse(
                 room_id=request.room_id,
-                memory_id=None,
-                memory=None,
-                success=False,
-                error=str(e),
-                status_code=500,
+                memory_id=memory.memory_id if memory else None,
+                memory=memory,
+                success=memory is not None,
+                error=None if memory else "Room memory not found",
+                status_code=200 if memory else 404,
             )
+        except Exception as exc:
+            return _room_memory_error_response(request, exc, memory_id=None)
 
     async def update_room_memory_by_room_id(
         self, request: RoomCenterMemoryRequest
@@ -303,38 +281,25 @@ class RoomMemoryService:
         """
         Update a room memory by room_id
         """
+        facade = self._require_facade()
         try:
-            room_memory_response = (
-                await self.database_service.update_room_memory_by_room_id(
-                    request.room_id, request.memory
-                )
+            doc = request.memory.model_dump(mode="json") if request.memory else {}
+            ok = await facade.legacy_update_room_memory_by_room_id(
+                request.room_id, doc
             )
-            if room_memory_response:
-                return RoomCenterMemoryResponse(
-                    room_id=request.room_id,
-                    memory_id=request.memory_id,
-                    memory=request.memory,
-                    success=True,
-                    error=None,
-                    status_code=200,
-                )
-            else:
-                return RoomCenterMemoryResponse(
-                    room_id=request.room_id,
-                    memory_id=request.memory_id,
-                    memory=None,
-                    success=False,
-                    error="Room memory not found",
-                    status_code=404,
-                )
-        except Exception as e:
             return RoomCenterMemoryResponse(
                 room_id=request.room_id,
                 memory_id=request.memory_id,
-                memory=None,
-                success=False,
-                error=str(e),
-                status_code=500,
+                memory=request.memory if ok else None,
+                success=ok,
+                error=None if ok else "Room memory not found",
+                status_code=200 if ok else 404,
+            )
+        except Exception as exc:
+            return _room_memory_error_response(
+                request,
+                exc,
+                memory_id=request.memory_id,
             )
 
     async def get_room_memory_by_memory_id(
@@ -343,36 +308,25 @@ class RoomMemoryService:
         """
         Get a room memory by memory_id
         """
+        facade = self._require_facade()
         try:
-            room_memory = await self.database_service.get_room_memory_by_memory_id(
+            doc = await facade.legacy_get_room_memory_by_memory_id(
                 request.memory_id
             )
-            if room_memory:
-                return RoomCenterMemoryResponse(
-                    room_id=request.room_id,
-                    memory_id=room_memory.memory_id,
-                    memory=room_memory,
-                    success=True,
-                    error=None,
-                    status_code=200,
-                )
-            else:
-                return RoomCenterMemoryResponse(
-                    room_id=request.room_id,
-                    memory_id=request.memory_id,
-                    memory=None,
-                    success=False,
-                    error="Room memory not found",
-                    status_code=404,
-                )
-        except Exception as e:
+            memory = _room_memory_from_doc(doc) if doc else None
             return RoomCenterMemoryResponse(
                 room_id=request.room_id,
+                memory_id=memory.memory_id if memory else request.memory_id,
+                memory=memory,
+                success=memory is not None,
+                error=None if memory else "Room memory not found",
+                status_code=200 if memory else 404,
+            )
+        except Exception as exc:
+            return _room_memory_error_response(
+                request,
+                exc,
                 memory_id=request.memory_id,
-                memory=None,
-                success=False,
-                error=str(e),
-                status_code=500,
             )
 
     async def update_room_memory_by_memory_id(
@@ -381,36 +335,25 @@ class RoomMemoryService:
         """
         Update a room memory by memory_id
         """
+        facade = self._require_facade()
         try:
-            room_memory = await self.database_service.get_room_memory_by_memory_id(
+            doc = await facade.legacy_get_room_memory_for_update_by_memory_id(
                 request.memory_id
             )
-            if room_memory:
-                return RoomCenterMemoryResponse(
-                    room_id=request.room_id,
-                    memory_id=room_memory.memory_id,
-                    memory=room_memory,
-                    success=True,
-                    error=None,
-                    status_code=200,
-                )
-            else:
-                return RoomCenterMemoryResponse(
-                    room_id=request.room_id,
-                    memory_id=request.memory_id,
-                    memory=None,
-                    success=False,
-                    error="Room memory not found",
-                    status_code=404,
-                )
-        except Exception as e:
+            memory = _room_memory_from_doc(doc) if doc else None
             return RoomCenterMemoryResponse(
                 room_id=request.room_id,
+                memory_id=memory.memory_id if memory else request.memory_id,
+                memory=memory,
+                success=memory is not None,
+                error=None if memory else "Room memory not found",
+                status_code=200 if memory else 404,
+            )
+        except Exception as exc:
+            return _room_memory_error_response(
+                request,
+                exc,
                 memory_id=request.memory_id,
-                memory=None,
-                success=False,
-                error=str(e),
-                status_code=500,
             )
 
     async def delete_room_memory_by_memory_id(
@@ -419,36 +362,24 @@ class RoomMemoryService:
         """
         Delete a room memory by memory_id
         """
+        facade = self._require_facade()
         try:
-            success = await self.database_service.delete_room_memory_by_memory_id(
+            ok = await facade.legacy_delete_room_memory_by_memory_id(
                 request.memory_id
             )
-            if success:
-                return RoomCenterMemoryResponse(
-                    room_id=request.room_id,
-                    memory_id=request.memory_id,
-                    memory=None,
-                    success=True,
-                    error=None,
-                    status_code=200,
-                )
-            else:
-                return RoomCenterMemoryResponse(
-                    room_id=request.room_id,
-                    memory_id=None,
-                    memory=None,
-                    success=False,
-                    error="Room memory not found",
-                    status_code=404,
-                )
-        except Exception as e:
             return RoomCenterMemoryResponse(
                 room_id=request.room_id,
-                memory_id=None,
+                memory_id=request.memory_id if ok else None,
                 memory=None,
-                success=False,
-                error=str(e),
-                status_code=500,
+                success=ok,
+                error=None if ok else "Room memory not found",
+                status_code=200 if ok else 404,
+            )
+        except Exception as exc:
+            return _room_memory_error_response(
+                request,
+                exc,
+                memory_id=request.memory_id,
             )
 
     async def initialize_or_update_room_memory(
@@ -460,100 +391,32 @@ class RoomMemoryService:
 
         The message is cleaned of @mention UUIDs before storage.
         """
-        room_id = request.room_id
-        new_message = request.memory_content
-        room_agent_set = request.room_agent_set or {}
-        user_id = request.user_id
-        attachments = request.attachments
-
-        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
-
-        if not room_memory:
-            # Initialize new room memory with structured format
-            memory_content = MemoryContent()
-
-            if new_message:
-                # Clean @mentions before storing
-                clean_message = clean_mention_format(new_message, room_agent_set)
-                from services.room_services import build_turn_content
-
-                turn_content = build_turn_content(clean_message, attachments)
-                memory_content = add_turn_to_history(
-                    memory_content=memory_content,
-                    role="user",
-                    content=turn_content,
-                    user_id=user_id,
-                )
-
-            room_memory = RoomMemory(
-                room_id=room_id,
-                memory_id=str(uuid4()),
-                memory_content=memory_content,
+        facade = self._require_facade()
+        try:
+            doc = await facade.initialize_or_update_room_memory(
+                request.room_id,
+                memory_content=request.memory_content,
+                room_agent_set=request.room_agent_set,
+                user_id=request.user_id,
+                attachments=request.attachments,
+                message_id=request.message_id,
             )
-
-            add_room_memory_success = await self.database_service.add_room_memory(
-                room_memory
+            duplicate_turn = bool(
+                doc and doc.get("_context_memory_duplicate_turn")
             )
-            if not add_room_memory_success:
-                return RoomCenterMemoryResponse(
-                    room_id=room_id,
-                    success=False,
-                    error="Failed to add room memory",
-                    status_code=500,
-                )
-
-            logger.info(
-                f"RoomMemoryService: Initialized new room memory for room {room_id}"
+            if doc and not duplicate_turn:
+                await self._track_user_interaction(request.user_id)
+            memory = _room_memory_from_doc(_strip_internal_memory_flags(doc)) if doc else None
+            return RoomCenterMemoryResponse(
+                room_id=request.room_id,
+                memory_id=memory.memory_id if memory else None,
+                memory=memory,
+                success=memory is not None,
+                error=None if memory else "Failed to update room memory",
+                status_code=200 if memory else 500,
             )
-        else:
-            if new_message:
-                clean_message = clean_mention_format(new_message, room_agent_set)
-
-                from common.utils.context_utils import (
-                    MAX_HISTORY_TURNS,
-                    MAX_SUMMARY_CHARS,
-                    estimate_tokens,
-                    extract_turn_notes,
-                )
-                from models.memory import ConversationTurn, TurnRole
-                from services.room_services import build_turn_content
-
-                turn_content = build_turn_content(clean_message, attachments)
-                turn = ConversationTurn(
-                    role=TurnRole.USER,
-                    content=turn_content,
-                    user_id=user_id,
-                    estimated_tokens_full=estimate_tokens(turn_content),
-                    turn_notes=extract_turn_notes(turn_content),
-                )
-
-                modified, matched = await self.database_service.push_and_trim_conversation_turn(
-                    room_id,
-                    turn.model_dump(mode="json"),
-                    max_turns=MAX_HISTORY_TURNS,
-                    summary_stub=f"[User] {clean_message[:200]}...",
-                    max_summary_chars=MAX_SUMMARY_CHARS,
-                )
-                if not modified:
-                    logger.error("RoomMemoryService: Failed to push user turn to room %s", room_id)
-                    return RoomCenterMemoryResponse(
-                        room_id=room_id,
-                        success=False,
-                        error="Room memory not found" if not matched else "Failed to update room memory",
-                        status_code=404 if not matched else 500,
-                    )
-
-        # Track user interaction (§4.3 UserMemory)
-        await self._track_user_interaction(user_id)
-
-        return RoomCenterMemoryResponse(
-            room_id=room_id,
-            memory_id=room_memory.memory_id,
-            memory=room_memory,
-            success=True,
-            error=None,
-            status_code=200,
-        )
+        except Exception as exc:
+            return _room_memory_error_response(request, exc, memory_id=None)
 
     async def _track_user_interaction(self, user_id: str | None) -> None:
         """Fire-and-forget: increment user interaction counter in UserMemory (§4.3)."""
@@ -611,6 +474,7 @@ class RoomMemoryService:
         agent_name: str,
         response_text: str,
         was_successful: bool = True,
+        message_id: str | None = None,
     ) -> RoomCenterMemoryResponse:
         """
         Add an agent's response to the room conversation history.
@@ -618,70 +482,30 @@ class RoomMemoryService:
 
         Uses atomic $push instead of loading the full document.
         """
-        from common.utils.context_utils import (
-            MAX_HISTORY_TURNS,
-            MAX_SUMMARY_CHARS,
-            estimate_tokens,
-            extract_turn_notes,
-        )
-        from models.memory import ConversationTurn, TurnRole
-
-        tokens_full = estimate_tokens(response_text)
-        notes = extract_turn_notes(response_text)
-
-        turn = ConversationTurn(
-            role=TurnRole.AGENT,
-            content=response_text,
-            agent_id=agent_id,
-            agent_name=agent_name,
-            estimated_tokens_full=tokens_full,
-            turn_notes=notes,
-            was_successful=was_successful,
-        )
-
-        modified, matched = await self.database_service.push_and_trim_conversation_turn(
+        facade = self._require_facade()
+        modified, matched = await facade.add_agent_response_to_memory(
             room_id,
-            turn.model_dump(mode="json"),
-            max_turns=MAX_HISTORY_TURNS,
-            summary_stub=f"[{agent_name}] {response_text[:200]}...",
-            max_summary_chars=MAX_SUMMARY_CHARS,
+            agent_id,
+            agent_name,
+            response_text,
+            was_successful=was_successful,
+            message_id=message_id,
         )
-
         if not modified:
-            logger.error(
-                "RoomMemoryService: Failed to push agent response to room %s",
-                room_id,
-            )
+            if matched and message_id:
+                return RoomCenterMemoryResponse(
+                    room_id=room_id,
+                    success=True,
+                    error=None,
+                    status_code=200,
+                )
             return RoomCenterMemoryResponse(
                 room_id=room_id,
                 success=False,
                 error="Room memory not found" if not matched else "Failed to update room memory",
                 status_code=404 if not matched else 500,
             )
-
-        # Post-save: enrich turn_notes via LLM for long turns (§6.2).
-        # Fire-and-forget: the LLM call + targeted DB write run in a background
-        # task so the caller isn't blocked by the extra 1-2s round-trip.
-        try:
-            from common.utils.context_utils import LLM_TURN_NOTES_THRESHOLD
-
-            if response_text and tokens_full > LLM_TURN_NOTES_THRESHOLD:
-                asyncio.create_task(
-                    self._enrich_turn_notes_background(
-                        room_id, turn.turn_id, notes, response_text,
-                    )
-                )
-        except Exception as e:
-            logger.debug(
-                "RoomMemoryService: LLM turn_notes enrichment skipped: %s", e
-            )
-
-        # Track agent call outcome (§4.4 AgentMemory)
-        await self._track_agent_call(
-            agent_id=agent_id,
-            success=was_successful,
-        )
-
+        await self._track_agent_call(agent_id=agent_id, success=was_successful)
         return RoomCenterMemoryResponse(
             room_id=room_id,
             success=True,
@@ -707,85 +531,12 @@ class RoomMemoryService:
         When trajectory is provided, agent contributions are extracted into the
         turn for richer turn_notes (forward-compatibility with Phase 4B search).
         """
-        from common.utils.context_utils import (
-            MAX_HISTORY_TURNS,
-            MAX_SUMMARY_CHARS,
-            estimate_tokens,
-            extract_turn_notes,
-        )
-        from models.memory import ConversationTurn, TurnRole, TurnType
-
-        # Enrich synthesis content with trajectory agent contributions
-        enriched_content = synthesis_text
-        if trajectory and trajectory.entries:
-            agent_contributions = []
-            for entry in trajectory.entries:
-                for result in getattr(entry, "results", []):
-                    if result.success and result.agent_name:
-                        task_summary = (result.task or "")[:100]
-                        agent_contributions.append(
-                            f"{result.agent_name}: {task_summary}"
-                        )
-            if agent_contributions:
-                contributions_text = "; ".join(agent_contributions[:5])
-                enriched_content = (
-                    f"{synthesis_text}\n\n"
-                    f"[Agent contributions: {contributions_text}]"
-                )
-
-        tokens_full = estimate_tokens(enriched_content)
-        notes = extract_turn_notes(enriched_content)
-
-        turn = ConversationTurn(
-            role=TurnRole.SUPERVISOR,
-            content=enriched_content,
-            turn_type=TurnType.MESSAGE,
-            estimated_tokens_full=tokens_full,
-            turn_notes=notes,
-        )
-
-        summary_stub = (
-            f"[Supervisor synthesis ({turn.turn_id[:8]})] "
-            f"{enriched_content[:200]}..."
-        )
-        modified, matched = await self.database_service.push_and_trim_conversation_turn(
+        facade = self._require_facade()
+        return await facade.add_synthesis_to_history(
             room_id,
-            turn.model_dump(mode="json"),
-            max_turns=MAX_HISTORY_TURNS,
-            summary_stub=summary_stub,
-            max_summary_chars=MAX_SUMMARY_CHARS,
+            synthesis_text,
+            trajectory=trajectory,
         )
-        if not modified:
-            if not matched:
-                logger.error(
-                    "RoomMemoryService.add_synthesis_to_history: "
-                    "Room memory not found for room %s", room_id,
-                )
-            else:
-                logger.error(
-                    "RoomMemoryService.add_synthesis_to_history: "
-                    "Failed to persist synthesis turn for room %s", room_id,
-                )
-            return None
-
-        # Post-save: enrich turn_notes via LLM for long synthesis turns (§6.2).
-        # Synthesis turns are high-value, context-dense text — worth the LLM call.
-        try:
-            from common.utils.context_utils import LLM_TURN_NOTES_THRESHOLD
-
-            if enriched_content and tokens_full > LLM_TURN_NOTES_THRESHOLD:
-                asyncio.create_task(
-                    self._enrich_turn_notes_background(
-                        room_id, turn.turn_id, notes, enriched_content,
-                    )
-                )
-        except Exception as e:
-            logger.debug(
-                "RoomMemoryService.add_synthesis_to_history: "
-                "background enrichment schedule failed: %s", e,
-            )
-
-        return turn.turn_id
 
     async def update_room_summary(
         self,
@@ -804,111 +555,44 @@ class RoomMemoryService:
         Returns:
             True if successfully updated, False if extraction or persistence failed
         """
-        extraction_prompt = (
-            "Extract structured room summary fields from the following synthesis. "
-            "Return ONLY valid JSON with these keys:\n"
-            '- "current_goal": string or null — what the user/room is trying to accomplish\n'
-            '- "key_decisions": list of strings — decisions that should persist\n'
-            '- "open_questions": list of strings — unresolved questions or blockers\n'
-            '- "recent_agent_contributions": list of strings — last 3-5 agent result summaries\n'
-            '- "important_constraints": list of strings — hard constraints stated\n'
-            '- "room_facts": list of strings — durable facts worth remembering across sessions '
-            '(e.g. user preferences, project names, deadlines, technical constraints). '
-            "Only include facts NOT already obvious from the goal or decisions. "
-            "Return an empty list if there are no new facts.\n\n"
-            f"Synthesis:\n{synthesis_text}"
-        )
-
-        try:
-            extracted = await self.openai_service.call_supervisor_llm_json(
-                system_prompt="You extract structured information from text. Respond with valid JSON only.",
-                user_prompt=extraction_prompt,
-                model="gpt-4o-mini",
-            )
-        except Exception as e:
-            logger.warning(
-                "RoomMemoryService.update_room_summary: "
-                "LLM extraction failed for room %s: %s", room_id, e,
-            )
-            return False
-
-        from models.memory import RoomFact, RoomSummary
-
-        # Lightweight projection — only loads room_summary and room_facts
-        doc = await self.database_service.get_room_summary_projection(room_id)
-        if not doc:
-            logger.warning(
-                "RoomMemoryService.update_room_summary: "
-                "Room memory not found for room %s", room_id,
-            )
-            return False
-
-        existing = RoomSummary(**(doc.get("room_summary") or {}))
-        extracted_goal = extracted.get("current_goal")
-        extracted_decisions = extracted.get("key_decisions")
-        extracted_questions = extracted.get("open_questions")
-        extracted_contributions = extracted.get("recent_agent_contributions")
-        extracted_constraints = extracted.get("important_constraints")
-
-        new_summary = RoomSummary(
-            current_goal=extracted_goal if extracted_goal is not None else existing.current_goal,
-            key_decisions=extracted_decisions if extracted_decisions is not None else existing.key_decisions,
-            open_questions=extracted_questions if extracted_questions is not None else existing.open_questions,
-            recent_agent_contributions=(
-                extracted_contributions if extracted_contributions is not None
-                else existing.recent_agent_contributions
-            ),
-            important_constraints=(
-                extracted_constraints if extracted_constraints is not None
-                else existing.important_constraints
-            ),
-            last_updated_at=utcnow(),
-            updated_after_turn_id=synthesis_turn_id or existing.updated_after_turn_id,
-        )
-
-        # Deduplicate new facts against existing ones
-        new_facts: list[dict] = []
-        extracted_facts_raw = extracted.get("room_facts", [])
-        if isinstance(extracted_facts_raw, list) and extracted_facts_raw:
-            existing_fact_contents = {
-                (f.get("content") or "").lower().strip()
-                for f in (doc.get("room_facts") or [])
-            }
-            for fact_text in extracted_facts_raw:
-                if (
-                    isinstance(fact_text, str)
-                    and fact_text.strip()
-                    and fact_text.lower().strip() not in existing_fact_contents
-                ):
-                    new_facts.append(
-                        RoomFact(
-                            content=fact_text.strip(),
-                            source_turn_id=synthesis_turn_id,
-                        ).model_dump(mode="json")
-                    )
-                    existing_fact_contents.add(fact_text.lower().strip())
-
-        MAX_ROOM_FACTS = 50
-        success = await self.database_service.update_room_summary_atomic(
+        facade = self._require_facade()
+        return await facade.update_room_summary(
             room_id,
-            new_summary.model_dump(mode="json"),
-            new_facts=new_facts if new_facts else None,
-            max_facts=MAX_ROOM_FACTS,
+            synthesis_text,
+            synthesis_turn_id=synthesis_turn_id,
         )
-
-        if success:
-            logger.info(
-                "RoomMemoryService.update_room_summary: "
-                "Updated room summary for room %s", room_id,
-            )
-        else:
-            logger.error(
-                "RoomMemoryService.update_room_summary: "
-                "Failed to persist room summary for room %s", room_id,
-            )
-        return success
 
 
 # Singleton exports
 chat_memory_service = ChatMemoryService()
 room_memory_service = RoomMemoryService()
+
+
+def _room_memory_from_doc(doc: dict | None) -> RoomMemory | None:
+    if not doc:
+        return None
+    return RoomMemory(**doc)
+
+
+def _strip_internal_memory_flags(doc: dict | None) -> dict | None:
+    if not doc:
+        return None
+    clean = dict(doc)
+    clean.pop("_context_memory_duplicate_turn", None)
+    return clean
+
+
+def _room_memory_error_response(
+    request: RoomCenterMemoryRequest,
+    error: Exception,
+    *,
+    memory_id: str | None = None,
+) -> RoomCenterMemoryResponse:
+    return RoomCenterMemoryResponse(
+        room_id=request.room_id,
+        memory_id=memory_id if memory_id is not None else request.memory_id,
+        memory=None,
+        success=False,
+        error=str(error),
+        status_code=500,
+    )

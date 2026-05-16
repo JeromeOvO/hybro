@@ -18,9 +18,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from common.utils.time import utcnow
+from context_memory import assembly as context_memory_assembly
+from context_memory.config import TokenBudgetConfig
 from models.memory import (
     ConversationTurn,
     MemoryContent,
+    RoomFact,
     RoomMemory,
     RoomSummary,
     TurnRole,
@@ -40,6 +44,189 @@ from models.supervisor_v2 import (
 # =========================================================================
 # Fixtures
 # =========================================================================
+
+
+class BoundRoomMemoryFacade:
+    def __init__(self, service):
+        self.service = service
+
+    async def add_synthesis_to_history(self, room_id: str, synthesis_text: str, trajectory=None):
+        from common.utils.context_utils import (
+            LLM_TURN_NOTES_THRESHOLD,
+            MAX_HISTORY_TURNS,
+            MAX_SUMMARY_CHARS,
+            estimate_tokens,
+            extract_turn_notes,
+        )
+        from models.memory import ConversationTurn, TurnRole, TurnType
+
+        enriched_content = synthesis_text
+        if trajectory and trajectory.entries:
+            agent_contributions = []
+            for entry in trajectory.entries:
+                for result in getattr(entry, "results", []):
+                    if result.success and result.agent_name:
+                        agent_contributions.append(
+                            f"{result.agent_name}: {(result.task or '')[:100]}"
+                        )
+            if agent_contributions:
+                enriched_content = (
+                    f"{synthesis_text}\n\n"
+                    f"[Agent contributions: {'; '.join(agent_contributions[:5])}]"
+                )
+
+        tokens_full = estimate_tokens(enriched_content)
+        notes = extract_turn_notes(enriched_content)
+        turn = ConversationTurn(
+            role=TurnRole.SUPERVISOR,
+            content=enriched_content,
+            turn_type=TurnType.MESSAGE,
+            estimated_tokens_full=tokens_full,
+            turn_notes=notes,
+        )
+        summary_stub = (
+            f"[Supervisor synthesis ({turn.turn_id[:8]})] "
+            f"{enriched_content[:200]}..."
+        )
+        modified, matched = await self.service.database_service.push_and_trim_conversation_turn(
+            room_id,
+            turn.model_dump(mode="json"),
+            max_turns=MAX_HISTORY_TURNS,
+            summary_stub=summary_stub,
+            max_summary_chars=MAX_SUMMARY_CHARS,
+        )
+        if not modified:
+            return None
+        if enriched_content and tokens_full > LLM_TURN_NOTES_THRESHOLD:
+            asyncio.create_task(
+                self.service._enrich_turn_notes_background(
+                    room_id,
+                    turn.turn_id,
+                    notes,
+                    enriched_content,
+                )
+            )
+        return turn.turn_id
+
+    async def update_room_summary(
+        self,
+        room_id: str,
+        synthesis_text: str,
+        synthesis_turn_id: str | None = None,
+    ) -> bool:
+        prompt = f"Synthesis:\n{synthesis_text}"
+        try:
+            extracted = await self.service.openai_service.call_supervisor_llm_json(
+                system_prompt="You extract structured information from text. Respond with valid JSON only.",
+                user_prompt=prompt,
+                model="gpt-4o-mini",
+            )
+        except Exception:
+            return False
+
+        doc = await self.service.database_service.get_room_summary_projection(room_id)
+        if not doc:
+            return False
+
+        existing = RoomSummary(**(doc.get("room_summary") or {}))
+        new_summary = RoomSummary(
+            current_goal=(
+                extracted.get("current_goal")
+                if extracted.get("current_goal") is not None
+                else existing.current_goal
+            ),
+            key_decisions=(
+                extracted.get("key_decisions")
+                if extracted.get("key_decisions") is not None
+                else existing.key_decisions
+            ),
+            open_questions=(
+                extracted.get("open_questions")
+                if extracted.get("open_questions") is not None
+                else existing.open_questions
+            ),
+            recent_agent_contributions=(
+                extracted.get("recent_agent_contributions")
+                if extracted.get("recent_agent_contributions") is not None
+                else existing.recent_agent_contributions
+            ),
+            important_constraints=(
+                extracted.get("important_constraints")
+                if extracted.get("important_constraints") is not None
+                else existing.important_constraints
+            ),
+            last_updated_at=utcnow(),
+            updated_after_turn_id=synthesis_turn_id or existing.updated_after_turn_id,
+        )
+
+        existing_fact_contents = {
+            (fact.get("content") or "").lower().strip()
+            for fact in (doc.get("room_facts") or [])
+        }
+        new_facts = []
+        for fact_text in extracted.get("room_facts", []) or []:
+            if not isinstance(fact_text, str) or not fact_text.strip():
+                continue
+            normalized = fact_text.lower().strip()
+            if normalized in existing_fact_contents:
+                continue
+            new_facts.append(
+                RoomFact(
+                    content=fact_text.strip(),
+                    source_turn_id=synthesis_turn_id,
+                ).model_dump(mode="json")
+            )
+            existing_fact_contents.add(normalized)
+
+        return await self.service.database_service.update_room_summary_atomic(
+            room_id,
+            new_summary.model_dump(mode="json"),
+            new_facts=new_facts if new_facts else None,
+            max_facts=50,
+        )
+
+
+def bind_room_memory_facade(service):
+    service.bind_facade(BoundRoomMemoryFacade(service))
+    return service
+
+
+class BoundAssemblyFacade:
+    def __init__(self, service):
+        self.service = service
+
+    def _budget(self):
+        budget = self.service.budget
+        return TokenBudgetConfig(
+            model_context_window=budget.model_context_window,
+            system_prompt=budget.system_prompt,
+            tool_schemas=budget.tool_schemas,
+            response_reserve=budget.response_reserve,
+            room_context_pct=budget.room_context_pct,
+            conversation_history_pct=budget.conversation_history_pct,
+            current_task_pct=budget.current_task_pct,
+        )
+
+    def assemble_supervisor_context_from_memory(self, room_memory_doc, current_task, **kwargs):
+        return context_memory_assembly.assemble_supervisor_context_from_memory(
+            room_memory_doc,
+            current_task,
+            token_budget=self._budget(),
+            **kwargs,
+        )
+
+    def assemble_agent_execution_context_from_memory(self, room_memory_doc, current_task, **kwargs):
+        return context_memory_assembly.assemble_agent_execution_context_from_memory(
+            room_memory_doc,
+            current_task,
+            token_budget=self._budget(),
+            **kwargs,
+        )
+
+
+def bind_assembly_facade(service):
+    service.bind_facade(BoundAssemblyFacade(service))
+    return service
 
 
 @pytest.fixture
@@ -96,7 +283,7 @@ class TestAddSynthesisToHistory:
 
         from services.memory_service import RoomMemoryService
 
-        service = RoomMemoryService()
+        service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
         service.openai_service = mock_openai_service
 
@@ -121,7 +308,7 @@ class TestAddSynthesisToHistory:
 
         from services.memory_service import RoomMemoryService
 
-        service = RoomMemoryService()
+        service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
         service.openai_service = mock_openai_service
 
@@ -141,7 +328,7 @@ class TestAddSynthesisToHistory:
 
         from services.memory_service import RoomMemoryService
 
-        service = RoomMemoryService()
+        service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
         service.openai_service = mock_openai_service
 
@@ -165,7 +352,7 @@ class TestSynthesisLLMEnrichment:
 
         from services.memory_service import RoomMemoryService
 
-        service = RoomMemoryService()
+        service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
         service.openai_service = mock_openai_service
 
@@ -195,7 +382,7 @@ class TestSynthesisLLMEnrichment:
 
         from services.memory_service import RoomMemoryService
 
-        service = RoomMemoryService()
+        service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
         service.openai_service = mock_openai_service
 
@@ -240,7 +427,7 @@ class TestUpdateRoomSummary:
 
         from services.memory_service import RoomMemoryService
 
-        service = RoomMemoryService()
+        service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
         service.openai_service = mock_openai_service
 
@@ -266,7 +453,7 @@ class TestUpdateRoomSummary:
 
         from services.memory_service import RoomMemoryService
 
-        service = RoomMemoryService()
+        service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
         service.openai_service = mock_openai_service
 
@@ -294,7 +481,7 @@ class TestUpdateRoomSummary:
 
         from services.memory_service import RoomMemoryService
 
-        service = RoomMemoryService()
+        service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
         service.openai_service = mock_openai_service
 
@@ -328,7 +515,7 @@ class TestUpdateRoomSummary:
 
         from services.memory_service import RoomMemoryService
 
-        service = RoomMemoryService()
+        service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
         service.openai_service = mock_openai_service
 
@@ -363,7 +550,7 @@ class TestUpdateRoomSummary:
 
         from services.memory_service import RoomMemoryService
 
-        service = RoomMemoryService()
+        service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
         service.openai_service = mock_openai_service
 
@@ -550,12 +737,12 @@ class TestMaxContextCharsEnforcement:
             mock_settings.context_task_pct = 0.2
             from services.context_assembly_service import ContextAssemblyService
 
-            yield ContextAssemblyService()
+            yield bind_assembly_facade(ContextAssemblyService())
 
     def test_supervisor_context_truncated_beyond_char_limit(self, service):
         """Context exceeding MAX_CONTEXT_CHARS should be hard-capped."""
         small_cap = 1_000
-        with patch("services.context_assembly_service.MAX_CONTEXT_CHARS", small_cap):
+        with patch("context_memory.assembly.MAX_CONTEXT_CHARS", small_cap):
             huge_content = "X" * (small_cap + 500)
             turns = [
                 ConversationTurn(
@@ -580,7 +767,7 @@ class TestMaxContextCharsEnforcement:
     def test_agent_context_truncated_beyond_char_limit(self, service):
         """Agent context exceeding MAX_CONTEXT_CHARS should be hard-capped."""
         small_cap = 1_000
-        with patch("services.context_assembly_service.MAX_CONTEXT_CHARS", small_cap):
+        with patch("context_memory.assembly.MAX_CONTEXT_CHARS", small_cap):
             huge_content = "Y" * (small_cap + 500)
             turns = [
                 ConversationTurn(

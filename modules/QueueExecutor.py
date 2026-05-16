@@ -383,6 +383,7 @@ class QueueExecutor:
                         agent_name=agent.agent_card.name if agent else "Agent",
                         response_text=result.response_text,
                         was_successful=result.status == ProcessingStatus.SUCCESS,
+                        message_id=getattr(current_message, "message_id", None),
                     )
 
                 # Queue up next messages in the chain (skip for direct chat)
@@ -745,6 +746,7 @@ class QueueExecutor:
                 agent_name=current_agent_name,
                 response_text=task_result_text,
                 was_successful=True,
+                message_id=message_id,
             )
 
         if len(remaining_queue) > 0:
