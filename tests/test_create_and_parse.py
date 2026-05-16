@@ -131,3 +131,60 @@ class TestCreateAndParseOversizedMessage:
         assert result.success is False
         assert result.status_code == 400
         assert "maximum length" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_create_and_parse_processing_status_is_caller_owned_transport_only_with_client_request_id(
+    monkeypatch,
+):
+    from models.room import MessageContent, RoomUserMessage
+    from services.room_services import RoomServices
+    import services.room_services as room_services
+
+    rc = object.__new__(RoomServices)
+
+    async def add_room_user_message(message):
+        assert message.client_request_id == "cr-create"
+        return True
+
+    rc.database_service = MagicMock()
+    rc.database_service.add_room_user_message = AsyncMock(side_effect=add_room_user_message)
+    rc.database_service.get_room_by_room_id = AsyncMock(return_value=None)
+    rc.room_memory_service = MagicMock()
+    rc.room_memory_service.initialize_or_update_room_memory = AsyncMock(
+        return_value=MagicMock(success=True)
+    )
+
+    fake_sse = MagicMock()
+    fake_sse.send_processing_status = AsyncMock()
+    helper_spy = AsyncMock()
+    monkeypatch.setattr(room_services, "sse_manager", fake_sse)
+    monkeypatch.setattr(
+        room_services,
+        "record_and_maybe_broadcast_run_event",
+        helper_spy,
+        raising=False,
+    )
+
+    message = RoomUserMessage(
+        room_id="room-1",
+        message_id="msg-create",
+        user_id="user-1",
+        message_content=MessageContent(message_text="hello"),
+    )
+    request = MagicMock()
+    request.room_id = "room-1"
+    request.message = message
+    request.client_request_id = "cr-create"
+    request.attachments = None
+
+    result = await rc.create_and_parse_user_message(request)
+
+    assert result.success is True
+    helper_spy.assert_not_awaited()
+    fake_sse.send_processing_status.assert_awaited_once_with(
+        "room-1",
+        "processing",
+        "msg-create",
+        client_request_id="cr-create",
+    )
