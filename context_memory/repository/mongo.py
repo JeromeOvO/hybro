@@ -105,6 +105,8 @@ class MemoryMongoRepository:
         max_summary_chars = max(max_summary_chars, 10)
         doc = await self._push_turn(room_id, turn, max_turns, summary_stub, max_summary_chars)
         matched = doc is not None
+        # The append pipeline always changes a matched room by adding the new turn.
+        # That keeps the legacy modified/matched tuple semantics equivalent here.
         return matched, matched
 
     async def push_and_trim_conversation_turn_if_absent(
@@ -471,6 +473,8 @@ def _append_turn_with_history_fallback(
 
 
 def _merge_histories_expression(primary: str, fallback: str) -> dict:
+    # TODO: remove after dual conversation_history migration completes. This
+    # reconciliation is O(n^2), but the update path trims history to a small window.
     return {
         "$let": {
             "vars": {
