@@ -42,6 +42,7 @@ from services.notification_service import notification_service
 from services.rate_limit_service import rate_limit_service
 from services.room_coordinator_service import room_coordinator_service
 from services.openai_service import openai_service
+from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
 from services.room_services import room_services
 from services.room_supervisor_service import room_supervisor_service
 from services.sse_services import sse_manager
@@ -417,6 +418,13 @@ class RoomMessageCenter:
             # indicator.  Without this, the Stop button stays stuck because
             # send_message_to_room already emitted PROCESSING and this
             # BackgroundTask response is never seen by the client.
+            await record_and_maybe_broadcast_run_event(
+                room_id,
+                SSEProcessingStatus.FAILED,
+                room_user_message_id,
+                details="Room is busy processing another message — please retry shortly",
+                sse=self.sse_manager,
+            )
             await self.sse_manager.send_processing_status(
                 room_id,
                 SSEProcessingStatus.FAILED,
@@ -561,6 +569,13 @@ class RoomMessageCenter:
                     room_id,
                     room_user_message_id,
                 )
+                await record_and_maybe_broadcast_run_event(
+                    room_id,
+                    SSEProcessingStatus.FAILED,
+                    room_user_message_id,
+                    details="Supervisor-enabled room missing V2 preparation data",
+                    sse=self.sse_manager,
+                )
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.FAILED, room_user_message_id,
                     details="Supervisor-enabled room missing V2 preparation data",
@@ -599,6 +614,12 @@ class RoomMessageCenter:
             # related_message_id chain from these step-1 messages.
             for mid in step1_ids:
                 await self.database_service.cancel_descendants(mid)
+            await record_and_maybe_broadcast_run_event(
+                room_id,
+                SSEProcessingStatus.CANCELED,
+                room_user_message_id,
+                sse=self.sse_manager,
+            )
             await self.sse_manager.send_processing_status(
                 room_id, SSEProcessingStatus.CANCELED, room_user_message_id
             )
@@ -619,6 +640,13 @@ class RoomMessageCenter:
         )
 
         if queue_processing_result.result == QueueResult.FAILED:
+            await record_and_maybe_broadcast_run_event(
+                room_id,
+                SSEProcessingStatus.FAILED,
+                room_user_message_id,
+                details="Failed to process agent messages",
+                sse=self.sse_manager,
+            )
             await self.sse_manager.send_processing_status(
                 room_id,
                 SSEProcessingStatus.FAILED,
@@ -675,6 +703,12 @@ class RoomMessageCenter:
         )
 
         # Send completion status
+        await record_and_maybe_broadcast_run_event(
+            room_id,
+            SSEProcessingStatus.COMPLETED,
+            room_user_message_id,
+            sse=self.sse_manager,
+        )
         await self.sse_manager.send_processing_status(
             room_id, SSEProcessingStatus.COMPLETED, room_user_message_id
         )
@@ -833,6 +867,13 @@ class RoomMessageCenter:
             logger.error(
                 "RoomMessageCenter: V2 extend_info missing required keys: %s",
                 e,
+            )
+            await record_and_maybe_broadcast_run_event(
+                room_id,
+                SSEProcessingStatus.FAILED,
+                room_user_message_id,
+                details="V2 supervisor data corrupted or incomplete",
+                sse=self.sse_manager,
             )
             await self.sse_manager.send_processing_status(
                 room_id, SSEProcessingStatus.FAILED, room_user_message_id,
@@ -1008,6 +1049,13 @@ class RoomMessageCenter:
                     emit_err,
                 )
             self.sse_manager.remove_token(room_user_message_id)
+            await record_and_maybe_broadcast_run_event(
+                room_id,
+                SSEProcessingStatus.FAILED,
+                room_user_message_id,
+                details="Supervisor planning failed",
+                sse=self.sse_manager,
+            )
             await self.sse_manager.send_processing_status(
                 room_id,
                 SSEProcessingStatus.FAILED,
@@ -1035,6 +1083,13 @@ class RoomMessageCenter:
                 user_message, room_user_message_id, resumed_trajectory,
             )
             self.sse_manager.remove_token(room_user_message_id)
+            await record_and_maybe_broadcast_run_event(
+                room_id,
+                SSEProcessingStatus.FAILED,
+                room_user_message_id,
+                details="Supervisor execution failed unexpectedly",
+                sse=self.sse_manager,
+            )
             await self.sse_manager.send_processing_status(
                 room_id,
                 SSEProcessingStatus.FAILED,
@@ -1123,6 +1178,13 @@ class RoomMessageCenter:
             logger.error(
                 "RoomMessageCenter: V2 resume failed to deserialize trajectory: %s",
                 e,
+            )
+            await record_and_maybe_broadcast_run_event(
+                room_id,
+                SSEProcessingStatus.FAILED,
+                user_message_id,
+                details="V2 resume: corrupted trajectory data",
+                sse=self.sse_manager,
             )
             await self.sse_manager.send_processing_status(
                 room_id,
@@ -1249,6 +1311,13 @@ class RoomMessageCenter:
         if not room:
             logger.error(
                 "RoomMessageCenter: V2 resume room not found: %s", room_id
+            )
+            await record_and_maybe_broadcast_run_event(
+                room_id,
+                SSEProcessingStatus.FAILED,
+                user_message_id,
+                details="V2 resume: room not found",
+                sse=self.sse_manager,
             )
             await self.sse_manager.send_processing_status(
                 room_id,
@@ -1408,6 +1477,12 @@ class RoomMessageCenter:
                     "paused_message_id": paused_message_id,
                 },
             )
+            await record_and_maybe_broadcast_run_event(
+                room_id,
+                SSEProcessingStatus.CANCELED,
+                user_message_id,
+                sse=self.sse_manager,
+            )
             await self.sse_manager.send_processing_status(
                 room_id, SSEProcessingStatus.CANCELED, user_message_id,
             )
@@ -1431,6 +1506,13 @@ class RoomMessageCenter:
         except Exception:
             logger.exception(
                 "RoomMessageCenter: V2 resume supervisor_executor.run() failed"
+            )
+            await record_and_maybe_broadcast_run_event(
+                room_id,
+                SSEProcessingStatus.FAILED,
+                user_message_id,
+                details="V2 resume: executor failed",
+                sse=self.sse_manager,
             )
             await self.sse_manager.send_processing_status(
                 room_id,
@@ -1687,6 +1769,12 @@ class RoomMessageCenter:
                     trajectory_responses=trajectory_responses,
                     is_debate=is_debate,
                 )
+                await record_and_maybe_broadcast_run_event(
+                    room_id,
+                    SSEProcessingStatus.COMPLETED,
+                    user_message_id,
+                    sse=self.sse_manager,
+                )
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.COMPLETED, user_message_id
                 )
@@ -1759,6 +1847,12 @@ class RoomMessageCenter:
                     await self.database_service.cancel_agent_messages_by_ids(
                         canceled_parent_ids
                     )
+                await record_and_maybe_broadcast_run_event(
+                    room_id,
+                    SSEProcessingStatus.CANCELED,
+                    user_message_id,
+                    sse=self.sse_manager,
+                )
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.CANCELED, user_message_id
                 )
@@ -1789,6 +1883,13 @@ class RoomMessageCenter:
                     await self.database_service.cancel_agent_messages_by_ids(
                         failed_parent_ids
                     )
+                await record_and_maybe_broadcast_run_event(
+                    room_id,
+                    SSEProcessingStatus.FAILED,
+                    user_message_id,
+                    details="V2 supervisor execution failed",
+                    sse=self.sse_manager,
+                )
                 await self.sse_manager.send_processing_status(
                     room_id,
                     SSEProcessingStatus.FAILED,
@@ -2054,6 +2155,12 @@ class RoomMessageCenter:
             )
             await self._emit_unified_summary(
                 result.room_id, result.user_message_id, is_debate=is_debate
+            )
+            await record_and_maybe_broadcast_run_event(
+                result.room_id,
+                SSEProcessingStatus.COMPLETED,
+                result.user_message_id,
+                sse=self.sse_manager,
             )
             await self.sse_manager.send_processing_status(
                 result.room_id, SSEProcessingStatus.COMPLETED, result.user_message_id
