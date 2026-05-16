@@ -812,6 +812,32 @@ class TestRelayTransportHandlePublish:
         sse.send_processing_status.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_processing_status_valid_user_message_id_keeps_agent_display_message_id(self):
+        db = MagicMock()
+        msg = _make_msg()
+        msg.turn_id = "umsg-001"
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
+        db.is_message_cancelled = AsyncMock(return_value=False)
+        agent_mock = MagicMock()
+        agent_mock.hub_id = "hub-001"
+        db.get_agent_by_agent_id = AsyncMock(return_value=agent_mock)
+
+        rt = _make_relay_transport(db_service=db)
+        await rt.handle_publish_event(
+            "processing_status",
+            "amsg-001",
+            {"status": "completed", "user_message_id": "umsg-001", "details": "done"},
+            "room-1",
+            "hub-001",
+        )
+
+        rt.response_handler.handle.assert_awaited_once()
+        event = rt.response_handler.handle.call_args.args[0]
+        assert event.kind == "processing_status"
+        assert event.message_id == "amsg-001"
+        assert event.lifecycle_message_id == "umsg-001"
+
+    @pytest.mark.asyncio
     async def test_processing_status_parent_agent_message_id_is_dropped(self):
         db = MagicMock()
         msg = _make_msg(related_message_id="parent-agent-msg")

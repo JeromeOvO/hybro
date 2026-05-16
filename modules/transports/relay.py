@@ -303,10 +303,9 @@ class RelayTransport(AgentTransport):
             return self._normalize_task_interactive(data, base)
 
         if event_type == "processing_status":
-            event_message_id = lifecycle_message_id or agent_message_id
             return AgentEvent(
                 kind="processing_status",
-                **{**base, "message_id": event_message_id},
+                **base,
                 state=data.get("status", "completed"),
                 details=data.get("details"),
                 lifecycle_message_id=lifecycle_message_id,

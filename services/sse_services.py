@@ -482,7 +482,7 @@ class SSEManager:
         client_request_id: str | None = None,
         agents: list[dict] | None = None,
     ):
-        """Send processing status and persist to room for page refresh recovery.
+        """Send a processing-status SSE frame to connected clients.
 
         Args:
             room_id: The room ID
