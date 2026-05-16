@@ -8,6 +8,7 @@ Owns:
 
 from __future__ import annotations
 
+import inspect
 from typing import TYPE_CHECKING
 
 from a2a.types import TaskState
@@ -323,24 +324,41 @@ class RelayTransport(AgentTransport):
         data: dict,
     ) -> str | None:
         candidate = data.get("user_message_id")
-        if not candidate:
+        if not isinstance(candidate, str) or not candidate:
             return None
         if candidate == getattr(msg, "turn_id", None):
             return candidate
 
+        canonical_root = await self._resolve_root_user_message_id(msg)
+        if candidate == canonical_root:
+            return candidate
+        return None
+
+    async def _resolve_root_user_message_id(
+        self,
+        msg: RoomAgentMessage,
+    ) -> str | None:
         cursor = getattr(msg, "related_message_id", None)
         visited: set[str] = set()
         for _ in range(20):
-            if not cursor or cursor in visited:
+            if not isinstance(cursor, str) or not cursor or cursor in visited:
                 break
             visited.add(cursor)
-            if cursor == candidate:
-                return candidate
+
+            user_lookup = getattr(self._db, "get_room_user_message_by_message_id", None)
+            if callable(user_lookup):
+                user_msg = user_lookup(cursor)
+                if inspect.isawaitable(user_msg):
+                    user_msg = await user_msg
+                if getattr(user_msg, "message_type", None) == "user":
+                    return cursor
+
             parent = await self._db.get_room_agent_message_by_message_id(cursor)
             if parent is None:
                 break
-            if candidate == getattr(parent, "turn_id", None):
-                return candidate
+            parent_turn_id = getattr(parent, "turn_id", None)
+            if isinstance(parent_turn_id, str) and parent_turn_id:
+                return parent_turn_id
             cursor = getattr(parent, "related_message_id", None)
         return None
 

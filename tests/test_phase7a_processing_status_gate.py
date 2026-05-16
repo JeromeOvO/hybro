@@ -77,6 +77,20 @@ def _find_awaited_call(
     return None
 
 
+def _direct_awaited_call(stmt: ast.stmt, *, name: str) -> ast.Call | None:
+    value: ast.AST | None = None
+    if isinstance(stmt, ast.Expr):
+        value = stmt.value
+    elif isinstance(stmt, ast.Assign):
+        value = stmt.value
+    if not isinstance(value, ast.Await) or not isinstance(value.value, ast.Call):
+        return None
+    call = value.value
+    if _call_name(call) != name:
+        return None
+    return call
+
+
 def _build_parents(tree: ast.AST) -> dict[ast.AST, ast.AST]:
     parents: dict[ast.AST, ast.AST] = {}
     for parent in ast.walk(tree):
@@ -210,7 +224,7 @@ def _find_prior_awaited_helper(
     helper_name: str,
 ) -> ast.Call | None:
     for stmt in reversed(_prior_statements(item)):
-        call = _find_awaited_call(stmt, item.parents, name=helper_name)
+        call = _direct_awaited_call(stmt, name=helper_name)
         if call is not None:
             return call
     return None
@@ -351,6 +365,51 @@ def test_production_processing_status_callers_are_manifest_covered() -> None:
         )
 
     assert not errors, "\n\n".join(errors)
+
+
+def test_lifecycle_helper_must_be_direct_prior_sibling_statement() -> None:
+    source = """
+async def send(flag):
+    if flag:
+        await record_and_maybe_broadcast_run_event("room", "completed", "msg", sse=sse)
+    await sse.send_processing_status("room", "completed", "msg")
+"""
+    tree = ast.parse(source)
+    parents = _build_parents(tree)
+    send_call = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "send_processing_status"
+    )
+    item = ProcessingStatusCall(
+        path="example.py",
+        function_or_method="send",
+        line=send_call.lineno,
+        room_id_expression=_unparse(_arg_or_kw(send_call, 0, "room_id")),
+        status_expression=_unparse(_arg_or_kw(send_call, 1, "status")),
+        sse_message_id_expression=_unparse(_arg_or_kw(send_call, 2, "message_id")),
+        client_request_id_expression=None,
+        details_expression=None,
+        delivery_expression=_unparse(send_call.func.value),
+        call=send_call,
+        parents=parents,
+    )
+
+    assert _find_prior_awaited_helper(
+        item, "record_and_maybe_broadcast_run_event"
+    ) is None
+
+
+def test_manifest_call_ids_do_not_encode_line_numbers() -> None:
+    manifest = _load_manifest()
+    line_suffixed = [
+        entry["call_id"]
+        for entry in manifest
+        if entry.get("call_id", "").rsplit(".", 1)[-1].isdigit()
+    ]
+    assert not line_suffixed
 
 
 def test_sse_manager_processing_status_has_no_run_lifecycle_side_effects() -> None:

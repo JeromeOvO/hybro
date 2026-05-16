@@ -1,6 +1,6 @@
 [
   {
-    "call_id": "api.sse.cancel_message.canceled.160",
+    "call_id": "api.sse.cancel_message.canceled",
     "path": "api/sse.py",
     "function_or_method": "cancel_message",
     "line": 160,
@@ -18,7 +18,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "jobs.stale_task_checker.StaleTaskChecker._fail_stale_runs.failed.254",
+    "call_id": "jobs.stale_task_checker.StaleTaskChecker._fail_stale_runs.failed.call-01",
     "path": "jobs/stale_task_checker.py",
     "function_or_method": "StaleTaskChecker._fail_stale_runs",
     "line": 254,
@@ -35,7 +35,7 @@
     "transport_only_reason": "FEATURE_RUN_DUAL_WRITE is disabled, so append_run_timeout_failure cannot produce a run_event payload; preserve the existing watchdog FAILED frontend clear without lifecycle recording."
   },
   {
-    "call_id": "jobs.stale_task_checker.StaleTaskChecker._fail_stale_runs.failed.275",
+    "call_id": "jobs.stale_task_checker.StaleTaskChecker._fail_stale_runs.failed.call-02",
     "path": "jobs/stale_task_checker.py",
     "function_or_method": "StaleTaskChecker._fail_stale_runs",
     "line": 275,
@@ -55,7 +55,7 @@
     "expects_run_event_sse": true
   },
   {
-    "call_id": "modules.QueueExecutor.QueueExecutor.process_queue.awaiting_input.337",
+    "call_id": "modules.QueueExecutor.QueueExecutor.process_queue.awaiting_input",
     "path": "modules/QueueExecutor.py",
     "function_or_method": "QueueExecutor.process_queue",
     "line": 337,
@@ -72,7 +72,7 @@
     "expects_run_event_sse": true
   },
   {
-    "call_id": "modules.QueueExecutor.QueueExecutor.process_queue.sse_status.414",
+    "call_id": "modules.QueueExecutor.QueueExecutor.process_queue.sse_status",
     "path": "modules/QueueExecutor.py",
     "function_or_method": "QueueExecutor.process_queue",
     "line": 414,
@@ -89,7 +89,7 @@
     "expects_run_event_sse": true
   },
   {
-    "call_id": "modules.QueueExecutor.QueueExecutor.resume_from_continuation.failed.787",
+    "call_id": "modules.QueueExecutor.QueueExecutor.resume_from_continuation.failed",
     "path": "modules/QueueExecutor.py",
     "function_or_method": "QueueExecutor.resume_from_continuation",
     "line": 787,
@@ -107,7 +107,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter.process_room_user_message.failed.428",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter.process_room_user_message.failed",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter.process_room_user_message",
     "line": 428,
@@ -125,7 +125,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._process_room_user_message_locked.failed.579",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._process_room_user_message_locked.failed.call-01",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter._process_room_user_message_locked",
     "line": 579,
@@ -143,7 +143,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._process_room_user_message_locked.canceled.623",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._process_room_user_message_locked.canceled",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter._process_room_user_message_locked",
     "line": 623,
@@ -161,7 +161,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._process_room_user_message_locked.failed.650",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._process_room_user_message_locked.failed.call-02",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter._process_room_user_message_locked",
     "line": 650,
@@ -179,7 +179,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._process_room_user_message_locked.completed.712",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._process_room_user_message_locked.completed",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter._process_room_user_message_locked",
     "line": 712,
@@ -197,7 +197,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._process_supervisor_v2.failed.878",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._process_supervisor_v2.failed.call-01",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter._process_supervisor_v2",
     "line": 878,
@@ -215,7 +215,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._process_supervisor_v2.completed.1014",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._process_supervisor_v2.completed",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter._process_supervisor_v2",
     "line": 1014,
@@ -232,7 +232,7 @@
     "transport_only_reason": "Frontend-only spinner clear for clarify-resume retry failure; run lifecycle remains awaiting clarification and must not be terminalized as completed."
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._process_supervisor_v2.failed.1059",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._process_supervisor_v2.failed.call-02",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter._process_supervisor_v2",
     "line": 1059,
@@ -250,7 +250,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._process_supervisor_v2.failed.1093",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._process_supervisor_v2.failed.call-03",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter._process_supervisor_v2",
     "line": 1093,
@@ -268,7 +268,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._resume_supervisor_v2.failed.1189",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._resume_supervisor_v2.failed.call-01",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter._resume_supervisor_v2",
     "line": 1189,
@@ -286,7 +286,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._resume_supervisor_v2.failed.1322",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._resume_supervisor_v2.failed.call-02",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter._resume_supervisor_v2",
     "line": 1322,
@@ -304,7 +304,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._resume_supervisor_v2.canceled.1486",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._resume_supervisor_v2.canceled",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter._resume_supervisor_v2",
     "line": 1486,
@@ -322,7 +322,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._resume_supervisor_v2.failed.1517",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._resume_supervisor_v2.failed.call-03",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter._resume_supervisor_v2",
     "line": 1517,
@@ -340,7 +340,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._handle_v2_run_result.completed.1778",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._handle_v2_run_result.completed.call-01",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter._handle_v2_run_result",
     "line": 1778,
@@ -358,7 +358,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._handle_v2_run_result.completed.1824",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._handle_v2_run_result.completed.call-02",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter._handle_v2_run_result",
     "line": 1824,
@@ -375,7 +375,7 @@
     "transport_only_reason": "Frontend-only spinner clear for CLARIFYING; run lifecycle remains awaiting input and must not be terminalized as completed."
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._handle_v2_run_result.canceled.1856",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._handle_v2_run_result.canceled",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter._handle_v2_run_result",
     "line": 1856,
@@ -393,7 +393,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._handle_v2_run_result.failed.1893",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._handle_v2_run_result.failed",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter._handle_v2_run_result",
     "line": 1893,
@@ -411,7 +411,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._resume_continuation_locked.completed.2165",
+    "call_id": "modules.RoomMessageCenter.RoomMessageCenter._resume_continuation_locked.completed",
     "path": "modules/RoomMessageCenter.py",
     "function_or_method": "RoomMessageCenter._resume_continuation_locked",
     "line": 2165,
@@ -429,7 +429,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "modules.SupervisorExecutor.SupervisorExecutor.run.processing.243",
+    "call_id": "modules.SupervisorExecutor.SupervisorExecutor.run.processing.call-01",
     "path": "modules/SupervisorExecutor.py",
     "function_or_method": "SupervisorExecutor.run",
     "line": 243,
@@ -446,7 +446,7 @@
     "expects_run_event_sse": true
   },
   {
-    "call_id": "modules.SupervisorExecutor.SupervisorExecutor.run.processing.550",
+    "call_id": "modules.SupervisorExecutor.SupervisorExecutor.run.processing.call-02",
     "path": "modules/SupervisorExecutor.py",
     "function_or_method": "SupervisorExecutor.run",
     "line": 550,
@@ -463,7 +463,7 @@
     "expects_run_event_sse": true
   },
   {
-    "call_id": "modules.SupervisorExecutor.SupervisorExecutor.run.awaiting_input.709",
+    "call_id": "modules.SupervisorExecutor.SupervisorExecutor.run.awaiting_input.call-01",
     "path": "modules/SupervisorExecutor.py",
     "function_or_method": "SupervisorExecutor.run",
     "line": 709,
@@ -480,7 +480,7 @@
     "expects_run_event_sse": true
   },
   {
-    "call_id": "modules.SupervisorExecutor.SupervisorExecutor.run.processing.741",
+    "call_id": "modules.SupervisorExecutor.SupervisorExecutor.run.processing.call-03",
     "path": "modules/SupervisorExecutor.py",
     "function_or_method": "SupervisorExecutor.run",
     "line": 741,
@@ -497,7 +497,7 @@
     "expects_run_event_sse": true
   },
   {
-    "call_id": "modules.SupervisorExecutor.SupervisorExecutor.run.processing.785",
+    "call_id": "modules.SupervisorExecutor.SupervisorExecutor.run.processing.call-04",
     "path": "modules/SupervisorExecutor.py",
     "function_or_method": "SupervisorExecutor.run",
     "line": 785,
@@ -514,7 +514,7 @@
     "expects_run_event_sse": true
   },
   {
-    "call_id": "modules.SupervisorExecutor.SupervisorExecutor.run.awaiting_input.963",
+    "call_id": "modules.SupervisorExecutor.SupervisorExecutor.run.awaiting_input.call-02",
     "path": "modules/SupervisorExecutor.py",
     "function_or_method": "SupervisorExecutor.run",
     "line": 963,
@@ -531,7 +531,7 @@
     "expects_run_event_sse": true
   },
   {
-    "call_id": "modules.SupervisorExecutor.SupervisorExecutor.run.processing.1029",
+    "call_id": "modules.SupervisorExecutor.SupervisorExecutor.run.processing.call-05",
     "path": "modules/SupervisorExecutor.py",
     "function_or_method": "SupervisorExecutor.run",
     "line": 1029,
@@ -548,7 +548,7 @@
     "expects_run_event_sse": true
   },
   {
-    "call_id": "modules.WorkflowCenter.WorkflowCenter.run_workflow.canceled.477",
+    "call_id": "modules.WorkflowCenter.WorkflowCenter.run_workflow.canceled",
     "path": "modules/WorkflowCenter.py",
     "function_or_method": "WorkflowCenter.run_workflow",
     "line": 477,
@@ -565,7 +565,7 @@
     "transport_only_reason": "Legacy Workflow is decommissioned by MODULAR_DECOUPLING_DESIGN.md and base_task_id is not an Execution run room_id."
   },
   {
-    "call_id": "modules.agent_response_handler.AgentResponseHandler._maybe_create_hitl_for_async_interactive.awaiting_input.324",
+    "call_id": "modules.agent_response_handler.AgentResponseHandler._maybe_create_hitl_for_async_interactive.awaiting_input",
     "path": "modules/agent_response_handler.py",
     "function_or_method": "AgentResponseHandler._maybe_create_hitl_for_async_interactive",
     "line": 324,
@@ -582,7 +582,7 @@
     "expects_run_event_sse": true
   },
   {
-    "call_id": "modules.agent_response_handler.AgentResponseHandler._on_processing_status.state.381",
+    "call_id": "modules.agent_response_handler.AgentResponseHandler._on_processing_status.state.call-01",
     "path": "modules/agent_response_handler.py",
     "function_or_method": "AgentResponseHandler._on_processing_status",
     "line": 381,
@@ -599,7 +599,7 @@
     "expects_run_event_sse": true
   },
   {
-    "call_id": "modules.agent_response_handler.AgentResponseHandler._on_processing_status.state.389",
+    "call_id": "modules.agent_response_handler.AgentResponseHandler._on_processing_status.state.call-02",
     "path": "modules/agent_response_handler.py",
     "function_or_method": "AgentResponseHandler._on_processing_status",
     "line": 389,
@@ -616,7 +616,7 @@
     "transport_only_reason": "Generic agent processing-status event has no validated lifecycle_message_id, so it remains transport-only."
   },
   {
-    "call_id": "services.room_services.RoomServices.send_message_to_room.failed.2294",
+    "call_id": "services.room_services.RoomServices.send_message_to_room.failed.call-01",
     "path": "services/room_services.py",
     "function_or_method": "RoomServices.send_message_to_room",
     "line": 2294,
@@ -634,7 +634,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "services.room_services.RoomServices.send_message_to_room.failed.2367",
+    "call_id": "services.room_services.RoomServices.send_message_to_room.failed.call-02",
     "path": "services/room_services.py",
     "function_or_method": "RoomServices.send_message_to_room",
     "line": 2367,
@@ -652,7 +652,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "services.room_services.RoomServices.send_message_to_room.canceled.2474",
+    "call_id": "services.room_services.RoomServices.send_message_to_room.canceled",
     "path": "services/room_services.py",
     "function_or_method": "RoomServices.send_message_to_room",
     "line": 2474,
@@ -670,7 +670,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "services.room_services.RoomServices.send_message_to_room.failed.2489",
+    "call_id": "services.room_services.RoomServices.send_message_to_room.failed.call-03",
     "path": "services/room_services.py",
     "function_or_method": "RoomServices.send_message_to_room",
     "line": 2489,
@@ -688,7 +688,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "services.room_services.RoomServices._send_processing_status.processing.2582",
+    "call_id": "services.room_services.RoomServices._send_processing_status.processing",
     "path": "services/room_services.py",
     "function_or_method": "RoomServices._send_processing_status",
     "line": 2582,
@@ -705,7 +705,7 @@
     "expects_run_event_sse": true
   },
   {
-    "call_id": "services.room_services.RoomServices._handle_no_agents_fallback.completed.2929",
+    "call_id": "services.room_services.RoomServices._handle_no_agents_fallback.completed",
     "path": "services/room_services.py",
     "function_or_method": "RoomServices._handle_no_agents_fallback",
     "line": 2929,
@@ -723,7 +723,7 @@
     "terminal_status": true
   },
   {
-    "call_id": "services.room_services.RoomServices.create_and_parse_user_message.processing.2998",
+    "call_id": "services.room_services.RoomServices.create_and_parse_user_message.processing",
     "path": "services/room_services.py",
     "function_or_method": "RoomServices.create_and_parse_user_message",
     "line": 2998,
@@ -740,7 +740,7 @@
     "transport_only_reason": "create_and_parse_user_message persists/parses/fans out messages but does not start the terminalizing Execution run; the deprecated external processing endpoint returns 410."
   },
   {
-    "call_id": "services.task_notification_service._notify_task_update_impl.mapped_status.375",
+    "call_id": "services.task_notification_service._notify_task_update_impl.mapped_status.call-01",
     "path": "services/task_notification_service.py",
     "function_or_method": "_notify_task_update_impl",
     "line": 375,
@@ -757,7 +757,7 @@
     "transport_only_reason": "Per-agent task-state notification only; root orchestration lifecycle is emitted by RoomMessageCenter after the full queue completes."
   },
   {
-    "call_id": "services.task_notification_service._notify_task_update_impl.mapped_status.379",
+    "call_id": "services.task_notification_service._notify_task_update_impl.mapped_status.call-02",
     "path": "services/task_notification_service.py",
     "function_or_method": "_notify_task_update_impl",
     "line": 379,

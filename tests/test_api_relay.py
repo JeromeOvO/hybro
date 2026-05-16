@@ -812,6 +812,34 @@ class TestRelayTransportHandlePublish:
         sse.send_processing_status.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_processing_status_parent_agent_message_id_is_dropped(self):
+        db = MagicMock()
+        msg = _make_msg(related_message_id="parent-agent-msg")
+        parent = _make_msg(message_id="parent-agent-msg", related_message_id="umsg-001")
+        db.get_room_agent_message_by_message_id = AsyncMock(side_effect=[msg, parent])
+        db.get_room_user_message_by_message_id = AsyncMock(
+            side_effect=[None, MagicMock(message_type="user")]
+        )
+        db.is_message_cancelled = AsyncMock(return_value=False)
+        agent_mock = MagicMock()
+        agent_mock.hub_id = "hub-001"
+        db.get_agent_by_agent_id = AsyncMock(return_value=agent_mock)
+        sse = MagicMock()
+        sse.send_processing_status = AsyncMock()
+
+        rt = _make_relay_transport(db_service=db, sse_manager=sse)
+        await rt.handle_publish_event(
+            "processing_status",
+            "amsg-001",
+            {"status": "completed", "user_message_id": "parent-agent-msg"},
+            "room-1",
+            "hub-001",
+        )
+
+        rt.response_handler.handle.assert_not_awaited()
+        sse.send_processing_status.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_rejects_cross_hub_publish(self):
         """A hub must not publish events for agents belonging to a different hub."""
         db = MagicMock()
