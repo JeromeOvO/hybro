@@ -161,7 +161,10 @@ async def cancel_message(
             message.room_id, "canceled", message_id
         )
 
-        # Immediately mark any paused agent messages as canceled and notify frontend
+        # Phase 7a: root cancellation lifecycle/frontend clear is complete above.
+        # Paused-agent DB task-state updates, task notifications, and remote
+        # cancels are separate best-effort cleanup; failures here must not
+        # block the root cancellation result.
         try:
             from a2a.types import TaskState
             from services.a2a_service import a2a_service

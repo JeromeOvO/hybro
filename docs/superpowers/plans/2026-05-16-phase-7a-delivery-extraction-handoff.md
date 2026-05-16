@@ -11,10 +11,17 @@ extracting Delivery.
 
 ## Remaining Audit Items
 
+- `modules/RoomMessageCenter.py`: the failed room-lock path in
+  `process_room_user_message` emits `FAILED` `processing_status` before
+  `_notify_all_non_terminal_tasks_failed(...)`.
 - `modules/RoomMessageCenter.py`: the queue failure path in
   `_process_room_user_message_locked` emits `FAILED` `processing_status` before
   the `turn_failed` append and before
   `_notify_all_non_terminal_tasks_failed(...)`.
+- `modules/RoomMessageCenter.py`: V1 queue-resume failure records/emits
+  `FAILED` in `QueueExecutor.resume_from_continuation()`, then
+  `_resume_continuation_locked()` calls
+  `_notify_all_non_terminal_tasks_failed(...)` after that terminal emit.
 - `modules/RoomMessageCenter.py`: root queue completion emits `COMPLETED`
   `processing_status` before `turn_event_appender.append("turn_completed", ...)`.
 - `modules/RoomMessageCenter.py`: supervisor V2 execution failure emits
@@ -38,9 +45,20 @@ extracting Delivery.
   ...)`. This is not run-lifecycle terminalization, but it is still a post-emit
   business side effect.
 
+## Classified Best-Effort Cleanup
+
+- `api/sse.py`: `cancel_message()` records/emits the root `canceled`
+  processing status after the required root cancellation side effects
+  (`cancel_message_and_broadcast`, HITL request cancellation, and MongoDB
+  cancellation persistence). The later paused-agent DB task-state update,
+  `notify_task_update()`, and remote cancel loop are separate best-effort
+  cleanup. The Phase 7a cancellation test in `tests/test_api_sse.py` proves a
+  paused-agent notification failure does not block the root lifecycle record or
+  frontend clear.
+
 ## Phase 6 Gate
 
-Before Delivery extraction proceeds, each listed side effect must either:
+Before Delivery extraction proceeds, each remaining side effect must either:
 
 - move before the corresponding `processing_status` emit, or
 - be explicitly classified as best-effort/non-blocking with tests proving
