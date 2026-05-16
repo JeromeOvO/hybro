@@ -8,7 +8,6 @@ Original content is always retrievable on demand.
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6 for design details.
 """
 
-import asyncio
 import os
 
 from common.utils.context_utils import estimate_tokens
@@ -19,7 +18,6 @@ from models.compaction import (
     ContentReference,
     StorageType,
 )
-from models.context_config import compaction_config
 from models.memory import ConversationTurn, RoomMemory, TurnRepresentation
 from services.content_storage_service import (
     ContentExpiredError,
@@ -49,6 +47,14 @@ def _safe_tokens_full(turn: ConversationTurn) -> int:
     return 0
 
 
+def _is_unsupported_storage_response(content: str) -> bool:
+    return (
+        isinstance(content, str)
+        and content.startswith("[Error:")
+        and "unsupported storage" in content.lower()
+    )
+
+
 class CompactionService:
     """
     Service for lossless compaction of conversation turns.
@@ -75,6 +81,13 @@ class CompactionService:
         self._facade = facade
         self._bound = True
 
+    def _require_facade(self):
+        if not self._bound or self._facade is None:
+            raise RuntimeError(
+                "CompactionService.bind_facade() not called - startup incomplete"
+            )
+        return self._facade
+
     async def should_compact(self, room_id: str) -> bool:
         """
         Check if room memory needs compaction.
@@ -91,48 +104,8 @@ class CompactionService:
         Returns:
             True if compaction should be triggered
         """
-        if self._bound and self._facade is not None:
-            return await self._facade.should_compact(room_id)
-
-        config = compaction_config
-
-        if not config.enabled:
-            return False
-
-        room_memory = await self.db_service.get_room_memory_by_room_id(room_id)
-        if not room_memory:
-            return False
-
-        history = room_memory.get_conversation_history()
-        if not history:
-            return False
-
-        # Count only full-representation turns
-        full_turns = [
-            t for t in history if t.representation == TurnRepresentation.FULL
-        ]
-
-        if not full_turns:
-            return False
-
-        # Check turn count threshold
-        if len(full_turns) > config.max_full_turns:
-            logger.debug(
-                f"CompactionService: Room {room_id} has {len(full_turns)} full turns "
-                f"(threshold: {config.max_full_turns})"
-            )
-            return True
-
-        # Check token threshold
-        token_estimate = sum(_safe_tokens_full(t) for t in full_turns)
-        if token_estimate > config.max_total_tokens:
-            logger.debug(
-                f"CompactionService: Room {room_id} has {token_estimate} tokens "
-                f"(threshold: {config.max_total_tokens})"
-            )
-            return True
-
-        return False
+        facade = self._require_facade()
+        return await facade.should_compact(room_id)
 
     async def compact_if_needed(self, room_id: str) -> CompactionResult | None:
         """Check and compact in a single pass, avoiding redundant DB loads.
@@ -140,38 +113,10 @@ class CompactionService:
         Returns the CompactionResult if compaction ran, or None if it was
         not needed (or disabled).
         """
-        if self._bound and self._facade is not None:
-            return _legacy_compaction_result_or_none(
-                await self._facade.compact_if_needed(room_id)
-            )
-
-        config = compaction_config
-        if not config.enabled:
-            return None
-
-        room_memory = await self.db_service.get_room_memory_by_room_id(room_id)
-        if not room_memory:
-            return None
-
-        history = room_memory.get_conversation_history()
-        if not history:
-            return None
-
-        full_turns = [
-            t for t in history if t.representation == TurnRepresentation.FULL
-        ]
-        if not full_turns:
-            return None
-
-        needs = len(full_turns) > config.max_full_turns
-        if not needs:
-            token_estimate = sum(_safe_tokens_full(t) for t in full_turns)
-            needs = token_estimate > config.max_total_tokens
-
-        if not needs:
-            return None
-
-        return await self.compact_room_memory(room_id, room_memory=room_memory)
+        facade = self._require_facade()
+        return _legacy_compaction_result_or_none(
+            await facade.compact_if_needed(room_id)
+        )
 
     async def compact_room_memory(
         self,
@@ -198,129 +143,14 @@ class CompactionService:
         2. Trigger location matters: This function is safe to call within the
            per-room processing lock (on-demand after synthesis).
         """
-        if self._bound and self._facade is not None:
-            return _legacy_compaction_result(
-                await self._facade.compact_room_memory(
-                    room_id,
-                    room_memory_doc=room_memory.model_dump(mode="json")
-                    if room_memory is not None
-                    else None,
-                )
+        facade = self._require_facade()
+        return _legacy_compaction_result(
+            await facade.compact_room_memory(
+                room_id,
+                room_memory_doc=room_memory.model_dump(mode="json")
+                if room_memory is not None
+                else None,
             )
-
-        config = compaction_config
-
-        if not config.enabled:
-            return CompactionResult(
-                room_id=room_id,
-                compacted_count=0,
-                tokens_saved=0,
-                errors=["Compaction is disabled"],
-            )
-
-        if not room_memory:
-            room_memory = await self.db_service.get_room_memory_by_room_id(room_id)
-        if not room_memory:
-            return CompactionResult(
-                room_id=room_id,
-                compacted_count=0,
-                tokens_saved=0,
-                errors=[f"Room memory not found for room {room_id}"],
-            )
-
-        history = room_memory.get_conversation_history()
-        if not history:
-            return CompactionResult(
-                room_id=room_id,
-                compacted_count=0,
-                tokens_saved=0,
-            )
-
-        preserve_count = config.preserve_recent_turns
-
-        # Guard: preserve_count=0 means compact everything.
-        # Python's seq[:-0] == seq[:0] == [] — NOT seq[:], so we must handle this.
-        if preserve_count == 0:
-            turns_to_compact = [
-                t
-                for t in history
-                if t.representation == TurnRepresentation.FULL
-            ]
-        else:
-            turns_to_compact = [
-                t
-                for t in history[:-preserve_count]
-                if t.representation == TurnRepresentation.FULL
-            ]
-
-        if not turns_to_compact:
-            logger.debug(
-                f"CompactionService: No turns to compact for room {room_id}"
-            )
-            return CompactionResult(
-                room_id=room_id,
-                compacted_count=0,
-                tokens_saved=0,
-            )
-
-        tokens_saved = 0
-        compacted_entries: list[dict] = []
-        errors: list[str] = []
-
-        sem = asyncio.Semaphore(COMPACTION_CONCURRENCY)
-
-        async def _compact_one(turn: ConversationTurn) -> tuple[dict | None, int, str | None]:
-            """Prepare one turn for compaction under a semaphore."""
-            async with sem:
-                try:
-                    ref_data = await self._prepare_compaction(turn, room_id)
-                    if ref_data:
-                        saved = max(
-                            0, turn.estimated_tokens_full - turn.estimated_tokens_compact
-                        )
-                        return ref_data, saved, None
-                    return None, 0, None
-                except Exception as e:
-                    msg = f"Failed to compact turn {turn.turn_id}: {e}"
-                    logger.error("CompactionService: %s", msg)
-                    return None, 0, msg
-
-        results = await asyncio.gather(
-            *(_compact_one(turn) for turn in turns_to_compact)
-        )
-
-        for ref_data, saved, error_msg in results:
-            if ref_data:
-                compacted_entries.append(ref_data)
-                tokens_saved += saved
-            if error_msg:
-                errors.append(error_msg)
-
-        if compacted_entries:
-            save_success = await self.db_service.compact_turns_bulk(
-                room_id, compacted_entries
-            )
-
-            if save_success:
-                logger.info(
-                    f"CompactionService: Compacted {len(compacted_entries)} turns for room {room_id}, "
-                    f"saved ~{tokens_saved} tokens"
-                )
-            else:
-                error_msg = (
-                    f"CompactionService: Prepared {len(compacted_entries)} turns in-memory "
-                    f"but atomic write failed for room {room_id} — will retry next cycle"
-                )
-                logger.warning(error_msg)
-                errors.append(error_msg)
-                compacted_entries = []
-                tokens_saved = 0
-
-        return CompactionResult(
-            room_id=room_id,
-            compacted_count=len(compacted_entries),
-            tokens_saved=tokens_saved,
-            errors=errors,
         )
 
     async def _prepare_compaction(
@@ -417,21 +247,20 @@ class CompactionService:
             ContentExpiredError: If the stored document is missing
             ValueError: If the turn is compact but has no content_ref
         """
-        if self._bound and self._facade is not None:
-            return await self._facade.expand_turn_content_from_turn(
-                turn.model_dump(mode="json")
-            )
-
         if turn.representation == TurnRepresentation.FULL:
             return turn.content or ""
-
-        if not turn.content_ref:
+        if turn.content_ref is None:
             raise ValueError(
-                f"Compact turn {turn.turn_id} missing content reference"
+                f"Compact turn {turn.turn_id} has missing content reference"
             )
-
-        return await self.content_storage.expand_content_reference(
-            turn.content_ref, turn.turn_id
+        if turn.content_ref.storage_type != StorageType.MONGODB:
+            return await self.content_storage.expand_content_reference(
+                turn.content_ref,
+                turn.turn_id,
+            )
+        facade = self._require_facade()
+        return await facade.expand_turn_content_from_turn(
+            turn.model_dump(mode="json")
         )
 
     async def fetch_turn_content(
@@ -451,18 +280,27 @@ class CompactionService:
         Returns:
             The full content string, or an error message
         """
-        if self._bound and self._facade is not None:
-            return await self._facade.fetch_turn_content(turn_id, room_id)
+        facade = self._require_facade()
+        try:
+            content = await facade.fetch_turn_content(turn_id, room_id)
+        except NotImplementedError:
+            return await self._fetch_turn_content_via_legacy_storage(turn_id, room_id)
+        if not _is_unsupported_storage_response(content):
+            return content
+        return await self._fetch_turn_content_via_legacy_storage(turn_id, room_id)
 
+    async def _fetch_turn_content_via_legacy_storage(
+        self, turn_id: str, room_id: str
+    ) -> str:
         room_memory = await self.db_service.get_room_memory_by_room_id(room_id)
         if not room_memory:
             return f"[Error: Room {room_id} not found]"
 
         history = room_memory.get_conversation_history()
         turn = next(
-            (t for t in history if t.turn_id == turn_id), None
+            (item for item in history if item.turn_id == turn_id),
+            None,
         )
-
         if turn is None:
             return f"[Error: Turn {turn_id} not found in room history]"
 
@@ -470,10 +308,10 @@ class CompactionService:
             return await self.expand_turn_content(turn)
         except ContentExpiredError:
             return f"[Error: Content for turn {turn_id} is no longer available (expired)]"
-        except NotImplementedError as e:
-            return f"[Error: Content for turn {turn_id} uses unsupported storage: {e}]"
-        except ValueError as e:
-            return f"[Error: {e}]"
+        except NotImplementedError as exc:
+            return f"[Error: Content for turn {turn_id} uses unsupported storage: {exc}]"
+        except ValueError as exc:
+            return f"[Error: {exc}]"
 
     async def expand_turns_for_context(
         self, turns: list[ConversationTurn]
@@ -501,6 +339,7 @@ class CompactionService:
         Returns:
             The turns list unchanged (assembly layer calls turn.to_context_string())
         """
+        self._require_facade()
         return turns  # Assembly layer calls turn.to_context_string() for rendering
 
     async def get_compaction_stats(self, room_id: str) -> dict:
@@ -513,42 +352,8 @@ class CompactionService:
         Returns:
             Dict with compaction statistics
         """
-        if self._bound and self._facade is not None:
-            return await self._facade.get_compaction_stats(room_id)
-
-        room_memory = await self.db_service.get_room_memory_by_room_id(room_id)
-        if not room_memory:
-            return {"error": f"Room {room_id} not found"}
-
-        history = room_memory.get_conversation_history()
-
-        full_turns = [
-            t for t in history if t.representation == TurnRepresentation.FULL
-        ]
-        compact_turns = [
-            t for t in history if t.representation == TurnRepresentation.COMPACT
-        ]
-
-        full_tokens = sum(_safe_tokens_full(t) for t in full_turns)
-        compact_tokens_saved = sum(
-            max(0, t.estimated_tokens_full - t.estimated_tokens_compact)
-            for t in compact_turns
-        )
-
-        content_stats = await self.content_storage.get_content_stats_for_room(
-            room_id
-        )
-
-        return {
-            "room_id": room_id,
-            "total_turns": len(history),
-            "full_turns": len(full_turns),
-            "compact_turns": len(compact_turns),
-            "full_tokens": full_tokens,
-            "tokens_saved_by_compaction": compact_tokens_saved,
-            "total_compactions": room_memory.total_compactions,
-            "content_storage": content_stats,
-        }
+        facade = self._require_facade()
+        return await facade.get_compaction_stats(room_id)
 
 
 # Singleton export

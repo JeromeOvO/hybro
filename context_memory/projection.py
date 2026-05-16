@@ -13,8 +13,11 @@ from common.utils.context_utils import (
     estimate_tokens,
     extract_turn_notes,
 )
+from common.utils.logger import get_logger
 
 from context_memory.config import ContextMemoryLLMConfig
+
+logger = get_logger(__name__)
 
 
 TURN_NOTES_SCHEMA: dict[str, Any] = {
@@ -31,22 +34,40 @@ TURN_NOTES_SCHEMA: dict[str, Any] = {
 
 
 def build_turn_content(message_text: str, attachments: list[Any] | None = None) -> str:
+    content = message_text or ""
     if not attachments:
-        return message_text
-    parts = [message_text] if message_text else []
-    rendered = []
-    for attachment in attachments:
-        if isinstance(attachment, dict):
-            name = attachment.get("file_name") or attachment.get("name") or "attachment"
-            url = attachment.get("url") or attachment.get("file_url") or attachment.get("s3_key") or ""
-        else:
-            name = getattr(attachment, "file_name", None) or getattr(attachment, "name", None) or "attachment"
-            url = getattr(attachment, "url", None) or getattr(attachment, "file_url", None) or getattr(attachment, "s3_key", None) or ""
-        rendered.append(f"- {name}: {url}" if url else f"- {name}")
-    if rendered:
-        parts.append("[Attachments]")
-        parts.extend(rendered)
-    return "\n".join(parts)
+        return content
+    descriptions = [_format_attachment_for_turn(attachment) for attachment in attachments]
+    return f"{content}\n[Attachments: {', '.join(descriptions)}]"
+
+
+def _format_attachment_for_turn(attachment: Any) -> str:
+    name = _attachment_value(attachment, "file_name", "name") or "attachment"
+    mime_type = _attachment_value(attachment, "mime_type", "content_type") or "unknown type"
+    size_bytes = _attachment_value(attachment, "size_bytes", "size")
+    size = _human_size(size_bytes) if size_bytes else "unknown size"
+    return f"{name} ({mime_type}, {size})"
+
+
+def _attachment_value(attachment: Any, *keys: str) -> Any:
+    if isinstance(attachment, dict):
+        for key in keys:
+            if attachment.get(key) is not None:
+                return attachment[key]
+        return None
+    for key in keys:
+        value = getattr(attachment, key, None)
+        if value is not None:
+            return value
+    return None
+
+
+def _human_size(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes}B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.0f}KB"
+    return f"{size_bytes / (1024 * 1024):.1f}MB"
 
 
 async def project_message_from_history(
@@ -197,6 +218,7 @@ async def initialize_or_update_room_memory(
     attachments: list | None,
     id_factory: Callable[[], str],
     now,
+    message_id: str | None = None,
 ) -> dict | None:
     room_memory = await repository.get_room_memory(room_id)
     if not room_memory:
@@ -210,20 +232,38 @@ async def initialize_or_update_room_memory(
     if memory_content:
         clean_message = clean_mention_format(memory_content, room_agent_set or {})
         content = build_turn_content(clean_message, attachments)
+        turn_id = message_id or id_factory()
         turn = user_turn(
-            message_id=id_factory(),
+            message_id=turn_id,
             content=content,
             user_id=user_id,
             timestamp=now(),
         )
-        turn["turn_id"] = id_factory()
-        modified, matched = await repository.push_and_trim_conversation_turn(
-            room_id,
-            turn,
-            max_turns=MAX_HISTORY_TURNS,
-            summary_stub=f"[User] {clean_message[:200]}...",
-            max_summary_chars=MAX_SUMMARY_CHARS,
-        )
+        if message_id is None:
+            turn["turn_id"] = turn_id
+            modified, matched = await repository.push_and_trim_conversation_turn(
+                room_id,
+                turn,
+                max_turns=MAX_HISTORY_TURNS,
+                summary_stub=f"[User] {clean_message[:200]}...",
+                max_summary_chars=MAX_SUMMARY_CHARS,
+            )
+        else:
+            modified, matched, already_exists = (
+                await repository.push_and_trim_conversation_turn_if_absent(
+                    room_id,
+                    turn,
+                    turn_id=turn["turn_id"],
+                    max_turns=MAX_HISTORY_TURNS,
+                    summary_stub=f"[User] {clean_message[:200]}...",
+                    max_summary_chars=MAX_SUMMARY_CHARS,
+                )
+            )
+            if already_exists:
+                latest = await repository.get_room_memory(room_id) or room_memory
+                duplicate_doc = dict(latest)
+                duplicate_doc["_context_memory_duplicate_turn"] = True
+                return duplicate_doc
         if not modified and not matched:
             return None
         room_memory = await repository.get_room_memory(room_id) or room_memory
@@ -243,22 +283,35 @@ async def add_agent_response_to_memory(
     llm_provider: LLMProvider,
     llm_config: ContextMemoryLLMConfig,
     background_task_runner: Callable[[Awaitable[Any]], None],
+    message_id: str | None = None,
 ) -> tuple[bool, bool]:
     turn = agent_turn(
         content=response_text,
         agent_id=agent_id,
         agent_name=agent_name,
         timestamp=now(),
-        turn_id=id_factory(),
+        turn_id=f"message:{message_id}" if message_id else id_factory(),
         was_successful=was_successful,
     )
-    modified, matched = await repository.push_and_trim_conversation_turn(
-        room_id,
-        turn,
-        max_turns=MAX_HISTORY_TURNS,
-        summary_stub=f"[{agent_name}] {response_text[:200]}...",
-        max_summary_chars=MAX_SUMMARY_CHARS,
-    )
+    if message_id:
+        modified, matched, _already_exists = (
+            await repository.push_and_trim_conversation_turn_if_absent(
+                room_id,
+                turn,
+                turn_id=turn["turn_id"],
+                max_turns=MAX_HISTORY_TURNS,
+                summary_stub=f"[{agent_name}] {response_text[:200]}...",
+                max_summary_chars=MAX_SUMMARY_CHARS,
+            )
+        )
+    else:
+        modified, matched = await repository.push_and_trim_conversation_turn(
+            room_id,
+            turn,
+            max_turns=MAX_HISTORY_TURNS,
+            summary_stub=f"[{agent_name}] {response_text[:200]}...",
+            max_summary_chars=MAX_SUMMARY_CHARS,
+        )
     if modified and turn["estimated_tokens_full"] > LLM_TURN_NOTES_THRESHOLD:
         background_task_runner(
             enrich_turn_notes(
@@ -323,11 +376,17 @@ async def enrich_turn_notes(
     heuristic_notes: dict | None,
     content: str,
 ) -> None:
-    enriched = await extract_turn_notes_llm(
-        content, llm_provider=llm_provider, llm_config=llm_config
-    )
-    if enriched and enriched != heuristic_notes:
-        await repository.update_turn_notes(room_id, turn_id, enriched)
+    try:
+        enriched = await extract_turn_notes_llm(
+            content, llm_provider=llm_provider, llm_config=llm_config
+        )
+        if enriched and enriched != heuristic_notes:
+            await repository.update_turn_notes(room_id, turn_id, enriched)
+    except Exception:
+        logger.exception(
+            "Failed to enrich turn notes",
+            extra={"room_id": room_id, "turn_id": turn_id},
+        )
 
 
 async def extract_turn_notes_llm(
@@ -368,7 +427,10 @@ async def extract_turn_notes_llm(
                 "one_liner": (result.get("one_liner", "") or "")[:150],
             }
     except Exception:
-        pass
+        logger.debug(
+            "LLM turn note extraction failed; using heuristic notes",
+            exc_info=True,
+        )
     return extract_turn_notes(content)
 
 
@@ -391,9 +453,13 @@ def enrich_synthesis_with_trajectory(synthesis_text: str, trajectory: Any | None
 
 
 def extract_message_text(content: Any) -> str:
+    if content is None:
+        return ""
     if isinstance(content, str):
         return content
     if isinstance(content, dict):
+        if not content:
+            return ""
         attachments = content.get("attachments")
         for key in ("message_text", "response_text", "response", "content", "message", "text"):
             value = content.get(key)

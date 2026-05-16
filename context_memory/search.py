@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import time
 from dataclasses import replace
@@ -8,11 +9,14 @@ from datetime import datetime
 from common.dto import MemorySearchResult, VectorRecord
 from common.errors import VectorIndexUnavailableError
 from common.protocols import ContentStorageRepository, LLMProvider, VectorDAL
+from common.utils.logger import get_logger
 from common.utils.time import utcnow
 
 from context_memory.config import MemorySearchConfig
 from context_memory.models import SearchRankingRecord
 from context_memory.translators import search_result_from_record
+
+logger = get_logger(__name__)
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -49,30 +53,48 @@ async def search_memory(
             "mmr_applied": False,
         }
 
-    vector_used = True
-    keyword_used = True
-    try:
-        vector_records = await vector_search(
-            room_id=room_id,
-            query=query,
-            vector=vector,
-            llm_provider=llm_provider,
-            config=config,
+    vector_task = vector_search(
+        room_id=room_id,
+        query=query,
+        vector=vector,
+        llm_provider=llm_provider,
+        config=config,
+    )
+    keyword_task = keyword_search(
+        room_id=room_id,
+        query=query,
+        content_repository=content_repository,
+        config=config,
+    )
+    raw_vector_records, raw_keyword_records = await asyncio.gather(
+        vector_task,
+        keyword_task,
+        return_exceptions=True,
+    )
+
+    if isinstance(raw_vector_records, Exception):
+        logger.warning(
+            "Vector memory search failed for room %s",
+            room_id,
+            exc_info=_exc_info(raw_vector_records),
         )
-    except Exception:
         vector_records = []
         vector_used = False
+    else:
+        vector_records = raw_vector_records
+        vector_used = True
 
-    try:
-        keyword_records = await keyword_search(
-            room_id=room_id,
-            query=query,
-            content_repository=content_repository,
-            config=config,
+    if isinstance(raw_keyword_records, Exception):
+        logger.warning(
+            "Keyword memory search failed for room %s",
+            room_id,
+            exc_info=_exc_info(raw_keyword_records),
         )
-    except Exception:
         keyword_records = []
         keyword_used = False
+    else:
+        keyword_records = raw_keyword_records
+        keyword_used = True
 
     merged = merge_results(
         vector_records,
@@ -89,7 +111,8 @@ async def search_memory(
         merged = apply_mmr(merged, config.mmr_lambda)
         mmr_applied = True
 
-    final = merged[: limit or config.max_results]
+    effective_limit = _effective_limit(limit, config.max_results)
+    final = merged[:effective_limit]
     await hydrate_empty_results(final, room_id, content_repository, config)
     dto_results = [
         search_result_from_record(
@@ -131,15 +154,12 @@ async def vector_search(
     config: MemorySearchConfig,
 ) -> list[SearchRankingRecord]:
     embedding = await llm_provider.embed(query)
-    try:
-        matches = await vector.search(
-            config.index_name,
-            embedding,
-            top_k=50,
-            filter={"room_id": {"$eq": room_id}},
-        )
-    except VectorIndexUnavailableError:
-        return []
+    matches = await vector.search(
+        config.index_name,
+        embedding,
+        top_k=50,
+        filter={"room_id": {"$eq": room_id}},
+    )
     records = []
     for match in matches:
         metadata = dict(match.metadata or {})
@@ -174,18 +194,26 @@ async def keyword_search(
     for doc in docs:
         notes = doc.get("turn_notes") or {}
         one_liner = notes.get("one_liner") if isinstance(notes, dict) else None
-        content = (one_liner or doc.get("content") or "")[: config.max_snippet_chars]
+        content_type = doc.get("content_type") or "text"
+        content = (
+            one_liner[: config.max_snippet_chars]
+            if one_liner
+            else f"[{content_type}]"
+        )
+        content_preview = one_liner[: config.max_snippet_chars] if one_liner else None
+        timestamp = _parse_timestamp(doc.get("stored_at"))
         records.append(
             SearchRankingRecord(
                 turn_id=doc.get("turn_id", ""),
                 room_id=room_id,
                 content=content,
                 keyword_score=float(doc.get("score", 0.0) or 0.0),
-                timestamp=_parse_timestamp(doc.get("stored_at")),
+                timestamp=timestamp,
                 metadata={
                     "source_type": "turn",
-                    "content_preview": content,
-                    "content_type": doc.get("content_type"),
+                    "content_preview": content_preview,
+                    "content_type": content_type,
+                    "timestamp": timestamp,
                     "is_compact": True,
                     "can_expand": True,
                 },
@@ -327,20 +355,36 @@ async def index_turn_for_search(
             ],
         )
         return True
-    except VectorIndexUnavailableError:
+    except VectorIndexUnavailableError as exc:
+        logger.warning(
+            "Vector index unavailable while indexing context memory turn %s for room %s",
+            turn_doc.get("turn_id", ""),
+            room_id,
+            exc_info=_exc_info(exc),
+        )
         return False
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Failed to index context memory turn %s for room %s",
+            turn_doc.get("turn_id", ""),
+            room_id,
+            exc_info=_exc_info(exc),
+        )
         return False
 
 
 async def delete_room_index(
-    *, room_id: str, vector: VectorDAL, config: MemorySearchConfig
+    *,
+    room_id: str,
+    vector: VectorDAL,
+    config: MemorySearchConfig,
+    unavailable_ok: bool = False,
 ) -> bool:
     try:
         await vector.delete_by_filter(config.index_name, {"room_id": {"$eq": room_id}})
         return True
     except VectorIndexUnavailableError:
-        return False
+        return unavailable_ok
     except Exception:
         return False
 
@@ -354,3 +398,13 @@ def _parse_timestamp(value) -> datetime | None:
         except ValueError:
             return None
     return None
+
+
+def _effective_limit(limit: int | None, default: int) -> int:
+    if limit is None:
+        return max(0, default)
+    return max(0, limit)
+
+
+def _exc_info(exc: BaseException) -> tuple[type[BaseException], BaseException, object]:
+    return (type(exc), exc, exc.__traceback__)

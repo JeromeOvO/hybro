@@ -306,4 +306,5 @@ class TestProcessQueue:
             agent_name="TestAgent",
             response_text="task done",
             was_successful=True,
+            message_id="paused-msg",
         )

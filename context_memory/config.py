@@ -1,21 +1,46 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import timedelta
 import os
+from dataclasses import dataclass, field
+from datetime import timedelta
 
-from common.config import settings
+
+def _setting(name: str, fallback):
+    from common.config import settings
+
+    return getattr(settings, name, fallback)
+
+
+def _env_int(name: str, fallback: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(fallback))))
+    except (TypeError, ValueError):
+        return fallback
 
 
 @dataclass(frozen=True)
 class TokenBudgetConfig:
-    model_context_window: int = settings.context_model_window
-    system_prompt: int = settings.context_system_prompt_tokens
-    tool_schemas: int = settings.context_tool_schema_tokens
-    response_reserve: int = settings.context_response_reserve_tokens
-    room_context_pct: float = settings.context_room_pct
-    conversation_history_pct: float = settings.context_history_pct
-    current_task_pct: float = settings.context_task_pct
+    model_context_window: int = field(
+        default_factory=lambda: _setting("context_model_window", 128000)
+    )
+    system_prompt: int = field(
+        default_factory=lambda: _setting("context_system_prompt_tokens", 2000)
+    )
+    tool_schemas: int = field(
+        default_factory=lambda: _setting("context_tool_schema_tokens", 3000)
+    )
+    response_reserve: int = field(
+        default_factory=lambda: _setting("context_response_reserve_tokens", 4000)
+    )
+    room_context_pct: float = field(
+        default_factory=lambda: _setting("context_room_pct", 0.15)
+    )
+    conversation_history_pct: float = field(
+        default_factory=lambda: _setting("context_history_pct", 0.60)
+    )
+    current_task_pct: float = field(
+        default_factory=lambda: _setting("context_task_pct", 0.25)
+    )
 
     @property
     def fixed_reserve_tokens(self) -> int:
@@ -23,7 +48,7 @@ class TokenBudgetConfig:
 
     @property
     def available_for_content(self) -> int:
-        return self.model_context_window - self.fixed_reserve_tokens
+        return max(0, self.model_context_window - self.fixed_reserve_tokens)
 
     @property
     def room_context_tokens(self) -> int:
@@ -38,8 +63,9 @@ class TokenBudgetConfig:
         return int(self.available_for_content * self.current_task_pct)
 
     def with_model_window(self, token_budget: int) -> "TokenBudgetConfig":
+        model_context_window = max(0, int(token_budget))
         return TokenBudgetConfig(
-            model_context_window=token_budget,
+            model_context_window=model_context_window,
             system_prompt=self.system_prompt,
             tool_schemas=self.tool_schemas,
             response_reserve=self.response_reserve,
@@ -49,21 +75,26 @@ class TokenBudgetConfig:
         )
 
 
-def _compaction_concurrency_default() -> int:
-    try:
-        return max(1, int(os.getenv("COMPACTION_CONCURRENCY", "5")))
-    except (TypeError, ValueError):
-        return 5
-
-
 @dataclass(frozen=True)
 class CompactionConfig:
-    enabled: bool = settings.compaction_enabled
-    max_full_turns: int = settings.compaction_max_full_turns
-    max_total_tokens: int = settings.compaction_max_total_tokens
-    preserve_recent_turns: int = settings.compaction_preserve_recent
-    content_ttl_days: int = settings.compaction_content_ttl_days
-    concurrency: int = _compaction_concurrency_default()
+    enabled: bool = field(
+        default_factory=lambda: _setting("compaction_enabled", True)
+    )
+    max_full_turns: int = field(
+        default_factory=lambda: _setting("compaction_max_full_turns", 20)
+    )
+    max_total_tokens: int = field(
+        default_factory=lambda: _setting("compaction_max_total_tokens", 80000)
+    )
+    preserve_recent_turns: int = field(
+        default_factory=lambda: _setting("compaction_preserve_recent", 10)
+    )
+    content_ttl_days: int = field(
+        default_factory=lambda: _setting("compaction_content_ttl_days", 0)
+    )
+    concurrency: int = field(
+        default_factory=lambda: _env_int("COMPACTION_CONCURRENCY", 5)
+    )
 
     def expires_delta(self) -> timedelta | None:
         if self.content_ttl_days <= 0:
@@ -73,15 +104,33 @@ class CompactionConfig:
 
 @dataclass(frozen=True)
 class MemorySearchConfig:
-    enabled: bool = settings.memory_search_enabled
-    vector_weight: float = settings.memory_search_vector_weight
-    keyword_weight: float = settings.memory_search_keyword_weight
-    temporal_decay_enabled: bool = settings.memory_search_temporal_decay_enabled
-    half_life_days: int = settings.memory_search_half_life_days
-    mmr_lambda: float = settings.memory_search_mmr_lambda
-    max_results: int = settings.memory_search_max_results
-    max_snippet_chars: int = settings.memory_search_max_snippet_chars
-    index_name: str = settings.memory_search_index_name
+    enabled: bool = field(
+        default_factory=lambda: _setting("memory_search_enabled", True)
+    )
+    vector_weight: float = field(
+        default_factory=lambda: _setting("memory_search_vector_weight", 0.7)
+    )
+    keyword_weight: float = field(
+        default_factory=lambda: _setting("memory_search_keyword_weight", 0.3)
+    )
+    temporal_decay_enabled: bool = field(
+        default_factory=lambda: _setting("memory_search_temporal_decay_enabled", True)
+    )
+    half_life_days: int = field(
+        default_factory=lambda: _setting("memory_search_half_life_days", 30)
+    )
+    mmr_lambda: float = field(
+        default_factory=lambda: _setting("memory_search_mmr_lambda", 0.7)
+    )
+    max_results: int = field(
+        default_factory=lambda: _setting("memory_search_max_results", 10)
+    )
+    max_snippet_chars: int = field(
+        default_factory=lambda: _setting("memory_search_max_snippet_chars", 500)
+    )
+    index_name: str = field(
+        default_factory=lambda: _setting("memory_search_index_name", "room-memory")
+    )
 
 
 @dataclass(frozen=True)

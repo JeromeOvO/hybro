@@ -978,18 +978,27 @@ class RoomServices:
             )
 
         room_id = request.room_id
-        owner_id = (
-            request.requesting_user_id
-            or request.room_owner_id
-            or await facade.get_room_owner(room_id)
-        )
-        if owner_id is None:
+        actual_owner_id = await facade.get_room_owner(room_id)
+        if actual_owner_id is None:
             return self._room_error_response(
                 room_id=room_id,
                 error="Room not found",
                 status_code=404,
             )
-        success = await facade.delete_room(room_id, owner_id)
+        requested_owner_id = (
+            request.requesting_user_id
+            or request.room_owner_id
+            or actual_owner_id
+        )
+        if requested_owner_id != actual_owner_id:
+            return RoomCenterRoomSettingResponse(
+                room_id=room_id,
+                room=None,
+                success=False,
+                error="Forbidden",
+                status_code=403,
+            )
+        success = await facade.delete_room(room_id, actual_owner_id)
         if not success:
             return RoomCenterRoomSettingResponse(
                 room_id=room_id,
@@ -998,49 +1007,41 @@ class RoomServices:
                 error="Failed to delete room",
                 status_code=500,
             )
+        cleanup_ok = await self._cleanup_context_memory_for_room(room_id)
         await self._delete_transitional_non_room_data(room_id)
-        return RoomCenterRoomSettingResponse(
-            room_id=room_id, room=None, success=True, error=None, status_code=200
-        )
-
-        # Delete the room record first to confirm ownership/existence
-        success = await self.database_service.delete_room_by_room_id(room_id)
-        if not success:
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id,
-                room=None,
-                success=False,
-                error="Failed to delete room",
-                status_code=500,
-            )
-
-        # Cascade delete child data after room deletion is confirmed
-        from database.mongodb import mongodb
-
-        # S3 cleanup first — if this fails, file_uploads metadata remains for
-        # the orphan cleaner to reconcile on its next pass.
-        s3_cleanup_ok = True
-        try:
-            from services.s3_service import s3_service
-
-            await s3_service.delete_prefix(f"uploads/{room_id}/")
-            await s3_service.delete_prefix(f"artifacts/{room_id}/")
-        except Exception:
-            s3_cleanup_ok = False
+        if not cleanup_ok:
             logger.warning(
-                "S3 cleanup failed for room %s; orphan job will retry", room_id
+                "Context & Memory cleanup failed after room deletion for room %s",
+                room_id,
             )
-
-        await mongodb.room_user_messages_collection.delete_many({"room_id": room_id})
-        await mongodb.room_agent_messages_collection.delete_many({"room_id": room_id})
-        await mongodb.room_memories_collection.delete_many({"room_id": room_id})
-        if s3_cleanup_ok:
-            await mongodb.file_uploads_collection.delete_many({"room_id": room_id})
-        await mongodb.conversation_content_collection.delete_many({"room_id": room_id})
-
         return RoomCenterRoomSettingResponse(
             room_id=room_id, room=None, success=True, error=None, status_code=200
         )
+
+    async def _cleanup_context_memory_for_room(self, room_id: str) -> bool:
+        # TODO(Phase 9): Move this transitional cleanup behind a repository/DAL
+        # boundary when the remaining legacy room data paths are retired.
+        if self._context_memory_manager is None:
+            logger.warning(
+                "Context & Memory cleanup skipped for room %s; manager not bound",
+                room_id,
+            )
+            return False
+        try:
+            ok = await self._context_memory_manager.delete_room_memory(room_id)
+            if not ok:
+                logger.warning(
+                    "Context & Memory cleanup reported failure for room %s",
+                    room_id,
+                )
+            return bool(ok)
+        except Exception:
+            logger.warning(
+                "Context & Memory cleanup failed for room %s",
+                room_id,
+                exc_info=True,
+            )
+            return False
 
     async def _delete_transitional_non_room_data(self, room_id: str) -> None:
         s3_cleanup_ok = True
@@ -1053,25 +1054,17 @@ class RoomServices:
                 "S3 cleanup failed for room %s; orphan job will retry", room_id
             )
 
-        try:
-            from database.mongodb import mongodb
+        if s3_cleanup_ok:
+            try:
+                from database.mongodb import mongodb
 
-            # TODO(Phase 9): Move this transitional cleanup behind a repository/DAL
-            # boundary when the remaining legacy room data paths are retired.
-            if self._context_memory_manager is not None:
-                ok = await self._context_memory_manager.delete_room_memory(room_id)
-                if not ok:
-                    logger.warning(
-                        "Context & Memory cleanup reported failure for room %s",
-                        room_id,
-                    )
-            if s3_cleanup_ok:
                 await mongodb.file_uploads_collection.delete_many({"room_id": room_id})
-        except Exception:
-            logger.warning(
-                "Transitional non-room cleanup failed for room %s", room_id,
-                exc_info=True,
-            )
+            except Exception:
+                logger.warning(
+                    "Transitional file upload cleanup failed for room %s",
+                    room_id,
+                    exc_info=True,
+                )
 
     # --- Attachment resolution helpers ---
 
@@ -2546,6 +2539,7 @@ class RoomServices:
             await self.room_memory_service.initialize_or_update_room_memory(
                 RoomCenterMemoryRequest(
                     room_id=request.room_id,
+                    message_id=user_message.message_id,
                     memory_content=user_message.message_content.message_text,
                     room_agent_set=room_agent_set,  # Pass for cleaning @mentions
                     user_id=user_message.user_id,
@@ -2936,6 +2930,7 @@ class RoomServices:
             await self.room_memory_service.initialize_or_update_room_memory(
                 RoomCenterMemoryRequest(
                     room_id=room_id,
+                    message_id=message.message_id,
                     memory_content=message.message_content.message_text,
                     attachments=message.message_content.attachments,
                 )

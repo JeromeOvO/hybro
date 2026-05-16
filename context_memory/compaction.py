@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Any
 
 from common.protocols import ContentStorageRepository, MemoryRepository
 from common.utils.context_utils import estimate_tokens
@@ -34,10 +33,12 @@ def safe_tokens_full(turn) -> int:
 async def should_compact(
     repository: MemoryRepository, room_id: str, config: CompactionConfig
 ) -> bool:
-    if not config.enabled:
-        return False
     doc = await repository.get_room_memory(room_id)
-    if not doc:
+    return _doc_should_compact(doc, config)
+
+
+def _doc_should_compact(doc: dict | None, config: CompactionConfig) -> bool:
+    if not config.enabled or not doc:
         return False
     state = normalize_room_memory(doc)
     full_turns = [t for t in state.conversation_history if t.representation == "full"]
@@ -57,13 +58,14 @@ async def compact_if_needed(
     now,
     index_turn: IndexTurnCallback | None = None,
 ):
-    if not await should_compact(repository, room_id, config):
+    doc = await repository.get_room_memory(room_id)
+    if not _doc_should_compact(doc, config):
         return None
     return await compact_room_memory(
         repository=repository,
         content_repository=content_repository,
         room_id=room_id,
-        room_memory_doc=None,
+        room_memory_doc=doc,
         config=config,
         now=now,
         index_turn=index_turn,
@@ -80,7 +82,8 @@ async def run_compaction(
     now,
     index_turn: IndexTurnCallback | None = None,
 ):
-    if not await should_compact(repository, room_id, config):
+    doc = await repository.get_room_memory(room_id)
+    if not _doc_should_compact(doc, config):
         return compaction_result_dto(
             room_id=room_id,
             compacted_count=0,
@@ -91,7 +94,7 @@ async def run_compaction(
         repository=repository,
         content_repository=content_repository,
         room_id=room_id,
-        room_memory_doc=None,
+        room_memory_doc=doc,
         config=config,
         now=now,
         index_turn=index_turn,
@@ -171,7 +174,9 @@ async def compact_room_memory(
                 )
                 if index_turn is not None:
                     try:
-                        await index_turn(room_id, turn.to_dict())
+                        indexed = await index_turn(room_id, turn.to_dict())
+                        if indexed is False:
+                            errors.append(f"Failed to index turn {turn.turn_id}")
                     except Exception as exc:
                         errors.append(f"Failed to index turn {turn.turn_id}: {exc}")
                 content_ref = {
@@ -198,9 +203,15 @@ async def compact_room_memory(
     if compacted_entries:
         ok = await repository.compact_turns_bulk(room_id, compacted_entries)
         if not ok:
-            errors.append(
-                f"Prepared {len(compacted_entries)} turns but atomic write failed for room {room_id}"
+            stale_noop = await _compaction_write_was_stale_noop(
+                repository,
+                room_id,
+                compacted_entries,
             )
+            if not stale_noop:
+                errors.append(
+                    f"Prepared {len(compacted_entries)} turns but atomic write failed for room {room_id}"
+                )
             compacted_entries = []
             tokens_saved = 0
     return compaction_result_dto(
@@ -209,6 +220,28 @@ async def compact_room_memory(
         tokens_saved=tokens_saved,
         memory_id=state.memory_id,
         metadata={"errors": errors, "compacted_at": now()},
+    )
+
+
+async def _compaction_write_was_stale_noop(
+    repository: MemoryRepository,
+    room_id: str,
+    compacted_entries: list[dict],
+) -> bool:
+    fresh_doc = await repository.get_room_memory(room_id)
+    if not fresh_doc:
+        return False
+    target_ids = {
+        entry.get("turn_id")
+        for entry in compacted_entries
+        if entry.get("turn_id")
+    }
+    if not target_ids:
+        return False
+    state = normalize_room_memory(fresh_doc)
+    return not any(
+        turn.turn_id in target_ids and turn.representation == "full"
+        for turn in state.conversation_history
     )
 
 

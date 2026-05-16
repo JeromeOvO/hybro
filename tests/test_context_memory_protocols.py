@@ -246,6 +246,106 @@ def test_context_memory_protocol_method_sets():
     }
 
 
+def test_context_memory_facade_uses_legacy_compaction_concurrency(monkeypatch):
+    from container import create_context_memory_facade
+
+    monkeypatch.setenv("COMPACTION_CONCURRENCY", "11")
+
+    facade = create_context_memory_facade(
+        mongo=FakeMongo(),
+        vector=FakeVector(),
+        llm_provider=FakeLLM(),
+        room_history_reader=FakeRoomHistoryReader(),
+    )
+
+    assert facade.compaction_config.concurrency == 11
+
+
+def test_context_memory_config_defaults_read_common_settings(monkeypatch):
+    from common.config import settings
+    from context_memory.config import (
+        CompactionConfig,
+        MemorySearchConfig,
+        TokenBudgetConfig,
+    )
+
+    monkeypatch.setattr(settings, "context_model_window", 12345)
+    monkeypatch.setattr(settings, "context_system_prompt_tokens", 101)
+    monkeypatch.setattr(settings, "context_tool_schema_tokens", 102)
+    monkeypatch.setattr(settings, "context_response_reserve_tokens", 103)
+    monkeypatch.setattr(settings, "context_room_pct", 0.2)
+    monkeypatch.setattr(settings, "context_history_pct", 0.5)
+    monkeypatch.setattr(settings, "context_task_pct", 0.3)
+    monkeypatch.setattr(settings, "compaction_enabled", False)
+    monkeypatch.setattr(settings, "compaction_max_full_turns", 7)
+    monkeypatch.setattr(settings, "compaction_max_total_tokens", 777)
+    monkeypatch.setattr(settings, "compaction_preserve_recent", 3)
+    monkeypatch.setattr(settings, "compaction_content_ttl_days", 9)
+    monkeypatch.setenv("COMPACTION_CONCURRENCY", "4")
+    monkeypatch.setattr(settings, "memory_search_enabled", False)
+    monkeypatch.setattr(settings, "memory_search_vector_weight", 0.4)
+    monkeypatch.setattr(settings, "memory_search_keyword_weight", 0.6)
+    monkeypatch.setattr(settings, "memory_search_index_name", "settings-index")
+
+    token_budget = TokenBudgetConfig()
+    compaction = CompactionConfig()
+    search = MemorySearchConfig()
+
+    assert token_budget.model_context_window == 12345
+    assert token_budget.system_prompt == 101
+    assert token_budget.tool_schemas == 102
+    assert token_budget.response_reserve == 103
+    assert token_budget.room_context_pct == 0.2
+    assert token_budget.conversation_history_pct == 0.5
+    assert token_budget.current_task_pct == 0.3
+    assert compaction.enabled is False
+    assert compaction.max_full_turns == 7
+    assert compaction.max_total_tokens == 777
+    assert compaction.preserve_recent_turns == 3
+    assert compaction.content_ttl_days == 9
+    assert compaction.concurrency == 4
+    assert search.enabled is False
+    assert search.vector_weight == 0.4
+    assert search.keyword_weight == 0.6
+    assert search.index_name == "settings-index"
+
+
+def test_context_memory_setting_helper_does_not_swallow_import_failures(monkeypatch):
+    import builtins
+
+    from context_memory import config
+
+    real_import = builtins.__import__
+
+    def failing_import(name, *args, **kwargs):
+        if name == "common.config":
+            raise RuntimeError("settings validation failed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", failing_import)
+
+    with pytest.raises(RuntimeError, match="settings validation failed"):
+        config._setting("context_model_window", 128000)
+
+
+def test_room_delete_has_no_stale_direct_context_memory_cleanup():
+    from services.room_services import RoomServices
+
+    source = inspect.getsource(RoomServices.delete_room_by_room_id)
+
+    assert "room_memories_collection" not in source
+    assert "conversation_content_collection" not in source
+
+
+def test_room_delete_logs_when_context_memory_cleanup_is_unbound():
+    from services.room_services import RoomServices
+
+    source = inspect.getsource(RoomServices._cleanup_context_memory_for_room)
+
+    assert "Context & Memory cleanup skipped" in source
+    assert "_context_memory_manager is None" in source
+
+
 def test_context_memory_import_boundary():
     forbidden = {
         "a2a_adapter",
@@ -285,3 +385,81 @@ def test_context_memory_import_boundary():
                     path,
                     node.module,
                 )
+
+
+def test_non_protocol_helper_call_boundary():
+    allowed_call_sites = {
+        "services/context_assembly_service.py": {
+            "assemble_supervisor_context_from_memory",
+            "assemble_agent_execution_context_from_memory",
+        },
+        "services/memory_service.py": {
+            "legacy_create_room_memory",
+            "legacy_get_room_memory_by_room_id",
+            "legacy_get_room_memory_by_memory_id",
+            "legacy_update_room_memory_by_room_id",
+            "legacy_get_room_memory_for_update_by_memory_id",
+            "legacy_delete_room_memory_by_room_id",
+            "legacy_delete_room_memory_by_memory_id",
+            "initialize_or_update_room_memory",
+            "add_agent_response_to_memory",
+            "add_synthesis_to_history",
+            "update_room_summary",
+        },
+        "services/memory_search_service.py": {
+            "legacy_search",
+            "index_turn_for_search",
+            "delete_room_index",
+        },
+        "services/compaction_service.py": {
+            "should_compact",
+            "compact_if_needed",
+            "compact_room_memory",
+            "expand_turn_content",
+            "expand_turn_content_from_turn",
+            "fetch_turn_content",
+            "get_compaction_stats",
+        },
+        "services/content_storage_service.py": {
+            "content_upsert_full_content",
+            "content_get_content_by_document_id",
+            "content_get_content_by_turn_id",
+            "content_expand_mongodb_reference",
+            "content_delete_content_by_turn_id",
+            "content_delete_content_by_room_id",
+            "content_get_content_stats_for_room",
+        },
+        "context_memory/events.py": {"project_message_for_event"},
+    }
+    helper_names = set().union(*allowed_call_sites.values())
+    path_allowed_helpers = {
+        Path(path): helpers for path, helpers in allowed_call_sites.items()
+    }
+
+    violations = []
+    for path in Path(".").rglob("*.py"):
+        if (
+            path.parts[0] in {"context_memory", "tests"}
+            or path in {Path("container.py"), Path("main.py")}
+            or ".venv" in path.parts
+        ):
+            continue
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = None
+            receiver = ""
+            if isinstance(node.func, ast.Attribute):
+                name = node.func.attr
+                receiver = ast.unparse(node.func.value)
+            elif isinstance(node.func, ast.Name):
+                name = node.func.id
+            if name not in helper_names:
+                continue
+            if isinstance(node.func, ast.Attribute) and "facade" not in receiver:
+                continue
+            if name not in path_allowed_helpers.get(path, set()):
+                violations.append(f"{path}:{node.lineno}:{name}")
+
+    assert violations == []

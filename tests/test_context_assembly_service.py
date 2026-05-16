@@ -20,6 +20,8 @@ from services.context_assembly_service import (
     ContextAssemblyResult,
     TruncationReason,
 )
+from context_memory import assembly as context_memory_assembly
+from context_memory.config import TokenBudgetConfig
 from models.memory import (
     RoomMemory,
     RoomSummary,
@@ -32,6 +34,45 @@ from models.memory import (
     TurnType,
 )
 from models.context_config import TokenBudget
+
+
+def _token_budget_config(service: ContextAssemblyService) -> TokenBudgetConfig:
+    budget = service.budget
+    return TokenBudgetConfig(
+        model_context_window=budget.model_context_window,
+        system_prompt=budget.system_prompt,
+        tool_schemas=budget.tool_schemas,
+        response_reserve=budget.response_reserve,
+        room_context_pct=budget.room_context_pct,
+        conversation_history_pct=budget.conversation_history_pct,
+        current_task_pct=budget.current_task_pct,
+    )
+
+
+class BoundAssemblyFacade:
+    def __init__(self, service: ContextAssemblyService):
+        self.service = service
+
+    def assemble_supervisor_context_from_memory(self, room_memory_doc, current_task, **kwargs):
+        return context_memory_assembly.assemble_supervisor_context_from_memory(
+            room_memory_doc,
+            current_task,
+            token_budget=_token_budget_config(self.service),
+            **kwargs,
+        )
+
+    def assemble_agent_execution_context_from_memory(self, room_memory_doc, current_task, **kwargs):
+        return context_memory_assembly.assemble_agent_execution_context_from_memory(
+            room_memory_doc,
+            current_task,
+            token_budget=_token_budget_config(self.service),
+            **kwargs,
+        )
+
+
+def bind_assembly_facade(service: ContextAssemblyService) -> ContextAssemblyService:
+    service.bind_facade(BoundAssemblyFacade(service))
+    return service
 
 
 class TestTokenBudget:
@@ -95,7 +136,7 @@ class TestContextAssemblyService:
             mock_settings.context_room_pct = 0.15
             mock_settings.context_history_pct = 0.60
             mock_settings.context_task_pct = 0.25
-            yield ContextAssemblyService()
+            yield bind_assembly_facade(ContextAssemblyService())
 
     @pytest.fixture
     def sample_room_memory(self):
@@ -292,7 +333,7 @@ class TestTurnSelection:
             mock_settings.context_room_pct = 0.15
             mock_settings.context_history_pct = 0.60
             mock_settings.context_task_pct = 0.25
-            yield ContextAssemblyService()
+            yield bind_assembly_facade(ContextAssemblyService())
 
     def test_select_turns_preserves_recent(self, service):
         """Test that most recent turns are preserved during selection."""
@@ -369,7 +410,7 @@ class TestOccupancyThresholds:
             mock_settings.context_room_pct = 0.15
             mock_settings.context_history_pct = 0.60
             mock_settings.context_task_pct = 0.25
-            yield ContextAssemblyService()
+            yield bind_assembly_facade(ContextAssemblyService())
 
     def test_healthy_occupancy_logs_debug(self, service):
         """Test that <70% occupancy logs at debug level."""
@@ -455,7 +496,7 @@ class TestHardCapEnforcement:
             mock_settings.context_room_pct = 0.15
             mock_settings.context_history_pct = 0.60
             mock_settings.context_task_pct = 0.25
-            yield ContextAssemblyService()
+            yield bind_assembly_facade(ContextAssemblyService())
 
     @pytest.fixture
     def large_room_memory(self):
@@ -557,7 +598,7 @@ class TestTaskBudgetEnforcement:
             mock_settings.context_room_pct = 0.15
             mock_settings.context_history_pct = 0.60
             mock_settings.context_task_pct = 0.25
-            yield ContextAssemblyService()
+            yield bind_assembly_facade(ContextAssemblyService())
 
     def test_task_budget_is_passed_to_dynamic_suffix(self, service):
         """Test that task_budget is passed to _build_agent_dynamic_suffix."""

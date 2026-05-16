@@ -410,7 +410,20 @@ class TestSearchToContextIntegration:
         mock_compaction_config.context_history_pct = 0.60
         mock_compaction_config.context_task_pct = 0.25
 
+        class Facade:
+            def assemble_supervisor_context_from_memory(self, room_memory_doc, current_task, **kwargs):
+                from context_memory.assembly import assemble_supervisor_context_from_memory
+
+                return assemble_supervisor_context_from_memory(
+                    room_memory_doc,
+                    current_task,
+                    agent_registry=kwargs.get("agent_registry"),
+                    max_turns=kwargs.get("max_turns", 5),
+                    memory_search_results=kwargs.get("memory_search_results"),
+                )
+
         service = ContextAssemblyService()
+        service.bind_facade(Facade())
 
         search_results = [
             MemorySearchResult(

@@ -126,7 +126,7 @@ def build_agent_dynamic_suffix(
         )
         if quoted_text:
             instruction += (
-                " Pay special attention to the quoted context - "
+                " Pay special attention to the quoted context — "
                 "the user is asking about or responding to that specific content."
             )
         task_parts.append(instruction)
@@ -227,7 +227,7 @@ def assemble_supervisor_context_from_memory(
         include_summary=False,
         summary=state.summary,
     )
-    result = _finalize(
+    result, stable_prefix, dynamic_suffix = _finalize(
         room_id=state.room_id,
         stable_prefix=stable_prefix,
         dynamic_suffix=dynamic_suffix,
@@ -240,12 +240,14 @@ def assemble_supervisor_context_from_memory(
             summary=state.summary,
         ),
     )
+    final_turns = _included_turns(recent_turns, result.turns_included)
     return assemble_context_dto(
         room_id=state.room_id,
         stable_prefix=stable_prefix,
-        dynamic_suffix=result[1],
-        result=result[0],
+        dynamic_suffix=dynamic_suffix,
+        result=result,
         mode="supervisor",
+        extra_metadata=_turn_representation_counts(final_turns),
     )
 
 
@@ -295,7 +297,7 @@ def assemble_agent_execution_context_from_memory(
         include_system_instruction=include_system_instruction,
         task_budget=budget.current_task_tokens,
     )
-    result, dynamic_suffix = _finalize(
+    result, stable_prefix, dynamic_suffix = _finalize(
         room_id=state.room_id,
         stable_prefix=stable_prefix,
         dynamic_suffix=dynamic_suffix,
@@ -313,13 +315,17 @@ def assemble_agent_execution_context_from_memory(
             task_budget=budget.current_task_tokens,
         ),
     )
+    final_turns = _included_turns(selected_turns, result.turns_included)
     return assemble_context_dto(
         room_id=state.room_id,
         stable_prefix=stable_prefix,
         dynamic_suffix=dynamic_suffix,
         result=result,
         mode="agent",
-        extra_metadata={"agent_id": agent_id},
+        extra_metadata={
+            "agent_id": agent_id,
+            **_turn_representation_counts(final_turns),
+        },
     )
 
 
@@ -332,7 +338,7 @@ def _finalize(
     turns: list[ConversationTurnData],
     rebuild,
     turns_truncated: int = 0,
-) -> tuple[AssemblyResult, str]:
+) -> tuple[AssemblyResult, str, str]:
     stable_tokens = estimate_tokens(stable_prefix)
     dynamic_tokens = estimate_tokens(dynamic_suffix)
     total_tokens = stable_tokens + dynamic_tokens
@@ -346,30 +352,45 @@ def _finalize(
     if total_tokens > available:
         was_truncated = True
         truncation_reason = TruncationReason.TOKEN_BUDGET_EXCEEDED
-        while total_tokens > available and len(selected_turns) > 1:
+        while total_tokens > available and selected_turns:
             turns_truncated += 1
             selected_turns = selected_turns[1:]
             dynamic_suffix = rebuild(selected_turns)
             dynamic_tokens = estimate_tokens(dynamic_suffix)
             total_tokens = stable_tokens + dynamic_tokens
-        if total_tokens > available:
-            logger.error(
-                "Context still over budget after max truncation. "
-                "room=%s total=%s available=%s",
-                room_id,
-                total_tokens,
-                available,
-            )
-
     context = f"{stable_prefix}\n\n{dynamic_suffix}" if stable_prefix else dynamic_suffix
+    if total_tokens > available:
+        was_truncated = True
+        truncation_reason = TruncationReason.TOKEN_BUDGET_EXCEEDED
+        context = _truncate_context_to_token_budget(context, available)
+        stable_prefix, dynamic_suffix = _split_context_blocks(
+            context,
+            stable_prefix,
+        )
+        if selected_turns and not _dynamic_suffix_contains_turns(dynamic_suffix):
+            turns_truncated += len(selected_turns)
+            selected_turns = []
+        stable_tokens = estimate_tokens(stable_prefix)
+        dynamic_tokens = estimate_tokens(dynamic_suffix)
+        total_tokens = estimate_tokens(context)
     if len(context) > MAX_CONTEXT_CHARS:
         was_truncated = True
-        truncation_reason = TruncationReason.CHAR_LIMIT_EXCEEDED
-        context = context[:MAX_CONTEXT_CHARS] + "\n... [context truncated]"
+        if truncation_reason is None:
+            truncation_reason = TruncationReason.CHAR_LIMIT_EXCEEDED
+        context = _truncate_context_to_char_limit(context, MAX_CONTEXT_CHARS)
+        stable_prefix, dynamic_suffix = _split_context_blocks(
+            context,
+            stable_prefix,
+        )
+        if selected_turns and not _dynamic_suffix_contains_turns(dynamic_suffix):
+            turns_truncated += len(selected_turns)
+            selected_turns = []
+        stable_tokens = estimate_tokens(stable_prefix)
         total_tokens = estimate_tokens(context)
-        dynamic_tokens = max(0, total_tokens - stable_tokens)
+        dynamic_tokens = estimate_tokens(dynamic_suffix)
 
-    occupancy = (total_tokens / budget.model_context_window) * 100
+    occupancy_window = max(1, budget.model_context_window)
+    occupancy = (total_tokens / occupancy_window) * 100
     return (
         AssemblyResult(
             context=context,
@@ -382,8 +403,99 @@ def _finalize(
             stable_prefix_tokens=stable_tokens,
             dynamic_suffix_tokens=dynamic_tokens,
         ),
+        stable_prefix,
         dynamic_suffix,
     )
+
+
+def _truncate_context_to_token_budget(context: str, available_tokens: int) -> str:
+    current_request = _current_request_section(context)
+    if available_tokens <= 0:
+        return current_request or ""
+
+    marker = "\n... [context truncated]"
+    if estimate_tokens(marker) > available_tokens:
+        marker = "..."
+    if estimate_tokens(marker) > available_tokens:
+        return ""
+
+    if current_request:
+        candidate = _truncate_current_request_section(
+            current_request,
+            available_tokens,
+            marker,
+        )
+        if candidate is not None:
+            return candidate
+
+    lo = 0
+    hi = len(context)
+    best = marker.lstrip()
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = f"{marker.lstrip()}\n{context[len(context) - mid:].lstrip()}"
+        if estimate_tokens(candidate) <= available_tokens:
+            best = candidate
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best
+
+
+def _truncate_context_to_char_limit(context: str, max_chars: int) -> str:
+    marker = "\n... [context truncated]"
+    if max_chars <= len(marker):
+        return marker[-max_chars:]
+    current_request = _current_request_section(context)
+    if current_request:
+        prefix_marker = marker.lstrip()
+        candidate = f"{prefix_marker}\n{current_request}"
+        if len(candidate) <= max_chars:
+            return candidate
+        suffix_marker = marker
+        if max_chars <= len(suffix_marker):
+            return suffix_marker[-max_chars:]
+        return current_request[: max_chars - len(suffix_marker)].rstrip() + suffix_marker
+    prefix_marker = marker.lstrip()
+    body_chars = max_chars - len(prefix_marker) - 1
+    if body_chars <= 0:
+        return prefix_marker[-max_chars:]
+    return f"{prefix_marker}\n{context[-body_chars:].lstrip()}"
+
+
+def _current_request_section(context: str) -> str | None:
+    marker = "[Current request]"
+    index = context.rfind(marker)
+    if index == -1:
+        return None
+    return context[index:].lstrip()
+
+
+def _truncate_current_request_section(
+    current_request: str,
+    available_tokens: int,
+    marker: str,
+) -> str | None:
+    prefix_marker = marker.lstrip()
+    candidate = f"{prefix_marker}\n{current_request}"
+    if estimate_tokens(candidate) <= available_tokens:
+        return candidate
+
+    suffix_marker = marker
+    if estimate_tokens(suffix_marker) > available_tokens:
+        return None
+    lo = 0
+    hi = len(current_request)
+    best = suffix_marker.strip()
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = current_request[:mid].rstrip() + suffix_marker
+        if estimate_tokens(candidate) <= available_tokens:
+            best = candidate
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best
 
 
 def _search_snippets(memory_search_results: list | None) -> list[str] | None:
@@ -400,3 +512,36 @@ def _search_snippets(memory_search_results: list | None) -> list[str] | None:
         if preview:
             snippets.append(f"{label} {preview}")
     return snippets
+
+
+def _split_context_blocks(
+    context: str,
+    stable_prefix: str,
+) -> tuple[str, str]:
+    if not stable_prefix:
+        return "", context
+    if context.startswith(stable_prefix):
+        remainder = context[len(stable_prefix) :]
+        if remainder.startswith("\n\n"):
+            return stable_prefix, remainder[2:]
+        return stable_prefix, remainder.lstrip("\n")
+    return "", context
+
+
+def _dynamic_suffix_contains_turns(dynamic_suffix: str) -> bool:
+    return "[Recent conversation]" in dynamic_suffix
+
+
+def _included_turns(
+    turns: list[ConversationTurnData],
+    turns_included: int,
+) -> list[ConversationTurnData]:
+    if turns_included <= 0:
+        return []
+    return turns[-turns_included:]
+
+
+def _turn_representation_counts(turns: list[ConversationTurnData]) -> dict[str, int]:
+    full_turns = sum(1 for turn in turns if turn.representation == "full")
+    compact_turns = sum(1 for turn in turns if turn.representation == "compact")
+    return {"full_turns": full_turns, "compact_turns": compact_turns}

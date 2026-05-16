@@ -230,6 +230,9 @@ async def lifespan(app: FastAPI):
                     summary_model="context_memory_legacy_json_model",
                 ),
             )
+            # TODO(phase-6/7): Register ContextMemoryEventHandler with EventPublisher
+            # once Delivery wires runtime MessageCommitted delivery. Phase 5 keeps the
+            # direct compaction call path via legacy services.
             _context_memory_deps = create_context_memory_deps(context_memory_facade)
             context_assembly_service.bind_facade(context_memory_facade)
             memory_search_service.bind_facade(context_memory_facade)

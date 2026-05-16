@@ -12,6 +12,7 @@ from common.dto import (
     RoomMemoryInfo,
     UserMemory,
 )
+from common.utils.context_utils import estimate_tokens
 
 from context_memory.models import (
     AssemblyResult,
@@ -41,9 +42,9 @@ def primitive(value: Any) -> Any:
 def normalize_room_memory(memory: dict | Any) -> RoomMemoryState:
     doc = primitive(memory) or {}
     memory_content = doc.get("memory_content") or {}
-    direct_history = doc.get("conversation_history") or []
-    legacy_history = memory_content.get("conversation_history") or []
-    history = direct_history or legacy_history
+    direct_history = doc.get("conversation_history")
+    legacy_history = memory_content.get("conversation_history")
+    history = _reconcile_histories(legacy_history, direct_history)
 
     return RoomMemoryState(
         room_id=doc.get("room_id", ""),
@@ -58,6 +59,23 @@ def normalize_room_memory(memory: dict | Any) -> RoomMemoryState:
         total_compactions=int(doc.get("total_compactions") or 0),
         raw=doc,
     )
+
+
+def _reconcile_histories(
+    primary_history: list | None,
+    fallback_history: list | None,
+) -> list:
+    merged: list = []
+    positions_by_turn_id: dict[str, int] = {}
+    for turn in [*(primary_history or []), *(fallback_history or [])]:
+        turn_id = turn.get("turn_id") if isinstance(turn, dict) else None
+        if turn_id:
+            if turn_id in positions_by_turn_id:
+                merged[positions_by_turn_id[turn_id]] = turn
+                continue
+            positions_by_turn_id[turn_id] = len(merged)
+        merged.append(turn)
+    return merged
 
 
 def summary_from_dict(doc: dict[str, Any]) -> RoomSummaryData:
@@ -178,12 +196,18 @@ def room_memory_info_from_doc(doc: dict[str, Any]) -> RoomMemoryInfo:
         created_at=_maybe_datetime(state.memory_created_at),
         updated_at=_maybe_datetime(state.last_activity_at),
         token_count=sum(
-            turn.estimated_tokens_full
-            if turn.representation == "full"
-            else turn.estimated_tokens_compact
+            _turn_token_count(turn)
             for turn in state.conversation_history
         ),
     )
+
+
+def _turn_token_count(turn: ConversationTurnData) -> int:
+    if turn.representation != "full":
+        return turn.estimated_tokens_compact
+    if turn.estimated_tokens_full:
+        return turn.estimated_tokens_full
+    return estimate_tokens(turn.content or "")
 
 
 def render_room_memory_content(state: RoomMemoryState) -> str:

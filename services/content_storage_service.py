@@ -7,52 +7,12 @@ Content is stored in MongoDB's conversation_content collection.
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.3, §6.4, §6.6 for design details.
 """
 
-import hashlib
-from datetime import timedelta
-
 from common.utils.logger import get_logger
-from common.utils.time import utcnow
-from config.settings import settings
+from context_memory.content_storage import ContentExpiredError, hash_content
 from database.mongodb import mongodb
-from models.compaction import ContentReference, StorageType, StoredContent
-from context_memory.content_storage import (
-    ContentExpiredError as ContextMemoryContentExpiredError,
-)
-from context_memory.content_storage import hash_content as context_memory_hash_content
+from models.compaction import ContentReference, StorageType
 
 logger = get_logger(__name__)
-
-
-class ContentExpiredError(Exception):
-    """
-    Raised when a compacted turn's stored content can no longer be retrieved.
-
-    Callers should log the error and fall back to the compact pointer string
-    rather than crashing the request. This indicates a data integrity issue
-    (TTL expiry, manual deletion, or migration error) that needs investigation.
-
-    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.4 for specification.
-    """
-
-    def __init__(self, turn_id: str, document_id: str):
-        self.turn_id = turn_id
-        self.document_id = document_id
-        super().__init__(
-            f"Content for turn {turn_id} (doc {document_id}) not found in storage"
-        )
-
-
-def hash_content(content: str) -> str:
-    """
-    Generate SHA-256 hash of content for integrity/deduplication.
-
-    Args:
-        content: The text content to hash
-
-    Returns:
-        Hex-encoded SHA-256 hash
-    """
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 class ContentStorageService:
@@ -75,6 +35,13 @@ class ContentStorageService:
     def bind_facade(self, facade) -> None:
         self._facade = facade
         self._bound = True
+
+    def _require_facade(self):
+        if not self._bound or self._facade is None:
+            raise RuntimeError(
+                "ContentStorageService.bind_facade() not called - startup incomplete"
+            )
+        return self._facade
 
     @property
     def collection(self):
@@ -108,68 +75,13 @@ class ContentStorageService:
         Returns:
             The document ID (string)
         """
-        if self._bound and self._facade is not None:
-            return await self._facade.content_upsert_full_content(
-                room_id=room_id,
-                turn_id=turn_id,
-                content=content,
-                content_type=content_type,
-                turn_notes=turn_notes,
-            )
-
-        content_hash = hash_content(content)
-        now = utcnow()
-
-        # Calculate expiry if TTL is configured
-        expires_at = None
-        if settings.compaction_content_ttl_days > 0:
-            expires_at = now + timedelta(days=settings.compaction_content_ttl_days)
-
-        # Build the document for $setOnInsert
-        insert_doc = {
-            "room_id": room_id,
-            "turn_id": turn_id,
-            "content": content,
-            "content_type": content_type,
-            "content_hash": content_hash,
-            "stored_at": now,
-            "expires_at": expires_at,
-        }
-
-        if turn_notes:
-            insert_doc["turn_notes"] = turn_notes
-
-        result = await self.collection.update_one(
-            {"room_id": room_id, "turn_id": turn_id},  # Filter on unique key
-            {"$setOnInsert": insert_doc},  # Only set fields on insert
-            upsert=True,
-        )
-
-        # For an insert: result.upserted_id is the new _id
-        if result.upserted_id:
-            doc_id = str(result.upserted_id)
-            logger.debug(
-                f"ContentStorageService: Stored new content for turn {turn_id}, "
-                f"doc_id={doc_id}, hash={content_hash[:16]}..."
-            )
-            return doc_id
-
-        # For an update (already existed): fetch the existing _id
-        existing = await self.collection.find_one(
-            {"room_id": room_id, "turn_id": turn_id}, {"_id": 1}
-        )
-        if existing:
-            doc_id = str(existing["_id"])
-            logger.debug(
-                f"ContentStorageService: Content already exists for turn {turn_id}, "
-                f"doc_id={doc_id}"
-            )
-            return doc_id
-
-        # This should never happen if the upsert worked correctly
-        raise RuntimeError(
-            f"Failed to upsert content for turn {turn_id}: "
-            "no upserted_id and no existing document"
+        facade = self._require_facade()
+        return await facade.content_upsert_full_content(
+            room_id=room_id,
+            turn_id=turn_id,
+            content=content,
+            content_type=content_type,
+            turn_notes=turn_notes,
         )
 
     async def get_content_by_document_id(self, document_id: str) -> str | None:
@@ -182,19 +94,8 @@ class ContentStorageService:
         Returns:
             The full content string, or None if not found
         """
-        if self._bound and self._facade is not None:
-            return await self._facade.content_get_content_by_document_id(document_id)
-
-        from bson import ObjectId
-
-        try:
-            doc = await self.collection.find_one({"_id": ObjectId(document_id)})
-            if doc:
-                return doc.get("content")
-            return None
-        except Exception as e:
-            logger.error(f"ContentStorageService: Error retrieving content: {e}")
-            return None
+        facade = self._require_facade()
+        return await facade.content_get_content_by_document_id(document_id)
 
     async def get_content_by_turn_id(
         self, room_id: str, turn_id: str
@@ -209,15 +110,8 @@ class ContentStorageService:
         Returns:
             The full content string, or None if not found
         """
-        if self._bound and self._facade is not None:
-            return await self._facade.content_get_content_by_turn_id(room_id, turn_id)
-
-        doc = await self.collection.find_one(
-            {"room_id": room_id, "turn_id": turn_id}
-        )
-        if doc:
-            return doc.get("content")
-        return None
+        facade = self._require_facade()
+        return await facade.content_get_content_by_turn_id(room_id, turn_id)
 
     async def expand_content_reference(
         self, content_ref: ContentReference, turn_id: str
@@ -237,26 +131,12 @@ class ContentStorageService:
             NotImplementedError: If the storage type is not yet implemented (URL)
             ValueError: If the content reference is malformed
         """
-        if (
-            self._bound
-            and self._facade is not None
-            and content_ref.storage_type == StorageType.MONGODB
-        ):
-            return await self._facade.content_expand_mongodb_reference(
+        if content_ref.storage_type == StorageType.MONGODB:
+            facade = self._require_facade()
+            return await facade.content_expand_mongodb_reference(
                 content_ref.model_dump(mode="json"),
                 turn_id,
             )
-
-        if content_ref.storage_type == StorageType.MONGODB:
-            if not content_ref.document_id:
-                raise ValueError(
-                    f"ContentReference for turn {turn_id} has no document_id"
-                )
-
-            content = await self.get_content_by_document_id(content_ref.document_id)
-            if content is None:
-                raise ContentExpiredError(turn_id, content_ref.document_id)
-            return content
 
         elif content_ref.storage_type == StorageType.S3:
             if not content_ref.s3_key:
@@ -296,15 +176,10 @@ class ContentStorageService:
         Returns:
             True if content was deleted, False if not found
         """
-        if self._bound and self._facade is not None:
-            return await self._facade.content_delete_content_by_turn_id(
-                room_id, turn_id
-            )
-
-        result = await self.collection.delete_one(
-            {"room_id": room_id, "turn_id": turn_id}
+        facade = self._require_facade()
+        return await facade.content_delete_content_by_turn_id(
+            room_id, turn_id
         )
-        return result.deleted_count > 0
 
     async def delete_content_by_room_id(self, room_id: str) -> int:
         """
@@ -316,15 +191,8 @@ class ContentStorageService:
         Returns:
             Number of documents deleted
         """
-        if self._bound and self._facade is not None:
-            return await self._facade.content_delete_content_by_room_id(room_id)
-
-        result = await self.collection.delete_many({"room_id": room_id})
-        logger.info(
-            f"ContentStorageService: Deleted {result.deleted_count} content documents "
-            f"for room {room_id}"
-        )
-        return result.deleted_count
+        facade = self._require_facade()
+        return await facade.content_delete_content_by_room_id(room_id)
 
     async def get_content_stats_for_room(self, room_id: str) -> dict:
         """
@@ -336,45 +204,9 @@ class ContentStorageService:
         Returns:
             Dict with content statistics
         """
-        if self._bound and self._facade is not None:
-            return await self._facade.content_get_content_stats_for_room(room_id)
-
-        pipeline = [
-            {"$match": {"room_id": room_id}},
-            {
-                "$group": {
-                    "_id": "$content_type",
-                    "count": {"$sum": 1},
-                    "total_size": {"$sum": {"$strLenBytes": "$content"}},
-                }
-            },
-        ]
-
-        cursor = self.collection.aggregate(pipeline)
-        results = await cursor.to_list(length=None)
-
-        stats = {
-            "room_id": room_id,
-            "by_type": {},
-            "total_documents": 0,
-            "total_size_bytes": 0,
-        }
-
-        for result in results:
-            content_type = result["_id"]
-            stats["by_type"][content_type] = {
-                "count": result["count"],
-                "size_bytes": result["total_size"],
-            }
-            stats["total_documents"] += result["count"]
-            stats["total_size_bytes"] += result["total_size"]
-
-        return stats
+        facade = self._require_facade()
+        return await facade.content_get_content_stats_for_room(room_id)
 
 
 # Singleton export
 content_storage_service = ContentStorageService()
-
-# Preserve old import paths while using the Context & Memory exception/helper.
-ContentExpiredError = ContextMemoryContentExpiredError
-hash_content = context_memory_hash_content

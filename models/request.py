@@ -286,6 +286,7 @@ class RoomCenterAgentMessageRequest(BaseModel):
 
 class RoomCenterMemoryRequest(BaseModel):
     room_id: str | None = None
+    message_id: str | None = None
     memory_id: str | None = None
     memory_content: str | None = None
     memory_created_at: datetime | None = None

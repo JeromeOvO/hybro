@@ -3,8 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from common.protocols import LLMProvider, MemoryRepository
+from common.utils.logger import get_logger
 
 from context_memory.config import ContextMemoryLLMConfig
+
+logger = get_logger(__name__)
 
 
 ROOM_SUMMARY_EXTRACTION_SCHEMA: dict[str, Any] = {
@@ -74,12 +77,31 @@ async def update_room_summary(
         )
         extracted = getattr(response, "data", None)
     except Exception:
+        logger.exception(
+            "Failed to extract room summary",
+            extra={"room_id": room_id},
+        )
         return False
     if not isinstance(extracted, dict):
+        logger.warning(
+            "Room summary extraction returned invalid payload",
+            extra={"room_id": room_id, "payload_type": type(extracted).__name__},
+        )
         return False
 
-    doc = await repository.get_room_summary_projection(room_id)
+    try:
+        doc = await repository.get_room_summary_projection(room_id)
+    except Exception:
+        logger.exception(
+            "Failed to load room summary projection",
+            extra={"room_id": room_id},
+        )
+        return False
     if not doc:
+        logger.warning(
+            "Room summary projection missing",
+            extra={"room_id": room_id},
+        )
         return False
     existing = doc.get("room_summary") or {}
     summary = {
@@ -125,9 +147,22 @@ async def update_room_summary(
         )
         existing_contents.add(key)
 
-    return await repository.update_room_summary_atomic(
-        room_id,
-        summary,
-        new_facts=new_facts or None,
-        max_facts=50,
-    )
+    try:
+        persisted = await repository.update_room_summary_atomic(
+            room_id,
+            summary,
+            new_facts=new_facts or None,
+            max_facts=50,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to persist room summary",
+            extra={"room_id": room_id},
+        )
+        return False
+    if not persisted:
+        logger.warning(
+            "Failed to persist room summary",
+            extra={"room_id": room_id},
+        )
+    return persisted

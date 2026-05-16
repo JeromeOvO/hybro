@@ -13,6 +13,7 @@ from common.protocols import (
     RoomHistoryReader,
     VectorDAL,
 )
+from common.utils.logger import get_logger
 
 from context_memory import assembly, compaction, projection, search, summary
 from context_memory.config import (
@@ -30,6 +31,8 @@ from context_memory.translators import (
     room_memory_info_from_doc,
     user_memory_from_doc,
 )
+
+logger = get_logger(__name__)
 
 
 class ContextMemoryFacade:
@@ -142,25 +145,34 @@ class ContextMemoryFacade:
 
     async def delete_room_memory(self, room_id: str) -> bool:
         existed = await self.memory_repository.get_room_memory(room_id)
-        memory_deleted = await self.memory_repository.delete_room_memory(room_id)
-        content_ok = True
-        vector_ok = True
+        if existed:
+            memory_deleted = await self.memory_repository.delete_room_memory(room_id)
+            if not memory_deleted:
+                return False
+        cleanup_ok = True
         try:
-            await self.content_repository.delete_content_by_room_id(room_id)
-        except Exception:
-            content_ok = False
-        try:
-            await search.delete_room_index(
+            vector_deleted = await search.delete_room_index(
                 room_id=room_id,
                 vector=self.vector,
                 config=self.search_config,
+                unavailable_ok=True,
             )
-            vector_ok = True
+            cleanup_ok = bool(vector_deleted) and cleanup_ok
         except Exception:
-            vector_ok = False
-        if existed and not memory_deleted:
-            return False
-        return content_ok and vector_ok
+            logger.exception(
+                "Failed to clean up context memory vector index",
+                extra={"room_id": room_id},
+            )
+            cleanup_ok = False
+        try:
+            await self.content_repository.delete_content_by_room_id(room_id)
+        except Exception:
+            logger.exception(
+                "Failed to clean up context memory content",
+                extra={"room_id": room_id},
+            )
+            cleanup_ok = False
+        return cleanup_ok
 
     async def project_message(self, room_id: str, message_id: str) -> None:
         await self.project_message_for_event(room_id, message_id)
@@ -252,10 +264,16 @@ class ContextMemoryFacade:
         return await self.memory_repository.get_room_memory_by_memory_id(memory_id)
 
     async def legacy_delete_room_memory_by_room_id(self, room_id: str) -> bool:
-        return await self.memory_repository.delete_room_memory(room_id)
+        return await self.delete_room_memory(room_id)
 
     async def legacy_delete_room_memory_by_memory_id(self, memory_id: str) -> bool:
-        return await self.memory_repository.delete_room_memory_by_memory_id(memory_id)
+        doc = await self.memory_repository.get_room_memory_by_memory_id(memory_id)
+        if not doc:
+            return False
+        room_id = doc.get("room_id")
+        if not room_id:
+            return False
+        return await self.delete_room_memory(room_id)
 
     async def initialize_or_update_room_memory(
         self,
@@ -265,6 +283,7 @@ class ContextMemoryFacade:
         room_agent_set: dict | None,
         user_id: str | None,
         attachments: list | None = None,
+        message_id: str | None = None,
     ) -> dict | None:
         return await projection.initialize_or_update_room_memory(
             repository=self.memory_repository,
@@ -275,6 +294,7 @@ class ContextMemoryFacade:
             attachments=attachments,
             id_factory=self.id_factory,
             now=self.now,
+            message_id=message_id,
         )
 
     async def add_agent_response_to_memory(
@@ -284,6 +304,7 @@ class ContextMemoryFacade:
         agent_name: str,
         response_text: str,
         was_successful: bool = True,
+        message_id: str | None = None,
     ) -> tuple[bool, bool]:
         return await projection.add_agent_response_to_memory(
             repository=self.memory_repository,
@@ -297,6 +318,7 @@ class ContextMemoryFacade:
             llm_provider=self.llm_provider,
             llm_config=self.llm_config,
             background_task_runner=self.background_task_runner,
+            message_id=message_id,
         )
 
     async def add_synthesis_to_history(
@@ -332,12 +354,16 @@ class ContextMemoryFacade:
         )
 
     async def legacy_search(
-        self, query: str, room_id: str, user_id: str | None = None, limit: int = 10
+        self,
+        query: str,
+        room_id: str,
+        user_id: str | None = None,
+        limit: int | None = None,
     ) -> dict:
         _results, response = await search.search_memory(
             room_id=room_id,
             query=query,
-            limit=limit,
+            limit=limit if limit is not None else self.search_config.max_results,
             vector=self.vector,
             llm_provider=self.llm_provider,
             content_repository=self.content_repository,
@@ -470,4 +496,14 @@ class ContextMemoryFacade:
 
 
 def _background_task(coro: Awaitable[Any]) -> None:
-    asyncio.create_task(coro)
+    task = asyncio.create_task(coro)
+    task.add_done_callback(_log_background_task_exception)
+
+
+def _log_background_task_exception(task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+    try:
+        task.result()
+    except Exception:
+        logger.exception("Context memory background task failed")

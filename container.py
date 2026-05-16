@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -30,6 +31,7 @@ from common.protocols import (
     VectorDAL,
 )
 from common.utils.time import utcnow
+from config.settings import settings
 from context_memory import (
     ContentStorageMongoRepository,
     ContextMemoryFacade,
@@ -143,6 +145,34 @@ def create_context_memory_facade(
         mongo=mongo,
         index_registry=index_registry,
     )
+    token_budget = token_budget or TokenBudgetConfig(
+        model_context_window=settings.context_model_window,
+        system_prompt=settings.context_system_prompt_tokens,
+        tool_schemas=settings.context_tool_schema_tokens,
+        response_reserve=settings.context_response_reserve_tokens,
+        room_context_pct=settings.context_room_pct,
+        conversation_history_pct=settings.context_history_pct,
+        current_task_pct=settings.context_task_pct,
+    )
+    compaction_config = compaction_config or CompactionConfig(
+        enabled=settings.compaction_enabled,
+        max_full_turns=settings.compaction_max_full_turns,
+        max_total_tokens=settings.compaction_max_total_tokens,
+        preserve_recent_turns=settings.compaction_preserve_recent,
+        content_ttl_days=settings.compaction_content_ttl_days,
+        concurrency=_legacy_compaction_concurrency(),
+    )
+    search_config = search_config or MemorySearchConfig(
+        enabled=settings.memory_search_enabled,
+        vector_weight=settings.memory_search_vector_weight,
+        keyword_weight=settings.memory_search_keyword_weight,
+        temporal_decay_enabled=settings.memory_search_temporal_decay_enabled,
+        half_life_days=settings.memory_search_half_life_days,
+        mmr_lambda=settings.memory_search_mmr_lambda,
+        max_results=settings.memory_search_max_results,
+        max_snippet_chars=settings.memory_search_max_snippet_chars,
+        index_name=settings.memory_search_index_name,
+    )
     return ContextMemoryFacade(
         memory_repository=memory_repository,
         content_repository=content_repository,
@@ -165,3 +195,10 @@ def create_context_memory_deps(facade: ContextMemoryFacade) -> ContextMemoryDeps
         memory_manager=facade,
         memory_projector=facade,
     )
+
+
+def _legacy_compaction_concurrency() -> int:
+    try:
+        return max(1, int(os.getenv("COMPACTION_CONCURRENCY", "5")))
+    except (TypeError, ValueError):
+        return 5
