@@ -11,15 +11,28 @@ extracting Delivery.
 
 ## Remaining Audit Items
 
-- `modules/RoomMessageCenter.py`: the failed room-lock path emits `FAILED`
-  `processing_status` before `_notify_all_non_terminal_tasks_failed(...)`.
+- `modules/RoomMessageCenter.py`: the queue failure path in
+  `_process_room_user_message_locked` emits `FAILED` `processing_status` before
+  the `turn_failed` append and before
+  `_notify_all_non_terminal_tasks_failed(...)`.
 - `modules/RoomMessageCenter.py`: root queue completion emits `COMPLETED`
   `processing_status` before `turn_event_appender.append("turn_completed", ...)`.
+- `modules/RoomMessageCenter.py`: supervisor V2 execution failure emits
+  `FAILED` `processing_status` before
+  `_notify_all_non_terminal_tasks_failed(...)`.
+- `modules/RoomMessageCenter.py`: supervisor V2 resume failure branches emit
+  `FAILED` `processing_status` before
+  `_notify_all_non_terminal_tasks_failed(...)` when trajectory deserialization
+  fails, the room lookup fails, or resumed executor execution fails.
 - `modules/RoomMessageCenter.py`: V2 `RunStatus.COMPLETED` emits `COMPLETED`
   `processing_status` before `turn_event_appender.append("turn_completed", ...)`.
 - `modules/RoomMessageCenter.py`: V2 `RunStatus.CANCELED` and
   `RunStatus.FAILED` emit terminal `processing_status` before terminal
-  `turn_event_appender.append(...)` calls.
+  `turn_event_appender.append(...)` calls and before
+  `_notify_all_non_terminal_tasks_failed(...)`.
+- `modules/RoomMessageCenter.py`: terminal V2 post-loop integration still runs
+  after terminal `processing_status` emit, including synthesis history writes,
+  room summary update, and compaction.
 - `modules/RoomMessageCenter.py`: the `RunStatus.CLARIFYING` soft-complete path
   emits frontend `COMPLETED` before `turn_event_appender.append("turn_completed",
   ...)`. This is not run-lifecycle terminalization, but it is still a post-emit

@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "tests" / "fixtures" / "phase7a_processing_status_callers.json"
@@ -274,12 +276,13 @@ def _assert_pre_recorded_payload(item: ProcessingStatusCall, entry: dict[str, An
     assert any(
         isinstance(stmt, ast.Assign)
         and any(_unparse(target) == entry["payload_variable"] for target in stmt.targets)
+        and isinstance(stmt.value, ast.Await)
         and _expr_equal(
-            _unparse(stmt.value.value if isinstance(stmt.value, ast.Await) else stmt.value),
+            _unparse(stmt.value.value),
             entry["pre_record_call_expression"],
         )
         for stmt in prior
-    ), f"{entry['call_id']} missing pre-record assignment"
+    ), f"{entry['call_id']} missing awaited pre-record assignment"
     assert any(
         isinstance(stmt, ast.If)
         and _expr_equal(_unparse(stmt.test), entry["payload_none_guard"].removeprefix("if ").removesuffix(": continue"))
@@ -400,6 +403,70 @@ async def send(flag):
     assert _find_prior_awaited_helper(
         item, "record_and_maybe_broadcast_run_event"
     ) is None
+
+
+def test_pre_recorded_payload_requires_awaited_assignment() -> None:
+    source = """
+async def fail_stale_runs():
+    for doc in docs:
+        payload = run_command_handler.append_run_timeout_failure(
+            room_id, run_id, stale_minutes=stale_mins
+        )
+        if payload is None:
+            continue
+        await broadcast_run_event_payload(
+            room_id,
+            payload,
+            client_request_id=client_request_id,
+            sse=sse_manager,
+        )
+        await sse_manager.send_processing_status(
+            room_id,
+            SSEProcessingStatus.FAILED,
+            str(tid),
+            client_request_id=client_request_id,
+            details="Run watchdog: stale non-terminal run timed out",
+        )
+"""
+    tree = ast.parse(source)
+    parents = _build_parents(tree)
+    send_call = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "send_processing_status"
+    )
+    item = ProcessingStatusCall(
+        path="example.py",
+        function_or_method="fail_stale_runs",
+        line=send_call.lineno,
+        room_id_expression=_unparse(_arg_or_kw(send_call, 0, "room_id")),
+        status_expression=_unparse(_arg_or_kw(send_call, 1, "status")),
+        sse_message_id_expression=_unparse(_arg_or_kw(send_call, 2, "message_id")),
+        client_request_id_expression=_unparse(_keyword(send_call, "client_request_id")),
+        details_expression=_unparse(_keyword(send_call, "details")),
+        delivery_expression=_unparse(send_call.func.value),
+        call=send_call,
+        parents=parents,
+    )
+    entry = {
+        "call_id": "example.fail_stale_runs.failed",
+        "pre_record_call_expression": (
+            "run_command_handler.append_run_timeout_failure("
+            "room_id, run_id, stale_minutes=stale_mins)"
+        ),
+        "payload_variable": "payload",
+        "payload_none_guard": "if payload is None: continue",
+        "run_event_broadcast_expression": (
+            "broadcast_run_event_payload("
+            "room_id, payload, client_request_id=client_request_id, sse=sse_manager)"
+        ),
+        "delivery_expression": "sse_manager",
+    }
+
+    with pytest.raises(AssertionError, match="missing awaited pre-record assignment"):
+        _assert_pre_recorded_payload(item, entry)
 
 
 def test_manifest_call_ids_do_not_encode_line_numbers() -> None:
