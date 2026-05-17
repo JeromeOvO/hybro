@@ -80,10 +80,15 @@ def _attribute_chain(node: ast.AST) -> str | None:
 def test_delivery_package_skeleton_and_config_exports():
     delivery = importlib.import_module("delivery")
 
-    assert getattr(delivery, "__all__", []) == []
-
     from delivery.config import DeliveryConfig, DeliveryStartupPolicy
     from delivery.types import RoomSubscriptionLimitExceeded, TaskRunner
+
+    if getattr(delivery, "__all__", []) != []:
+        assert delivery.__all__ == [
+            "DeliveryFacade",
+            "EventPublisherImpl",
+            "SSETransportImpl",
+        ]
 
     config = DeliveryConfig()
     assert config.heartbeat_interval_seconds == 30.0
@@ -226,6 +231,23 @@ def test_sse_transport_connect_is_sync_async_iterator_factory():
     assert inspect.iscoroutinefunction(SSETransport.connect) is False
 
 
+def test_delivery_facade_exports_and_protocol_conformance():
+    import delivery
+    from common.protocols import EventPublisher, SSETransport
+    from delivery import DeliveryFacade, EventPublisherImpl, SSETransportImpl
+
+    assert delivery.__all__ == [
+        "DeliveryFacade",
+        "EventPublisherImpl",
+        "SSETransportImpl",
+    ]
+    assert isinstance(EventPublisherImpl, type)
+    assert isinstance(SSETransportImpl, type)
+    assert DeliveryFacade is delivery.DeliveryFacade
+    assert isinstance(EventPublisherImpl.__new__(EventPublisherImpl), EventPublisher)
+    assert isinstance(SSETransportImpl.__new__(SSETransportImpl), SSETransport)
+
+
 def test_tracing_helpers_preserve_explicit_trace_context():
     from common.observability import (
         get_current_trace_id,
@@ -325,3 +347,195 @@ def test_delivery_background_tasks_use_traced_task_runner():
                 owner = _attribute_chain(node.func.value)
                 assert owner not in asyncio_aliases, path
                 assert owner != "loop", path
+
+
+class _LifecycleComponent:
+    def __init__(self, name: str, calls: list[str]):
+        self.name = name
+        self.calls = calls
+        self.started = False
+        self.stopped = False
+
+    async def start(self):
+        self.calls.append(f"{self.name}.start")
+        self.started = True
+
+    async def stop(self):
+        self.calls.append(f"{self.name}.stop")
+        self.stopped = True
+
+
+class _FakeTransport(_LifecycleComponent):
+    def __init__(self, calls: list[str]):
+        super().__init__("transport", calls)
+        self.closed = False
+        self.draining = False
+        self.compat_calls: list[tuple] = []
+
+    async def start_cancellation_watcher(self):
+        self.calls.append("transport.start_cancellation_watcher")
+
+    async def stop_cancellation_watcher(self):
+        self.calls.append("transport.stop_cancellation_watcher")
+
+    async def close_all_connections(self):
+        self.calls.append("transport.close_all_connections")
+        self.closed = True
+
+    def set_draining(self, draining: bool):
+        self.draining = draining
+
+    async def open_connection(self, room_id: str):
+        self.compat_calls.append(("open_connection", room_id))
+        return "connection"
+
+    async def remove_connection(self, room_id: str, connection_id: str):
+        self.compat_calls.append(("remove_connection", room_id, connection_id))
+
+    def get_room_status(self, room_id: str):
+        return {"room_id": room_id}
+
+    def is_cancelled(self, message_id: str):
+        return False
+
+    def cancel_message(self, message_id: str):
+        self.compat_calls.append(("cancel_message", message_id))
+
+    async def cancel_message_and_broadcast(self, message_id: str):
+        self.compat_calls.append(("cancel_message_and_broadcast", message_id))
+
+    async def check_cancelled(self, message_id: str):
+        return False
+
+    def clear_cancellation(self, message_id: str):
+        self.compat_calls.append(("clear_cancellation", message_id))
+
+    def create_token(self, message_id: str):
+        return None
+
+    def get_token(self, message_id: str):
+        return None
+
+    def remove_token(self, message_id: str):
+        self.compat_calls.append(("remove_token", message_id))
+
+
+class _FakePublisher(_LifecycleComponent):
+    def __init__(self, calls: list[str]):
+        super().__init__("publisher", calls)
+        self.legacy_frames: list[tuple[str, dict]] = []
+
+    async def _emit_legacy_frame(self, room_id: str, frame: dict):
+        self.legacy_frames.append((room_id, frame))
+
+
+class _FakeBus(_LifecycleComponent):
+    def __init__(self, calls: list[str], connected=True):
+        super().__init__("bus", calls)
+        self.connected = connected
+        self.health_refreshed = False
+
+    @property
+    def is_connected(self):
+        return self.connected
+
+    async def refresh_health(self):
+        self.health_refreshed = True
+
+
+class _FakeRedisKV:
+    def __init__(self, result=True):
+        self.result = result
+        self.closed = 0
+
+    async def ping(self):
+        return self.result
+
+    async def close(self):
+        self.closed += 1
+
+
+def _make_facade(redis_kv=None, bus_connected=True):
+    from delivery.config import DeliveryConfig, DeliveryStartupPolicy
+    from delivery.facade import DeliveryFacade
+
+    calls: list[str] = []
+    publisher = _FakePublisher(calls)
+    transport = _FakeTransport(calls)
+    bus = _FakeBus(calls, connected=bus_connected)
+    facade = DeliveryFacade(
+        event_publisher=publisher,
+        sse_transport=transport,
+        event_bus=bus,
+        cancellation_watcher=None,
+        redis_kv=redis_kv,
+        config=DeliveryConfig(),
+        startup_policy=DeliveryStartupPolicy(redis_expected=False, multi_worker=False),
+        instance_id="worker-1",
+    )
+    return facade, publisher, transport, bus, calls
+
+
+@pytest.mark.asyncio
+async def test_delivery_facade_lifecycle_health_and_compatibility():
+    redis_kv = _FakeRedisKV(result=True)
+    facade, publisher, transport, bus, calls = _make_facade(redis_kv=redis_kv)
+
+    await facade.start()
+    assert calls == [
+        "transport.start_cancellation_watcher",
+        "bus.start",
+        "publisher.start",
+    ]
+    assert facade.instance_id == "worker-1"
+    assert facade.delivery_kv_connected is True
+    assert facade.delivery_pubsub_connected is True
+    assert facade.redis_connected is True
+    assert facade.broker_connected is True
+
+    frame = {"type": "custom"}
+    await facade.compat.emit_legacy_frame("room-1", frame)
+    assert publisher.legacy_frames == [("room-1", frame)]
+    assert await facade.compat.open_connection("room-1") == "connection"
+    assert transport.compat_calls == [("open_connection", "room-1")]
+
+    facade.set_draining(True)
+    assert transport.draining is True
+
+    await facade.stop()
+    assert calls[-4:] == [
+        "publisher.stop",
+        "transport.close_all_connections",
+        "bus.stop",
+        "transport.stop_cancellation_watcher",
+    ]
+    assert redis_kv.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_delivery_facade_refresh_health_handles_ping_failure():
+    redis_kv = _FakeRedisKV(result=False)
+    facade, _, _, bus, _ = _make_facade(redis_kv=redis_kv, bus_connected=False)
+
+    await facade.refresh_health()
+
+    assert bus.health_refreshed is True
+    assert facade.delivery_kv_connected is False
+    assert facade.delivery_pubsub_connected is False
+
+
+def test_legacy_frame_private_helper_call_sites():
+    allowed = Path("delivery/facade.py")
+    call_sites = []
+    for root in [Path("delivery"), Path("services")]:
+        for path in _python_files(root):
+            tree = ast.parse(path.read_text(), filename=str(path))
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "_emit_legacy_frame"
+                ):
+                    call_sites.append(path)
+
+    assert call_sites == [allowed]
