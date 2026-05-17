@@ -1,6 +1,7 @@
 import ast
 import asyncio
 import importlib
+import inspect
 import tomllib
 from pathlib import Path
 
@@ -217,6 +218,12 @@ def test_delivery_packages_are_registered():
     packages = set(pyproject["tool"]["setuptools"]["packages"])
 
     assert {"delivery", "delivery.sse", "delivery.event_bus"}.issubset(packages)
+
+
+def test_sse_transport_connect_is_sync_async_iterator_factory():
+    from common.protocols import SSETransport
+
+    assert inspect.iscoroutinefunction(SSETransport.connect) is False
 
 
 def test_tracing_helpers_preserve_explicit_trace_context():
