@@ -9,7 +9,9 @@ Tests cover:
 - _validate_send_message_request input validation
 """
 
+import ast
 import pytest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -30,6 +32,259 @@ def room_center():
     rc.sse_manager = MagicMock()
     rc.task_service = MagicMock()
     return rc
+
+
+_ROOT = Path(__file__).resolve().parents[1]
+_ROOM_SERVICES_PATH = _ROOT / "services" / "room_services.py"
+
+
+def _room_services_function(function_name: str) -> ast.AsyncFunctionDef:
+    tree = ast.parse(
+        _ROOM_SERVICES_PATH.read_text(), filename=str(_ROOM_SERVICES_PATH)
+    )
+    matches = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == function_name
+    ]
+    assert matches, f"{function_name} not found"
+    return matches[0]
+
+
+def _room_services_call_line(
+    function_name: str,
+    call_name: str,
+    *snippets: str,
+    occurrence: int = 1,
+) -> int:
+    matches: list[tuple[int, str]] = []
+    for node in ast.walk(_room_services_function(function_name)):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Attribute):
+            name = node.func.attr
+        elif isinstance(node.func, ast.Name):
+            name = node.func.id
+        else:
+            name = None
+        if name != call_name:
+            continue
+        expression = ast.unparse(node)
+        if all(snippet in expression for snippet in snippets):
+            matches.append((node.lineno, expression))
+    matches.sort()
+    assert len(matches) >= occurrence, (
+        f"{function_name}.{call_name} with {snippets!r} occurrence "
+        f"{occurrence} not found; matches={matches}"
+    )
+    return matches[occurrence - 1][0]
+
+
+def _matching_room_services_call(
+    function_name: str,
+    call_name: str,
+    *snippets: str,
+    occurrence: int = 1,
+) -> ast.Call:
+    matches: list[ast.Call] = []
+    for node in ast.walk(_room_services_function(function_name)):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Attribute):
+            name = node.func.attr
+        elif isinstance(node.func, ast.Name):
+            name = node.func.id
+        else:
+            name = None
+        if name != call_name:
+            continue
+        expression = ast.unparse(node)
+        if all(snippet in expression for snippet in snippets):
+            matches.append(node)
+    matches.sort(key=lambda node: node.lineno)
+    assert len(matches) >= occurrence, (
+        f"{function_name}.{call_name} with {snippets!r} occurrence "
+        f"{occurrence} not found; matches="
+        f"{[(node.lineno, ast.unparse(node)) for node in matches]}"
+    )
+    return matches[occurrence - 1]
+
+
+def _body_containing_statement(
+    function: ast.AsyncFunctionDef,
+    statement: ast.stmt,
+) -> list[ast.stmt]:
+    for node in ast.walk(function):
+        bodies: list[list[ast.stmt]] = []
+        for attr in ("body", "orelse", "finalbody"):
+            body = getattr(node, attr, None)
+            if isinstance(body, list) and all(isinstance(item, ast.stmt) for item in body):
+                bodies.append(body)
+        if isinstance(node, ast.Try):
+            bodies.extend(handler.body for handler in node.handlers)
+        if isinstance(node, ast.Match):
+            bodies.extend(case.body for case in node.cases)
+        for body in bodies:
+            if any(item is statement for item in body):
+                return body
+    raise AssertionError(f"body containing statement at line {statement.lineno} not found")
+
+
+def _statement_containing_call(
+    function: ast.AsyncFunctionDef,
+    call: ast.Call,
+) -> ast.stmt:
+    statements = [
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.stmt)
+        and node.lineno <= call.lineno <= getattr(node, "end_lineno", node.lineno)
+    ]
+    assert statements, f"statement containing call at line {call.lineno} not found"
+    statements.sort(
+        key=lambda node: (
+            getattr(node, "end_lineno", node.lineno) - node.lineno,
+            -node.lineno,
+        )
+    )
+    return statements[0]
+
+
+def _statement_owning_body(
+    function: ast.AsyncFunctionDef,
+    body: list[ast.stmt],
+) -> ast.stmt | None:
+    if body is function.body:
+        return None
+    for node in ast.walk(function):
+        if not isinstance(node, ast.stmt):
+            continue
+        bodies: list[list[ast.stmt]] = []
+        for attr in ("body", "orelse", "finalbody"):
+            candidate = getattr(node, attr, None)
+            if isinstance(candidate, list) and all(
+                isinstance(item, ast.stmt) for item in candidate
+            ):
+                bodies.append(candidate)
+        if isinstance(node, ast.Try):
+            bodies.extend(handler.body for handler in node.handlers)
+        if isinstance(node, ast.Match):
+            bodies.extend(case.body for case in node.cases)
+        if any(candidate is body for candidate in bodies):
+            return node
+    raise AssertionError("owner for branch body not found")
+
+
+def _preceding_path_statements(
+    function: ast.AsyncFunctionDef,
+    emit_statement: ast.stmt,
+) -> list[ast.stmt]:
+    path_statements: list[ast.stmt] = []
+    current_statement: ast.stmt | None = emit_statement
+    while current_statement is not None:
+        body = _body_containing_statement(function, current_statement)
+        emit_index = next(
+            index
+            for index, statement in enumerate(body)
+            if statement is current_statement
+        )
+        path_statements.extend(body[:emit_index])
+        current_statement = _statement_owning_body(function, body)
+    return path_statements
+
+
+def _path_calls(statement: ast.stmt) -> list[ast.Call]:
+    if isinstance(statement, ast.If) and any(
+        isinstance(node, ast.Return) for node in ast.walk(statement)
+    ):
+        return [node for node in ast.walk(statement.test) if isinstance(node, ast.Call)]
+    return [node for node in ast.walk(statement) if isinstance(node, ast.Call)]
+
+
+def _assert_room_service_before(
+    function_name: str,
+    before_call: str,
+    before_snippets: tuple[str, ...],
+    emit_snippets: tuple[str, ...],
+    *,
+    before_occurrence: int = 1,
+    emit_occurrence: int = 1,
+) -> None:
+    function = _room_services_function(function_name)
+    emit_call = _matching_room_services_call(
+        function_name,
+        "send_processing_status",
+        *emit_snippets,
+        occurrence=emit_occurrence,
+    )
+    emit_statement = _statement_containing_call(function, emit_call)
+    path_statements = _preceding_path_statements(function, emit_statement)
+    candidates: list[tuple[int, str]] = []
+    for statement in path_statements:
+        for node in _path_calls(statement):
+            if isinstance(node.func, ast.Attribute):
+                name = node.func.attr
+            elif isinstance(node.func, ast.Name):
+                name = node.func.id
+            else:
+                name = None
+            expression = ast.unparse(node)
+            if name == before_call and all(
+                snippet in expression for snippet in before_snippets
+            ):
+                candidates.append((node.lineno, expression))
+    candidates.sort()
+    assert len(candidates) >= before_occurrence, (
+        f"{function_name}.{before_call} with {before_snippets!r} occurrence "
+        f"{before_occurrence} not found in same path before emit line "
+        f"{emit_call.lineno}; candidates={candidates}"
+    )
+    assert candidates[before_occurrence - 1][0] < emit_call.lineno
+
+
+def test_send_message_failure_call_01_side_effects_before_failed_processing_status():
+    _assert_room_service_before(
+        "send_message_to_room",
+        "_initialize_room_memory",
+        (),
+        ("Failed to initialize room memory",),
+    )
+
+
+def test_send_message_failure_call_02_side_effects_before_failed_processing_status():
+    _assert_room_service_before(
+        "send_message_to_room",
+        "_resolve_explicit_target_scope",
+        (),
+        ("Agent selection failed",),
+    )
+
+
+def test_send_message_canceled_side_effects_before_canceled_processing_status():
+    _assert_room_service_before(
+        "send_message_to_room",
+        "parse_user_message",
+        (),
+        ("SSEProcessingStatus.CANCELED",),
+    )
+
+
+def test_send_message_failure_call_03_side_effects_before_failed_processing_status():
+    _assert_room_service_before(
+        "send_message_to_room",
+        "parse_user_message",
+        (),
+        ("Failed to parse user message",),
+    )
+
+
+def test_no_agents_fallback_side_effects_before_completed_processing_status():
+    _assert_room_service_before(
+        "_handle_no_agents_fallback",
+        "add_room_agent_message",
+        (),
+        ("SSEProcessingStatus.COMPLETED",),
+    )
 
 
 @pytest.mark.asyncio

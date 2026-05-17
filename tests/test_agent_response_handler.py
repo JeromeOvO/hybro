@@ -6,7 +6,9 @@ produces identical DB writes and SSE emissions for each event kind,
 and that flow-control flags (skip_persist) work.
 """
 
+import ast
 import pytest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -49,6 +51,45 @@ def _base_event(**overrides):
     )
     defaults.update(overrides)
     return defaults
+
+
+def test_processing_status_callback_has_no_required_post_emit_business_side_effects():
+    path = Path(__file__).resolve().parents[1] / "modules" / "agent_response_handler.py"
+    tree = ast.parse(path.read_text(), filename=str(path))
+    fn = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_on_processing_status"
+    )
+    send_lines = [
+        node.lineno
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "send_processing_status"
+    ]
+    assert send_lines
+    last_send = max(send_lines)
+    forbidden_after_emit = {
+        "record_and_maybe_broadcast_run_event",
+        "update_task_state_on_message",
+        "accumulate_artifact_on_message",
+        "resume_queue_from_continuation",
+        "request_input",
+    }
+    post_emit = []
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Call) or node.lineno <= last_send:
+            continue
+        if isinstance(node.func, ast.Attribute):
+            name = node.func.attr
+        elif isinstance(node.func, ast.Name):
+            name = node.func.id
+        else:
+            name = None
+        if name in forbidden_after_emit:
+            post_emit.append((node.lineno, ast.unparse(node)))
+    assert post_emit == []
 
 
 # =============================================================================

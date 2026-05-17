@@ -405,6 +405,19 @@ class QueueExecutor:
         # Phase 2: deferred SSE notification
         if deferred_sse:
             sse_status, clear_cancel = deferred_sse
+            if (
+                sse_status == SSEProcessingStatus.CANCELED
+                and getattr(self, "_turn_event_appender", None)
+            ):
+                try:
+                    await self._turn_event_appender.append(
+                        room_id,
+                        user_message_id,
+                        "turn_canceled",
+                        {},
+                    )
+                except Exception:
+                    pass
             await record_and_maybe_broadcast_run_event(
                 room_id,
                 sse_status,
@@ -708,6 +721,8 @@ class QueueExecutor:
         self,
         message_id: str,
         task_result_text: str | None = None,
+        *,
+        before_terminal_failure=None,
     ) -> ResumeResult:
         """Resume queue processing after a push notification task completes.
 
@@ -778,6 +793,8 @@ class QueueExecutor:
             if queue_processing_result.result == QueueResult.PAUSED:
                 return ResumeResult(success=True)
             if queue_processing_result.result == QueueResult.FAILED:
+                if before_terminal_failure is not None:
+                    await before_terminal_failure(room_id, user_message_id)
                 await record_and_maybe_broadcast_run_event(
                     room_id,
                     SSEProcessingStatus.FAILED,

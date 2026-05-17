@@ -264,31 +264,114 @@ def _assert_no_prior_lifecycle_work(item: ProcessingStatusCall, call_id: str) ->
 
 
 def _assert_pre_recorded_payload(item: ProcessingStatusCall, entry: dict[str, Any]) -> None:
-    broadcast = _find_prior_awaited_helper(item, "broadcast_run_event_payload")
-    assert broadcast is not None, f"{entry['call_id']} missing run_event payload broadcast"
+    prior = _prior_statements(item)
+
+    def assignment_index(target_expr: str, value_expr: str) -> int | None:
+        for idx, stmt in enumerate(prior):
+            if not isinstance(stmt, ast.Assign):
+                continue
+            if not any(_expr_equal(_unparse(target), target_expr) for target in stmt.targets):
+                continue
+            if _expr_equal(_unparse(stmt.value), value_expr):
+                return idx
+        return None
+
+    tid_index = assignment_index("tid", "doc.get('trigger_message_id') or run_id")
+    assert tid_index is not None, (
+        f"{entry['call_id']} missing trigger message assignment before send"
+    )
+    assert _expr_equal(item.sse_message_id_expression, "str(tid)"), (
+        f"{entry['call_id']} send must use trigger message id tid"
+    )
+
+    client_request_index = assignment_index(
+        "client_request_id", "doc.get('client_request_id')"
+    )
+    assert client_request_index is not None, (
+        f"{entry['call_id']} missing client_request_id assignment before send"
+    )
+    assert _expr_equal(item.client_request_id_expression, "client_request_id"), (
+        f"{entry['call_id']} send must use assigned client_request_id"
+    )
+
+    payload_index: int | None = None
+    for idx, stmt in enumerate(prior):
+        if not isinstance(stmt, ast.Assign):
+            continue
+        if not any(
+            _expr_equal(_unparse(target), entry["payload_variable"])
+            for target in stmt.targets
+        ):
+            continue
+        if (
+            isinstance(stmt.value, ast.Await)
+            and isinstance(stmt.value.value, ast.Call)
+            and _expr_equal(
+                _unparse(stmt.value.value),
+                entry["pre_record_call_expression"],
+            )
+        ):
+            payload_index = idx
+            break
+    assert payload_index is not None, (
+        f"{entry['call_id']} missing awaited pre-record assignment"
+    )
+
+    guard_test = (
+        entry["payload_none_guard"].removeprefix("if ").removesuffix(": continue")
+    )
+    guard_index: int | None = None
+    for idx, stmt in enumerate(prior):
+        if not isinstance(stmt, ast.If):
+            continue
+        if not _expr_equal(_unparse(stmt.test), guard_test):
+            continue
+        if any(isinstance(child, ast.Continue) for child in stmt.body):
+            guard_index = idx
+            break
+    assert guard_index is not None, (
+        f"{entry['call_id']} missing payload None continue guard"
+    )
+    assert payload_index < guard_index, (
+        f"{entry['call_id']} payload None guard must occur after payload assignment"
+    )
+
+    metric_index: int | None = None
+    for idx, stmt in enumerate(prior):
+        if idx <= payload_index:
+            continue
+        if any(
+            isinstance(node, ast.Call) and _call_name(node) == "increment_counter"
+            for node in ast.walk(stmt)
+        ):
+            metric_index = idx
+            break
+    assert metric_index is not None, (
+        f"{entry['call_id']} missing watchdog metric increment"
+    )
+    assert guard_index < metric_index, (
+        f"{entry['call_id']} payload None guard must occur before metric increment"
+    )
+
+    broadcast_index: int | None = None
+    broadcast: ast.Call | None = None
+    for idx, stmt in enumerate(prior):
+        candidate = _direct_awaited_call(stmt, name="broadcast_run_event_payload")
+        if candidate is not None:
+            broadcast_index = idx
+            broadcast = candidate
+            break
+    assert broadcast is not None and broadcast_index is not None, (
+        f"{entry['call_id']} missing run_event payload broadcast"
+    )
+    assert guard_index < broadcast_index, (
+        f"{entry['call_id']} payload None guard must occur before run_event broadcast"
+    )
     assert _expr_equal(
         _call_expression(broadcast),
         entry["run_event_broadcast_expression"],
     )
     assert _expr_equal(_unparse(_keyword(broadcast, "sse")), entry["delivery_expression"])
-
-    prior = _prior_statements(item)
-    assert any(
-        isinstance(stmt, ast.Assign)
-        and any(_unparse(target) == entry["payload_variable"] for target in stmt.targets)
-        and isinstance(stmt.value, ast.Await)
-        and _expr_equal(
-            _unparse(stmt.value.value),
-            entry["pre_record_call_expression"],
-        )
-        for stmt in prior
-    ), f"{entry['call_id']} missing awaited pre-record assignment"
-    assert any(
-        isinstance(stmt, ast.If)
-        and _expr_equal(_unparse(stmt.test), entry["payload_none_guard"].removeprefix("if ").removesuffix(": continue"))
-        and any(isinstance(child, ast.Continue) for child in stmt.body)
-        for stmt in prior
-    ), f"{entry['call_id']} missing payload None continue guard"
 
 
 def test_production_processing_status_callers_are_manifest_covered() -> None:
@@ -405,29 +488,7 @@ async def send(flag):
     ) is None
 
 
-def test_pre_recorded_payload_requires_awaited_assignment() -> None:
-    source = """
-async def fail_stale_runs():
-    for doc in docs:
-        payload = run_command_handler.append_run_timeout_failure(
-            room_id, run_id, stale_minutes=stale_mins
-        )
-        if payload is None:
-            continue
-        await broadcast_run_event_payload(
-            room_id,
-            payload,
-            client_request_id=client_request_id,
-            sse=sse_manager,
-        )
-        await sse_manager.send_processing_status(
-            room_id,
-            SSEProcessingStatus.FAILED,
-            str(tid),
-            client_request_id=client_request_id,
-            details="Run watchdog: stale non-terminal run timed out",
-        )
-"""
+def _pre_recorded_item_from_source(source: str) -> ProcessingStatusCall:
     tree = ast.parse(source)
     parents = _build_parents(tree)
     send_call = next(
@@ -450,7 +511,11 @@ async def fail_stale_runs():
         call=send_call,
         parents=parents,
     )
-    entry = {
+    return item
+
+
+def _pre_recorded_entry() -> dict[str, Any]:
+    return {
         "call_id": "example.fail_stale_runs.failed",
         "pre_record_call_expression": (
             "run_command_handler.append_run_timeout_failure("
@@ -465,7 +530,101 @@ async def fail_stale_runs():
         "delivery_expression": "sse_manager",
     }
 
+
+def test_pre_recorded_payload_requires_awaited_assignment() -> None:
+    source = """
+async def fail_stale_runs():
+    for doc in docs:
+        tid = doc.get("trigger_message_id") or run_id
+        client_request_id = doc.get("client_request_id")
+        payload = run_command_handler.append_run_timeout_failure(
+            room_id, run_id, stale_minutes=stale_mins
+        )
+        if payload is None:
+            continue
+        increment_counter("run_watchdog_forced_failure_total")
+        await broadcast_run_event_payload(
+            room_id,
+            payload,
+            client_request_id=client_request_id,
+            sse=sse_manager,
+        )
+        await sse_manager.send_processing_status(
+            room_id,
+            SSEProcessingStatus.FAILED,
+            str(tid),
+            client_request_id=client_request_id,
+            details="Run watchdog: stale non-terminal run timed out",
+        )
+"""
+    item = _pre_recorded_item_from_source(source)
+    entry = _pre_recorded_entry()
+
     with pytest.raises(AssertionError, match="missing awaited pre-record assignment"):
+        _assert_pre_recorded_payload(item, entry)
+
+
+def test_pre_recorded_payload_requires_trigger_and_client_assignments() -> None:
+    source = """
+async def fail_stale_runs():
+    for doc in docs:
+        payload = await run_command_handler.append_run_timeout_failure(
+            room_id, run_id, stale_minutes=stale_mins
+        )
+        if payload is None:
+            continue
+        increment_counter("run_watchdog_forced_failure_total")
+        await broadcast_run_event_payload(
+            room_id,
+            payload,
+            client_request_id=client_request_id,
+            sse=sse_manager,
+        )
+        await sse_manager.send_processing_status(
+            room_id,
+            SSEProcessingStatus.FAILED,
+            str(run_id),
+            client_request_id=client_request_id,
+            details="Run watchdog: stale non-terminal run timed out",
+        )
+"""
+    item = _pre_recorded_item_from_source(source)
+    entry = _pre_recorded_entry()
+
+    with pytest.raises(AssertionError, match="missing trigger message assignment"):
+        _assert_pre_recorded_payload(item, entry)
+
+
+def test_pre_recorded_payload_requires_guard_before_metric_and_broadcast() -> None:
+    source = """
+async def fail_stale_runs():
+    for doc in docs:
+        tid = doc.get("trigger_message_id") or run_id
+        client_request_id = doc.get("client_request_id")
+        payload = await run_command_handler.append_run_timeout_failure(
+            room_id, run_id, stale_minutes=stale_mins
+        )
+        increment_counter("run_watchdog_forced_failure_total")
+        if payload is None:
+            continue
+        await broadcast_run_event_payload(
+            room_id,
+            payload,
+            client_request_id=client_request_id,
+            sse=sse_manager,
+        )
+        await sse_manager.send_processing_status(
+            room_id,
+            SSEProcessingStatus.FAILED,
+            str(tid),
+            client_request_id=client_request_id,
+            details="Run watchdog: stale non-terminal run timed out",
+        )
+"""
+    item = _pre_recorded_item_from_source(source)
+    entry = _pre_recorded_entry()
+
+    with pytest.raises(AssertionError, match="payload None guard must occur"):
         _assert_pre_recorded_payload(item, entry)
 
 

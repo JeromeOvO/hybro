@@ -87,3 +87,58 @@ async def test_watchdog_payload_none_suppresses_metric_and_delivery(monkeypatch)
 
     counter.assert_not_called()
     fake_sse.send_processing_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_watchdog_dual_write_disabled_sends_failed_without_lifecycle(
+    monkeypatch,
+):
+    import jobs.stale_task_checker as mod
+    import services.run_command_handler as handler_mod
+    import services.sse_services as sse_mod
+    from services.a2a_constants import SSEProcessingStatus
+
+    calls: list[str] = []
+    fake_sse = MagicMock()
+    fake_sse.send_processing_status = AsyncMock(
+        side_effect=lambda *a, **k: calls.append("send")
+    )
+    append = AsyncMock()
+    broadcast = AsyncMock()
+
+    monkeypatch.setenv("FEATURE_RUN_DUAL_WRITE", "0")
+    monkeypatch.setattr(
+        mod.db_service,
+        "find_stale_non_terminal_runs",
+        AsyncMock(
+            return_value=[
+                {
+                    "room_id": "room-1",
+                    "run_id": "run-1",
+                    "trigger_message_id": "msg-1",
+                    "client_request_id": "cr-1",
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        handler_mod.run_command_handler,
+        "append_run_timeout_failure",
+        append,
+    )
+    monkeypatch.setattr(sse_mod, "sse_manager", fake_sse)
+    monkeypatch.setattr(mod, "broadcast_run_event_payload", broadcast, raising=False)
+    monkeypatch.setattr(mod, "increment_counter", lambda name: calls.append(name))
+
+    await StaleTaskChecker()._fail_stale_runs()
+
+    assert calls == ["run_watchdog_forced_failure_total", "send"]
+    fake_sse.send_processing_status.assert_awaited_once_with(
+        "room-1",
+        SSEProcessingStatus.FAILED,
+        "msg-1",
+        client_request_id="cr-1",
+        details="Run watchdog: stale non-terminal run timed out",
+    )
+    append.assert_not_awaited()
+    broadcast.assert_not_awaited()
