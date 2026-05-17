@@ -3,7 +3,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from common.dto import MessageCommitted, ProcessingStatusEvent, RunStateChanged
+from common.dto import (
+    HubAgentResponseInternal,
+    MessageCommitted,
+    ProcessingStatusEvent,
+    RunStateChanged,
+)
 from common.observability import get_current_trace_id, trace_id_context
 from delivery.config import DeliveryConfig
 from delivery.event_publisher import EventPublisherImpl
@@ -384,3 +389,119 @@ async def test_stop_cancels_blocked_handler_after_configured_timeout():
     await publisher.stop()
 
     assert runner.tasks[0].cancelled()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event",
+    [
+        MessageCommitted(
+            room_id="room-1",
+            message_id="msg-1",
+            message_type="user",
+            timestamp=NOW,
+        ),
+        RunStateChanged(
+            run_id="run-1",
+            room_id="room-1",
+            old_state="queued",
+            new_state="processing",
+            timestamp=NOW,
+        ),
+        HubAgentResponseInternal(
+            hub_id="hub-1",
+            agent_id="agent-1",
+            task_id="task-1",
+            room_id="room-1",
+            is_terminal=False,
+            payload={"delta": "hello"},
+            timestamp=NOW,
+        ),
+    ],
+)
+async def test_all_internal_event_union_members_schedule_local_handlers(event):
+    runner = RecordingTaskRunner()
+    publisher = make_publisher(task_runner=runner)
+    received = []
+
+    publisher.register_internal_handler(event.event_type, lambda item: received.append(item))
+
+    await publisher.emit_internal(event)
+    await asyncio.gather(*runner.tasks)
+
+    assert received == [event]
+
+
+@pytest.mark.asyncio
+async def test_remote_internal_events_cover_all_union_members_and_multiple_handlers():
+    runner = RecordingTaskRunner()
+    publisher = make_publisher(task_runner=runner)
+    first = []
+    second = []
+    events = [
+        MessageCommitted(
+            room_id="room-1",
+            message_id="msg-1",
+            message_type="user",
+            timestamp=NOW,
+        ),
+        RunStateChanged(
+            run_id="run-1",
+            room_id="room-1",
+            old_state="queued",
+            new_state="processing",
+            timestamp=NOW,
+        ),
+        HubAgentResponseInternal(
+            hub_id="hub-1",
+            agent_id="agent-1",
+            task_id="task-1",
+            room_id="room-1",
+            is_terminal=True,
+            payload={"content": "done"},
+            timestamp=NOW,
+        ),
+    ]
+
+    for event in events:
+        publisher.register_internal_handler(
+            event.event_type,
+            lambda item, bucket=first: bucket.append(item.event_type),
+        )
+        publisher.register_internal_handler(
+            event.event_type,
+            lambda item, bucket=second: bucket.append(item.event_type),
+        )
+        await publisher.handle_remote_internal_event(
+            {
+                "kind": "internal_event",
+                "origin": "worker-2",
+                "event_type": event.event_type,
+                "event": event.model_dump(mode="json"),
+            }
+        )
+
+    await asyncio.gather(*runner.tasks)
+
+    assert first == [event.event_type for event in events]
+    assert second == [event.event_type for event in events]
+
+
+@pytest.mark.asyncio
+async def test_emit_internal_with_no_subscribers_is_noop_for_handlers():
+    runner = RecordingTaskRunner()
+    bus = FakeBus()
+    publisher = make_publisher(bus=bus, task_runner=runner)
+    event = HubAgentResponseInternal(
+        hub_id="hub-1",
+        agent_id="agent-1",
+        task_id="task-1",
+        room_id="room-1",
+        is_terminal=False,
+        timestamp=NOW,
+    )
+
+    await publisher.emit_internal(event)
+
+    assert runner.tasks == []
+    assert bus.internal == [event]
