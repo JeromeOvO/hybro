@@ -316,6 +316,59 @@ async def test_redis_pubsub_impl_publishes_with_direct_client():
 
 
 @pytest.mark.asyncio
+async def test_redis_pubsub_impl_raises_transient_error_for_publish_failure():
+    from dal.redis.pubsub import RedisPubSubImpl
+
+    client = MagicMock()
+    client.publish = AsyncMock(side_effect=RuntimeError("publish failed"))
+
+    pubsub_impl = RedisPubSubImpl(client=client)
+
+    with pytest.raises(TransientError):
+        await pubsub_impl.publish("events", "payload")
+
+
+@pytest.mark.asyncio
+async def test_redis_pubsub_impl_surfaces_subscribe_setup_failure():
+    from dal.redis.pubsub import RedisPubSubImpl
+
+    pubsub = MagicMock()
+    pubsub.subscribe = AsyncMock(side_effect=RuntimeError("subscribe failed"))
+    pubsub.unsubscribe = AsyncMock()
+    pubsub.aclose = AsyncMock()
+
+    client = MagicMock()
+    client.pubsub.return_value = pubsub
+
+    pubsub_impl = RedisPubSubImpl(client=client)
+    iterator = await pubsub_impl.subscribe("events")
+
+    with pytest.raises(TransientError):
+        await anext(iterator)
+
+
+def test_redis_pubsub_impl_accepts_explicit_max_connections(monkeypatch):
+    from dal.redis import pubsub as pubsub_module
+
+    captured = {}
+
+    def from_url(url, **kwargs):
+        captured.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(pubsub_module.aioredis, "from_url", from_url)
+
+    pubsub_impl = pubsub_module.RedisPubSubImpl(
+        url="redis://localhost:6379/0",
+        max_connections=120,
+    )
+    pubsub_impl._ensure_client()
+
+    assert pubsub_impl.max_connections == 120
+    assert captured["max_connections"] == 120
+
+
+@pytest.mark.asyncio
 async def test_redis_pubsub_impl_gracefully_degrades_without_url(monkeypatch):
     from dal.redis import pubsub as pubsub_module
 
