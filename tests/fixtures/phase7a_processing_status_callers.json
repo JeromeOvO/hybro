@@ -737,7 +737,7 @@
     "recording_kind": "transport_only",
     "requires_recording": false,
     "expects_run_event_sse": false,
-    "transport_only_reason": "create_and_parse_user_message persists/parses/fans out messages but does not start the terminalizing Execution run; the deprecated external processing endpoint returns 410."
+    "transport_only_reason": "create_and_parse_user_message persists/parses/fans out messages but does not start the terminalizing Execution run; /roomCenter/createAndParseUserMessage returns 410 before invoking this service path."
   },
   {
     "call_id": "services.task_notification_service._notify_task_update_impl.mapped_status.call-01",

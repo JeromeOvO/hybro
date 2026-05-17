@@ -443,28 +443,25 @@ class TestCreateAndParseUserMessage:
     """Tests for create_and_parse_user_message endpoint."""
 
     @pytest.mark.asyncio
-    async def test_creates_message_for_owner(
+    async def test_returns_410_without_invoking_legacy_message_flow(
         self, mock_user, sample_room, sample_user_message, patch_room_center_deps
     ):
-        """Should create and parse message when user is owner."""
+        """Deprecated createAndParseUserMessage should not emit unowned processing status."""
         mock_request = MagicMock()
         mock_request.json = AsyncMock(return_value={
             "room_id": sample_room.room_id,
             "message": sample_user_message.model_dump(),
             "client_request_id": "c7c9a000-0000-4000-8000-000000000010",
         })
-        
-        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
-        expected_response = RoomCenterUserMessageResponse(
-            success=True,
-            message_id="new-message-id",
-        )
-        patch_room_center_deps["room_center"].create_and_parse_user_message.return_value = expected_response
-        
+
         response = await create_and_parse_user_message(mock_request, mock_user)
-        
-        assert response.success is True
-        assert response.message_id == "new-message-id"
+
+        assert response.status_code == 410
+        mock_request.json.assert_not_awaited()
+        patch_room_center_deps["db_service"].get_room_by_room_id.assert_not_called()
+        patch_room_center_deps[
+            "room_center"
+        ].create_and_parse_user_message.assert_not_awaited()
 
 
 class TestInquiryRoomMessages:

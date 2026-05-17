@@ -1,4 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from common.auth import ClerkUser, get_current_user
 from models.file_upload import MAX_ATTACHMENT_REFS_PER_REQUEST
@@ -224,44 +225,22 @@ async def update_room_extend_info(
     return room_center_response
 
 
-@router.post("/roomCenter/createAndParseUserMessage")
+@router.post("/roomCenter/createAndParseUserMessage", deprecated=True)
 async def create_and_parse_user_message(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
 ):
-    """Create and parse user message - PROTECTED (requires room ownership)"""
-    request_data = await request.json()
-    room_id = request_data.get("room_id")
-    message = request_data.get("message")
-    client_request_id = request_data.get("client_request_id")
-    if not isinstance(client_request_id, str) or not client_request_id.strip():
-        return RoomCenterUserMessageResponse(
-            message_id=None,
-            message=None,
-            success=False,
-            error="client_request_id is required",
-            status_code=400,
-        )
-
-    # Verify user owns the room
-    await verify_room_ownership(room_id, user)
-
-    attachments, inline_file_ids, err = _extract_attachments(request_data, message)
-    if err is not None:
-        return err
-
-    room_center_request = RoomCenterUserMessageRequest(
-        room_id=room_id,
-        user_id=user.user_id,
-        message=message,
-        attachments=attachments,
-        inline_file_ids=inline_file_ids,
-        client_request_id=client_request_id,
+    """
+    **Deprecated.** Message creation and processing now go through sendMessage.
+    This endpoint returns HTTP 410 Gone before parsing the request body.
+    """
+    return JSONResponse(
+        status_code=410,
+        content={
+            "success": False,
+            "error": "This endpoint is deprecated. Use /roomCenter/sendMessage.",
+        },
     )
-    room_center_response = await room_center.create_and_parse_user_message(
-        room_center_request
-    )
-    return room_center_response
 
 
 @router.post("/roomCenter/inquiryRoomMessagesByRoomId")

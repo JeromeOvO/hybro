@@ -543,7 +543,7 @@ await sse_manager.send_processing_status(
 )
 ```
 
-The manifest entry for this send must use `recording_kind="transport_only"` and a reason such as: `"create_and_parse_user_message persists/parses/fans out messages but does not start the terminalizing Execution run; the deprecated external processing endpoint returns 410."`
+The manifest entry for this send must use `recording_kind="transport_only"` and a reason such as: `"create_and_parse_user_message persists/parses/fans out messages but does not start the terminalizing Execution run; /roomCenter/createAndParseUserMessage returns 410 before invoking this service path."`
 
 - [ ] **Step 3: Update room-service assertions**
 
