@@ -179,15 +179,9 @@ class TestSendProcessingStatusClientRequestId:
         mgr = SSEManager()
         conn = await mgr.add_connection("room-1")
 
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(
-                "services.sse_services.run_command_handler.record_processing_status",
-                AsyncMock(return_value=None),
-            )
-
-            await mgr.send_processing_status(
-                "room-1", "processing", "msg-1", client_request_id="cr-abc"
-            )
+        await mgr.send_processing_status(
+            "room-1", "processing", "msg-1", client_request_id="cr-abc"
+        )
 
         msg = await conn.queue.get()
         parsed = json.loads(msg)
@@ -200,17 +194,41 @@ class TestSendProcessingStatusClientRequestId:
         mgr = SSEManager()
         conn = await mgr.add_connection("room-1")
 
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(
-                "services.sse_services.run_command_handler.record_processing_status",
-                AsyncMock(return_value=None),
-            )
-
-            await mgr.send_processing_status(
-                "room-1", "processing", "msg-1"
-            )
+        await mgr.send_processing_status(
+            "room-1", "processing", "msg-1"
+        )
 
         msg = await conn.queue.get()
         parsed = json.loads(msg)
         assert parsed["type"] == "processing_status"
         assert "client_request_id" not in parsed["data"]
+
+    @pytest.mark.asyncio
+    async def test_send_processing_status_does_not_record_or_emit_run_event(self, monkeypatch):
+        import services.run_command_handler as handler_mod
+
+        mgr = SSEManager()
+        conn = await mgr.add_connection("room-1")
+        record = AsyncMock(
+            return_value={
+                "event_id": "evt-1",
+                "run_id": "msg-1",
+                "seq": 1,
+                "type": "RUN_STARTED",
+                "payload": {},
+            }
+        )
+        monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
+        monkeypatch.setattr(
+            handler_mod.run_command_handler,
+            "record_processing_status",
+            record,
+        )
+
+        await mgr.send_processing_status("room-1", "processing", "msg-1")
+
+        record.assert_not_awaited()
+        msg = await conn.queue.get()
+        parsed = json.loads(msg)
+        assert parsed["type"] == "processing_status"
+        assert conn.queue.empty()

@@ -453,6 +453,7 @@ class TestAllAgentsPostPersistMessageId:
             "room-1",
             "failed",
             "msg-real-123",
+            client_request_id=None,
             details="Agent selection failed.",
         )
 

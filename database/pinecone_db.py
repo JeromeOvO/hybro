@@ -1,26 +1,41 @@
-import os
-
 import pinecone
-from dotenv import load_dotenv
 
-load_dotenv()
+from common.config import get_pinecone_api_key, get_pinecone_index_name
 
 
 class PineconeDB:
     def __init__(self):
-        self.index_name = os.getenv("PINECONE_INDEX_NAME")
+        self.index_name = get_pinecone_index_name()
         self.index = None
         self._pc: pinecone.Pinecone | None = None
+        self._api_key: str | None = None
         self._indexes: dict[str, object] = {}
 
     def _get_client(self) -> pinecone.Pinecone:
+        api_key = get_pinecone_api_key()
         if self._pc is None:
-            self._pc = pinecone.Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+            self._pc = pinecone.Pinecone(api_key=api_key)
+            self._api_key = api_key
+            self._indexes.clear()
+            self.index = None
+        elif self._api_key is None:
+            self._api_key = api_key
+        elif self._api_key != api_key:
+            self._pc = pinecone.Pinecone(api_key=api_key)
+            self._api_key = api_key
+            self._indexes.clear()
+            self.index = None
         return self._pc
 
     def connect(self):
+        self.index_name = get_pinecone_index_name()
         pc = self._get_client()
         self.index = pc.Index(self.index_name)
+
+    def _ensure_default_index(self):
+        if self.index is None or self.index_name != get_pinecone_index_name():
+            self.connect()
+        return self.index
 
     def get_index(self, index_name: str):
         """Get a Pinecone index by name, with lazy connection caching.
@@ -38,10 +53,9 @@ class PineconeDB:
 
     def query(self, vector, top_k=5, filter=None):
         """Query the vector database for similar vectors with optional metadata filter"""
-        if not self.index:
-            self.connect()
+        index = self._ensure_default_index()
 
-        results = self.index.query(
+        results = index.query(
             vector=vector,
             top_k=top_k,
             include_metadata=True,
@@ -52,10 +66,9 @@ class PineconeDB:
 
     def upsert(self, vectors):
         """Insert or update vectors in the database"""
-        if not self.index:
-            self.connect()
+        index = self._ensure_default_index()
 
-        return self.index.upsert(vectors=vectors)
+        return index.upsert(vectors=vectors)
 
     def delete(self, ids):
         """Delete vectors from the database by their IDs
@@ -66,10 +79,9 @@ class PineconeDB:
         Returns:
             The deletion response from Pinecone
         """
-        if not self.index:
-            self.connect()
+        index = self._ensure_default_index()
 
-        return self.index.delete(ids=ids)
+        return index.delete(ids=ids)
 
 
 pinecone_db = PineconeDB()

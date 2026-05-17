@@ -110,6 +110,27 @@ async def test_create_room_validates_required_fields_and_manual_seed():
 
 
 @pytest.mark.asyncio
+async def test_create_room_preserves_initial_extend_info():
+    facade, rooms, _, _, _ = _facade(ids=["room-created"])
+
+    room = await facade.create_room(
+        CreateRoomRequest(
+            owner_id="owner",
+            owner_name="Owner",
+            room_name="Room",
+            membership_seed=MembershipSeed(mode="manual"),
+            extend_info={"debateMode": True, "use_supervisor": True},
+        )
+    )
+
+    assert room.extend_info == {"debateMode": True, "use_supervisor": True}
+    assert rooms.created_docs[-1]["extend_info"] == {
+        "debateMode": True,
+        "use_supervisor": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_create_room_supports_saved_group_all_current_and_empty_manual():
     facade, _, _, _, source = _facade(
         agents=[

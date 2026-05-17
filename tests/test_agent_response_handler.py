@@ -6,7 +6,9 @@ produces identical DB writes and SSE emissions for each event kind,
 and that flow-control flags (skip_persist) work.
 """
 
+import ast
 import pytest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -49,6 +51,45 @@ def _base_event(**overrides):
     )
     defaults.update(overrides)
     return defaults
+
+
+def test_processing_status_callback_has_no_required_post_emit_business_side_effects():
+    path = Path(__file__).resolve().parents[1] / "modules" / "agent_response_handler.py"
+    tree = ast.parse(path.read_text(), filename=str(path))
+    fn = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_on_processing_status"
+    )
+    send_lines = [
+        node.lineno
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "send_processing_status"
+    ]
+    assert send_lines
+    last_send = max(send_lines)
+    forbidden_after_emit = {
+        "record_and_maybe_broadcast_run_event",
+        "update_task_state_on_message",
+        "accumulate_artifact_on_message",
+        "resume_queue_from_continuation",
+        "request_input",
+    }
+    post_emit = []
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Call) or node.lineno <= last_send:
+            continue
+        if isinstance(node.func, ast.Attribute):
+            name = node.func.attr
+        elif isinstance(node.func, ast.Name):
+            name = node.func.id
+        else:
+            name = None
+        if name in forbidden_after_emit:
+            post_emit.append((node.lineno, ast.unparse(node)))
+    assert post_emit == []
 
 
 # =============================================================================
@@ -405,10 +446,25 @@ class TestInteractiveEvent:
             request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
         )
 
+        order: list[str] = []
+
+        async def record(*args, **kwargs):
+            order.append("record")
+
+        async def send(*args, **kwargs):
+            order.append("send")
+
+        h._sse.send_processing_status = AsyncMock(side_effect=send)
+
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
                 "modules.agent_response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
+            )
+            mp.setattr(
+                "modules.agent_response_handler.record_and_maybe_broadcast_run_event",
+                AsyncMock(side_effect=record),
+                raising=False,
             )
             mp.setattr("services.hitl_service.hitl_service", hitl)
             await h.handle(event)
@@ -430,6 +486,7 @@ class TestInteractiveEvent:
             "awaiting_input",
             "user-msg-001",
         )
+        assert order == ["record", "send"]
 
     @pytest.mark.asyncio
     async def test_logs_agent_name_lookup_failure_without_blocking_hitl(self):
@@ -523,6 +580,74 @@ class TestProcessingStatusEvent:
             state="completed", details="all done",
         )
         await h.handle(event)
+        h._sse.send_processing_status.assert_awaited_once_with(
+            "room-001", "completed", message_id="msg-001", details="all done",
+        )
+
+    @pytest.mark.asyncio
+    async def test_records_when_lifecycle_message_id_is_explicit(self):
+        h = _make_handler()
+        order: list[str] = []
+
+        async def record(*args, **kwargs):
+            order.append("record")
+
+        async def send(*args, **kwargs):
+            order.append("send")
+
+        h._sse.send_processing_status = AsyncMock(side_effect=send)
+        event = AgentEvent(
+            kind="processing_status", **_base_event(message_id="display-msg-001"),
+            lifecycle_message_id="umsg-001",
+            state="completed",
+            details="all done",
+            client_request_id="cr-1",
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            helper = AsyncMock(side_effect=record)
+            mp.setattr(
+                "modules.agent_response_handler.record_and_maybe_broadcast_run_event",
+                helper,
+                raising=False,
+            )
+            await h.handle(event)
+
+        helper.assert_awaited_once_with(
+            "room-001",
+            "completed",
+            "umsg-001",
+            client_request_id="cr-1",
+            details="all done",
+            sse=h._sse,
+        )
+        h._sse.send_processing_status.assert_awaited_once_with(
+            "room-001",
+            "completed",
+            message_id="display-msg-001",
+            details="all done",
+            client_request_id="cr-1",
+        )
+        assert order == ["record", "send"]
+
+    @pytest.mark.asyncio
+    async def test_related_message_processing_status_stays_transport_only(self):
+        h = _make_handler()
+        event = AgentEvent(
+            kind="processing_status", **_base_event(),
+            state="completed", details="all done",
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            helper = AsyncMock()
+            mp.setattr(
+                "modules.agent_response_handler.record_and_maybe_broadcast_run_event",
+                helper,
+                raising=False,
+            )
+            await h.handle(event)
+
+        helper.assert_not_awaited()
         h._sse.send_processing_status.assert_awaited_once_with(
             "room-001", "completed", message_id="msg-001", details="all done",
         )

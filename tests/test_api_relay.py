@@ -787,6 +787,133 @@ class TestRelayTransportHandlePublish:
         assert event.text == "hi"
 
     @pytest.mark.asyncio
+    async def test_processing_status_mismatched_user_message_id_is_dropped(self):
+        db = MagicMock()
+        msg = _make_msg()
+        msg.turn_id = "umsg-001"
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
+        db.is_message_cancelled = AsyncMock(return_value=False)
+        agent_mock = MagicMock()
+        agent_mock.hub_id = "hub-001"
+        db.get_agent_by_agent_id = AsyncMock(return_value=agent_mock)
+        sse = MagicMock()
+        sse.send_processing_status = AsyncMock()
+
+        rt = _make_relay_transport(db_service=db, sse_manager=sse)
+        await rt.handle_publish_event(
+            "processing_status",
+            "amsg-001",
+            {"status": "completed", "user_message_id": "other-msg"},
+            "room-1",
+            "hub-001",
+        )
+
+        rt.response_handler.handle.assert_not_awaited()
+        sse.send_processing_status.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_processing_status_valid_user_message_id_keeps_agent_display_message_id(self):
+        db = MagicMock()
+        msg = _make_msg()
+        msg.turn_id = "umsg-001"
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
+        db.is_message_cancelled = AsyncMock(return_value=False)
+        agent_mock = MagicMock()
+        agent_mock.hub_id = "hub-001"
+        db.get_agent_by_agent_id = AsyncMock(return_value=agent_mock)
+
+        rt = _make_relay_transport(db_service=db)
+        await rt.handle_publish_event(
+            "processing_status",
+            "amsg-001",
+            {"status": "completed", "user_message_id": "umsg-001", "details": "done"},
+            "room-1",
+            "hub-001",
+        )
+
+        rt.response_handler.handle.assert_awaited_once()
+        event = rt.response_handler.handle.call_args.args[0]
+        assert event.kind == "processing_status"
+        assert event.message_id == "amsg-001"
+        assert event.lifecycle_message_id == "umsg-001"
+
+    @pytest.mark.asyncio
+    async def test_processing_status_root_resolution_is_cached_for_repeated_agent_message(self):
+        db = MagicMock()
+        msg = _make_msg(related_message_id="parent-agent-msg")
+        parent = _make_msg(message_id="parent-agent-msg", related_message_id="umsg-001")
+        parent.turn_id = "umsg-001"
+        agent_message_lookups: list[str] = []
+
+        async def get_agent_message(message_id):
+            agent_message_lookups.append(message_id)
+            if message_id == "amsg-001":
+                return msg
+            if message_id == "parent-agent-msg":
+                return parent
+            return None
+
+        db.get_room_agent_message_by_message_id = AsyncMock(
+            side_effect=get_agent_message
+        )
+        db.get_room_user_message_by_message_id = AsyncMock(return_value=None)
+        db.is_message_cancelled = AsyncMock(return_value=False)
+        agent_mock = MagicMock()
+        agent_mock.hub_id = "hub-001"
+        db.get_agent_by_agent_id = AsyncMock(return_value=agent_mock)
+
+        rt = _make_relay_transport(db_service=db)
+
+        for _ in range(2):
+            await rt.handle_publish_event(
+                "processing_status",
+                "amsg-001",
+                {
+                    "status": "completed",
+                    "user_message_id": "umsg-001",
+                    "details": "done",
+                },
+                "room-1",
+                "hub-001",
+            )
+
+        assert agent_message_lookups == [
+            "amsg-001",
+            "parent-agent-msg",
+            "amsg-001",
+        ]
+        assert db.get_room_user_message_by_message_id.await_count == 1
+        assert rt.response_handler.handle.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_processing_status_parent_agent_message_id_is_dropped(self):
+        db = MagicMock()
+        msg = _make_msg(related_message_id="parent-agent-msg")
+        parent = _make_msg(message_id="parent-agent-msg", related_message_id="umsg-001")
+        db.get_room_agent_message_by_message_id = AsyncMock(side_effect=[msg, parent])
+        db.get_room_user_message_by_message_id = AsyncMock(
+            side_effect=[None, MagicMock(message_type="user")]
+        )
+        db.is_message_cancelled = AsyncMock(return_value=False)
+        agent_mock = MagicMock()
+        agent_mock.hub_id = "hub-001"
+        db.get_agent_by_agent_id = AsyncMock(return_value=agent_mock)
+        sse = MagicMock()
+        sse.send_processing_status = AsyncMock()
+
+        rt = _make_relay_transport(db_service=db, sse_manager=sse)
+        await rt.handle_publish_event(
+            "processing_status",
+            "amsg-001",
+            {"status": "completed", "user_message_id": "parent-agent-msg"},
+            "room-1",
+            "hub-001",
+        )
+
+        rt.response_handler.handle.assert_not_awaited()
+        sse.send_processing_status.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_rejects_cross_hub_publish(self):
         """A hub must not publish events for agents belonging to a different hub."""
         db = MagicMock()

@@ -8,9 +8,11 @@ Owns:
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 from a2a.types import TaskState
+from cachetools import TTLCache
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -50,6 +52,10 @@ class RelayTransport(AgentTransport):
         self.relay_service = relay_service
         self._db = db
         self._sse = sse_manager
+        self._root_user_message_cache: TTLCache[str, str | None] = TTLCache(
+            maxsize=2048,
+            ttl=300,
+        )
 
     async def dispatch(
         self,
@@ -173,7 +179,27 @@ class RelayTransport(AgentTransport):
             )
             return
 
-        agent_event = self._normalize(event_type, agent_message_id, data, msg)
+        lifecycle_message_id = None
+        if event_type == "processing_status":
+            lifecycle_message_id = await self._resolve_processing_status_lifecycle_id(
+                msg, data
+            )
+            if data.get("user_message_id") and lifecycle_message_id is None:
+                logger.warning(
+                    "Dropping processing_status for agent_message_id %s with "
+                    "mismatched user_message_id %s",
+                    agent_message_id,
+                    data.get("user_message_id"),
+                )
+                return
+
+        agent_event = self._normalize(
+            event_type,
+            agent_message_id,
+            data,
+            msg,
+            lifecycle_message_id=lifecycle_message_id,
+        )
         if agent_event is None:
             return
 
@@ -219,6 +245,8 @@ class RelayTransport(AgentTransport):
         agent_message_id: str,
         data: dict,
         msg: RoomAgentMessage,
+        *,
+        lifecycle_message_id: str | None = None,
     ) -> AgentEvent | None:
         """Convert hub publish dict -> AgentEvent."""
         base = dict(
@@ -282,9 +310,10 @@ class RelayTransport(AgentTransport):
         if event_type == "processing_status":
             return AgentEvent(
                 kind="processing_status",
-                **{**base, "message_id": data.get("user_message_id") or agent_message_id},
+                **base,
                 state=data.get("status", "completed"),
                 details=data.get("details"),
+                lifecycle_message_id=lifecycle_message_id,
             )
 
         logger.warning(
@@ -292,6 +321,59 @@ class RelayTransport(AgentTransport):
             event_type, agent_message_id,
         )
         return None
+
+    async def _resolve_processing_status_lifecycle_id(
+        self,
+        msg: RoomAgentMessage,
+        data: dict,
+    ) -> str | None:
+        candidate = data.get("user_message_id")
+        if not isinstance(candidate, str) or not candidate:
+            return None
+        if candidate == getattr(msg, "turn_id", None):
+            return candidate
+
+        canonical_root = await self._resolve_root_user_message_id(msg)
+        if candidate == canonical_root:
+            return candidate
+        return None
+
+    async def _resolve_root_user_message_id(
+        self,
+        msg: RoomAgentMessage,
+    ) -> str | None:
+        cache_key = getattr(msg, "message_id", None)
+        if isinstance(cache_key, str) and cache_key in self._root_user_message_cache:
+            return self._root_user_message_cache[cache_key]
+
+        def remember(value: str | None) -> str | None:
+            if isinstance(cache_key, str):
+                self._root_user_message_cache[cache_key] = value
+            return value
+
+        cursor = getattr(msg, "related_message_id", None)
+        visited: set[str] = set()
+        for _ in range(20):
+            if not isinstance(cursor, str) or not cursor or cursor in visited:
+                break
+            visited.add(cursor)
+
+            user_lookup = getattr(self._db, "get_room_user_message_by_message_id", None)
+            if callable(user_lookup):
+                user_msg = user_lookup(cursor)
+                if asyncio.iscoroutine(user_msg):
+                    user_msg = await user_msg
+                if getattr(user_msg, "message_type", None) == "user":
+                    return remember(cursor)
+
+            parent = await self._db.get_room_agent_message_by_message_id(cursor)
+            if parent is None:
+                break
+            parent_turn_id = getattr(parent, "turn_id", None)
+            if isinstance(parent_turn_id, str) and parent_turn_id:
+                return remember(parent_turn_id)
+            cursor = getattr(parent, "related_message_id", None)
+        return remember(None)
 
     @staticmethod
     def _normalize_hub_parts(parts: list[dict] | None) -> list[dict] | None:

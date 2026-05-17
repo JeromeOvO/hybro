@@ -8,7 +8,9 @@ from common.auth import ClerkUser, get_current_user, get_current_user_with_query
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from database.mongodb import mongodb
+from services.a2a_constants import SSEProcessingStatus
 from services.database_service import db_service
+from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
 from services.sse_services import sse_manager
 
 logger = get_logger(__name__)
@@ -150,11 +152,20 @@ async def cancel_message(
         logger.info(f"Message {message_id} cancelled by user {user.user_id}")
 
         # Clear room processing status for the user message (must use user message ID)
+        await record_and_maybe_broadcast_run_event(
+            message.room_id,
+            SSEProcessingStatus.CANCELED,
+            message_id,
+            sse=sse_manager,
+        )
         await sse_manager.send_processing_status(
-            message.room_id, "canceled", message_id
+            message.room_id, SSEProcessingStatus.CANCELED, message_id
         )
 
-        # Immediately mark any paused agent messages as canceled and notify frontend
+        # Phase 7a: root cancellation lifecycle/frontend clear is complete above.
+        # Paused-agent DB task-state updates, task notifications, and remote
+        # cancels are separate best-effort cleanup; failures here must not
+        # block the root cancellation result.
         try:
             from a2a.types import TaskState
             from services.a2a_service import a2a_service

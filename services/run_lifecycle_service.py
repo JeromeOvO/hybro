@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
-import os
-from typing import Any
+from typing import Any, Protocol
 
-from services.run_command_handler import run_command_handler
+from services.run_command_handler import (
+    feature_run_dual_write_enabled,
+    run_command_handler,
+    run_event_sse_enabled,
+)
 
 
-def _feature_run_dual_write_enabled() -> bool:
-    raw = (os.environ.get("FEATURE_RUN_DUAL_WRITE") or "1").strip().lower()
-    return raw not in ("0", "false", "no", "off")
+class RunEventBroadcaster(Protocol):
+    async def broadcast_to_room(
+        self,
+        room_id: str,
+        message_type: str,
+        data: Any,
+    ) -> Any:
+        ...
 
 
 class RunLifecycleService:
@@ -24,10 +32,10 @@ class RunLifecycleService:
         *,
         client_request_id: str | None = None,
         details: str | None = None,
-    ) -> None:
-        if not _feature_run_dual_write_enabled():
-            return
-        await run_command_handler.record_processing_status(
+    ) -> dict[str, Any] | None:
+        if not feature_run_dual_write_enabled():
+            return None
+        return await run_command_handler.record_processing_status(
             room_id=room_id,
             status=status,
             message_id=message_id,
@@ -37,3 +45,60 @@ class RunLifecycleService:
 
 
 run_lifecycle_service = RunLifecycleService()
+
+
+async def record_and_maybe_broadcast_run_event(
+    room_id: str,
+    status: Any,
+    message_id: str | None,
+    *,
+    sse: RunEventBroadcaster,
+    client_request_id: str | None = None,
+    details: str | None = None,
+) -> dict[str, Any] | None:
+    payload = await run_lifecycle_service.record_processing_status(
+        room_id=room_id,
+        status=status,
+        message_id=message_id,
+        client_request_id=client_request_id,
+        details=details,
+    )
+    await broadcast_run_event_payload(
+        room_id,
+        payload,
+        sse=sse,
+        client_request_id=client_request_id,
+    )
+    return payload
+
+
+def build_run_event_sse_payload(
+    payload: dict[str, Any],
+    *,
+    client_request_id: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "event_id": payload.get("event_id"),
+        "run_id": payload.get("run_id"),
+        "seq": payload.get("seq"),
+        "type": payload.get("type"),
+        "payload": payload.get("payload") or {},
+        "correlation_id": client_request_id,
+    }
+
+
+async def broadcast_run_event_payload(
+    room_id: str,
+    payload: dict[str, Any] | None,
+    *,
+    sse: RunEventBroadcaster,
+    client_request_id: str | None = None,
+) -> None:
+    if not (run_event_sse_enabled() and payload):
+        return
+
+    await sse.broadcast_to_room(
+        room_id,
+        "run_event",
+        build_run_event_sse_payload(payload, client_request_id=client_request_id),
+    )

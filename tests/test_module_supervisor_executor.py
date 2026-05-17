@@ -9,12 +9,22 @@ Tests cover:
 """
 
 import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from modules.SupervisorExecutor import SupervisorExecutor
 from models.supervisor_v2 import (
-    SupervisorTrajectory,
+    ActionType,
+    AgentProfile,
+    ClarifyQuestion,
+    DelegateTarget,
+    RoomConfig,
+    RunStatus,
+    StepStatus,
+    SupervisorAction,
     SupervisorRunResult,
+    SupervisorTrajectory,
+    V2StepResult,
 )
 
 
@@ -247,3 +257,189 @@ class TestClarifyCleanupCompensation:
         assert hitl_mock.cancel_request.await_count == 1
         hitl_mock.cancel_request.assert_awaited_once_with("req-a", "room-1")
         assert se.database_service.delete_room_agent_message_by_message_id.await_count == 2
+
+
+class TestProcessingStatusLifecycleOrder:
+    @pytest.mark.asyncio
+    async def test_stage_notification_records_before_send(self):
+        import modules.SupervisorExecutor as supervisor_mod
+
+        se = _make_supervisor_executor()
+        order: list[str] = []
+        se.sse_manager.send_processing_status = AsyncMock(
+            side_effect=lambda *a, **k: order.append("send")
+        )
+        se.supervisor_service.decide_next = AsyncMock(
+            return_value=SupervisorAction(
+                action=ActionType.DONE,
+                reasoning="nothing else to do",
+            )
+        )
+        record = AsyncMock(side_effect=lambda *a, **k: order.append("record"))
+
+        with patch.object(
+            supervisor_mod, "record_and_maybe_broadcast_run_event", record
+        ):
+            result = await se.run(
+                room_id="room-1",
+                user_message_id="msg-1",
+                message_text="hello",
+                agent_registry=[],
+                room_config=RoomConfig(),
+            )
+
+        assert result.status == RunStatus.COMPLETED
+        record.assert_awaited_once()
+        se.sse_manager.send_processing_status.assert_awaited_once()
+        assert order == ["record", "send"]
+
+    @pytest.mark.asyncio
+    async def test_stage_notification_helper_failure_is_swallowed(self):
+        import modules.SupervisorExecutor as supervisor_mod
+
+        se = _make_supervisor_executor()
+        se.sse_manager.send_processing_status = AsyncMock()
+        se.supervisor_service.decide_next = AsyncMock(
+            return_value=SupervisorAction(
+                action=ActionType.DONE,
+                reasoning="nothing else to do",
+            )
+        )
+        record = AsyncMock(side_effect=RuntimeError("lifecycle unavailable"))
+
+        with patch.object(
+            supervisor_mod, "record_and_maybe_broadcast_run_event", record
+        ):
+            result = await se.run(
+                room_id="room-1",
+                user_message_id="msg-1",
+                message_text="hello",
+                agent_registry=[],
+                room_config=RoomConfig(),
+            )
+
+        assert result.status == RunStatus.COMPLETED
+        record.assert_awaited_once()
+        se.sse_manager.send_processing_status.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_agent_awaiting_input_records_before_send(self):
+        import modules.SupervisorExecutor as supervisor_mod
+
+        se = _make_supervisor_executor()
+        order: list[str] = []
+        se.sse_manager.send_processing_status = AsyncMock(
+            side_effect=lambda *a, **k: order.append("send")
+            if a[1] == "awaiting_input"
+            else None
+        )
+        se.supervisor_service.decide_next = AsyncMock(
+            return_value=SupervisorAction(
+                action=ActionType.DELEGATE,
+                reasoning="ask agent",
+                targets=[
+                    DelegateTarget(
+                        agent_id="agent-1",
+                        agent_name="Agent",
+                        task="ask",
+                    )
+                ],
+            )
+        )
+        se._dispatch_targets = AsyncMock(
+            return_value=[
+                V2StepResult(
+                    step_number=1,
+                    agent_id="agent-1",
+                    agent_name="Agent",
+                    task="ask",
+                    response_text="",
+                    success=False,
+                    status=StepStatus.AWAITING_INPUT,
+                    paused_message_id="agent-msg-1",
+                    agent_message_id="agent-msg-1",
+                    status_message="Need input",
+                )
+            ]
+        )
+        se._checkpoint_trajectory = AsyncMock(return_value=None)
+        se._save_interrupted_state = AsyncMock(return_value=True)
+        hitl_mock = AsyncMock()
+        hitl_mock.request_input = AsyncMock(
+            return_value=SimpleNamespace(request_id="hitl-1")
+        )
+
+        async def record_side_effect(*args, **kwargs):
+            if args[1] == "awaiting_input":
+                order.append("record")
+
+        record = AsyncMock(side_effect=record_side_effect)
+
+        with (
+            patch.object(supervisor_mod, "record_and_maybe_broadcast_run_event", record),
+            patch("services.hitl_service.hitl_service", hitl_mock),
+        ):
+            result = await se.run(
+                room_id="room-1",
+                user_message_id="msg-1",
+                message_text="hello",
+                agent_registry=[
+                    AgentProfile(agent_id="agent-1", agent_name="Agent")
+                ],
+                room_config=RoomConfig(),
+            )
+
+        assert result.status == RunStatus.AWAITING_INPUT
+        assert order == ["record", "send"]
+
+    @pytest.mark.asyncio
+    async def test_supervisor_hitl_records_before_awaiting_input_send(self):
+        import modules.SupervisorExecutor as supervisor_mod
+
+        se = _make_supervisor_executor()
+        order: list[str] = []
+        se.sse_manager.send_processing_status = AsyncMock(
+            side_effect=lambda *a, **k: order.append("send")
+            if a[1] == "awaiting_input"
+            else None
+        )
+        se.supervisor_service.decide_next = AsyncMock(
+            return_value=SupervisorAction(
+                action=ActionType.CLARIFY,
+                reasoning="need details",
+                questions=[ClarifyQuestion(prompt="Which account?")],
+            )
+        )
+        se.room_services.create_agent_message.return_value = SimpleNamespace(
+            message_id="hitl-agent-msg"
+        )
+        se.database_service.resolve_client_request_id_for_message_id = AsyncMock(
+            return_value="cr-1"
+        )
+        se.database_service.add_room_agent_message = AsyncMock()
+        se._save_interrupted_state = AsyncMock(return_value=True)
+        hitl_mock = AsyncMock()
+        hitl_mock.request_input = AsyncMock(
+            return_value=SimpleNamespace(request_id="hitl-1")
+        )
+
+        async def record_side_effect(*args, **kwargs):
+            if args[1] == "awaiting_input":
+                order.append("record")
+
+        record = AsyncMock(side_effect=record_side_effect)
+
+        with (
+            patch.object(supervisor_mod, "record_and_maybe_broadcast_run_event", record),
+            patch("services.hitl_service.hitl_service", hitl_mock),
+        ):
+            result = await se.run(
+                room_id="room-1",
+                user_message_id="msg-1",
+                message_text="hello",
+                agent_registry=[],
+                room_config=RoomConfig(),
+            )
+
+        assert result.status == RunStatus.AWAITING_INPUT
+        assert order == ["record", "send"]

@@ -34,6 +34,10 @@ from services.a2a_constants import (
     is_terminal_state,
 )
 from services.run_metrics import increment_counter
+from services.run_lifecycle_service import (
+    broadcast_run_event_payload,
+    feature_run_dual_write_enabled,
+)
 from services.a2a_service import a2a_service
 from services.database_service import db_service
 
@@ -241,15 +245,36 @@ class StaleTaskChecker:
             if not room_id or not run_id:
                 continue
             try:
-                await run_command_handler.append_run_timeout_failure(
+                tid = doc.get("trigger_message_id") or run_id
+                client_request_id = doc.get("client_request_id")
+                if not feature_run_dual_write_enabled():
+                    increment_counter("run_watchdog_forced_failure_total")
+                    await sse_manager.send_processing_status(
+                        room_id,
+                        SSEProcessingStatus.FAILED,
+                        str(tid),
+                        client_request_id=client_request_id,
+                        details="Run watchdog: stale non-terminal run timed out",
+                    )
+                    continue
+
+                payload = await run_command_handler.append_run_timeout_failure(
                     room_id, run_id, stale_minutes=stale_mins
                 )
+                if payload is None:
+                    continue
                 increment_counter("run_watchdog_forced_failure_total")
-                tid = doc.get("trigger_message_id") or run_id
+                await broadcast_run_event_payload(
+                    room_id,
+                    payload,
+                    client_request_id=client_request_id,
+                    sse=sse_manager,
+                )
                 await sse_manager.send_processing_status(
                     room_id,
                     SSEProcessingStatus.FAILED,
                     str(tid),
+                    client_request_id=client_request_id,
                     details="Run watchdog: stale non-terminal run timed out",
                 )
             except Exception as e:

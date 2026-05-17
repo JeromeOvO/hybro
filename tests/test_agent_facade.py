@@ -611,6 +611,62 @@ async def test_facade_match_excludes_agents_with_open_capability_issues():
 
 
 @pytest.mark.asyncio
+async def test_facade_match_falls_back_to_visible_agents_when_vector_index_missing():
+    from common.errors import VectorIndexUnavailableError
+
+    class MissingIndexVector(FakeVector):
+        async def search(self, index, vector, top_k, filter=None):
+            self.searches.append(
+                {"index": index, "vector": vector, "top_k": top_k, "filter": filter}
+            )
+            raise VectorIndexUnavailableError(index, "search")
+
+    facade, repo, vector, llm, _ = _facade_with_docs(
+        [
+            {
+                "agent_id": "public",
+                "is_public": True,
+                "agent_status": "active",
+                "agent_card": {"name": "Public", "url": "https://public"},
+            },
+            {
+                "agent_id": "owned-private",
+                "provider_id": "u1",
+                "is_public": False,
+                "agent_status": "active",
+                "agent_card": {"name": "Owned", "url": "https://owned"},
+            },
+            {
+                "agent_id": "other-private",
+                "provider_id": "u2",
+                "is_public": False,
+                "agent_status": "active",
+                "agent_card": {"name": "Other", "url": "https://other"},
+            },
+        ],
+        vector=MissingIndexVector(),
+    )
+
+    matches = await facade.match_agents(
+        "hello",
+        limit=5,
+        requesting_user_id="u1",
+    )
+
+    assert [match.agent_id for match in matches] == ["public"]
+    assert llm.embedded == ["hello"]
+    assert vector.searches == [
+        {
+            "index": "a2a-agents",
+            "vector": [0.1, 0.2, 0.3],
+            "top_k": 15,
+            "filter": {"agent_id": {"$in": ["public", "owned-private"]}},
+        }
+    ]
+    assert repo.get_by_ids_calls == []
+
+
+@pytest.mark.asyncio
 async def test_facade_match_respect_visibility_false_still_excludes_private_agents():
     facade, _, vector, _, _ = _facade_with_docs([
         {
@@ -1007,6 +1063,7 @@ async def test_facade_uses_async_hub_liveness_reader():
         vector=FakeVector(),
         llm_provider=FakeLLM(),
         card_resolver=FakeCardResolver(),
+        agent_index="a2a-agents",
         hub_liveness=hub,
         id_factory=lambda: "new-agent",
         now=lambda: datetime(2026, 5, 10, tzinfo=timezone.utc),
@@ -1283,6 +1340,7 @@ def _facade_with_docs(
             vector=vector,
             llm_provider=llm,
             card_resolver=resolver,
+            agent_index="a2a-agents",
             hub_liveness=hub,
             exclusion_reader=exclusion_reader,
             gateway_base_url=gateway_base_url,

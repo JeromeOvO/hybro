@@ -91,6 +91,7 @@ class RoomFacade:
             membership_origin_status=resolved.membership_origin_status,
             source_group_id=resolved.source_group_id,
             source_group_name=resolved.source_group_name,
+            extend_info=request.extend_info,
         )
         await self._repository.create(doc)
         return room_info_from_doc(doc)

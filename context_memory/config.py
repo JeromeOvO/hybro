@@ -129,7 +129,7 @@ class MemorySearchConfig:
         default_factory=lambda: _setting("memory_search_max_snippet_chars", 500)
     )
     index_name: str = field(
-        default_factory=lambda: _setting("memory_search_index_name", "room-memory")
+        default_factory=lambda: _memory_search_index_name()
     )
 
 
@@ -137,3 +137,9 @@ class MemorySearchConfig:
 class ContextMemoryLLMConfig:
     turn_notes_model: str = "context_memory_legacy_json_model"
     summary_model: str = "context_memory_legacy_json_model"
+
+
+def _memory_search_index_name() -> str:
+    from common.config import get_memory_search_index_name
+
+    return get_memory_search_index_name()

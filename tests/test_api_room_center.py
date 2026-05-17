@@ -137,6 +137,7 @@ class TestCreateNewRoom:
             "room_name": "Test Room",
             "room_owner_name": "Test User",
             "room_agent_set": {"agent-1": "Agent One"},
+            "extend_info": {"debateMode": True, "use_supervisor": True},
         })
         
         expected_response = RoomCenterRoomSettingResponse(
@@ -155,6 +156,7 @@ class TestCreateNewRoom:
         # Verify the request was made with user's ID as owner
         call_args = mock_room_center.create_new_room.call_args[0][0]
         assert call_args.room_owner_id == mock_user.user_id
+        assert call_args.extend_info == {"debateMode": True, "use_supervisor": True}
 
     @pytest.mark.asyncio
     async def test_creates_room_with_agent_group(

@@ -13,6 +13,7 @@ Supervisor-enabled rooms use ``SupervisorExecutor`` exclusively.
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -28,6 +29,7 @@ from modules.AgentMessageProcessor import AgentMessageProcessor
 from modules.TaskStateManager import TaskStateManager
 from models.processing import ProcessingResult, ProcessingStatus
 from services.a2a_constants import SSEProcessingStatus
+from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
 
 if TYPE_CHECKING:
     from modules.agent_response_handler import AgentResponseHandler
@@ -115,6 +117,9 @@ class QueueExecutor:
         self._agent_message_processor = agent_message_processor
         self.response_handler = response_handler
         self._slot_lifecycle = slot_lifecycle
+        self._turn_event_appender = turn_event_appender
+
+    def bind_turn_event_appender(self, turn_event_appender) -> None:
         self._turn_event_appender = turn_event_appender
 
     # ------------------------------------------------------------------
@@ -327,6 +332,12 @@ class QueueExecutor:
                             )
                             queue_result = QueueResult.FAILED
                             break
+                        await record_and_maybe_broadcast_run_event(
+                            room_id,
+                            SSEProcessingStatus.AWAITING_INPUT,
+                            user_message_id,
+                            sse=self.sse_manager,
+                        )
                         await self.sse_manager.send_processing_status(
                             room_id,
                             SSEProcessingStatus.AWAITING_INPUT,
@@ -398,6 +409,25 @@ class QueueExecutor:
         # Phase 2: deferred SSE notification
         if deferred_sse:
             sse_status, clear_cancel = deferred_sse
+            if (
+                sse_status == SSEProcessingStatus.CANCELED
+                and getattr(self, "_turn_event_appender", None)
+            ):
+                try:
+                    await self._turn_event_appender.append(
+                        room_id,
+                        user_message_id,
+                        "turn_canceled",
+                        {},
+                    )
+                except Exception:
+                    pass
+            await record_and_maybe_broadcast_run_event(
+                room_id,
+                sse_status,
+                user_message_id,
+                sse=self.sse_manager,
+            )
             await self.sse_manager.send_processing_status(
                 room_id, sse_status, user_message_id
             )
@@ -695,6 +725,8 @@ class QueueExecutor:
         self,
         message_id: str,
         task_result_text: str | None = None,
+        *,
+        before_terminal_failure: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> ResumeResult:
         """Resume queue processing after a push notification task completes.
 
@@ -765,6 +797,14 @@ class QueueExecutor:
             if queue_processing_result.result == QueueResult.PAUSED:
                 return ResumeResult(success=True)
             if queue_processing_result.result == QueueResult.FAILED:
+                if before_terminal_failure is not None:
+                    await before_terminal_failure(room_id, user_message_id)
+                await record_and_maybe_broadcast_run_event(
+                    room_id,
+                    SSEProcessingStatus.FAILED,
+                    user_message_id,
+                    sse=self.sse_manager,
+                )
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.FAILED, user_message_id
                 )

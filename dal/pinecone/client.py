@@ -5,7 +5,7 @@ from typing import Any
 
 import pinecone
 
-from common.config import settings
+from common.config import get_pinecone_api_key, get_pinecone_index_name
 from common.dto import VectorRecord, VectorSearchResult
 from common.errors import VectorIndexUnavailableError
 
@@ -21,13 +21,37 @@ class VectorDALImpl:
         index_name: str | None = None,
     ) -> None:
         self._client = client
-        self._api_key = settings.pinecone_api_key if api_key is None else api_key
-        self._default_index = index_name or settings.pinecone_index_name
+        self._owns_client = client is None
+        self._api_key_override = api_key
+        self._client_api_key: str | None = None
+        self._default_index_override = index_name
         self._indexes: dict[str, Any] = {}
 
+    def _resolved_api_key(self) -> str:
+        return (
+            get_pinecone_api_key()
+            if self._api_key_override is None
+            else self._api_key_override
+        )
+
+    def _resolved_default_index(self) -> str:
+        return (
+            get_pinecone_index_name()
+            if self._default_index_override is None
+            else self._default_index_override
+        )
+
     def _get_client(self) -> Any:
-        if self._client is None:
-            self._client = pinecone.Pinecone(api_key=self._api_key)
+        api_key = self._resolved_api_key()
+        if self._client is None or (
+            self._owns_client
+            and self._api_key_override is None
+            and self._client_api_key != api_key
+        ):
+            self._client = pinecone.Pinecone(api_key=api_key)
+            self._owns_client = True
+            self._client_api_key = api_key
+            self._indexes.clear()
         return self._client
 
     def _get_index(self, index: str) -> Any:
@@ -97,7 +121,7 @@ class VectorDALImpl:
 
     async def ping(self) -> bool:
         try:
-            pinecone_index = self._get_index(self._default_index)
+            pinecone_index = self._get_index(self._resolved_default_index())
             await asyncio.to_thread(pinecone_index.describe_index_stats)
             return True
         except Exception:
