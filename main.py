@@ -6,7 +6,7 @@ import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
@@ -146,8 +146,8 @@ async def lifespan(app: FastAPI):
       Phase 2 — Background services (only after guard passes)
 
     Cleanup is split into two separate paths:
-      Startup failure — tears down only what was opened, does NOT poison
-          singleton state (no set_draining, no stop_change_stream_watcher)
+      Startup failure — tears down only what was opened, without entering
+          the normal SSE draining path.
       Normal shutdown — full teardown including draining and change stream
     """
     _redis_service = None
@@ -155,7 +155,9 @@ async def lifespan(app: FastAPI):
     _leader = None
     _relay_svc = None
     _agent_deps = None
-    _change_stream_started = False
+    _delivery_facade = None
+    _delivery_config = None
+    _delivery_bound = False
     _bg_started = False
 
     try:
@@ -170,11 +172,16 @@ async def lifespan(app: FastAPI):
                 create_agent_deps,
                 create_context_memory_deps,
                 create_context_memory_facade,
+                create_delivery_cancellation_collection,
+                create_delivery_config,
+                create_delivery_facade,
+                create_delivery_redis_clients,
+                create_delivery_startup_policy,
+                create_mongo_dal,
                 create_room_deps,
+                create_vector_dal,
             )
             from context_memory.config import ContextMemoryLLMConfig
-            from dal.mongo import MongoDALImpl
-            from dal.pinecone import VectorDALImpl
             from llm_gateway import LLMGatewayImpl, ModelRegistryImpl
             from services.agent_capability_issue_service import (
                 CapabilityIssueExclusionReader,
@@ -191,9 +198,35 @@ async def lifespan(app: FastAPI):
             from services.room_services import room_services
 
             await mongodb.create_context_memory_indexes()
-            mongo_dal = MongoDALImpl(database=mongodb.db)
+            mongo_dal = create_mongo_dal(database=mongodb.db)
+            vector_dal = create_vector_dal()
+            _delivery_config = create_delivery_config(settings)
+            delivery_startup_policy = create_delivery_startup_policy(
+                redis_url=settings.redis_url,
+                multi_worker=os.environ.get("SERVER_SOFTWARE", "").startswith(
+                    "gunicorn"
+                ),
+            )
+            delivery_redis_kv, delivery_redis_pubsub = create_delivery_redis_clients(
+                redis_url=settings.redis_url,
+                config=_delivery_config,
+            )
+            cancellation_collection = create_delivery_cancellation_collection(
+                mongo=mongo_dal
+            )
+            _delivery_facade = create_delivery_facade(
+                cancellation_collection=cancellation_collection,
+                startup_policy=delivery_startup_policy,
+                redis_kv=delivery_redis_kv,
+                redis_pubsub=delivery_redis_pubsub,
+                config=_delivery_config,
+            )
+            await _delivery_facade.start()
+            sse_manager.bind_facade(_delivery_facade)
+            _delivery_bound = True
+            app.state.delivery_facade = _delivery_facade
+
             model_registry = ModelRegistryImpl()
-            vector_dal = VectorDALImpl()
             llm_provider = LLMGatewayImpl(model_registry=model_registry)
             _agent_deps = create_agent_deps(
                 mongo=mongo_dal,
@@ -252,38 +285,40 @@ async def lifespan(app: FastAPI):
             from services.database_service import db_service
             await db_service.ensure_hitl_indexes()
 
-        # Init all three Redis subsystems before the guard
-        from infrastructure.brokers import create_event_broker
+        # Init legacy Redis subsystems before the guard. Delivery-owned
+        # Pub/Sub/KV clients are constructed through container.py above.
         from infrastructure.redis_service import create_redis_service
-
-        _event_broker = create_event_broker()
-        if _event_broker:
-            await sse_manager.start_event_broker(_event_broker)
-            logger.info("Event broker started (cross-instance SSE fan-out enabled)")
-        else:
-            logger.info("Event broker disabled (REDIS_URL not set — single-instance mode)")
 
         _redis_service = create_redis_service()
         if _redis_service:
             await _redis_service.start()
-            await sse_manager.start_redis_service(_redis_service)
-            logger.info("RedisService started (shared cancellation/dedup enabled)")
+            logger.info("RedisService started (leader election/relay enabled)")
         else:
             logger.info("RedisService disabled (REDIS_URL not set)")
+        app.state.legacy_redis_service = _redis_service
 
         _redis_streams_service = create_redis_service()  # separate pool for blocking XREAD
         if _redis_streams_service:
             await _redis_streams_service.start()
+        app.state.redis_streams_service = _redis_streams_service
 
         # ── Guard: fail if gunicorn without fully connected Redis ──
         check_multi_worker_safety(
             is_gunicorn=os.environ.get("SERVER_SOFTWARE", "").startswith("gunicorn"),
-            broker_connected=sse_manager.broker_connected,
+            delivery_pubsub_connected=bool(
+                _delivery_facade and _delivery_facade.delivery_pubsub_connected
+            ),
+            delivery_kv_connected=bool(
+                _delivery_facade and _delivery_facade.delivery_kv_connected
+            ),
             redis_service_connected=bool(
                 _redis_service and _redis_service.is_connected
             ),
             relay_streams_connected=bool(
                 _redis_streams_service and _redis_streams_service.is_connected
+            ),
+            change_stream_connected=bool(
+                _delivery_facade and _delivery_facade.change_stream_connected
             ),
         )
 
@@ -292,7 +327,12 @@ async def lifespan(app: FastAPI):
         from infrastructure.leader_election import LeaderElection
         if _redis_service and _redis_service.is_connected:
             _leader = LeaderElection(
-                _redis_service, instance_id=sse_manager._instance_id
+                _redis_service,
+                instance_id=(
+                    _delivery_facade.instance_id
+                    if _delivery_facade is not None
+                    else sse_manager._instance_id
+                ),
             )
             logger.info("Leader election enabled for background jobs")
 
@@ -312,17 +352,6 @@ async def lifespan(app: FastAPI):
             )
         else:
             logger.warning("WEBHOOK_SIGNING_KEY not set - A2A long-running tasks disabled")
-
-        try:
-            await sse_manager.start_change_stream_watcher(
-                mongodb.cancelled_messages_collection
-            )
-            _change_stream_started = True
-            logger.info("Message cancellation change stream watcher started")
-        except Exception as e:
-            logger.warning(
-                f"Could not start change stream watcher (may not have replica set): {e}"
-            )
 
         await compaction_sweep.start()
         await orphaned_upload_cleaner.start()
@@ -366,9 +395,8 @@ async def lifespan(app: FastAPI):
 
     except BaseException:
         # ── Startup failure: tear down only what was opened ──
-        # DO NOT call set_draining() — poisons _draining flag (sse_services.py:163)
-        # DO NOT call stop_change_stream_watcher() — sets _shutdown_flag (sse_services.py:730)
-        # which start_change_stream_watcher() never resets (sse_services.py:611)
+        # Do not call set_draining() on startup failure; normal shutdown owns
+        # the drain window after the adapter has been successfully bound.
         if _relay_svc:
             await _relay_svc.stop()
         if _redis_streams_service:
@@ -378,18 +406,17 @@ async def lifespan(app: FastAPI):
             await compaction_sweep.stop()
             await orphaned_upload_cleaner.stop()
             await agent_health_service.stop()
-        if _change_stream_started and sse_manager._change_stream_task:
-            sse_manager._change_stream_task.cancel()
-            try:
-                await sse_manager._change_stream_task
-            except asyncio.CancelledError:
-                pass
         if _leader:
             await _leader.release_all(ALL_JOB_NAMES)
-        await sse_manager.stop_redis_service()
         if _redis_service:
             await _redis_service.stop()
-        await sse_manager.stop_event_broker()
+        try:
+            if _delivery_facade is not None:
+                await _delivery_facade.stop()
+        finally:
+            if _delivery_bound:
+                sse_manager.unbind_facade()
+            app.state.delivery_facade = None
         await mongodb.close_database_connection()
         raise
 
@@ -417,19 +444,25 @@ async def lifespan(app: FastAPI):
             await _leader.release_all(ALL_JOB_NAMES)
 
         # Drain: stop accepting new SSE connections and allow in-flight events to finish
-        sse_manager.set_draining(True)
-        await asyncio.sleep(settings.shutdown_drain_seconds)
+        if _delivery_bound:
+            sse_manager.set_draining(True)
+        await asyncio.sleep(
+            _delivery_config.shutdown_drain_seconds
+            if _delivery_config is not None
+            else settings.shutdown_drain_seconds
+        )
+
+        try:
+            if _delivery_facade is not None:
+                await _delivery_facade.stop()
+        finally:
+            if _delivery_bound:
+                sse_manager.unbind_facade()
+            app.state.delivery_facade = None
 
         # Stop RedisService
-        await sse_manager.stop_redis_service()
         if _redis_service:
             await _redis_service.stop()
-
-        # Stop event broker
-        await sse_manager.stop_event_broker()
-
-        # Stop change stream watcher
-        await sse_manager.stop_change_stream_watcher()
 
         await mongodb.close_database_connection()
 
@@ -455,9 +488,11 @@ app.add_middleware(
 def check_multi_worker_safety(
     *,
     is_gunicorn: bool,
-    broker_connected: bool,
+    delivery_pubsub_connected: bool,
+    delivery_kv_connected: bool,
     redis_service_connected: bool,
     relay_streams_connected: bool,
+    change_stream_connected: bool,
 ) -> None:
     """Refuse to start under gunicorn without fully connected Redis.
 
@@ -474,12 +509,16 @@ def check_multi_worker_safety(
         return
 
     problems = []
-    if not broker_connected:
-        problems.append("Event broker (Pub/Sub) not connected")
+    if not delivery_pubsub_connected:
+        problems.append("Delivery Pub/Sub not connected")
+    if not delivery_kv_connected:
+        problems.append("Delivery KV not connected")
     if not redis_service_connected:
         problems.append("RedisService (key-value) not connected")
     if not relay_streams_connected:
         problems.append("Relay streams not connected")
+    if not change_stream_connected:
+        problems.append("Cancellation change stream not connected")
 
     if problems:
         raise RuntimeError(
@@ -493,21 +532,35 @@ def check_multi_worker_safety(
 
 # Pure function — trivially testable without lifespan/DB
 def compute_health_status(
-    *, broker_connected: bool, redis_url: str, change_stream_connected: bool,
-    redis_service_connected: bool = False,
+    *,
+    delivery_pubsub_connected: bool,
+    delivery_kv_connected: bool,
+    legacy_redis_service_connected: bool,
     relay_streams_available: bool = False,
+    redis_url: str,
+    change_stream_connected: bool,
 ) -> dict:
     """Compute health status body and HTTP status code."""
-    broker_expected = bool(redis_url)
-    degraded = broker_expected and not broker_connected
+    redis_expected = bool(redis_url)
+    redis_degraded = redis_expected and not (
+        delivery_pubsub_connected
+        and delivery_kv_connected
+        and legacy_redis_service_connected
+        and relay_streams_available
+    )
+    degraded = redis_degraded or not change_stream_connected
     return {
         "body": {
             "status": "degraded" if degraded else "ok",
             "change_stream_connected": change_stream_connected,
-            "broker_connected": broker_connected,
-            "broker_expected": broker_expected,
-            "redis_service_connected": redis_service_connected,
+            "delivery_pubsub_connected": delivery_pubsub_connected,
+            "delivery_kv_connected": delivery_kv_connected,
+            "legacy_redis_service_connected": legacy_redis_service_connected,
             "relay_streams_available": relay_streams_available,
+            "redis_expected": redis_expected,
+            "broker_connected": delivery_pubsub_connected,
+            "broker_expected": redis_expected,
+            "redis_service_connected": legacy_redis_service_connected,
         },
         "status_code": 503 if degraded else 200,
     }
@@ -515,17 +568,30 @@ def compute_health_status(
 
 # Health check endpoint (no prefix, no dependencies)
 @app.get("/health")
-async def health_check():
+async def health_check(request: Request):
     from services.relay_service import relay_service as _relay_svc_health
+    delivery_facade = getattr(request.app.state, "delivery_facade", None)
+    if delivery_facade is not None:
+        await delivery_facade.refresh_health()
+    legacy_redis_service = getattr(request.app.state, "legacy_redis_service", None)
     result = compute_health_status(
-        broker_connected=sse_manager.broker_connected,
-        redis_url=settings.redis_url,
-        change_stream_connected=sse_manager.change_stream_connected,
-        redis_service_connected=sse_manager.redis_connected,
+        delivery_pubsub_connected=bool(
+            delivery_facade and delivery_facade.delivery_pubsub_connected
+        ),
+        delivery_kv_connected=bool(
+            delivery_facade and delivery_facade.delivery_kv_connected
+        ),
+        legacy_redis_service_connected=bool(
+            legacy_redis_service and legacy_redis_service.is_connected
+        ),
         relay_streams_available=bool(
             _relay_svc_health
             and _relay_svc_health._streams
             and _relay_svc_health._streams.is_connected
+        ),
+        redis_url=settings.redis_url,
+        change_stream_connected=bool(
+            delivery_facade and delivery_facade.change_stream_connected
         ),
     )
     return JSONResponse(content=result["body"], status_code=result["status_code"])

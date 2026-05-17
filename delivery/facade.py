@@ -20,6 +20,10 @@ class DeliveryCompatibility:
     def get_room_status(self, room_id: str) -> dict:
         return self._facade._sse_transport.get_room_status(room_id)
 
+    @property
+    def room_connections(self) -> dict:
+        return self._facade._sse_transport.room_connections
+
     def is_cancelled(self, message_id: str) -> bool:
         return self._facade._sse_transport.is_cancelled(message_id)
 
@@ -61,6 +65,9 @@ class DeliveryCompatibility:
 
     async def stop_event_broker(self) -> None:
         return None
+
+    def set_draining(self, draining: bool) -> None:
+        self._facade.set_draining(draining)
 
     @property
     def change_stream_connected(self) -> bool:
@@ -154,8 +161,12 @@ class DeliveryFacade:
     async def start(self) -> None:
         started: list[str] = []
         try:
-            await self._sse_transport.start_cancellation_watcher()
-            started.append("watcher")
+            try:
+                await self._sse_transport.start_cancellation_watcher()
+                started.append("watcher")
+            except Exception:
+                if not self.startup_policy.allow_degraded_change_stream:
+                    raise
             await self._event_bus.start()
             started.append("bus")
             await self.refresh_health()

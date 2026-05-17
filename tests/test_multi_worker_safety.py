@@ -22,13 +22,15 @@ from main import check_multi_worker_safety
 
 
 def test_gunicorn_no_redis_raises():
-    """All Redis services down under gunicorn → RuntimeError listing 3 problems."""
-    with pytest.raises(RuntimeError, match="Event broker.*RedisService.*Relay"):
+    """All delivery/Redis services down under gunicorn -> RuntimeError lists problems."""
+    with pytest.raises(RuntimeError, match="Delivery Pub/Sub.*Delivery KV.*RedisService.*Relay.*change stream"):
         check_multi_worker_safety(
             is_gunicorn=True,
-            broker_connected=False,
+            delivery_pubsub_connected=False,
+            delivery_kv_connected=False,
             redis_service_connected=False,
             relay_streams_connected=False,
+            change_stream_connected=False,
         )
 
 
@@ -37,9 +39,11 @@ def test_gunicorn_partial_redis_raises():
     with pytest.raises(RuntimeError, match="Relay streams"):
         check_multi_worker_safety(
             is_gunicorn=True,
-            broker_connected=True,
+            delivery_pubsub_connected=True,
+            delivery_kv_connected=True,
             redis_service_connected=True,
             relay_streams_connected=False,
+            change_stream_connected=True,
         )
 
 
@@ -47,9 +51,11 @@ def test_gunicorn_all_redis_ok():
     """All Redis services up under gunicorn → no error."""
     check_multi_worker_safety(
         is_gunicorn=True,
-        broker_connected=True,
+        delivery_pubsub_connected=True,
+        delivery_kv_connected=True,
         redis_service_connected=True,
         relay_streams_connected=True,
+        change_stream_connected=True,
     )
 
 
@@ -57,9 +63,11 @@ def test_not_gunicorn_no_redis_ok():
     """Not running under gunicorn → guard skipped regardless of Redis state."""
     check_multi_worker_safety(
         is_gunicorn=False,
-        broker_connected=False,
+        delivery_pubsub_connected=False,
+        delivery_kv_connected=False,
         redis_service_connected=False,
         relay_streams_connected=False,
+        change_stream_connected=False,
     )
 
 

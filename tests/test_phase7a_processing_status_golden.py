@@ -7,6 +7,7 @@ import pytest
 from modules.RoomMessageCenter import RoomMessageCenter
 from models.supervisor_v2 import RunStatus, SupervisorRunResult, SupervisorTrajectory
 from services.sse_services import SSEManager
+from tests.delivery_adapter_fakes import make_bound_manager
 
 
 async def _next_sse_type(conn) -> tuple[str, dict]:
@@ -49,7 +50,7 @@ async def test_golden_send_message_processing_status_order(monkeypatch):
     from services.a2a_constants import SSEProcessingStatus
     from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
 
-    manager = SSEManager()
+    manager = make_bound_manager()
     conn = await manager.add_connection("room-1")
     payload = {
         "event_id": "evt-1",
@@ -95,7 +96,7 @@ async def test_golden_hitl_resolve_resume_completion_order(monkeypatch):
     import modules.RoomMessageCenter as rmc_mod
     from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
 
-    manager = SSEManager()
+    manager = make_bound_manager()
     conn = await manager.add_connection("room-1")
     payload = {
         "event_id": "evt-2",
@@ -161,7 +162,7 @@ async def test_golden_duplicate_terminal_root_completion_suppressed(monkeypatch)
     import modules.RoomMessageCenter as rmc_mod
     from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
 
-    manager = SSEManager()
+    manager = make_bound_manager()
     conn = await manager.add_connection("room-1")
     payload = {
         "event_id": "evt-terminal",
@@ -210,10 +211,8 @@ async def test_golden_duplicate_terminal_suppressed_across_redis_l2(monkeypatch)
     from tests.test_sse_event_broker import MockRedisService
 
     redis = MockRedisService()
-    first_manager = SSEManager()
-    second_manager = SSEManager()
-    await first_manager.start_redis_service(redis)
-    await second_manager.start_redis_service(redis)
+    first_manager = make_bound_manager(redis_service=redis, instance_id="worker-1")
+    second_manager = make_bound_manager(redis_service=redis, instance_id="worker-2")
     first_conn = await first_manager.add_connection("room-1")
     second_conn = await second_manager.add_connection("room-1")
 
@@ -266,7 +265,7 @@ async def test_golden_duplicate_terminal_suppressed_across_redis_l2(monkeypatch)
 async def test_golden_clarifying_soft_complete_is_transport_only(monkeypatch):
     import modules.RoomMessageCenter as rmc_mod
 
-    manager = SSEManager()
+    manager = make_bound_manager()
     conn = await manager.add_connection("room-1")
     lifecycle = AsyncMock()
     monkeypatch.setattr(
@@ -304,7 +303,7 @@ async def test_golden_clarify_resume_retry_failure_completed_is_transport_only(
     from models.supervisor_v2 import AgentProfile, RoomConfig
     from services.room_supervisor_service import SupervisorPlanningError
 
-    manager = SSEManager()
+    manager = make_bound_manager()
     conn = await manager.add_connection("room-1")
     lifecycle = AsyncMock()
     monkeypatch.setattr(

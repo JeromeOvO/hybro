@@ -3,7 +3,9 @@ import asyncio
 import importlib
 import inspect
 import tomllib
+from dataclasses import fields
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -539,3 +541,146 @@ def test_legacy_frame_private_helper_call_sites():
                     call_sites.append(path)
 
     assert call_sites == [allowed]
+
+
+def test_container_delivery_factories_and_config_mapping():
+    from common.protocols import EventPublisher, SSETransport
+    from container import (
+        DeliveryDeps,
+        create_delivery_config,
+        create_delivery_deps,
+        create_delivery_facade,
+        create_delivery_redis_clients,
+        create_delivery_startup_policy,
+    )
+    from delivery.config import DeliveryConfig, DeliveryStartupPolicy
+    from delivery.facade import DeliveryFacade
+
+    values = {
+        field: getattr(DeliveryConfig(), field)
+        for field in DeliveryConfig.__dataclass_fields__
+    }
+    values.update(
+        {
+            "heartbeat_interval_seconds": 2.5,
+            "shutdown_drain_seconds": 1.25,
+            "cancellation_ttl_seconds": 42,
+            "terminal_dedup_ttl_seconds": 43,
+            "cancellation_cache_maxsize": 44,
+            "cancellation_token_cache_maxsize": 45,
+            "terminal_dedup_cache_maxsize": 46,
+            "redis_sse_channel_prefix": "custom:sse:",
+            "redis_cancel_channel": "custom:cancel",
+            "redis_internal_channel": "custom:internal",
+            "redis_dead_letter_channel": "custom:dead",
+            "redis_cancel_key_prefix": "custom:cancelled:",
+            "redis_terminal_key_prefix": "custom:terminal:",
+            "dead_letter_memory_maxlen": 47,
+            "handler_shutdown_timeout_seconds": 0.5,
+            "redis_reconnect_delay": 0.25,
+            "redis_reconnect_max_delay": 3.0,
+            "redis_max_connections": 120,
+            "redis_subscription_reserved_connections": 10,
+            "redis_room_subscription_production_limit": 100,
+            "cs_backoff_base": 0.5,
+            "cs_backoff_max": 8.0,
+            "cs_backoff_factor": 1.5,
+            "cs_jitter_fraction": 0.1,
+            "terminal_processing_statuses": "Done, FAILED",
+        }
+    )
+    config = create_delivery_config(SimpleNamespace(**values))
+
+    assert config.heartbeat_interval_seconds == 2.5
+    assert config.redis_sse_channel_prefix == "custom:sse:"
+    assert config.redis_internal_channel == "custom:internal"
+    assert config.redis_dead_letter_channel == "custom:dead"
+    assert config.redis_max_connections == 120
+    assert config.redis_room_subscription_production_limit == 100
+    assert config.terminal_processing_statuses == frozenset({"done", "failed"})
+
+    redis_kv, redis_pubsub = create_delivery_redis_clients(
+        redis_url="redis://localhost:6379/0",
+        config=config,
+    )
+    assert redis_kv is not None
+    assert redis_pubsub is not None
+    assert redis_pubsub.max_connections == 120
+    assert create_delivery_redis_clients(redis_url="", config=config) == (None, None)
+
+    policy = create_delivery_startup_policy(redis_url="", multi_worker=False)
+    assert policy == DeliveryStartupPolicy(
+        redis_expected=False,
+        multi_worker=False,
+        allow_degraded_change_stream=True,
+    )
+    fatal_policy = create_delivery_startup_policy(
+        redis_url="redis://localhost:6379/0",
+        multi_worker=True,
+    )
+    assert fatal_policy == DeliveryStartupPolicy(
+        redis_expected=True,
+        multi_worker=True,
+        allow_degraded_change_stream=False,
+    )
+
+    class FakeCollection:
+        pass
+
+    facade = create_delivery_facade(
+        cancellation_collection=FakeCollection(),
+        startup_policy=fatal_policy,
+        redis_kv=None,
+        redis_pubsub=None,
+        config=DeliveryConfig(),
+        instance_id="worker-1",
+        id_factory=lambda: "conn-1",
+    )
+    deps = create_delivery_deps(facade)
+
+    assert isinstance(facade, DeliveryFacade)
+    assert isinstance(deps, DeliveryDeps)
+    assert [field.name for field in fields(DeliveryDeps)] == [
+        "event_publisher",
+        "sse_transport",
+    ]
+    assert deps.event_publisher is facade.event_publisher
+    assert deps.sse_transport is facade.sse_transport
+    assert isinstance(deps.event_publisher, EventPublisher)
+    assert isinstance(deps.sse_transport, SSETransport)
+
+
+def test_main_does_not_import_or_instantiate_concrete_dal():
+    forbidden_names = {
+        "MongoDALImpl",
+        "VectorDALImpl",
+        "RedisKVImpl",
+        "RedisPubSubImpl",
+    }
+    tree = ast.parse(Path("main.py").read_text(), filename="main.py")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert alias.name.split(".")[0] != "dal"
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            assert node.module.split(".")[0] != "dal"
+        elif isinstance(node, ast.Name):
+            assert node.id not in forbidden_names
+            assert not node.id.endswith("DALImpl")
+        elif isinstance(node, ast.Attribute):
+            assert node.attr != "collection"
+            assert node.attr != "cancelled_messages_collection"
+
+
+def test_main_does_not_construct_legacy_sse_broker():
+    tree = ast.parse(Path("main.py").read_text(), filename="main.py")
+    forbidden_names = {"create_event_broker", "RedisBroker"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            assert node.module != "infrastructure.brokers"
+            assert not node.module.startswith("infrastructure.brokers.")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                assert not alias.name.startswith("infrastructure.brokers")
+        elif isinstance(node, ast.Name):
+            assert node.id not in forbidden_names
