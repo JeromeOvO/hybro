@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import get_type_hints
 from unittest.mock import AsyncMock, MagicMock
 
 import inspect
@@ -6,6 +7,21 @@ import pytest
 
 from common.dto import VectorRecord
 from common.errors import TransientError
+from common.protocols import MongoChangeStream
+
+
+class FakeMongoChangeStream:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
 
 
 @pytest.mark.asyncio
@@ -26,7 +42,8 @@ async def test_mongo_collection_adapter_maps_basic_operations():
     collection.delete_many = AsyncMock(return_value=SimpleNamespace(deleted_count=3))
     collection.count_documents = AsyncMock(return_value=4)
     collection.create_index = AsyncMock(return_value="idx")
-    collection.watch.return_value = "watcher"
+    watcher = FakeMongoChangeStream()
+    collection.watch.return_value = watcher
 
     adapter = MongoCollectionAdapter(collection)
 
@@ -39,7 +56,11 @@ async def test_mongo_collection_adapter_maps_basic_operations():
     assert await adapter.delete_many({"a": 1}) == 3
     assert await adapter.count({"a": 1}) == 4
     assert await adapter.create_index([("a", 1)], unique=True) == "idx"
-    assert adapter.watch() == "watcher"
+    async with adapter.watch() as stream:
+        assert stream is watcher
+
+    hints = get_type_hints(MongoCollectionAdapter.watch)
+    assert hints["return"] is MongoChangeStream
 
 
 @pytest.mark.asyncio

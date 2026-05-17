@@ -5,6 +5,7 @@ from typing import Any
 import asyncio
 
 from common.observability import MetricsCollector, NoopMetricsCollector
+from common.utils.cancellation import CancellationToken
 from delivery.config import DeliveryConfig
 from delivery.sse.connection import SSEConnection
 from delivery.types import TaskRunner
@@ -111,11 +112,35 @@ class SSETransportImpl:
     async def mark_cancelled(self, message_id: str) -> None:
         await self.cancellation_watcher.mark_cancelled(message_id)
 
+    def cancel_message(self, message_id: str) -> None:
+        self.cancellation_watcher.cancel_message(message_id)
+
+    async def cancel_message_and_broadcast(self, message_id: str) -> None:
+        await self.cancellation_watcher.mark_cancelled(message_id)
+
+    async def check_cancelled(self, message_id: str) -> bool:
+        return await self.cancellation_watcher.check_cancelled(message_id)
+
+    def clear_cancellation(self, message_id: str) -> None:
+        self.cancellation_watcher.clear_cancellation(message_id)
+
+    def create_token(self, message_id: str) -> CancellationToken:
+        return self.cancellation_watcher.create_token(message_id)
+
+    def get_token(self, message_id: str) -> CancellationToken | None:
+        return self.cancellation_watcher.get_token(message_id)
+
+    def remove_token(self, message_id: str) -> None:
+        self.cancellation_watcher.remove_token(message_id)
+
     def set_draining(self, draining: bool) -> None:
         self._draining = draining
 
     async def start_cancellation_watcher(self) -> None:
         await self.cancellation_watcher.start()
+
+    async def stop_cancellation_watcher(self) -> None:
+        await self.cancellation_watcher.stop()
 
     async def _admit_connection(
         self,
