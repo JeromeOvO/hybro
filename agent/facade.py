@@ -27,6 +27,7 @@ from common.dto.agent import (
     HubAgentDescriptor,
     SyncedHubAgent,
 )
+from common.errors import VectorIndexUnavailableError
 from common.observability import NoopTracingProvider
 from common.protocols import (
     AgentCardResolver,
@@ -552,12 +553,32 @@ class AgentFacade:
         candidate_ids = [doc["agent_id"] for doc in candidates]
         candidate_id_set = set(candidate_ids)
         embedding = await self._llm_provider.embed(query)
-        results = await self._vector.search(
-            self._agent_index,
-            embedding,
-            top_k=max(limit * 3, 15),
-            filter={"agent_id": {"$in": candidate_ids}},
-        )
+        try:
+            results = await self._vector.search(
+                self._agent_index,
+                embedding,
+                top_k=max(limit * 3, 15),
+                filter={"agent_id": {"$in": candidate_ids}},
+            )
+        except VectorIndexUnavailableError:
+            logger.warning(
+                "Agent vector index %s unavailable; falling back to visible "
+                "candidate ranking",
+                self._agent_index,
+                exc_info=True,
+            )
+            ranked = rank_agent_docs(
+                candidates,
+                {},
+                required_input_modes=required_input_modes,
+            )
+            selected = select_top_matches(
+                ranked,
+                is_debate_mode=is_debate_mode,
+            )[:limit]
+            for match in selected:
+                match["agent"] = agent_info_from_doc(match["agent"])
+            return selected
         result_ids = [
             _vector_result_id(result)
             for result in results
