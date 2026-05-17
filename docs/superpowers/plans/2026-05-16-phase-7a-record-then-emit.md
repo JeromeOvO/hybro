@@ -62,8 +62,8 @@ This plan was reviewed against `docs/MODULAR_DECOUPLING_DESIGN.md` and repaired 
 - Fix: remove the reservation API. Callers record first; `RunCommandHandler` idempotency decides whether a new run event payload exists. `SSEManager` terminal dedup remains a pure transport concern inside `send_processing_status()`.
 - Issue found: some frontend `COMPLETED` statuses are soft spinner-clears while the run remains awaiting input, for example clarification prompts and clarify-resume retry failures.
 - Fix: mark those soft-complete `processing_status` sends pure transport-only. Do not place any lifecycle helper immediately before the frontend `COMPLETED` send; the AST gate's negative assertion must remain simple and strict for these call sites.
-- Issue found: `create_and_parse_user_message()` emits `PROCESSING` but does not start the terminalizing execution path; it saves/parses a user message and creates agent messages, while the old external processing endpoint is deprecated.
-- Fix: keep the create/parse `PROCESSING` send transport-only in Phase 7a. Preserve or add `client_request_id` correlation on the message and the SSE frame, but do not record run lifecycle for this path unless a future change proves it starts a terminalizing execution flow.
+- Issue found: `create_and_parse_user_message()` emitted `PROCESSING` but does not start the terminalizing execution path; it saves/parses a user message and creates agent messages, while the old external processing endpoint is deprecated.
+- Fix: remove the create/parse `PROCESSING` send. Preserve `client_request_id` correlation on the persisted message, but do not emit a processing-status frame or record run lifecycle for this path unless a future change adds a real terminalizing execution flow.
 
 **Pass 5: Non-run business side effects after emit**
 - Issue found: Phase 7a's record-then-emit migration fixes the run-lifecycle side effect, but other business side effects can still occur after a `processing_status` emit, for example `RoomMessageCenter._notify_all_non_terminal_tasks_failed(...)` after a failed room-lock send and `turn_event_appender.append(...)` after terminal sends.
@@ -110,7 +110,7 @@ Create:
 Modify:
 - `services/run_lifecycle_service.py`: return lifecycle payloads and add temporary record-plus-run-event helpers.
 - `services/sse_services.py`: later make `send_processing_status()` transport-only by removing `run_command_handler` and `run_event_sse_enabled` usage.
-- `services/room_services.py`: record before lifecycle processing-status sends in sendMessage helper paths; keep `create_and_parse_user_message()` transport-only because it does not trigger terminalizing execution.
+- `services/room_services.py`: record before lifecycle processing-status sends in sendMessage helper paths; remove the `create_and_parse_user_message()` processing-status send because it does not trigger terminalizing execution.
 - `api/sse.py`: record before cancellation processing-status send after required root cancellation persistence; leave later paused-agent cleanup documented as separate best-effort per-agent work.
 - `modules/RoomMessageCenter.py`: record before lifecycle processing-status sends; keep soft spinner-clear `COMPLETED` sends pure transport-only.
 - `modules/SupervisorExecutor.py`: record before lifecycle processing-status sends while preserving existing best-effort delivery blocks.
@@ -447,7 +447,7 @@ git commit -m "feat: add processing status lifecycle helper"
 
 Migration rule for Tasks 3-5: do not remove the embedded `SSEManager.send_processing_status()` lifecycle write yet. These tasks intentionally run against the old manager, making its internal record call redundant/dead for migrated paths. Task 6 removes the internal write after callers are covered.
 
-Transport-only terminology before Task 6 means "caller-owned transport-only": the caller must not invoke the lifecycle helper, but the old `SSEManager.send_processing_status()` may still perform the embedded legacy record until Task 6. Tests in Tasks 3-5 should assert caller behavior only. True no-lifecycle transport assertions are reserved for Task 6 and later, after `SSEManager` is made transport-only.
+Transport-only terminology before Task 6 means "caller-owned transport-only": the caller must not invoke the lifecycle helper, but the old `SSEManager.send_processing_status()` may still perform the embedded legacy record until Task 6. Tests in Tasks 3-5 should assert caller behavior only. True no-lifecycle transport assertions are reserved for Task 6 and later, after `SSEManager` is made transport-only. The create/parse path is the exception: remove its processing-status emit entirely because it does not start a terminalizing execution path.
 
 Best-effort delivery rule for Tasks 3-5: when an existing `send_processing_status()` call is inside a `try`/`except`, best-effort helper, or delivery-failure-swallowing block, place `record_and_maybe_broadcast_run_event()` in that same protected block immediately before the send. Do not move run-event broadcast failure outside existing best-effort error handling. This applies globally, including `SupervisorExecutor` stage notifications.
 
@@ -462,14 +462,14 @@ Add `test_golden_send_message_processing_status_order` using a real `SSEManager`
 - Assert queue order is `run_event` first, `processing_status` second.
 - Assert the processing-status frame still contains `client_request_id="cr-1"`.
 
-Add `tests/test_create_and_parse.py::test_create_and_parse_processing_status_is_caller_owned_transport_only_with_client_request_id`:
+Add `tests/test_create_and_parse.py::test_create_and_parse_persists_client_request_without_processing_status_lifecycle`:
 - Build a `RoomServices` instance with successful `add_room_user_message()` and successful memory initialization.
 - Set `room_memory_service.initialize_or_update_room_memory()` to return success.
-- Set `database_service.get_room_by_room_id = AsyncMock(return_value=None)` for a controlled early return immediately after the processing-status send and memory update, or explicitly stub `parse_agent_mentions()` and `parse_user_message_with_mentions()` if testing the full fanout path.
-- Patch the module-level `services.room_services.sse_manager` singleton or spy on its `send_processing_status()` because `create_and_parse_user_message()` also calls the imported singleton, not `self.sse_manager`.
+- Set `database_service.get_room_by_room_id = AsyncMock(return_value=None)` for a controlled early return immediately after memory update, or explicitly stub `parse_agent_mentions()` and `parse_user_message_with_mentions()` if testing the full fanout path.
+- Patch the module-level `services.room_services.sse_manager` singleton so the test proves no legacy processing-status frame is emitted.
 - Spy on `services.room_services.record_and_maybe_broadcast_run_event` and assert it is not awaited.
-- Assert `message.client_request_id = request.client_request_id` is persisted before fanout and that the singleton `send_processing_status()` call includes `client_request_id=message.client_request_id`.
-- Classify this call as caller-owned transport-only because create/parse does not start the terminalizing Execution run. Before Task 6, this proves no caller helper is invoked; after Task 6, `SSEManager` tests prove no embedded lifecycle write remains.
+- Assert `message.client_request_id = request.client_request_id` is persisted before fanout and that `send_processing_status()` is not awaited.
+- Do not classify this call as transport-only in the manifest. There is no processing-status call site after the create/parse emit is removed.
 
 Also verify the deprecated external processing endpoint remains unavailable:
 - Run or add a focused `tests/test_api_orchestration.py` assertion that `/orchestrationCenter/processRoomUserMessage` returns HTTP 410.
@@ -479,7 +479,7 @@ Run:
 
 ```bash
 PYTHONPATH=. uv run pytest -q tests/test_phase7a_processing_status_golden.py::test_golden_send_message_processing_status_order
-PYTHONPATH=. uv run pytest -q tests/test_create_and_parse.py::test_create_and_parse_processing_status_is_caller_owned_transport_only_with_client_request_id
+PYTHONPATH=. uv run pytest -q tests/test_create_and_parse.py::test_create_and_parse_persists_client_request_without_processing_status_lifecycle
 PYTHONPATH=. uv run pytest -q tests/test_api_orchestration.py
 ```
 
@@ -663,7 +663,7 @@ For each file, update an existing unit test or add a small test that proves the 
 - `modules/WorkflowCenter.py`: no lifecycle recording is added; the manifest marks this legacy Workflow send as transport-only with the decommission reason.
 - Soft-complete frontend `COMPLETED` statuses for clarification remain transport-only and do not terminalize the run.
 
-For lifecycle callers, use `AsyncMock` side effects to append `"record"` and `"send"` to a list, then assert order. For caller-owned transport-only paths in Tasks 3-5, assert the lifecycle helper is not awaited and only the existing send occurs; do not assert true no-lifecycle behavior until Task 6 removes the embedded manager write. For existing best-effort send blocks, assert helper failures are swallowed by the same block rather than escaping.
+For lifecycle callers, use `AsyncMock` side effects to append `"record"` and `"send"` to a list, then assert order. For caller-owned transport-only paths in Tasks 3-5, assert the lifecycle helper is not awaited and only the existing send occurs; do not assert true no-lifecycle behavior until Task 6 removes the embedded manager write. For create/parse specifically, assert the lifecycle helper and processing-status send are both not awaited. For existing best-effort send blocks, assert helper failures are swallowed by the same block rather than escaping.
 
 Run the focused tests and expect failures before migration:
 
