@@ -134,7 +134,7 @@ class TestCreateAndParseOversizedMessage:
 
 
 @pytest.mark.asyncio
-async def test_create_and_parse_processing_status_is_caller_owned_transport_only_with_client_request_id(
+async def test_create_and_parse_persists_client_request_without_processing_status_lifecycle(
     monkeypatch,
 ):
     from models.room import MessageContent, RoomUserMessage
@@ -142,9 +142,10 @@ async def test_create_and_parse_processing_status_is_caller_owned_transport_only
     import services.room_services as room_services
 
     rc = object.__new__(RoomServices)
+    persisted_messages = []
 
     async def add_room_user_message(message):
-        assert message.client_request_id == "cr-create"
+        persisted_messages.append(message)
         return True
 
     rc.database_service = MagicMock()
@@ -181,10 +182,7 @@ async def test_create_and_parse_processing_status_is_caller_owned_transport_only
     result = await rc.create_and_parse_user_message(request)
 
     assert result.success is True
+    assert persisted_messages == [message]
+    assert message.client_request_id == "cr-create"
     helper_spy.assert_not_awaited()
-    fake_sse.send_processing_status.assert_awaited_once_with(
-        "room-1",
-        "processing",
-        "msg-create",
-        client_request_id="cr-create",
-    )
+    fake_sse.send_processing_status.assert_not_awaited()

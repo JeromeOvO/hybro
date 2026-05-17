@@ -723,23 +723,6 @@
     "terminal_status": true
   },
   {
-    "call_id": "services.room_services.RoomServices.create_and_parse_user_message.processing",
-    "path": "services/room_services.py",
-    "function_or_method": "RoomServices.create_and_parse_user_message",
-    "line": 2998,
-    "room_id_expression": "room_id",
-    "status_expression": "SSEProcessingStatus.PROCESSING",
-    "sse_message_id_expression": "message.message_id",
-    "lifecycle_message_id_expression": null,
-    "client_request_id_expression": "message.client_request_id",
-    "details_expression": null,
-    "delivery_expression": "sse_manager",
-    "recording_kind": "transport_only",
-    "requires_recording": false,
-    "expects_run_event_sse": false,
-    "transport_only_reason": "create_and_parse_user_message persists/parses/fans out messages but does not start the terminalizing Execution run; the deprecated external processing endpoint returns 410."
-  },
-  {
     "call_id": "services.task_notification_service._notify_task_update_impl.mapped_status.call-01",
     "path": "services/task_notification_service.py",
     "function_or_method": "_notify_task_update_impl",

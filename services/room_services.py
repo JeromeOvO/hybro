@@ -2991,17 +2991,6 @@ class RoomServices:
                 status_code=500,
             )
 
-        # send processing status via sse to client
-        logger.debug(
-            f"RoomServices: Sending processing status to room {room_id} for message {message.message_id}"
-        )
-        await sse_manager.send_processing_status(
-            room_id,
-            SSEProcessingStatus.PROCESSING,
-            message.message_id,
-            client_request_id=message.client_request_id,
-        )
-
         # Initialize or update room memory
         room_memory_initialize_or_update_response = (
             await self.room_memory_service.initialize_or_update_room_memory(

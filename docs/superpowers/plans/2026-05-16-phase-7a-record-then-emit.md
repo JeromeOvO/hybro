@@ -531,19 +531,7 @@ await sse_manager.send_processing_status(
 )
 ```
 
-For `create_and_parse_user_message()`, do not add the lifecycle helper. Preserve client request correlation by assigning it before `add_room_user_message()`, and keep the existing processing-status frame caller-owned transport-only:
-
-```python
-message.client_request_id = request.client_request_id
-await sse_manager.send_processing_status(
-    room_id,
-    SSEProcessingStatus.PROCESSING,
-    message.message_id,
-    client_request_id=message.client_request_id,
-)
-```
-
-The manifest entry for this send must use `recording_kind="transport_only"` and a reason such as: `"create_and_parse_user_message persists/parses/fans out messages but does not start the terminalizing Execution run; the deprecated external processing endpoint returns 410."`
+For `create_and_parse_user_message()`, do not add the lifecycle helper and do not emit a processing-status frame. Preserve client request correlation by assigning it before `add_room_user_message()`. This path persists/parses/fans out messages but does not start the terminalizing execution path, so a lone `PROCESSING` frame or run record would create unowned/stuck state.
 
 - [ ] **Step 3: Update room-service assertions**
 
