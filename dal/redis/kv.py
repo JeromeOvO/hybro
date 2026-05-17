@@ -5,6 +5,7 @@ from typing import Any
 import redis.asyncio as aioredis
 
 from common.config import settings
+from common.errors import TransientError
 
 
 class RedisKVImpl:
@@ -31,14 +32,20 @@ class RedisKVImpl:
         self._client = aioredis.from_url(self._url, **kwargs)
         return self._client
 
+    def _transient(self, operation: str, exc: Exception) -> TransientError:
+        return TransientError(
+            f"Redis KV {operation} failed",
+            details={"operation": operation, "error": str(exc)},
+        )
+
     async def get(self, key: str) -> str | None:
         client = self._ensure_client()
         if client is None:
             return None
         try:
             return await client.get(key)
-        except Exception:
-            return None
+        except Exception as exc:
+            raise self._transient("get", exc) from exc
 
     async def set(self, key: str, value: str, ttl: int | None = None) -> None:
         client = self._ensure_client()
@@ -46,8 +53,8 @@ class RedisKVImpl:
             return None
         try:
             await client.set(key, value, ex=ttl)
-        except Exception:
-            return None
+        except Exception as exc:
+            raise self._transient("set", exc) from exc
         return None
 
     async def delete(self, key: str) -> bool:
@@ -56,8 +63,8 @@ class RedisKVImpl:
             return False
         try:
             return bool(await client.delete(key))
-        except Exception:
-            return False
+        except Exception as exc:
+            raise self._transient("delete", exc) from exc
 
     async def increment(self, key: str, amount: int = 1) -> int:
         client = self._ensure_client()
@@ -65,8 +72,8 @@ class RedisKVImpl:
             return 0
         try:
             return await client.incrby(key, amount)
-        except Exception:
-            return 0
+        except Exception as exc:
+            raise self._transient("increment", exc) from exc
 
     async def setnx(self, key: str, value: str, ttl: int) -> bool:
         client = self._ensure_client()
@@ -74,8 +81,8 @@ class RedisKVImpl:
             return False
         try:
             return bool(await client.set(key, value, nx=True, ex=ttl))
-        except Exception:
-            return False
+        except Exception as exc:
+            raise self._transient("setnx", exc) from exc
 
     async def exists(self, key: str) -> bool:
         client = self._ensure_client()
@@ -83,8 +90,8 @@ class RedisKVImpl:
             return False
         try:
             return bool(await client.exists(key))
-        except Exception:
-            return False
+        except Exception as exc:
+            raise self._transient("exists", exc) from exc
 
     async def ping(self) -> bool:
         client = self._ensure_client()

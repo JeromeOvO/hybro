@@ -5,6 +5,7 @@ import inspect
 import pytest
 
 from common.dto import VectorRecord
+from common.errors import TransientError
 
 
 @pytest.mark.asyncio
@@ -145,6 +146,33 @@ async def test_redis_kv_impl_gracefully_degrades_without_url(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_redis_kv_impl_raises_transient_error_for_configured_driver_failures():
+    from dal.redis.kv import RedisKVImpl
+
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=RuntimeError("get failed"))
+    client.set = AsyncMock(side_effect=RuntimeError("set failed"))
+    client.delete = AsyncMock(side_effect=RuntimeError("delete failed"))
+    client.incrby = AsyncMock(side_effect=RuntimeError("increment failed"))
+    client.exists = AsyncMock(side_effect=RuntimeError("exists failed"))
+
+    kv = RedisKVImpl(client=client)
+
+    with pytest.raises(TransientError):
+        await kv.get("k")
+    with pytest.raises(TransientError):
+        await kv.set("k", "v")
+    with pytest.raises(TransientError):
+        await kv.delete("k")
+    with pytest.raises(TransientError):
+        await kv.increment("k")
+    with pytest.raises(TransientError):
+        await kv.setnx("k", "v", ttl=1)
+    with pytest.raises(TransientError):
+        await kv.exists("k")
+
+
+@pytest.mark.asyncio
 async def test_redis_streams_impl_normalizes_xread():
     from dal.redis.streams import RedisStreamsImpl
 
@@ -175,6 +203,22 @@ async def test_redis_streams_impl_gracefully_degrades_without_url(monkeypatch):
     assert await streams.xadd("stream-a", {"payload": "one"}) == ""
     assert await streams.xread({"stream-a": "0-0"}) == []
     assert await streams.ping() is False
+
+
+@pytest.mark.asyncio
+async def test_redis_streams_impl_raises_transient_error_for_configured_failures():
+    from dal.redis.streams import RedisStreamsImpl
+
+    client = MagicMock()
+    client.xadd = AsyncMock(side_effect=RuntimeError("xadd failed"))
+    client.xread = AsyncMock(side_effect=RuntimeError("xread failed"))
+
+    streams = RedisStreamsImpl(client=client)
+
+    with pytest.raises(TransientError):
+        await streams.xadd("stream-a", {"payload": "one"})
+    with pytest.raises(TransientError):
+        await streams.xread({"stream-a": "0-0"})
 
 
 @pytest.mark.asyncio
