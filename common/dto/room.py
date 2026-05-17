@@ -75,6 +75,7 @@ class CreateRoomRequest(FrozenDTO):
     owner_name: str
     room_name: str
     membership_seed: MembershipSeed
+    extend_info: dict[str, Any] | None = None
 
 
 RoomCreationParams = CreateRoomRequest

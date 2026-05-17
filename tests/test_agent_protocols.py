@@ -23,6 +23,7 @@ def _fake_facade():
         vector=AsyncMock(),
         llm_provider=AsyncMock(),
         card_resolver=AsyncMock(),
+        agent_index="test-agent-index",
         id_factory=lambda: "agent-id",
         now=lambda: datetime(2026, 5, 10, tzinfo=timezone.utc),
     )
@@ -116,6 +117,46 @@ def test_agent_container_binds_single_facade_to_all_protocols():
     assert deps.agent_registry is deps.agent_matcher
     assert deps.agent_registry is deps.agent_management
     assert deps.agent_registry is deps.agent_registry_writer
+
+
+def test_agent_container_prefers_env_pinecone_index(monkeypatch):
+    from config.settings import settings
+    from container import create_agent_deps
+
+    monkeypatch.setenv("PINECONE_INDEX_NAME", "local-agent-index")
+    monkeypatch.setattr(settings, "pinecone_index_name", "prod-agent-index")
+
+    fake_mongo = MagicMock()
+    fake_mongo.collection.return_value = AsyncMock()
+
+    deps = create_agent_deps(
+        mongo=fake_mongo,
+        vector=AsyncMock(),
+        llm_provider=AsyncMock(),
+        card_resolver=AsyncMock(),
+    )
+
+    assert getattr(deps.agent_registry, "_agent_index") == "local-agent-index"
+
+
+def test_agent_container_uses_settings_pinecone_index_when_env_absent(monkeypatch):
+    from config.settings import settings
+    from container import create_agent_deps
+
+    monkeypatch.delenv("PINECONE_INDEX_NAME", raising=False)
+    monkeypatch.setattr(settings, "pinecone_index_name", "configured-agent-index")
+
+    fake_mongo = MagicMock()
+    fake_mongo.collection.return_value = AsyncMock()
+
+    deps = create_agent_deps(
+        mongo=fake_mongo,
+        vector=AsyncMock(),
+        llm_provider=AsyncMock(),
+        card_resolver=AsyncMock(),
+    )
+
+    assert getattr(deps.agent_registry, "_agent_index") == "configured-agent-index"
 
 
 def _assert_import_boundary(

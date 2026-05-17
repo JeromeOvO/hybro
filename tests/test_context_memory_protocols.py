@@ -285,6 +285,7 @@ def test_context_memory_config_defaults_read_common_settings(monkeypatch):
     monkeypatch.setattr(settings, "memory_search_enabled", False)
     monkeypatch.setattr(settings, "memory_search_vector_weight", 0.4)
     monkeypatch.setattr(settings, "memory_search_keyword_weight", 0.6)
+    monkeypatch.delenv("MEMORY_SEARCH_INDEX_NAME", raising=False)
     monkeypatch.setattr(settings, "memory_search_index_name", "settings-index")
 
     token_budget = TokenBudgetConfig()
@@ -308,6 +309,16 @@ def test_context_memory_config_defaults_read_common_settings(monkeypatch):
     assert search.vector_weight == 0.4
     assert search.keyword_weight == 0.6
     assert search.index_name == "settings-index"
+
+
+def test_memory_search_config_prefers_env_index(monkeypatch):
+    from common.config import settings
+    from context_memory.config import MemorySearchConfig
+
+    monkeypatch.setenv("MEMORY_SEARCH_INDEX_NAME", "env-memory-index")
+    monkeypatch.setattr(settings, "memory_search_index_name", "settings-memory-index")
+
+    assert MemorySearchConfig().index_name == "env-memory-index"
 
 
 def test_context_memory_setting_helper_does_not_swallow_import_failures(monkeypatch):
@@ -439,7 +450,7 @@ def test_non_protocol_helper_call_boundary():
     violations = []
     for path in Path(".").rglob("*.py"):
         if (
-            path.parts[0] in {"context_memory", "tests"}
+            path.parts[0] in {"context_memory", "tests", ".git", ".venv", ".worktrees"}
             or path in {Path("container.py"), Path("main.py")}
             or ".venv" in path.parts
         ):

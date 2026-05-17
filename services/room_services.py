@@ -506,6 +506,7 @@ class RoomServices:
                     membership_seed=self._membership_seed_from_request(
                         room_create_request
                     ),
+                    extend_info=room_create_request.extend_info,
                 )
             )
         except ValueError as exc:

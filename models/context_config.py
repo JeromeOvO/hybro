@@ -7,7 +7,7 @@ and provide typed, property-based access.
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §14.3 for specification.
 """
 
-from config.settings import settings
+from config.settings import get_memory_search_index_name, settings
 
 
 class TokenBudget:
@@ -148,7 +148,7 @@ class MemorySearchConfig:
 
     @property
     def index_name(self) -> str:
-        return settings.memory_search_index_name
+        return get_memory_search_index_name(settings)
 
 
 # Singleton instances

@@ -335,6 +335,7 @@ async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
             room_owner_id="owner",
             room_owner_name="Owner",
             room_agent_set={"a1": "Agent One"},
+            extend_info={"debateMode": True, "use_supervisor": True},
             requesting_user_id="owner",
         )
     )
@@ -370,6 +371,8 @@ async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
     assert extend_response.success is True
     assert delete_response.success is True
     facade.create_room.assert_awaited_once()
+    create_request = facade.create_room.await_args.args[0]
+    assert create_request.extend_info == {"debateMode": True, "use_supervisor": True}
     facade.get_room.assert_awaited()
     facade.list_rooms_for_owner.assert_awaited_once_with("owner")
     facade.replace_membership.assert_awaited_once()

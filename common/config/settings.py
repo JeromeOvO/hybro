@@ -4,6 +4,11 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
+PINECONE_INDEX_NAME_DEFAULT = "agentmatch"
+PINECONE_API_KEY_DEFAULT = ""
+MEMORY_SEARCH_INDEX_NAME_DEFAULT = "room-memory"
+
+
 class Settings(BaseSettings):
     app_env: str = "development"  # development, staging, production
 
@@ -20,8 +25,8 @@ class Settings(BaseSettings):
     mongodb_username: str = ""
     mongodb_password: str = ""
 
-    pinecone_api_key: str = ""
-    pinecone_index_name: str = "agentmatch"
+    pinecone_api_key: str = PINECONE_API_KEY_DEFAULT
+    pinecone_index_name: str = PINECONE_INDEX_NAME_DEFAULT
 
     openai_api_key: str = ""
     lead_ai_model: str = "gpt-5-mini"
@@ -161,7 +166,7 @@ class Settings(BaseSettings):
     )
     memory_search_max_results: int = 10  # Max results to return
     memory_search_max_snippet_chars: int = 500  # Max chars per snippet
-    memory_search_index_name: str = "room-memory"  # Pinecone index for memory
+    memory_search_index_name: str = MEMORY_SEARCH_INDEX_NAME_DEFAULT  # Pinecone index for memory
 
     # AWS S3 (file uploads and binary content storage)
     s3_bucket_name: str = ""
@@ -213,4 +218,51 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-__all__ = ["Settings", "settings"]
+def _first_non_empty(*values: str | None, default: str) -> str:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return default
+
+
+def _settings_value(settings_obj, name: str):
+    source = settings if settings_obj is None else settings_obj
+    return getattr(source, name, None)
+
+
+def get_pinecone_api_key(settings_obj=None) -> str:
+    return _first_non_empty(
+        os.getenv("PINECONE_API_KEY"),
+        _settings_value(settings_obj, "pinecone_api_key"),
+        default=PINECONE_API_KEY_DEFAULT,
+    )
+
+
+def get_pinecone_index_name(settings_obj=None) -> str:
+    return _first_non_empty(
+        os.getenv("PINECONE_INDEX_NAME"),
+        _settings_value(settings_obj, "pinecone_index_name"),
+        default=PINECONE_INDEX_NAME_DEFAULT,
+    )
+
+
+def get_memory_search_index_name(settings_obj=None) -> str:
+    return _first_non_empty(
+        os.getenv("MEMORY_SEARCH_INDEX_NAME"),
+        _settings_value(settings_obj, "memory_search_index_name"),
+        default=MEMORY_SEARCH_INDEX_NAME_DEFAULT,
+    )
+
+
+__all__ = [
+    "MEMORY_SEARCH_INDEX_NAME_DEFAULT",
+    "PINECONE_INDEX_NAME_DEFAULT",
+    "Settings",
+    "get_memory_search_index_name",
+    "get_pinecone_api_key",
+    "get_pinecone_index_name",
+    "settings",
+]
