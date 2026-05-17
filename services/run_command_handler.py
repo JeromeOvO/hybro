@@ -18,9 +18,13 @@ from services.run_reducer import RunTransitionError, ensure_transition_allowed
 logger = get_logger(__name__)
 
 
-def _feature_run_dual_write_enabled() -> bool:
+def feature_run_dual_write_enabled() -> bool:
     raw = (os.environ.get("FEATURE_RUN_DUAL_WRITE") or "1").strip().lower()
     return raw not in ("0", "false", "no", "off")
+
+
+def _feature_run_dual_write_enabled() -> bool:
+    return feature_run_dual_write_enabled()
 
 
 class RunCommandHandler:

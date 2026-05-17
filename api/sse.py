@@ -8,6 +8,7 @@ from common.auth import ClerkUser, get_current_user, get_current_user_with_query
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from database.mongodb import mongodb
+from services.a2a_constants import SSEProcessingStatus
 from services.database_service import db_service
 from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
 from services.sse_services import sse_manager
@@ -153,12 +154,12 @@ async def cancel_message(
         # Clear room processing status for the user message (must use user message ID)
         await record_and_maybe_broadcast_run_event(
             message.room_id,
-            "canceled",
+            SSEProcessingStatus.CANCELED,
             message_id,
             sse=sse_manager,
         )
         await sse_manager.send_processing_status(
-            message.room_id, "canceled", message_id
+            message.room_id, SSEProcessingStatus.CANCELED, message_id
         )
 
         # Phase 7a: root cancellation lifecycle/frontend clear is complete above.

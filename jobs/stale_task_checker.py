@@ -34,7 +34,10 @@ from services.a2a_constants import (
     is_terminal_state,
 )
 from services.run_metrics import increment_counter
-from services.run_lifecycle_service import broadcast_run_event_payload
+from services.run_lifecycle_service import (
+    broadcast_run_event_payload,
+    feature_run_dual_write_enabled,
+)
 from services.a2a_service import a2a_service
 from services.database_service import db_service
 
@@ -244,12 +247,7 @@ class StaleTaskChecker:
             try:
                 tid = doc.get("trigger_message_id") or run_id
                 client_request_id = doc.get("client_request_id")
-                if os.environ.get("FEATURE_RUN_DUAL_WRITE", "1").strip().lower() in (
-                    "0",
-                    "false",
-                    "no",
-                    "off",
-                ):
+                if not feature_run_dual_write_enabled():
                     increment_counter("run_watchdog_forced_failure_total")
                     await sse_manager.send_processing_status(
                         room_id,

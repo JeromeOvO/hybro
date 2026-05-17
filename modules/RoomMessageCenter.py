@@ -109,6 +109,9 @@ class RoomMessageCenter:
             database_service=self.database_service,
             transports={"direct": self.direct_transport},
         )
+        # Turn-event infrastructure is retired; keep a declared optional
+        # appender for legacy proof paths and propagate it explicitly.
+        self._turn_event_appender = None
         self.queue_executor = QueueExecutor(
             tsm=self.tsm,
             sse_manager=self.sse_manager,
@@ -121,6 +124,7 @@ class RoomMessageCenter:
             agent_dispatcher=self.agent_dispatcher,
             agent_message_processor=self.agent_message_processor,
             response_handler=self.agent_response_handler,
+            turn_event_appender=self._turn_event_appender,
         )
         self.supervisor_executor = SupervisorExecutor(
             supervisor_service=room_supervisor_service,
@@ -134,8 +138,6 @@ class RoomMessageCenter:
             agent_message_processor=self.agent_message_processor,
             room_coordinator_service=self.room_coordinator_service,
         )
-        self._turn_event_appender = None
-
         # Per-room asyncio locks to serialise processing within the same room.
         # Prevents concurrent supervisor runs / queue executions that would
         # corrupt shared state (context, compaction, memory).
@@ -149,8 +151,6 @@ class RoomMessageCenter:
         self._redis: RedisService | None = None
         self._room_facade = None
         self._room_bound = False
-        # Turn-event infrastructure is retired; keep placeholders to
-        # preserve defensive getattr/None checks in legacy code paths.
 
     # -- Redis wiring (called from main.py at startup) ---------------------
 
@@ -641,10 +641,7 @@ class RoomMessageCenter:
                 status_code=200,
             )
 
-        if hasattr(self.queue_executor, "_turn_event_appender"):
-            self.queue_executor._turn_event_appender = getattr(
-                self, "_turn_event_appender", None
-            )
+        self.queue_executor.bind_turn_event_appender(self._turn_event_appender)
 
         queue_processing_result = await self.queue_executor.process_queue(
             message_queue,
@@ -1866,6 +1863,9 @@ class RoomMessageCenter:
                         )
                     except Exception:
                         pass
+                # Transport-only frontend clear: CLARIFYING leaves the run
+                # awaiting user input, so recording COMPLETED here would
+                # incorrectly terminalize lifecycle state.
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.COMPLETED, user_message_id
                 )

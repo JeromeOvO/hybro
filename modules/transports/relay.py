@@ -8,10 +8,11 @@ Owns:
 
 from __future__ import annotations
 
-import inspect
+import asyncio
 from typing import TYPE_CHECKING
 
 from a2a.types import TaskState
+from cachetools import TTLCache
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -51,6 +52,10 @@ class RelayTransport(AgentTransport):
         self.relay_service = relay_service
         self._db = db
         self._sse = sse_manager
+        self._root_user_message_cache: TTLCache[str, str | None] = TTLCache(
+            maxsize=2048,
+            ttl=300,
+        )
 
     async def dispatch(
         self,
@@ -337,6 +342,15 @@ class RelayTransport(AgentTransport):
         self,
         msg: RoomAgentMessage,
     ) -> str | None:
+        cache_key = getattr(msg, "message_id", None)
+        if isinstance(cache_key, str) and cache_key in self._root_user_message_cache:
+            return self._root_user_message_cache[cache_key]
+
+        def remember(value: str | None) -> str | None:
+            if isinstance(cache_key, str):
+                self._root_user_message_cache[cache_key] = value
+            return value
+
         cursor = getattr(msg, "related_message_id", None)
         visited: set[str] = set()
         for _ in range(20):
@@ -347,19 +361,19 @@ class RelayTransport(AgentTransport):
             user_lookup = getattr(self._db, "get_room_user_message_by_message_id", None)
             if callable(user_lookup):
                 user_msg = user_lookup(cursor)
-                if inspect.isawaitable(user_msg):
+                if asyncio.iscoroutine(user_msg):
                     user_msg = await user_msg
                 if getattr(user_msg, "message_type", None) == "user":
-                    return cursor
+                    return remember(cursor)
 
             parent = await self._db.get_room_agent_message_by_message_id(cursor)
             if parent is None:
                 break
             parent_turn_id = getattr(parent, "turn_id", None)
             if isinstance(parent_turn_id, str) and parent_turn_id:
-                return parent_turn_id
+                return remember(parent_turn_id)
             cursor = getattr(parent, "related_message_id", None)
-        return None
+        return remember(None)
 
     @staticmethod
     def _normalize_hub_parts(parts: list[dict] | None) -> list[dict] | None:

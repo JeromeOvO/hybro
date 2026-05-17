@@ -7,10 +7,12 @@ Tests cover:
 - _managed_queue cleanup behavior (RAII)
 """
 
-import pytest
+import inspect
 from collections import deque
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from a2a.types import TaskState
 
@@ -29,6 +31,14 @@ class TestQueueResult:
         assert QueueResult.COMPLETED == "completed"
         assert QueueResult.CANCELED == "canceled"
         assert QueueResult.PAUSED == "paused"
+
+
+def test_resume_from_continuation_before_terminal_failure_is_typed():
+    annotation = inspect.signature(
+        QueueExecutor.resume_from_continuation
+    ).parameters["before_terminal_failure"].annotation
+
+    assert annotation == "Callable[[str, str], Awaitable[None]] | None"
 
 
 # =============================================================================

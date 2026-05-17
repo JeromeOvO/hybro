@@ -13,6 +13,7 @@ Supervisor-enabled rooms use ``SupervisorExecutor`` exclusively.
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -116,6 +117,9 @@ class QueueExecutor:
         self._agent_message_processor = agent_message_processor
         self.response_handler = response_handler
         self._slot_lifecycle = slot_lifecycle
+        self._turn_event_appender = turn_event_appender
+
+    def bind_turn_event_appender(self, turn_event_appender) -> None:
         self._turn_event_appender = turn_event_appender
 
     # ------------------------------------------------------------------
@@ -722,7 +726,7 @@ class QueueExecutor:
         message_id: str,
         task_result_text: str | None = None,
         *,
-        before_terminal_failure=None,
+        before_terminal_failure: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> ResumeResult:
         """Resume queue processing after a push notification task completes.
 

@@ -159,6 +159,29 @@ async def test_record_and_maybe_broadcast_run_event_uses_provided_sse(monkeypatc
     )
 
 
+def test_build_run_event_sse_payload_includes_correlation_id():
+    import services.run_lifecycle_service as mod
+
+    payload = {
+        "event_id": "evt-1",
+        "run_id": "msg-1",
+        "seq": 2,
+        "type": "RUN_STARTED",
+        "payload": {"status": "processing"},
+    }
+
+    assert mod.build_run_event_sse_payload(
+        payload, client_request_id="cr-1"
+    ) == {
+        "event_id": "evt-1",
+        "run_id": "msg-1",
+        "seq": 2,
+        "type": "RUN_STARTED",
+        "payload": {"status": "processing"},
+        "correlation_id": "cr-1",
+    }
+
+
 @pytest.mark.asyncio
 async def test_record_and_maybe_broadcast_run_event_skips_when_flag_disabled(monkeypatch):
     monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
@@ -247,16 +270,11 @@ async def test_broadcast_run_event_payload_does_not_record(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_broadcast_run_event_payload_lazily_imports_singleton(monkeypatch):
+async def test_broadcast_run_event_payload_requires_explicit_sse(monkeypatch):
     import services.run_lifecycle_service as mod
-    import services.sse_services as sse_mod
 
     payload = {"event_id": "evt-1", "run_id": "msg-1", "seq": 3, "type": "RUN_FAILED"}
-    fake_sse = MagicMock()
-    fake_sse.broadcast_to_room = AsyncMock()
     monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
-    monkeypatch.setattr(sse_mod, "sse_manager", fake_sse)
 
-    await mod.broadcast_run_event_payload("room-1", payload)
-
-    fake_sse.broadcast_to_room.assert_awaited_once()
+    with pytest.raises(TypeError):
+        await mod.broadcast_run_event_payload("room-1", payload)

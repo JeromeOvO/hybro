@@ -21,6 +21,7 @@ from api.sse import (
     get_room_sse_status,
     cancel_message,
 )
+from services.a2a_constants import SSEProcessingStatus
 from tests.conftest import PATCH
 
 
@@ -286,12 +287,14 @@ class TestCancelMessage:
         assert result["success"] is True
         record.assert_awaited_once_with(
             sample_user_message.room_id,
-            "canceled",
+            SSEProcessingStatus.CANCELED,
             sample_user_message.message_id,
             sse=deps["sse_manager"],
         )
         deps["sse_manager"].send_processing_status.assert_awaited_once_with(
-            sample_user_message.room_id, "canceled", sample_user_message.message_id
+            sample_user_message.room_id,
+            SSEProcessingStatus.CANCELED,
+            sample_user_message.message_id,
         )
         deps["db_service"].update_task_state_on_message.assert_awaited_once_with(
             sample_agent_message_with_task.message_id,
