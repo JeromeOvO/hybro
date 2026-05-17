@@ -258,6 +258,41 @@ def test_common_foundation_dtos_can_be_instantiated():
     )
 
 
+def test_delivery_dtos_accept_optional_trace_and_correlation_fields():
+    envelope = DeliveryEnvelope(
+        room_id="room-1",
+        event_type="processing_status",
+        payload={},
+        trace_id="trace-1",
+    )
+    base = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="processing",
+        trace_id="trace-2",
+    )
+    run_event = RunEventNotification(
+        room_id="room-1",
+        event_id="evt-1",
+        run_id="run-1",
+        seq=1,
+        run_event_type="agent_started",
+        correlation_id="cr-1",
+    )
+    omitted = RunEventNotification(
+        room_id="room-1",
+        event_id="evt-2",
+        run_id="run-1",
+        seq=2,
+        run_event_type="agent_finished",
+    )
+
+    assert envelope.trace_id == "trace-1"
+    assert base.trace_id == "trace-2"
+    assert run_event.correlation_id == "cr-1"
+    assert omitted.correlation_id is None
+
+
 def test_room_info_preserves_legacy_membership_status_default():
     room = RoomInfo(room_id="r1", room_name="Room", owner_id="u1")
 
@@ -318,10 +353,11 @@ def test_event_exports_are_distinct():
 
 def test_delivery_event_schemas_match_design_doc():
     expected_fields = {
-        DeliveryEventBase: {"room_id", "timestamp"},
+        DeliveryEventBase: {"room_id", "timestamp", "trace_id"},
         ProcessingStatusEvent: {
             "room_id",
             "timestamp",
+            "trace_id",
             "event_type",
             "message_id",
             "status",
@@ -333,16 +369,19 @@ def test_delivery_event_schemas_match_design_doc():
         RunEventNotification: {
             "room_id",
             "timestamp",
+            "trace_id",
             "event_type",
             "event_id",
             "run_id",
             "seq",
             "run_event_type",
             "payload",
+            "correlation_id",
         },
         AgentMessagePartial: {
             "room_id",
             "timestamp",
+            "trace_id",
             "event_type",
             "message_id",
             "agent_id",
@@ -351,15 +390,24 @@ def test_delivery_event_schemas_match_design_doc():
         AgentMessageFinal: {
             "room_id",
             "timestamp",
+            "trace_id",
             "event_type",
             "message_id",
             "agent_id",
             "content",
         },
-        CancellationEvent: {"room_id", "timestamp", "event_type", "message_id", "reason"},
+        CancellationEvent: {
+            "room_id",
+            "timestamp",
+            "trace_id",
+            "event_type",
+            "message_id",
+            "reason",
+        },
         HITLRequestEvent: {
             "room_id",
             "timestamp",
+            "trace_id",
             "event_type",
             "request_id",
             "prompt",
@@ -370,6 +418,7 @@ def test_delivery_event_schemas_match_design_doc():
         HITLResolvedEvent: {
             "room_id",
             "timestamp",
+            "trace_id",
             "event_type",
             "request_id",
             "message_id",
@@ -377,6 +426,7 @@ def test_delivery_event_schemas_match_design_doc():
         HubAgentEvent: {
             "room_id",
             "timestamp",
+            "trace_id",
             "event_type",
             "hub_id",
             "agent_id",
@@ -387,6 +437,7 @@ def test_delivery_event_schemas_match_design_doc():
         DebateRoundEvent: {
             "room_id",
             "timestamp",
+            "trace_id",
             "event_type",
             "round_number",
             "agent_id",
