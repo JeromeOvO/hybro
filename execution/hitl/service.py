@@ -587,15 +587,13 @@ class HITLService:
                 request.display_message_id
             )
             if agent_msg:
-                from a2a.types import TaskState
-
                 state_map = {
-                    "completed": TaskState.completed,
-                    "failed": TaskState.failed,
-                    "canceled": TaskState.canceled,
-                    "rejected": TaskState.rejected,
+                    "completed": "completed",
+                    "failed": "failed",
+                    "canceled": "canceled",
+                    "rejected": "rejected",
                 }
-                notify_state = state_map.get(effective_state, TaskState.completed)
+                notify_state = state_map.get(effective_state, "completed")
                 await self.task_notifications.notify_task_update(
                     request.display_message_id,
                     notify_state,

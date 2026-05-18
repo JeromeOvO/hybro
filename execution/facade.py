@@ -434,9 +434,20 @@ class ExecutionFacade:
         return await self._run_reader.get_runs_for_room(room_id)
 
     async def cancel_inflight_tasks(self) -> int:
-        tasks = set(self._inflight)
-        for task in tasks:
-            metadata = self._inflight_metadata.get(task) or {}
+        task_metadata = {
+            task: (self._inflight_metadata.get(task) or {})
+            for task in set(self._inflight)
+            if not task.done()
+        }
+        for task in task_metadata:
+            task.cancel()
+        if task_metadata:
+            await asyncio.gather(*task_metadata, return_exceptions=True)
+
+        canceled_count = 0
+        for task, metadata in task_metadata.items():
+            if not task.cancelled():
+                continue
             room_id = metadata.get("room_id")
             message_id = metadata.get("message_id")
             if not room_id or not message_id:
@@ -459,11 +470,8 @@ class ExecutionFacade:
                     "execution shutdown failed to mark orchestration canceled",
                     exc_info=True,
                 )
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        return len(tasks)
+            canceled_count += 1
+        return canceled_count
 
     async def heal_diverged_runs(self, limit: int = 500) -> int:
         return await self._run_lifecycle.heal_diverged_runs(limit=limit)

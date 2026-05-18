@@ -262,6 +262,27 @@ async def test_cancel_inflight_tasks_awaits_cancelled_tasks():
 
 
 @pytest.mark.asyncio
+async def test_cancel_inflight_tasks_does_not_mark_task_that_completes_during_shutdown():
+    async def completes_normally():
+        return "done"
+
+    facade, deps = _make_facade()
+    task = asyncio.create_task(completes_normally(), name="execution-test")
+    await task
+    facade._inflight.add(task)
+    facade._inflight_metadata[task] = {
+        "room_id": "room-1",
+        "message_id": "msg-1",
+        "client_request_id": "cr-1",
+    }
+
+    assert await facade.cancel_inflight_tasks() == 0
+    assert task.done()
+    assert not task.cancelled()
+    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_hitl_methods_delegate_and_translate():
     facade, deps = _make_facade()
     model_request = SimpleNamespace(
