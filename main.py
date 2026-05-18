@@ -204,7 +204,10 @@ async def lifespan(app: FastAPI):
                 LegacyProcessingStatusC3Adapter,
                 SSEClientRequestIdResolver,
             )
-            from execution.events import emit_processing_status
+            from execution.events import (
+                emit_processing_status,
+                run_event_notification_from_payload,
+            )
             from execution.cancellation import (
                 AgentTaskCleanupAdapter,
                 CancellationStateC3Adapter,
@@ -432,11 +435,66 @@ async def lifespan(app: FastAPI):
         agent_health_service.set_leader_election(_leader)
         stale_task_checker.set_leader_election(_leader)
         if _execution_deps is not None:
-            from jobs.stale_task_checker import StaleRecoveryDeps
+            from jobs.stale_task_checker import (
+                StaleRecoveryDeps,
+                StaleRunWatchdogEventDeps,
+            )
+
+            def run_dual_write_enabled() -> bool:
+                raw = (
+                    os.environ.get("FEATURE_RUN_DUAL_WRITE") or "1"
+                ).strip().lower()
+                return raw not in ("0", "false", "no", "off")
+
+            async def emit_watchdog_run_event(
+                *,
+                room_id: str,
+                payload: dict,
+                client_request_id: str | None = None,
+            ) -> None:
+                if payload and run_event_sse_enabled():
+                    await _delivery_deps.event_publisher.emit(
+                        run_event_notification_from_payload(
+                            room_id=room_id,
+                            payload=payload,
+                            correlation_id=client_request_id,
+                        )
+                    )
+
+            async def emit_watchdog_processing_status(
+                *,
+                room_id: str,
+                status: str,
+                message_id: str,
+                client_request_id: str | None = None,
+                details: str | None = None,
+            ) -> None:
+                await emit_processing_status(
+                    room_id=room_id,
+                    status=status,
+                    message_id=message_id,
+                    lifecycle_message_id=message_id,
+                    record_lifecycle=False,
+                    client_request_id=client_request_id,
+                    legacy_details=details,
+                    run_lifecycle=run_lifecycle,
+                    event_publisher=_delivery_deps.event_publisher,
+                    legacy_processing_status_publisher=legacy_processing_status_publisher,
+                    run_event_enabled=run_event_sse_enabled,
+                    client_request_id_resolver=app_shell_client_request_id_resolver,
+                )
 
             stale_task_checker.set_execution_recovery_deps(
                 StaleRecoveryDeps(
                     schedule_recovery=execution_facade.schedule_recovery_orchestration,
+                )
+            )
+            stale_task_checker.set_run_watchdog_event_deps(
+                StaleRunWatchdogEventDeps(
+                    append_run_timeout_failure=run_lifecycle.append_run_timeout_failure,
+                    emit_run_event=emit_watchdog_run_event,
+                    emit_processing_status=emit_watchdog_processing_status,
+                    run_dual_write_enabled=run_dual_write_enabled,
                 )
             )
         compaction_sweep.set_leader_election(_leader)

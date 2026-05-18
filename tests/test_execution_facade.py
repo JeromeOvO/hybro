@@ -218,14 +218,29 @@ async def test_cancel_inflight_tasks_awaits_cancelled_tasks():
             marker.append("cleanup")
 
     marker = []
-    facade, _ = _make_facade()
-    task = facade._spawn_orchestration(wait_forever(), name="execution-test")
+    facade, deps = _make_facade()
+    task = facade._spawn_orchestration(
+        wait_forever(),
+        name="execution-test",
+        room_id="room-1",
+        message_id="msg-1",
+        client_request_id="cr-1",
+    )
     await asyncio.sleep(0)
 
     assert await facade.cancel_inflight_tasks() == 1
     assert task.cancelled()
     assert marker == ["cleanup"]
     assert facade._inflight == set()
+    assert facade._inflight_metadata == {}
+    deps["run_lifecycle"].record_processing_status.assert_awaited_once_with(
+        "room-1",
+        "canceled",
+        "msg-1",
+        client_request_id="cr-1",
+        details=None,
+        error_message=None,
+    )
 
 
 @pytest.mark.asyncio

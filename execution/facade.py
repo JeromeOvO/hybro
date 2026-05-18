@@ -303,6 +303,7 @@ class ExecutionFacade:
         self._client_request_id_resolver = client_request_id_resolver
         self._task_factory = task_factory
         self._inflight: set[asyncio.Task] = set()
+        self._inflight_metadata: dict[asyncio.Task, dict[str, str | None]] = {}
 
     async def execute(self, request: ExecutionRequest) -> ExecutionAck:
         room_request = RoomCenterUserMessageRequest(
@@ -338,6 +339,9 @@ class ExecutionFacade:
         task = self._spawn_orchestration(
             self._room_message_center.process_room_user_message(orchestration_request),
             name=f"execution-orchestrate-{ack.message_id}",
+            room_id=request.room_id,
+            message_id=ack.message_id,
+            client_request_id=request.client_request_id,
         )
         await task
 
@@ -351,6 +355,9 @@ class ExecutionFacade:
         return self._spawn_orchestration(
             self._room_message_center.process_room_user_message(request),
             name=f"execution-recovery-{reason}-{message_id}",
+            room_id=request.room_id,
+            message_id=message_id,
+            client_request_id=request.client_request_id,
         )
 
     def _spawn_orchestration(
@@ -358,12 +365,21 @@ class ExecutionFacade:
         coro,
         *,
         name: str,
+        room_id: str | None = None,
+        message_id: str | None = None,
+        client_request_id: str | None = None,
     ) -> asyncio.Task[Any]:
         task = self._task_factory(coro, name=name)
         self._inflight.add(task)
+        self._inflight_metadata[task] = {
+            "room_id": room_id,
+            "message_id": message_id,
+            "client_request_id": client_request_id,
+        }
 
         def _on_done(done: asyncio.Task) -> None:
             self._inflight.discard(done)
+            self._inflight_metadata.pop(done, None)
             if done.cancelled():
                 return
             exc = done.exception()
@@ -420,6 +436,30 @@ class ExecutionFacade:
 
     async def cancel_inflight_tasks(self) -> int:
         tasks = set(self._inflight)
+        for task in tasks:
+            metadata = self._inflight_metadata.get(task) or {}
+            room_id = metadata.get("room_id")
+            message_id = metadata.get("message_id")
+            if not room_id or not message_id:
+                continue
+            try:
+                await emit_processing_status(
+                    room_id=room_id,
+                    status="canceled",
+                    message_id=message_id,
+                    lifecycle_message_id=message_id,
+                    run_lifecycle=self._run_lifecycle,
+                    event_publisher=self._event_publisher,
+                    legacy_processing_status_publisher=self._legacy_processing_status_publisher,
+                    run_event_enabled=self._run_event_enabled,
+                    client_request_id_resolver=self._client_request_id_resolver,
+                    client_request_id=metadata.get("client_request_id"),
+                )
+            except Exception:
+                logger.warning(
+                    "execution shutdown failed to mark orchestration canceled",
+                    exc_info=True,
+                )
         for task in tasks:
             task.cancel()
         if tasks:
