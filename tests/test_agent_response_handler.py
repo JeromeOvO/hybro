@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from modules.agent_event import AgentEvent
-from modules.agent_response_handler import AgentResponseHandler
+from execution.dispatch.response_handler import AgentResponseHandler
 
 
 # =============================================================================
@@ -54,7 +54,7 @@ def _base_event(**overrides):
 
 
 def test_processing_status_callback_has_no_required_post_emit_business_side_effects():
-    path = Path(__file__).resolve().parents[1] / "modules" / "agent_response_handler.py"
+    path = Path(__file__).resolve().parents[1] / "execution" / "dispatch" / "response_handler.py"
     tree = ast.parse(path.read_text(), filename=str(path))
     fn = next(
         node
@@ -274,7 +274,7 @@ class TestResponseEvent:
         with pytest.MonkeyPatch.context() as mp:
             mock_notify = AsyncMock(return_value=True)
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 mock_notify,
             )
             await h.handle(event)
@@ -294,7 +294,7 @@ class TestResponseEvent:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             await h.handle(event)
@@ -311,7 +311,7 @@ class TestResponseEvent:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             await h.handle(event)
@@ -336,7 +336,7 @@ class TestErrorEvent:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             await h.handle(event)
@@ -358,7 +358,7 @@ class TestErrorEvent:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             await h.handle(event)
@@ -381,7 +381,7 @@ class TestCanceledEvent:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             await h.handle(event)
@@ -411,7 +411,7 @@ class TestInteractiveEvent:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             await h.handle(event)
@@ -458,11 +458,11 @@ class TestInteractiveEvent:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             mp.setattr(
-                "modules.agent_response_handler.record_and_maybe_broadcast_run_event",
+                "execution.dispatch.response_handler.record_and_maybe_broadcast_run_event",
                 AsyncMock(side_effect=record),
                 raising=False,
             )
@@ -512,12 +512,12 @@ class TestInteractiveEvent:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             mp.setattr("services.hitl_service.hitl_service", hitl)
             debug = MagicMock()
-            mp.setattr("modules.agent_response_handler.logger.debug", debug)
+            mp.setattr("execution.dispatch.response_handler.logger.debug", debug)
             await h.handle(event)
 
         debug.assert_called_once_with("agent name lookup failed", exc_info=True)
@@ -607,7 +607,7 @@ class TestProcessingStatusEvent:
         with pytest.MonkeyPatch.context() as mp:
             helper = AsyncMock(side_effect=record)
             mp.setattr(
-                "modules.agent_response_handler.record_and_maybe_broadcast_run_event",
+                "execution.dispatch.response_handler.record_and_maybe_broadcast_run_event",
                 helper,
                 raising=False,
             )
@@ -641,7 +641,7 @@ class TestProcessingStatusEvent:
         with pytest.MonkeyPatch.context() as mp:
             helper = AsyncMock()
             mp.setattr(
-                "modules.agent_response_handler.record_and_maybe_broadcast_run_event",
+                "execution.dispatch.response_handler.record_and_maybe_broadcast_run_event",
                 helper,
                 raising=False,
             )
@@ -670,7 +670,7 @@ class TestResumeOrchestrationErrorHandling:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             # Should not raise despite resume failure

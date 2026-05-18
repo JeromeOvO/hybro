@@ -262,7 +262,7 @@ class TestAppendPausedResult:
 
 
 _ROOT = Path(__file__).resolve().parents[1]
-_RMC_PATH = _ROOT / "modules" / "RoomMessageCenter.py"
+_RMC_PATH = _ROOT / "execution" / "orchestration" / "room_message_center.py"
 
 
 def _source_tree() -> ast.AST:
@@ -530,7 +530,7 @@ def test_supervisor_v2_prep_missing_notifies_before_failed_processing_status():
 
 
 def test_queue_canceled_side_effects_complete_before_canceled_processing_status():
-    queue_path = _ROOT / "modules" / "QueueExecutor.py"
+    queue_path = _ROOT / "execution" / "orchestration" / "queue_executor.py"
     tree = ast.parse(queue_path.read_text(), filename=str(queue_path))
     function = next(
         node
