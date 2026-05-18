@@ -1,0 +1,389 @@
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock
+
+import pytest
+
+from common.dto import ProcessingStatusEvent, RunEventNotification
+from delivery.translator import to_sse_frame
+from execution.events import (
+    _is_legacy_processing_status,
+    _normalize_processing_status,
+    emit_processing_status,
+    run_event_notification_from_payload,
+)
+
+
+NOW = datetime(2026, 5, 17, 12, 0, tzinfo=timezone.utc)
+
+
+def make_client_request_id_resolver():
+    resolver = AsyncMock()
+    resolver.resolve_client_request_id = AsyncMock(
+        side_effect=lambda message_id, provided: provided or f"resolved-{message_id}"
+    )
+    return resolver
+
+
+@pytest.mark.asyncio
+async def test_emit_processing_status_records_run_event_then_processing_status():
+    lifecycle = AsyncMock()
+    lifecycle.record_processing_status.return_value = {
+        "event_id": "evt-1",
+        "run_id": "msg-1",
+        "seq": 2,
+        "type": "run_started",
+        "payload": {"state": "processing"},
+    }
+    publisher = AsyncMock()
+    compat = AsyncMock()
+    resolver = make_client_request_id_resolver()
+
+    await emit_processing_status(
+        room_id="room-1",
+        status="processing",
+        message_id="msg-1",
+        client_request_id="cr-1",
+        run_lifecycle=lifecycle,
+        event_publisher=publisher,
+        legacy_processing_status_publisher=compat,
+        run_event_enabled=lambda: True,
+        client_request_id_resolver=resolver,
+    )
+
+    lifecycle.record_processing_status.assert_awaited_once()
+    compat.emit_processing_status.assert_not_awaited()
+    assert [call.args[0].event_type for call in publisher.emit.await_args_list] == [
+        "run_event",
+        "processing_status",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_emit_processing_status_routes_awaiting_input_to_compat_frame():
+    lifecycle = AsyncMock()
+    publisher = AsyncMock()
+    compat = AsyncMock()
+    resolver = make_client_request_id_resolver()
+
+    await emit_processing_status(
+        room_id="room-1",
+        status="awaiting_input",
+        message_id="msg-1",
+        details={"prompt": "Need input"},
+        run_lifecycle=lifecycle,
+        event_publisher=publisher,
+        legacy_processing_status_publisher=compat,
+        run_event_enabled=lambda: False,
+        client_request_id_resolver=resolver,
+    )
+
+    lifecycle.record_processing_status.assert_awaited_once()
+    publisher.emit.assert_not_awaited()
+    compat.emit_processing_status.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_emit_processing_status_preserves_error_message_details_as_legacy_string():
+    lifecycle = AsyncMock()
+    publisher = AsyncMock()
+    compat = AsyncMock()
+    resolver = make_client_request_id_resolver()
+
+    await emit_processing_status(
+        room_id="room-1",
+        status="failed",
+        message_id="msg-1",
+        legacy_details="agent failed",
+        error_message="agent failed",
+        run_lifecycle=lifecycle,
+        event_publisher=publisher,
+        legacy_processing_status_publisher=compat,
+        run_event_enabled=lambda: False,
+        client_request_id_resolver=resolver,
+    )
+
+    publisher.emit.assert_not_awaited()
+    compat.emit_processing_status.assert_awaited_once()
+    assert compat.emit_processing_status.await_args.kwargs["details"] == "agent failed"
+
+
+@pytest.mark.asyncio
+async def test_emit_processing_status_resolves_client_request_id_when_omitted():
+    lifecycle = AsyncMock()
+    publisher = AsyncMock()
+    compat = AsyncMock()
+    resolver = make_client_request_id_resolver()
+
+    await emit_processing_status(
+        room_id="room-1",
+        status="processing",
+        message_id="msg-1",
+        run_lifecycle=lifecycle,
+        event_publisher=publisher,
+        legacy_processing_status_publisher=compat,
+        run_event_enabled=lambda: False,
+        client_request_id_resolver=resolver,
+    )
+
+    resolver.resolve_client_request_id.assert_awaited_once_with("msg-1", None)
+    event = publisher.emit.await_args.args[0]
+    assert event.client_request_id == "resolved-msg-1"
+
+
+@pytest.mark.asyncio
+async def test_emit_processing_status_keeps_run_event_correlation_explicit_only():
+    lifecycle = AsyncMock()
+    lifecycle.record_processing_status.return_value = {
+        "event_id": "evt-1",
+        "run_id": "msg-1",
+        "seq": 1,
+        "type": "run_started",
+        "payload": {"state": "processing"},
+    }
+    publisher = AsyncMock()
+    compat = AsyncMock()
+    resolver = make_client_request_id_resolver()
+
+    await emit_processing_status(
+        room_id="room-1",
+        status="processing",
+        message_id="msg-1",
+        client_request_id=None,
+        run_lifecycle=lifecycle,
+        event_publisher=publisher,
+        legacy_processing_status_publisher=compat,
+        run_event_enabled=lambda: True,
+        client_request_id_resolver=resolver,
+    )
+
+    run_event, processing_status = [call.args[0] for call in publisher.emit.await_args_list]
+    assert run_event.correlation_id is None
+    assert processing_status.client_request_id == "resolved-msg-1"
+
+
+@pytest.mark.asyncio
+async def test_emit_processing_status_resolver_failure_does_not_skip_lifecycle():
+    lifecycle = AsyncMock()
+    publisher = AsyncMock()
+    compat = AsyncMock()
+    resolver = AsyncMock()
+    resolver.resolve_client_request_id.side_effect = RuntimeError("db down")
+
+    await emit_processing_status(
+        room_id="room-1",
+        status="processing",
+        message_id="msg-1",
+        client_request_id=None,
+        run_lifecycle=lifecycle,
+        event_publisher=publisher,
+        legacy_processing_status_publisher=compat,
+        run_event_enabled=lambda: False,
+        client_request_id_resolver=resolver,
+    )
+
+    lifecycle.record_processing_status.assert_awaited_once()
+    assert lifecycle.record_processing_status.await_args.kwargs["client_request_id"] is None
+    event = publisher.emit.await_args.args[0]
+    assert event.client_request_id is None
+
+
+@pytest.mark.asyncio
+async def test_emit_processing_status_separates_frontend_and_lifecycle_ids():
+    lifecycle = AsyncMock()
+    lifecycle.record_processing_status.return_value = {
+        "event_id": "evt-1",
+        "run_id": "user-msg-1",
+        "seq": 1,
+        "type": "run_started",
+        "payload": {},
+    }
+    publisher = AsyncMock()
+    compat = AsyncMock()
+    resolver = make_client_request_id_resolver()
+
+    await emit_processing_status(
+        room_id="room-1",
+        status="processing",
+        message_id="agent-msg-1",
+        lifecycle_message_id="user-msg-1",
+        run_lifecycle=lifecycle,
+        event_publisher=publisher,
+        legacy_processing_status_publisher=compat,
+        run_event_enabled=lambda: False,
+        client_request_id_resolver=resolver,
+    )
+
+    lifecycle.record_processing_status.assert_awaited_once()
+    assert lifecycle.record_processing_status.await_args.args[2] == "user-msg-1"
+    event = publisher.emit.await_args.args[0]
+    assert event.message_id == "agent-msg-1"
+
+
+@pytest.mark.asyncio
+async def test_emit_processing_status_can_skip_lifecycle_for_legacy_send_only_paths():
+    lifecycle = AsyncMock()
+    publisher = AsyncMock()
+    compat = AsyncMock()
+    resolver = make_client_request_id_resolver()
+
+    await emit_processing_status(
+        room_id="room-1",
+        status="processing",
+        message_id="agent-msg-1",
+        lifecycle_message_id=None,
+        record_lifecycle=False,
+        run_lifecycle=lifecycle,
+        event_publisher=publisher,
+        legacy_processing_status_publisher=compat,
+        run_event_enabled=lambda: True,
+        client_request_id_resolver=resolver,
+    )
+
+    lifecycle.record_processing_status.assert_not_awaited()
+    assert publisher.emit.await_args.args[0].message_id == "agent-msg-1"
+
+
+def test_run_event_notification_from_payload_maps_legacy_payload():
+    payload = {
+        "event_id": "evt-1",
+        "run_id": "run-1",
+        "seq": 7,
+        "type": "run_completed",
+        "payload": {"state": "completed"},
+        "correlation_id": "payload-cr",
+    }
+
+    event = run_event_notification_from_payload(
+        room_id="room-1",
+        payload=payload,
+        correlation_id="fallback-cr",
+    )
+
+    assert event.event_id == "evt-1"
+    assert event.run_id == "run-1"
+    assert event.seq == 7
+    assert event.run_event_type == "run_completed"
+    assert event.payload == {"state": "completed"}
+    assert event.correlation_id == "payload-cr"
+
+
+def test_run_event_delivery_translation_preserves_correlation_id():
+    event = RunEventNotification(
+        room_id="room-1",
+        event_id="evt-1",
+        run_id="run-1",
+        seq=1,
+        run_event_type="run_started",
+        payload={"state": "processing"},
+        correlation_id="cr-1",
+    )
+
+    sse = to_sse_frame(event, timestamp=NOW)
+    assert sse["type"] == "run_event"
+    assert sse["data"]["event_id"] == "evt-1"
+    assert sse["data"]["run_id"] == "run-1"
+    assert sse["data"]["seq"] == 1
+    assert sse["data"]["type"] == "run_started"
+    assert sse["data"]["payload"] == {"state": "processing"}
+    assert sse["data"]["correlation_id"] == "cr-1"
+
+
+def test_run_event_delivery_translation_preserves_null_correlation_key():
+    event = RunEventNotification(
+        room_id="room-1",
+        event_id="evt-1",
+        run_id="run-1",
+        seq=1,
+        run_event_type="run_started",
+        payload={},
+        correlation_id=None,
+    )
+
+    sse = to_sse_frame(event, timestamp=NOW)
+    assert "correlation_id" in sse["data"]
+    assert sse["data"]["correlation_id"] is None
+
+
+def test_processing_status_delivery_translation_preserves_legacy_sse_shape():
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="processing",
+        details=None,
+        client_request_id="cr-1",
+        agents=[{"agent_id": "agent-1", "agent_name": "Agent One"}],
+    )
+    sse = to_sse_frame(event, timestamp=NOW)
+    assert sse["type"] == "processing_status"
+    assert sse["data"]["status"] == "processing"
+    assert sse["data"]["message_id"] == "msg-1"
+    assert "details" in sse["data"]
+    assert sse["data"]["details"] is None
+    assert isinstance(sse["data"]["timestamp"], str)
+    assert sse["data"]["client_request_id"] == "cr-1"
+    assert sse["data"]["agents"] == [
+        {"agent_id": "agent-1", "agent_name": "Agent One"}
+    ]
+
+
+def test_processing_status_delivery_translation_preserves_structured_details():
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="failed",
+        details={"message": "agent failed"},
+        client_request_id=None,
+        agents=None,
+    )
+    sse = to_sse_frame(event, timestamp=NOW)
+    assert sse["type"] == "processing_status"
+    assert sse["data"]["details"] == {"message": "agent failed"}
+    assert "timestamp" in sse["data"]
+    assert "client_request_id" not in sse["data"]
+    assert "agents" not in sse["data"]
+
+
+def test_normalize_processing_status_accepts_string_and_enum_values():
+    from services.a2a_constants import SSEProcessingStatus
+
+    assert _normalize_processing_status("processing") == "processing"
+    assert _normalize_processing_status(SSEProcessingStatus.COMPLETED) == "completed"
+
+
+def test_unsupported_processing_status_stays_on_compat_path():
+    assert _is_legacy_processing_status("awaiting_input") is True
+    with pytest.raises(ValueError):
+        _normalize_processing_status("awaiting_input")
+
+
+def test_run_event_notification_from_payload_rejects_missing_required_fields():
+    with pytest.raises(ValueError, match="event_id"):
+        run_event_notification_from_payload(
+            room_id="room-1",
+            payload={
+                "run_id": "run-1",
+                "seq": 1,
+                "type": "run_started",
+                "payload": {},
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_emit_processing_status_rejects_missing_frontend_message_id_for_typed_status():
+    lifecycle = AsyncMock()
+    publisher = AsyncMock()
+    with pytest.raises(ValueError, match="frontend message_id"):
+        await emit_processing_status(
+            room_id="room-1",
+            status="processing",
+            message_id=None,
+            lifecycle_message_id="run-1",
+            run_lifecycle=lifecycle,
+            event_publisher=publisher,
+            legacy_processing_status_publisher=AsyncMock(),
+            run_event_enabled=lambda: False,
+            client_request_id_resolver=make_client_request_id_resolver(),
+        )
+    lifecycle.record_processing_status.assert_not_awaited()
+    publisher.emit.assert_not_awaited()

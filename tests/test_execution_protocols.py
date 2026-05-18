@@ -1,5 +1,7 @@
 import inspect
+from unittest.mock import AsyncMock
 
+import pytest
 from common.dto import AgentEvent, ExecutionAck, ExecutionRequest, HITLRequest, RunInfo
 
 
@@ -172,3 +174,111 @@ def test_hitl_manager_create_preserves_public_metadata_fields():
         "group_index",
     ]:
         assert name in sig.parameters
+
+
+class _FakeCursor:
+    def __init__(self, docs=None, error: Exception | None = None):
+        self.docs = docs or []
+        self.error = error
+        self.sort_calls = []
+        self.limit_calls = []
+
+    def sort(self, *args):
+        self.sort_calls.append(args)
+        return self
+
+    def limit(self, *args):
+        self.limit_calls.append(args)
+        return self
+
+    async def to_list(self, *, length):
+        if self.error:
+            raise self.error
+        return self.docs
+
+
+class _FakeRunsCollection:
+    def __init__(self, *, docs=None, find_error: Exception | None = None):
+        self.docs = docs or []
+        self.find_error = find_error
+        self.find_calls = []
+        self.find_one = AsyncMock()
+        self.cursor = _FakeCursor(self.docs, error=find_error)
+
+    def find(self, query):
+        self.find_calls.append(query)
+        return self.cursor
+
+
+@pytest.mark.asyncio
+async def test_run_query_adapter_filters_non_terminal_runs_and_preserves_trigger_message_id():
+    from execution.run_queries import RunQueryAdapter
+    from models.run import NON_TERMINAL_RUN_STATE_VALUES
+
+    collection = _FakeRunsCollection(
+        docs=[
+            {
+                "run_id": "run-1",
+                "room_id": "room-1",
+                "state": "processing",
+                "trigger_message_id": "user-msg-1",
+                "agent_id": "agent-1",
+                "seq": 4,
+            }
+        ]
+    )
+    adapter = RunQueryAdapter(collection)
+
+    runs = await adapter.get_runs_for_room("room-1")
+
+    assert collection.find_calls == [
+        {
+            "room_id": "room-1",
+            "state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)},
+        }
+    ]
+    assert collection.cursor.sort_calls == [("updated_at", -1)]
+    assert runs[0].trigger_message_id == "user-msg-1"
+    assert runs[0].seq == 4
+
+
+@pytest.mark.asyncio
+async def test_run_query_adapter_returns_empty_list_on_collection_errors():
+    from execution.run_queries import RunQueryAdapter
+
+    collection = _FakeRunsCollection(find_error=RuntimeError("db down"))
+    adapter = RunQueryAdapter(collection)
+
+    assert await adapter.get_runs_for_room("room-1") == []
+
+
+@pytest.mark.asyncio
+async def test_run_query_adapter_get_run_returns_none_on_lookup_errors():
+    from execution.run_queries import RunQueryAdapter
+
+    collection = _FakeRunsCollection()
+    collection.find_one.side_effect = RuntimeError("db down")
+    adapter = RunQueryAdapter(collection)
+
+    assert await adapter.get_run("run-1") is None
+
+
+@pytest.mark.asyncio
+async def test_run_query_adapter_get_run_preserves_doc_fields():
+    from execution.run_queries import RunQueryAdapter
+
+    collection = _FakeRunsCollection()
+    collection.find_one.return_value = {
+        "run_id": "run-1",
+        "room_id": "room-1",
+        "state": "awaiting_input",
+        "trigger_message_id": "user-msg-1",
+        "error_message": "waiting",
+    }
+    adapter = RunQueryAdapter(collection)
+
+    run = await adapter.get_run("run-1")
+
+    assert run is not None
+    assert run.trigger_message_id == "user-msg-1"
+    assert run.error == "waiting"

@@ -174,6 +174,7 @@ async def lifespan(app: FastAPI):
                 create_context_memory_facade,
                 create_delivery_cancellation_collection,
                 create_delivery_config,
+                create_delivery_deps,
                 create_delivery_facade,
                 create_delivery_redis_clients,
                 create_delivery_startup_policy,
@@ -224,7 +225,34 @@ async def lifespan(app: FastAPI):
             await _delivery_facade.start()
             sse_manager.bind_facade(_delivery_facade)
             _delivery_bound = True
+            _delivery_deps = create_delivery_deps(_delivery_facade)
             app.state.delivery_facade = _delivery_facade
+            app.state.delivery_deps = _delivery_deps
+
+            from execution.legacy_processing_status import (
+                LegacyProcessingStatusC3Adapter,
+                SSEClientRequestIdResolver,
+            )
+            from execution.run_lifecycle import RunLifecycleAdapter
+            from services.run_command_handler import run_command_handler
+
+            run_lifecycle = RunLifecycleAdapter(
+                command_handler=run_command_handler,
+                runs_collection=mongodb.runs_collection,
+            )
+            legacy_processing_status_publisher = LegacyProcessingStatusC3Adapter(
+                sse_manager=sse_manager,
+            )
+            app_shell_client_request_id_resolver = SSEClientRequestIdResolver(
+                sse_manager=sse_manager,
+            )
+            app.state.execution_run_lifecycle = run_lifecycle
+            app.state.execution_legacy_processing_status_publisher = (
+                legacy_processing_status_publisher
+            )
+            app.state.execution_client_request_id_resolver = (
+                app_shell_client_request_id_resolver
+            )
 
             model_registry = ModelRegistryImpl()
             llm_provider = LLMGatewayImpl(model_registry=model_registry)

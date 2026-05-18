@@ -115,6 +115,7 @@ packages = [
     "delivery",
     "delivery.sse",
     "delivery.event_bus",
+    "execution",
     "models",
     "common",
     "common.config",
