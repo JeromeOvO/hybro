@@ -4,10 +4,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from common.dto import ExecutionAck, ExecutionRequest
-from execution.facade import ExecutionFacade
+from common.dto import ExecutionAck, ExecutionRequest, HubAgentResponseInternal
+from execution.facade import (
+    ExecutionFacade,
+    hub_agent_response_internal_to_agent_event,
+)
 from execution.translators import room_response_to_execution_ack
 from models.response import RoomCenterUserMessageResponse
+from common.utils.time import utcnow
 
 
 class RecordingTaskFactory:
@@ -274,3 +278,146 @@ def test_room_response_to_execution_ack_preserves_missing_message_error_shape():
     assert ack.message_id is None
     assert ack.message is None
     assert ack.error == "Message is required"
+
+
+@pytest.mark.asyncio
+async def test_handle_hub_agent_response_delegates_to_agent_response_handler():
+    facade, deps = _make_facade()
+    event = HubAgentResponseInternal(
+        hub_id="hub-1",
+        agent_id="agent-1",
+        task_id="task-1",
+        room_id="room-1",
+        is_terminal=True,
+        timestamp=utcnow(),
+        payload={
+            "kind": "response",
+            "message_id": "agent-msg-1",
+            "text": "done",
+            "parts": [{"kind": "text", "text": "done"}],
+            "is_final": True,
+        },
+    )
+
+    await facade.handle_hub_agent_response(event)
+
+    deps["agent_response_handler"].handle.assert_awaited_once()
+    agent_event = deps["agent_response_handler"].handle.await_args.args[0]
+    assert agent_event.kind == "response"
+    assert agent_event.room_id == "room-1"
+    assert agent_event.message_id == "agent-msg-1"
+    assert agent_event.agent_id == "agent-1"
+    assert agent_event.task_id == "task-1"
+    assert agent_event.text == "done"
+    assert agent_event.parts == [{"kind": "text", "text": "done"}]
+
+
+def test_hub_agent_response_adapter_maps_legacy_final_event_type():
+    event = HubAgentResponseInternal(
+        hub_id="hub-1",
+        agent_id="agent-1",
+        task_id="task-1",
+        room_id="room-1",
+        is_terminal=True,
+        timestamp=utcnow(),
+        payload={"event_type": "final", "message_id": "msg-1", "text": "done"},
+    )
+
+    agent_event = hub_agent_response_internal_to_agent_event(event)
+
+    assert agent_event.kind == "response"
+    assert agent_event.is_final is True
+
+
+def test_hub_agent_response_adapter_maps_continuation_message_id_and_thaws_payload():
+    event = HubAgentResponseInternal(
+        hub_id="hub-1",
+        agent_id="agent-1",
+        task_id="task-1",
+        room_id="room-1",
+        is_terminal=True,
+        timestamp=utcnow(),
+        payload={
+            "kind": "response",
+            "continuation_message_id": "continuation-1",
+            "artifacts": [{"parts": [{"file": {"metadata": {"x": 1}}}]}],
+        },
+    )
+
+    agent_event = hub_agent_response_internal_to_agent_event(event)
+    agent_event.artifacts[0]["parts"][0]["file"]["metadata"]["x"] = 2
+
+    assert agent_event.message_id == "continuation-1"
+    assert agent_event.artifacts[0]["parts"][0]["file"]["metadata"]["x"] == 2
+
+
+@pytest.mark.parametrize(
+    "payload,is_terminal,error",
+    [
+        ({"kind": "partial", "message_id": "m1"}, False, "Unsupported non-terminal"),
+        ({"kind": "unknown", "message_id": "m1"}, False, "Unsupported AgentEvent"),
+        ({"kind": "response", "message_id": "m1"}, False, "requires terminal"),
+        ({"kind": "response", "message_id": "m1", "is_final": False}, True, "is_final=False"),
+        ({"kind": "processing_status", "message_id": "m1"}, False, "requires state"),
+        (
+            {"kind": "processing_status", "message_id": "m1", "state": "working"},
+            False,
+            "Unsupported Hub AgentEvent state",
+        ),
+        (
+            {
+                "kind": "processing_status",
+                "message_id": "m1",
+                "state": "processing",
+                "lifecycle_message_id": "root-1",
+            },
+            False,
+            "requires upstream",
+        ),
+        ({"kind": "error", "message_id": "m1"}, True, "requires error_text or text"),
+        ({"kind": "interactive", "message_id": "m1", "state": "working"}, False, "Unsupported"),
+        ({"kind": "response", "message_id": 123}, True, "non-empty string"),
+        ({"kind": "response", "message_id": "m1", "task_id": "other"}, True, "conflicts"),
+        ({"kind": "response", "message_id": "m1", "parts": ["bad"]}, True, "list of objects"),
+        ({"kind": "response", "message_id": "m1", "append": "yes"}, True, "must be a boolean"),
+        ({"kind": "response", "message_id": "m1", "step_number": True}, True, "integer"),
+    ],
+)
+def test_hub_agent_response_adapter_rejects_invalid_payloads(
+    payload,
+    is_terminal,
+    error,
+):
+    event = HubAgentResponseInternal(
+        hub_id="hub-1",
+        agent_id="agent-1",
+        task_id="task-1",
+        room_id="room-1",
+        is_terminal=is_terminal,
+        timestamp=utcnow(),
+        payload=payload,
+    )
+
+    with pytest.raises(ValueError, match=error):
+        hub_agent_response_internal_to_agent_event(event)
+
+
+def test_hub_agent_response_adapter_normalizes_interactive_state():
+    event = HubAgentResponseInternal(
+        hub_id="hub-1",
+        agent_id="agent-1",
+        task_id="task-1",
+        room_id="room-1",
+        is_terminal=False,
+        timestamp=utcnow(),
+        payload={
+            "event_type": "input_required",
+            "message_id": "msg-1",
+            "state": "input_required",
+        },
+    )
+
+    agent_event = hub_agent_response_internal_to_agent_event(event)
+
+    assert agent_event.kind == "interactive"
+    assert agent_event.state == "input-required"

@@ -328,6 +328,10 @@ async def lifespan(app: FastAPI):
             room_center.bind_execution_deps(_execution_deps)
             hitl.bind_execution_deps(_execution_deps)
             sse.bind_execution_deps(_execution_deps)
+            _delivery_deps.event_publisher.register_internal_handler(
+                "hub_agent_response_internal",
+                _execution_deps.hub_agent_response_sink.handle_hub_agent_response,
+            )
             app.state.execution_facade = execution_facade
             app.state.execution_deps = _execution_deps
 

@@ -18,6 +18,7 @@ from common.protocols import (
     ContextAssembler,
     EventPublisher,
     ExecutionEngine,
+    HubAgentResponseSink,
     HubLivenessReader,
     HITLManager,
     LLMProvider,
@@ -96,6 +97,7 @@ class DeliveryDeps:
 class ExecutionDeps:
     execution_engine: ExecutionEngine
     hitl_manager: HITLManager
+    hub_agent_response_sink: HubAgentResponseSink
 
 
 def create_mongo_dal(*, database: Any) -> MongoDAL:
@@ -255,6 +257,7 @@ def create_execution_deps(facade) -> ExecutionDeps:
     return ExecutionDeps(
         execution_engine=facade,
         hitl_manager=facade,
+        hub_agent_response_sink=facade,
     )
 
 

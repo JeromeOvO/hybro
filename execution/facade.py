@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any
 
-from common.dto import ExecutionAck, ExecutionRequest, HITLRequest, HITLResponse, RunInfo
+from common.dto import (
+    ExecutionAck,
+    ExecutionRequest,
+    HITLRequest,
+    HITLResponse,
+    HubAgentResponseInternal,
+    RunInfo,
+)
 from common.observability import traced_create_task
 from common.protocols import EventPublisher
+from execution.dispatch.agent_event import AgentEvent
 from common.utils.logger import get_logger
 from execution.events import emit_processing_status
 from execution.hitl.translators import (
@@ -30,6 +40,231 @@ from execution.translators import room_response_to_execution_ack
 from models.request import OrchestrationRequest, RoomCenterUserMessageRequest
 
 logger = get_logger(__name__)
+
+AGENT_EVENT_KINDS = {
+    "artifact_update",
+    "response",
+    "error",
+    "canceled",
+    "task_submitted",
+    "status_update",
+    "interactive",
+    "processing_status",
+}
+TERMINAL_AGENT_EVENT_KINDS = {"response", "error", "canceled"}
+LEGACY_COMMON_AGENT_EVENT_KIND_MAP = {
+    "final": "response",
+    "input_required": "interactive",
+    "status_update": "status_update",
+    "error": "error",
+}
+UNSUPPORTED_PHASE7B_HUB_EVENT_TYPES = {"partial"}
+LEGACY_TASK_STATE_VALUE_MAP = {
+    "input_required": "input-required",
+    "auth_required": "auth-required",
+}
+VALID_ERROR_TASK_STATES = {"failed", "canceled", "rejected"}
+VALID_INTERACTIVE_TASK_STATES = {"input-required", "auth-required"}
+VALID_PROCESSING_STATUS_STATES = {
+    "queued",
+    "processing",
+    "awaiting_input",
+    "completed",
+    "failed",
+    "canceled",
+    "rejected",
+    "rate_limited",
+    "error",
+}
+
+
+def _thaw_hub_payload_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw_hub_payload_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_thaw_hub_payload_value(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return [_thaw_hub_payload_value(item) for item in value]
+    return deepcopy(value)
+
+
+def _hub_payload_kind(payload: dict[str, Any]) -> str:
+    raw = payload.get("kind") or payload.get("event_type")
+    if raw is None or raw == "":
+        raise ValueError("HubAgentResponseInternal payload missing required field: kind")
+    raw_kind = str(raw)
+    if raw_kind in UNSUPPORTED_PHASE7B_HUB_EVENT_TYPES:
+        raise ValueError(f"Unsupported non-terminal Hub AgentEvent event_type: {raw_kind}")
+    kind = LEGACY_COMMON_AGENT_EVENT_KIND_MAP.get(raw_kind, raw_kind)
+    if kind not in AGENT_EVENT_KINDS:
+        raise ValueError(f"Unsupported AgentEvent kind from Hub payload: {kind}")
+    return kind
+
+
+def _hub_payload_message_id(payload: dict[str, Any]) -> str:
+    value = payload.get("message_id")
+    if value is None:
+        value = payload.get("continuation_message_id")
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            "HubAgentResponseInternal payload requires non-empty string message_id "
+            "or continuation_message_id"
+        )
+    return value
+
+
+def _optional_hub_str(
+    payload: dict[str, Any],
+    key: str,
+    *,
+    default: str | None = None,
+) -> str | None:
+    value = payload.get(key, default)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"Hub AgentEvent field {key} must be a string")
+    return value
+
+
+def _optional_hub_bool(payload: dict[str, Any], key: str, *, default: bool) -> bool:
+    value = payload.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"Hub AgentEvent field {key} must be a boolean")
+    return value
+
+
+def _optional_hub_int(payload: dict[str, Any], key: str) -> int | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"Hub AgentEvent field {key} must be an integer")
+    return value
+
+
+def _optional_hub_list_of_dicts(
+    payload: dict[str, Any],
+    key: str,
+) -> list[dict[str, Any]] | None:
+    value = _thaw_hub_payload_value(payload.get(key))
+    if value is None:
+        return None
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise ValueError(f"Hub AgentEvent field {key} must be a list of objects")
+    return value
+
+
+def _agent_event_details(value: Any) -> str | None:
+    if value is None or isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _normalize_hub_state(kind: str, value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = LEGACY_TASK_STATE_VALUE_MAP.get(value, value)
+    if kind == "processing_status":
+        allowed = VALID_PROCESSING_STATUS_STATES
+    elif kind == "error":
+        allowed = VALID_ERROR_TASK_STATES
+    elif kind == "interactive":
+        allowed = VALID_INTERACTIVE_TASK_STATES
+    else:
+        return normalized
+    if normalized not in allowed:
+        raise ValueError(f"Unsupported Hub AgentEvent state for {kind}: {value}")
+    return normalized
+
+
+def _hub_payload_state(kind: str, payload: dict[str, Any]) -> str | None:
+    return _normalize_hub_state(kind, _optional_hub_str(payload, "state"))
+
+
+def _validate_hub_payload_for_kind(kind: str, payload: dict[str, Any]) -> None:
+    state = _hub_payload_state(kind, payload)
+    text = _optional_hub_str(payload, "text", default="")
+    error_text = _optional_hub_str(payload, "error_text")
+    if kind == "processing_status" and not state:
+        raise ValueError("processing_status Hub payload requires state")
+    if kind == "error" and not (error_text or text):
+        raise ValueError("error Hub payload requires error_text or text")
+    if payload.get("is_final") is not None and not isinstance(payload.get("is_final"), bool):
+        raise ValueError("Hub AgentEvent field is_final must be a boolean")
+    verified = payload.get("lifecycle_message_id_verified")
+    if verified is not None and not isinstance(verified, bool):
+        raise ValueError("Hub AgentEvent field lifecycle_message_id_verified must be a boolean")
+
+
+def _validate_hub_event_consistency(
+    event: HubAgentResponseInternal,
+    kind: str,
+    payload: dict[str, Any],
+) -> None:
+    payload_task_id = payload.get("task_id")
+    if payload_task_id is not None and payload_task_id != event.task_id:
+        raise ValueError("Hub payload task_id conflicts with event.task_id")
+    if not event.task_id:
+        raise ValueError("HubAgentResponseInternal requires top-level task_id")
+    if kind in TERMINAL_AGENT_EVENT_KINDS and not event.is_terminal:
+        raise ValueError(f"Hub AgentEvent kind {kind} requires terminal internal event")
+    if kind not in TERMINAL_AGENT_EVENT_KINDS and event.is_terminal:
+        raise ValueError(
+            f"Hub AgentEvent kind {kind} must not use a terminal internal event"
+        )
+    if kind in TERMINAL_AGENT_EVENT_KINDS and payload.get("is_final") is False:
+        raise ValueError(f"Hub AgentEvent kind {kind} cannot set is_final=False")
+
+
+def _hub_payload_lifecycle_message_id(kind: str, payload: dict[str, Any]) -> str | None:
+    value = _optional_hub_str(payload, "lifecycle_message_id")
+    if (
+        value is not None
+        and kind == "processing_status"
+        and payload.get("lifecycle_message_id_verified") is not True
+    ):
+        raise ValueError(
+            "Hub processing_status lifecycle_message_id requires upstream "
+            "turn/root validation"
+        )
+    return value
+
+
+def hub_agent_response_internal_to_agent_event(
+    event: HubAgentResponseInternal,
+) -> AgentEvent:
+    payload = _thaw_hub_payload_value(event.payload)
+    kind = _hub_payload_kind(payload)
+    _validate_hub_event_consistency(event, kind, payload)
+    _validate_hub_payload_for_kind(kind, payload)
+    return AgentEvent(
+        kind=kind,
+        room_id=event.room_id,
+        message_id=_hub_payload_message_id(payload),
+        agent_id=event.agent_id,
+        task_id=event.task_id,
+        turn_id=_optional_hub_str(payload, "turn_id"),
+        text=_optional_hub_str(payload, "text", default="") or "",
+        state=_hub_payload_state(kind, payload),
+        parts=_optional_hub_list_of_dicts(payload, "parts"),
+        artifacts=_optional_hub_list_of_dicts(payload, "artifacts"),
+        context_id=_optional_hub_str(payload, "context_id"),
+        error_text=_optional_hub_str(payload, "error_text"),
+        related_message_id=_optional_hub_str(payload, "related_message_id"),
+        user_id=_optional_hub_str(payload, "user_id"),
+        client_request_id=_optional_hub_str(payload, "client_request_id"),
+        lifecycle_message_id=_hub_payload_lifecycle_message_id(kind, payload),
+        append=_optional_hub_bool(payload, "append", default=False),
+        last_chunk=_optional_hub_bool(payload, "last_chunk", default=False),
+        is_final=_optional_hub_bool(payload, "is_final", default=event.is_terminal),
+        agent_name=_optional_hub_str(payload, "agent_name"),
+        step_number=_optional_hub_int(payload, "step_number"),
+        total_steps=_optional_hub_int(payload, "total_steps"),
+        skip_persist=_optional_hub_bool(payload, "skip_persist", default=False),
+        s3_converted=_optional_hub_bool(payload, "s3_converted", default=False),
+        details=_agent_event_details(_thaw_hub_payload_value(payload.get("details"))),
+    )
 
 
 class ExecutionFacade:
@@ -234,5 +469,16 @@ class ExecutionFacade:
         result = await self._hitl_service.cancel_request(request_id, room_id=room_id)
         return hitl_cancel_none_to_success(result)
 
+    async def handle_hub_agent_response(
+        self,
+        event: HubAgentResponseInternal,
+    ) -> None:
+        await self._agent_response_handler.handle(
+            hub_agent_response_internal_to_agent_event(event)
+        )
 
-__all__ = ["ExecutionFacade"]
+
+__all__ = [
+    "ExecutionFacade",
+    "hub_agent_response_internal_to_agent_event",
+]

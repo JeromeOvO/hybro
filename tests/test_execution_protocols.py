@@ -177,13 +177,14 @@ def test_hitl_manager_create_preserves_public_metadata_fields():
 
 
 def test_execution_facade_satisfies_task6_public_protocols():
-    from common.protocols import ExecutionEngine, HITLManager
+    from common.protocols import ExecutionEngine, HITLManager, HubAgentResponseSink
     from execution.facade import ExecutionFacade
 
     facade = ExecutionFacade.__new__(ExecutionFacade)
 
     assert isinstance(facade, ExecutionEngine)
     assert isinstance(facade, HITLManager)
+    assert isinstance(facade, HubAgentResponseSink)
 
 
 class _FakeCursor:
