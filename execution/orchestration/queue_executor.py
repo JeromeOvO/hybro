@@ -28,7 +28,7 @@ from execution.dispatch.agent_message_processor import AgentMessageProcessor
 from execution.state.task_state_manager import TaskStateManager
 from models.processing import ProcessingResult, ProcessingStatus
 from common.a2a_constants import SSEProcessingStatus
-from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
+from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
 
 if TYPE_CHECKING:
     from execution.dispatch.response_handler import AgentResponseHandler
@@ -117,6 +117,44 @@ class QueueExecutor:
         self.response_handler = response_handler
         self._slot_lifecycle = slot_lifecycle
         self._turn_event_appender = turn_event_appender
+        self._processing_status_emitter = None
+
+    def bind_execution_event_deps(self, processing_status_emitter) -> None:
+        self._processing_status_emitter = processing_status_emitter
+
+    async def _emit_processing_status(
+        self,
+        *,
+        room_id: str,
+        status,
+        message_id: str | None,
+        lifecycle_message_id: str | None = None,
+        record_lifecycle: bool = True,
+        client_request_id: str | None = None,
+        details=None,
+    ) -> None:
+        legacy_details = details if isinstance(details, str) else None
+        structured_details = details if isinstance(details, dict) else None
+        if self._processing_status_emitter is not None:
+            await self._processing_status_emitter(
+                room_id=room_id,
+                status=status,
+                message_id=message_id,
+                lifecycle_message_id=lifecycle_message_id or message_id,
+                record_lifecycle=record_lifecycle,
+                client_request_id=client_request_id,
+                details=structured_details,
+                legacy_details=legacy_details,
+                error_message=legacy_details,
+            )
+            return
+        await LegacyProcessingStatusC3Adapter(self.sse_manager).emit_processing_status(
+            room_id=room_id,
+            status=status,
+            message_id=message_id,
+            details=details,
+            client_request_id=client_request_id,
+        )
 
     # ------------------------------------------------------------------
     # RAII queue cleanup (A-2)
@@ -328,16 +366,11 @@ class QueueExecutor:
                             )
                             queue_result = QueueResult.FAILED
                             break
-                        await record_and_maybe_broadcast_run_event(
-                            room_id,
-                            SSEProcessingStatus.AWAITING_INPUT,
-                            user_message_id,
-                            sse=self.sse_manager,
-                        )
-                        await self.sse_manager.send_processing_status(
-                            room_id,
-                            SSEProcessingStatus.AWAITING_INPUT,
-                            user_message_id,
+                        await self._emit_processing_status(
+                            room_id=room_id,
+                            status=SSEProcessingStatus.AWAITING_INPUT,
+                            message_id=user_message_id,
+                            lifecycle_message_id=user_message_id,
                         )
                         logger.info(
                             "QueueExecutor: Queue paused for HITL on message %s",
@@ -418,14 +451,11 @@ class QueueExecutor:
                     )
                 except Exception:
                     pass
-            await record_and_maybe_broadcast_run_event(
-                room_id,
-                sse_status,
-                user_message_id,
-                sse=self.sse_manager,
-            )
-            await self.sse_manager.send_processing_status(
-                room_id, sse_status, user_message_id
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=sse_status,
+                message_id=user_message_id,
+                lifecycle_message_id=user_message_id,
             )
             if clear_cancel:
                 self.sse_manager.clear_cancellation(user_message_id)
@@ -795,14 +825,11 @@ class QueueExecutor:
             if queue_processing_result.result == QueueResult.FAILED:
                 if before_terminal_failure is not None:
                     await before_terminal_failure(room_id, user_message_id)
-                await record_and_maybe_broadcast_run_event(
-                    room_id,
-                    SSEProcessingStatus.FAILED,
-                    user_message_id,
-                    sse=self.sse_manager,
-                )
-                await self.sse_manager.send_processing_status(
-                    room_id, SSEProcessingStatus.FAILED, user_message_id
+                await self._emit_processing_status(
+                    room_id=room_id,
+                    status=SSEProcessingStatus.FAILED,
+                    message_id=user_message_id,
+                    lifecycle_message_id=user_message_id,
                 )
                 return ResumeResult(
                     success=False,

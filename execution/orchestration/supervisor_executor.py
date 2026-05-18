@@ -43,7 +43,7 @@ from models.supervisor_v2 import (
 from config.settings import settings
 from models.processing import ProcessingStatus
 from common.a2a_constants import SSEProcessingStatus
-from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
+from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
 
 if TYPE_CHECKING:
     from execution.dispatch.agent_dispatcher import AgentDispatcher
@@ -91,6 +91,47 @@ class SupervisorExecutor:
         self.agent_message_processor = agent_message_processor
         self.room_coordinator_service = room_coordinator_service
         self._slot_lifecycle = slot_lifecycle
+        self._processing_status_emitter = None
+
+    def bind_execution_event_deps(self, processing_status_emitter) -> None:
+        self._processing_status_emitter = processing_status_emitter
+
+    async def _emit_processing_status(
+        self,
+        *,
+        room_id: str,
+        status,
+        message_id: str | None,
+        lifecycle_message_id: str | None = None,
+        record_lifecycle: bool = True,
+        client_request_id: str | None = None,
+        details=None,
+        agents: list[dict] | None = None,
+    ) -> None:
+        legacy_details = details if isinstance(details, str) else None
+        structured_details = details if isinstance(details, dict) else None
+        if self._processing_status_emitter is not None:
+            await self._processing_status_emitter(
+                room_id=room_id,
+                status=status,
+                message_id=message_id,
+                lifecycle_message_id=lifecycle_message_id or message_id,
+                record_lifecycle=record_lifecycle,
+                client_request_id=client_request_id,
+                details=structured_details,
+                legacy_details=legacy_details,
+                error_message=legacy_details,
+                agents=agents,
+            )
+            return
+        await LegacyProcessingStatusC3Adapter(self.sse_manager).emit_processing_status(
+            room_id=room_id,
+            status=status,
+            message_id=message_id,
+            details=details,
+            client_request_id=client_request_id,
+            agents=agents,
+        )
 
     # ------------------------------------------------------------------
     # Main loop
@@ -233,15 +274,11 @@ class SupervisorExecutor:
             # Skip if already cancelled — avoids duplicate PROCESSING after cancel.
             if not (token and token.is_cancelled):
                 try:
-                    await record_and_maybe_broadcast_run_event(
-                        room_id,
-                        SSEProcessingStatus.PROCESSING,
-                        user_message_id,
-                        details="Planning next action...",
-                        sse=self.sse_manager,
-                    )
-                    await self.sse_manager.send_processing_status(
-                        room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                    await self._emit_processing_status(
+                        room_id=room_id,
+                        status=SSEProcessingStatus.PROCESSING,
+                        message_id=user_message_id,
+                        lifecycle_message_id=user_message_id,
                         details="Planning next action...",
                     )
                 except Exception:
@@ -540,15 +577,11 @@ class SupervisorExecutor:
                     if not (token and token.is_cancelled):
                         try:
                             agent_names = [t.agent_name for t in action.targets]
-                            await record_and_maybe_broadcast_run_event(
-                                room_id,
-                                SSEProcessingStatus.PROCESSING,
-                                user_message_id,
-                                details=f"Delegating to {len(action.targets)} agent(s)...",
-                                sse=self.sse_manager,
-                            )
-                            await self.sse_manager.send_processing_status(
-                                room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                            await self._emit_processing_status(
+                                room_id=room_id,
+                                status=SSEProcessingStatus.PROCESSING,
+                                message_id=user_message_id,
+                                lifecycle_message_id=user_message_id,
                                 details=f"Delegating to {len(action.targets)} agent(s)...",
                                 agents=[
                                     {"agent_id": t.agent_id, "agent_name": t.agent_name}
@@ -700,16 +733,11 @@ class SupervisorExecutor:
                                 ),
                             )
 
-                        await record_and_maybe_broadcast_run_event(
-                            room_id,
-                            SSEProcessingStatus.AWAITING_INPUT,
-                            user_message_id,
-                            sse=self.sse_manager,
-                        )
-                        await self.sse_manager.send_processing_status(
-                            room_id,
-                            SSEProcessingStatus.AWAITING_INPUT,
-                            user_message_id,
+                        await self._emit_processing_status(
+                            room_id=room_id,
+                            status=SSEProcessingStatus.AWAITING_INPUT,
+                            message_id=user_message_id,
+                            lifecycle_message_id=user_message_id,
                         )
                         return self._log_and_return(
                             room_id, trajectory,
@@ -731,15 +759,11 @@ class SupervisorExecutor:
                     # SSE: notify frontend of evaluation stage
                     if not (token and token.is_cancelled):
                         try:
-                            await record_and_maybe_broadcast_run_event(
-                                room_id,
-                                SSEProcessingStatus.PROCESSING,
-                                user_message_id,
-                                details="Evaluating agent results...",
-                                sse=self.sse_manager,
-                            )
-                            await self.sse_manager.send_processing_status(
-                                room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                            await self._emit_processing_status(
+                                room_id=room_id,
+                                status=SSEProcessingStatus.PROCESSING,
+                                message_id=user_message_id,
+                                lifecycle_message_id=user_message_id,
                                 details="Evaluating agent results...",
                             )
                         except Exception:
@@ -775,15 +799,11 @@ class SupervisorExecutor:
                     # SSE: notify frontend of synthesis stage
                     if not (token and token.is_cancelled):
                         try:
-                            await record_and_maybe_broadcast_run_event(
-                                room_id,
-                                SSEProcessingStatus.PROCESSING,
-                                user_message_id,
-                                details="Synthesizing responses...",
-                                sse=self.sse_manager,
-                            )
-                            await self.sse_manager.send_processing_status(
-                                room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                            await self._emit_processing_status(
+                                room_id=room_id,
+                                status=SSEProcessingStatus.PROCESSING,
+                                message_id=user_message_id,
+                                lifecycle_message_id=user_message_id,
                                 details="Synthesizing responses...",
                             )
                         except Exception:
@@ -954,16 +974,11 @@ class SupervisorExecutor:
                             ),
                         )
 
-                    await record_and_maybe_broadcast_run_event(
-                        room_id,
-                        SSEProcessingStatus.AWAITING_INPUT,
-                        user_message_id,
-                        sse=self.sse_manager,
-                    )
-                    await self.sse_manager.send_processing_status(
-                        room_id,
-                        SSEProcessingStatus.AWAITING_INPUT,
-                        user_message_id,
+                    await self._emit_processing_status(
+                        room_id=room_id,
+                        status=SSEProcessingStatus.AWAITING_INPUT,
+                        message_id=user_message_id,
+                        lifecycle_message_id=user_message_id,
                     )
                     return self._log_and_return(
                         room_id, trajectory,
@@ -1019,15 +1034,11 @@ class SupervisorExecutor:
             # SSE: notify frontend of budget-exhaustion synthesis
             if not (token and token.is_cancelled):
                 try:
-                    await record_and_maybe_broadcast_run_event(
-                        room_id,
-                        SSEProcessingStatus.PROCESSING,
-                        user_message_id,
-                        details="Synthesizing responses...",
-                        sse=self.sse_manager,
-                    )
-                    await self.sse_manager.send_processing_status(
-                        room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                    await self._emit_processing_status(
+                        room_id=room_id,
+                        status=SSEProcessingStatus.PROCESSING,
+                        message_id=user_message_id,
+                        lifecycle_message_id=user_message_id,
                         details="Synthesizing responses...",
                     )
                 except Exception:

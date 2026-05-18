@@ -12,7 +12,7 @@ from a2a.types import TaskState
 
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
-from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
+from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
 
 if TYPE_CHECKING:
     from services.database_service import DatabaseService
@@ -39,6 +39,10 @@ class AgentResponseHandler:
         self._sse = sse
         self._rmc = room_message_center
         self._slot_lifecycle = slot_lifecycle
+        self._processing_status_emitter = None
+
+    def bind_execution_event_deps(self, processing_status_emitter) -> None:
+        self._processing_status_emitter = processing_status_emitter
 
     async def _terminate_slot(
         self,
@@ -315,16 +319,11 @@ class AgentResponseHandler:
             display_message_id=msg.message_id if msg else e.message_id,
         )
         if hitl_req:
-            await record_and_maybe_broadcast_run_event(
-                e.room_id,
-                "awaiting_input",
-                user_message_id,
-                sse=self._sse,
-            )
-            await self._sse.send_processing_status(
-                e.room_id,
-                "awaiting_input",
-                user_message_id,
+            await self._emit_processing_status(
+                room_id=e.room_id,
+                status="awaiting_input",
+                message_id=user_message_id,
+                lifecycle_message_id=user_message_id,
             )
             logger.info(
                 "Created HITL request %s for async interactive event on %s",
@@ -366,35 +365,51 @@ class AgentResponseHandler:
             )
 
     async def _on_processing_status(self, e: AgentEvent) -> None:
-        kw: dict = {}
-        if e.client_request_id:
-            kw["client_request_id"] = e.client_request_id
-        if e.lifecycle_message_id:
-            await record_and_maybe_broadcast_run_event(
-                e.room_id,
-                e.state,
-                e.lifecycle_message_id,
-                client_request_id=e.client_request_id,
-                details=e.details,
-                sse=self._sse,
-            )
-            await self._sse.send_processing_status(
-                e.room_id,
-                e.state,
-                message_id=e.message_id,
-                details=e.details,
-                client_request_id=e.client_request_id,
-            )
-        else:
-            await self._sse.send_processing_status(
-                e.room_id,
-                e.state,
-                message_id=e.message_id,
-                details=e.details,
-                **kw,
-            )
+        await self._emit_processing_status(
+            room_id=e.room_id,
+            status=e.state,
+            message_id=e.message_id,
+            lifecycle_message_id=e.lifecycle_message_id,
+            record_lifecycle=bool(e.lifecycle_message_id),
+            client_request_id=e.client_request_id,
+            details=e.details,
+        )
 
     # --- Helpers ---
+
+    async def _emit_processing_status(
+        self,
+        *,
+        room_id: str,
+        status,
+        message_id: str | None,
+        lifecycle_message_id: str | None = None,
+        record_lifecycle: bool = True,
+        client_request_id: str | None = None,
+        details=None,
+    ) -> None:
+        legacy_details = details if isinstance(details, str) else None
+        structured_details = details if isinstance(details, dict) else None
+        if self._processing_status_emitter is not None:
+            await self._processing_status_emitter(
+                room_id=room_id,
+                status=status,
+                message_id=message_id,
+                lifecycle_message_id=lifecycle_message_id,
+                record_lifecycle=record_lifecycle,
+                client_request_id=client_request_id,
+                details=structured_details,
+                legacy_details=legacy_details,
+                error_message=legacy_details,
+            )
+            return
+        await LegacyProcessingStatusC3Adapter(self._sse).emit_processing_status(
+            room_id=room_id,
+            status=status,
+            message_id=message_id,
+            details=details,
+            client_request_id=client_request_id,
+        )
 
     async def notify_task_update(
         self,

@@ -344,6 +344,9 @@ async def lifespan(app: FastAPI):
             room_services.bind_execution_event_deps(
                 processing_status_emitter=emit_room_processing_status,
             )
+            room_center.room_message_center.bind_execution_event_deps(
+                emit_room_processing_status
+            )
             room_center.bind_execution_deps(_execution_deps)
             hitl.bind_execution_deps(_execution_deps)
             sse.bind_execution_deps(_execution_deps)

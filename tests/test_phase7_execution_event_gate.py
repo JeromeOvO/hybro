@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+import ast
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -14,6 +16,7 @@ from execution.events import (
 
 
 NOW = datetime(2026, 5, 17, 12, 0, tzinfo=timezone.utc)
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def make_client_request_id_resolver():
@@ -22,6 +25,27 @@ def make_client_request_id_resolver():
         side_effect=lambda message_id, provided: provided or f"resolved-{message_id}"
     )
     return resolver
+
+
+def test_execution_processing_status_call_sites_use_event_helper_or_compat_adapter():
+    violations: list[str] = []
+    for path in sorted((ROOT / "execution").rglob("*.py")):
+        rel = path.relative_to(ROOT).as_posix()
+        tree = ast.parse(path.read_text(), filename=rel)
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "send_processing_status"
+                and rel != "execution/legacy_processing_status.py"
+            ):
+                violations.append(f"{rel}:{node.lineno}")
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module == "services.run_lifecycle_service"
+            ):
+                violations.append(f"{rel}:{node.lineno} imports run_lifecycle_service")
+    assert violations == []
 
 
 @pytest.mark.asyncio

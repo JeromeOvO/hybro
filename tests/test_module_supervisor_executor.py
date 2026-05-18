@@ -262,77 +262,63 @@ class TestClarifyCleanupCompensation:
 class TestProcessingStatusLifecycleOrder:
     @pytest.mark.asyncio
     async def test_stage_notification_records_before_send(self):
-        import modules.SupervisorExecutor as supervisor_mod
-
         se = _make_supervisor_executor()
         order: list[str] = []
-        se.sse_manager.send_processing_status = AsyncMock(
-            side_effect=lambda *a, **k: order.append("send")
-        )
+        emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
+        se.bind_execution_event_deps(emit)
         se.supervisor_service.decide_next = AsyncMock(
             return_value=SupervisorAction(
                 action=ActionType.DONE,
                 reasoning="nothing else to do",
             )
         )
-        record = AsyncMock(side_effect=lambda *a, **k: order.append("record"))
-
-        with patch.object(
-            supervisor_mod, "record_and_maybe_broadcast_run_event", record
-        ):
-            result = await se.run(
-                room_id="room-1",
-                user_message_id="msg-1",
-                message_text="hello",
-                agent_registry=[],
-                room_config=RoomConfig(),
-            )
+        result = await se.run(
+            room_id="room-1",
+            user_message_id="msg-1",
+            message_text="hello",
+            agent_registry=[],
+            room_config=RoomConfig(),
+        )
 
         assert result.status == RunStatus.COMPLETED
-        record.assert_awaited_once()
-        se.sse_manager.send_processing_status.assert_awaited_once()
-        assert order == ["record", "send"]
+        emit.assert_awaited_once()
+        se.sse_manager.send_processing_status.assert_not_called()
+        assert order == ["emit"]
 
     @pytest.mark.asyncio
     async def test_stage_notification_helper_failure_is_swallowed(self):
-        import modules.SupervisorExecutor as supervisor_mod
-
         se = _make_supervisor_executor()
         se.sse_manager.send_processing_status = AsyncMock()
+        emit = AsyncMock(side_effect=RuntimeError("lifecycle unavailable"))
+        se.bind_execution_event_deps(emit)
         se.supervisor_service.decide_next = AsyncMock(
             return_value=SupervisorAction(
                 action=ActionType.DONE,
                 reasoning="nothing else to do",
             )
         )
-        record = AsyncMock(side_effect=RuntimeError("lifecycle unavailable"))
-
-        with patch.object(
-            supervisor_mod, "record_and_maybe_broadcast_run_event", record
-        ):
-            result = await se.run(
-                room_id="room-1",
-                user_message_id="msg-1",
-                message_text="hello",
-                agent_registry=[],
-                room_config=RoomConfig(),
-            )
+        result = await se.run(
+            room_id="room-1",
+            user_message_id="msg-1",
+            message_text="hello",
+            agent_registry=[],
+            room_config=RoomConfig(),
+        )
 
         assert result.status == RunStatus.COMPLETED
-        record.assert_awaited_once()
-        se.sse_manager.send_processing_status.assert_not_awaited()
+        emit.assert_awaited_once()
+        se.sse_manager.send_processing_status.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_agent_awaiting_input_records_before_send(self):
-        import modules.SupervisorExecutor as supervisor_mod
-
         se = _make_supervisor_executor()
         order: list[str] = []
-        se.sse_manager.send_processing_status = AsyncMock(
-            side_effect=lambda *a, **k: order.append("send")
-            if a[1] == "awaiting_input"
+        emit = AsyncMock(
+            side_effect=lambda *a, **k: order.append("emit")
+            if k.get("status") == "awaiting_input"
             else None
         )
+        se.bind_execution_event_deps(emit)
         se.supervisor_service.decide_next = AsyncMock(
             return_value=SupervisorAction(
                 action=ActionType.DELEGATE,
@@ -369,16 +355,7 @@ class TestProcessingStatusLifecycleOrder:
             return_value=SimpleNamespace(request_id="hitl-1")
         )
 
-        async def record_side_effect(*args, **kwargs):
-            if args[1] == "awaiting_input":
-                order.append("record")
-
-        record = AsyncMock(side_effect=record_side_effect)
-
-        with (
-            patch.object(supervisor_mod, "record_and_maybe_broadcast_run_event", record),
-            patch("services.hitl_service.hitl_service", hitl_mock),
-        ):
+        with patch("services.hitl_service.hitl_service", hitl_mock):
             result = await se.run(
                 room_id="room-1",
                 user_message_id="msg-1",
@@ -390,19 +367,19 @@ class TestProcessingStatusLifecycleOrder:
             )
 
         assert result.status == RunStatus.AWAITING_INPUT
-        assert order == ["record", "send"]
+        assert order == ["emit"]
+        se.sse_manager.send_processing_status.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_supervisor_hitl_records_before_awaiting_input_send(self):
-        import modules.SupervisorExecutor as supervisor_mod
-
         se = _make_supervisor_executor()
         order: list[str] = []
-        se.sse_manager.send_processing_status = AsyncMock(
-            side_effect=lambda *a, **k: order.append("send")
-            if a[1] == "awaiting_input"
+        emit = AsyncMock(
+            side_effect=lambda *a, **k: order.append("emit")
+            if k.get("status") == "awaiting_input"
             else None
         )
+        se.bind_execution_event_deps(emit)
         se.supervisor_service.decide_next = AsyncMock(
             return_value=SupervisorAction(
                 action=ActionType.CLARIFY,
@@ -423,16 +400,7 @@ class TestProcessingStatusLifecycleOrder:
             return_value=SimpleNamespace(request_id="hitl-1")
         )
 
-        async def record_side_effect(*args, **kwargs):
-            if args[1] == "awaiting_input":
-                order.append("record")
-
-        record = AsyncMock(side_effect=record_side_effect)
-
-        with (
-            patch.object(supervisor_mod, "record_and_maybe_broadcast_run_event", record),
-            patch("services.hitl_service.hitl_service", hitl_mock),
-        ):
+        with patch("services.hitl_service.hitl_service", hitl_mock):
             result = await se.run(
                 room_id="room-1",
                 user_message_id="msg-1",
@@ -442,4 +410,5 @@ class TestProcessingStatusLifecycleOrder:
             )
 
         assert result.status == RunStatus.AWAITING_INPUT
-        assert order == ["record", "send"]
+        assert order == ["emit"]
+        se.sse_manager.send_processing_status.assert_not_called()

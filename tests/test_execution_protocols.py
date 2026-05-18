@@ -228,7 +228,6 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
             "services.database_service",
             "services.hitl_service",
             "services.notification_service",
-            "services.run_lifecycle_service",
             "services.sse_services",
             "services.task_notification_service",
         },
@@ -269,7 +268,6 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
             "services.memory_service",
             "services.rate_limit_service",
             "services.room_services",
-            "services.run_lifecycle_service",
             "services.sse_services",
         },
         "execution/orchestration/room_message_center.py": {
@@ -288,7 +286,6 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
             "services.room_coordinator_service",
             "services.room_services",
             "services.room_supervisor_service",
-            "services.run_lifecycle_service",
             "services.sse_services",
             "services.task_notification_service",
             "services.task_service",
@@ -301,7 +298,6 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
             "services.room_coordinator_service",
             "services.room_services",
             "services.room_supervisor_service",
-            "services.run_lifecycle_service",
             "services.sse_services",
         },
         "execution/state/task_state_manager.py": {

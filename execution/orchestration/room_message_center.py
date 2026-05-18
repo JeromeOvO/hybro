@@ -28,6 +28,7 @@ from models.supervisor_v2 import (
 from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
 from execution.dispatch.response_handler import AgentResponseHandler
+from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
 from execution.orchestration.queue_executor import QueueExecutor, QueueResult
 from execution.dispatch.transports.direct import DirectTransport
 from execution.orchestration.supervisor_executor import SupervisorExecutor
@@ -42,7 +43,6 @@ from services.notification_service import notification_service
 from services.rate_limit_service import rate_limit_service
 from services.room_coordinator_service import room_coordinator_service
 from services.openai_service import openai_service
-from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
 from services.room_services import room_services
 from services.room_supervisor_service import room_supervisor_service
 from services.sse_services import sse_manager
@@ -149,10 +149,59 @@ class RoomMessageCenter:
         self._redis: RedisService | None = None
         self._room_facade = None
         self._room_bound = False
+        self._processing_status_emitter = None
         # Turn-event infrastructure is retired; keep placeholders to
         # preserve defensive getattr/None checks in legacy code paths.
 
     # -- Redis wiring (called from main.py at startup) ---------------------
+
+    def bind_execution_event_deps(self, processing_status_emitter) -> None:
+        self._processing_status_emitter = processing_status_emitter
+        for component in (
+            self.agent_response_handler,
+            self.queue_executor,
+            self.supervisor_executor,
+        ):
+            binder = getattr(component, "bind_execution_event_deps", None)
+            if binder is not None:
+                binder(processing_status_emitter)
+
+    async def _emit_processing_status(
+        self,
+        *,
+        room_id: str,
+        status,
+        message_id: str | None,
+        lifecycle_message_id: str | None = None,
+        record_lifecycle: bool = True,
+        client_request_id: str | None = None,
+        details=None,
+        agents: list[dict] | None = None,
+    ) -> None:
+        legacy_details = details if isinstance(details, str) else None
+        structured_details = details if isinstance(details, dict) else None
+        if getattr(self, "_processing_status_emitter", None) is not None:
+            await self._processing_status_emitter(
+                room_id=room_id,
+                status=status,
+                message_id=message_id,
+                lifecycle_message_id=lifecycle_message_id or message_id,
+                record_lifecycle=record_lifecycle,
+                client_request_id=client_request_id,
+                details=structured_details,
+                legacy_details=legacy_details,
+                error_message=legacy_details,
+                agents=agents,
+            )
+            return
+        await LegacyProcessingStatusC3Adapter(self.sse_manager).emit_processing_status(
+            room_id=room_id,
+            status=status,
+            message_id=message_id,
+            details=details,
+            client_request_id=client_request_id,
+            agents=agents,
+        )
 
     def bind_facade(self, facade) -> None:
         self._room_facade = facade
@@ -424,17 +473,11 @@ class RoomMessageCenter:
             # indicator.  Without this, the Stop button stays stuck because
             # send_message_to_room already emitted PROCESSING and this
             # BackgroundTask response is never seen by the client.
-            await record_and_maybe_broadcast_run_event(
-                room_id,
-                SSEProcessingStatus.FAILED,
-                room_user_message_id,
-                details="Room is busy processing another message — please retry shortly",
-                sse=self.sse_manager,
-            )
-            await self.sse_manager.send_processing_status(
-                room_id,
-                SSEProcessingStatus.FAILED,
-                room_user_message_id,
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.FAILED,
+                message_id=room_user_message_id,
+                lifecycle_message_id=room_user_message_id,
                 details="Room is busy processing another message — please retry shortly",
             )
             return OrchestrationResponse(
@@ -572,15 +615,11 @@ class RoomMessageCenter:
                 await self._notify_all_non_terminal_tasks_failed(
                     room_id, room_user_message_id
                 )
-                await record_and_maybe_broadcast_run_event(
-                    room_id,
-                    SSEProcessingStatus.FAILED,
-                    room_user_message_id,
-                    details="Supervisor-enabled room missing V2 preparation data",
-                    sse=self.sse_manager,
-                )
-                await self.sse_manager.send_processing_status(
-                    room_id, SSEProcessingStatus.FAILED, room_user_message_id,
+                await self._emit_processing_status(
+                    room_id=room_id,
+                    status=SSEProcessingStatus.FAILED,
+                    message_id=room_user_message_id,
+                    lifecycle_message_id=room_user_message_id,
                     details="Supervisor-enabled room missing V2 preparation data",
                 )
                 return OrchestrationResponse(
@@ -625,14 +664,11 @@ class RoomMessageCenter:
                     )
                 except Exception:
                     pass
-            await record_and_maybe_broadcast_run_event(
-                room_id,
-                SSEProcessingStatus.CANCELED,
-                room_user_message_id,
-                sse=self.sse_manager,
-            )
-            await self.sse_manager.send_processing_status(
-                room_id, SSEProcessingStatus.CANCELED, room_user_message_id
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.CANCELED,
+                message_id=room_user_message_id,
+                lifecycle_message_id=room_user_message_id,
             )
             self.sse_manager.clear_cancellation(room_user_message_id)
             return OrchestrationResponse(
@@ -668,17 +704,11 @@ class RoomMessageCenter:
             await self._notify_all_non_terminal_tasks_failed(
                 room_id, room_user_message_id
             )
-            await record_and_maybe_broadcast_run_event(
-                room_id,
-                SSEProcessingStatus.FAILED,
-                room_user_message_id,
-                details="Failed to process agent messages",
-                sse=self.sse_manager,
-            )
-            await self.sse_manager.send_processing_status(
-                room_id,
-                SSEProcessingStatus.FAILED,
-                room_user_message_id,
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.FAILED,
+                message_id=room_user_message_id,
+                lifecycle_message_id=room_user_message_id,
                 details="Failed to process agent messages",
             )
             return OrchestrationResponse(
@@ -720,14 +750,11 @@ class RoomMessageCenter:
                 pass
 
         # Send completion status
-        await record_and_maybe_broadcast_run_event(
-            room_id,
-            SSEProcessingStatus.COMPLETED,
-            room_user_message_id,
-            sse=self.sse_manager,
-        )
-        await self.sse_manager.send_processing_status(
-            room_id, SSEProcessingStatus.COMPLETED, room_user_message_id
+        await self._emit_processing_status(
+            room_id=room_id,
+            status=SSEProcessingStatus.COMPLETED,
+            message_id=room_user_message_id,
+            lifecycle_message_id=room_user_message_id,
         )
 
         # Log room memory stats (debug/monitoring)
@@ -888,15 +915,11 @@ class RoomMessageCenter:
             await self._notify_all_non_terminal_tasks_failed(
                 room_id, room_user_message_id
             )
-            await record_and_maybe_broadcast_run_event(
-                room_id,
-                SSEProcessingStatus.FAILED,
-                room_user_message_id,
-                details="V2 supervisor data corrupted or incomplete",
-                sse=self.sse_manager,
-            )
-            await self.sse_manager.send_processing_status(
-                room_id, SSEProcessingStatus.FAILED, room_user_message_id,
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.FAILED,
+                message_id=room_user_message_id,
+                lifecycle_message_id=room_user_message_id,
                 details="V2 supervisor data corrupted or incomplete",
             )
             return OrchestrationResponse(
@@ -1031,11 +1054,13 @@ class RoomMessageCenter:
                             persist_err,
                         )
                     self.sse_manager.remove_token(room_user_message_id)
-                    await self.sse_manager.send_processing_status(
-                        room_id,
-                        SSEProcessingStatus.COMPLETED,
-                        room_user_message_id,
+                    await self._emit_processing_status(
+                        room_id=room_id,
+                        status=SSEProcessingStatus.COMPLETED,
+                        message_id=room_user_message_id,
+                        lifecycle_message_id=room_user_message_id,
                         details="Clarify resume failed — please answer the clarification question again",
+                        record_lifecycle=False,
                     )
                     return OrchestrationResponse(
                         room_id=room_id,
@@ -1072,17 +1097,11 @@ class RoomMessageCenter:
             await self._notify_all_non_terminal_tasks_failed(
                 room_id, room_user_message_id
             )
-            await record_and_maybe_broadcast_run_event(
-                room_id,
-                SSEProcessingStatus.FAILED,
-                room_user_message_id,
-                details="Supervisor planning failed",
-                sse=self.sse_manager,
-            )
-            await self.sse_manager.send_processing_status(
-                room_id,
-                SSEProcessingStatus.FAILED,
-                room_user_message_id,
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.FAILED,
+                message_id=room_user_message_id,
+                lifecycle_message_id=room_user_message_id,
                 details="Supervisor planning failed",
             )
             return OrchestrationResponse(
@@ -1109,17 +1128,11 @@ class RoomMessageCenter:
             await self._notify_all_non_terminal_tasks_failed(
                 room_id, room_user_message_id
             )
-            await record_and_maybe_broadcast_run_event(
-                room_id,
-                SSEProcessingStatus.FAILED,
-                room_user_message_id,
-                details="Supervisor execution failed unexpectedly",
-                sse=self.sse_manager,
-            )
-            await self.sse_manager.send_processing_status(
-                room_id,
-                SSEProcessingStatus.FAILED,
-                room_user_message_id,
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.FAILED,
+                message_id=room_user_message_id,
+                lifecycle_message_id=room_user_message_id,
                 details="Supervisor execution failed unexpectedly",
             )
             return OrchestrationResponse(
@@ -1205,17 +1218,11 @@ class RoomMessageCenter:
             await self._notify_all_non_terminal_tasks_failed(
                 room_id, user_message_id
             )
-            await record_and_maybe_broadcast_run_event(
-                room_id,
-                SSEProcessingStatus.FAILED,
-                user_message_id,
-                details="V2 resume: corrupted trajectory data",
-                sse=self.sse_manager,
-            )
-            await self.sse_manager.send_processing_status(
-                room_id,
-                SSEProcessingStatus.FAILED,
-                user_message_id,
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.FAILED,
+                message_id=user_message_id,
+                lifecycle_message_id=user_message_id,
                 details="V2 resume: corrupted trajectory data",
             )
             return RunStatus.FAILED
@@ -1338,17 +1345,11 @@ class RoomMessageCenter:
             await self._notify_all_non_terminal_tasks_failed(
                 room_id, user_message_id
             )
-            await record_and_maybe_broadcast_run_event(
-                room_id,
-                SSEProcessingStatus.FAILED,
-                user_message_id,
-                details="V2 resume: room not found",
-                sse=self.sse_manager,
-            )
-            await self.sse_manager.send_processing_status(
-                room_id,
-                SSEProcessingStatus.FAILED,
-                user_message_id,
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.FAILED,
+                message_id=user_message_id,
+                lifecycle_message_id=user_message_id,
                 details="V2 resume: room not found",
             )
             return RunStatus.FAILED
@@ -1511,14 +1512,11 @@ class RoomMessageCenter:
             await self._notify_all_non_terminal_tasks_failed(
                 room_id, user_message_id
             )
-            await record_and_maybe_broadcast_run_event(
-                room_id,
-                SSEProcessingStatus.CANCELED,
-                user_message_id,
-                sse=self.sse_manager,
-            )
-            await self.sse_manager.send_processing_status(
-                room_id, SSEProcessingStatus.CANCELED, user_message_id,
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.CANCELED,
+                message_id=user_message_id,
+                lifecycle_message_id=user_message_id,
             )
             self.sse_manager.clear_cancellation(user_message_id)
             return True
@@ -1544,17 +1542,11 @@ class RoomMessageCenter:
             await self._notify_all_non_terminal_tasks_failed(
                 room_id, user_message_id
             )
-            await record_and_maybe_broadcast_run_event(
-                room_id,
-                SSEProcessingStatus.FAILED,
-                user_message_id,
-                details="V2 resume: executor failed",
-                sse=self.sse_manager,
-            )
-            await self.sse_manager.send_processing_status(
-                room_id,
-                SSEProcessingStatus.FAILED,
-                user_message_id,
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.FAILED,
+                message_id=user_message_id,
+                lifecycle_message_id=user_message_id,
                 details="V2 resume: executor failed",
             )
             return RunStatus.FAILED
@@ -1814,14 +1806,11 @@ class RoomMessageCenter:
                         )
                     except Exception:
                         pass
-                await record_and_maybe_broadcast_run_event(
-                    room_id,
-                    SSEProcessingStatus.COMPLETED,
-                    user_message_id,
-                    sse=self.sse_manager,
-                )
-                await self.sse_manager.send_processing_status(
-                    room_id, SSEProcessingStatus.COMPLETED, user_message_id
+                await self._emit_processing_status(
+                    room_id=room_id,
+                    status=SSEProcessingStatus.COMPLETED,
+                    message_id=user_message_id,
+                    lifecycle_message_id=user_message_id,
                 )
 
             case RunStatus.PAUSED:
@@ -1866,8 +1855,12 @@ class RoomMessageCenter:
                         )
                     except Exception:
                         pass
-                await self.sse_manager.send_processing_status(
-                    room_id, SSEProcessingStatus.COMPLETED, user_message_id
+                await self._emit_processing_status(
+                    room_id=room_id,
+                    status=SSEProcessingStatus.COMPLETED,
+                    message_id=user_message_id,
+                    lifecycle_message_id=user_message_id,
+                    record_lifecycle=False,
                 )
 
             case RunStatus.CANCELED:
@@ -1895,14 +1888,11 @@ class RoomMessageCenter:
                 await self._notify_all_non_terminal_tasks_failed(
                     room_id, user_message_id
                 )
-                await record_and_maybe_broadcast_run_event(
-                    room_id,
-                    SSEProcessingStatus.CANCELED,
-                    user_message_id,
-                    sse=self.sse_manager,
-                )
-                await self.sse_manager.send_processing_status(
-                    room_id, SSEProcessingStatus.CANCELED, user_message_id
+                await self._emit_processing_status(
+                    room_id=room_id,
+                    status=SSEProcessingStatus.CANCELED,
+                    message_id=user_message_id,
+                    lifecycle_message_id=user_message_id,
                 )
                 self.sse_manager.clear_cancellation(user_message_id)
 
@@ -1931,17 +1921,11 @@ class RoomMessageCenter:
                 await self._notify_all_non_terminal_tasks_failed(
                     room_id, user_message_id
                 )
-                await record_and_maybe_broadcast_run_event(
-                    room_id,
-                    SSEProcessingStatus.FAILED,
-                    user_message_id,
-                    details="V2 supervisor execution failed",
-                    sse=self.sse_manager,
-                )
-                await self.sse_manager.send_processing_status(
-                    room_id,
-                    SSEProcessingStatus.FAILED,
-                    user_message_id,
+                await self._emit_processing_status(
+                    room_id=room_id,
+                    status=SSEProcessingStatus.FAILED,
+                    message_id=user_message_id,
+                    lifecycle_message_id=user_message_id,
                     details="V2 supervisor execution failed",
                 )
 
@@ -2204,14 +2188,11 @@ class RoomMessageCenter:
                     )
                 except Exception:
                     pass
-            await record_and_maybe_broadcast_run_event(
-                result.room_id,
-                SSEProcessingStatus.COMPLETED,
-                result.user_message_id,
-                sse=self.sse_manager,
-            )
-            await self.sse_manager.send_processing_status(
-                result.room_id, SSEProcessingStatus.COMPLETED, result.user_message_id
+            await self._emit_processing_status(
+                room_id=result.room_id,
+                status=SSEProcessingStatus.COMPLETED,
+                message_id=result.user_message_id,
+                lifecycle_message_id=result.user_message_id,
             )
             await self._log_room_memory_stats(result.room_id)
 

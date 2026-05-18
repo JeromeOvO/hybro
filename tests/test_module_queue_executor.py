@@ -189,8 +189,6 @@ class TestProcessQueue:
     @pytest.mark.asyncio
     async def test_process_queue_cancels_on_cancellation_token(self):
         """Pre-cancelled token -> QueueResult.CANCELED on the first iteration."""
-        import modules.QueueExecutor as queue_mod
-
         qe = _make_queue_executor()
         order: list[str] = []
 
@@ -204,30 +202,25 @@ class TestProcessQueue:
         token.cancel()
 
         qe.tsm.transition_task = AsyncMock()
-        qe.sse_manager.send_processing_status = AsyncMock(
-            side_effect=lambda *a, **k: order.append("send")
-        )
         qe.sse_manager.clear_cancellation = MagicMock()
         qe.database_service.cancel_descendants = AsyncMock()
-        record = AsyncMock(side_effect=lambda *a, **k: order.append("record"))
+        emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
+        qe.bind_execution_event_deps(emit)
 
-        with patch.object(queue_mod, "record_and_maybe_broadcast_run_event", record):
-            result = await qe.process_queue(queue, "room-1", "umsg-1", token=token)
+        result = await qe.process_queue(queue, "room-1", "umsg-1", token=token)
 
         assert result.result == QueueResult.CANCELED
         qe.tsm.transition_task.assert_called_once_with(
             msg, TaskState.canceled, persist=True
         )
-        record.assert_awaited_once()
-        qe.sse_manager.send_processing_status.assert_called_once()
-        assert order == ["record", "send"]
+        emit.assert_awaited_once()
+        qe.sse_manager.send_processing_status.assert_not_called()
+        assert order == ["emit"]
         qe.sse_manager.clear_cancellation.assert_called_once_with("umsg-1")
 
     @pytest.mark.asyncio
     async def test_process_queue_records_before_awaiting_input_send(self):
         """HITL AWAITING_INPUT records before the frontend pause status."""
-        import modules.QueueExecutor as queue_mod
-
         qe = _make_queue_executor()
         order: list[str] = []
 
@@ -256,31 +249,24 @@ class TestProcessQueue:
         qe._queue_next_messages = AsyncMock()
         qe._save_continuation = AsyncMock()
         qe.database_service.cancel_descendants = AsyncMock()
-        qe.sse_manager.send_processing_status = AsyncMock(
-            side_effect=lambda *a, **k: order.append("send")
-        )
-        record = AsyncMock(side_effect=lambda *a, **k: order.append("record"))
+        emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
+        qe.bind_execution_event_deps(emit)
         hitl_service = MagicMock()
         hitl_service.request_input = AsyncMock(
             return_value=SimpleNamespace(request_id="hitl-1")
         )
 
-        with (
-            patch.object(queue_mod, "record_and_maybe_broadcast_run_event", record),
-            patch("services.hitl_service.hitl_service", hitl_service),
-        ):
+        with patch("services.hitl_service.hitl_service", hitl_service):
             result = await qe.process_queue(queue, "room-1", "umsg-1")
 
         assert result.result == QueueResult.PAUSED
-        record.assert_awaited_once()
-        qe.sse_manager.send_processing_status.assert_awaited_once()
-        assert order == ["record", "send"]
+        emit.assert_awaited_once()
+        qe.sse_manager.send_processing_status.assert_not_called()
+        assert order == ["emit"]
 
     @pytest.mark.asyncio
     async def test_deferred_sse_status_has_no_required_post_emit_business_side_effects(self):
         """Deferred terminal delivery leaves only cancellation-token cleanup after emit."""
-        import modules.QueueExecutor as queue_mod
-
         qe = _make_queue_executor()
         order: list[str] = []
 
@@ -297,31 +283,25 @@ class TestProcessQueue:
         qe.database_service.cancel_descendants = AsyncMock(
             side_effect=lambda *a, **k: order.append("cancel-descendants")
         )
-        qe.sse_manager.send_processing_status = AsyncMock(
-            side_effect=lambda *a, **k: order.append("send")
-        )
         qe.sse_manager.clear_cancellation = MagicMock(
             side_effect=lambda *a, **k: order.append("clear-token")
         )
-        record = AsyncMock(side_effect=lambda *a, **k: order.append("record"))
+        emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
+        qe.bind_execution_event_deps(emit)
 
-        with patch.object(queue_mod, "record_and_maybe_broadcast_run_event", record):
-            result = await qe.process_queue(queue, "room-1", "umsg-1", token=token)
+        result = await qe.process_queue(queue, "room-1", "umsg-1", token=token)
 
         assert result.result == QueueResult.CANCELED
         assert order == [
             "cancel-task",
             "cancel-descendants",
-            "record",
-            "send",
+            "emit",
             "clear-token",
         ]
 
     @pytest.mark.asyncio
     async def test_resume_from_continuation_failure_records_before_terminal_emit(self):
         """V1 resume failure runs caller-owned notification before terminal emit."""
-        import modules.QueueExecutor as queue_mod
-
         qe = _make_queue_executor()
         order: list[str] = []
         continuation = {
@@ -347,20 +327,17 @@ class TestProcessQueue:
         qe.process_queue = AsyncMock(
             return_value=QueueProcessingResult(result=QueueResult.FAILED)
         )
-        qe.sse_manager.send_processing_status = AsyncMock(
-            side_effect=lambda *a, **k: order.append("send")
-        )
-        record = AsyncMock(side_effect=lambda *a, **k: order.append("record"))
+        emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
+        qe.bind_execution_event_deps(emit)
         notify = AsyncMock(side_effect=lambda *a, **k: order.append("notify"))
 
-        with patch.object(queue_mod, "record_and_maybe_broadcast_run_event", record):
-            result = await qe.resume_from_continuation(
-                "paused-msg",
-                before_terminal_failure=notify,
-            )
+        result = await qe.resume_from_continuation(
+            "paused-msg",
+            before_terminal_failure=notify,
+        )
 
         assert result.success is False
-        assert order == ["notify", "record", "send"]
+        assert order == ["notify", "emit"]
 
     @pytest.mark.asyncio
     async def test_save_continuation_persists_to_db(self):
@@ -462,8 +439,6 @@ class TestProcessQueue:
 @pytest.mark.asyncio
 async def test_deferred_sse_status_has_no_required_post_emit_business_side_effects():
     """Deferred terminal delivery leaves only cancellation-token cleanup after emit."""
-    import modules.QueueExecutor as queue_mod
-
     qe = _make_queue_executor()
     order: list[str] = []
 
@@ -480,23 +455,19 @@ async def test_deferred_sse_status_has_no_required_post_emit_business_side_effec
     qe.database_service.cancel_descendants = AsyncMock(
         side_effect=lambda *a, **k: order.append("cancel-descendants")
     )
-    qe.sse_manager.send_processing_status = AsyncMock(
-        side_effect=lambda *a, **k: order.append("send")
-    )
     qe.sse_manager.clear_cancellation = MagicMock(
         side_effect=lambda *a, **k: order.append("clear-token")
     )
-    record = AsyncMock(side_effect=lambda *a, **k: order.append("record"))
+    emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
+    qe.bind_execution_event_deps(emit)
 
-    with patch.object(queue_mod, "record_and_maybe_broadcast_run_event", record):
-        result = await qe.process_queue(queue, "room-1", "umsg-1", token=token)
+    result = await qe.process_queue(queue, "room-1", "umsg-1", token=token)
 
     assert result.result == QueueResult.CANCELED
     assert order == [
         "cancel-task",
         "cancel-descendants",
-        "record",
-        "send",
+        "emit",
         "clear-token",
     ]
 
@@ -504,8 +475,6 @@ async def test_deferred_sse_status_has_no_required_post_emit_business_side_effec
 @pytest.mark.asyncio
 async def test_resume_from_continuation_failure_records_before_terminal_emit():
     """V1 resume failure runs caller-owned notification before terminal emit."""
-    import modules.QueueExecutor as queue_mod
-
     qe = _make_queue_executor()
     order: list[str] = []
     continuation = {
@@ -531,17 +500,14 @@ async def test_resume_from_continuation_failure_records_before_terminal_emit():
     qe.process_queue = AsyncMock(
         return_value=QueueProcessingResult(result=QueueResult.FAILED)
     )
-    qe.sse_manager.send_processing_status = AsyncMock(
-        side_effect=lambda *a, **k: order.append("send")
-    )
-    record = AsyncMock(side_effect=lambda *a, **k: order.append("record"))
+    emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
+    qe.bind_execution_event_deps(emit)
     notify = AsyncMock(side_effect=lambda *a, **k: order.append("notify"))
 
-    with patch.object(queue_mod, "record_and_maybe_broadcast_run_event", record):
-        result = await qe.resume_from_continuation(
-            "paused-msg",
-            before_terminal_failure=notify,
-        )
+    result = await qe.resume_from_continuation(
+        "paused-msg",
+        before_terminal_failure=notify,
+    )
 
     assert result.success is False
-    assert order == ["notify", "record", "send"]
+    assert order == ["notify", "emit"]
