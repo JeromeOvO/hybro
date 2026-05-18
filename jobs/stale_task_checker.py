@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import TYPE_CHECKING
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
@@ -26,7 +28,6 @@ from config.settings import settings
 from database.mongodb import mongodb
 from models.request import OrchestrationRequest
 from models.room import RoomAgentMessage
-from modules.RoomMessageCenter import room_message_center
 from services.a2a_constants import (
     INTERACTIVE_STATES,
     NON_TERMINAL_STATES,
@@ -34,10 +35,6 @@ from services.a2a_constants import (
     is_terminal_state,
 )
 from services.run_metrics import increment_counter
-from services.run_lifecycle_service import (
-    broadcast_run_event_payload,
-    feature_run_dual_write_enabled,
-)
 from services.a2a_service import a2a_service
 from services.database_service import db_service
 
@@ -47,6 +44,25 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 MAX_CONCURRENT_RECOVERIES = 5
+
+
+@dataclass(frozen=True)
+class StaleRecoveryDeps:
+    schedule_recovery: Callable[..., asyncio.Task]
+
+
+@dataclass(frozen=True)
+class StaleRunWatchdogEventDeps:
+    append_run_timeout_failure: Callable[..., Awaitable[dict[str, Any] | None]]
+    emit_run_event: Callable[..., Awaitable[None]]
+    emit_processing_status: Callable[..., Awaitable[None]]
+    run_dual_write_enabled: Callable[[], bool]
+
+
+@dataclass(frozen=True)
+class StaleHITLDeps:
+    recover_stale_processing: Callable[[], Awaitable[Any]]
+    cancel_requests_for_message: Callable[[str], Awaitable[Any]]
 
 
 class StaleTaskChecker:
@@ -92,10 +108,22 @@ class StaleTaskChecker:
         self._task: asyncio.Task | None = None
         self._recovery_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RECOVERIES)
         self._leader: LeaderElection | None = None
+        self._execution_recovery_deps: StaleRecoveryDeps | None = None
+        self._watchdog_event_deps: StaleRunWatchdogEventDeps | None = None
+        self._hitl_deps: StaleHITLDeps | None = None
 
     def set_leader_election(self, leader: LeaderElection | None) -> None:
         """Attach a LeaderElection instance for distributed leader gating."""
         self._leader = leader
+
+    def set_execution_recovery_deps(self, deps: StaleRecoveryDeps) -> None:
+        self._execution_recovery_deps = deps
+
+    def set_run_watchdog_event_deps(self, deps: StaleRunWatchdogEventDeps) -> None:
+        self._watchdog_event_deps = deps
+
+    def set_hitl_deps(self, deps: StaleHITLDeps) -> None:
+        self._hitl_deps = deps
 
     async def start(self) -> None:
         """Start the background checker."""
@@ -210,8 +238,12 @@ class StaleTaskChecker:
         # 7. Recover HITL requests stuck in "processing" (worker crashed
         #    between CAS claim and finalization).
         try:
-            from services.hitl_service import hitl_service
-            await hitl_service.recover_stale_processing()
+            if self._hitl_deps is None:
+                logger.warning(
+                    "Skipped stale HITL processing recovery: HITL deps are not bound"
+                )
+            else:
+                await self._hitl_deps.recover_stale_processing()
         except Exception as e:
             logger.error("Failed to recover stale HITL processing requests: %s", e)
 
@@ -234,10 +266,12 @@ class StaleTaskChecker:
             return
         if not stale:
             return
-
-        from services.run_command_handler import run_command_handler
-        from services.sse_services import sse_manager
-        from services.a2a_constants import SSEProcessingStatus
+        if self._watchdog_event_deps is None:
+            logger.warning(
+                "run watchdog: skipped because Execution event dependencies are not bound"
+            )
+            return
+        event_deps = self._watchdog_event_deps
 
         for doc in stale:
             room_id = str(doc.get("room_id") or "")
@@ -247,33 +281,32 @@ class StaleTaskChecker:
             try:
                 tid = doc.get("trigger_message_id") or run_id
                 client_request_id = doc.get("client_request_id")
-                if not feature_run_dual_write_enabled():
+                if not event_deps.run_dual_write_enabled():
                     increment_counter("run_watchdog_forced_failure_total")
-                    await sse_manager.send_processing_status(
-                        room_id,
-                        SSEProcessingStatus.FAILED,
-                        str(tid),
+                    await event_deps.emit_processing_status(
+                        room_id=room_id,
+                        status="failed",
+                        message_id=str(tid),
                         client_request_id=client_request_id,
                         details="Run watchdog: stale non-terminal run timed out",
                     )
                     continue
 
-                payload = await run_command_handler.append_run_timeout_failure(
+                payload = await event_deps.append_run_timeout_failure(
                     room_id, run_id, stale_minutes=stale_mins
                 )
                 if payload is None:
                     continue
                 increment_counter("run_watchdog_forced_failure_total")
-                await broadcast_run_event_payload(
-                    room_id,
-                    payload,
+                await event_deps.emit_run_event(
+                    room_id=room_id,
+                    payload=payload,
                     client_request_id=client_request_id,
-                    sse=sse_manager,
                 )
-                await sse_manager.send_processing_status(
-                    room_id,
-                    SSEProcessingStatus.FAILED,
-                    str(tid),
+                await event_deps.emit_processing_status(
+                    room_id=room_id,
+                    status="failed",
+                    message_id=str(tid),
                     client_request_id=client_request_id,
                     details="Run watchdog: stale non-terminal run timed out",
                 )
@@ -540,11 +573,17 @@ class StaleTaskChecker:
 
         # Cancel any pending HITL request for this message
         try:
-            from services.hitl_service import hitl_service
             # HITL requests are keyed by user_message_id, not agent message_id.
             # related_message_id on the agent message points to the user message.
             user_msg_id = msg.related_message_id or message_id
-            await hitl_service.cancel_requests_for_message(user_msg_id)
+            if self._hitl_deps is None:
+                logger.warning(
+                    "stale_task_checker: HITL deps are not bound; cannot cancel "
+                    "requests for %s",
+                    user_msg_id,
+                )
+            else:
+                await self._hitl_deps.cancel_requests_for_message(user_msg_id)
         except Exception as e:
             logger.warning(
                 "stale_task_checker: Failed to cancel HITL requests for %s: %s",
@@ -609,6 +648,11 @@ class StaleTaskChecker:
 
         if not orphaned_messages:
             return
+        if self._execution_recovery_deps is None:
+            logger.warning(
+                "Orphan recovery skipped: Execution recovery dependencies are not bound"
+            )
+            return
 
         logger.info(
             f"Found {len(orphaned_messages)} orphaned agent messages to recover"
@@ -654,42 +698,18 @@ class StaleTaskChecker:
                     )
                     break
                 await self._recovery_semaphore.acquire()
-                asyncio.create_task(
-                    self._guarded_orphan_recovery(room_message_center, request)
+                task = self._execution_recovery_deps.schedule_recovery(
+                    request,
+                    reason="orphan",
+                )
+                task.add_done_callback(
+                    lambda _task: self._recovery_semaphore.release()
                 )
 
             except Exception as e:
                 logger.error(
                     f"Failed to trigger recovery for user message {user_message_id}: {e}"
                 )
-
-    async def _guarded_orphan_recovery(self, room_message_center, request):
-        """Wrapper that releases the recovery semaphore after processing."""
-        try:
-            await self._process_orphaned_user_message(room_message_center, request)
-        finally:
-            self._recovery_semaphore.release()
-
-    async def _process_orphaned_user_message(
-        self,
-        room_message_center,
-        request: OrchestrationRequest,
-    ) -> None:
-        """Process an orphaned user message in the background."""
-        try:
-            result = await room_message_center.process_room_user_message(request)
-            if result.success:
-                logger.info(
-                    f"Successfully recovered orphaned messages for user message {request.room_user_message_id}"
-                )
-            else:
-                logger.warning(
-                    f"Recovery for user message {request.room_user_message_id} completed with error: {result.error}"
-                )
-        except Exception as e:
-            logger.error(
-                f"Exception during recovery of user message {request.room_user_message_id}: {e}"
-            )
 
     async def _recover_stuck_supervisor_trajectories(self) -> None:
         """Recover V2 supervisor trajectories stuck in "running" status.
@@ -708,6 +728,11 @@ class StaleTaskChecker:
         )
 
         if not stuck_messages:
+            return
+        if self._execution_recovery_deps is None:
+            logger.warning(
+                "supervisor_recovery: skipped because Execution recovery dependencies are not bound"
+            )
             return
 
         logger.info(
@@ -762,8 +787,12 @@ class StaleTaskChecker:
                     is_recovery=True,
                 )
                 await self._recovery_semaphore.acquire()
-                asyncio.create_task(
-                    self._guarded_supervisor_recovery(request, message_id)
+                task = self._execution_recovery_deps.schedule_recovery(
+                    request,
+                    reason="supervisor",
+                )
+                task.add_done_callback(
+                    lambda _task: self._recovery_semaphore.release()
                 )
             except Exception as e:
                 logger.error(
@@ -771,39 +800,6 @@ class StaleTaskChecker:
                     message_id,
                     e,
                 )
-
-    async def _guarded_supervisor_recovery(self, request, message_id):
-        """Wrapper that releases the recovery semaphore after processing."""
-        try:
-            await self._process_recovered_supervisor_message(request, message_id)
-        finally:
-            self._recovery_semaphore.release()
-
-    async def _process_recovered_supervisor_message(
-        self,
-        request: OrchestrationRequest,
-        message_id: str,
-    ) -> None:
-        """Process a recovered supervisor V2 message in the background."""
-        try:
-            result = await room_message_center.process_room_user_message(request)
-            if result.success:
-                logger.info(
-                    "supervisor_recovery: successfully recovered message %s",
-                    message_id,
-                )
-            else:
-                logger.warning(
-                    "supervisor_recovery: recovery for %s completed with error: %s",
-                    message_id,
-                    result.error,
-                )
-        except Exception as e:
-            logger.error(
-                "supervisor_recovery: exception recovering message %s: %s",
-                message_id,
-                e,
-            )
 
 
 # Singleton instance

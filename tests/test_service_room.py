@@ -213,7 +213,7 @@ def _assert_room_service_before(
     function = _room_services_function(function_name)
     emit_call = _matching_room_services_call(
         function_name,
-        "send_processing_status",
+        "_emit_processing_status_event",
         *emit_snippets,
         occurrence=emit_occurrence,
     )
@@ -285,6 +285,22 @@ def test_no_agents_fallback_side_effects_before_completed_processing_status():
         (),
         ("SSEProcessingStatus.COMPLETED",),
     )
+
+
+@pytest.mark.asyncio
+async def test_room_services_processing_status_uses_bound_execution_emitter():
+    svc = object.__new__(RoomServices)
+    emitter = AsyncMock(return_value=None)
+
+    svc.bind_execution_event_deps(processing_status_emitter=emitter)
+
+    await svc._send_processing_status("room-1", "msg-1", "cr-1")
+
+    emitter.assert_awaited_once()
+    assert emitter.await_args.kwargs["room_id"] == "room-1"
+    assert emitter.await_args.kwargs["message_id"] == "msg-1"
+    assert emitter.await_args.kwargs["lifecycle_message_id"] == "msg-1"
+    assert emitter.await_args.kwargs["client_request_id"] == "cr-1"
 
 
 @pytest.mark.asyncio

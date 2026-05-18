@@ -461,6 +461,9 @@ def mock_hitl_service():
     mock.get_pending_requests = AsyncMock(return_value=[])
     mock.cancel_request = AsyncMock()
     mock.cancel_requests_for_message = AsyncMock()
+    mock.resolve_hitl = AsyncMock()
+    mock.get_pending_hitl = AsyncMock(return_value=[])
+    mock.cancel_hitl = AsyncMock()
     return mock
 
 
@@ -571,13 +574,16 @@ def patch_sse_deps(mock_db_service, mock_sse_manager, mock_mongodb, mock_hitl_se
     with ExitStack() as stack:
         stack.enter_context(patch(PATCH["sse.db_service"], mock_db_service))
         stack.enter_context(patch(PATCH["sse.sse_manager"], mock_sse_manager))
-        stack.enter_context(patch(PATCH["sse.mongodb"], mock_mongodb))
         stack.enter_context(patch(PATCH["hitl_service_singleton"], mock_hitl_service))
+        execution_engine = MagicMock()
+        execution_engine.cancel = AsyncMock(return_value=True)
+        stack.enter_context(patch("api.sse.execution_engine", execution_engine))
         yield {
             "db_service": mock_db_service,
             "sse_manager": mock_sse_manager,
             "mongodb": mock_mongodb,
             "hitl_service": mock_hitl_service,
+            "execution_engine": execution_engine,
         }
 
 
@@ -585,14 +591,23 @@ def patch_sse_deps(mock_db_service, mock_sse_manager, mock_mongodb, mock_hitl_se
 def patch_room_center_deps(mock_db_service, mock_room_center, mock_room_message_center):
     """Patch all room center endpoint dependencies at once."""
     from contextlib import ExitStack
+    from common.dto import ExecutionAck
     with ExitStack() as stack:
         stack.enter_context(patch(PATCH["room_center.db_service"], mock_db_service))
         stack.enter_context(patch(PATCH["room_center.room_center"], mock_room_center))
         stack.enter_context(patch(PATCH["room_center.room_message_center"], mock_room_message_center))
+        execution_engine = MagicMock()
+        execution_engine.execute = AsyncMock(
+            return_value=ExecutionAck(success=True, message_id="new-message-id")
+        )
+        execution_engine.start_orchestration = AsyncMock()
+        execution_engine.get_runs_for_room = AsyncMock(return_value=[])
+        stack.enter_context(patch("api.room_center.execution_engine", execution_engine))
         yield {
             "db_service": mock_db_service,
             "room_center": mock_room_center,
             "room_message_center": mock_room_message_center,
+            "execution_engine": execution_engine,
         }
 
 

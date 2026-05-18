@@ -1,0 +1,56 @@
+[
+  {
+    "path": "execution/events.py",
+    "function": "emit_processing_status",
+    "role": "central_record_then_emit_helper",
+    "status_source": "status argument",
+    "lifecycle_id_source": "lifecycle_message_id or message_id when record_lifecycle is true",
+    "frontend_transport": "typed or legacy compatibility frame",
+    "lifecycle_required_for_frontend_emit": true
+  },
+  {
+    "path": "execution/dispatch/response_handler.py",
+    "function": "AgentResponseHandler._emit_processing_status",
+    "role": "dispatch status helper",
+    "status_source": "AgentEvent.state",
+    "lifecycle_id_source": "verified AgentEvent.lifecycle_message_id",
+    "frontend_transport": "delegates to central helper",
+    "lifecycle_required_for_frontend_emit": true
+  },
+  {
+    "path": "execution/orchestration/queue_executor.py",
+    "function": "QueueExecutor._emit_processing_status",
+    "role": "queue status helper",
+    "status_source": "queue execution state",
+    "lifecycle_id_source": "lifecycle root user message id",
+    "frontend_transport": "delegates to central helper",
+    "lifecycle_required_for_frontend_emit": true
+  },
+  {
+    "path": "execution/orchestration/room_message_center.py",
+    "function": "RoomMessageCenter._emit_processing_status",
+    "role": "room orchestration status helper",
+    "status_source": "room orchestration state",
+    "lifecycle_id_source": "lifecycle root user message id",
+    "frontend_transport": "delegates to central helper",
+    "lifecycle_required_for_frontend_emit": true
+  },
+  {
+    "path": "execution/orchestration/supervisor_executor.py",
+    "function": "SupervisorExecutor._emit_processing_status",
+    "role": "supervisor status helper",
+    "status_source": "supervisor execution state",
+    "lifecycle_id_source": "lifecycle root user message id",
+    "frontend_transport": "delegates to central helper",
+    "lifecycle_required_for_frontend_emit": true
+  },
+  {
+    "path": "execution/facade.py",
+    "function": "hub_agent_response_internal_to_agent_event",
+    "role": "hub processing_status ingress validation",
+    "status_source": "Hub payload state",
+    "lifecycle_id_source": "verified Hub payload lifecycle_message_id",
+    "frontend_transport": "AgentResponseHandler processing_status path",
+    "lifecycle_required_for_frontend_emit": true
+  }
+]

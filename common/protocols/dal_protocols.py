@@ -1,3 +1,4 @@
+from types import TracebackType
 from typing import AsyncIterator, Protocol, runtime_checkable
 
 from common.dto import VectorRecord, VectorSearchResult
@@ -9,6 +10,17 @@ class MongoDAL(Protocol):
     async def connect(self) -> None: ...
     async def close(self) -> None: ...
     async def ping(self) -> bool: ...
+
+
+@runtime_checkable
+class MongoChangeStream(Protocol):
+    async def __aenter__(self) -> AsyncIterator[dict]: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool | None: ...
 
 
 @runtime_checkable
@@ -34,7 +46,7 @@ class MongoCollection(Protocol):
     ) -> dict | None: ...
     def watch(
         self, pipeline: list[dict] | None = None, **kwargs
-    ) -> AsyncIterator[dict]: ...
+    ) -> MongoChangeStream: ...
 
 
 @runtime_checkable
@@ -114,6 +126,7 @@ __all__ = [
     "DistributedLock",
     "IndexRegistry",
     "LeaderElector",
+    "MongoChangeStream",
     "MongoCollection",
     "MongoDAL",
     "ObjectStorageDAL",

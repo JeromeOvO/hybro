@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, AsyncIterator
+from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from common.config import settings
+from common.protocols import MongoChangeStream
 
 
 class MongoCollectionAdapter:
@@ -97,7 +98,7 @@ class MongoCollectionAdapter:
 
     def watch(
         self, pipeline: list[dict] | None = None, **kwargs
-    ) -> AsyncIterator[dict]:
+    ) -> MongoChangeStream:
         return self._collection.watch(pipeline or [], **kwargs)
 
 

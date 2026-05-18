@@ -14,8 +14,12 @@ import pytest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi import HTTPException
-
+from execution.hitl.exceptions import (
+    HITLConflictError,
+    HITLNotFoundError,
+    HITLRoomMismatchError,
+    HITLRoutingFailedError,
+)
 from models.hitl import (
     HITLRequest,
     HITLStatus,
@@ -54,6 +58,10 @@ def mock_hitl_db_service():
     mock.claim_hitl_request = AsyncMock(return_value=None)
     mock.fenced_update_hitl_request = AsyncMock(return_value=True)
     mock.cas_update_hitl_request = AsyncMock(return_value=True)
+    mock.count_pending_in_hitl_group = AsyncMock(return_value=0)
+    mock.claim_hitl_group_routing = AsyncMock(return_value=True)
+    mock.release_hitl_group_routing = AsyncMock(return_value=True)
+    mock.get_hitl_group_requests = AsyncMock(return_value=[])
     mock.reset_last_notified_state = AsyncMock()
     mock.get_pending_continuation_on_message = AsyncMock(return_value=None)
     mock.save_continuation_on_user_message = AsyncMock(return_value=True)
@@ -73,6 +81,65 @@ def mock_hitl_sse_manager():
 # =============================================================================
 # Request Input Tests
 # =============================================================================
+
+
+def test_infer_prompt_type_detects_approve_reject():
+    from execution.hitl.detector import infer_prompt_type
+
+    assert infer_prompt_type("Approve or reject this action").value == "confirmation"
+
+
+def test_hitl_request_translator_preserves_pending_api_shape(sample_hitl_request):
+    from execution.hitl.translators import model_hitl_request_to_common
+
+    sample_hitl_request.display_message_id = "display-msg-1"
+    sample_hitl_request.group_id = "group-1"
+    sample_hitl_request.group_total = 2
+    sample_hitl_request.group_index = 1
+
+    common = model_hitl_request_to_common(sample_hitl_request)
+
+    assert common.request_id == sample_hitl_request.request_id
+    assert common.message_id == "display-msg-1"
+    assert common.group_id == "group-1"
+    assert common.group_total == 2
+    assert common.group_index == 1
+
+
+def test_hitl_response_translator_preserves_route_dict_shape():
+    from execution.hitl.translators import hitl_response_dict_to_common
+
+    response = hitl_response_dict_to_common(
+        {
+            "status": "ok",
+            "request_id": "req-1",
+            "reclaimed": True,
+            "error": None,
+        }
+    )
+
+    assert response.status == "ok"
+    assert response.request_id == "req-1"
+    assert response.reclaimed is True
+
+
+def test_bound_hitl_service_proxy_raises_before_binding_and_forwards_after_binding():
+    from execution.hitl.factory import BoundHITLServiceProxy
+
+    proxy = BoundHITLServiceProxy()
+    with pytest.raises(RuntimeError):
+        proxy.recover_stale_processing
+
+    target = MagicMock()
+    target.recover_stale_processing = AsyncMock(return_value=3)
+    proxy.bind(target)
+    assert proxy.recover_stale_processing is target.recover_stale_processing
+
+
+def test_legacy_hitl_singleton_is_bound_proxy():
+    from services.hitl_service import BoundHITLServiceProxy, hitl_service
+
+    assert isinstance(hitl_service, BoundHITLServiceProxy)
 
 
 class TestRequestInput:
@@ -264,8 +331,10 @@ class TestCancelRequest:
             room_id=sample_hitl_request.room_id,
         )
         
-        mock_hitl_db_service.update_hitl_request.assert_called_once_with(
-            sample_hitl_request.request_id, status=HITLStatus.CANCELED
+        mock_hitl_db_service.cas_update_hitl_request.assert_awaited_once_with(
+            sample_hitl_request.request_id,
+            expected_status=HITLStatus.PENDING.value,
+            status=HITLStatus.CANCELED.value,
         )
 
     @pytest.mark.asyncio
@@ -276,10 +345,10 @@ class TestCancelRequest:
         hitl_service._db_service = mock_hitl_db_service
         mock_hitl_db_service.get_hitl_request.return_value = None
         
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(HITLNotFoundError) as exc_info:
             await hitl_service.cancel_request("nonexistent-request")
         
-        assert exc_info.value.status_code == 404
+        assert exc_info.value.message == "HITL request not found"
 
     @pytest.mark.asyncio
     async def test_raises_403_on_room_mismatch(
@@ -291,13 +360,13 @@ class TestCancelRequest:
         request_doc = sample_hitl_request.model_dump(mode="json")
         mock_hitl_db_service.get_hitl_request.return_value = request_doc
         
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(HITLRoomMismatchError) as exc_info:
             await hitl_service.cancel_request(
                 sample_hitl_request.request_id,
                 room_id="different-room",
             )
         
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.message == "Room mismatch"
 
     @pytest.mark.asyncio
     async def test_noop_when_already_resolved(
@@ -315,6 +384,48 @@ class TestCancelRequest:
         
         # Should not call update
         mock_hitl_db_service.update_hitl_request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cancel_uses_pending_cas_before_clearing_or_emitting(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._sse_manager = mock_hitl_sse_manager
+        request_doc = sample_hitl_request.model_dump(mode="json")
+        mock_hitl_db_service.get_hitl_request.return_value = request_doc
+        mock_hitl_db_service.cas_update_hitl_request.return_value = True
+
+        await hitl_service.cancel_request(
+            sample_hitl_request.request_id,
+            room_id=sample_hitl_request.room_id,
+        )
+
+        mock_hitl_db_service.cas_update_hitl_request.assert_awaited_once_with(
+            sample_hitl_request.request_id,
+            expected_status=HITLStatus.PENDING.value,
+            status=HITLStatus.CANCELED.value,
+        )
+        mock_hitl_db_service.update_hitl_request.assert_not_called()
+        mock_hitl_sse_manager.broadcast_to_room.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cancel_does_not_clear_or_emit_when_pending_cas_loses(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._sse_manager = mock_hitl_sse_manager
+        request_doc = sample_hitl_request.model_dump(mode="json")
+        mock_hitl_db_service.get_hitl_request.return_value = request_doc
+        mock_hitl_db_service.cas_update_hitl_request.return_value = False
+
+        await hitl_service.cancel_request(
+            sample_hitl_request.request_id,
+            room_id=sample_hitl_request.room_id,
+        )
+
+        mock_hitl_db_service.get_and_clear_continuation_on_message.assert_not_awaited()
+        mock_hitl_db_service.get_and_clear_continuation_on_user_message.assert_not_awaited()
+        mock_hitl_sse_manager.broadcast_to_room.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_emits_cancel_event(
@@ -383,8 +494,239 @@ class TestCancelRequestsForMessage:
         
         await hitl_service.cancel_requests_for_message("msg-456")
         
-        # Should have called update for both requests
-        assert mock_hitl_db_service.update_hitl_request.call_count == 2
+        # Should have CAS-canceled both requests
+        assert mock_hitl_db_service.cas_update_hitl_request.await_count == 2
+
+
+class TestHandleResponseErrors:
+    """Tests for execution-owned handle_response errors."""
+
+    @pytest.mark.asyncio
+    async def test_raises_execution_not_found_when_claim_missing_request(
+        self, hitl_service, mock_hitl_db_service
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        mock_hitl_db_service.claim_hitl_request.return_value = None
+        mock_hitl_db_service.get_hitl_request.return_value = None
+
+        with pytest.raises(HITLNotFoundError) as exc_info:
+            await hitl_service.handle_response(
+                room_id="room-1",
+                request_id="missing-request",
+                user_input="yes",
+                user_id="user-1",
+            )
+
+        assert exc_info.value.message == "HITL request not found"
+
+    @pytest.mark.asyncio
+    async def test_raises_execution_conflict_when_claim_already_resolved(
+        self, hitl_service, mock_hitl_db_service, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        mock_hitl_db_service.claim_hitl_request.return_value = None
+        doc = sample_hitl_request.model_dump(mode="json")
+        doc["status"] = HITLStatus.RESPONDED.value
+        mock_hitl_db_service.get_hitl_request.return_value = doc
+
+        with pytest.raises(HITLConflictError) as exc_info:
+            await hitl_service.handle_response(
+                room_id=sample_hitl_request.room_id,
+                request_id=sample_hitl_request.request_id,
+                user_input="yes",
+                user_id="user-1",
+            )
+
+        assert exc_info.value.message == "Request already responded"
+
+
+class TestGroupedHandleResponse:
+    """Tests for grouped HITL response routing."""
+
+    @pytest.mark.asyncio
+    async def test_first_group_answer_waits_for_remaining_answers(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._sse_manager = mock_hitl_sse_manager
+        request = sample_hitl_request.model_copy(
+            update={
+                "source": "supervisor",
+                "group_id": "group-1",
+                "group_total": 2,
+                "group_index": 0,
+                "continuation_message_id": "cont-1",
+            }
+        )
+        doc = request.model_dump(mode="json")
+        mock_hitl_db_service.get_hitl_request.return_value = doc
+        mock_hitl_db_service.claim_hitl_request.return_value = doc
+        # The DB helper counts the current processing claim plus pending siblings.
+        mock_hitl_db_service.count_pending_in_hitl_group.return_value = 2
+        hitl_service._handle_supervisor_response = AsyncMock()
+
+        result = await hitl_service.handle_response(
+            room_id=request.room_id,
+            request_id=request.request_id,
+            user_input="first answer",
+            user_id="user-1",
+        )
+
+        assert result == {"status": "ok", "request_id": request.request_id}
+        hitl_service._handle_supervisor_response.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_last_group_answer_routes_supervisor_response(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._sse_manager = mock_hitl_sse_manager
+        request = sample_hitl_request.model_copy(
+            update={
+                "source": "supervisor",
+                "group_id": "group-1",
+                "group_total": 2,
+                "group_index": 1,
+                "continuation_message_id": "cont-1",
+            }
+        )
+        doc = request.model_dump(mode="json")
+        mock_hitl_db_service.get_hitl_request.return_value = doc
+        mock_hitl_db_service.claim_hitl_request.return_value = doc
+        # The DB helper counts the current processing claim, so the final active
+        # group member reports one remaining record.
+        mock_hitl_db_service.count_pending_in_hitl_group.return_value = 1
+        mock_hitl_db_service.get_hitl_group_requests.return_value = [
+            {**doc, "prompt": "Q1?", "request_id": "req-1", "user_input": "first"},
+            {**doc, "prompt": "Q2?", "request_id": request.request_id},
+        ]
+        hitl_service._handle_supervisor_response = AsyncMock()
+
+        await hitl_service.handle_response(
+            room_id=request.room_id,
+            request_id=request.request_id,
+            user_input="second",
+            user_id="user-1",
+        )
+
+        hitl_service._handle_supervisor_response.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_group_answer_routes_after_finalize_when_group_completes(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._sse_manager = mock_hitl_sse_manager
+        request = sample_hitl_request.model_copy(
+            update={
+                "source": "supervisor",
+                "group_id": "group-1",
+                "group_total": 2,
+                "group_index": 0,
+                "continuation_message_id": "cont-1",
+            }
+        )
+        doc = request.model_dump(mode="json")
+        mock_hitl_db_service.get_hitl_request.return_value = doc
+        mock_hitl_db_service.claim_hitl_request.return_value = doc
+        mock_hitl_db_service.count_pending_in_hitl_group.side_effect = [2, 0]
+        mock_hitl_db_service.claim_hitl_group_routing.return_value = True
+        mock_hitl_db_service.get_hitl_group_requests.return_value = [
+            {**doc, "prompt": "Q1?", "request_id": request.request_id},
+            {**doc, "prompt": "Q2?", "request_id": "req-2", "user_input": "second"},
+        ]
+        hitl_service._handle_supervisor_response = AsyncMock()
+
+        await hitl_service.handle_response(
+            room_id=request.room_id,
+            request_id=request.request_id,
+            user_input="first",
+            user_id="user-1",
+        )
+
+        mock_hitl_db_service.claim_hitl_group_routing.assert_awaited_once()
+        hitl_service._handle_supervisor_response.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_group_route_failure_releases_claim_for_retry(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._sse_manager = mock_hitl_sse_manager
+        request = sample_hitl_request.model_copy(
+            update={
+                "source": "supervisor",
+                "group_id": "group-1",
+                "group_total": 2,
+                "group_index": 1,
+                "continuation_message_id": "cont-1",
+            }
+        )
+        doc = request.model_dump(mode="json")
+        mock_hitl_db_service.get_hitl_request.return_value = doc
+        mock_hitl_db_service.claim_hitl_request.return_value = doc
+        mock_hitl_db_service.count_pending_in_hitl_group.return_value = 1
+        mock_hitl_db_service.claim_hitl_group_routing.return_value = True
+        mock_hitl_db_service.get_hitl_group_requests.return_value = [
+            {**doc, "prompt": "Q1?", "request_id": "req-1", "user_input": "first"},
+            {**doc, "prompt": "Q2?", "request_id": request.request_id},
+        ]
+        hitl_service._handle_supervisor_response = AsyncMock(
+            side_effect=RuntimeError("transient resume failure")
+        )
+
+        with pytest.raises(HITLRoutingFailedError):
+            await hitl_service.handle_response(
+                room_id=request.room_id,
+                request_id=request.request_id,
+                user_input="second",
+                user_id="user-1",
+            )
+
+        mock_hitl_db_service.release_hitl_group_routing.assert_awaited_once()
+        assert (
+            mock_hitl_db_service.release_hitl_group_routing.await_args.args[0]
+            == "group-1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_room_mismatch_is_rejected_before_claim(
+        self, hitl_service, mock_hitl_db_service, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        doc = sample_hitl_request.model_dump(mode="json")
+        mock_hitl_db_service.get_hitl_request.return_value = doc
+
+        with pytest.raises(HITLRoomMismatchError):
+            await hitl_service.handle_response(
+                room_id="different-room",
+                request_id=sample_hitl_request.request_id,
+                user_input="yes",
+                user_id="user-1",
+            )
+
+        mock_hitl_db_service.claim_hitl_request.assert_not_awaited()
+        mock_hitl_db_service.fenced_update_hitl_request.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_wrong_room_resolved_request_does_not_leak_status(
+        self, hitl_service, mock_hitl_db_service, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        doc = sample_hitl_request.model_dump(mode="json")
+        doc["status"] = HITLStatus.RESPONDED.value
+        mock_hitl_db_service.get_hitl_request.return_value = doc
+
+        with pytest.raises(HITLRoomMismatchError) as exc_info:
+            await hitl_service.handle_response(
+                room_id="different-room",
+                request_id=sample_hitl_request.request_id,
+                user_input="yes",
+                user_id="user-1",
+            )
+
+        assert exc_info.value.message == "Room mismatch"
+        mock_hitl_db_service.claim_hitl_request.assert_not_awaited()
 
 
 # =============================================================================
@@ -397,9 +739,10 @@ class TestEmitHitlEvent:
 
     @pytest.mark.asyncio
     async def test_emits_input_requested_event(
-        self, hitl_service, mock_hitl_sse_manager, sample_hitl_request
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
         """Should emit correct data for INPUT_REQUESTED event."""
+        hitl_service._db_service = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         
         await hitl_service._emit_hitl_event(
@@ -421,9 +764,10 @@ class TestEmitHitlEvent:
 
     @pytest.mark.asyncio
     async def test_emits_status_update_event(
-        self, hitl_service, mock_hitl_sse_manager, sample_hitl_request
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
         """Should emit correct data for status update events."""
+        hitl_service._db_service = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         
         await hitl_service._emit_hitl_event(
@@ -440,9 +784,10 @@ class TestEmitHitlEvent:
 
     @pytest.mark.asyncio
     async def test_includes_error_message_on_error_event(
-        self, hitl_service, mock_hitl_sse_manager, sample_hitl_request
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
         """Should include error message for ERROR events."""
+        hitl_service._db_service = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         
         await hitl_service._emit_hitl_event(

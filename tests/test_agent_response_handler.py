@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from modules.agent_event import AgentEvent
-from modules.agent_response_handler import AgentResponseHandler
+from execution.dispatch.response_handler import AgentResponseHandler
 
 
 # =============================================================================
@@ -21,7 +21,7 @@ from modules.agent_response_handler import AgentResponseHandler
 # =============================================================================
 
 
-def _make_handler(*, db=None, sse=None, rmc=None):
+def _make_handler(*, db=None, sse=None, rmc=None, hitl_coordinator=None):
     if db is None:
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=True)
@@ -38,7 +38,12 @@ def _make_handler(*, db=None, sse=None, rmc=None):
     if rmc is None:
         rmc = MagicMock()
         rmc.resume_queue_from_continuation = AsyncMock(return_value=True)
-    return AgentResponseHandler(db=db, sse=sse, room_message_center=rmc)
+    return AgentResponseHandler(
+        db=db,
+        sse=sse,
+        room_message_center=rmc,
+        hitl_coordinator=hitl_coordinator,
+    )
 
 
 def _base_event(**overrides):
@@ -54,22 +59,22 @@ def _base_event(**overrides):
 
 
 def test_processing_status_callback_has_no_required_post_emit_business_side_effects():
-    path = Path(__file__).resolve().parents[1] / "modules" / "agent_response_handler.py"
+    path = Path(__file__).resolve().parents[1] / "execution" / "dispatch" / "response_handler.py"
     tree = ast.parse(path.read_text(), filename=str(path))
     fn = next(
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.AsyncFunctionDef) and node.name == "_on_processing_status"
     )
-    send_lines = [
+    emit_lines = [
         node.lineno
         for node in ast.walk(fn)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "send_processing_status"
+        and node.func.attr == "_emit_processing_status"
     ]
-    assert send_lines
-    last_send = max(send_lines)
+    assert emit_lines
+    last_emit = max(emit_lines)
     forbidden_after_emit = {
         "record_and_maybe_broadcast_run_event",
         "update_task_state_on_message",
@@ -79,7 +84,7 @@ def test_processing_status_callback_has_no_required_post_emit_business_side_effe
     }
     post_emit = []
     for node in ast.walk(fn):
-        if not isinstance(node, ast.Call) or node.lineno <= last_send:
+        if not isinstance(node, ast.Call) or node.lineno <= last_emit:
             continue
         if isinstance(node.func, ast.Attribute):
             name = node.func.attr
@@ -274,7 +279,7 @@ class TestResponseEvent:
         with pytest.MonkeyPatch.context() as mp:
             mock_notify = AsyncMock(return_value=True)
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 mock_notify,
             )
             await h.handle(event)
@@ -294,7 +299,7 @@ class TestResponseEvent:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             await h.handle(event)
@@ -311,7 +316,7 @@ class TestResponseEvent:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             await h.handle(event)
@@ -336,7 +341,7 @@ class TestErrorEvent:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             await h.handle(event)
@@ -358,7 +363,7 @@ class TestErrorEvent:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             await h.handle(event)
@@ -381,7 +386,7 @@ class TestCanceledEvent:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             await h.handle(event)
@@ -411,7 +416,7 @@ class TestInteractiveEvent:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             await h.handle(event)
@@ -436,37 +441,23 @@ class TestInteractiveEvent:
         db.get_room_by_room_id = AsyncMock(
             return_value=SimpleNamespace(room_agent_set={"agent-001": "Agent X"})
         )
-        h = _make_handler(db=db)
+        hitl = SimpleNamespace(
+            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
+        )
+        h = _make_handler(db=db, hitl_coordinator=hitl)
         event = AgentEvent(
             kind="interactive", **_base_event(),
             text="need input", state="input-required",
             task_id="t-1", context_id="c-1",
         )
-        hitl = SimpleNamespace(
-            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
-        )
-
-        order: list[str] = []
-
-        async def record(*args, **kwargs):
-            order.append("record")
-
-        async def send(*args, **kwargs):
-            order.append("send")
-
-        h._sse.send_processing_status = AsyncMock(side_effect=send)
+        emitter = AsyncMock()
+        h.bind_execution_event_deps(emitter)
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
-            mp.setattr(
-                "modules.agent_response_handler.record_and_maybe_broadcast_run_event",
-                AsyncMock(side_effect=record),
-                raising=False,
-            )
-            mp.setattr("services.hitl_service.hitl_service", hitl)
             await h.handle(event)
 
         hitl.request_input.assert_awaited_once_with(
@@ -481,12 +472,18 @@ class TestInteractiveEvent:
             continuation_message_id="msg-001",
             display_message_id="display-msg-001",
         )
-        h._sse.send_processing_status.assert_awaited_once_with(
-            "room-001",
-            "awaiting_input",
-            "user-msg-001",
+        emitter.assert_awaited_once_with(
+            room_id="room-001",
+            status="awaiting_input",
+            message_id="user-msg-001",
+            lifecycle_message_id="user-msg-001",
+            record_lifecycle=True,
+            client_request_id=None,
+            details=None,
+            legacy_details=None,
+            error_message=None,
         )
-        assert order == ["record", "send"]
+        h._sse.send_processing_status.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_logs_agent_name_lookup_failure_without_blocking_hitl(self):
@@ -500,34 +497,31 @@ class TestInteractiveEvent:
             return_value=SimpleNamespace(message_id="display-msg-001")
         )
         db.get_room_by_room_id = AsyncMock(side_effect=RuntimeError("db down"))
-        h = _make_handler(db=db)
+        hitl = SimpleNamespace(
+            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
+        )
+        h = _make_handler(db=db, hitl_coordinator=hitl)
+        emitter = AsyncMock()
+        h.bind_execution_event_deps(emitter)
         event = AgentEvent(
             kind="interactive", **_base_event(),
             text="need input", state="input-required",
             task_id="t-1", context_id="c-1",
         )
-        hitl = SimpleNamespace(
-            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
-        )
-
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
-            mp.setattr("services.hitl_service.hitl_service", hitl)
             debug = MagicMock()
-            mp.setattr("modules.agent_response_handler.logger.debug", debug)
+            mp.setattr("execution.dispatch.response_handler.logger.debug", debug)
             await h.handle(event)
 
         debug.assert_called_once_with("agent name lookup failed", exc_info=True)
         hitl.request_input.assert_awaited_once()
         assert hitl.request_input.call_args.kwargs["agent_name"] is None
-        h._sse.send_processing_status.assert_awaited_once_with(
-            "room-001",
-            "awaiting_input",
-            "user-msg-001",
-        )
+        emitter.assert_awaited_once()
+        h._sse.send_processing_status.assert_not_awaited()
 
 
 # =============================================================================
@@ -573,29 +567,28 @@ class TestStatusUpdateEvent:
 
 class TestProcessingStatusEvent:
     @pytest.mark.asyncio
-    async def test_sends_processing_status(self):
+    async def test_sends_processing_status_with_lifecycle_id(self):
         h = _make_handler()
         event = AgentEvent(
             kind="processing_status", **_base_event(),
+            lifecycle_message_id="umsg-001",
             state="completed", details="all done",
         )
         await h.handle(event)
         h._sse.send_processing_status.assert_awaited_once_with(
-            "room-001", "completed", message_id="msg-001", details="all done",
+            "room-001",
+            "completed",
+            "msg-001",
+            details="all done",
+            client_request_id=None,
+            agents=None,
         )
 
     @pytest.mark.asyncio
     async def test_records_when_lifecycle_message_id_is_explicit(self):
         h = _make_handler()
-        order: list[str] = []
-
-        async def record(*args, **kwargs):
-            order.append("record")
-
-        async def send(*args, **kwargs):
-            order.append("send")
-
-        h._sse.send_processing_status = AsyncMock(side_effect=send)
+        emitter = AsyncMock()
+        h.bind_execution_event_deps(emitter)
         event = AgentEvent(
             kind="processing_status", **_base_event(message_id="display-msg-001"),
             lifecycle_message_id="umsg-001",
@@ -604,53 +597,35 @@ class TestProcessingStatusEvent:
             client_request_id="cr-1",
         )
 
-        with pytest.MonkeyPatch.context() as mp:
-            helper = AsyncMock(side_effect=record)
-            mp.setattr(
-                "modules.agent_response_handler.record_and_maybe_broadcast_run_event",
-                helper,
-                raising=False,
-            )
-            await h.handle(event)
+        await h.handle(event)
 
-        helper.assert_awaited_once_with(
-            "room-001",
-            "completed",
-            "umsg-001",
-            client_request_id="cr-1",
-            details="all done",
-            sse=h._sse,
-        )
-        h._sse.send_processing_status.assert_awaited_once_with(
-            "room-001",
-            "completed",
+        emitter.assert_awaited_once_with(
+            room_id="room-001",
+            status="completed",
             message_id="display-msg-001",
-            details="all done",
+            lifecycle_message_id="umsg-001",
+            record_lifecycle=True,
             client_request_id="cr-1",
+            details=None,
+            legacy_details="all done",
+            error_message="all done",
         )
-        assert order == ["record", "send"]
+        h._sse.send_processing_status.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_related_message_processing_status_stays_transport_only(self):
+    async def test_processing_status_without_lifecycle_id_is_dropped(self):
         h = _make_handler()
+        emitter = AsyncMock()
+        h.bind_execution_event_deps(emitter)
         event = AgentEvent(
             kind="processing_status", **_base_event(),
             state="completed", details="all done",
         )
 
-        with pytest.MonkeyPatch.context() as mp:
-            helper = AsyncMock()
-            mp.setattr(
-                "modules.agent_response_handler.record_and_maybe_broadcast_run_event",
-                helper,
-                raising=False,
-            )
-            await h.handle(event)
+        await h.handle(event)
 
-        helper.assert_not_awaited()
-        h._sse.send_processing_status.assert_awaited_once_with(
-            "room-001", "completed", message_id="msg-001", details="all done",
-        )
+        emitter.assert_not_awaited()
+        h._sse.send_processing_status.assert_not_awaited()
 
 
 # =============================================================================
@@ -670,7 +645,7 @@ class TestResumeOrchestrationErrorHandling:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             # Should not raise despite resume failure

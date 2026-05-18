@@ -8,6 +8,8 @@ Covers:
 """
 
 import asyncio
+import ast
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -22,13 +24,15 @@ from main import check_multi_worker_safety
 
 
 def test_gunicorn_no_redis_raises():
-    """All Redis services down under gunicorn → RuntimeError listing 3 problems."""
-    with pytest.raises(RuntimeError, match="Event broker.*RedisService.*Relay"):
+    """All delivery/Redis services down under gunicorn -> RuntimeError lists problems."""
+    with pytest.raises(RuntimeError, match="Delivery Pub/Sub.*Delivery KV.*RedisService.*Relay.*change stream"):
         check_multi_worker_safety(
             is_gunicorn=True,
-            broker_connected=False,
+            delivery_pubsub_connected=False,
+            delivery_kv_connected=False,
             redis_service_connected=False,
             relay_streams_connected=False,
+            change_stream_connected=False,
         )
 
 
@@ -37,9 +41,11 @@ def test_gunicorn_partial_redis_raises():
     with pytest.raises(RuntimeError, match="Relay streams"):
         check_multi_worker_safety(
             is_gunicorn=True,
-            broker_connected=True,
+            delivery_pubsub_connected=True,
+            delivery_kv_connected=True,
             redis_service_connected=True,
             relay_streams_connected=False,
+            change_stream_connected=True,
         )
 
 
@@ -47,9 +53,11 @@ def test_gunicorn_all_redis_ok():
     """All Redis services up under gunicorn → no error."""
     check_multi_worker_safety(
         is_gunicorn=True,
-        broker_connected=True,
+        delivery_pubsub_connected=True,
+        delivery_kv_connected=True,
         redis_service_connected=True,
         relay_streams_connected=True,
+        change_stream_connected=True,
     )
 
 
@@ -57,9 +65,11 @@ def test_not_gunicorn_no_redis_ok():
     """Not running under gunicorn → guard skipped regardless of Redis state."""
     check_multi_worker_safety(
         is_gunicorn=False,
-        broker_connected=False,
+        delivery_pubsub_connected=False,
+        delivery_kv_connected=False,
         redis_service_connected=False,
         relay_streams_connected=False,
+        change_stream_connected=False,
     )
 
 
@@ -149,6 +159,22 @@ async def test_redis_broker_pool_uses_settings(monkeypatch):
 # =========================================================================
 # C + D. Lifespan ordering + cleanup tests
 # =========================================================================
+
+
+def test_normal_shutdown_requires_execution_deps_before_drain():
+    source = Path("main.py").read_text()
+    tree = ast.parse(source)
+    lifespan = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "lifespan"
+    )
+    normal_shutdown = ast.unparse(lifespan).split(
+        "# Drain: stop accepting new SSE connections", 1
+    )[0].split("# ── Startup failure: tear down only what was opened ──", 1)[-1]
+
+    assert "getattr(app.state, 'execution_deps', None)" not in normal_shutdown
+    assert "app.state.execution_deps" in normal_shutdown
 
 
 def _patch_infrastructure_noop(monkeypatch):

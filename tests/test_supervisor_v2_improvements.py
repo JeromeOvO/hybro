@@ -144,16 +144,20 @@ def _make_executor() -> SupervisorExecutor:
     se.rate_limit_service = MagicMock()
     se.room_coordinator_service = MagicMock()
     se.MAX_STEPS = 8
+    se._emitted_status_details = []
+
+    async def emit_processing_status(**kwargs):
+        detail = kwargs.get("details") or kwargs.get("legacy_details")
+        if detail:
+            se._emitted_status_details.append(detail)
+
+    se.bind_execution_event_deps(emit_processing_status)
     return se
 
 
 def _get_sse_details(se: SupervisorExecutor) -> list[str]:
-    """Extract all `details` values from send_processing_status calls."""
-    return [
-        c.kwargs.get("details") or (c.args[3] if len(c.args) > 3 else None)
-        for c in se.sse_manager.send_processing_status.call_args_list
-        if c.kwargs.get("details") or (len(c.args) > 3 and c.args[3])
-    ]
+    """Extract stage details emitted through the execution event boundary."""
+    return se._emitted_status_details
 
 
 class TestSupervisorSSEStageNotifications:
@@ -345,7 +349,7 @@ class TestSupervisorSSEStageNotifications:
     async def test_sse_failure_does_not_crash_loop(self):
         """If send_processing_status raises, the supervisor loop continues."""
         se = _make_executor()
-        se.sse_manager.send_processing_status.side_effect = Exception("SSE down")
+        se.bind_execution_event_deps(AsyncMock(side_effect=Exception("SSE down")))
         se.supervisor_service.decide_next.return_value = SupervisorAction(
             action=ActionType.DONE,
             reasoning="done",

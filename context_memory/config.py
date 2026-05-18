@@ -140,6 +140,4 @@ class ContextMemoryLLMConfig:
 
 
 def _memory_search_index_name() -> str:
-    from common.config import get_memory_search_index_name
-
-    return get_memory_search_index_name()
+    return _setting("memory_search_index_name", "room-memory")
