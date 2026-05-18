@@ -75,6 +75,59 @@ def mock_hitl_sse_manager():
 # =============================================================================
 
 
+def test_infer_prompt_type_detects_approve_reject():
+    from execution.hitl.detector import infer_prompt_type
+
+    assert infer_prompt_type("Approve or reject this action").value == "confirmation"
+
+
+def test_hitl_request_translator_preserves_pending_api_shape(sample_hitl_request):
+    from execution.hitl.translators import model_hitl_request_to_common
+
+    sample_hitl_request.display_message_id = "display-msg-1"
+    sample_hitl_request.group_id = "group-1"
+    sample_hitl_request.group_total = 2
+    sample_hitl_request.group_index = 1
+
+    common = model_hitl_request_to_common(sample_hitl_request)
+
+    assert common.request_id == sample_hitl_request.request_id
+    assert common.message_id == "display-msg-1"
+    assert common.group_id == "group-1"
+    assert common.group_total == 2
+    assert common.group_index == 1
+
+
+def test_hitl_response_translator_preserves_route_dict_shape():
+    from execution.hitl.translators import hitl_response_dict_to_common
+
+    response = hitl_response_dict_to_common(
+        {
+            "status": "ok",
+            "request_id": "req-1",
+            "reclaimed": True,
+            "error": None,
+        }
+    )
+
+    assert response.status == "ok"
+    assert response.request_id == "req-1"
+    assert response.reclaimed is True
+
+
+def test_bound_hitl_service_proxy_raises_before_binding_and_forwards_after_binding():
+    from execution.hitl.factory import BoundHITLServiceProxy
+
+    proxy = BoundHITLServiceProxy()
+    with pytest.raises(RuntimeError):
+        proxy.recover_stale_processing
+
+    target = MagicMock()
+    target.recover_stale_processing = AsyncMock(return_value=3)
+    proxy.bind(target)
+    assert proxy.recover_stale_processing is target.recover_stale_processing
+
+
 class TestRequestInput:
     """Tests for request_input method."""
 

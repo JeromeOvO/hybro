@@ -121,6 +121,7 @@ packages = [
     "execution.dispatch.middleware",
     "execution.dispatch.transports",
     "execution.state",
+    "execution.hitl",
     "models",
     "common",
     "common.config",
