@@ -34,11 +34,13 @@ class AgentResponseHandler:
         sse: SSEManager,
         room_message_center: object,
         slot_lifecycle=None,
+        hitl_coordinator=None,
     ) -> None:
         self._db = db
         self._sse = sse
         self._rmc = room_message_center
         self._slot_lifecycle = slot_lifecycle
+        self.hitl_coordinator = hitl_coordinator
         self._processing_status_emitter = None
 
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
@@ -285,7 +287,8 @@ class AgentResponseHandler:
         if not continuation:
             return
 
-        from services.hitl_service import hitl_service
+        if self.hitl_coordinator is None:
+            raise RuntimeError("HITL coordinator has not been bound")
 
         user_message_id = continuation.get("user_message_id", "")
         if not user_message_id:
@@ -306,7 +309,7 @@ class AgentResponseHandler:
             except Exception:
                 logger.debug("agent name lookup failed", exc_info=True)
 
-        hitl_req = await hitl_service.request_input(
+        hitl_req = await self.hitl_coordinator.request_input(
             room_id=e.room_id,
             user_message_id=user_message_id,
             source="agent",

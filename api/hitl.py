@@ -11,6 +11,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from api.room_center import verify_room_ownership
 from common.auth import ClerkUser, get_current_user
 from common.protocols import HITLManager
+from execution.hitl.exceptions import (
+    HITLError,
+    HITLConflictError,
+    HITLContinuationLostError,
+    HITLNotFoundError,
+    HITLRoomMismatchError,
+    HITLRoutingFailedError,
+)
 from models.hitl import HITLResponseRequest
 
 router = APIRouter(prefix="/rooms/{room_id}/hitl", tags=["hitl"])
@@ -28,6 +36,21 @@ def _require_hitl_manager() -> HITLManager:
     return hitl_manager
 
 
+def _raise_http_for_hitl_error(exc: HITLError) -> None:
+    status_code = 500
+    if isinstance(exc, HITLNotFoundError):
+        status_code = 404
+    elif isinstance(exc, HITLConflictError):
+        status_code = 409
+    elif isinstance(exc, HITLRoomMismatchError):
+        status_code = 403
+    elif isinstance(exc, HITLContinuationLostError):
+        status_code = 410
+    elif isinstance(exc, HITLRoutingFailedError):
+        status_code = 502
+    raise HTTPException(status_code=status_code, detail=exc.message) from exc
+
+
 @router.post("/respond")
 async def respond_to_hitl_request(
     room_id: str,
@@ -37,12 +60,15 @@ async def respond_to_hitl_request(
     """User responds to an HITL prompt."""
     await verify_room_ownership(room_id, user)
 
-    response = await _require_hitl_manager().resolve_hitl(
-        room_id,
-        body.request_id,
-        body.user_input,
-        user.user_id,
-    )
+    try:
+        response = await _require_hitl_manager().resolve_hitl(
+            room_id,
+            body.request_id,
+            body.user_input,
+            user.user_id,
+        )
+    except HITLError as exc:
+        _raise_http_for_hitl_error(exc)
     result = {"status": response.status, "request_id": response.request_id}
     if response.reclaimed is not None:
         result["reclaimed"] = response.reclaimed
@@ -78,5 +104,8 @@ async def cancel_hitl_request(
     """Cancel a pending HITL request."""
     await verify_room_ownership(room_id, user)
 
-    await _require_hitl_manager().cancel_hitl(room_id, request_id)
+    try:
+        await _require_hitl_manager().cancel_hitl(room_id, request_id)
+    except HITLError as exc:
+        _raise_http_for_hitl_error(exc)
     return {"status": "canceled"}

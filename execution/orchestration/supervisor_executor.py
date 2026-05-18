@@ -79,6 +79,7 @@ class SupervisorExecutor:
         agent_message_processor: AgentMessageProcessor,
         room_coordinator_service: RoomCoordinatorService,
         slot_lifecycle=None,
+        hitl_coordinator=None,
     ) -> None:
         self.supervisor_service = supervisor_service
         self.room_services = room_services
@@ -91,6 +92,7 @@ class SupervisorExecutor:
         self.agent_message_processor = agent_message_processor
         self.room_coordinator_service = room_coordinator_service
         self._slot_lifecycle = slot_lifecycle
+        self.hitl_coordinator = hitl_coordinator
         self._processing_status_emitter = None
 
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
@@ -677,9 +679,9 @@ class SupervisorExecutor:
 
                         # Only create HITL for the FIRST awaiting agent
                         ar = awaiting[0]
-                        from services.hitl_service import hitl_service
-
-                        request = await hitl_service.request_input(
+                        if self.hitl_coordinator is None:
+                            raise RuntimeError("HITL coordinator has not been bound")
+                        request = await self.hitl_coordinator.request_input(
                             room_id=room_id,
                             user_message_id=user_message_id,
                             source="agent",
@@ -848,9 +850,10 @@ class SupervisorExecutor:
                     trajectory.entries.append(entry)
                     trajectory.status = TrajectoryStatus.AWAITING_INPUT
 
-                    from services.hitl_service import hitl_service
                     from models.hitl import HITLPromptType
                     from models.supervisor_v2 import ClarifyQuestion
+                    if self.hitl_coordinator is None:
+                        raise RuntimeError("HITL coordinator has not been bound")
 
                     # Build questions list — prefer structured questions[],
                     # fall back to legacy clarification_question string.
@@ -877,7 +880,7 @@ class SupervisorExecutor:
                         """Cancel HITL requests and delete agent messages created in this CLARIFY."""
                         for rid in created_request_ids:
                             try:
-                                await hitl_service.cancel_request(rid, room_id)
+                                await self.hitl_coordinator.cancel_request(rid, room_id)
                             except Exception:
                                 logger.warning("Failed to cancel orphaned HITL request %s", rid)
                         for mid in created_messages:
@@ -911,7 +914,7 @@ class SupervisorExecutor:
                         )
                         created_messages.append(hitl_agent_message.message_id)
 
-                        request = await hitl_service.request_input(
+                        request = await self.hitl_coordinator.request_input(
                             room_id=room_id,
                             user_message_id=user_message_id,
                             source="supervisor",
@@ -1311,16 +1314,7 @@ class SupervisorExecutor:
                 logger.warning(
                     "dispatch_one cancelled for agent %s", target.agent_id
                 )
-                return V2StepResult(
-                    step_number=step_number,
-                    agent_id=target.agent_id,
-                    agent_name=target.agent_name,
-                    task=target.task,
-                    response_text="",
-                    success=False,
-                    status=StepStatus.FAILED,
-                    error_message="Agent dispatch was cancelled",
-                )
+                raise
             except Exception as e:
                 logger.exception(
                     "dispatch_one failed for agent %s: %s", target.agent_id, e

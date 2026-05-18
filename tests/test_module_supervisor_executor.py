@@ -8,7 +8,9 @@ Tests cover:
 - CLARIFY cleanup compensation: orphan requests are canceled on failure
 """
 
+import ast
 import pytest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -27,6 +29,8 @@ from models.supervisor_v2 import (
     V2StepResult,
 )
 
+_ROOT = Path(__file__).resolve().parents[1]
+
 
 def _make_supervisor_executor():
     se = object.__new__(SupervisorExecutor)
@@ -40,7 +44,29 @@ def _make_supervisor_executor():
     se.room_memory_service = MagicMock()
     se.rate_limit_service = MagicMock()
     se.room_coordinator_service = MagicMock()
+    se.hitl_coordinator = MagicMock()
     return se
+
+
+def test_dispatch_targets_cancelled_error_handler_reraises():
+    tree = ast.parse(
+        (_ROOT / "execution" / "orchestration" / "supervisor_executor.py").read_text()
+    )
+    dispatch_targets = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_dispatch_targets"
+    )
+    handlers = [
+        node
+        for node in ast.walk(dispatch_targets)
+        if isinstance(node, ast.ExceptHandler)
+        and ast.unparse(node.type) == "asyncio.CancelledError"
+    ]
+    assert handlers, "CancelledError handler not found"
+    for handler in handlers:
+        assert any(isinstance(stmt, ast.Raise) for stmt in handler.body)
+        assert not any(isinstance(stmt, ast.Return) for stmt in handler.body)
 
 
 # =============================================================================
@@ -196,15 +222,15 @@ class TestClarifyCleanupCompensation:
         se._save_interrupted_state = AsyncMock(return_value=False)
         se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
 
-        with patch("services.hitl_service.hitl_service", hitl_mock):
-            result = await se.run(
-                room_id="room-1",
-                user_message_id="umsg-1",
-                message_text="Hello",
-                agent_registry=[],
-                room_config=self._make_room_config(),
-                request_user_id="user-1",
-            )
+        se.hitl_coordinator = hitl_mock
+        result = await se.run(
+            room_id="room-1",
+            user_message_id="umsg-1",
+            message_text="Hello",
+            agent_registry=[],
+            room_config=self._make_room_config(),
+            request_user_id="user-1",
+        )
 
         assert result.status == "failed"
         assert hitl_mock.cancel_request.await_count == 2
@@ -243,15 +269,15 @@ class TestClarifyCleanupCompensation:
         se.supervisor_service.decide_next = AsyncMock(return_value=action)
         se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
 
-        with patch("services.hitl_service.hitl_service", hitl_mock):
-            result = await se.run(
-                room_id="room-1",
-                user_message_id="umsg-1",
-                message_text="Hello",
-                agent_registry=[],
-                room_config=self._make_room_config(),
-                request_user_id="user-1",
-            )
+        se.hitl_coordinator = hitl_mock
+        result = await se.run(
+            room_id="room-1",
+            user_message_id="umsg-1",
+            message_text="Hello",
+            agent_registry=[],
+            room_config=self._make_room_config(),
+            request_user_id="user-1",
+        )
 
         assert result.status == "failed"
         assert hitl_mock.cancel_request.await_count == 1
@@ -355,16 +381,16 @@ class TestProcessingStatusLifecycleOrder:
             return_value=SimpleNamespace(request_id="hitl-1")
         )
 
-        with patch("services.hitl_service.hitl_service", hitl_mock):
-            result = await se.run(
-                room_id="room-1",
-                user_message_id="msg-1",
-                message_text="hello",
-                agent_registry=[
-                    AgentProfile(agent_id="agent-1", agent_name="Agent")
-                ],
-                room_config=RoomConfig(),
-            )
+        se.hitl_coordinator = hitl_mock
+        result = await se.run(
+            room_id="room-1",
+            user_message_id="msg-1",
+            message_text="hello",
+            agent_registry=[
+                AgentProfile(agent_id="agent-1", agent_name="Agent")
+            ],
+            room_config=RoomConfig(),
+        )
 
         assert result.status == RunStatus.AWAITING_INPUT
         assert order == ["emit"]
@@ -400,14 +426,14 @@ class TestProcessingStatusLifecycleOrder:
             return_value=SimpleNamespace(request_id="hitl-1")
         )
 
-        with patch("services.hitl_service.hitl_service", hitl_mock):
-            result = await se.run(
-                room_id="room-1",
-                user_message_id="msg-1",
-                message_text="hello",
-                agent_registry=[],
-                room_config=RoomConfig(),
-            )
+        se.hitl_coordinator = hitl_mock
+        result = await se.run(
+            room_id="room-1",
+            user_message_id="msg-1",
+            message_text="hello",
+            agent_registry=[],
+            room_config=RoomConfig(),
+        )
 
         assert result.status == RunStatus.AWAITING_INPUT
         assert order == ["emit"]

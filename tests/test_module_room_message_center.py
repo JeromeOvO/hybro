@@ -9,6 +9,7 @@ Tests cover:
 """
 
 import ast
+import asyncio
 import pytest
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +25,7 @@ from models.supervisor_v2 import (
     V2StepResult,
     StepStatus,
 )
+from common.a2a_constants import SSEProcessingStatus
 
 
 # =============================================================================
@@ -92,6 +94,49 @@ class TestRoomFacadeBinding:
         rmc.bind_facade(facade)
 
         assert rmc._require_room_facade() is facade
+
+
+@pytest.mark.asyncio
+async def test_process_room_user_message_cancelled_error_emits_canceled_and_reraises():
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    request = SimpleNamespace(
+        room_id="room-1",
+        room_user_message_id="user-msg-1",
+        is_recovery=False,
+    )
+    rmc.database_service = SimpleNamespace(
+        claim_user_message_for_processing=AsyncMock(return_value=True),
+        refresh_processing_claim=AsyncMock(),
+    )
+    rmc._acquire_room_lock = AsyncMock(return_value="owner-1")
+    rmc._release_room_lock = AsyncMock()
+    rmc._process_room_user_message_locked = AsyncMock(
+        side_effect=asyncio.CancelledError()
+    )
+    rmc._notify_all_non_terminal_tasks_failed = AsyncMock()
+    rmc._emit_processing_status = AsyncMock()
+    rmc.sse_manager = SimpleNamespace(clear_cancellation=MagicMock())
+    rmc._turn_event_appender = SimpleNamespace(append=AsyncMock())
+
+    with pytest.raises(asyncio.CancelledError):
+        await rmc.process_room_user_message(request)
+
+    rmc._turn_event_appender.append.assert_awaited_once_with(
+        "room-1", "user-msg-1", "turn_canceled", {}
+    )
+    rmc._notify_all_non_terminal_tasks_failed.assert_awaited_once_with(
+        "room-1", "user-msg-1"
+    )
+    rmc._emit_processing_status.assert_awaited_once_with(
+        room_id="room-1",
+        status=SSEProcessingStatus.CANCELED,
+        message_id="user-msg-1",
+        lifecycle_message_id="user-msg-1",
+    )
+    rmc.sse_manager.clear_cancellation.assert_called_once_with("user-msg-1")
+    rmc._release_room_lock.assert_awaited_once_with(
+        "room-1", "owner-1", acquired_at=pytest.approx(rmc._release_room_lock.call_args.kwargs["acquired_at"])
+    )
 
 
 # =============================================================================

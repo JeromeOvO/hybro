@@ -10,10 +10,7 @@ from execution.orchestration.room_message_center import (
 
 
 def create_room_message_center(**kwargs: Any) -> RoomMessageCenter:
-    runtime = RoomMessageCenter()
-    for name, value in kwargs.items():
-        setattr(runtime, name, value)
-    return runtime
+    return RoomMessageCenter(**kwargs)
 
 
 __all__ = [

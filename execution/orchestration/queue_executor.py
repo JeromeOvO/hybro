@@ -103,6 +103,7 @@ class QueueExecutor:
         response_handler: AgentResponseHandler,
         slot_lifecycle=None,
         turn_event_appender=None,
+        hitl_coordinator=None,
     ) -> None:
         self.tsm = tsm
         self.sse_manager = sse_manager
@@ -117,6 +118,7 @@ class QueueExecutor:
         self.response_handler = response_handler
         self._slot_lifecycle = slot_lifecycle
         self._turn_event_appender = turn_event_appender
+        self.hitl_coordinator = hitl_coordinator
         self._processing_status_emitter = None
 
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
@@ -340,8 +342,9 @@ class QueueExecutor:
                             request_user_id=request_user_id,
                             current_agent=agent,
                         )
-                        from services.hitl_service import hitl_service
-                        hitl_req = await hitl_service.request_input(
+                        if self.hitl_coordinator is None:
+                            raise RuntimeError("HITL coordinator has not been bound")
+                        hitl_req = await self.hitl_coordinator.request_input(
                             room_id=room_id,
                             user_message_id=user_message_id,
                             source="agent",

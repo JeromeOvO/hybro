@@ -8,6 +8,8 @@ Covers:
 """
 
 import asyncio
+import ast
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -157,6 +159,22 @@ async def test_redis_broker_pool_uses_settings(monkeypatch):
 # =========================================================================
 # C + D. Lifespan ordering + cleanup tests
 # =========================================================================
+
+
+def test_normal_shutdown_requires_execution_deps_before_drain():
+    source = Path("main.py").read_text()
+    tree = ast.parse(source)
+    lifespan = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "lifespan"
+    )
+    normal_shutdown = ast.unparse(lifespan).split(
+        "# Drain: stop accepting new SSE connections", 1
+    )[0].split("# ── Startup failure: tear down only what was opened ──", 1)[-1]
+
+    assert "getattr(app.state, 'execution_deps', None)" not in normal_shutdown
+    assert "app.state.execution_deps" in normal_shutdown
 
 
 def _patch_infrastructure_noop(monkeypatch):

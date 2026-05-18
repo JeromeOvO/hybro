@@ -18,10 +18,16 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 from typing import Any
 
-from fastapi import HTTPException
-
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from execution.hitl.exceptions import (
+    ContinuationLostError,
+    HITLError,
+    HITLConflictError,
+    HITLNotFoundError,
+    HITLRoomMismatchError,
+    HITLRoutingFailedError,
+)
 from models.hitl import (
     HITLEventType,
     HITLPromptType,
@@ -78,19 +84,22 @@ def _infer_prompt_type(prompt_text: str) -> HITLPromptType:
     return HITLPromptType.TEXT
 
 
-class ContinuationLostError(RuntimeError):
-    """The supervisor continuation for this HITL request no longer exists."""
-
-
 class HITLService:
     """Manages the human-in-the-loop interaction lifecycle."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        continuation=None,
+        task_notifications=None,
+    ) -> None:
         # Lazy imports to avoid circular dependencies at module load time.
         # Resolved on first method call.
         self._db_service = None
         self._sse_manager = None
         self._a2a_service = None
+        self._continuation = continuation
+        self._task_notifications = task_notifications
 
     @property
     def database_service(self):
@@ -112,6 +121,18 @@ class HITLService:
             from services.a2a_service import a2a_service
             self._a2a_service = a2a_service
         return self._a2a_service
+
+    @property
+    def continuation(self):
+        if self._continuation is None:
+            raise RuntimeError("HITL continuation port has not been bound")
+        return self._continuation
+
+    @property
+    def task_notifications(self):
+        if self._task_notifications is None:
+            raise RuntimeError("HITL task notification port has not been bound")
+        return self._task_notifications
 
     # ------------------------------------------------------------------
     # Create HITL request
@@ -269,8 +290,8 @@ class HITLService:
         if not claimed_doc:
             doc = await self.database_service.get_hitl_request(request_id)
             if not doc:
-                raise HTTPException(404, "HITL request not found")
-            raise HTTPException(409, f"Request already {doc.get('status', 'unknown')}")
+                raise HITLNotFoundError("HITL request not found")
+            raise HITLConflictError(f"Request already {doc.get('status', 'unknown')}")
 
         request = HITLRequest(**{k: v for k, v in claimed_doc.items() if k != "_id"})
         if request.room_id != room_id:
@@ -283,7 +304,7 @@ class HITLService:
                     "responded_by_user_id": None,
                 },
             )
-            raise HTTPException(403, "Room mismatch")
+            raise HITLRoomMismatchError("Room mismatch")
 
         # Phase 2: Route — revert to PENDING on failure (fenced).
         # A background heartbeat task bumps responded_at every
@@ -348,17 +369,6 @@ class HITLService:
                         await self._handle_supervisor_response(request, combined_input)
                     else:
                         await self._handle_supervisor_response(request, user_input)
-            except HTTPException:
-                await self.database_service.fenced_update_hitl_request(
-                    request_id, claim_id, {
-                        "status": HITLStatus.PENDING.value,
-                        "claim_id": None,
-                        "user_input": None,
-                        "responded_at": None,
-                        "responded_by_user_id": None,
-                    },
-                )
-                raise
             except ContinuationLostError as exc:
                 logger.warning(
                     "HITL request %s — continuation lost, canceling: %s",
@@ -375,10 +385,20 @@ class HITLService:
                     event_type=HITLEventType.INPUT_CANCELED,
                     request=request,
                 )
-                raise HTTPException(
-                    410,
+                raise ContinuationLostError(
                     "The supervisor session has expired. Please send a new message.",
                 ) from exc
+            except HITLError:
+                await self.database_service.fenced_update_hitl_request(
+                    request_id, claim_id, {
+                        "status": HITLStatus.PENDING.value,
+                        "claim_id": None,
+                        "user_input": None,
+                        "responded_at": None,
+                        "responded_by_user_id": None,
+                    },
+                )
+                raise
             except Exception as exc:
                 logger.error(
                     "HITL routing failed for request %s: %s",
@@ -401,10 +421,9 @@ class HITLService:
                     request=request,
                     error=str(exc),
                 )
-                raise HTTPException(
-                    502,
-                    f"Failed to deliver response to {request.source}: {exc}",
-                )
+                raise HITLRoutingFailedError(
+                    f"Failed to deliver response to {request.source}: {exc}"
+                ) from exc
             finally:
                 heartbeat_task.cancel()
                 try:
@@ -538,8 +557,7 @@ class HITLService:
                     "with failure to unblock conversation",
                     request.continuation_message_id,
                 )
-                from modules.RoomMessageCenter import room_message_center
-                await room_message_center.resume_queue_from_continuation(
+                await self.continuation.resume_queue_from_continuation(
                     request.continuation_message_id,
                     task_result_text=response_text,
                     failed=True,
@@ -562,7 +580,6 @@ class HITLService:
             )
             if agent_msg:
                 from a2a.types import TaskState
-                from services.task_notification_service import notify_task_update
 
                 state_map = {
                     "completed": TaskState.completed,
@@ -571,7 +588,7 @@ class HITLService:
                     "rejected": TaskState.rejected,
                 }
                 notify_state = state_map.get(effective_state, TaskState.completed)
-                await notify_task_update(
+                await self.task_notifications.notify_task_update(
                     request.display_message_id,
                     notify_state,
                     room_id=request.room_id,
@@ -584,8 +601,7 @@ class HITLService:
             task_state,
             request.continuation_message_id,
         )
-        from modules.RoomMessageCenter import room_message_center
-        resumed = await room_message_center.resume_queue_from_continuation(
+        resumed = await self.continuation.resume_queue_from_continuation(
             request.continuation_message_id,
             task_result_text=task_result_text,
             failed=is_failure,
@@ -604,8 +620,6 @@ class HITLService:
         self, request: HITLRequest, user_input: str
     ) -> None:
         """Resume V2 supervisor loop with user's answer injected into trajectory."""
-        from modules.RoomMessageCenter import room_message_center
-
         continuation = await self.database_service.get_pending_continuation_on_message(
             request.continuation_message_id
         )
@@ -630,8 +644,8 @@ class HITLService:
                     f"{request.continuation_message_id} — user reply would be lost"
                 )
 
-        resumed = await room_message_center.resume_queue_from_continuation(
-            message_id=request.continuation_message_id,
+        resumed = await self.continuation.resume_queue_from_continuation(
+            request.continuation_message_id,
             task_result_text=None,
         )
         if not resumed:
@@ -674,10 +688,10 @@ class HITLService:
         """Cancel a pending HITL request."""
         doc = await self.database_service.get_hitl_request(request_id)
         if not doc:
-            raise HTTPException(404, "HITL request not found")
+            raise HITLNotFoundError("HITL request not found")
         request = HITLRequest(**{k: v for k, v in doc.items() if k != "_id"})
         if room_id is not None and request.room_id != room_id:
-            raise HTTPException(403, "Room mismatch")
+            raise HITLRoomMismatchError("Room mismatch")
         if request.status != HITLStatus.PENDING:
             return  # Already resolved, no-op
 

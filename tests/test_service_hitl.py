@@ -14,8 +14,11 @@ import pytest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi import HTTPException
-
+from execution.hitl.exceptions import (
+    HITLConflictError,
+    HITLNotFoundError,
+    HITLRoomMismatchError,
+)
 from models.hitl import (
     HITLRequest,
     HITLStatus,
@@ -335,10 +338,10 @@ class TestCancelRequest:
         hitl_service._db_service = mock_hitl_db_service
         mock_hitl_db_service.get_hitl_request.return_value = None
         
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(HITLNotFoundError) as exc_info:
             await hitl_service.cancel_request("nonexistent-request")
         
-        assert exc_info.value.status_code == 404
+        assert exc_info.value.message == "HITL request not found"
 
     @pytest.mark.asyncio
     async def test_raises_403_on_room_mismatch(
@@ -350,13 +353,13 @@ class TestCancelRequest:
         request_doc = sample_hitl_request.model_dump(mode="json")
         mock_hitl_db_service.get_hitl_request.return_value = request_doc
         
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(HITLRoomMismatchError) as exc_info:
             await hitl_service.cancel_request(
                 sample_hitl_request.request_id,
                 room_id="different-room",
             )
         
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.message == "Room mismatch"
 
     @pytest.mark.asyncio
     async def test_noop_when_already_resolved(
@@ -444,6 +447,48 @@ class TestCancelRequestsForMessage:
         
         # Should have called update for both requests
         assert mock_hitl_db_service.update_hitl_request.call_count == 2
+
+
+class TestHandleResponseErrors:
+    """Tests for execution-owned handle_response errors."""
+
+    @pytest.mark.asyncio
+    async def test_raises_execution_not_found_when_claim_missing_request(
+        self, hitl_service, mock_hitl_db_service
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        mock_hitl_db_service.claim_hitl_request.return_value = None
+        mock_hitl_db_service.get_hitl_request.return_value = None
+
+        with pytest.raises(HITLNotFoundError) as exc_info:
+            await hitl_service.handle_response(
+                room_id="room-1",
+                request_id="missing-request",
+                user_input="yes",
+                user_id="user-1",
+            )
+
+        assert exc_info.value.message == "HITL request not found"
+
+    @pytest.mark.asyncio
+    async def test_raises_execution_conflict_when_claim_already_resolved(
+        self, hitl_service, mock_hitl_db_service, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        mock_hitl_db_service.claim_hitl_request.return_value = None
+        doc = sample_hitl_request.model_dump(mode="json")
+        doc["status"] = HITLStatus.RESPONDED.value
+        mock_hitl_db_service.get_hitl_request.return_value = doc
+
+        with pytest.raises(HITLConflictError) as exc_info:
+            await hitl_service.handle_response(
+                room_id=sample_hitl_request.room_id,
+                request_id=sample_hitl_request.request_id,
+                user_input="yes",
+                user_id="user-1",
+            )
+
+        assert exc_info.value.message == "Request already responded"
 
 
 # =============================================================================

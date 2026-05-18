@@ -208,6 +208,10 @@ async def lifespan(app: FastAPI):
                 emit_processing_status,
                 run_event_notification_from_payload,
             )
+            from execution.hitl.adapters import (
+                A2AHITLContinuationAdapter,
+                HITLTaskNotificationAdapter,
+            )
             from execution.cancellation import (
                 AgentTaskCleanupAdapter,
                 CancellationStateC3Adapter,
@@ -244,6 +248,13 @@ async def lifespan(app: FastAPI):
                     database_service=_db_svc,
                     sse_manager=sse_manager,
                     a2a_service=a2a_service,
+                    continuation=A2AHITLContinuationAdapter(
+                        a2a_service,
+                        lambda: execution_room_message_center,
+                    ),
+                    task_notifications=HITLTaskNotificationAdapter(
+                        notify_task_update_with_string_state
+                    ),
                 )
             )
             run_lifecycle = RunLifecycleAdapter(
@@ -289,7 +300,9 @@ async def lifespan(app: FastAPI):
             _room_facade = _room_deps.room_registry
             room_services.bind_facade(_room_facade)
             room_center.room_center.bind_facade(_room_facade)
-            execution_room_message_center.bind(create_room_message_center())
+            execution_room_message_center.bind(
+                create_room_message_center(hitl_coordinator=hitl_service)
+            )
             room_center.room_message_center.bind_facade(_room_facade)
 
             execution_facade = create_execution_facade(
@@ -628,14 +641,13 @@ async def lifespan(app: FastAPI):
         if _leader:
             await _leader.release_all(ALL_JOB_NAMES)
 
-        execution_deps = getattr(app.state, "execution_deps", None)
-        if execution_deps is not None:
-            cancelled = await execution_deps.execution_engine.cancel_inflight_tasks()
-            if cancelled:
-                logger.info(
-                    "shutdown: cancelled %s in-flight execution task(s)",
-                    cancelled,
-                )
+        execution_deps = app.state.execution_deps
+        cancelled = await execution_deps.execution_engine.cancel_inflight_tasks()
+        if cancelled:
+            logger.info(
+                "shutdown: cancelled %s in-flight execution task(s)",
+                cancelled,
+            )
 
         # Drain: stop accepting new SSE connections and allow in-flight events to finish
         if _delivery_bound:

@@ -21,7 +21,7 @@ from execution.dispatch.response_handler import AgentResponseHandler
 # =============================================================================
 
 
-def _make_handler(*, db=None, sse=None, rmc=None):
+def _make_handler(*, db=None, sse=None, rmc=None, hitl_coordinator=None):
     if db is None:
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=True)
@@ -38,7 +38,12 @@ def _make_handler(*, db=None, sse=None, rmc=None):
     if rmc is None:
         rmc = MagicMock()
         rmc.resume_queue_from_continuation = AsyncMock(return_value=True)
-    return AgentResponseHandler(db=db, sse=sse, room_message_center=rmc)
+    return AgentResponseHandler(
+        db=db,
+        sse=sse,
+        room_message_center=rmc,
+        hitl_coordinator=hitl_coordinator,
+    )
 
 
 def _base_event(**overrides):
@@ -436,16 +441,15 @@ class TestInteractiveEvent:
         db.get_room_by_room_id = AsyncMock(
             return_value=SimpleNamespace(room_agent_set={"agent-001": "Agent X"})
         )
-        h = _make_handler(db=db)
+        hitl = SimpleNamespace(
+            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
+        )
+        h = _make_handler(db=db, hitl_coordinator=hitl)
         event = AgentEvent(
             kind="interactive", **_base_event(),
             text="need input", state="input-required",
             task_id="t-1", context_id="c-1",
         )
-        hitl = SimpleNamespace(
-            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
-        )
-
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
 
@@ -454,7 +458,6 @@ class TestInteractiveEvent:
                 "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
-            mp.setattr("services.hitl_service.hitl_service", hitl)
             await h.handle(event)
 
         hitl.request_input.assert_awaited_once_with(
@@ -494,7 +497,10 @@ class TestInteractiveEvent:
             return_value=SimpleNamespace(message_id="display-msg-001")
         )
         db.get_room_by_room_id = AsyncMock(side_effect=RuntimeError("db down"))
-        h = _make_handler(db=db)
+        hitl = SimpleNamespace(
+            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
+        )
+        h = _make_handler(db=db, hitl_coordinator=hitl)
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
         event = AgentEvent(
@@ -502,16 +508,11 @@ class TestInteractiveEvent:
             text="need input", state="input-required",
             task_id="t-1", context_id="c-1",
         )
-        hitl = SimpleNamespace(
-            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
-        )
-
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
                 "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
-            mp.setattr("services.hitl_service.hitl_service", hitl)
             debug = MagicMock()
             mp.setattr("execution.dispatch.response_handler.logger.debug", debug)
             await h.handle(event)

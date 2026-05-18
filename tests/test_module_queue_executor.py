@@ -48,6 +48,7 @@ def _make_queue_executor():
     qe._agent_message_processor = MagicMock()
     qe.response_handler = MagicMock()
     qe.response_handler.notify_task_update = AsyncMock(return_value=True)
+    qe.hitl_coordinator = MagicMock()
     return qe
 
 
@@ -256,8 +257,8 @@ class TestProcessQueue:
             return_value=SimpleNamespace(request_id="hitl-1")
         )
 
-        with patch("services.hitl_service.hitl_service", hitl_service):
-            result = await qe.process_queue(queue, "room-1", "umsg-1")
+        qe.hitl_coordinator = hitl_service
+        result = await qe.process_queue(queue, "room-1", "umsg-1")
 
         assert result.result == QueueResult.PAUSED
         emit.assert_awaited_once()

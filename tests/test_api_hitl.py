@@ -20,6 +20,13 @@ from api.hitl import (
 )
 from models.hitl import HITLResponseRequest, HITLRequest, HITLStatus
 from common.dto import HITLRequest as CommonHITLRequest, HITLResponse as CommonHITLResponse
+from execution.hitl.exceptions import (
+    HITLConflictError,
+    HITLContinuationLostError,
+    HITLNotFoundError,
+    HITLRoomMismatchError,
+    HITLRoutingFailedError,
+)
 from tests.conftest import PATCH
 
 
@@ -80,6 +87,41 @@ class TestRespondToHitlRequest:
                 )
         
         assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error", "status_code"),
+        [
+            (HITLNotFoundError("HITL request not found"), 404),
+            (HITLConflictError("Request already responded"), 409),
+            (HITLRoomMismatchError("Room mismatch"), 403),
+            (
+                HITLContinuationLostError(
+                    "The supervisor session has expired. Please send a new message."
+                ),
+                410,
+            ),
+            (HITLRoutingFailedError("Failed to deliver response to agent"), 502),
+        ],
+    )
+    async def test_translates_execution_hitl_errors(
+        self, error, status_code, mock_user, mock_hitl_service, sample_room
+    ):
+        body = HITLResponseRequest(
+            request_id="hitl-request-123",
+            user_input="Response",
+        )
+        mock_hitl_service.resolve_hitl.side_effect = error
+
+        with patch(PATCH["hitl.verify_room_ownership"], AsyncMock()):
+            with patch("api.hitl.hitl_manager", mock_hitl_service):
+                with pytest.raises(HTTPException) as exc_info:
+                    await respond_to_hitl_request(
+                        sample_room.room_id, body, mock_user
+                    )
+
+        assert exc_info.value.status_code == status_code
+        assert exc_info.value.detail == error.message
 
 
 # =============================================================================
@@ -177,3 +219,22 @@ class TestCancelHitlRequest:
                 )
         
         assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_translates_cancel_execution_hitl_errors(
+        self, mock_user, mock_hitl_service, sample_room
+    ):
+        error = HITLRoomMismatchError("Room mismatch")
+        mock_hitl_service.cancel_hitl.side_effect = error
+
+        with patch(PATCH["hitl.verify_room_ownership"], AsyncMock()):
+            with patch("api.hitl.hitl_manager", mock_hitl_service):
+                with pytest.raises(HTTPException) as exc_info:
+                    await cancel_hitl_request(
+                        sample_room.room_id,
+                        "hitl-request-to-cancel",
+                        mock_user,
+                    )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "Room mismatch"

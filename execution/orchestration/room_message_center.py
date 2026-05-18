@@ -71,13 +71,68 @@ class RoomMessageCenter:
     """Room user message processing: agent communication,
     streaming/sync responses, queue management, and memory updates."""
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        room_services=None,
+        database_service=None,
+        sse_manager=None,
+        room_coordinator_service=None,
+        openai_service=None,
+        notification_service=None,
+        agent_resolver_service=None,
+        a2a_service=None,
+        task_service=None,
+        room_memory_service=None,
+        debate_service=None,
+        rate_limit_service=None,
+        room_supervisor_service=None,
+        hitl_coordinator=None,
+    ):
+        room_services = room_services if room_services is not None else globals()["room_services"]
+        database_service = database_service if database_service is not None else db_service
+        sse_manager = sse_manager if sse_manager is not None else globals()["sse_manager"]
+        room_coordinator_service = (
+            room_coordinator_service
+            if room_coordinator_service is not None
+            else globals()["room_coordinator_service"]
+        )
+        openai_service = openai_service if openai_service is not None else globals()["openai_service"]
+        notification_service = (
+            notification_service
+            if notification_service is not None
+            else globals()["notification_service"]
+        )
+        agent_resolver_service = (
+            agent_resolver_service
+            if agent_resolver_service is not None
+            else globals()["agent_resolver_service"]
+        )
+        a2a_service = a2a_service if a2a_service is not None else globals()["a2a_service"]
+        task_service = task_service if task_service is not None else globals()["task_service"]
+        room_memory_service = (
+            room_memory_service
+            if room_memory_service is not None
+            else globals()["room_memory_service"]
+        )
+        debate_service = debate_service if debate_service is not None else globals()["debate_service"]
+        rate_limit_service = (
+            rate_limit_service
+            if rate_limit_service is not None
+            else globals()["rate_limit_service"]
+        )
+        room_supervisor_service = (
+            room_supervisor_service
+            if room_supervisor_service is not None
+            else globals()["room_supervisor_service"]
+        )
+
         self.room_services = room_services
-        self.database_service = db_service
+        self.database_service = database_service
         self.sse_manager = sse_manager
         self.room_coordinator_service = room_coordinator_service
         self.openai_service = openai_service
-        self.tsm = TaskStateManager(room_services, notification_service)
+        self.tsm = TaskStateManager(self.room_services, notification_service)
         self.agent_dispatcher = AgentDispatcher(
             agent_resolver=agent_resolver_service,
             database_service=self.database_service,
@@ -88,6 +143,7 @@ class RoomMessageCenter:
             db=self.database_service,
             sse=self.sse_manager,
             room_message_center=self,
+            hitl_coordinator=hitl_coordinator,
         )
 
         # DirectTransport contains all streaming/sync response processing
@@ -121,6 +177,7 @@ class RoomMessageCenter:
             agent_dispatcher=self.agent_dispatcher,
             agent_message_processor=self.agent_message_processor,
             response_handler=self.agent_response_handler,
+            hitl_coordinator=hitl_coordinator,
         )
         self.supervisor_executor = SupervisorExecutor(
             supervisor_service=room_supervisor_service,
@@ -133,6 +190,7 @@ class RoomMessageCenter:
             agent_dispatcher=self.agent_dispatcher,
             agent_message_processor=self.agent_message_processor,
             room_coordinator_service=self.room_coordinator_service,
+            hitl_coordinator=hitl_coordinator,
         )
         self._turn_event_appender = None
 
@@ -502,6 +560,29 @@ class RoomMessageCenter:
             return await self._process_room_user_message_locked(
                 request, room_id, room_user_message_id
             )
+        except asyncio.CancelledError:
+            logger.info(
+                "RoomMessageCenter: processing task cancelled for message %s",
+                room_user_message_id,
+            )
+            if getattr(self, '_turn_event_appender', None):
+                try:
+                    await self._turn_event_appender.append(
+                        room_id, room_user_message_id, "turn_canceled", {},
+                    )
+                except Exception:
+                    pass
+            await self._notify_all_non_terminal_tasks_failed(
+                room_id, room_user_message_id
+            )
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.CANCELED,
+                message_id=room_user_message_id,
+                lifecycle_message_id=room_user_message_id,
+            )
+            self.sse_manager.clear_cancellation(room_user_message_id)
+            raise
         finally:
             await self._release_room_lock(room_id, lock_owner, acquired_at=lock_acquired_at)
 

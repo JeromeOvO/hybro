@@ -226,7 +226,6 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
         "execution/dispatch/response_handler.py": {
             "a2a.types",
             "services.database_service",
-            "services.hitl_service",
             "services.notification_service",
             "services.sse_services",
             "services.task_notification_service",
@@ -252,19 +251,15 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
         },
         "execution/hitl/service.py": {
             "a2a.types",
-            "fastapi",
-            "modules.RoomMessageCenter",
             "services.a2a_service",
             "services.database_service",
             "services.sse_services",
-            "services.task_notification_service",
         },
         "execution/orchestration/queue_executor.py": {
             "a2a.types",
             "services.a2a_service",
             "services.database_service",
             "services.debate_service",
-            "services.hitl_service",
             "services.memory_service",
             "services.rate_limit_service",
             "services.room_services",
@@ -292,7 +287,6 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
         },
         "execution/orchestration/supervisor_executor.py": {
             "services.database_service",
-            "services.hitl_service",
             "services.memory_service",
             "services.rate_limit_service",
             "services.room_coordinator_service",
@@ -344,6 +338,57 @@ def test_execution_scaffold_adapters_are_available():
     runtime = create_room_message_center(database_service=db)
     assert runtime.database_service is db
     assert isinstance(room_message_center, BoundRoomMessageCenterProxy)
+
+
+def test_room_message_center_factory_propagates_overrides_to_children():
+    from execution.orchestration.factory import create_room_message_center
+
+    deps = {
+        name: object()
+        for name in [
+            "database_service",
+            "sse_manager",
+            "room_services",
+            "notification_service",
+            "a2a_service",
+            "task_service",
+            "agent_resolver_service",
+            "room_memory_service",
+            "debate_service",
+            "rate_limit_service",
+            "room_supervisor_service",
+            "room_coordinator_service",
+            "openai_service",
+            "hitl_coordinator",
+        ]
+    }
+    runtime = create_room_message_center(**deps)
+
+    assert runtime.database_service is deps["database_service"]
+    assert runtime.sse_manager is deps["sse_manager"]
+    assert runtime.room_services is deps["room_services"]
+    assert runtime.openai_service is deps["openai_service"]
+    assert runtime.tsm.room_services is deps["room_services"]
+    assert runtime.tsm.notification_service is deps["notification_service"]
+    assert runtime.agent_dispatcher.database_service is deps["database_service"]
+    assert runtime.agent_dispatcher.agent_resolver is deps["agent_resolver_service"]
+    assert runtime.agent_response_handler._db is deps["database_service"]
+    assert runtime.agent_response_handler._sse is deps["sse_manager"]
+    assert runtime.direct_transport.database_service is deps["database_service"]
+    assert runtime.direct_transport.sse_manager is deps["sse_manager"]
+    assert runtime.direct_transport.a2a_service is deps["a2a_service"]
+    assert runtime.direct_transport.task_service is deps["task_service"]
+    assert runtime.agent_message_processor.database_service is deps["database_service"]
+    assert runtime.agent_message_processor.sse_manager is deps["sse_manager"]
+    assert runtime.queue_executor.database_service is deps["database_service"]
+    assert runtime.queue_executor.sse_manager is deps["sse_manager"]
+    assert runtime.queue_executor.room_services is deps["room_services"]
+    assert runtime.queue_executor.hitl_coordinator is deps["hitl_coordinator"]
+    assert runtime.supervisor_executor.database_service is deps["database_service"]
+    assert runtime.supervisor_executor.sse_manager is deps["sse_manager"]
+    assert runtime.supervisor_executor.room_services is deps["room_services"]
+    assert runtime.supervisor_executor.hitl_coordinator is deps["hitl_coordinator"]
+    assert runtime.agent_response_handler.hitl_coordinator is deps["hitl_coordinator"]
 
 
 class _FakeCursor:
