@@ -324,7 +324,7 @@ async def test_emit_processing_status_can_skip_lifecycle_for_legacy_send_only_pa
 
 
 @pytest.mark.asyncio
-async def test_emit_processing_status_suppresses_typed_frame_when_lifecycle_noops():
+async def test_emit_processing_status_keeps_typed_frame_when_lifecycle_noops():
     lifecycle = AsyncMock()
     lifecycle.record_processing_status.return_value = None
     publisher = AsyncMock()
@@ -345,12 +345,13 @@ async def test_emit_processing_status_suppresses_typed_frame_when_lifecycle_noop
 
     assert result is None
     lifecycle.record_processing_status.assert_awaited_once()
-    publisher.emit.assert_not_awaited()
+    publisher.emit.assert_awaited_once()
+    assert publisher.emit.await_args.args[0].event_type == "processing_status"
     compat.emit_processing_status.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_emit_processing_status_suppresses_legacy_frame_when_lifecycle_noops():
+async def test_emit_processing_status_keeps_legacy_frame_when_lifecycle_noops():
     lifecycle = AsyncMock()
     lifecycle.record_processing_status.return_value = None
     publisher = AsyncMock()
@@ -372,7 +373,7 @@ async def test_emit_processing_status_suppresses_legacy_frame_when_lifecycle_noo
     assert result is None
     lifecycle.record_processing_status.assert_awaited_once()
     publisher.emit.assert_not_awaited()
-    compat.emit_processing_status.assert_not_awaited()
+    compat.emit_processing_status.assert_awaited_once()
 
 
 def test_run_event_notification_from_payload_maps_legacy_payload():

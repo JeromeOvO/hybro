@@ -151,8 +151,6 @@ async def emit_processing_status(
             details=details,
             error_message=error_message,
         )
-        if payload is None:
-            return None
     resolved_client_request_id = await _resolve_processing_status_client_request_id(
         client_request_id_resolver,
         message_id,

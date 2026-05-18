@@ -58,6 +58,7 @@ def mock_hitl_db_service():
     mock.fenced_update_hitl_request = AsyncMock(return_value=True)
     mock.cas_update_hitl_request = AsyncMock(return_value=True)
     mock.count_pending_in_hitl_group = AsyncMock(return_value=0)
+    mock.claim_hitl_group_routing = AsyncMock(return_value=True)
     mock.get_hitl_group_requests = AsyncMock(return_value=[])
     mock.reset_last_notified_state = AsyncMock()
     mock.get_pending_continuation_on_message = AsyncMock(return_value=None)
@@ -606,6 +607,42 @@ class TestGroupedHandleResponse:
             user_id="user-1",
         )
 
+        hitl_service._handle_supervisor_response.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_group_answer_routes_after_finalize_when_group_completes(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._sse_manager = mock_hitl_sse_manager
+        request = sample_hitl_request.model_copy(
+            update={
+                "source": "supervisor",
+                "group_id": "group-1",
+                "group_total": 2,
+                "group_index": 0,
+                "continuation_message_id": "cont-1",
+            }
+        )
+        doc = request.model_dump(mode="json")
+        mock_hitl_db_service.get_hitl_request.return_value = doc
+        mock_hitl_db_service.claim_hitl_request.return_value = doc
+        mock_hitl_db_service.count_pending_in_hitl_group.side_effect = [2, 0]
+        mock_hitl_db_service.claim_hitl_group_routing.return_value = True
+        mock_hitl_db_service.get_hitl_group_requests.return_value = [
+            {**doc, "prompt": "Q1?", "request_id": request.request_id},
+            {**doc, "prompt": "Q2?", "request_id": "req-2", "user_input": "second"},
+        ]
+        hitl_service._handle_supervisor_response = AsyncMock()
+
+        await hitl_service.handle_response(
+            room_id=request.room_id,
+            request_id=request.request_id,
+            user_input="first",
+            user_id="user-1",
+        )
+
+        mock_hitl_db_service.claim_hitl_group_routing.assert_awaited_once()
         hitl_service._handle_supervisor_response.assert_awaited_once()
 
     @pytest.mark.asyncio

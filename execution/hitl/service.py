@@ -357,28 +357,31 @@ class HITLService:
                     responded_at=utcnow(),
                 )
 
-        if not is_group or is_last_in_group:
+        async def _route_current_response() -> None:
+            if request.source == "agent":
+                await self._handle_agent_response(request, user_input)
+            elif request.source == "supervisor":
+                if is_group:
+                    group_docs = await self.database_service.get_hitl_group_requests(
+                        request.group_id
+                    )
+                    parts = []
+                    for gd in group_docs:
+                        q_prompt = gd.get("prompt", "")
+                        if gd.get("request_id") == request_id:
+                            q_answer = user_input
+                        else:
+                            q_answer = gd.get("user_input") or ""
+                        parts.append(f"Q: {q_prompt}\nA: {q_answer}")
+                    combined_input = "\n\n".join(parts)
+                    await self._handle_supervisor_response(request, combined_input)
+                else:
+                    await self._handle_supervisor_response(request, user_input)
+
+        async def _route_with_heartbeat() -> bool:
             heartbeat_task = asyncio.create_task(_lease_heartbeat())
             try:
-                if request.source == "agent":
-                    await self._handle_agent_response(request, user_input)
-                elif request.source == "supervisor":
-                    if is_group:
-                        group_docs = await self.database_service.get_hitl_group_requests(
-                            request.group_id
-                        )
-                        parts = []
-                        for gd in group_docs:
-                            q_prompt = gd.get("prompt", "")
-                            if gd.get("request_id") == request_id:
-                                q_answer = user_input
-                            else:
-                                q_answer = gd.get("user_input") or ""
-                            parts.append(f"Q: {q_prompt}\nA: {q_answer}")
-                        combined_input = "\n\n".join(parts)
-                        await self._handle_supervisor_response(request, combined_input)
-                    else:
-                        await self._handle_supervisor_response(request, user_input)
+                await _route_current_response()
             except ContinuationLostError as exc:
                 logger.warning(
                     "HITL request %s — continuation lost, canceling: %s",
@@ -452,6 +455,29 @@ class HITLService:
                     "reclaimed by recovery. Abandoning finalization.",
                     request_id, claim_id,
                 )
+                return False
+            return True
+
+        routed_response = False
+        if is_group and is_last_in_group:
+            routed_response = await self.database_service.claim_hitl_group_routing(
+                request.group_id,
+                claim_id,
+            )
+            if not routed_response:
+                logger.info(
+                    "hitl_group_route_already_claimed",
+                    extra={
+                        "request_id": request_id,
+                        "group_id": request.group_id,
+                    },
+                )
+        else:
+            routed_response = not is_group
+
+        if routed_response:
+            routed_response = await _route_with_heartbeat()
+            if not routed_response:
                 return {"status": "ok", "request_id": request_id, "reclaimed": True}
 
         # Phase 3: Finalize processing -> responded (fenced).
@@ -471,6 +497,26 @@ class HITLService:
                 "routing_completed_at.",
                 request_id, claim_id,
             )
+
+        if is_group and not routed_response and finalized:
+            remaining_after_finalize = (
+                await self.database_service.count_pending_in_hitl_group(
+                    request.group_id
+                )
+            )
+            if remaining_after_finalize <= 0:
+                route_claimed = await self.database_service.claim_hitl_group_routing(
+                    request.group_id,
+                    claim_id,
+                )
+                if route_claimed:
+                    routed_response = await _route_with_heartbeat()
+                    if not routed_response:
+                        return {
+                            "status": "ok",
+                            "request_id": request_id,
+                            "reclaimed": True,
+                        }
 
         await self._emit_hitl_event(
             room_id=room_id,
