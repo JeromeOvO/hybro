@@ -558,7 +558,8 @@ class TestGroupedHandleResponse:
         doc = request.model_dump(mode="json")
         mock_hitl_db_service.get_hitl_request.return_value = doc
         mock_hitl_db_service.claim_hitl_request.return_value = doc
-        mock_hitl_db_service.count_pending_in_hitl_group.return_value = 1
+        # The DB helper counts the current processing claim plus pending siblings.
+        mock_hitl_db_service.count_pending_in_hitl_group.return_value = 2
         hitl_service._handle_supervisor_response = AsyncMock()
 
         result = await hitl_service.handle_response(
@@ -589,7 +590,9 @@ class TestGroupedHandleResponse:
         doc = request.model_dump(mode="json")
         mock_hitl_db_service.get_hitl_request.return_value = doc
         mock_hitl_db_service.claim_hitl_request.return_value = doc
-        mock_hitl_db_service.count_pending_in_hitl_group.return_value = 0
+        # The DB helper counts the current processing claim, so the final active
+        # group member reports one remaining record.
+        mock_hitl_db_service.count_pending_in_hitl_group.return_value = 1
         mock_hitl_db_service.get_hitl_group_requests.return_value = [
             {**doc, "prompt": "Q1?", "request_id": "req-1", "user_input": "first"},
             {**doc, "prompt": "Q2?", "request_id": request.request_id},

@@ -368,12 +368,19 @@ class AgentResponseHandler:
             )
 
     async def _on_processing_status(self, e: AgentEvent) -> None:
+        if not e.lifecycle_message_id:
+            logger.warning(
+                "AgentResponseHandler: dropping processing_status without "
+                "lifecycle_message_id for %s",
+                e.message_id,
+            )
+            return
         await self._emit_processing_status(
             room_id=e.room_id,
             status=e.state,
             message_id=e.message_id,
             lifecycle_message_id=e.lifecycle_message_id,
-            record_lifecycle=bool(e.lifecycle_message_id),
+            record_lifecycle=True,
             client_request_id=e.client_request_id,
             details=e.details,
         )

@@ -336,7 +336,9 @@ class HITLService:
                 )
                 is_last_in_group = True
             else:
-                is_last_in_group = remaining == 0
+                # count_pending_in_hitl_group includes this request's processing
+                # claim plus any still-pending siblings.
+                is_last_in_group = remaining <= 1
             logger.info(
                 "hitl_group_last_check",
                 extra={

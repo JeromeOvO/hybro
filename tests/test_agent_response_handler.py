@@ -567,10 +567,11 @@ class TestStatusUpdateEvent:
 
 class TestProcessingStatusEvent:
     @pytest.mark.asyncio
-    async def test_sends_processing_status(self):
+    async def test_sends_processing_status_with_lifecycle_id(self):
         h = _make_handler()
         event = AgentEvent(
             kind="processing_status", **_base_event(),
+            lifecycle_message_id="umsg-001",
             state="completed", details="all done",
         )
         await h.handle(event)
@@ -612,7 +613,7 @@ class TestProcessingStatusEvent:
         h._sse.send_processing_status.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_related_message_processing_status_stays_transport_only(self):
+    async def test_processing_status_without_lifecycle_id_is_dropped(self):
         h = _make_handler()
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
@@ -623,17 +624,7 @@ class TestProcessingStatusEvent:
 
         await h.handle(event)
 
-        emitter.assert_awaited_once_with(
-            room_id="room-001",
-            status="completed",
-            message_id="msg-001",
-            lifecycle_message_id=None,
-            record_lifecycle=False,
-            client_request_id=None,
-            details=None,
-            legacy_details="all done",
-            error_message="all done",
-        )
+        emitter.assert_not_awaited()
         h._sse.send_processing_status.assert_not_awaited()
 
 
