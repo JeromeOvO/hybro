@@ -576,18 +576,7 @@ def patch_sse_deps(mock_db_service, mock_sse_manager, mock_mongodb, mock_hitl_se
         stack.enter_context(patch(PATCH["sse.sse_manager"], mock_sse_manager))
         stack.enter_context(patch(PATCH["hitl_service_singleton"], mock_hitl_service))
         execution_engine = MagicMock()
-
-        async def cancel(*, room_id, message_id, requested_by_user_id):
-            await mock_sse_manager.cancel_message_and_broadcast(message_id)
-            await mock_hitl_service.cancel_requests_for_message(message_id)
-            success = await mock_mongodb.cancel_message(message_id, requested_by_user_id)
-            if not success:
-                mock_sse_manager.clear_cancellation(message_id)
-                return False
-            await mock_sse_manager.send_processing_status(room_id, "canceled", message_id)
-            return True
-
-        execution_engine.cancel = AsyncMock(side_effect=cancel)
+        execution_engine.cancel = AsyncMock(return_value=True)
         stack.enter_context(patch("api.sse.execution_engine", execution_engine))
         yield {
             "db_service": mock_db_service,

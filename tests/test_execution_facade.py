@@ -95,7 +95,12 @@ async def test_execute_persists_ack_without_starting_orchestration():
         room_id="room-1",
         sender_id="user-1",
         sender_name="User",
-        message={"message_content": {"message_text": "hello"}},
+        message={
+            "room_id": "room-1",
+            "message_id": "draft-msg-1",
+            "message_type": "user",
+            "message_content": {"message_text": "hello"},
+        },
         target_group=None,
         mentioned_agent_ids=["agent-1"],
     )
@@ -106,7 +111,7 @@ async def test_execute_persists_ack_without_starting_orchestration():
     deps["room_center"].send_message_to_room.assert_awaited_once()
     sent_request = deps["room_center"].send_message_to_room.await_args.args[0]
     assert sent_request.user_id == "user-1"
-    assert sent_request.message == {"message_content": {"message_text": "hello"}}
+    assert sent_request.message.message_content.message_text == "hello"
     assert deps["room_center"].send_message_to_room.await_args.args[1:] == (
         None,
         ["agent-1"],

@@ -305,7 +305,7 @@ class ExecutionFacade:
         self._inflight: set[asyncio.Task] = set()
 
     async def execute(self, request: ExecutionRequest) -> ExecutionAck:
-        room_request = RoomCenterUserMessageRequest.model_construct(
+        room_request = RoomCenterUserMessageRequest(
             room_id=request.room_id,
             user_id=request.sender_id,
             user_name=request.sender_name,

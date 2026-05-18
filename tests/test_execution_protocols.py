@@ -1,8 +1,13 @@
+import ast
 import inspect
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 from common.dto import AgentEvent, ExecutionAck, ExecutionRequest, HITLRequest, RunInfo
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_execution_request_matches_send_message_payload_shape():
@@ -185,6 +190,153 @@ def test_execution_facade_satisfies_task6_public_protocols():
     assert isinstance(facade, ExecutionEngine)
     assert isinstance(facade, HITLManager)
     assert isinstance(facade, HubAgentResponseSink)
+
+
+def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
+    legacy_prefixes = {
+        "a2a",
+        "api",
+        "container",
+        "database",
+        "delivery",
+        "fastapi",
+        "main",
+        "modules",
+        "services",
+    }
+    expected = {
+        "execution/dispatch/agent_dispatcher.py": {
+            "services.agent_resolver_service",
+            "services.database_service",
+        },
+        "execution/dispatch/agent_message_processor.py": {
+            "services.agent_health_service",
+            "services.database_service",
+            "services.relay_service",
+            "services.room_services",
+            "services.sse_services",
+        },
+        "execution/dispatch/dispatch_middleware.py": {"a2a.types"},
+        "execution/dispatch/middleware/cloud_health.py": {
+            "services.agent_health_service",
+        },
+        "execution/dispatch/middleware/hub_transport.py": {
+            "services.relay_service",
+        },
+        "execution/dispatch/response_handler.py": {
+            "a2a.types",
+            "services.database_service",
+            "services.hitl_service",
+            "services.notification_service",
+            "services.run_lifecycle_service",
+            "services.sse_services",
+            "services.task_notification_service",
+        },
+        "execution/dispatch/transports/direct.py": {
+            "a2a.types",
+            "services.a2a_service",
+            "services.agent_capability_issue_service",
+            "services.s3_service",
+        },
+        "execution/dispatch/transports/relay.py": {
+            "a2a.types",
+            "database.mongodb",
+            "services.database_service",
+            "services.relay_service",
+            "services.sse_services",
+        },
+        "execution/dispatch/transports/webhook.py": {
+            "a2a.types",
+            "fastapi",
+            "services.database_service",
+            "services.task_notification_service",
+        },
+        "execution/hitl/service.py": {
+            "a2a.types",
+            "fastapi",
+            "modules.RoomMessageCenter",
+            "services.a2a_service",
+            "services.database_service",
+            "services.sse_services",
+            "services.task_notification_service",
+        },
+        "execution/orchestration/queue_executor.py": {
+            "a2a.types",
+            "services.a2a_service",
+            "services.database_service",
+            "services.debate_service",
+            "services.hitl_service",
+            "services.memory_service",
+            "services.rate_limit_service",
+            "services.room_services",
+            "services.run_lifecycle_service",
+            "services.sse_services",
+        },
+        "execution/orchestration/room_message_center.py": {
+            "a2a.types",
+            "services.a2a_service",
+            "services.agent_resolver_service",
+            "services.compaction_service",
+            "services.context_assembly_service",
+            "services.database_service",
+            "services.debate_service",
+            "services.memory_search_service",
+            "services.memory_service",
+            "services.notification_service",
+            "services.openai_service",
+            "services.rate_limit_service",
+            "services.room_coordinator_service",
+            "services.room_services",
+            "services.room_supervisor_service",
+            "services.run_lifecycle_service",
+            "services.sse_services",
+            "services.task_notification_service",
+            "services.task_service",
+        },
+        "execution/orchestration/supervisor_executor.py": {
+            "services.database_service",
+            "services.hitl_service",
+            "services.memory_service",
+            "services.rate_limit_service",
+            "services.room_coordinator_service",
+            "services.room_services",
+            "services.room_supervisor_service",
+            "services.run_lifecycle_service",
+            "services.sse_services",
+        },
+        "execution/state/task_state_manager.py": {
+            "a2a.types",
+            "services.notification_service",
+            "services.room_services",
+        },
+    }
+    actual: dict[str, set[str]] = {}
+    for path in sorted((ROOT / "execution").rglob("*.py")):
+        rel = path.relative_to(ROOT).as_posix()
+        tree = ast.parse(path.read_text(), filename=rel)
+        modules: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                if node.module.split(".")[0] in legacy_prefixes:
+                    modules.add(node.module)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.split(".")[0] in legacy_prefixes:
+                        modules.add(alias.name)
+        if modules:
+            actual[rel] = modules
+
+    assert actual == expected
+
+
+def test_execution_scaffold_adapters_are_available():
+    from execution.dispatch.task_notifications import TaskNotificationAdapter
+    from execution.orchestration.factory import BoundRoomMessageCenterProxy
+    from execution.state.locking import RoomLockManager
+
+    assert TaskNotificationAdapter.__name__ == "TaskNotificationAdapter"
+    assert BoundRoomMessageCenterProxy.__name__ == "BoundRoomMessageCenterProxy"
+    assert RoomLockManager.__name__ == "RoomLockManager"
 
 
 class _FakeCursor:
