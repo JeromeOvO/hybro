@@ -335,6 +335,7 @@ def test_execution_scaffold_adapters_are_available():
     from execution.orchestration.factory import (
         BoundRoomMessageCenterProxy,
         create_room_message_center,
+        room_message_center,
     )
     from execution.state.locking import RoomLockManager
 
@@ -346,6 +347,7 @@ def test_execution_scaffold_adapters_are_available():
     assert hitl._db_service is db
     runtime = create_room_message_center(database_service=db)
     assert runtime.database_service is db
+    assert isinstance(room_message_center, BoundRoomMessageCenterProxy)
 
 
 class _FakeCursor:

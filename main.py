@@ -214,6 +214,10 @@ async def lifespan(app: FastAPI):
                 HITLMessageCancellationAdapter,
                 MongoCancellationStoreAdapter,
             )
+            from execution.orchestration.factory import (
+                create_room_message_center,
+                room_message_center as execution_room_message_center,
+            )
             from execution.run_lifecycle import RunLifecycleAdapter
             from execution.run_queries import RunQueryAdapter
             from services.a2a_service import a2a_service
@@ -274,6 +278,7 @@ async def lifespan(app: FastAPI):
             _room_facade = _room_deps.room_registry
             room_services.bind_facade(_room_facade)
             room_center.room_center.bind_facade(_room_facade)
+            execution_room_message_center.bind(create_room_message_center())
             room_center.room_message_center.bind_facade(_room_facade)
 
             execution_facade = create_execution_facade(
@@ -436,6 +441,7 @@ async def lifespan(app: FastAPI):
         stale_task_checker.set_leader_election(_leader)
         if _execution_deps is not None:
             from jobs.stale_task_checker import (
+                StaleHITLDeps,
                 StaleRecoveryDeps,
                 StaleRunWatchdogEventDeps,
             )
@@ -487,6 +493,12 @@ async def lifespan(app: FastAPI):
             stale_task_checker.set_execution_recovery_deps(
                 StaleRecoveryDeps(
                     schedule_recovery=execution_facade.schedule_recovery_orchestration,
+                )
+            )
+            stale_task_checker.set_hitl_deps(
+                StaleHITLDeps(
+                    recover_stale_processing=hitl_service.recover_stale_processing,
+                    cancel_requests_for_message=hitl_service.cancel_requests_for_message,
                 )
             )
             stale_task_checker.set_run_watchdog_event_deps(

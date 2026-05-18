@@ -2,6 +2,7 @@ import sys
 
 from execution.orchestration import room_message_center as _impl
 from execution.orchestration.room_message_center import (
+    BoundRoomMessageCenterProxy,
     ROOM_LOCK_HOLD_TTL_SECONDS,
     ROOM_LOCK_TIMEOUT_SECONDS,
     RoomMessageCenter,
@@ -10,6 +11,7 @@ from execution.orchestration.room_message_center import (
 )
 
 __all__ = [
+    "BoundRoomMessageCenterProxy",
     "ROOM_LOCK_HOLD_TTL_SECONDS",
     "ROOM_LOCK_TIMEOUT_SECONDS",
     "RoomMessageCenter",

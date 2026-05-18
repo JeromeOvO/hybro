@@ -4,7 +4,7 @@ import asyncio
 import time
 from collections import deque
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from a2a.types import TaskState
@@ -2408,5 +2408,20 @@ class RoomMessageCenter:
             )
 
 
-# Module-level singleton
-room_message_center = RoomMessageCenter()
+class BoundRoomMessageCenterProxy:
+    def __init__(self) -> None:
+        self._runtime: RoomMessageCenter | None = None
+
+    def bind(self, runtime: RoomMessageCenter) -> None:
+        self._runtime = runtime
+
+    def _require_runtime(self) -> RoomMessageCenter:
+        if self._runtime is None:
+            raise RuntimeError("RoomMessageCenter has not been bound at startup")
+        return self._runtime
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._require_runtime(), name)
+
+
+room_message_center = BoundRoomMessageCenterProxy()

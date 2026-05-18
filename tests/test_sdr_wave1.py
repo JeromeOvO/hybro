@@ -289,6 +289,103 @@ class TestStaleTaskCheckerSemaphore:
         assert reason == "supervisor"
         assert request.room_user_message_id == "msg-1"
 
+    @pytest.mark.asyncio
+    async def test_stale_checker_uses_bound_hitl_recovery_deps(self, monkeypatch):
+        from jobs import stale_task_checker as mod
+        from jobs.stale_task_checker import StaleHITLDeps, StaleTaskChecker
+
+        checker = StaleTaskChecker()
+        recover = AsyncMock()
+        checker.set_hitl_deps(
+            StaleHITLDeps(
+                recover_stale_processing=recover,
+                cancel_requests_for_message=AsyncMock(),
+            )
+        )
+        monkeypatch.setattr(
+            mod.db_service,
+            "get_stale_task_messages",
+            AsyncMock(return_value=[]),
+        )
+        monkeypatch.setattr(
+            mod.db_service,
+            "get_expired_task_messages",
+            AsyncMock(return_value=[]),
+        )
+        monkeypatch.setattr(
+            mod.db_service,
+            "get_orphaned_agent_messages",
+            AsyncMock(return_value=[]),
+        )
+        monkeypatch.setattr(
+            mod.db_service,
+            "get_room_ids_with_non_terminal_runs",
+            AsyncMock(return_value=[]),
+        )
+        monkeypatch.setattr(
+            mod.db_service,
+            "get_non_tracked_stale_task_messages",
+            AsyncMock(return_value=[]),
+        )
+        monkeypatch.setattr(
+            mod.db_service,
+            "get_stuck_supervisor_trajectory_messages",
+            AsyncMock(return_value=[]),
+        )
+        monkeypatch.setattr(
+            mod.db_service,
+            "find_stale_non_terminal_runs",
+            AsyncMock(return_value=[]),
+        )
+
+        await checker.check_stale_tasks()
+
+        recover.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_mark_task_failed_cancels_hitl_through_bound_deps(self, monkeypatch):
+        from jobs import stale_task_checker as mod
+        from jobs.stale_task_checker import StaleHITLDeps, StaleTaskChecker
+
+        checker = StaleTaskChecker()
+        cancel = AsyncMock()
+        checker.set_hitl_deps(
+            StaleHITLDeps(
+                recover_stale_processing=AsyncMock(),
+                cancel_requests_for_message=cancel,
+            )
+        )
+        msg = MagicMock()
+        msg.message_content.message_task.id = "task-1"
+        msg.message_content.message_task.context_id = "ctx-1"
+        msg.related_message_id = "user-msg-1"
+        msg.room_id = "room-1"
+        msg.user_id = "user-1"
+        monkeypatch.setattr(
+            mod.db_service,
+            "update_task_on_message",
+            AsyncMock(),
+        )
+        monkeypatch.setattr(
+            mod.db_service,
+            "get_and_clear_continuation_on_message",
+            AsyncMock(),
+        )
+        monkeypatch.setattr(
+            mod.db_service,
+            "get_and_clear_continuation_on_user_message",
+            AsyncMock(),
+        )
+        monkeypatch.setattr(mod, "notify_task_update", AsyncMock())
+
+        await checker._mark_task_failed(
+            message_id="agent-msg-1",
+            msg=msg,
+            error="failed",
+        )
+
+        cancel.assert_awaited_once_with("user-msg-1")
+
 
 # =============================================================================
 # Fix 4 (SDR 2.12): CORS configuration test

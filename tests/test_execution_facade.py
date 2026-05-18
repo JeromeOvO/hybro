@@ -144,6 +144,22 @@ async def test_start_orchestration_tracks_and_awaits_background_task():
 
 
 @pytest.mark.asyncio
+async def test_start_orchestration_skips_when_ack_disables_dispatch():
+    facade, deps = _make_facade()
+    request = ExecutionRequest(room_id="room-1", sender_id="user-1")
+    ack = ExecutionAck(
+        success=True,
+        message_id="msg-1",
+        should_start_orchestration=False,
+    )
+
+    await facade.start_orchestration(request, ack)
+
+    deps["room_message_center"].process_room_user_message.assert_not_called()
+    assert facade._inflight == set()
+
+
+@pytest.mark.asyncio
 async def test_cancel_preserves_order_and_requested_by_user_id():
     order = []
     facade, deps = _make_facade()

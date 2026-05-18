@@ -327,7 +327,7 @@ class ExecutionFacade:
         request: ExecutionRequest,
         ack: ExecutionAck,
     ) -> None:
-        if not ack.success or not ack.message_id:
+        if not ack.success or not ack.message_id or not ack.should_start_orchestration:
             return
         orchestration_request = OrchestrationRequest(
             room_id=request.room_id,

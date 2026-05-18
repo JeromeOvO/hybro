@@ -59,6 +59,12 @@ class StaleRunWatchdogEventDeps:
     run_dual_write_enabled: Callable[[], bool]
 
 
+@dataclass(frozen=True)
+class StaleHITLDeps:
+    recover_stale_processing: Callable[[], Awaitable[Any]]
+    cancel_requests_for_message: Callable[[str], Awaitable[Any]]
+
+
 class StaleTaskChecker:
     """
     Background job that checks for stale and expired tasks.
@@ -104,6 +110,7 @@ class StaleTaskChecker:
         self._leader: LeaderElection | None = None
         self._execution_recovery_deps: StaleRecoveryDeps | None = None
         self._watchdog_event_deps: StaleRunWatchdogEventDeps | None = None
+        self._hitl_deps: StaleHITLDeps | None = None
 
     def set_leader_election(self, leader: LeaderElection | None) -> None:
         """Attach a LeaderElection instance for distributed leader gating."""
@@ -114,6 +121,9 @@ class StaleTaskChecker:
 
     def set_run_watchdog_event_deps(self, deps: StaleRunWatchdogEventDeps) -> None:
         self._watchdog_event_deps = deps
+
+    def set_hitl_deps(self, deps: StaleHITLDeps) -> None:
+        self._hitl_deps = deps
 
     async def start(self) -> None:
         """Start the background checker."""
@@ -228,8 +238,12 @@ class StaleTaskChecker:
         # 7. Recover HITL requests stuck in "processing" (worker crashed
         #    between CAS claim and finalization).
         try:
-            from services.hitl_service import hitl_service
-            await hitl_service.recover_stale_processing()
+            if self._hitl_deps is None:
+                logger.warning(
+                    "Skipped stale HITL processing recovery: HITL deps are not bound"
+                )
+            else:
+                await self._hitl_deps.recover_stale_processing()
         except Exception as e:
             logger.error("Failed to recover stale HITL processing requests: %s", e)
 
@@ -559,11 +573,17 @@ class StaleTaskChecker:
 
         # Cancel any pending HITL request for this message
         try:
-            from services.hitl_service import hitl_service
             # HITL requests are keyed by user_message_id, not agent message_id.
             # related_message_id on the agent message points to the user message.
             user_msg_id = msg.related_message_id or message_id
-            await hitl_service.cancel_requests_for_message(user_msg_id)
+            if self._hitl_deps is None:
+                logger.warning(
+                    "stale_task_checker: HITL deps are not bound; cannot cancel "
+                    "requests for %s",
+                    user_msg_id,
+                )
+            else:
+                await self._hitl_deps.cancel_requests_for_message(user_msg_id)
         except Exception as e:
             logger.warning(
                 "stale_task_checker: Failed to cancel HITL requests for %s: %s",
