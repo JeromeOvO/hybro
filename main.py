@@ -431,6 +431,14 @@ async def lifespan(app: FastAPI):
 
         agent_health_service.set_leader_election(_leader)
         stale_task_checker.set_leader_election(_leader)
+        if _execution_deps is not None:
+            from jobs.stale_task_checker import StaleRecoveryDeps
+
+            stale_task_checker.set_execution_recovery_deps(
+                StaleRecoveryDeps(
+                    schedule_recovery=execution_facade.schedule_recovery_orchestration,
+                )
+            )
         compaction_sweep.set_leader_election(_leader)
         orphaned_upload_cleaner.set_leader_election(_leader)
 

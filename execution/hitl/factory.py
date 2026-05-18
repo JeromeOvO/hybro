@@ -22,7 +22,16 @@ class BoundHITLServiceProxy:
 
 
 def create_hitl_service(**kwargs: Any) -> HITLService:
-    return HITLService(**kwargs)
+    service = HITLService()
+    dependency_attrs = {
+        "database_service": "_db_service",
+        "db_service": "_db_service",
+        "sse_manager": "_sse_manager",
+        "a2a_service": "_a2a_service",
+    }
+    for name, value in kwargs.items():
+        setattr(service, dependency_attrs.get(name, name), value)
+    return service
 
 
 __all__ = ["BoundHITLServiceProxy", "create_hitl_service"]

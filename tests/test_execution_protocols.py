@@ -331,12 +331,21 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
 
 def test_execution_scaffold_adapters_are_available():
     from execution.dispatch.task_notifications import TaskNotificationAdapter
-    from execution.orchestration.factory import BoundRoomMessageCenterProxy
+    from execution.hitl.factory import create_hitl_service
+    from execution.orchestration.factory import (
+        BoundRoomMessageCenterProxy,
+        create_room_message_center,
+    )
     from execution.state.locking import RoomLockManager
 
     assert TaskNotificationAdapter.__name__ == "TaskNotificationAdapter"
     assert BoundRoomMessageCenterProxy.__name__ == "BoundRoomMessageCenterProxy"
     assert RoomLockManager.__name__ == "RoomLockManager"
+    db = object()
+    hitl = create_hitl_service(database_service=db)
+    assert hitl._db_service is db
+    runtime = create_room_message_center(database_service=db)
+    assert runtime.database_service is db
 
 
 class _FakeCursor:

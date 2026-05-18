@@ -63,6 +63,7 @@ class ExecutionAck(FrozenDTO):
     success: bool = True
     error: str | None = None
     status_code: int = 200
+    should_start_orchestration: bool = True
 
 
 class RunInfo(FrozenDTO):

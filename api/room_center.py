@@ -373,7 +373,7 @@ async def send_message(
     ack = await _require_execution_engine().execute(execution_request)
 
     # Auto-trigger processing as background task if message was created successfully
-    if ack.success and ack.message_id:
+    if ack.success and ack.message_id and ack.should_start_orchestration:
         background_tasks.add_task(
             _require_execution_engine().start_orchestration,
             execution_request,

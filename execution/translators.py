@@ -27,6 +27,7 @@ def room_response_to_execution_ack(
         success=response.success,
         error=response.error,
         status_code=response.status_code,
+        should_start_orchestration=bool(response.dispatch_root_message_id),
     )
 
 

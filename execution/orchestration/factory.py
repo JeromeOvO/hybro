@@ -22,7 +22,10 @@ class BoundRoomMessageCenterProxy:
 
 
 def create_room_message_center(**kwargs: Any) -> RoomMessageCenter:
-    return RoomMessageCenter(**kwargs)
+    runtime = RoomMessageCenter()
+    for name, value in kwargs.items():
+        setattr(runtime, name, value)
+    return runtime
 
 
 __all__ = [

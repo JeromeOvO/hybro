@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -44,6 +46,11 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 MAX_CONCURRENT_RECOVERIES = 5
+
+
+@dataclass(frozen=True)
+class StaleRecoveryDeps:
+    schedule_recovery: Callable[..., asyncio.Task]
 
 
 class StaleTaskChecker:
@@ -89,10 +96,14 @@ class StaleTaskChecker:
         self._task: asyncio.Task | None = None
         self._recovery_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RECOVERIES)
         self._leader: LeaderElection | None = None
+        self._execution_recovery_deps: StaleRecoveryDeps | None = None
 
     def set_leader_election(self, leader: LeaderElection | None) -> None:
         """Attach a LeaderElection instance for distributed leader gating."""
         self._leader = leader
+
+    def set_execution_recovery_deps(self, deps: StaleRecoveryDeps) -> None:
+        self._execution_recovery_deps = deps
 
     async def start(self) -> None:
         """Start the background checker."""
@@ -611,6 +622,11 @@ class StaleTaskChecker:
 
         if not orphaned_messages:
             return
+        if self._execution_recovery_deps is None:
+            logger.warning(
+                "Orphan recovery skipped: Execution recovery dependencies are not bound"
+            )
+            return
 
         logger.info(
             f"Found {len(orphaned_messages)} orphaned agent messages to recover"
@@ -656,8 +672,12 @@ class StaleTaskChecker:
                     )
                     break
                 await self._recovery_semaphore.acquire()
-                asyncio.create_task(
-                    self._guarded_orphan_recovery(room_message_center, request)
+                task = self._execution_recovery_deps.schedule_recovery(
+                    request,
+                    reason="orphan",
+                )
+                task.add_done_callback(
+                    lambda _task: self._recovery_semaphore.release()
                 )
 
             except Exception as e:
@@ -710,6 +730,11 @@ class StaleTaskChecker:
         )
 
         if not stuck_messages:
+            return
+        if self._execution_recovery_deps is None:
+            logger.warning(
+                "supervisor_recovery: skipped because Execution recovery dependencies are not bound"
+            )
             return
 
         logger.info(
@@ -764,8 +789,12 @@ class StaleTaskChecker:
                     is_recovery=True,
                 )
                 await self._recovery_semaphore.acquire()
-                asyncio.create_task(
-                    self._guarded_supervisor_recovery(request, message_id)
+                task = self._execution_recovery_deps.schedule_recovery(
+                    request,
+                    reason="supervisor",
+                )
+                task.add_done_callback(
+                    lambda _task: self._recovery_semaphore.release()
                 )
             except Exception as e:
                 logger.error(

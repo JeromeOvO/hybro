@@ -188,6 +188,107 @@ class TestStaleTaskCheckerSemaphore:
         assert checker._recovery_semaphore._value == MAX_CONCURRENT_RECOVERIES
         assert MAX_CONCURRENT_RECOVERIES == 5
 
+    @pytest.mark.asyncio
+    async def test_orphan_recovery_uses_execution_scheduler(self, monkeypatch):
+        from jobs import stale_task_checker as mod
+        from jobs.stale_task_checker import StaleRecoveryDeps, StaleTaskChecker
+
+        checker = StaleTaskChecker()
+        scheduled = []
+
+        def schedule_recovery(request, *, reason):
+            scheduled.append((request, reason))
+            return MagicMock(add_done_callback=MagicMock())
+
+        checker.set_execution_recovery_deps(
+            StaleRecoveryDeps(schedule_recovery=schedule_recovery)
+        )
+        monkeypatch.setattr(
+            mod.db_service,
+            "get_orphaned_agent_messages",
+            AsyncMock(
+                return_value=[
+                    MagicMock(
+                        agent_id="agent-1",
+                        related_message_id="user-msg-1",
+                        room_id="room-1",
+                        message_id="agent-msg-1",
+                    )
+                ]
+            ),
+        )
+        monkeypatch.setattr(
+            mod.db_service,
+            "get_agent_by_agent_id",
+            AsyncMock(return_value=None),
+        )
+
+        await checker._recover_orphaned_messages()
+
+        assert len(scheduled) == 1
+        request, reason = scheduled[0]
+        assert reason == "orphan"
+        assert request.room_user_message_id == "user-msg-1"
+
+    @pytest.mark.asyncio
+    async def test_orphan_recovery_skips_before_execution_scheduler_bind(
+        self,
+        monkeypatch,
+    ):
+        from jobs import stale_task_checker as mod
+        from jobs.stale_task_checker import StaleTaskChecker
+
+        checker = StaleTaskChecker()
+        monkeypatch.setattr(
+            mod.db_service,
+            "get_orphaned_agent_messages",
+            AsyncMock(return_value=[MagicMock()]),
+        )
+        get_agent = AsyncMock()
+        monkeypatch.setattr(mod.db_service, "get_agent_by_agent_id", get_agent)
+
+        await checker._recover_orphaned_messages()
+
+        get_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_supervisor_recovery_uses_execution_scheduler(self, monkeypatch):
+        from jobs import stale_task_checker as mod
+        from jobs.stale_task_checker import StaleRecoveryDeps, StaleTaskChecker
+
+        checker = StaleTaskChecker()
+        scheduled = []
+
+        def schedule_recovery(request, *, reason):
+            scheduled.append((request, reason))
+            return MagicMock(add_done_callback=MagicMock())
+
+        checker.set_execution_recovery_deps(
+            StaleRecoveryDeps(schedule_recovery=schedule_recovery)
+        )
+        monkeypatch.setattr(
+            mod.db_service,
+            "get_stuck_supervisor_trajectory_messages",
+            AsyncMock(return_value=[{"message_id": "msg-1", "room_id": "room-1"}]),
+        )
+        monkeypatch.setattr(
+            mod.db_service,
+            "is_message_cancelled",
+            AsyncMock(return_value=False),
+        )
+        monkeypatch.setattr(
+            mod.db_service,
+            "claim_stuck_supervisor_trajectory",
+            AsyncMock(return_value=True),
+        )
+
+        await checker._recover_stuck_supervisor_trajectories()
+
+        assert len(scheduled) == 1
+        request, reason = scheduled[0]
+        assert reason == "supervisor"
+        assert request.room_user_message_id == "msg-1"
+
 
 # =============================================================================
 # Fix 4 (SDR 2.12): CORS configuration test

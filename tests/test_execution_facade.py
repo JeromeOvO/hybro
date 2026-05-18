@@ -285,6 +285,20 @@ def test_room_response_to_execution_ack_preserves_missing_message_error_shape():
     assert ack.error == "Message is required"
 
 
+def test_room_response_to_execution_ack_skips_orchestration_without_dispatch_root():
+    response = RoomCenterUserMessageResponse(
+        success=True,
+        message_id="msg-1",
+        dispatch_root_message_id=None,
+    )
+
+    ack = room_response_to_execution_ack(response)
+
+    assert ack.success is True
+    assert ack.message_id == "msg-1"
+    assert ack.should_start_orchestration is False
+
+
 @pytest.mark.asyncio
 async def test_handle_hub_agent_response_delegates_to_agent_response_handler():
     facade, deps = _make_facade()

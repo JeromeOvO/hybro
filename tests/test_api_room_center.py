@@ -555,6 +555,31 @@ class TestSendMessage:
         assert response.success is False
         mock_background_tasks.add_task.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_does_not_trigger_processing_when_ack_says_skip(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        """Should not start orchestration when execution already emitted terminal status."""
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "room_id": sample_room.room_id,
+            "message": sample_user_message.model_dump(),
+            "client_request_id": "c7c9a000-0000-4000-8000-000000000012",
+        })
+        mock_background_tasks = MagicMock()
+        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
+        patch_room_center_deps["execution_engine"].execute.return_value = ExecutionAck(
+            success=True,
+            message_id="new-message-id",
+            should_start_orchestration=False,
+        )
+
+        response = await send_message(mock_request, mock_background_tasks, mock_user)
+
+        assert response.success is True
+        assert response.message_id == "new-message-id"
+        mock_background_tasks.add_task.assert_not_called()
+
 
 # =============================================================================
 # Agent Suggestion Tests
