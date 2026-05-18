@@ -551,6 +551,7 @@ def test_protocol_methods_match_design_doc():
         protocols.MemoryProjector: {"project_message", "run_compaction"},
         protocols.ExecutionEngine: {
             "execute",
+            "start_orchestration",
             "cancel",
             "get_run",
             "get_runs_for_room",
@@ -771,7 +772,10 @@ def test_protocol_methods_match_design_doc():
     )
     assert inspect.iscoroutinefunction(protocols.HubLivenessReader.is_hub_online)
     _assert_params(protocols.RoomManagement.create_room, ["self", "request"])
-    _assert_params(protocols.ExecutionEngine.cancel, ["self", "room_id", "message_id"])
+    _assert_params(
+        protocols.ExecutionEngine.cancel,
+        ["self", "room_id", "message_id", "requested_by_user_id"],
+    )
     _assert_params(protocols.MongoCollection.find, ["self", "query", "kwargs"])
     _assert_params(
         protocols.DistributedLock.acquire, ["self", "key", "owner", "ttl"]
