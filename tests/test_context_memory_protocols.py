@@ -440,9 +440,10 @@ def test_non_protocol_helper_call_boundary():
     for path in Path(".").rglob("*.py"):
         if (
             path.parts[0] in {"context_memory", "tests"}
-            or path in {Path("container.py"), Path("main.py")}
-            or ".venv" in path.parts
-        ):
+                or path in {Path("container.py"), Path("main.py")}
+                or ".venv" in path.parts
+                or ".worktrees" in path.parts
+            ):
             continue
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):

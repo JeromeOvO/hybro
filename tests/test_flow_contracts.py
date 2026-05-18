@@ -24,6 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from a2a.types import AgentCard, AgentSkill, AgentCapabilities, Task, TaskStatus, TaskState
 
 from common.auth import ClerkUser
+from common.dto import ExecutionAck
 from common.dto.agent import AgentInfo
 from models.agent import Agent, AgentStatus
 from models.room import Room, RoomUserMessage, RoomAgentMessage, MessageContent
@@ -116,54 +117,60 @@ class TestRoomLifecycleFlow:
 
         mock_rmc = MagicMock()
         mock_rmc.process_room_user_message = AsyncMock()
+        mock_execution_engine = MagicMock()
+        mock_execution_engine.execute = AsyncMock(
+            return_value=ExecutionAck(success=True, message_id=message_id)
+        )
+        mock_execution_engine.start_orchestration = AsyncMock()
 
         with patch(PATCH["room_center.db_service"], mock_db):
             with patch(PATCH["room_center.room_center"], mock_rc):
                 with patch(PATCH["room_center.room_message_center"], mock_rmc):
-                    # Step 1: Create room (real endpoint parses request JSON,
-                    # builds RoomCenterRoomSettingRequest, calls room_center)
-                    req1 = MagicMock()
-                    req1.json = AsyncMock(return_value={
-                        "room_name": "Flow Test Room",
-                        "room_owner_name": "Flow User",
-                        "room_agent_set": {"agent-1": "TestAgent"},
-                    })
-                    create_resp = await create_new_room(req1, flow_user)
-                    assert create_resp.success is True
-                    assert create_resp.room_id == room_id
+                    with patch("api.room_center.execution_engine", mock_execution_engine):
+                        # Step 1: Create room (real endpoint parses request JSON,
+                        # builds RoomCenterRoomSettingRequest, calls room_center)
+                        req1 = MagicMock()
+                        req1.json = AsyncMock(return_value={
+                            "room_name": "Flow Test Room",
+                            "room_owner_name": "Flow User",
+                            "room_agent_set": {"agent-1": "TestAgent"},
+                        })
+                        create_resp = await create_new_room(req1, flow_user)
+                        assert create_resp.success is True
+                        assert create_resp.room_id == room_id
 
-                    # Verify endpoint set room_owner_id from auth user
-                    create_call = mock_rc.create_new_room.call_args[0][0]
-                    assert create_call.room_owner_id == flow_user.user_id
+                        # Verify endpoint set room_owner_id from auth user
+                        create_call = mock_rc.create_new_room.call_args[0][0]
+                        assert create_call.room_owner_id == flow_user.user_id
 
-                    # Step 2: Query room setting (real endpoint verifies ownership)
-                    req2 = MagicMock()
-                    req2.json = AsyncMock(return_value={"room_id": room_id})
-                    setting_resp = await inquiry_room_setting(req2, flow_user)
-                    assert setting_resp.success is True
-                    assert setting_resp.room.room_id == room_id
+                        # Step 2: Query room setting (real endpoint verifies ownership)
+                        req2 = MagicMock()
+                        req2.json = AsyncMock(return_value={"room_id": room_id})
+                        setting_resp = await inquiry_room_setting(req2, flow_user)
+                        assert setting_resp.success is True
+                        assert setting_resp.room.room_id == room_id
 
-                    # Step 3: Send message (real endpoint builds request,
-                    # calls room_center, queues background task)
-                    req3 = MagicMock()
-                    req3.json = AsyncMock(return_value={
-                        "room_id": room_id,
-                        "message": user_msg.model_dump(),
-                        "target_group": "room_team",
-                        "client_request_id": "c7c9a000-0000-4000-8000-000000000003",
-                    })
-                    bg = MagicMock()
-                    send_resp = await send_message(req3, bg, flow_user)
-                    assert send_resp.success is True
-                    assert send_resp.message_id == message_id
-                    bg.add_task.assert_called_once()
+                        # Step 3: Send message (real endpoint builds request,
+                        # calls execution engine, queues background task)
+                        req3 = MagicMock()
+                        req3.json = AsyncMock(return_value={
+                            "room_id": room_id,
+                            "message": user_msg.model_dump(),
+                            "target_group": "room_team",
+                            "client_request_id": "c7c9a000-0000-4000-8000-000000000003",
+                        })
+                        bg = MagicMock()
+                        send_resp = await send_message(req3, bg, flow_user)
+                        assert send_resp.success is True
+                        assert send_resp.message_id == message_id
+                        bg.add_task.assert_called_once()
 
-                    # Step 4: Query messages
-                    req4 = MagicMock()
-                    req4.json = AsyncMock(return_value={"room_id": room_id})
-                    msgs_resp = await inquiry_room_messages(req4, flow_user)
-                    assert msgs_resp.success is True
-                    assert len(msgs_resp.message_list) == 1
+                        # Step 4: Query messages
+                        req4 = MagicMock()
+                        req4.json = AsyncMock(return_value={"room_id": room_id})
+                        msgs_resp = await inquiry_room_messages(req4, flow_user)
+                        assert msgs_resp.success is True
+                        assert len(msgs_resp.message_list) == 1
 
     @pytest.mark.asyncio
     async def test_room_ownership_enforcement(self, flow_user):
@@ -562,17 +569,20 @@ class TestMessageCancellationFlow:
 
         mock_hitl = MagicMock()
         mock_hitl.cancel_requests_for_message = AsyncMock()
+        mock_execution_engine = MagicMock()
+        mock_execution_engine.cancel = AsyncMock(return_value=True)
 
         with patch(PATCH["sse.db_service"], mock_db):
-            with patch(PATCH["sse.mongodb"], mock_mongodb):
-                with patch(PATCH["sse.sse_manager"], mock_sse):
-                    with patch(PATCH["hitl_service_singleton"], mock_hitl):
-                        result = await cancel_message(msg_id, flow_user)
+            with patch("api.sse.execution_engine", mock_execution_engine):
+                result = await cancel_message(msg_id, flow_user)
 
         assert result["success"] is True
         assert result["message_id"] == msg_id
-        mock_sse.cancel_message_and_broadcast.assert_called_once_with(msg_id)
-        mock_hitl.cancel_requests_for_message.assert_called_once_with(msg_id)
+        mock_execution_engine.cancel.assert_awaited_once_with(
+            room_id=room_id,
+            message_id=msg_id,
+            requested_by_user_id=flow_user.user_id,
+        )
 
 
 # =============================================================================
