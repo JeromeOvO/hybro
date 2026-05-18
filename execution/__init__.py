@@ -1,3 +1,5 @@
 """Execution module public compatibility exports."""
 
-__all__: list[str] = []
+from execution.facade import ExecutionFacade
+
+__all__ = ["ExecutionFacade"]

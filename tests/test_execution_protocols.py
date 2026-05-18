@@ -176,6 +176,16 @@ def test_hitl_manager_create_preserves_public_metadata_fields():
         assert name in sig.parameters
 
 
+def test_execution_facade_satisfies_task6_public_protocols():
+    from common.protocols import ExecutionEngine, HITLManager
+    from execution.facade import ExecutionFacade
+
+    facade = ExecutionFacade.__new__(ExecutionFacade)
+
+    assert isinstance(facade, ExecutionEngine)
+    assert isinstance(facade, HITLManager)
+
+
 class _FakeCursor:
     def __init__(self, docs=None, error: Exception | None = None):
         self.docs = docs or []

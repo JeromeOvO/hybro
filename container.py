@@ -17,7 +17,9 @@ from common.protocols import (
     ContentStorageRepository,
     ContextAssembler,
     EventPublisher,
+    ExecutionEngine,
     HubLivenessReader,
+    HITLManager,
     LLMProvider,
     MemoryManager,
     MemoryProjector,
@@ -88,6 +90,12 @@ class ContextMemoryDeps:
 class DeliveryDeps:
     event_publisher: EventPublisher
     sse_transport: SSETransport
+
+
+@dataclass(frozen=True)
+class ExecutionDeps:
+    execution_engine: ExecutionEngine
+    hitl_manager: HITLManager
 
 
 def create_mongo_dal(*, database: Any) -> MongoDAL:
@@ -234,6 +242,19 @@ def create_delivery_deps(facade: DeliveryFacade) -> DeliveryDeps:
     return DeliveryDeps(
         event_publisher=facade.event_publisher,
         sse_transport=facade.sse_transport,
+    )
+
+
+def create_execution_facade(**kwargs: Any):
+    from execution.facade import ExecutionFacade
+
+    return ExecutionFacade(**kwargs)
+
+
+def create_execution_deps(facade) -> ExecutionDeps:
+    return ExecutionDeps(
+        execution_engine=facade,
+        hitl_manager=facade,
     )
 
 

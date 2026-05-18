@@ -1,0 +1,276 @@
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from common.dto import ExecutionAck, ExecutionRequest
+from execution.facade import ExecutionFacade
+from execution.translators import room_response_to_execution_ack
+from models.response import RoomCenterUserMessageResponse
+
+
+class RecordingTaskFactory:
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, coro, *, name=None):
+        self.calls.append(name)
+        return asyncio.create_task(coro, name=name)
+
+
+def _make_facade(**overrides):
+    room_center = SimpleNamespace(send_message_to_room=AsyncMock())
+    room_message_center = SimpleNamespace(process_room_user_message=AsyncMock())
+    hitl_service = SimpleNamespace(
+        request_input=AsyncMock(),
+        handle_response=AsyncMock(),
+        get_pending_requests=AsyncMock(return_value=[]),
+        cancel_request=AsyncMock(return_value=None),
+    )
+    run_lifecycle = SimpleNamespace(
+        heal_diverged_runs=AsyncMock(return_value=2),
+        record_processing_status=AsyncMock(return_value=None),
+    )
+    run_reader = SimpleNamespace(
+        get_run=AsyncMock(return_value=None),
+        get_runs_for_room=AsyncMock(return_value=[]),
+    )
+    cancellation_state = SimpleNamespace(
+        cancel_message_and_broadcast=AsyncMock(),
+        clear_cancellation=MagicMock(),
+    )
+    cancellation_store = SimpleNamespace(cancel_message=AsyncMock(return_value=True))
+    hitl_message_cancellation = SimpleNamespace(
+        cancel_requests_for_message=AsyncMock(),
+    )
+    agent_task_cleanup = SimpleNamespace(
+        cleanup_cancelled_message_tasks=AsyncMock(),
+    )
+    agent_response_handler = SimpleNamespace(handle=AsyncMock())
+    event_publisher = SimpleNamespace(emit=AsyncMock())
+    legacy_processing_status_publisher = SimpleNamespace(
+        emit_processing_status=AsyncMock(),
+    )
+    client_request_id_resolver = SimpleNamespace(
+        resolve_client_request_id=AsyncMock(side_effect=lambda _, provided: provided),
+    )
+    deps = {
+        "room_center": room_center,
+        "room_message_center": room_message_center,
+        "hitl_service": hitl_service,
+        "run_lifecycle": run_lifecycle,
+        "run_reader": run_reader,
+        "cancellation_state": cancellation_state,
+        "cancellation_store": cancellation_store,
+        "hitl_message_cancellation": hitl_message_cancellation,
+        "agent_task_cleanup": agent_task_cleanup,
+        "agent_response_handler": agent_response_handler,
+        "event_publisher": event_publisher,
+        "legacy_processing_status_publisher": legacy_processing_status_publisher,
+        "run_event_enabled": lambda: False,
+        "client_request_id_resolver": client_request_id_resolver,
+        "task_factory": RecordingTaskFactory(),
+    }
+    deps.update(overrides)
+    facade = ExecutionFacade(**deps)
+    return facade, deps
+
+
+@pytest.mark.asyncio
+async def test_execute_persists_ack_without_starting_orchestration():
+    facade, deps = _make_facade()
+    deps["room_center"].send_message_to_room.return_value = RoomCenterUserMessageResponse(
+        room_id="room-1",
+        message_id="msg-1",
+        user_id="user-1",
+        user_name="User",
+        success=True,
+    )
+    request = ExecutionRequest(
+        room_id="room-1",
+        sender_id="user-1",
+        sender_name="User",
+        message={"message_content": {"message_text": "hello"}},
+        target_group=None,
+        mentioned_agent_ids=["agent-1"],
+    )
+
+    ack = await facade.execute(request)
+
+    assert ack.message_id == "msg-1"
+    deps["room_center"].send_message_to_room.assert_awaited_once()
+    sent_request = deps["room_center"].send_message_to_room.await_args.args[0]
+    assert sent_request.user_id == "user-1"
+    assert sent_request.message == {"message_content": {"message_text": "hello"}}
+    assert deps["room_center"].send_message_to_room.await_args.args[1:] == (
+        None,
+        ["agent-1"],
+    )
+    deps["room_message_center"].process_room_user_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_start_orchestration_tracks_and_awaits_background_task():
+    task_factory = RecordingTaskFactory()
+    facade, deps = _make_facade(task_factory=task_factory)
+    request = ExecutionRequest(
+        room_id="room-1",
+        sender_id="user-1",
+        client_request_id="cr-1",
+        parent_message_id="parent-1",
+    )
+    ack = ExecutionAck(success=True, message_id="msg-1")
+
+    await facade.start_orchestration(request, ack)
+
+    orchestration_request = deps["room_message_center"].process_room_user_message.call_args.args[0]
+    assert orchestration_request.room_id == "room-1"
+    assert orchestration_request.room_user_message_id == "msg-1"
+    assert orchestration_request.user_id == "user-1"
+    assert orchestration_request.client_request_id == "cr-1"
+    assert orchestration_request.room_related_message_id == "parent-1"
+    assert task_factory.calls == ["execution-orchestrate-msg-1"]
+    assert facade._inflight == set()
+
+
+@pytest.mark.asyncio
+async def test_cancel_preserves_order_and_requested_by_user_id():
+    order = []
+    facade, deps = _make_facade()
+
+    async def broadcast(message_id):
+        order.append("broadcast")
+
+    async def cancel_hitl(message_id):
+        order.append("hitl")
+
+    async def persist(message_id, user_id):
+        order.append(("persist", user_id))
+        return True
+
+    async def record(*args, **kwargs):
+        order.append("record")
+
+    async def cleanup(**kwargs):
+        order.append("cleanup")
+
+    deps["cancellation_state"].cancel_message_and_broadcast.side_effect = broadcast
+    deps["hitl_message_cancellation"].cancel_requests_for_message.side_effect = cancel_hitl
+    deps["cancellation_store"].cancel_message.side_effect = persist
+    deps["run_lifecycle"].record_processing_status.side_effect = record
+    deps["agent_task_cleanup"].cleanup_cancelled_message_tasks.side_effect = cleanup
+
+    assert await facade.cancel(
+        "room-1",
+        "msg-1",
+        requested_by_user_id="user-1",
+    )
+
+    assert order == ["broadcast", "hitl", ("persist", "user-1"), "record", "cleanup"]
+    deps["cancellation_state"].clear_cancellation.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel_clears_cancellation_when_persistence_fails():
+    facade, deps = _make_facade()
+    deps["cancellation_store"].cancel_message.return_value = False
+
+    assert not await facade.cancel(
+        "room-1",
+        "msg-1",
+        requested_by_user_id="user-1",
+    )
+
+    deps["cancellation_state"].clear_cancellation.assert_called_once_with("msg-1")
+    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_methods_delegate_to_ports():
+    facade, deps = _make_facade()
+    deps["run_reader"].get_runs_for_room.return_value = [
+        SimpleNamespace(trigger_message_id="user-msg-1")
+    ]
+
+    assert await facade.get_run("run-1") is None
+    runs = await facade.get_runs_for_room("room-1")
+    assert runs[0].trigger_message_id == "user-msg-1"
+    assert await facade.heal_diverged_runs(limit=123) == 2
+    deps["run_lifecycle"].heal_diverged_runs.assert_awaited_once_with(limit=123)
+
+
+@pytest.mark.asyncio
+async def test_cancel_inflight_tasks_awaits_cancelled_tasks():
+    async def wait_forever():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            marker.append("cleanup")
+
+    marker = []
+    facade, _ = _make_facade()
+    task = facade._spawn_orchestration(wait_forever(), name="execution-test")
+    await asyncio.sleep(0)
+
+    assert await facade.cancel_inflight_tasks() == 1
+    assert task.cancelled()
+    assert marker == ["cleanup"]
+    assert facade._inflight == set()
+
+
+@pytest.mark.asyncio
+async def test_hitl_methods_delegate_and_translate():
+    facade, deps = _make_facade()
+    model_request = SimpleNamespace(
+        request_id="req-1",
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        source="agent",
+        prompt="Need input",
+        prompt_type="text",
+        status="pending",
+        display_message_id="display-msg-1",
+    )
+    deps["hitl_service"].request_input.return_value = model_request
+    deps["hitl_service"].handle_response.return_value = {
+        "status": "ok",
+        "request_id": "req-1",
+    }
+    deps["hitl_service"].get_pending_requests.return_value = [model_request]
+
+    created = await facade.create_hitl_request(
+        "room-1",
+        "user-msg-1",
+        "Need input",
+        "agent",
+        display_message_id="display-msg-1",
+    )
+    resolved = await facade.resolve_hitl("room-1", "req-1", "yes", "user-1")
+    pending = await facade.get_pending_hitl("room-1")
+    canceled = await facade.cancel_hitl("room-1", "req-1")
+
+    assert created.message_id == "display-msg-1"
+    assert resolved.status == "ok"
+    assert pending[0].message_id == "display-msg-1"
+    assert canceled is True
+    deps["hitl_service"].cancel_request.assert_awaited_once_with(
+        "req-1",
+        room_id="room-1",
+    )
+
+
+def test_room_response_to_execution_ack_preserves_missing_message_error_shape():
+    response = RoomCenterUserMessageResponse(
+        success=False,
+        error="Message is required",
+        status_code=400,
+        message_id=None,
+        message=None,
+    )
+
+    ack = room_response_to_execution_ack(response)
+
+    assert ack.message_id is None
+    assert ack.message is None
+    assert ack.error == "Message is required"
