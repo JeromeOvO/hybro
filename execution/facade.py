@@ -219,6 +219,10 @@ def _validate_hub_event_consistency(
 
 def _hub_payload_lifecycle_message_id(kind: str, payload: dict[str, Any]) -> str | None:
     value = _optional_hub_str(payload, "lifecycle_message_id")
+    if kind == "processing_status" and value is None:
+        raise ValueError(
+            "Hub processing_status requires verified lifecycle_message_id"
+        )
     if (
         value is not None
         and kind == "processing_status"

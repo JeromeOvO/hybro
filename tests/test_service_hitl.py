@@ -57,6 +57,8 @@ def mock_hitl_db_service():
     mock.claim_hitl_request = AsyncMock(return_value=None)
     mock.fenced_update_hitl_request = AsyncMock(return_value=True)
     mock.cas_update_hitl_request = AsyncMock(return_value=True)
+    mock.count_pending_in_hitl_group = AsyncMock(return_value=0)
+    mock.get_hitl_group_requests = AsyncMock(return_value=[])
     mock.reset_last_notified_state = AsyncMock()
     mock.get_pending_continuation_on_message = AsyncMock(return_value=None)
     mock.save_continuation_on_user_message = AsyncMock(return_value=True)
@@ -533,6 +535,75 @@ class TestHandleResponseErrors:
             )
 
         assert exc_info.value.message == "Request already responded"
+
+
+class TestGroupedHandleResponse:
+    """Tests for grouped HITL response routing."""
+
+    @pytest.mark.asyncio
+    async def test_first_group_answer_waits_for_remaining_answers(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._sse_manager = mock_hitl_sse_manager
+        request = sample_hitl_request.model_copy(
+            update={
+                "source": "supervisor",
+                "group_id": "group-1",
+                "group_total": 2,
+                "group_index": 0,
+                "continuation_message_id": "cont-1",
+            }
+        )
+        doc = request.model_dump(mode="json")
+        mock_hitl_db_service.get_hitl_request.return_value = doc
+        mock_hitl_db_service.claim_hitl_request.return_value = doc
+        mock_hitl_db_service.count_pending_in_hitl_group.return_value = 1
+        hitl_service._handle_supervisor_response = AsyncMock()
+
+        result = await hitl_service.handle_response(
+            room_id=request.room_id,
+            request_id=request.request_id,
+            user_input="first answer",
+            user_id="user-1",
+        )
+
+        assert result == {"status": "ok", "request_id": request.request_id}
+        hitl_service._handle_supervisor_response.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_last_group_answer_routes_supervisor_response(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._sse_manager = mock_hitl_sse_manager
+        request = sample_hitl_request.model_copy(
+            update={
+                "source": "supervisor",
+                "group_id": "group-1",
+                "group_total": 2,
+                "group_index": 1,
+                "continuation_message_id": "cont-1",
+            }
+        )
+        doc = request.model_dump(mode="json")
+        mock_hitl_db_service.get_hitl_request.return_value = doc
+        mock_hitl_db_service.claim_hitl_request.return_value = doc
+        mock_hitl_db_service.count_pending_in_hitl_group.return_value = 0
+        mock_hitl_db_service.get_hitl_group_requests.return_value = [
+            {**doc, "prompt": "Q1?", "request_id": "req-1", "user_input": "first"},
+            {**doc, "prompt": "Q2?", "request_id": request.request_id},
+        ]
+        hitl_service._handle_supervisor_response = AsyncMock()
+
+        await hitl_service.handle_response(
+            room_id=request.room_id,
+            request_id=request.request_id,
+            user_input="second",
+            user_id="user-1",
+        )
+
+        hitl_service._handle_supervisor_response.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_room_mismatch_is_rejected_before_claim(

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import ast
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -46,6 +47,61 @@ def test_execution_processing_status_call_sites_use_event_helper_or_compat_adapt
             ):
                 violations.append(f"{rel}:{node.lineno} imports run_lifecycle_service")
     assert violations == []
+
+
+def _qualified_function_names(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(), filename=path.as_posix())
+    parent: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parent[child] = node
+
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        owner = parent.get(node)
+        if isinstance(owner, ast.ClassDef):
+            names.add(f"{owner.name}.{node.name}")
+        else:
+            names.add(node.name)
+    return names
+
+
+def test_execution_event_manifest_covers_status_helpers_and_hub_ingress():
+    manifest_path = ROOT / "tests/fixtures/phase7_execution_event_callers.json"
+    manifest = json.loads(manifest_path.read_text())
+    required_keys = {
+        "path",
+        "function",
+        "role",
+        "status_source",
+        "lifecycle_id_source",
+        "frontend_transport",
+        "lifecycle_required_for_frontend_emit",
+    }
+
+    for entry in manifest:
+        assert set(entry) == required_keys
+        assert entry["lifecycle_required_for_frontend_emit"] is True
+        assert entry["status_source"]
+        assert "lifecycle" in entry["lifecycle_id_source"]
+        assert entry["frontend_transport"]
+        assert entry["function"] in _qualified_function_names(ROOT / entry["path"])
+
+    expected = {
+        ("execution/events.py", "emit_processing_status"),
+        ("execution/dispatch/response_handler.py", "AgentResponseHandler._emit_processing_status"),
+        ("execution/orchestration/queue_executor.py", "QueueExecutor._emit_processing_status"),
+        ("execution/orchestration/room_message_center.py", "RoomMessageCenter._emit_processing_status"),
+        ("execution/orchestration/supervisor_executor.py", "SupervisorExecutor._emit_processing_status"),
+        ("execution/facade.py", "hub_agent_response_internal_to_agent_event"),
+    }
+    actual = {(entry["path"], entry["function"]) for entry in manifest}
+    assert actual == expected
+
+    facade_source = (ROOT / "execution/facade.py").read_text()
+    assert "requires verified lifecycle_message_id" in facade_source
 
 
 @pytest.mark.asyncio

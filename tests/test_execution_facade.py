@@ -447,6 +447,11 @@ def test_hub_agent_response_adapter_maps_continuation_message_id_and_thaws_paylo
             False,
             "requires upstream",
         ),
+        (
+            {"kind": "processing_status", "message_id": "m1", "state": "processing"},
+            False,
+            "requires verified lifecycle_message_id",
+        ),
         ({"kind": "error", "message_id": "m1"}, True, "requires error_text or text"),
         ({"kind": "interactive", "message_id": "m1", "state": "working"}, False, "Unsupported"),
         ({"kind": "response", "message_id": 123}, True, "non-empty string"),

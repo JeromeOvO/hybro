@@ -336,7 +336,7 @@ class HITLService:
                 )
                 is_last_in_group = True
             else:
-                is_last_in_group = remaining <= 1
+                is_last_in_group = remaining == 0
             logger.info(
                 "hitl_group_last_check",
                 extra={
