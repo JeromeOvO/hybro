@@ -572,6 +572,7 @@ async def lifespan(app: FastAPI):
         _relay_svc = init_relay_service(
             mongo=mongodb, database_service=_db_svc, sse_manager=sse_manager,
             room_message_center=_rmc,
+            hitl_coordinator=hitl_service,
         )
         _relay_svc.set_leader_election(_leader)
         if _agent_deps is not None:

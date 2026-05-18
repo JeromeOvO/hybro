@@ -915,6 +915,7 @@ def init_relay_service(
     database_service: DatabaseService,
     sse_manager: SSEManager,
     room_message_center: object,
+    hitl_coordinator: object | None = None,
 ) -> RelayService:
     global relay_service
     svc = RelayService(
@@ -927,7 +928,10 @@ def init_relay_service(
     from modules.transports.relay import RelayTransport
 
     handler = AgentResponseHandler(
-        db=database_service, sse=sse_manager, room_message_center=room_message_center,
+        db=database_service,
+        sse=sse_manager,
+        room_message_center=room_message_center,
+        hitl_coordinator=hitl_coordinator,
     )
     transport = RelayTransport(
         response_handler=handler,
