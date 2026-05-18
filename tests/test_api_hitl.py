@@ -19,6 +19,7 @@ from api.hitl import (
     cancel_hitl_request,
 )
 from models.hitl import HITLResponseRequest, HITLRequest, HITLStatus
+from common.dto import HITLRequest as CommonHITLRequest, HITLResponse as CommonHITLResponse
 from tests.conftest import PATCH
 
 
@@ -41,23 +42,23 @@ class TestRespondToHitlRequest:
         )
         
         mock_db_service.get_room_by_room_id.return_value = sample_room
-        mock_hitl_service.handle_response.return_value = {
-            "success": True,
-            "message": "Response processed",
-        }
+        mock_hitl_service.resolve_hitl.return_value = CommonHITLResponse(
+            request_id="hitl-request-123",
+            status="ok",
+        )
         
         with patch(PATCH["hitl.verify_room_ownership"], AsyncMock()):
-            with patch(PATCH["hitl.hitl_service"], mock_hitl_service):
+            with patch("api.hitl.hitl_manager", mock_hitl_service):
                 result = await respond_to_hitl_request(
                     sample_room.room_id, body, mock_user
                 )
         
-        assert result["success"] is True
-        mock_hitl_service.handle_response.assert_called_once_with(
-            room_id=sample_room.room_id,
-            request_id="hitl-request-123",
-            user_input="Yes, proceed with the action",
-            user_id=mock_user.user_id,
+        assert result == {"status": "ok", "request_id": "hitl-request-123"}
+        mock_hitl_service.resolve_hitl.assert_called_once_with(
+            sample_room.room_id,
+            "hitl-request-123",
+            "Yes, proceed with the action",
+            mock_user.user_id,
         )
 
     @pytest.mark.asyncio
@@ -96,10 +97,19 @@ class TestGetPendingHitlRequests:
     ):
         """Should return pending HITL requests for room."""
         mock_db_service.get_room_by_room_id.return_value = sample_room
-        mock_hitl_service.get_pending_requests.return_value = [sample_hitl_request]
+        mock_hitl_service.get_pending_hitl.return_value = [
+            CommonHITLRequest(
+                request_id=sample_hitl_request.request_id,
+                room_id=sample_hitl_request.room_id,
+                user_message_id=sample_hitl_request.user_message_id,
+                source=sample_hitl_request.source,
+                prompt=sample_hitl_request.prompt,
+                display_message_id=sample_hitl_request.display_message_id,
+            )
+        ]
         
         with patch(PATCH["hitl.verify_room_ownership"], AsyncMock()):
-            with patch(PATCH["hitl.hitl_service"], mock_hitl_service):
+            with patch("api.hitl.hitl_manager", mock_hitl_service):
                 result = await get_pending_hitl_requests(
                     sample_room.room_id, mock_user
                 )
@@ -114,10 +124,10 @@ class TestGetPendingHitlRequests:
     ):
         """Should return empty list when no pending requests."""
         mock_db_service.get_room_by_room_id.return_value = sample_room
-        mock_hitl_service.get_pending_requests.return_value = []
+        mock_hitl_service.get_pending_hitl.return_value = []
         
         with patch(PATCH["hitl.verify_room_ownership"], AsyncMock()):
-            with patch(PATCH["hitl.hitl_service"], mock_hitl_service):
+            with patch("api.hitl.hitl_manager", mock_hitl_service):
                 result = await get_pending_hitl_requests(
                     sample_room.room_id, mock_user
                 )
@@ -143,15 +153,13 @@ class TestCancelHitlRequest:
         mock_db_service.get_room_by_room_id.return_value = sample_room
         
         with patch(PATCH["hitl.verify_room_ownership"], AsyncMock()):
-            with patch(PATCH["hitl.hitl_service"], mock_hitl_service):
+            with patch("api.hitl.hitl_manager", mock_hitl_service):
                 result = await cancel_hitl_request(
                     sample_room.room_id, request_id, mock_user
                 )
         
         assert result["status"] == "canceled"
-        mock_hitl_service.cancel_request.assert_called_once_with(
-            request_id, room_id=sample_room.room_id
-        )
+        mock_hitl_service.cancel_hitl.assert_called_once_with(sample_room.room_id, request_id)
 
     @pytest.mark.asyncio
     async def test_verifies_room_ownership_before_cancel(

@@ -11,7 +11,6 @@ Tests cover:
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from a2a.types import TaskState
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -250,63 +249,13 @@ class TestCancelMessage:
         ].get_room_agent_messages_by_related_message_id.return_value = [
             sample_agent_message_with_task
         ]
+        deps["execution_engine"].cancel.return_value = True
 
-        events: list[str] = []
-
-        async def record_root_cancel(*args, **kwargs):
-            events.append("record_root_cancel")
-
-        async def clear_frontend(*args, **kwargs):
-            events.append("clear_frontend")
-
-        async def update_paused_agent(*args, **kwargs):
-            events.append("update_paused_agent")
-            return True
-
-        async def fail_paused_agent_notify(*args, **kwargs):
-            events.append("notify_paused_agent")
-            raise RuntimeError("notify down")
-
-        record = AsyncMock(side_effect=record_root_cancel)
-        notify_task_update = AsyncMock(side_effect=fail_paused_agent_notify)
-        deps["sse_manager"].send_processing_status.side_effect = clear_frontend
-        deps["db_service"].update_task_state_on_message.side_effect = (
-            update_paused_agent
-        )
-
-        with (
-            patch("api.sse.record_and_maybe_broadcast_run_event", record),
-            patch(
-                "services.task_notification_service.notify_task_update",
-                notify_task_update,
-            ),
-        ):
-            result = await cancel_message(sample_user_message.message_id, mock_user)
+        result = await cancel_message(sample_user_message.message_id, mock_user)
 
         assert result["success"] is True
-        record.assert_awaited_once_with(
-            sample_user_message.room_id,
-            "canceled",
-            sample_user_message.message_id,
-            sse=deps["sse_manager"],
+        deps["execution_engine"].cancel.assert_awaited_once_with(
+            room_id=sample_user_message.room_id,
+            message_id=sample_user_message.message_id,
+            requested_by_user_id=mock_user.user_id,
         )
-        deps["sse_manager"].send_processing_status.assert_awaited_once_with(
-            sample_user_message.room_id, "canceled", sample_user_message.message_id
-        )
-        deps["db_service"].update_task_state_on_message.assert_awaited_once_with(
-            sample_agent_message_with_task.message_id,
-            TaskState.canceled.value,
-            message_text="Task was canceled",
-        )
-        notify_task_update.assert_awaited_once_with(
-            message_id=sample_agent_message_with_task.message_id,
-            state=TaskState.canceled,
-            room_id=sample_agent_message_with_task.room_id,
-            user_id=sample_agent_message_with_task.user_id or "",
-        )
-        assert events == [
-            "record_root_cancel",
-            "clear_frontend",
-            "update_paused_agent",
-            "notify_paused_agent",
-        ]

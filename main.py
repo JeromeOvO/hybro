@@ -5,6 +5,7 @@ import sys
 import time
 from contextlib import asynccontextmanager
 
+from a2a.types import TaskState
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -178,6 +179,8 @@ async def lifespan(app: FastAPI):
                 create_delivery_facade,
                 create_delivery_redis_clients,
                 create_delivery_startup_policy,
+                create_execution_deps,
+                create_execution_facade,
                 create_mongo_dal,
                 create_room_deps,
                 create_vector_dal,
@@ -233,8 +236,29 @@ async def lifespan(app: FastAPI):
                 LegacyProcessingStatusC3Adapter,
                 SSEClientRequestIdResolver,
             )
+            from execution.events import emit_processing_status
+            from execution.cancellation import (
+                AgentTaskCleanupAdapter,
+                CancellationStateC3Adapter,
+                HITLMessageCancellationAdapter,
+                MongoCancellationStoreAdapter,
+            )
             from execution.run_lifecycle import RunLifecycleAdapter
-            from services.run_command_handler import run_command_handler
+            from execution.run_queries import RunQueryAdapter
+            from services.a2a_service import a2a_service
+            from services.database_service import db_service as _db_svc
+            from services.hitl_service import hitl_service
+            from services.run_command_handler import (
+                run_command_handler,
+                run_event_sse_enabled,
+            )
+            from services.task_notification_service import notify_task_update
+
+            async def notify_task_update_with_string_state(**kwargs):
+                state = kwargs.get("state")
+                if isinstance(state, str):
+                    kwargs["state"] = TaskState(state)
+                return await notify_task_update(**kwargs)
 
             run_lifecycle = RunLifecycleAdapter(
                 command_handler=run_command_handler,
@@ -280,6 +304,64 @@ async def lifespan(app: FastAPI):
             room_services.bind_facade(_room_facade)
             room_center.room_center.bind_facade(_room_facade)
             room_center.room_message_center.bind_facade(_room_facade)
+
+            execution_facade = create_execution_facade(
+                room_center=room_center.room_center,
+                room_message_center=room_center.room_message_center,
+                hitl_service=hitl_service,
+                run_lifecycle=run_lifecycle,
+                run_reader=RunQueryAdapter(mongodb.runs_collection),
+                cancellation_state=CancellationStateC3Adapter(sse_manager),
+                cancellation_store=MongoCancellationStoreAdapter(mongodb),
+                hitl_message_cancellation=HITLMessageCancellationAdapter(hitl_service),
+                agent_task_cleanup=AgentTaskCleanupAdapter(
+                    db_service=_db_svc,
+                    get_agent_card_from_url=a2a_service.get_agent_card_from_url,
+                    cancel_remote_task=a2a_service.cancel_remote_task,
+                    notify_task_update=notify_task_update_with_string_state,
+                ),
+                agent_response_handler=room_center.room_message_center.agent_response_handler,
+                event_publisher=_delivery_deps.event_publisher,
+                legacy_processing_status_publisher=legacy_processing_status_publisher,
+                run_event_enabled=run_event_sse_enabled,
+                client_request_id_resolver=app_shell_client_request_id_resolver,
+            )
+            _execution_deps = create_execution_deps(execution_facade)
+
+            async def read_room_active_runs(room_id: str):
+                runs = await execution_facade.get_runs_for_room(room_id)
+                return [
+                    {
+                        "run_id": run.run_id,
+                        "state": str(getattr(run.state, "value", run.state)),
+                        "trigger_message_id": run.trigger_message_id,
+                        "agent_id": run.agent_id,
+                        "seq": run.seq,
+                        "updated_at": run.updated_at,
+                    }
+                    for run in runs
+                ]
+
+            async def emit_room_processing_status(**kwargs):
+                return await emit_processing_status(
+                    **kwargs,
+                    run_lifecycle=run_lifecycle,
+                    event_publisher=_delivery_deps.event_publisher,
+                    legacy_processing_status_publisher=legacy_processing_status_publisher,
+                    run_event_enabled=run_event_sse_enabled,
+                    client_request_id_resolver=app_shell_client_request_id_resolver,
+                )
+
+            room_services.bind_hitl_pending_checker(hitl_service.get_pending_requests)
+            room_services.bind_active_run_reader(read_room_active_runs)
+            room_services.bind_execution_event_deps(
+                processing_status_emitter=emit_room_processing_status,
+            )
+            room_center.bind_execution_deps(_execution_deps)
+            hitl.bind_execution_deps(_execution_deps)
+            sse.bind_execution_deps(_execution_deps)
+            app.state.execution_facade = execution_facade
+            app.state.execution_deps = _execution_deps
 
             context_memory_facade = create_context_memory_facade(
                 mongo=mongo_dal,

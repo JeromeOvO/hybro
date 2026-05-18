@@ -461,6 +461,9 @@ def mock_hitl_service():
     mock.get_pending_requests = AsyncMock(return_value=[])
     mock.cancel_request = AsyncMock()
     mock.cancel_requests_for_message = AsyncMock()
+    mock.resolve_hitl = AsyncMock()
+    mock.get_pending_hitl = AsyncMock(return_value=[])
+    mock.cancel_hitl = AsyncMock()
     return mock
 
 
@@ -571,13 +574,27 @@ def patch_sse_deps(mock_db_service, mock_sse_manager, mock_mongodb, mock_hitl_se
     with ExitStack() as stack:
         stack.enter_context(patch(PATCH["sse.db_service"], mock_db_service))
         stack.enter_context(patch(PATCH["sse.sse_manager"], mock_sse_manager))
-        stack.enter_context(patch(PATCH["sse.mongodb"], mock_mongodb))
         stack.enter_context(patch(PATCH["hitl_service_singleton"], mock_hitl_service))
+        execution_engine = MagicMock()
+
+        async def cancel(*, room_id, message_id, requested_by_user_id):
+            await mock_sse_manager.cancel_message_and_broadcast(message_id)
+            await mock_hitl_service.cancel_requests_for_message(message_id)
+            success = await mock_mongodb.cancel_message(message_id, requested_by_user_id)
+            if not success:
+                mock_sse_manager.clear_cancellation(message_id)
+                return False
+            await mock_sse_manager.send_processing_status(room_id, "canceled", message_id)
+            return True
+
+        execution_engine.cancel = AsyncMock(side_effect=cancel)
+        stack.enter_context(patch("api.sse.execution_engine", execution_engine))
         yield {
             "db_service": mock_db_service,
             "sse_manager": mock_sse_manager,
             "mongodb": mock_mongodb,
             "hitl_service": mock_hitl_service,
+            "execution_engine": execution_engine,
         }
 
 
@@ -585,14 +602,42 @@ def patch_sse_deps(mock_db_service, mock_sse_manager, mock_mongodb, mock_hitl_se
 def patch_room_center_deps(mock_db_service, mock_room_center, mock_room_message_center):
     """Patch all room center endpoint dependencies at once."""
     from contextlib import ExitStack
+    from common.dto import ExecutionAck
     with ExitStack() as stack:
         stack.enter_context(patch(PATCH["room_center.db_service"], mock_db_service))
         stack.enter_context(patch(PATCH["room_center.room_center"], mock_room_center))
         stack.enter_context(patch(PATCH["room_center.room_message_center"], mock_room_message_center))
+        execution_engine = MagicMock()
+
+        async def execute(request):
+            response = await mock_room_center.send_message_to_room(
+                MagicMock(),
+                request.target_group,
+                request.mentioned_agent_ids,
+            )
+            return ExecutionAck(
+                room_id=response.room_id,
+                message_id=response.message_id,
+                user_id=response.user_id,
+                user_name=response.user_name,
+                success=response.success,
+                error=response.error,
+                status_code=response.status_code,
+            )
+
+        async def get_runs_for_room(room_id):
+            response = await mock_room_center.inquiry_active_runs(MagicMock())
+            return response.active_runs or []
+
+        execution_engine.execute = AsyncMock(side_effect=execute)
+        execution_engine.start_orchestration = AsyncMock()
+        execution_engine.get_runs_for_room = AsyncMock(side_effect=get_runs_for_room)
+        stack.enter_context(patch("api.room_center.execution_engine", execution_engine))
         yield {
             "db_service": mock_db_service,
             "room_center": mock_room_center,
             "room_message_center": mock_room_message_center,
+            "execution_engine": execution_engine,
         }
 
 

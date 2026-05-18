@@ -10,10 +10,22 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from api.room_center import verify_room_ownership
 from common.auth import ClerkUser, get_current_user
+from common.protocols import HITLManager
 from models.hitl import HITLResponseRequest
-from services.hitl_service import hitl_service
 
 router = APIRouter(prefix="/rooms/{room_id}/hitl", tags=["hitl"])
+hitl_manager: HITLManager | None = None
+
+
+def bind_execution_deps(deps) -> None:
+    global hitl_manager
+    hitl_manager = deps.hitl_manager
+
+
+def _require_hitl_manager() -> HITLManager:
+    if hitl_manager is None:
+        raise RuntimeError("ExecutionDeps have not been bound")
+    return hitl_manager
 
 
 @router.post("/respond")
@@ -25,12 +37,15 @@ async def respond_to_hitl_request(
     """User responds to an HITL prompt."""
     await verify_room_ownership(room_id, user)
 
-    result = await hitl_service.handle_response(
-        room_id=room_id,
-        request_id=body.request_id,
-        user_input=body.user_input,
-        user_id=user.user_id,
+    response = await _require_hitl_manager().resolve_hitl(
+        room_id,
+        body.request_id,
+        body.user_input,
+        user.user_id,
     )
+    result = {"status": response.status, "request_id": response.request_id}
+    if response.reclaimed is not None:
+        result["reclaimed"] = response.reclaimed
     return result
 
 
@@ -42,16 +57,12 @@ async def get_pending_hitl_requests(
     """Get pending HITL requests for a room (SSE reconnect catch-up)."""
     await verify_room_ownership(room_id, user)
 
-    requests = await hitl_service.get_pending_requests(room_id)
+    requests = await _require_hitl_manager().get_pending_hitl(room_id)
     return {
         "requests": [
             {
                 **r.model_dump(mode="json"),
-                "message_id": (
-                    r.display_message_id
-                    or r.continuation_message_id
-                    or r.user_message_id
-                ),
+                "message_id": r.message_id,
             }
             for r in requests
         ]
@@ -67,5 +78,5 @@ async def cancel_hitl_request(
     """Cancel a pending HITL request."""
     await verify_room_ownership(room_id, user)
 
-    await hitl_service.cancel_request(request_id, room_id=room_id)
+    await _require_hitl_manager().cancel_hitl(room_id, request_id)
     return {"status": "canceled"}

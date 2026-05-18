@@ -1,7 +1,9 @@
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from enum import Enum
+from typing import Any
 from uuid import uuid4
 
 from a2a.types import (
@@ -144,6 +146,9 @@ class RoomServices:
         self._facade = None
         self._bound = False
         self._context_memory_manager = None
+        self._active_run_reader: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None
+        self._hitl_pending_checker: Callable[[str], Awaitable[list[Any]]] | None = None
+        self._processing_status_emitter: Callable[..., Awaitable[dict[str, Any] | None]] | None = None
 
     @property
     def s3_service(self):
@@ -160,12 +165,49 @@ class RoomServices:
     def bind_context_memory(self, memory_manager) -> None:
         self._context_memory_manager = memory_manager
 
+    def bind_active_run_reader(
+        self,
+        reader: Callable[[str], Awaitable[list[dict[str, Any]]]],
+    ) -> None:
+        self._active_run_reader = reader
+
+    def bind_hitl_pending_checker(
+        self,
+        checker: Callable[[str], Awaitable[list[Any]]],
+    ) -> None:
+        self._hitl_pending_checker = checker
+
+    def bind_execution_event_deps(
+        self,
+        *,
+        processing_status_emitter: Callable[..., Awaitable[dict[str, Any] | None]],
+    ) -> None:
+        self._processing_status_emitter = processing_status_emitter
+
     def _require_facade(self):
         if not getattr(self, "_bound", False) or getattr(self, "_facade", None) is None:
             raise RuntimeError(
                 "RoomServices.bind_facade() not called - startup incomplete"
             )
         return self._facade
+
+    async def _read_active_runs_for_room(self, room_id: str) -> list[dict[str, Any]]:
+        reader = getattr(self, "_active_run_reader", None)
+        if reader is None:
+            active_runs_raw = await self.database_service.get_active_runs_by_room_id(
+                room_id
+            )
+            return self._active_run_payloads_from_raw(active_runs_raw)
+        try:
+            return await reader(room_id)
+        except Exception as e:
+            logger.warning(
+                "RoomServices: active-run reader failed for room %s: %s",
+                room_id,
+                e,
+                exc_info=True,
+            )
+            return []
 
     @staticmethod
     def _legacy_room_from_info(info: RoomInfo) -> Room:
@@ -595,12 +637,9 @@ class RoomServices:
                 error="Room not found",
                 status_code=404,
             )
-        active_runs_raw = await self.database_service.get_active_runs_by_room_id(
-            room_id
-        )
         return self._room_setting_response_from_info(
             info,
-            active_runs=self._active_run_payloads_from_raw(active_runs_raw),
+            active_runs=await self._read_active_runs_for_room(room_id),
         )
 
         room = await self.database_service.get_room_by_room_id(room_id)
@@ -639,10 +678,7 @@ class RoomServices:
             resolved_agents, room_default_status = await self._resolve_room_agent_refs(
                 room.room_agent_set, viewer_user_id=request.requesting_user_id
             )
-            active_runs_raw = await self.database_service.get_active_runs_by_room_id(
-                room.room_id
-            )
-            active_runs = self._active_run_payloads_from_raw(active_runs_raw)
+            active_runs = await self._read_active_runs_for_room(room.room_id)
 
             return RoomCenterRoomSettingResponse(
                 room_id=room.room_id,
@@ -679,10 +715,7 @@ class RoomServices:
                 status_code=404,
             )
 
-        active_runs_raw = await self.database_service.get_active_runs_by_room_id(
-            room.room_id
-        )
-        active_runs = self._active_run_payloads_from_raw(active_runs_raw)
+        active_runs = await self._read_active_runs_for_room(room.room_id)
         return RoomCenterActiveRunsResponse(
             room_id=room.room_id,
             active_runs=active_runs,
@@ -2185,9 +2218,8 @@ class RoomServices:
         # Check BEFORE persisting the message or creating a token so we don't
         # leave orphaned DB records on rejection.
         try:
-            from services.hitl_service import hitl_service
-            pending_hitl = await hitl_service.get_pending_requests(request.room_id)
-            if pending_hitl:
+            pending_checker = getattr(self, "_hitl_pending_checker", None)
+            if pending_checker is not None and await pending_checker(request.room_id):
                 return RoomCenterUserMessageResponse(
                     message_id=None,
                     message=None,

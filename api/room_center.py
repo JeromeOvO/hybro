@@ -2,6 +2,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from common.auth import ClerkUser, get_current_user
+from common.dto import ExecutionRequest, RunInfo
+from common.protocols import ExecutionEngine
 from models.file_upload import MAX_ATTACHMENT_REFS_PER_REQUEST
 from models.request import (
     OrchestrationRequest,
@@ -9,13 +11,36 @@ from models.request import (
     RoomCenterRoomSettingRequest,
     RoomCenterUserMessageRequest,
 )
-from models.response import RoomCenterUserMessageResponse
+from models.response import ActiveRunRef, RoomCenterActiveRunsResponse, RoomCenterUserMessageResponse
 from modules.RoomMessageCenter import room_message_center
 from modules.RoomCenter import RoomCenter
 from services.database_service import db_service
 
 router = APIRouter()
 room_center = RoomCenter()  # Singleton instance
+execution_engine: ExecutionEngine | None = None
+
+
+def bind_execution_deps(deps) -> None:
+    global execution_engine
+    execution_engine = deps.execution_engine
+
+
+def _require_execution_engine() -> ExecutionEngine:
+    if execution_engine is None:
+        raise RuntimeError("ExecutionDeps have not been bound")
+    return execution_engine
+
+
+def _run_info_to_active_run_ref(run: RunInfo) -> ActiveRunRef:
+    return ActiveRunRef(
+        run_id=run.run_id,
+        state=str(getattr(run.state, "value", run.state)),
+        trigger_message_id=run.trigger_message_id,
+        agent_id=run.agent_id,
+        seq=run.seq,
+        updated_at=run.updated_at,
+    )
 
 
 def _extract_attachments(request_data: dict, message: dict | None):
@@ -131,10 +156,12 @@ async def inquiry_active_runs(
 
     await verify_room_ownership(room_id, user)
 
-    room_center_request = RoomCenterRoomSettingRequest(
-        room_id=room_id, requesting_user_id=user.user_id
+    runs = await _require_execution_engine().get_runs_for_room(room_id)
+    return RoomCenterActiveRunsResponse(
+        success=True,
+        room_id=room_id,
+        active_runs=[_run_info_to_active_run_ref(run) for run in runs],
     )
-    return await room_center.inquiry_active_runs(room_center_request)
 
 
 @router.post("/roomCenter/inquiryRoomsByRoomOwnerId")
@@ -325,37 +352,35 @@ async def send_message(
     if err is not None:
         return err
 
-    room_center_request = RoomCenterUserMessageRequest(
-        room_id=room_id,
-        user_id=user.user_id,
-        message=message,
-        attachments=attachments,
-        inline_file_ids=inline_file_ids,
-        client_request_id=client_request_id,
-    )
-    room_center_response = await room_center.send_message_to_room(
-        room_center_request, target_group, mentioned_agent_ids
-    )
-
-    # Extract related_message_id from the user message (set when quoting)
     related_message_id = ""
     if isinstance(message, dict):
         related_message_id = message.get("related_message_id") or ""
 
+    execution_request = ExecutionRequest(
+        room_id=room_id,
+        sender_id=user.user_id,
+        sender_name=getattr(user, "username", None) or getattr(user, "email", None),
+        message=message,
+        attachments=attachments,
+        inline_file_ids=inline_file_ids,
+        client_request_id=client_request_id,
+        target_group=target_group,
+        target_group_id=target_group_id,
+        message_target_mode=message_target_mode,
+        mentioned_agent_ids=mentioned_agent_ids,
+        parent_message_id=related_message_id or None,
+    )
+    ack = await _require_execution_engine().execute(execution_request)
+
     # Auto-trigger processing as background task if message was created successfully
-    if room_center_response.success and room_center_response.message_id:
-        orchestration_request = OrchestrationRequest(
-            room_id=room_id,
-            room_user_message_id=room_center_response.message_id,
-            room_related_message_id=related_message_id,
-            user_id=user.user_id,
-            client_request_id=client_request_id,
-        )
+    if ack.success and ack.message_id:
         background_tasks.add_task(
-            room_message_center.process_room_user_message, orchestration_request
+            _require_execution_engine().start_orchestration,
+            execution_request,
+            ack,
         )
 
-    return room_center_response
+    return RoomCenterUserMessageResponse(**ack.model_dump())
 
 
 @router.post("/roomCenter/suggestAgents")
