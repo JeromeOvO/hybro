@@ -490,6 +490,45 @@ class TestHandleResponseErrors:
 
         assert exc_info.value.message == "Request already responded"
 
+    @pytest.mark.asyncio
+    async def test_room_mismatch_is_rejected_before_claim(
+        self, hitl_service, mock_hitl_db_service, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        doc = sample_hitl_request.model_dump(mode="json")
+        mock_hitl_db_service.get_hitl_request.return_value = doc
+
+        with pytest.raises(HITLRoomMismatchError):
+            await hitl_service.handle_response(
+                room_id="different-room",
+                request_id=sample_hitl_request.request_id,
+                user_input="yes",
+                user_id="user-1",
+            )
+
+        mock_hitl_db_service.claim_hitl_request.assert_not_awaited()
+        mock_hitl_db_service.fenced_update_hitl_request.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_wrong_room_resolved_request_does_not_leak_status(
+        self, hitl_service, mock_hitl_db_service, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        doc = sample_hitl_request.model_dump(mode="json")
+        doc["status"] = HITLStatus.RESPONDED.value
+        mock_hitl_db_service.get_hitl_request.return_value = doc
+
+        with pytest.raises(HITLRoomMismatchError) as exc_info:
+            await hitl_service.handle_response(
+                room_id="different-room",
+                request_id=sample_hitl_request.request_id,
+                user_input="yes",
+                user_id="user-1",
+            )
+
+        assert exc_info.value.message == "Room mismatch"
+        mock_hitl_db_service.claim_hitl_request.assert_not_awaited()
+
 
 # =============================================================================
 # SSE Event Emission Tests
@@ -501,9 +540,10 @@ class TestEmitHitlEvent:
 
     @pytest.mark.asyncio
     async def test_emits_input_requested_event(
-        self, hitl_service, mock_hitl_sse_manager, sample_hitl_request
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
         """Should emit correct data for INPUT_REQUESTED event."""
+        hitl_service._db_service = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         
         await hitl_service._emit_hitl_event(
@@ -525,9 +565,10 @@ class TestEmitHitlEvent:
 
     @pytest.mark.asyncio
     async def test_emits_status_update_event(
-        self, hitl_service, mock_hitl_sse_manager, sample_hitl_request
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
         """Should emit correct data for status update events."""
+        hitl_service._db_service = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         
         await hitl_service._emit_hitl_event(
@@ -544,9 +585,10 @@ class TestEmitHitlEvent:
 
     @pytest.mark.asyncio
     async def test_includes_error_message_on_error_event(
-        self, hitl_service, mock_hitl_sse_manager, sample_hitl_request
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
         """Should include error message for ERROR events."""
+        hitl_service._db_service = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         
         await hitl_service._emit_hitl_event(

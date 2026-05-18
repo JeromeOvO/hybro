@@ -251,9 +251,6 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
         },
         "execution/hitl/service.py": {
             "a2a.types",
-            "services.a2a_service",
-            "services.database_service",
-            "services.sse_services",
         },
         "execution/orchestration/queue_executor.py": {
             "a2a.types",

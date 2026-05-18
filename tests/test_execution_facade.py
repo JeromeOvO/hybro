@@ -192,7 +192,7 @@ async def test_cancel_preserves_order_and_requested_by_user_id():
         requested_by_user_id="user-1",
     )
 
-    assert order == ["broadcast", "hitl", ("persist", "user-1"), "record", "cleanup"]
+    assert order == [("persist", "user-1"), "broadcast", "hitl", "record", "cleanup"]
     deps["cancellation_state"].clear_cancellation.assert_not_called()
 
 
@@ -207,7 +207,9 @@ async def test_cancel_clears_cancellation_when_persistence_fails():
         requested_by_user_id="user-1",
     )
 
-    deps["cancellation_state"].clear_cancellation.assert_called_once_with("msg-1")
+    deps["cancellation_state"].cancel_message_and_broadcast.assert_not_awaited()
+    deps["hitl_message_cancellation"].cancel_requests_for_message.assert_not_awaited()
+    deps["cancellation_state"].clear_cancellation.assert_not_called()
     deps["run_lifecycle"].record_processing_status.assert_not_awaited()
 
 

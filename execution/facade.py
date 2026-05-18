@@ -399,15 +399,14 @@ class ExecutionFacade:
         *,
         requested_by_user_id: str,
     ) -> bool:
-        await self._cancellation_state.cancel_message_and_broadcast(message_id)
-        await self._hitl_message_cancellation.cancel_requests_for_message(message_id)
         persisted = await self._cancellation_store.cancel_message(
             message_id,
             requested_by_user_id,
         )
         if not persisted:
-            self._cancellation_state.clear_cancellation(message_id)
             return False
+        await self._cancellation_state.cancel_message_and_broadcast(message_id)
+        await self._hitl_message_cancellation.cancel_requests_for_message(message_id)
         await emit_processing_status(
             room_id=room_id,
             status="canceled",

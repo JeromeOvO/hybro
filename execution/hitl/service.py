@@ -104,22 +104,19 @@ class HITLService:
     @property
     def database_service(self):
         if self._db_service is None:
-            from services.database_service import db_service
-            self._db_service = db_service
+            raise RuntimeError("HITL database service has not been bound")
         return self._db_service
 
     @property
     def sse_manager(self):
         if self._sse_manager is None:
-            from services.sse_services import sse_manager
-            self._sse_manager = sse_manager
+            raise RuntimeError("HITL delivery port has not been bound")
         return self._sse_manager
 
     @property
     def a2a_service(self):
         if self._a2a_service is None:
-            from services.a2a_service import a2a_service
-            self._a2a_service = a2a_service
+            raise RuntimeError("HITL A2A continuation port has not been bound")
         return self._a2a_service
 
     @property
@@ -277,6 +274,15 @@ class HITLService:
         from uuid import uuid4
 
         claim_id = uuid4().hex
+        existing_doc = await self.database_service.get_hitl_request(request_id)
+        if not existing_doc:
+            raise HITLNotFoundError("HITL request not found")
+        if existing_doc.get("room_id") != room_id:
+            raise HITLRoomMismatchError("Room mismatch")
+        if existing_doc.get("status") != HITLStatus.PENDING.value:
+            raise HITLConflictError(
+                f"Request already {existing_doc.get('status', 'unknown')}"
+            )
 
         # Phase 1: Atomically claim pending -> processing with claim_id
         claimed_doc = await self.database_service.claim_hitl_request(
@@ -291,6 +297,8 @@ class HITLService:
             doc = await self.database_service.get_hitl_request(request_id)
             if not doc:
                 raise HITLNotFoundError("HITL request not found")
+            if doc.get("room_id") != room_id:
+                raise HITLRoomMismatchError("Room mismatch")
             raise HITLConflictError(f"Request already {doc.get('status', 'unknown')}")
 
         request = HITLRequest(**{k: v for k, v in claimed_doc.items() if k != "_id"})
