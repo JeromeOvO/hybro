@@ -266,7 +266,7 @@ async def lifespan(app: FastAPI):
                 sse_manager=sse_manager,
             )
             app_shell_client_request_id_resolver = SSEClientRequestIdResolver(
-                sse_manager=sse_manager,
+                db_service=_db_svc,
             )
             app.state.execution_run_lifecycle = run_lifecycle
             app.state.execution_legacy_processing_status_publisher = (

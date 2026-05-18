@@ -14,6 +14,7 @@ from execution.events import (
     emit_processing_status,
     run_event_notification_from_payload,
 )
+from execution.legacy_processing_status import SSEClientRequestIdResolver
 
 
 NOW = datetime(2026, 5, 17, 12, 0, tzinfo=timezone.utc)
@@ -26,6 +27,30 @@ def make_client_request_id_resolver():
         side_effect=lambda message_id, provided: provided or f"resolved-{message_id}"
     )
     return resolver
+
+
+@pytest.mark.asyncio
+async def test_app_shell_client_request_id_resolver_uses_db_not_sse_private_method():
+    db = AsyncMock()
+    db.resolve_client_request_id_for_message_id = AsyncMock(return_value="cr-db")
+    resolver = SSEClientRequestIdResolver(db_service=db)
+
+    result = await resolver.resolve_client_request_id("msg-1", None)
+
+    assert result == "cr-db"
+    db.resolve_client_request_id_for_message_id.assert_awaited_once_with("msg-1")
+
+
+@pytest.mark.asyncio
+async def test_app_shell_client_request_id_resolver_prefers_provided_id():
+    db = AsyncMock()
+    db.resolve_client_request_id_for_message_id = AsyncMock(return_value="cr-db")
+    resolver = SSEClientRequestIdResolver(db_service=db)
+
+    result = await resolver.resolve_client_request_id("msg-1", "cr-provided")
+
+    assert result == "cr-provided"
+    db.resolve_client_request_id_for_message_id.assert_not_awaited()
 
 
 def test_execution_processing_status_call_sites_use_event_helper_or_compat_adapter():
