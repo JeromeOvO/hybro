@@ -222,7 +222,11 @@ async def lifespan(app: FastAPI):
             from execution.run_queries import RunQueryAdapter
             from services.a2a_service import a2a_service
             from services.database_service import db_service as _db_svc
-            from services.hitl_service import hitl_service
+            from services.hitl_service import (
+                bind_hitl_service,
+                create_hitl_service,
+                hitl_service,
+            )
             from services.run_command_handler import (
                 run_command_handler,
                 run_event_sse_enabled,
@@ -235,6 +239,13 @@ async def lifespan(app: FastAPI):
                     kwargs["state"] = TaskState(state)
                 return await notify_task_update(**kwargs)
 
+            bind_hitl_service(
+                create_hitl_service(
+                    database_service=_db_svc,
+                    sse_manager=sse_manager,
+                    a2a_service=a2a_service,
+                )
+            )
             run_lifecycle = RunLifecycleAdapter(
                 command_handler=run_command_handler,
                 runs_collection=mongodb.runs_collection,

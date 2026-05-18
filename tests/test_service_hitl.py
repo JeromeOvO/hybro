@@ -128,6 +128,12 @@ def test_bound_hitl_service_proxy_raises_before_binding_and_forwards_after_bindi
     assert proxy.recover_stale_processing is target.recover_stale_processing
 
 
+def test_legacy_hitl_singleton_is_bound_proxy():
+    from services.hitl_service import BoundHITLServiceProxy, hitl_service
+
+    assert isinstance(hitl_service, BoundHITLServiceProxy)
+
+
 class TestRequestInput:
     """Tests for request_input method."""
 
