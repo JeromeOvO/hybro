@@ -208,6 +208,7 @@ async def lifespan(app: FastAPI):
                 emit_processing_status,
                 run_event_notification_from_payload,
             )
+            from execution.dispatch.task_notifications import TaskNotificationAdapter
             from execution.hitl.adapters import (
                 A2AHITLContinuationAdapter,
                 HITLTaskNotificationAdapter,
@@ -301,7 +302,12 @@ async def lifespan(app: FastAPI):
             room_services.bind_facade(_room_facade)
             room_center.room_center.bind_facade(_room_facade)
             execution_room_message_center.bind(
-                create_room_message_center(hitl_coordinator=hitl_service)
+                create_room_message_center(
+                    hitl_coordinator=hitl_service,
+                    task_notifications=TaskNotificationAdapter(
+                        notify_task_update_with_string_state
+                    ),
+                )
             )
             room_center.room_message_center.bind_facade(_room_facade)
 

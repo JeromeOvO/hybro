@@ -703,9 +703,13 @@ class HITLService:
         if request.status != HITLStatus.PENDING:
             return  # Already resolved, no-op
 
-        await self.database_service.update_hitl_request(
-            request_id, status=HITLStatus.CANCELED
+        canceled = await self.database_service.cas_update_hitl_request(
+            request_id,
+            expected_status=HITLStatus.PENDING.value,
+            status=HITLStatus.CANCELED.value,
         )
+        if not canceled:
+            return
 
         # Clear the orphaned continuation
         if request.continuation_message_id:

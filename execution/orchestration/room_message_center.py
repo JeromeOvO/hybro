@@ -88,6 +88,7 @@ class RoomMessageCenter:
         rate_limit_service=None,
         room_supervisor_service=None,
         hitl_coordinator=None,
+        task_notifications=None,
     ):
         room_services = room_services if room_services is not None else globals()["room_services"]
         database_service = database_service if database_service is not None else db_service
@@ -132,6 +133,7 @@ class RoomMessageCenter:
         self.sse_manager = sse_manager
         self.room_coordinator_service = room_coordinator_service
         self.openai_service = openai_service
+        self.task_notifications = task_notifications
         self.tsm = TaskStateManager(self.room_services, notification_service)
         self.agent_dispatcher = AgentDispatcher(
             agent_resolver=agent_resolver_service,
@@ -859,8 +861,6 @@ class RoomMessageCenter:
         ``notify_task_update`` ensures messages already notified as terminal
         are skipped (no double-notification).
         """
-        from services.task_notification_service import notify_task_update
-
         try:
             agent_messages = (
                 await self.database_service
@@ -891,7 +891,7 @@ class RoomMessageCenter:
                 # Already terminal — notify in case the SSE was missed,
                 # but idempotency in notify_task_update will skip duplicates.
                 try:
-                    await notify_task_update(
+                    await self.task_notifications.notify_task_update(
                         message_id=msg.message_id,
                         state=state,
                         room_id=room_id,
@@ -920,7 +920,7 @@ class RoomMessageCenter:
                     msg.message_id,
                 )
             try:
-                await notify_task_update(
+                await self.task_notifications.notify_task_update(
                     message_id=msg.message_id,
                     state=TaskState.failed,
                     room_id=room_id,

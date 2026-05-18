@@ -326,8 +326,10 @@ class TestCancelRequest:
             room_id=sample_hitl_request.room_id,
         )
         
-        mock_hitl_db_service.update_hitl_request.assert_called_once_with(
-            sample_hitl_request.request_id, status=HITLStatus.CANCELED
+        mock_hitl_db_service.cas_update_hitl_request.assert_awaited_once_with(
+            sample_hitl_request.request_id,
+            expected_status=HITLStatus.PENDING.value,
+            status=HITLStatus.CANCELED.value,
         )
 
     @pytest.mark.asyncio
@@ -377,6 +379,48 @@ class TestCancelRequest:
         
         # Should not call update
         mock_hitl_db_service.update_hitl_request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cancel_uses_pending_cas_before_clearing_or_emitting(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._sse_manager = mock_hitl_sse_manager
+        request_doc = sample_hitl_request.model_dump(mode="json")
+        mock_hitl_db_service.get_hitl_request.return_value = request_doc
+        mock_hitl_db_service.cas_update_hitl_request.return_value = True
+
+        await hitl_service.cancel_request(
+            sample_hitl_request.request_id,
+            room_id=sample_hitl_request.room_id,
+        )
+
+        mock_hitl_db_service.cas_update_hitl_request.assert_awaited_once_with(
+            sample_hitl_request.request_id,
+            expected_status=HITLStatus.PENDING.value,
+            status=HITLStatus.CANCELED.value,
+        )
+        mock_hitl_db_service.update_hitl_request.assert_not_called()
+        mock_hitl_sse_manager.broadcast_to_room.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cancel_does_not_clear_or_emit_when_pending_cas_loses(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._sse_manager = mock_hitl_sse_manager
+        request_doc = sample_hitl_request.model_dump(mode="json")
+        mock_hitl_db_service.get_hitl_request.return_value = request_doc
+        mock_hitl_db_service.cas_update_hitl_request.return_value = False
+
+        await hitl_service.cancel_request(
+            sample_hitl_request.request_id,
+            room_id=sample_hitl_request.room_id,
+        )
+
+        mock_hitl_db_service.get_and_clear_continuation_on_message.assert_not_awaited()
+        mock_hitl_db_service.get_and_clear_continuation_on_user_message.assert_not_awaited()
+        mock_hitl_sse_manager.broadcast_to_room.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_emits_cancel_event(
@@ -445,8 +489,8 @@ class TestCancelRequestsForMessage:
         
         await hitl_service.cancel_requests_for_message("msg-456")
         
-        # Should have called update for both requests
-        assert mock_hitl_db_service.update_hitl_request.call_count == 2
+        # Should have CAS-canceled both requests
+        assert mock_hitl_db_service.cas_update_hitl_request.await_count == 2
 
 
 class TestHandleResponseErrors:

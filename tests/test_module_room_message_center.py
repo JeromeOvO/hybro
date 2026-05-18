@@ -539,12 +539,12 @@ async def test_failed_room_lock_still_emits_terminal_status_when_task_transition
     rmc.tsm = SimpleNamespace(
         transition_task=AsyncMock(side_effect=RuntimeError("task db unavailable"))
     )
+    rmc.task_notifications = SimpleNamespace(notify_task_update=AsyncMock())
     rmc.sse_manager = SimpleNamespace(send_processing_status=AsyncMock())
     emit = AsyncMock()
     rmc._processing_status_emitter = emit
 
-    with patch("services.task_notification_service.notify_task_update", AsyncMock()):
-        result = await rmc.process_room_user_message(request)
+    result = await rmc.process_room_user_message(request)
 
     assert result.status_code == 429
     rmc.tsm.transition_task.assert_awaited_once()

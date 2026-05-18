@@ -279,7 +279,6 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
             "services.room_services",
             "services.room_supervisor_service",
             "services.sse_services",
-            "services.task_notification_service",
             "services.task_service",
         },
         "execution/orchestration/supervisor_executor.py": {
@@ -357,6 +356,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
             "room_coordinator_service",
             "openai_service",
             "hitl_coordinator",
+            "task_notifications",
         ]
     }
     runtime = create_room_message_center(**deps)
@@ -386,6 +386,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.supervisor_executor.room_services is deps["room_services"]
     assert runtime.supervisor_executor.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.agent_response_handler.hitl_coordinator is deps["hitl_coordinator"]
+    assert runtime.task_notifications is deps["task_notifications"]
 
 
 class _FakeCursor:

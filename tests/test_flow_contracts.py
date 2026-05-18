@@ -399,7 +399,7 @@ class TestHITLFlow:
         mock_db.get_hitl_request = AsyncMock(
             return_value=mock_req.model_dump(mode="json")
         )
-        mock_db.update_hitl_request = AsyncMock(return_value=True)
+        mock_db.cas_update_hitl_request = AsyncMock(return_value=True)
 
         mock_sse = MagicMock()
         mock_sse.broadcast_to_room = AsyncMock()
@@ -426,8 +426,10 @@ class TestHITLFlow:
 
         # Step 3: cancel_request
         await svc.cancel_request(req_id, room_id=room_id)
-        mock_db.update_hitl_request.assert_called_once_with(
-            req_id, status=HITLStatus.CANCELED,
+        mock_db.cas_update_hitl_request.assert_awaited_once_with(
+            req_id,
+            expected_status=HITLStatus.PENDING.value,
+            status=HITLStatus.CANCELED.value,
         )
 
     @pytest.mark.asyncio

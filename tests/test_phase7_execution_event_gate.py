@@ -267,6 +267,58 @@ async def test_emit_processing_status_can_skip_lifecycle_for_legacy_send_only_pa
     assert publisher.emit.await_args.args[0].message_id == "agent-msg-1"
 
 
+@pytest.mark.asyncio
+async def test_emit_processing_status_suppresses_typed_frame_when_lifecycle_noops():
+    lifecycle = AsyncMock()
+    lifecycle.record_processing_status.return_value = None
+    publisher = AsyncMock()
+    compat = AsyncMock()
+    resolver = make_client_request_id_resolver()
+
+    result = await emit_processing_status(
+        room_id="room-1",
+        status="processing",
+        message_id="msg-1",
+        record_lifecycle=True,
+        run_lifecycle=lifecycle,
+        event_publisher=publisher,
+        legacy_processing_status_publisher=compat,
+        run_event_enabled=lambda: True,
+        client_request_id_resolver=resolver,
+    )
+
+    assert result is None
+    lifecycle.record_processing_status.assert_awaited_once()
+    publisher.emit.assert_not_awaited()
+    compat.emit_processing_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_emit_processing_status_suppresses_legacy_frame_when_lifecycle_noops():
+    lifecycle = AsyncMock()
+    lifecycle.record_processing_status.return_value = None
+    publisher = AsyncMock()
+    compat = AsyncMock()
+    resolver = make_client_request_id_resolver()
+
+    result = await emit_processing_status(
+        room_id="room-1",
+        status="awaiting_input",
+        message_id="msg-1",
+        record_lifecycle=True,
+        run_lifecycle=lifecycle,
+        event_publisher=publisher,
+        legacy_processing_status_publisher=compat,
+        run_event_enabled=lambda: True,
+        client_request_id_resolver=resolver,
+    )
+
+    assert result is None
+    lifecycle.record_processing_status.assert_awaited_once()
+    publisher.emit.assert_not_awaited()
+    compat.emit_processing_status.assert_not_awaited()
+
+
 def test_run_event_notification_from_payload_maps_legacy_payload():
     payload = {
         "event_id": "evt-1",
