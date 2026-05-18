@@ -393,6 +393,11 @@ class HITLService:
                         "claim_id": None,
                     },
                 )
+                if is_group:
+                    await self.database_service.release_hitl_group_routing(
+                        request.group_id,
+                        claim_id,
+                    )
                 await self._emit_hitl_event(
                     room_id=room_id,
                     event_type=HITLEventType.INPUT_CANCELED,
@@ -411,6 +416,11 @@ class HITLService:
                         "responded_by_user_id": None,
                     },
                 )
+                if is_group:
+                    await self.database_service.release_hitl_group_routing(
+                        request.group_id,
+                        claim_id,
+                    )
                 raise
             except Exception as exc:
                 logger.error(
@@ -428,6 +438,11 @@ class HITLService:
                         "responded_by_user_id": None,
                     },
                 )
+                if is_group:
+                    await self.database_service.release_hitl_group_routing(
+                        request.group_id,
+                        claim_id,
+                    )
                 await self._emit_hitl_event(
                     room_id=room_id,
                     event_type=HITLEventType.ERROR,

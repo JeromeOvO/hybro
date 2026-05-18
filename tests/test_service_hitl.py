@@ -18,6 +18,7 @@ from execution.hitl.exceptions import (
     HITLConflictError,
     HITLNotFoundError,
     HITLRoomMismatchError,
+    HITLRoutingFailedError,
 )
 from models.hitl import (
     HITLRequest,
@@ -59,6 +60,7 @@ def mock_hitl_db_service():
     mock.cas_update_hitl_request = AsyncMock(return_value=True)
     mock.count_pending_in_hitl_group = AsyncMock(return_value=0)
     mock.claim_hitl_group_routing = AsyncMock(return_value=True)
+    mock.release_hitl_group_routing = AsyncMock(return_value=True)
     mock.get_hitl_group_requests = AsyncMock(return_value=[])
     mock.reset_last_notified_state = AsyncMock()
     mock.get_pending_continuation_on_message = AsyncMock(return_value=None)
@@ -644,6 +646,48 @@ class TestGroupedHandleResponse:
 
         mock_hitl_db_service.claim_hitl_group_routing.assert_awaited_once()
         hitl_service._handle_supervisor_response.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_group_route_failure_releases_claim_for_retry(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._sse_manager = mock_hitl_sse_manager
+        request = sample_hitl_request.model_copy(
+            update={
+                "source": "supervisor",
+                "group_id": "group-1",
+                "group_total": 2,
+                "group_index": 1,
+                "continuation_message_id": "cont-1",
+            }
+        )
+        doc = request.model_dump(mode="json")
+        mock_hitl_db_service.get_hitl_request.return_value = doc
+        mock_hitl_db_service.claim_hitl_request.return_value = doc
+        mock_hitl_db_service.count_pending_in_hitl_group.return_value = 1
+        mock_hitl_db_service.claim_hitl_group_routing.return_value = True
+        mock_hitl_db_service.get_hitl_group_requests.return_value = [
+            {**doc, "prompt": "Q1?", "request_id": "req-1", "user_input": "first"},
+            {**doc, "prompt": "Q2?", "request_id": request.request_id},
+        ]
+        hitl_service._handle_supervisor_response = AsyncMock(
+            side_effect=RuntimeError("transient resume failure")
+        )
+
+        with pytest.raises(HITLRoutingFailedError):
+            await hitl_service.handle_response(
+                room_id=request.room_id,
+                request_id=request.request_id,
+                user_input="second",
+                user_id="user-1",
+            )
+
+        mock_hitl_db_service.release_hitl_group_routing.assert_awaited_once()
+        assert (
+            mock_hitl_db_service.release_hitl_group_routing.await_args.args[0]
+            == "group-1"
+        )
 
     @pytest.mark.asyncio
     async def test_room_mismatch_is_rejected_before_claim(
