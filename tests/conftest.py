@@ -608,30 +608,11 @@ def patch_room_center_deps(mock_db_service, mock_room_center, mock_room_message_
         stack.enter_context(patch(PATCH["room_center.room_center"], mock_room_center))
         stack.enter_context(patch(PATCH["room_center.room_message_center"], mock_room_message_center))
         execution_engine = MagicMock()
-
-        async def execute(request):
-            response = await mock_room_center.send_message_to_room(
-                MagicMock(),
-                request.target_group,
-                request.mentioned_agent_ids,
-            )
-            return ExecutionAck(
-                room_id=response.room_id,
-                message_id=response.message_id,
-                user_id=response.user_id,
-                user_name=response.user_name,
-                success=response.success,
-                error=response.error,
-                status_code=response.status_code,
-            )
-
-        async def get_runs_for_room(room_id):
-            response = await mock_room_center.inquiry_active_runs(MagicMock())
-            return response.active_runs or []
-
-        execution_engine.execute = AsyncMock(side_effect=execute)
+        execution_engine.execute = AsyncMock(
+            return_value=ExecutionAck(success=True, message_id="new-message-id")
+        )
         execution_engine.start_orchestration = AsyncMock()
-        execution_engine.get_runs_for_room = AsyncMock(side_effect=get_runs_for_room)
+        execution_engine.get_runs_for_room = AsyncMock(return_value=[])
         stack.enter_context(patch("api.room_center.execution_engine", execution_engine))
         yield {
             "db_service": mock_db_service,

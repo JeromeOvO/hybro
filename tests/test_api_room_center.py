@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 
+from common.dto import ExecutionAck, RunInfo
 from api.room_center import (
     verify_room_ownership,
     create_new_room,
@@ -32,8 +33,6 @@ from api.room_center import (
 from modules.RoomCenter import RoomCenter
 from models.room import Room
 from models.response import (
-    ActiveRunRef,
-    RoomCenterActiveRunsResponse,
     RoomCenterRoomSettingResponse,
     RoomCenterUserMessageResponse,
     RoomCenterRoomMessageResponse,
@@ -242,21 +241,15 @@ class TestInquiryActiveRuns:
         patch_room_center_deps["db_service"].get_room_by_room_id.return_value = (
             sample_room
         )
-        ref = ActiveRunRef(
+        run = RunInfo(
             run_id="run-1",
+            room_id=sample_room.room_id,
             state="processing",
             trigger_message_id="m1",
             agent_id="a1",
             seq=1,
         )
-        expected = RoomCenterActiveRunsResponse(
-            success=True,
-            room_id=sample_room.room_id,
-            active_runs=[ref],
-        )
-        patch_room_center_deps["room_center"].inquiry_active_runs.return_value = (
-            expected
-        )
+        patch_room_center_deps["execution_engine"].get_runs_for_room.return_value = [run]
 
         response = await inquiry_active_runs(mock_request, mock_user)
 
@@ -265,6 +258,9 @@ class TestInquiryActiveRuns:
         assert response.active_runs is not None
         assert len(response.active_runs) == 1
         assert response.active_runs[0].run_id == "run-1"
+        patch_room_center_deps["execution_engine"].get_runs_for_room.assert_awaited_once_with(
+            sample_room.room_id
+        )
 
     @pytest.mark.asyncio
     async def test_raises_403_for_non_owner(
@@ -508,11 +504,11 @@ class TestSendMessage:
         mock_background_tasks = MagicMock()
         
         patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
-        expected_response = RoomCenterUserMessageResponse(
+        expected_response = ExecutionAck(
             success=True,
             message_id="new-message-id",
         )
-        patch_room_center_deps["room_center"].send_message_to_room.return_value = expected_response
+        patch_room_center_deps["execution_engine"].execute.return_value = expected_response
         
         response = await send_message(
             mock_request, mock_background_tasks, mock_user
@@ -523,6 +519,13 @@ class TestSendMessage:
         
         # Verify background task was added
         mock_background_tasks.add_task.assert_called_once()
+        execution_request = patch_room_center_deps[
+            "execution_engine"
+        ].execute.await_args.args[0]
+        assert execution_request.room_id == sample_room.room_id
+        assert execution_request.sender_id == mock_user.user_id
+        assert execution_request.target_group == "room_team"
+        assert execution_request.mentioned_agent_ids is None
 
     @pytest.mark.asyncio
     async def test_does_not_trigger_processing_on_failure(
@@ -539,11 +542,11 @@ class TestSendMessage:
         mock_background_tasks = MagicMock()
         
         patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
-        expected_response = RoomCenterUserMessageResponse(
+        expected_response = ExecutionAck(
             success=False,
             error="Failed to create message",
         )
-        patch_room_center_deps["room_center"].send_message_to_room.return_value = expected_response
+        patch_room_center_deps["execution_engine"].execute.return_value = expected_response
         
         response = await send_message(
             mock_request, mock_background_tasks, mock_user
