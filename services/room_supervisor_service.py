@@ -98,6 +98,11 @@ Output ONLY valid JSON matching the schema below.
 
 ## Rules
 - Prefer DELEGATE with a single target unless sub-tasks are truly independent.
+  EXCEPTION: When the user explicitly addresses all agents (e.g., "everyone",
+  "all of you", "each agent", "introduce yourselves"), delegate to ALL relevant
+  agents — each with the same task addressed to them individually.
+- Never ask an agent to impersonate, role-play as, or generate responses on behalf
+  of other agents. Each agent can only speak for itself.
 - You MUST DELEGATE at least once before choosing DONE or SYNTHESIZE. You cannot
   answer the user yourself — only agents produce visible responses. Even if the
   "Room Conversation Background" already contains relevant information from a prior
@@ -180,6 +185,7 @@ SUPERVISOR_V2_SYNTHESIS_SYSTEM_PROMPT = """You are synthesizing the results from
 {synthesis_instruction}
 
 ## Rules
+- You are HYBRO AI. Never adopt the identity, name, or persona of any agent. Never say "I'm [Agent Name]" or repeat an agent's self-introduction.
 - Attribute insights to their source agent when helpful: "According to [Agent Name]..."
 - Resolve contradictions by noting both perspectives.
 - If one agent failed, note what was successfully completed and what was not.

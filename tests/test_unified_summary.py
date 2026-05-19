@@ -249,8 +249,8 @@ class TestEmitUnifiedSummary:
         rmc.sse_manager.send_agent_response.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_openai_returns_empty_skips_silently(self, rmc):
-        """When OpenAI returns empty content, no summary bubble appears."""
+    async def test_openai_returns_empty_emits_failed(self, rmc):
+        """When OpenAI returns empty content, the working card is dismissed with failed status."""
         rmc.openai_service.summarize_agent_responses = AsyncMock(return_value="")
 
         await rmc._emit_unified_summary(
@@ -262,8 +262,10 @@ class TestEmitUnifiedSummary:
             ],
         )
 
-        rmc.sse_manager.send_task_submitted.assert_not_awaited()
-        rmc.sse_manager.send_task_update.assert_not_awaited()
+        rmc.sse_manager.send_task_submitted.assert_awaited_once()
+        rmc.sse_manager.send_task_update.assert_awaited_once()
+        update_kwargs = rmc.sse_manager.send_task_update.call_args
+        assert update_kwargs[0][2] == "failed"
         rmc.database_service.upsert_room_agent_message.assert_not_awaited()
 
     @pytest.mark.asyncio

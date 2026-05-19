@@ -1118,16 +1118,13 @@ class TestHandleV2RunResultUnifiedSummary:
     async def test_no_synthesis_passes_none(
         self, rmc, completed_result_without_synthesis
     ):
-        """When no synthesis, synthesis_text=None lets unified summary
-        fall through to OpenAI generation."""
+        """When supervisor chose DONE (synthesis_text=None), no summary is emitted."""
         await rmc._handle_v2_run_result(
             result=completed_result_without_synthesis,
             room_id="room-1",
             user_message_id="msg-1",
         )
-        rmc._emit_unified_summary.assert_awaited_once()
-        call_kwargs = rmc._emit_unified_summary.call_args
-        assert call_kwargs[1]["synthesis_text"] is None
+        rmc._emit_unified_summary.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_trajectory_responses_extracted_and_passed(self, rmc):
@@ -1165,7 +1162,7 @@ class TestHandleV2RunResultUnifiedSummary:
         result = SupervisorRunResult(
             status=RunStatus.COMPLETED,
             trajectory=SupervisorTrajectory(entries=[entry]),
-            synthesis_text=None,
+            synthesis_text="Combined synthesis.",
         )
         await rmc._handle_v2_run_result(
             result=result,
