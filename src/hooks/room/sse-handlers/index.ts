@@ -179,6 +179,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
                   clientRequestId: existing.clientRequestId || sseMessage.data?.client_request_id,
                   timestamp: existing.timestamp,
                   taskStatus: TASK_STATE.COMPLETED,
+                  taskContent: '',
                   taskUpdatedAt: normalizeTimestampOrNow(sseMessage.timestamp),
                   isEphemeral: false,
                   ...(existing.artifacts ? { artifacts: existing.artifacts } : {}),
@@ -230,6 +231,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               clientRequestId: existing?.clientRequestId || sseMessage.data?.client_request_id,
               timestamp: msgTimestamp,
               taskStatus: responseTaskStatus,
+              taskContent: '',
               taskUpdatedAt: msgTimestamp,
               isEphemeral: false,
               ...(artifacts ? { artifacts } : {}),
@@ -482,6 +484,8 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             taskCreatedAt: normalizeTimestampOrNow(taskTimestamp),
           }
 
+          const existing = store.entities[messageId]
+
           const baseMsg = {
             id: messageId,
             roomId,
@@ -490,10 +494,9 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             agentId: sseMessage.data.agent_id,
             agentSource: getAgentSource(sseMessage.data.agent_id),
             clientRequestId: sseMessage.data.client_request_id,
-            timestamp: new Date().toISOString(),
+            timestamp: existing?.timestamp ?? normalizeTimestampOrNow(taskTimestamp),
           }
 
-          const existing = store.entities[messageId]
           // Prefer DB checkpoint content. If the checkpoint has no content (e.g.
           // a status-only task_update), fall back first to the live streaming
           // buffer (which has accumulated all chunks) and only then to whatever
