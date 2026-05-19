@@ -5,8 +5,9 @@ import sys
 import time
 from contextlib import asynccontextmanager
 
+from a2a.types import TaskState
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
@@ -103,37 +104,38 @@ else:
     )
 
 
-async def _heal_diverged_runs_on_startup() -> None:
-    """One-shot sweep: heal any runs where run_events has advanced past the runs head.
+def _assert_startup_bindings_complete(app: FastAPI) -> None:
+    errors: list[str] = []
 
-    This catches the crash-window divergence (event committed, head update lost)
-    that the periodic watchdog would otherwise fail to fix due to DuplicateKeyError.
-    """
-    from models.run import NON_TERMINAL_RUN_STATE_VALUES
-    from services.run_command_handler import run_command_handler
+    if getattr(room_center, "execution_engine", None) is None:
+        errors.append("api.room_center.execution_engine")
 
-    try:
-        cursor = mongodb.runs_collection.find(
-            {"state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)}},
-        ).limit(500)
-        docs = await cursor.to_list(length=500)
-    except Exception as e:
-        logger.warning("startup heal: failed to query non-terminal runs: {}", e)
-        return
+    from execution.orchestration.room_message_center import (
+        room_message_center as execution_room_message_center,
+    )
 
-    healed = 0
-    for doc in docs:
-        run_id = str(doc.get("run_id", ""))
-        if not run_id:
-            continue
-        try:
-            if await run_command_handler.heal_head_from_events(run_id):
-                healed += 1
-        except Exception as e:
-            logger.warning("startup heal: error healing run {}: {}", run_id, e)
+    if getattr(execution_room_message_center, "_runtime", None) is None:
+        errors.append("execution.room_message_center")
 
-    if healed:
-        logger.info("startup heal: healed {} diverged run(s)", healed)
+    if getattr(sse_manager, "_facade", None) is None:
+        errors.append("sse_manager.delivery_facade")
+
+    from services.hitl_service import hitl_service
+
+    if getattr(hitl_service, "_service", None) is None:
+        errors.append("hitl_service")
+
+    if getattr(app.state, "execution_deps", None) is None:
+        errors.append("app.state.execution_deps")
+
+    if errors:
+        raise RuntimeError(
+            "Startup binding incomplete - missing: "
+            + ", ".join(errors)
+            + ". Cannot serve traffic."
+        )
+
+    logger.info("All startup bindings verified")
 
 
 @asynccontextmanager
@@ -146,8 +148,8 @@ async def lifespan(app: FastAPI):
       Phase 2 — Background services (only after guard passes)
 
     Cleanup is split into two separate paths:
-      Startup failure — tears down only what was opened, does NOT poison
-          singleton state (no set_draining, no stop_change_stream_watcher)
+      Startup failure — tears down only what was opened, without entering
+          the normal SSE draining path.
       Normal shutdown — full teardown including draining and change stream
     """
     _redis_service = None
@@ -155,7 +157,10 @@ async def lifespan(app: FastAPI):
     _leader = None
     _relay_svc = None
     _agent_deps = None
-    _change_stream_started = False
+    _delivery_facade = None
+    _delivery_config = None
+    _execution_deps = None
+    _delivery_bound = False
     _bg_started = False
 
     try:
@@ -170,11 +175,19 @@ async def lifespan(app: FastAPI):
                 create_agent_deps,
                 create_context_memory_deps,
                 create_context_memory_facade,
+                create_delivery_cancellation_collection,
+                create_delivery_config,
+                create_delivery_deps,
+                create_delivery_facade,
+                create_delivery_redis_clients,
+                create_delivery_startup_policy,
+                create_execution_deps,
+                create_execution_facade,
+                create_mongo_dal,
                 create_room_deps,
+                create_vector_dal,
             )
             from context_memory.config import ContextMemoryLLMConfig
-            from dal.mongo import MongoDALImpl
-            from dal.pinecone import VectorDALImpl
             from llm_gateway import LLMGatewayImpl, ModelRegistryImpl
             from services.agent_capability_issue_service import (
                 CapabilityIssueExclusionReader,
@@ -191,9 +204,113 @@ async def lifespan(app: FastAPI):
             from services.room_services import room_services
 
             await mongodb.create_context_memory_indexes()
-            mongo_dal = MongoDALImpl(database=mongodb.db)
+            mongo_dal = create_mongo_dal(database=mongodb.db)
+            vector_dal = create_vector_dal()
+            _delivery_config = create_delivery_config(settings)
+            delivery_startup_policy = create_delivery_startup_policy(
+                redis_url=settings.redis_url,
+                multi_worker=os.environ.get("SERVER_SOFTWARE", "").startswith(
+                    "gunicorn"
+                ),
+            )
+            delivery_redis_kv, delivery_redis_pubsub = create_delivery_redis_clients(
+                redis_url=settings.redis_url,
+                config=_delivery_config,
+            )
+            cancellation_collection = create_delivery_cancellation_collection(
+                mongo=mongo_dal
+            )
+            _delivery_facade = create_delivery_facade(
+                cancellation_collection=cancellation_collection,
+                startup_policy=delivery_startup_policy,
+                redis_kv=delivery_redis_kv,
+                redis_pubsub=delivery_redis_pubsub,
+                config=_delivery_config,
+            )
+            await _delivery_facade.start()
+            sse_manager.bind_facade(_delivery_facade)
+            _delivery_bound = True
+            _delivery_deps = create_delivery_deps(_delivery_facade)
+            app.state.delivery_facade = _delivery_facade
+            app.state.delivery_deps = _delivery_deps
+
+            from execution.legacy_processing_status import (
+                LegacyProcessingStatusC3Adapter,
+                SSEClientRequestIdResolver,
+            )
+            from execution.events import (
+                emit_processing_status,
+                run_event_notification_from_payload,
+            )
+            from execution.dispatch.task_notifications import TaskNotificationAdapter
+            from execution.hitl.adapters import (
+                A2AHITLContinuationAdapter,
+                HITLTaskNotificationAdapter,
+            )
+            from execution.cancellation import (
+                AgentTaskCleanupAdapter,
+                CancellationStateC3Adapter,
+                HITLMessageCancellationAdapter,
+                MongoCancellationStoreAdapter,
+            )
+            from execution.orchestration.factory import (
+                create_room_message_center,
+                room_message_center as execution_room_message_center,
+            )
+            from execution.run_lifecycle import RunLifecycleAdapter
+            from execution.run_queries import RunQueryAdapter
+            from services.a2a_service import a2a_service
+            from services.database_service import db_service as _db_svc
+            from services.hitl_service import (
+                bind_hitl_service,
+                create_hitl_service,
+                hitl_service,
+            )
+            from services.run_command_handler import (
+                run_command_handler,
+                run_event_sse_enabled,
+            )
+            from services.task_notification_service import notify_task_update
+
+            async def notify_task_update_with_string_state(**kwargs):
+                state = kwargs.get("state")
+                if isinstance(state, str):
+                    kwargs["state"] = TaskState(state)
+                return await notify_task_update(**kwargs)
+
+            bind_hitl_service(
+                create_hitl_service(
+                    database_service=_db_svc,
+                    sse_manager=sse_manager,
+                    a2a_service=a2a_service,
+                    continuation=A2AHITLContinuationAdapter(
+                        a2a_service,
+                        lambda: execution_room_message_center,
+                    ),
+                    task_notifications=HITLTaskNotificationAdapter(
+                        notify_task_update_with_string_state
+                    ),
+                )
+            )
+            run_lifecycle = RunLifecycleAdapter(
+                command_handler=run_command_handler,
+                runs_collection=mongodb.runs_collection,
+            )
+            legacy_processing_status_publisher = LegacyProcessingStatusC3Adapter(
+                sse_manager=sse_manager,
+            )
+            app_shell_client_request_id_resolver = SSEClientRequestIdResolver(
+                db_service=_db_svc,
+            )
+            app.state.execution_run_lifecycle = run_lifecycle
+            app.state.execution_legacy_processing_status_publisher = (
+                legacy_processing_status_publisher
+            )
+            app.state.execution_client_request_id_resolver = (
+                app_shell_client_request_id_resolver
+            )
+
             model_registry = ModelRegistryImpl()
-            vector_dal = VectorDALImpl()
             llm_provider = LLMGatewayImpl(model_registry=model_registry)
             _agent_deps = create_agent_deps(
                 mongo=mongo_dal,
@@ -218,7 +335,80 @@ async def lifespan(app: FastAPI):
             _room_facade = _room_deps.room_registry
             room_services.bind_facade(_room_facade)
             room_center.room_center.bind_facade(_room_facade)
+            execution_room_message_center.bind(
+                create_room_message_center(
+                    hitl_coordinator=hitl_service,
+                    task_notifications=TaskNotificationAdapter(
+                        notify_task_update_with_string_state
+                    ),
+                )
+            )
             room_center.room_message_center.bind_facade(_room_facade)
+
+            execution_facade = create_execution_facade(
+                room_center=room_center.room_center,
+                room_message_center=room_center.room_message_center,
+                hitl_service=hitl_service,
+                run_lifecycle=run_lifecycle,
+                run_reader=RunQueryAdapter(mongodb.runs_collection),
+                cancellation_state=CancellationStateC3Adapter(sse_manager),
+                cancellation_store=MongoCancellationStoreAdapter(mongodb),
+                hitl_message_cancellation=HITLMessageCancellationAdapter(hitl_service),
+                agent_task_cleanup=AgentTaskCleanupAdapter(
+                    db_service=_db_svc,
+                    get_agent_card_from_url=a2a_service.get_agent_card_from_url,
+                    cancel_remote_task=a2a_service.cancel_remote_task,
+                    notify_task_update=notify_task_update_with_string_state,
+                ),
+                agent_response_handler=room_center.room_message_center.agent_response_handler,
+                event_publisher=_delivery_deps.event_publisher,
+                legacy_processing_status_publisher=legacy_processing_status_publisher,
+                run_event_enabled=run_event_sse_enabled,
+                client_request_id_resolver=app_shell_client_request_id_resolver,
+            )
+            _execution_deps = create_execution_deps(execution_facade)
+
+            async def read_room_active_runs(room_id: str):
+                runs = await execution_facade.get_runs_for_room(room_id)
+                return [
+                    {
+                        "run_id": run.run_id,
+                        "state": str(getattr(run.state, "value", run.state)),
+                        "trigger_message_id": run.trigger_message_id,
+                        "agent_id": run.agent_id,
+                        "seq": run.seq,
+                        "updated_at": run.updated_at,
+                    }
+                    for run in runs
+                ]
+
+            async def emit_room_processing_status(**kwargs):
+                return await emit_processing_status(
+                    **kwargs,
+                    run_lifecycle=run_lifecycle,
+                    event_publisher=_delivery_deps.event_publisher,
+                    legacy_processing_status_publisher=legacy_processing_status_publisher,
+                    run_event_enabled=run_event_sse_enabled,
+                    client_request_id_resolver=app_shell_client_request_id_resolver,
+                )
+
+            room_services.bind_hitl_pending_checker(hitl_service.get_pending_requests)
+            room_services.bind_active_run_reader(read_room_active_runs)
+            room_services.bind_execution_event_deps(
+                processing_status_emitter=emit_room_processing_status,
+            )
+            room_center.room_message_center.bind_execution_event_deps(
+                emit_room_processing_status
+            )
+            room_center.bind_execution_deps(_execution_deps)
+            hitl.bind_execution_deps(_execution_deps)
+            sse.bind_execution_deps(_execution_deps)
+            _delivery_deps.event_publisher.register_internal_handler(
+                "hub_agent_response_internal",
+                _execution_deps.hub_agent_response_sink.handle_hub_agent_response,
+            )
+            app.state.execution_facade = execution_facade
+            app.state.execution_deps = _execution_deps
 
             context_memory_facade = create_context_memory_facade(
                 mongo=mongo_dal,
@@ -246,44 +436,57 @@ async def lifespan(app: FastAPI):
         await mongodb.ensure_agent_indexes()
         await mongodb.create_capability_issue_indexes()
         await mongodb.create_run_lifecycle_indexes()
-        await _heal_diverged_runs_on_startup()
+        if mongodb.client is not None:
+            if _execution_deps is None:
+                raise RuntimeError("ExecutionDeps have not been bound")
+            try:
+                healed = await _execution_deps.execution_engine.heal_diverged_runs(
+                    limit=500
+                )
+            except Exception:
+                logger.warning("startup heal: failed; continuing startup", exc_info=True)
+            else:
+                if healed:
+                    logger.info("startup heal: healed %s diverged run(s)", healed)
         if settings.webhook_signing_key:
             await mongodb.create_task_tracking_indexes()
             from services.database_service import db_service
             await db_service.ensure_hitl_indexes()
 
-        # Init all three Redis subsystems before the guard
-        from infrastructure.brokers import create_event_broker
+        # Init legacy Redis subsystems before the guard. Delivery-owned
+        # Pub/Sub/KV clients are constructed through container.py above.
         from infrastructure.redis_service import create_redis_service
-
-        _event_broker = create_event_broker()
-        if _event_broker:
-            await sse_manager.start_event_broker(_event_broker)
-            logger.info("Event broker started (cross-instance SSE fan-out enabled)")
-        else:
-            logger.info("Event broker disabled (REDIS_URL not set — single-instance mode)")
 
         _redis_service = create_redis_service()
         if _redis_service:
             await _redis_service.start()
-            await sse_manager.start_redis_service(_redis_service)
-            logger.info("RedisService started (shared cancellation/dedup enabled)")
+            logger.info("RedisService started (leader election/relay enabled)")
         else:
             logger.info("RedisService disabled (REDIS_URL not set)")
+        app.state.legacy_redis_service = _redis_service
 
         _redis_streams_service = create_redis_service()  # separate pool for blocking XREAD
         if _redis_streams_service:
             await _redis_streams_service.start()
+        app.state.redis_streams_service = _redis_streams_service
 
         # ── Guard: fail if gunicorn without fully connected Redis ──
         check_multi_worker_safety(
             is_gunicorn=os.environ.get("SERVER_SOFTWARE", "").startswith("gunicorn"),
-            broker_connected=sse_manager.broker_connected,
+            delivery_pubsub_connected=bool(
+                _delivery_facade and _delivery_facade.delivery_pubsub_connected
+            ),
+            delivery_kv_connected=bool(
+                _delivery_facade and _delivery_facade.delivery_kv_connected
+            ),
             redis_service_connected=bool(
                 _redis_service and _redis_service.is_connected
             ),
             relay_streams_connected=bool(
                 _redis_streams_service and _redis_streams_service.is_connected
+            ),
+            change_stream_connected=bool(
+                _delivery_facade and _delivery_facade.change_stream_connected
             ),
         )
 
@@ -292,12 +495,87 @@ async def lifespan(app: FastAPI):
         from infrastructure.leader_election import LeaderElection
         if _redis_service and _redis_service.is_connected:
             _leader = LeaderElection(
-                _redis_service, instance_id=sse_manager._instance_id
+                _redis_service,
+                instance_id=(
+                    _delivery_facade.instance_id
+                    if _delivery_facade is not None
+                    else sse_manager._instance_id
+                ),
             )
             logger.info("Leader election enabled for background jobs")
 
         agent_health_service.set_leader_election(_leader)
         stale_task_checker.set_leader_election(_leader)
+        if _execution_deps is not None:
+            from jobs.stale_task_checker import (
+                StaleHITLDeps,
+                StaleRecoveryDeps,
+                StaleRunWatchdogEventDeps,
+            )
+
+            def run_dual_write_enabled() -> bool:
+                raw = (
+                    os.environ.get("FEATURE_RUN_DUAL_WRITE") or "1"
+                ).strip().lower()
+                return raw not in ("0", "false", "no", "off")
+
+            async def emit_watchdog_run_event(
+                *,
+                room_id: str,
+                payload: dict,
+                client_request_id: str | None = None,
+            ) -> None:
+                if payload and run_event_sse_enabled():
+                    await _delivery_deps.event_publisher.emit(
+                        run_event_notification_from_payload(
+                            room_id=room_id,
+                            payload=payload,
+                            correlation_id=client_request_id,
+                        )
+                    )
+
+            async def emit_watchdog_processing_status(
+                *,
+                room_id: str,
+                status: str,
+                message_id: str,
+                client_request_id: str | None = None,
+                details: str | None = None,
+            ) -> None:
+                await emit_processing_status(
+                    room_id=room_id,
+                    status=status,
+                    message_id=message_id,
+                    lifecycle_message_id=message_id,
+                    record_lifecycle=False,
+                    client_request_id=client_request_id,
+                    legacy_details=details,
+                    run_lifecycle=run_lifecycle,
+                    event_publisher=_delivery_deps.event_publisher,
+                    legacy_processing_status_publisher=legacy_processing_status_publisher,
+                    run_event_enabled=run_event_sse_enabled,
+                    client_request_id_resolver=app_shell_client_request_id_resolver,
+                )
+
+            stale_task_checker.set_execution_recovery_deps(
+                StaleRecoveryDeps(
+                    schedule_recovery=execution_facade.schedule_recovery_orchestration,
+                )
+            )
+            stale_task_checker.set_hitl_deps(
+                StaleHITLDeps(
+                    recover_stale_processing=hitl_service.recover_stale_processing,
+                    cancel_requests_for_message=hitl_service.cancel_requests_for_message,
+                )
+            )
+            stale_task_checker.set_run_watchdog_event_deps(
+                StaleRunWatchdogEventDeps(
+                    append_run_timeout_failure=run_lifecycle.append_run_timeout_failure,
+                    emit_run_event=emit_watchdog_run_event,
+                    emit_processing_status=emit_watchdog_processing_status,
+                    run_dual_write_enabled=run_dual_write_enabled,
+                )
+            )
         compaction_sweep.set_leader_election(_leader)
         orphaned_upload_cleaner.set_leader_election(_leader)
 
@@ -312,17 +590,6 @@ async def lifespan(app: FastAPI):
             )
         else:
             logger.warning("WEBHOOK_SIGNING_KEY not set - A2A long-running tasks disabled")
-
-        try:
-            await sse_manager.start_change_stream_watcher(
-                mongodb.cancelled_messages_collection
-            )
-            _change_stream_started = True
-            logger.info("Message cancellation change stream watcher started")
-        except Exception as e:
-            logger.warning(
-                f"Could not start change stream watcher (may not have replica set): {e}"
-            )
 
         await compaction_sweep.start()
         await orphaned_upload_cleaner.start()
@@ -339,6 +606,7 @@ async def lifespan(app: FastAPI):
         _relay_svc = init_relay_service(
             mongo=mongodb, database_service=_db_svc, sse_manager=sse_manager,
             room_message_center=_rmc,
+            hitl_coordinator=hitl_service,
         )
         _relay_svc.set_leader_election(_leader)
         if _agent_deps is not None:
@@ -366,9 +634,8 @@ async def lifespan(app: FastAPI):
 
     except BaseException:
         # ── Startup failure: tear down only what was opened ──
-        # DO NOT call set_draining() — poisons _draining flag (sse_services.py:163)
-        # DO NOT call stop_change_stream_watcher() — sets _shutdown_flag (sse_services.py:730)
-        # which start_change_stream_watcher() never resets (sse_services.py:611)
+        # Do not call set_draining() on startup failure; normal shutdown owns
+        # the drain window after the adapter has been successfully bound.
         if _relay_svc:
             await _relay_svc.stop()
         if _redis_streams_service:
@@ -378,22 +645,22 @@ async def lifespan(app: FastAPI):
             await compaction_sweep.stop()
             await orphaned_upload_cleaner.stop()
             await agent_health_service.stop()
-        if _change_stream_started and sse_manager._change_stream_task:
-            sse_manager._change_stream_task.cancel()
-            try:
-                await sse_manager._change_stream_task
-            except asyncio.CancelledError:
-                pass
         if _leader:
             await _leader.release_all(ALL_JOB_NAMES)
-        await sse_manager.stop_redis_service()
         if _redis_service:
             await _redis_service.stop()
-        await sse_manager.stop_event_broker()
+        try:
+            if _delivery_facade is not None:
+                await _delivery_facade.stop()
+        finally:
+            if _delivery_bound:
+                sse_manager.unbind_facade()
+            app.state.delivery_facade = None
         await mongodb.close_database_connection()
         raise
 
     # ── Phase 3: Serve + Normal Shutdown ──
+    _assert_startup_bindings_complete(app)
     try:
         yield
     finally:
@@ -416,20 +683,34 @@ async def lifespan(app: FastAPI):
         if _leader:
             await _leader.release_all(ALL_JOB_NAMES)
 
+        execution_deps = app.state.execution_deps
+        cancelled = await execution_deps.execution_engine.cancel_inflight_tasks()
+        if cancelled:
+            logger.info(
+                "shutdown: cancelled %s in-flight execution task(s)",
+                cancelled,
+            )
+
         # Drain: stop accepting new SSE connections and allow in-flight events to finish
-        sse_manager.set_draining(True)
-        await asyncio.sleep(settings.shutdown_drain_seconds)
+        if _delivery_bound:
+            sse_manager.set_draining(True)
+        await asyncio.sleep(
+            _delivery_config.shutdown_drain_seconds
+            if _delivery_config is not None
+            else settings.shutdown_drain_seconds
+        )
+
+        try:
+            if _delivery_facade is not None:
+                await _delivery_facade.stop()
+        finally:
+            if _delivery_bound:
+                sse_manager.unbind_facade()
+            app.state.delivery_facade = None
 
         # Stop RedisService
-        await sse_manager.stop_redis_service()
         if _redis_service:
             await _redis_service.stop()
-
-        # Stop event broker
-        await sse_manager.stop_event_broker()
-
-        # Stop change stream watcher
-        await sse_manager.stop_change_stream_watcher()
 
         await mongodb.close_database_connection()
 
@@ -455,9 +736,11 @@ app.add_middleware(
 def check_multi_worker_safety(
     *,
     is_gunicorn: bool,
-    broker_connected: bool,
+    delivery_pubsub_connected: bool,
+    delivery_kv_connected: bool,
     redis_service_connected: bool,
     relay_streams_connected: bool,
+    change_stream_connected: bool,
 ) -> None:
     """Refuse to start under gunicorn without fully connected Redis.
 
@@ -474,12 +757,16 @@ def check_multi_worker_safety(
         return
 
     problems = []
-    if not broker_connected:
-        problems.append("Event broker (Pub/Sub) not connected")
+    if not delivery_pubsub_connected:
+        problems.append("Delivery Pub/Sub not connected")
+    if not delivery_kv_connected:
+        problems.append("Delivery KV not connected")
     if not redis_service_connected:
         problems.append("RedisService (key-value) not connected")
     if not relay_streams_connected:
         problems.append("Relay streams not connected")
+    if not change_stream_connected:
+        problems.append("Cancellation change stream not connected")
 
     if problems:
         raise RuntimeError(
@@ -493,21 +780,35 @@ def check_multi_worker_safety(
 
 # Pure function — trivially testable without lifespan/DB
 def compute_health_status(
-    *, broker_connected: bool, redis_url: str, change_stream_connected: bool,
-    redis_service_connected: bool = False,
+    *,
+    delivery_pubsub_connected: bool,
+    delivery_kv_connected: bool,
+    legacy_redis_service_connected: bool,
     relay_streams_available: bool = False,
+    redis_url: str,
+    change_stream_connected: bool,
 ) -> dict:
     """Compute health status body and HTTP status code."""
-    broker_expected = bool(redis_url)
-    degraded = broker_expected and not broker_connected
+    redis_expected = bool(redis_url)
+    redis_degraded = redis_expected and not (
+        delivery_pubsub_connected
+        and delivery_kv_connected
+        and legacy_redis_service_connected
+        and relay_streams_available
+    )
+    degraded = redis_degraded or not change_stream_connected
     return {
         "body": {
             "status": "degraded" if degraded else "ok",
             "change_stream_connected": change_stream_connected,
-            "broker_connected": broker_connected,
-            "broker_expected": broker_expected,
-            "redis_service_connected": redis_service_connected,
+            "delivery_pubsub_connected": delivery_pubsub_connected,
+            "delivery_kv_connected": delivery_kv_connected,
+            "legacy_redis_service_connected": legacy_redis_service_connected,
             "relay_streams_available": relay_streams_available,
+            "redis_expected": redis_expected,
+            "broker_connected": delivery_pubsub_connected,
+            "broker_expected": redis_expected,
+            "redis_service_connected": legacy_redis_service_connected,
         },
         "status_code": 503 if degraded else 200,
     }
@@ -515,17 +816,30 @@ def compute_health_status(
 
 # Health check endpoint (no prefix, no dependencies)
 @app.get("/health")
-async def health_check():
+async def health_check(request: Request):
     from services.relay_service import relay_service as _relay_svc_health
+    delivery_facade = getattr(request.app.state, "delivery_facade", None)
+    if delivery_facade is not None:
+        await delivery_facade.refresh_health()
+    legacy_redis_service = getattr(request.app.state, "legacy_redis_service", None)
     result = compute_health_status(
-        broker_connected=sse_manager.broker_connected,
-        redis_url=settings.redis_url,
-        change_stream_connected=sse_manager.change_stream_connected,
-        redis_service_connected=sse_manager.redis_connected,
+        delivery_pubsub_connected=bool(
+            delivery_facade and delivery_facade.delivery_pubsub_connected
+        ),
+        delivery_kv_connected=bool(
+            delivery_facade and delivery_facade.delivery_kv_connected
+        ),
+        legacy_redis_service_connected=bool(
+            legacy_redis_service and legacy_redis_service.is_connected
+        ),
         relay_streams_available=bool(
             _relay_svc_health
             and _relay_svc_health._streams
             and _relay_svc_health._streams.is_connected
+        ),
+        redis_url=settings.redis_url,
+        change_stream_connected=bool(
+            delivery_facade and delivery_facade.change_stream_connected
         ),
     )
     return JSONResponse(content=result["body"], status_code=result["status_code"])

@@ -9,6 +9,7 @@ Tests cover:
 """
 
 import ast
+import asyncio
 import pytest
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +25,7 @@ from models.supervisor_v2 import (
     V2StepResult,
     StepStatus,
 )
+from common.a2a_constants import SSEProcessingStatus
 
 
 # =============================================================================
@@ -92,6 +94,49 @@ class TestRoomFacadeBinding:
         rmc.bind_facade(facade)
 
         assert rmc._require_room_facade() is facade
+
+
+@pytest.mark.asyncio
+async def test_process_room_user_message_cancelled_error_emits_canceled_and_reraises():
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    request = SimpleNamespace(
+        room_id="room-1",
+        room_user_message_id="user-msg-1",
+        is_recovery=False,
+    )
+    rmc.database_service = SimpleNamespace(
+        claim_user_message_for_processing=AsyncMock(return_value=True),
+        refresh_processing_claim=AsyncMock(),
+    )
+    rmc._acquire_room_lock = AsyncMock(return_value="owner-1")
+    rmc._release_room_lock = AsyncMock()
+    rmc._process_room_user_message_locked = AsyncMock(
+        side_effect=asyncio.CancelledError()
+    )
+    rmc._notify_all_non_terminal_tasks_failed = AsyncMock()
+    rmc._emit_processing_status = AsyncMock()
+    rmc.sse_manager = SimpleNamespace(clear_cancellation=MagicMock())
+    rmc._turn_event_appender = SimpleNamespace(append=AsyncMock())
+
+    with pytest.raises(asyncio.CancelledError):
+        await rmc.process_room_user_message(request)
+
+    rmc._turn_event_appender.append.assert_awaited_once_with(
+        "room-1", "user-msg-1", "turn_canceled", {}
+    )
+    rmc._notify_all_non_terminal_tasks_failed.assert_awaited_once_with(
+        "room-1", "user-msg-1"
+    )
+    rmc._emit_processing_status.assert_awaited_once_with(
+        room_id="room-1",
+        status=SSEProcessingStatus.CANCELED,
+        message_id="user-msg-1",
+        lifecycle_message_id="user-msg-1",
+    )
+    rmc.sse_manager.clear_cancellation.assert_called_once_with("user-msg-1")
+    rmc._release_room_lock.assert_awaited_once_with(
+        "room-1", "owner-1", acquired_at=pytest.approx(rmc._release_room_lock.call_args.kwargs["acquired_at"])
+    )
 
 
 # =============================================================================
@@ -262,7 +307,7 @@ class TestAppendPausedResult:
 
 
 _ROOT = Path(__file__).resolve().parents[1]
-_RMC_PATH = _ROOT / "modules" / "RoomMessageCenter.py"
+_RMC_PATH = _ROOT / "execution" / "orchestration" / "room_message_center.py"
 
 
 def _source_tree() -> ast.AST:
@@ -439,7 +484,7 @@ def _assert_before(
     function = _function_node(function_name)
     emit_call = _matching_call(
         function_name,
-        "send_processing_status",
+        "_emit_processing_status",
         *emit_snippets,
         occurrence=emit_occurrence,
     )
@@ -470,8 +515,6 @@ def _assert_before(
 
 @pytest.mark.asyncio
 async def test_failed_room_lock_still_emits_terminal_status_when_task_transition_fails():
-    import modules.RoomMessageCenter as rmc_module
-
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
     request = SimpleNamespace(
         room_id="room-1",
@@ -496,19 +539,17 @@ async def test_failed_room_lock_still_emits_terminal_status_when_task_transition
     rmc.tsm = SimpleNamespace(
         transition_task=AsyncMock(side_effect=RuntimeError("task db unavailable"))
     )
+    rmc.task_notifications = SimpleNamespace(notify_task_update=AsyncMock())
     rmc.sse_manager = SimpleNamespace(send_processing_status=AsyncMock())
-    record = AsyncMock()
+    emit = AsyncMock()
+    rmc._processing_status_emitter = emit
 
-    with (
-        patch.object(rmc_module, "record_and_maybe_broadcast_run_event", record),
-        patch("services.task_notification_service.notify_task_update", AsyncMock()),
-    ):
-        result = await rmc.process_room_user_message(request)
+    result = await rmc.process_room_user_message(request)
 
     assert result.status_code == 429
     rmc.tsm.transition_task.assert_awaited_once()
-    record.assert_awaited_once()
-    rmc.sse_manager.send_processing_status.assert_awaited_once()
+    emit.assert_awaited_once()
+    rmc.sse_manager.send_processing_status.assert_not_awaited()
 
 
 def test_failed_room_lock_notifies_non_terminal_tasks_before_failed_processing_status():
@@ -530,7 +571,7 @@ def test_supervisor_v2_prep_missing_notifies_before_failed_processing_status():
 
 
 def test_queue_canceled_side_effects_complete_before_canceled_processing_status():
-    queue_path = _ROOT / "modules" / "QueueExecutor.py"
+    queue_path = _ROOT / "execution" / "orchestration" / "queue_executor.py"
     tree = ast.parse(queue_path.read_text(), filename=str(queue_path))
     function = next(
         node
@@ -542,7 +583,7 @@ def test_queue_canceled_side_effects_complete_before_canceled_processing_status(
         for node in ast.walk(function)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "send_processing_status"
+        and node.func.attr == "_emit_processing_status"
         and "sse_status" in ast.unparse(node)
     )
     emit_statement = _statement_containing_call(function, send_call)
@@ -604,7 +645,7 @@ def test_supervisor_v2_clarify_resume_failed_has_no_required_post_emit_side_effe
     fn = _function_node("_process_supervisor_v2")
     send_line = _call_line(
         "_process_supervisor_v2",
-        "send_processing_status",
+        "_emit_processing_status",
         "Clarify resume failed",
     )
     return_line = min(
@@ -753,9 +794,9 @@ def test_supervisor_v2_terminal_post_loop_side_effects_complete_before_terminal_
         "_run_v2_terminal_post_loop_integration",
     )
     first_terminal_emit = min(
-        _call_line("_handle_v2_run_result", "send_processing_status", "SSEProcessingStatus.COMPLETED"),
-        _call_line("_handle_v2_run_result", "send_processing_status", "SSEProcessingStatus.CANCELED"),
-        _call_line("_handle_v2_run_result", "send_processing_status", "V2 supervisor execution failed"),
+        _call_line("_handle_v2_run_result", "_emit_processing_status", "SSEProcessingStatus.COMPLETED"),
+        _call_line("_handle_v2_run_result", "_emit_processing_status", "SSEProcessingStatus.CANCELED"),
+        _call_line("_handle_v2_run_result", "_emit_processing_status", "V2 supervisor execution failed"),
     )
     assert integration_line < first_terminal_emit
 

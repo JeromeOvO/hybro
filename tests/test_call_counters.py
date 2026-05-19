@@ -140,7 +140,7 @@ class TestRelayTransportDispatchCallCounter:
         ctx = _make_dispatch_ctx()
         msg = _make_room_agent_message()
 
-        with patch("modules.transports.relay.mongodb") as mock_db:
+        with patch("execution.dispatch.transports.relay.mongodb") as mock_db:
             mock_db.increment_agent_call_count = AsyncMock()
             result = await rt.dispatch(ctx, msg)
 
@@ -158,7 +158,7 @@ class TestRelayTransportDispatchCallCounter:
         ctx.metadata["queued_for_offline"] = True
         msg = _make_room_agent_message()
 
-        with patch("modules.transports.relay.mongodb") as mock_db:
+        with patch("execution.dispatch.transports.relay.mongodb") as mock_db:
             mock_db.increment_agent_call_count = AsyncMock()
             result = await rt.dispatch(ctx, msg)
 
@@ -175,7 +175,7 @@ class TestRelayTransportDispatchCallCounter:
         ctx = _make_dispatch_ctx()
         msg = _make_room_agent_message()
 
-        with patch("modules.transports.relay.mongodb") as mock_db:
+        with patch("execution.dispatch.transports.relay.mongodb") as mock_db:
             mock_db.increment_agent_call_count = AsyncMock(
                 side_effect=RuntimeError("DB down"),
             )

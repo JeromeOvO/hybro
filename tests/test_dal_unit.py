@@ -1,10 +1,27 @@
 from types import SimpleNamespace
+from typing import get_type_hints
 from unittest.mock import AsyncMock, MagicMock
 
 import inspect
 import pytest
 
 from common.dto import VectorRecord
+from common.errors import TransientError
+from common.protocols import MongoChangeStream
+
+
+class FakeMongoChangeStream:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
 
 
 @pytest.mark.asyncio
@@ -25,7 +42,8 @@ async def test_mongo_collection_adapter_maps_basic_operations():
     collection.delete_many = AsyncMock(return_value=SimpleNamespace(deleted_count=3))
     collection.count_documents = AsyncMock(return_value=4)
     collection.create_index = AsyncMock(return_value="idx")
-    collection.watch.return_value = "watcher"
+    watcher = FakeMongoChangeStream()
+    collection.watch.return_value = watcher
 
     adapter = MongoCollectionAdapter(collection)
 
@@ -38,7 +56,11 @@ async def test_mongo_collection_adapter_maps_basic_operations():
     assert await adapter.delete_many({"a": 1}) == 3
     assert await adapter.count({"a": 1}) == 4
     assert await adapter.create_index([("a", 1)], unique=True) == "idx"
-    assert adapter.watch() == "watcher"
+    async with adapter.watch() as stream:
+        assert stream is watcher
+
+    hints = get_type_hints(MongoCollectionAdapter.watch)
+    assert hints["return"] is MongoChangeStream
 
 
 @pytest.mark.asyncio
@@ -145,6 +167,33 @@ async def test_redis_kv_impl_gracefully_degrades_without_url(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_redis_kv_impl_raises_transient_error_for_configured_driver_failures():
+    from dal.redis.kv import RedisKVImpl
+
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=RuntimeError("get failed"))
+    client.set = AsyncMock(side_effect=RuntimeError("set failed"))
+    client.delete = AsyncMock(side_effect=RuntimeError("delete failed"))
+    client.incrby = AsyncMock(side_effect=RuntimeError("increment failed"))
+    client.exists = AsyncMock(side_effect=RuntimeError("exists failed"))
+
+    kv = RedisKVImpl(client=client)
+
+    with pytest.raises(TransientError):
+        await kv.get("k")
+    with pytest.raises(TransientError):
+        await kv.set("k", "v")
+    with pytest.raises(TransientError):
+        await kv.delete("k")
+    with pytest.raises(TransientError):
+        await kv.increment("k")
+    with pytest.raises(TransientError):
+        await kv.setnx("k", "v", ttl=1)
+    with pytest.raises(TransientError):
+        await kv.exists("k")
+
+
+@pytest.mark.asyncio
 async def test_redis_streams_impl_normalizes_xread():
     from dal.redis.streams import RedisStreamsImpl
 
@@ -175,6 +224,22 @@ async def test_redis_streams_impl_gracefully_degrades_without_url(monkeypatch):
     assert await streams.xadd("stream-a", {"payload": "one"}) == ""
     assert await streams.xread({"stream-a": "0-0"}) == []
     assert await streams.ping() is False
+
+
+@pytest.mark.asyncio
+async def test_redis_streams_impl_raises_transient_error_for_configured_failures():
+    from dal.redis.streams import RedisStreamsImpl
+
+    client = MagicMock()
+    client.xadd = AsyncMock(side_effect=RuntimeError("xadd failed"))
+    client.xread = AsyncMock(side_effect=RuntimeError("xread failed"))
+
+    streams = RedisStreamsImpl(client=client)
+
+    with pytest.raises(TransientError):
+        await streams.xadd("stream-a", {"payload": "one"})
+    with pytest.raises(TransientError):
+        await streams.xread({"stream-a": "0-0"})
 
 
 @pytest.mark.asyncio
@@ -248,6 +313,59 @@ async def test_redis_pubsub_impl_publishes_with_direct_client():
     await pubsub_impl.publish("events", "payload")
 
     client.publish.assert_awaited_once_with("events", "payload")
+
+
+@pytest.mark.asyncio
+async def test_redis_pubsub_impl_raises_transient_error_for_publish_failure():
+    from dal.redis.pubsub import RedisPubSubImpl
+
+    client = MagicMock()
+    client.publish = AsyncMock(side_effect=RuntimeError("publish failed"))
+
+    pubsub_impl = RedisPubSubImpl(client=client)
+
+    with pytest.raises(TransientError):
+        await pubsub_impl.publish("events", "payload")
+
+
+@pytest.mark.asyncio
+async def test_redis_pubsub_impl_surfaces_subscribe_setup_failure():
+    from dal.redis.pubsub import RedisPubSubImpl
+
+    pubsub = MagicMock()
+    pubsub.subscribe = AsyncMock(side_effect=RuntimeError("subscribe failed"))
+    pubsub.unsubscribe = AsyncMock()
+    pubsub.aclose = AsyncMock()
+
+    client = MagicMock()
+    client.pubsub.return_value = pubsub
+
+    pubsub_impl = RedisPubSubImpl(client=client)
+    iterator = await pubsub_impl.subscribe("events")
+
+    with pytest.raises(TransientError):
+        await anext(iterator)
+
+
+def test_redis_pubsub_impl_accepts_explicit_max_connections(monkeypatch):
+    from dal.redis import pubsub as pubsub_module
+
+    captured = {}
+
+    def from_url(url, **kwargs):
+        captured.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(pubsub_module.aioredis, "from_url", from_url)
+
+    pubsub_impl = pubsub_module.RedisPubSubImpl(
+        url="redis://localhost:6379/0",
+        max_connections=120,
+    )
+    pubsub_impl._ensure_client()
+
+    assert pubsub_impl.max_connections == 120
+    assert captured["max_connections"] == 120
 
 
 @pytest.mark.asyncio

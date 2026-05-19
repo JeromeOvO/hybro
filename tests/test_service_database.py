@@ -197,6 +197,46 @@ class TestIdempotencyAndCAS:
 
         assert result is False
 
+    @pytest.mark.asyncio
+    async def test_claim_hitl_group_routing_claims_group_leader_once(self, db_svc):
+        mock_result = MagicMock(modified_count=1)
+        db_svc.mongo.db.hitl_requests.update_one = AsyncMock(
+            return_value=mock_result
+        )
+
+        result = await db_svc.claim_hitl_group_routing("group-1", "claim-1")
+
+        db_svc.mongo.db.hitl_requests.update_one.assert_awaited_once()
+        query, update = db_svc.mongo.db.hitl_requests.update_one.await_args.args
+        assert query == {
+            "group_id": "group-1",
+            "group_index": 0,
+            "group_routing_claim_id": {"$exists": False},
+        }
+        assert update["$set"]["group_routing_claim_id"] == "claim-1"
+        assert "group_routing_claimed_at" in update["$set"]
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_release_hitl_group_routing_clears_matching_claim(self, db_svc):
+        mock_result = MagicMock(modified_count=1)
+        db_svc.mongo.db.hitl_requests.update_one = AsyncMock(
+            return_value=mock_result
+        )
+
+        result = await db_svc.release_hitl_group_routing("group-1", "claim-1")
+
+        db_svc.mongo.db.hitl_requests.update_one.assert_awaited_once_with(
+            {"group_id": "group-1", "group_routing_claim_id": "claim-1"},
+            {
+                "$unset": {
+                    "group_routing_claim_id": "",
+                    "group_routing_claimed_at": "",
+                }
+            },
+        )
+        assert result is True
+
 
 # =============================================================================
 # Agent CRUD Tests

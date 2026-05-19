@@ -113,6 +113,23 @@ class Settings(BaseSettings):
         30  # Clear stuck processing status older than this
     )
 
+    # Delivery / SSE extraction settings
+    heartbeat_interval_seconds: float = 30.0
+    cancellation_ttl_seconds: int = 3600
+    terminal_dedup_ttl_seconds: int = 300
+    cancellation_cache_maxsize: int = 10_000
+    cancellation_token_cache_maxsize: int = 10_000
+    terminal_dedup_cache_maxsize: int = 10_000
+    redis_internal_channel: str = "internal:global"
+    redis_dead_letter_channel: str = "delivery:dead_letter"
+    dead_letter_memory_maxlen: int = 1000
+    handler_shutdown_timeout_seconds: float = 5.0
+    redis_subscription_reserved_connections: int = 10
+    redis_room_subscription_production_limit: int = 40
+    terminal_processing_statuses: frozenset[str] = frozenset(
+        {"completed", "failed", "canceled", "rejected", "rate_limited", "error"}
+    )
+
     # Change stream reconnection backoff
     cs_backoff_base: float = 1.0  # initial delay in seconds
     cs_backoff_max: float = 30.0  # ceiling delay in seconds
@@ -213,6 +230,15 @@ class Settings(BaseSettings):
             # Split comma-separated string into set
             return {host.strip() for host in v.split(",") if host.strip()}
         return set() if not v else v
+
+    @field_validator("terminal_processing_statuses", mode="before")
+    @classmethod
+    def parse_terminal_processing_statuses(cls, v):
+        if isinstance(v, str):
+            return frozenset(status.strip().lower() for status in v.split(",") if status.strip())
+        if v is None:
+            return frozenset()
+        return frozenset(str(status).strip().lower() for status in v)
 
 
 settings = Settings()

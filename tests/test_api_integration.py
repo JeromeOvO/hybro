@@ -232,10 +232,10 @@ class TestHITLHTTPIntegration:
         mock_db.get_room_by_room_id = AsyncMock(return_value=mock_room)
 
         mock_hitl = MagicMock()
-        mock_hitl.get_pending_requests = AsyncMock(return_value=[])
+        mock_hitl.get_pending_hitl = AsyncMock(return_value=[])
 
         with patch(PATCH["room_center.db_service"], mock_db):
-            with patch(PATCH["hitl.hitl_service"], mock_hitl):
+            with patch("api.hitl.hitl_manager", mock_hitl):
                 resp = await http_client.get(
                     "/api/v1/rooms/room-hitl-http/hitl/pending"
                 )

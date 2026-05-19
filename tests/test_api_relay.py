@@ -26,7 +26,7 @@ from models.room import MessageContent, Room, RoomAgentMessage
 from modules.agent_event import AgentEvent
 from modules.agent_response_handler import AgentResponseHandler
 from modules.transports.relay import RelayTransport
-from services.relay_service import RelayService
+from services.relay_service import RelayService, init_relay_service
 from tests.conftest import FROZEN_TIME
 
 # ===========================================================================
@@ -110,6 +110,24 @@ def _make_relay_service(
     svc.set_relay_transport(relay_transport)
 
     return svc
+
+
+def test_init_relay_service_binds_hitl_coordinator_to_publish_handler():
+    mongo = MagicMock()
+    db_service = MagicMock()
+    sse_manager = MagicMock()
+    room_message_center = MagicMock()
+    hitl_coordinator = MagicMock()
+
+    svc = init_relay_service(
+        mongo=mongo,
+        database_service=db_service,
+        sse_manager=sse_manager,
+        room_message_center=room_message_center,
+        hitl_coordinator=hitl_coordinator,
+    )
+
+    assert svc._relay_transport.response_handler.hitl_coordinator is hitl_coordinator
 
 
 def _make_writer():

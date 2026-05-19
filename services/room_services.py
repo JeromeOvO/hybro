@@ -1,7 +1,9 @@
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from enum import Enum
+from typing import Any
 from uuid import uuid4
 
 from a2a.types import (
@@ -144,6 +146,9 @@ class RoomServices:
         self._facade = None
         self._bound = False
         self._context_memory_manager = None
+        self._active_run_reader: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None
+        self._hitl_pending_checker: Callable[[str], Awaitable[list[Any]]] | None = None
+        self._processing_status_emitter: Callable[..., Awaitable[dict[str, Any] | None]] | None = None
 
     @property
     def s3_service(self):
@@ -160,12 +165,49 @@ class RoomServices:
     def bind_context_memory(self, memory_manager) -> None:
         self._context_memory_manager = memory_manager
 
+    def bind_active_run_reader(
+        self,
+        reader: Callable[[str], Awaitable[list[dict[str, Any]]]],
+    ) -> None:
+        self._active_run_reader = reader
+
+    def bind_hitl_pending_checker(
+        self,
+        checker: Callable[[str], Awaitable[list[Any]]],
+    ) -> None:
+        self._hitl_pending_checker = checker
+
+    def bind_execution_event_deps(
+        self,
+        *,
+        processing_status_emitter: Callable[..., Awaitable[dict[str, Any] | None]],
+    ) -> None:
+        self._processing_status_emitter = processing_status_emitter
+
     def _require_facade(self):
         if not getattr(self, "_bound", False) or getattr(self, "_facade", None) is None:
             raise RuntimeError(
                 "RoomServices.bind_facade() not called - startup incomplete"
             )
         return self._facade
+
+    async def _read_active_runs_for_room(self, room_id: str) -> list[dict[str, Any]]:
+        reader = getattr(self, "_active_run_reader", None)
+        if reader is None:
+            active_runs_raw = await self.database_service.get_active_runs_by_room_id(
+                room_id
+            )
+            return self._active_run_payloads_from_raw(active_runs_raw)
+        try:
+            return await reader(room_id)
+        except Exception as e:
+            logger.warning(
+                "RoomServices: active-run reader failed for room %s: %s",
+                room_id,
+                e,
+                exc_info=True,
+            )
+            return []
 
     @staticmethod
     def _legacy_room_from_info(info: RoomInfo) -> Room:
@@ -506,7 +548,7 @@ class RoomServices:
                     membership_seed=self._membership_seed_from_request(
                         room_create_request
                     ),
-                    extend_info=room_create_request.extend_info,
+                    extend_info=room_create_request.extend_info or None,
                 )
             )
         except ValueError as exc:
@@ -596,12 +638,9 @@ class RoomServices:
                 error="Room not found",
                 status_code=404,
             )
-        active_runs_raw = await self.database_service.get_active_runs_by_room_id(
-            room_id
-        )
         return self._room_setting_response_from_info(
             info,
-            active_runs=self._active_run_payloads_from_raw(active_runs_raw),
+            active_runs=await self._read_active_runs_for_room(room_id),
         )
 
         room = await self.database_service.get_room_by_room_id(room_id)
@@ -640,10 +679,7 @@ class RoomServices:
             resolved_agents, room_default_status = await self._resolve_room_agent_refs(
                 room.room_agent_set, viewer_user_id=request.requesting_user_id
             )
-            active_runs_raw = await self.database_service.get_active_runs_by_room_id(
-                room.room_id
-            )
-            active_runs = self._active_run_payloads_from_raw(active_runs_raw)
+            active_runs = await self._read_active_runs_for_room(room.room_id)
 
             return RoomCenterRoomSettingResponse(
                 room_id=room.room_id,
@@ -680,10 +716,7 @@ class RoomServices:
                 status_code=404,
             )
 
-        active_runs_raw = await self.database_service.get_active_runs_by_room_id(
-            room.room_id
-        )
-        active_runs = self._active_run_payloads_from_raw(active_runs_raw)
+        active_runs = await self._read_active_runs_for_room(room.room_id)
         return RoomCenterActiveRunsResponse(
             room_id=room.room_id,
             active_runs=active_runs,
@@ -2186,9 +2219,8 @@ class RoomServices:
         # Check BEFORE persisting the message or creating a token so we don't
         # leave orphaned DB records on rejection.
         try:
-            from services.hitl_service import hitl_service
-            pending_hitl = await hitl_service.get_pending_requests(request.room_id)
-            if pending_hitl:
+            pending_checker = getattr(self, "_hitl_pending_checker", None)
+            if pending_checker is not None and await pending_checker(request.room_id):
                 return RoomCenterUserMessageResponse(
                     message_id=None,
                     message=None,
@@ -2284,16 +2316,10 @@ class RoomServices:
 
         memory_response = await self._initialize_room_memory(request, user_message)
         if memory_response:
-            await record_and_maybe_broadcast_run_event(
+            await self._emit_processing_status_event(
                 request.room_id,
                 SSEProcessingStatus.FAILED,
                 user_message.message_id,
-                client_request_id=client_request_id,
-                details="Failed to initialize room memory",
-                sse=self.sse_manager,
-            )
-            await self.sse_manager.send_processing_status(
-                request.room_id, SSEProcessingStatus.FAILED, user_message.message_id,
                 client_request_id=client_request_id,
                 details="Failed to initialize room memory",
             )
@@ -2357,15 +2383,7 @@ class RoomServices:
                 # Processing status was set before selection; this early return
                 # must emit terminal processing_status (runs + SSE) so the client
                 # clears processing placeholders.
-                await record_and_maybe_broadcast_run_event(
-                    request.room_id,
-                    SSEProcessingStatus.FAILED,
-                    user_message.message_id,
-                    client_request_id=client_request_id,
-                    details=selection_result.error or "Agent selection failed",
-                    sse=self.sse_manager,
-                )
-                await self.sse_manager.send_processing_status(
+                await self._emit_processing_status_event(
                     request.room_id,
                     SSEProcessingStatus.FAILED,
                     user_message.message_id,
@@ -2465,30 +2483,17 @@ class RoomServices:
 
         if not parse_result.success:
             if parse_result.canceled:
-                await record_and_maybe_broadcast_run_event(
-                    request.room_id,
-                    SSEProcessingStatus.CANCELED,
-                    user_message.message_id,
-                    client_request_id=client_request_id,
-                    sse=self.sse_manager,
-                )
-                await self.sse_manager.send_processing_status(
+                await self._emit_processing_status_event(
                     request.room_id,
                     SSEProcessingStatus.CANCELED,
                     user_message.message_id,
                     client_request_id=client_request_id,
                 )
             else:
-                await record_and_maybe_broadcast_run_event(
+                await self._emit_processing_status_event(
                     request.room_id,
                     SSEProcessingStatus.FAILED,
                     user_message.message_id,
-                    client_request_id=client_request_id,
-                    details="Failed to parse user message",
-                    sse=self.sse_manager,
-                )
-                await self.sse_manager.send_processing_status(
-                    request.room_id, SSEProcessingStatus.FAILED, user_message.message_id,
                     client_request_id=client_request_id,
                     details="Failed to parse user message",
                 )
@@ -2573,18 +2578,62 @@ class RoomServices:
             room_id,
             message_id,
         )
-        await record_and_maybe_broadcast_run_event(
+        await self._emit_processing_status_event(
             room_id,
             SSEProcessingStatus.PROCESSING,
             message_id,
             client_request_id=client_request_id,
-            sse=sse_manager,
         )
-        await sse_manager.send_processing_status(
+
+    async def _emit_processing_status_event(
+        self,
+        room_id: str,
+        status: SSEProcessingStatus | str,
+        message_id: str,
+        *,
+        client_request_id: str | None = None,
+        details: str | dict | None = None,
+        record_lifecycle: bool = True,
+    ) -> None:
+        emitter = getattr(self, "_processing_status_emitter", None)
+        status_value = status.value if hasattr(status, "value") else str(status)
+        if emitter is not None:
+            await emitter(
+                room_id=room_id,
+                status=status,
+                message_id=message_id,
+                lifecycle_message_id=message_id,
+                record_lifecycle=record_lifecycle,
+                client_request_id=client_request_id,
+                details=details if isinstance(details, dict) else None,
+                legacy_details=details if isinstance(details, str) else None,
+                error_message=(
+                    details
+                    if isinstance(details, str)
+                    and status_value in {SSEProcessingStatus.FAILED.value, SSEProcessingStatus.CANCELED.value}
+                    else None
+                ),
+            )
+            return
+
+        transport = getattr(self, "sse_manager", sse_manager)
+        if record_lifecycle:
+            await record_and_maybe_broadcast_run_event(
+                room_id,
+                status,
+                message_id,
+                client_request_id=client_request_id,
+                details=details,
+                sse=transport,
+            )
+        send_kwargs = {"client_request_id": client_request_id}
+        if details is not None:
+            send_kwargs["details"] = details
+        await transport.send_processing_status(
             room_id,
-            SSEProcessingStatus.PROCESSING,
+            status_value,
             message_id,
-            client_request_id=client_request_id,
+            **send_kwargs,
         )
 
     async def _initialize_room_memory(
@@ -2920,14 +2969,7 @@ class RoomServices:
                 status_code=500,
             )
 
-        await record_and_maybe_broadcast_run_event(
-            request.room_id,
-            SSEProcessingStatus.COMPLETED,
-            user_message.message_id,
-            client_request_id=user_message.client_request_id,
-            sse=self.sse_manager,
-        )
-        await self.sse_manager.send_processing_status(
+        await self._emit_processing_status_event(
             request.room_id,
             SSEProcessingStatus.COMPLETED,
             user_message.message_id,

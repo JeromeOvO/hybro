@@ -2,9 +2,23 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from context_memory import assembly
 from context_memory.config import TokenBudgetConfig
 from context_memory.models import RoomSummaryData
+
+
+def _fallback_estimate_tokens(text: str | None, model: str = "gpt-4") -> int:
+    if not text:
+        return 0
+    return len(text) // 4
+
+
+@pytest.fixture(autouse=True)
+def deterministic_token_estimator(monkeypatch):
+    """Golden token counts are pinned to the fallback estimator."""
+    monkeypatch.setattr(assembly, "estimate_tokens", _fallback_estimate_tokens)
 
 
 def test_stable_prefix_fixed_golden():

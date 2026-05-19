@@ -12,6 +12,7 @@ class DeliveryEnvelope(FrozenDTO):
     payload: dict[str, Any]
     event_id: str | None = None
     timestamp: datetime | None = None
+    trace_id: str | None = None
 
 
 class SSEEvent(FrozenDTO):
@@ -31,6 +32,7 @@ class NotificationPayload(FrozenDTO):
 class DeliveryEventBase(FrozenDTO):
     room_id: str
     timestamp: datetime | None = None
+    trace_id: str | None = None
 
 
 class ProcessingStatusEvent(DeliveryEventBase):
@@ -50,6 +52,7 @@ class RunEventNotification(DeliveryEventBase):
     seq: int
     run_event_type: str
     payload: dict = Field(default_factory=dict)
+    correlation_id: str | None = None
 
 
 class AgentMessagePartial(DeliveryEventBase):

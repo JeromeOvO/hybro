@@ -2370,6 +2370,44 @@ class DatabaseService:
             logger.error("Failed to count pending in HITL group %s: %s", group_id, e)
             return -1
 
+    async def claim_hitl_group_routing(self, group_id: str, claim_id: str) -> bool:
+        """Claim responsibility for routing a completed HITL group once."""
+        try:
+            result = await self.mongo.db.hitl_requests.update_one(
+                {
+                    "group_id": group_id,
+                    "group_index": 0,
+                    "group_routing_claim_id": {"$exists": False},
+                },
+                {
+                    "$set": {
+                        "group_routing_claim_id": claim_id,
+                        "group_routing_claimed_at": utcnow(),
+                    }
+                },
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error("Failed to claim HITL group routing %s: %s", group_id, e)
+            return False
+
+    async def release_hitl_group_routing(self, group_id: str, claim_id: str) -> bool:
+        """Release a group routing claim if still owned by claim_id."""
+        try:
+            result = await self.mongo.db.hitl_requests.update_one(
+                {"group_id": group_id, "group_routing_claim_id": claim_id},
+                {
+                    "$unset": {
+                        "group_routing_claim_id": "",
+                        "group_routing_claimed_at": "",
+                    }
+                },
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error("Failed to release HITL group routing %s: %s", group_id, e)
+            return False
+
     async def count_hitl_requests_for_message(
         self, continuation_message_id: str
     ) -> int:

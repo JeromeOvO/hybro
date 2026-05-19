@@ -7,6 +7,7 @@ import pytest
 from modules.RoomMessageCenter import RoomMessageCenter
 from models.supervisor_v2 import RunStatus, SupervisorRunResult, SupervisorTrajectory
 from services.sse_services import SSEManager
+from tests.delivery_adapter_fakes import make_bound_manager
 
 
 async def _next_sse_type(conn) -> tuple[str, dict]:
@@ -43,13 +44,61 @@ def _make_rmc_for_v2_result(manager: SSEManager) -> RoomMessageCenter:
     return rmc
 
 
+def _bind_test_processing_emitter(
+    rmc: RoomMessageCenter,
+    manager: SSEManager,
+    record: AsyncMock,
+) -> None:
+    async def emit_processing_status(
+        *,
+        room_id: str,
+        status,
+        message_id: str,
+        lifecycle_message_id: str | None = None,
+        record_lifecycle: bool = True,
+        client_request_id: str | None = None,
+        details=None,
+        **_kwargs,
+    ) -> None:
+        if record_lifecycle:
+            payload = await record(
+                room_id=room_id,
+                status=getattr(status, "value", status),
+                message_id=lifecycle_message_id or message_id,
+                client_request_id=client_request_id,
+                details=details,
+            )
+            if payload:
+                await manager.broadcast_to_room(
+                    room_id,
+                    "run_event",
+                    {
+                        "event_id": payload.get("event_id"),
+                        "run_id": payload.get("run_id"),
+                        "seq": payload.get("seq"),
+                        "type": payload.get("type"),
+                        "payload": payload.get("payload") or {},
+                        "correlation_id": client_request_id,
+                    },
+                )
+        await manager.send_processing_status(
+            room_id,
+            getattr(status, "value", status),
+            message_id,
+            details=details,
+            client_request_id=client_request_id,
+        )
+
+    rmc._processing_status_emitter = emit_processing_status
+
+
 @pytest.mark.asyncio
 async def test_golden_send_message_processing_status_order(monkeypatch):
     import services.room_services as room_services
     from services.a2a_constants import SSEProcessingStatus
     from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
 
-    manager = SSEManager()
+    manager = make_bound_manager()
     conn = await manager.add_connection("room-1")
     payload = {
         "event_id": "evt-1",
@@ -92,10 +141,7 @@ async def test_golden_send_message_processing_status_order(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_golden_hitl_resolve_resume_completion_order(monkeypatch):
-    import modules.RoomMessageCenter as rmc_mod
-    from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
-
-    manager = SSEManager()
+    manager = make_bound_manager()
     conn = await manager.add_connection("room-1")
     payload = {
         "event_id": "evt-2",
@@ -105,22 +151,12 @@ async def test_golden_hitl_resolve_resume_completion_order(monkeypatch):
         "payload": {},
     }
     record = AsyncMock(side_effect=[payload, None])
-    helper_spy = AsyncMock(wraps=record_and_maybe_broadcast_run_event)
 
     monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
-    monkeypatch.setattr(
-        "services.run_lifecycle_service.run_command_handler.record_processing_status",
-        record,
-    )
-    monkeypatch.setattr(
-        rmc_mod,
-        "record_and_maybe_broadcast_run_event",
-        helper_spy,
-        raising=False,
-    )
 
     rmc = object.__new__(RoomMessageCenter)
     rmc.sse_manager = manager
+    _bind_test_processing_emitter(rmc, manager, record)
     rmc.database_service = SimpleNamespace(
         save_continuation_on_message=AsyncMock(),
         get_room_by_room_id=AsyncMock(return_value=SimpleNamespace(extend_info={})),
@@ -148,7 +184,7 @@ async def test_golden_hitl_resolve_resume_completion_order(monkeypatch):
     second_type, second_data = await _next_sse_type(conn)
 
     assert result is True
-    assert helper_spy.await_count == 1
+    assert record.await_count == 1
     assert first_type == "run_event"
     assert first_data["event_id"] == "evt-2"
     assert second_type == "processing_status"
@@ -158,10 +194,7 @@ async def test_golden_hitl_resolve_resume_completion_order(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_golden_duplicate_terminal_root_completion_suppressed(monkeypatch):
-    import modules.RoomMessageCenter as rmc_mod
-    from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
-
-    manager = SSEManager()
+    manager = make_bound_manager()
     conn = await manager.add_connection("room-1")
     payload = {
         "event_id": "evt-terminal",
@@ -171,21 +204,11 @@ async def test_golden_duplicate_terminal_root_completion_suppressed(monkeypatch)
         "payload": {},
     }
     record = AsyncMock(side_effect=[payload, None])
-    helper_spy = AsyncMock(wraps=record_and_maybe_broadcast_run_event)
 
     monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
-    monkeypatch.setattr(
-        "services.run_lifecycle_service.run_command_handler.record_processing_status",
-        record,
-    )
-    monkeypatch.setattr(
-        rmc_mod,
-        "record_and_maybe_broadcast_run_event",
-        helper_spy,
-        raising=False,
-    )
 
     rmc = _make_rmc_for_v2_result(manager)
+    _bind_test_processing_emitter(rmc, manager, record)
     result = SupervisorRunResult(
         status=RunStatus.COMPLETED,
         trajectory=SupervisorTrajectory(),
@@ -199,21 +222,16 @@ async def test_golden_duplicate_terminal_root_completion_suppressed(monkeypatch)
     assert frames[0][1]["event_id"] == "evt-terminal"
     assert frames[1][1]["status"] == "completed"
     assert frames[1][1]["message_id"] == "msg-1"
-    assert helper_spy.await_count == 2
     assert record.await_count == 2
 
 
 @pytest.mark.asyncio
 async def test_golden_duplicate_terminal_suppressed_across_redis_l2(monkeypatch):
-    import modules.RoomMessageCenter as rmc_mod
-    from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
     from tests.test_sse_event_broker import MockRedisService
 
     redis = MockRedisService()
-    first_manager = SSEManager()
-    second_manager = SSEManager()
-    await first_manager.start_redis_service(redis)
-    await second_manager.start_redis_service(redis)
+    first_manager = make_bound_manager(redis_service=redis, instance_id="worker-1")
+    second_manager = make_bound_manager(redis_service=redis, instance_id="worker-2")
     first_conn = await first_manager.add_connection("room-1")
     second_conn = await second_manager.add_connection("room-1")
 
@@ -225,30 +243,19 @@ async def test_golden_duplicate_terminal_suppressed_across_redis_l2(monkeypatch)
         "payload": {},
     }
     record = AsyncMock(side_effect=[payload, None])
-    helper_spy = AsyncMock(wraps=record_and_maybe_broadcast_run_event)
 
     monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
-    monkeypatch.setattr(
-        "services.run_lifecycle_service.run_command_handler.record_processing_status",
-        record,
-    )
-    monkeypatch.setattr(
-        rmc_mod,
-        "record_and_maybe_broadcast_run_event",
-        helper_spy,
-        raising=False,
-    )
 
     result = SupervisorRunResult(
         status=RunStatus.COMPLETED,
         trajectory=SupervisorTrajectory(),
     )
-    await _make_rmc_for_v2_result(first_manager)._handle_v2_run_result(
-        result, "room-1", "msg-1"
-    )
-    await _make_rmc_for_v2_result(second_manager)._handle_v2_run_result(
-        result, "room-1", "msg-1"
-    )
+    first_rmc = _make_rmc_for_v2_result(first_manager)
+    second_rmc = _make_rmc_for_v2_result(second_manager)
+    _bind_test_processing_emitter(first_rmc, first_manager, record)
+    _bind_test_processing_emitter(second_rmc, second_manager, record)
+    await first_rmc._handle_v2_run_result(result, "room-1", "msg-1")
+    await second_rmc._handle_v2_run_result(result, "room-1", "msg-1")
 
     first_frames = await _drain_sse(first_conn)
     second_frames = await _drain_sse(second_conn)
@@ -258,26 +265,18 @@ async def test_golden_duplicate_terminal_suppressed_across_redis_l2(monkeypatch)
     ]
     assert second_frames == []
     assert redis._store["terminal:room-1:msg-1"] == "completed"
-    assert helper_spy.await_count == 2
     assert record.await_count == 2
 
 
 @pytest.mark.asyncio
 async def test_golden_clarifying_soft_complete_is_transport_only(monkeypatch):
-    import modules.RoomMessageCenter as rmc_mod
-
-    manager = SSEManager()
+    manager = make_bound_manager()
     conn = await manager.add_connection("room-1")
     lifecycle = AsyncMock()
-    monkeypatch.setattr(
-        rmc_mod,
-        "record_and_maybe_broadcast_run_event",
-        lifecycle,
-        raising=False,
-    )
 
     turn_appender = SimpleNamespace(append=AsyncMock())
     rmc = _make_rmc_for_v2_result(manager)
+    _bind_test_processing_emitter(rmc, manager, lifecycle)
     rmc._turn_event_appender = turn_appender
     result = SupervisorRunResult(
         status=RunStatus.CLARIFYING,
@@ -300,19 +299,12 @@ async def test_golden_clarifying_soft_complete_is_transport_only(monkeypatch):
 async def test_golden_clarify_resume_retry_failure_completed_is_transport_only(
     monkeypatch,
 ):
-    import modules.RoomMessageCenter as rmc_mod
     from models.supervisor_v2 import AgentProfile, RoomConfig
     from services.room_supervisor_service import SupervisorPlanningError
 
-    manager = SSEManager()
+    manager = make_bound_manager()
     conn = await manager.add_connection("room-1")
     lifecycle = AsyncMock()
-    monkeypatch.setattr(
-        rmc_mod,
-        "record_and_maybe_broadcast_run_event",
-        lifecycle,
-        raising=False,
-    )
 
     trajectory = SupervisorTrajectory()
     trajectory.clarify_user_reply = "Use account A"
@@ -330,6 +322,7 @@ async def test_golden_clarify_resume_retry_failure_completed_is_transport_only(
     )
     original_msg = SimpleNamespace(extend_info={"supervisor_trajectory": {}})
     rmc = _make_rmc_for_v2_result(manager)
+    _bind_test_processing_emitter(rmc, manager, lifecycle)
     rmc.database_service.get_room_user_message_by_message_id = AsyncMock(
         return_value=original_msg
     )

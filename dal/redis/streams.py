@@ -5,6 +5,7 @@ from typing import Any
 import redis.asyncio as aioredis
 
 from common.config import settings
+from common.errors import TransientError
 
 
 class RedisStreamsImpl:
@@ -31,6 +32,12 @@ class RedisStreamsImpl:
         self._client = aioredis.from_url(self._url, **kwargs)
         return self._client
 
+    def _transient(self, operation: str, exc: Exception) -> TransientError:
+        return TransientError(
+            f"Redis Streams {operation} failed",
+            details={"operation": operation, "error": str(exc)},
+        )
+
     async def xadd(
         self, stream: str, fields: dict, maxlen: int | None = None
     ) -> str:
@@ -39,8 +46,8 @@ class RedisStreamsImpl:
             return ""
         try:
             return str(await client.xadd(stream, fields, maxlen=maxlen))
-        except Exception:
-            return ""
+        except Exception as exc:
+            raise self._transient("xadd", exc) from exc
 
     async def xread(
         self, streams: dict, block: int = 0, count: int = 100
@@ -50,8 +57,8 @@ class RedisStreamsImpl:
             return []
         try:
             response = await client.xread(streams, block=block, count=count)
-        except Exception:
-            return []
+        except Exception as exc:
+            raise self._transient("xread", exc) from exc
 
         entries: list[dict] = []
         for stream_name, stream_entries in response or []:

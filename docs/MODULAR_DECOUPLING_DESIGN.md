@@ -1,8 +1,8 @@
 # Modular Decoupling Design Document
 
-> **Status**: Proposal (v3)  
-> **Date**: 2026-05-04  
-> **Scope**: Refactor hybro-multi-agents-backend into interface-driven modular architecture  
+> **Status**: Proposal (v3)
+> **Date**: 2026-05-04
+> **Scope**: Refactor hybro-multi-agents-backend into interface-driven modular architecture
 > **Constraint**: All existing features remain unchanged; no new technology stack; zero backend breaking changes (except explicitly decommissioned legacy workflow endpoints after Phase 0d deprecation)
 
 ---
@@ -129,8 +129,10 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 
 > **NOTE (Workflow decommission)**: The legacy `base_tasks` / `meta_tasks` / `task_sessions` data model
 > (from the first version of chat room) is **deleted** in this refactor, NOT wrapped. The endpoints
-> `api/orchestration_center.py` and `api/task.py` are decommissioned. See Phase 0d for frontend
-> coordination and deprecation timeline.
+> `api/orchestration_center.py` and `api/task.py` are decommissioned in Phase 0d / follow-up
+> workflow cleanup, not in Phase 7b. Phase 7b explicitly excludes active legacy workflow routes
+> from the Execution extraction static gates except as documented out-of-scope manifest entries.
+> See Phase 0d for frontend coordination and deprecation timeline.
 
 ### 3.3 Dependency Rules (Hard Constraints)
 
@@ -144,11 +146,24 @@ Rule 6:  Delivery depends on Common + DAL ONLY (no business module dependency)
 Rule 7:  API Layer depends on module Protocols via sub-container (not implementations)
 Rule 8:  Application Shell is the ONLY place that knows concrete implementations
 Rule 9:  No module imports `main.py` or `container.py`
-Rule 10: a2a-sdk types NEVER appear outside A2A Protocol Adapter
+Rule 10: a2a-sdk types are confined to the A2A Protocol Adapter in the target architecture
 Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 ```
 
-> **NOTE (A1 fix)**: Rule 6 means Delivery is a **pure transport**. The current `sse_manager.send_processing_status()` which calls `run_command_handler.record_processing_status()` **violates** this rule. Resolution: Execution must call `RunLifecyclePort.record_processing_status()` **before** calling `EventPublisher.emit("processing_status", ...)`. Delivery only translates and delivers. See §4.5 for the enforced call-site contract.
+> **NOTE (A1 fix)**: Rule 6 means Delivery is a **pure transport**. Historically,
+> before the Phase 7a/Phase 6 separation, `sse_manager.send_processing_status()`
+> combined frontend delivery with run lifecycle recording, which violated this
+> rule. The current Phase 7b prerequisite is that SSE no longer calls
+> `run_command_handler`: Execution records through `RunLifecyclePort.record_processing_status()`
+> **before** calling `EventPublisher.emit("processing_status", ...)`, and
+> Delivery only translates and delivers. See §4.5 for the enforced call-site
+> contract.
+
+> **Phase 7b deviation:** The Phase 7b execution plan temporarily allowlists A2A
+> SDK imports in exact moved dispatch/orchestration files while preserving
+> behavior. That is not the target state; new Execution HITL/cancellation code
+> must use string/domain-state ports, and the allowlist should shrink as A2A
+> protocol adapters are introduced.
 
 ### 3.4 Cross-Module Communication Rules
 
@@ -157,17 +172,27 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 | Execution → Agent | `AgentRegistry` Protocol | Sync call | |
 | Execution → Room | `RoomRegistry` + `RoomMessageStore` | Sync call | |
 | Execution → Context & Memory | `ContextAssembler` Protocol | Sync call | |
-| Execution → Delivery | `EventPublisher` Protocol | Fire-and-forget | Execution records side effects BEFORE emitting |
+| Execution → Delivery | `EventPublisher` Protocol | Awaited best-effort event emit | Execution records side effects BEFORE emitting |
 | Execution → A2A Adapter | `AgentTransport` Protocol | Async call | |
 | Execution → HubRuntimeBridge | `HubDispatchPort` Protocol | Async call | |
 | Context & Memory → Room | `RoomHistoryReader` Protocol | Sync call | |
 | Context & Memory ← (domain events) | `MessageCommitted` | **In-process** on emitting worker + **Redis Pub/Sub** for other workers | See §4.5 |
 | Room services → Context & Memory | `MemoryManager.delete_room_memory()` Protocol | Temporary Phase 5 cleanup call | Migration-only room deletion cleanup; startup binds protocol only, never the concrete facade |
 | HubRuntimeBridge → Agent | `AgentRegistryWriter` Protocol | Sync call | |
-| HubRuntimeBridge → Execution | `HubAgentResponseInternal` via `EventPublisher.emit_internal` | Async internal event | Owner-worker routing; see §4.5 |
+| HubRuntimeBridge → Execution | `HubAgentResponseInternal` via `EventPublisher.emit_internal` | Async internal event | Phase 8 owner-worker routing; Phase 7b only registers the response-handler seam |
 | HubRuntimeBridge → Room | `RoomOwnershipReader` Protocol | Sync call | |
 | Agent → HubRuntimeBridge | `HubLivenessReader` Protocol | Sync call | For agent hydration: `is_hub_online` |
 | Agent ↔ Room | NO direct dependency | — | |
+
+> **Phase 7b deviation:** The Phase 7b execution plan temporarily binds a small
+> set of Execution-owned compatibility callables into legacy `RoomServices`:
+> pending-HITL checking, embedded active-run reading for
+> `/roomCenter/inquiryRoomSetting`, and sendMessage lifecycle/status emission.
+> This is a bridge while sendMessage persistence and room-setting assembly still
+> live in RoomServices. It is not a target communication direction. Follow-up
+> owner: Execution/Room boundary cleanup must move those gates/emits behind
+> `ExecutionFacade` or a Room-owned protocol so the long-term dependency returns
+> to Execution -> Room only.
 
 ---
 
@@ -318,7 +343,7 @@ class SavedUserMessage(BaseModel):
     """Returned after user message persistence — matches current RoomCenterUserMessageResponse."""
     room_id: str
     message_id: str
-    dispatch_root_message_id: str | None
+    dispatch_root_message_id: str | None = None
     user_id: str
     user_name: str
     message: dict  # Full RoomUserMessage serialized
@@ -405,22 +430,37 @@ boundary exposed to API/runtime consumers.
 class ExecutionEngine(Protocol):
     """Execute agent interactions within a room — used by API layer, HubRuntimeBridge.
 
-    IMPORTANT: execute() is fire-and-forget from HTTP perspective.
-    It persists the user message, starts orchestration as a background task,
-    and returns immediately with the saved message info.
+    IMPORTANT: /sendMessage keeps the current after-response scheduling boundary.
+    execute() persists the user message and returns the saved message info.
+    API routes schedule start_orchestration(...) through FastAPI BackgroundTasks;
+    the facade tracks and awaits the orchestration task once that after-response
+    callback runs, preserving the background task's lifetime/exception semantics.
     Agent responses arrive via EventPublisher → SSE stream.
     """
 
     async def execute(self, request: ExecutionRequest) -> ExecutionAck: ...
-    async def cancel(self, room_id: str, message_id: str) -> bool: ...
+    async def start_orchestration(
+        self,
+        request: ExecutionRequest,
+        ack: ExecutionAck,
+    ) -> None: ...
+    async def cancel(
+        self,
+        room_id: str,
+        message_id: str,
+        *,
+        requested_by_user_id: str,
+    ) -> bool:
+        """requested_by_user_id preserves the existing Mongo cancellation audit field."""
+        ...
     async def get_run(self, run_id: str) -> RunInfo | None: ...
     async def get_runs_for_room(self, room_id: str) -> list[RunInfo]: ...
-    async def cancel_inflight_tasks(self) -> int: ...
-        """Graceful shutdown: cancel all tracked background orchestration tasks.
-        Returns count of cancelled tasks. Each cancelled run transitions to RunState.CANCELED."""
-    async def heal_diverged_runs(self, limit: int = 500) -> int: ...
-        """Startup recovery: replay committed events whose head-row update was lost.
-        Returns count of healed runs."""
+    async def cancel_inflight_tasks(self) -> int:
+        """Graceful shutdown: cancel tracked orchestration tasks and return count."""
+        ...
+    async def heal_diverged_runs(self, limit: int = 500) -> int:
+        """Startup recovery: replay committed events whose head-row update was lost."""
+        ...
 
 
 @runtime_checkable
@@ -433,18 +473,34 @@ class HITLManager(Protocol):
         user_message_id: str,
         prompt: str,
         source: Literal["agent", "supervisor"],
+        source_step_id: str | None = None,
         agent_id: str | None = None,
+        agent_name: str | None = None,
         a2a_task_id: str | None = None,
         a2a_context_id: str | None = None,
         continuation_message_id: str | None = None,
+        display_message_id: str | None = None,
+        prompt_type: Literal["text", "choice", "confirmation"] = "text",
+        choices: list[str] | None = None,
+        group_id: str | None = None,
+        group_total: int | None = None,
+        group_index: int | None = None,
     ) -> HITLRequest | None: ...
 
+    # Phase 7b note: this public protocol intentionally mirrors the full
+    # current HITL DTO/API metadata surface so pending-route response fields are
+    # not lost while the runtime is still adapter-backed.
+
     async def resolve_hitl(
-        self, request_id: str, response: str, responder_id: str
+        self,
+        room_id: str,
+        request_id: str,
+        response: str,
+        responder_id: str,
     ) -> HITLResponse: ...
 
     async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]: ...
-    async def cancel_hitl(self, request_id: str) -> bool: ...
+    async def cancel_hitl(self, room_id: str, request_id: str) -> bool: ...
 
 
 @runtime_checkable
@@ -462,11 +518,17 @@ class HubAgentResponseSink(Protocol):
 class ExecutionRequest(BaseModel):
     """Matches current RoomCenterUserMessageRequest semantics."""
     room_id: str
-    message_text: str
     sender_id: str
-    sender_name: str
+    sender_name: str | None = None
+    message: dict | None = None
+    message_text: str | None = None
     attachments: list[dict] | None = None
+    inline_file_ids: list[str] | None = None
     target_agent_ids: list[str] | None = None
+    target_group: str | None = None
+    target_group_id: str | None = None
+    message_target_mode: str | None = None
+    mentioned_agent_ids: list[str] | None = None
     parent_message_id: str | None = None
     client_request_id: str | None = None
     mode: Literal["direct", "supervisor", "debate"] = "direct"
@@ -475,15 +537,16 @@ class ExecutionAck(BaseModel):
     """Returned immediately after user message persistence.
     Matches current RoomCenterUserMessageResponse contract exactly.
     Orchestration happens asynchronously; results via SSE."""
-    room_id: str
-    message_id: str
-    dispatch_root_message_id: str | None
-    user_id: str
-    user_name: str
-    message: dict  # Full RoomUserMessage serialized
+    # Nullable fields mirror current error responses; do not coerce to "" or {}.
+    room_id: str | None = None
+    message_id: str | None = None
+    dispatch_root_message_id: str | None = None
+    user_id: str | None = None
+    user_name: str | None = None
+    message: dict | None = None  # Full RoomUserMessage serialized when present
     message_list: list[dict] | None = None
     scope_resolution_error: dict | None = None
-    success: bool
+    success: bool = True
     error: str | None = None
     status_code: int = 200
 
@@ -500,39 +563,65 @@ class RunInfo(BaseModel):
     room_id: str
     agent_id: str | None
     state: RunState
-    parent_run_id: str | None
-    seq: int
+    seq: int = 0
+    trigger_message_id: str | None = None
+    parent_run_id: str | None = None
     error_code: str | None = None
-    created_at: datetime
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 class HITLRequest(BaseModel):
     request_id: str
     room_id: str
     user_message_id: str
     prompt: str
-    prompt_type: Literal["text", "confirmation"]
     source: Literal["agent", "supervisor"]
-    status: Literal["pending", "resolved", "expired", "canceled"]
+    message_id: str | None = None  # display_message_id or continuation_message_id or user_message_id
+    prompt_type: Literal["text", "choice", "confirmation"] = "text"
+    status: Literal["pending", "processing", "responded", "resolved", "expired", "canceled"] = "pending"
+    source_step_id: str | None = None
     agent_id: str | None = None
+    agent_name: str | None = None
     a2a_task_id: str | None = None
+    a2a_context_id: str | None = None
     continuation_message_id: str | None = None
-    created_at: datetime
+    display_message_id: str | None = None
+    choices: list[str] | None = None
+    group_id: str | None = None
+    group_total: int | None = None
+    group_index: int | None = None
+    expires_at: datetime | None = None
+    created_at: datetime | None = None
+    user_input: str | None = None
+    responded_at: datetime | None = None
+    responded_by_user_id: str | None = None
 
 class HITLResponse(BaseModel):
     request_id: str
-    response_text: str
-    responder_id: str
-    resolved_at: datetime
+    status: str = "ok"
+    response_text: str | None = None
+    responder_id: str | None = None
+    resolved_at: datetime | None = None
+    reclaimed: bool | None = None
+    error: str | None = None
 
 class AgentEvent(BaseModel):
-    """Normalized agent event from any source (direct, hub, webhook)."""
+    """Deprecated Common compatibility DTO; keep current event_type/payload shape."""
     room_id: str
     agent_id: str
     message_id: str
     event_type: Literal["partial", "final", "status_update", "error", "input_required"]
-    payload: dict
+    payload: dict = Field(default_factory=dict)
     hub_id: str | None = None
 ```
+
+Phase 7b ownership note: the normalized runtime event consumed by
+`AgentResponseHandler` is `execution.dispatch.agent_event.AgentEvent`, not the
+Common DTO above. `common.dto.execution.AgentEvent` remains exported as a
+deprecated compatibility DTO with its existing `event_type` / `payload` shape
+until old imports and tests are migrated. It must not be used by Hub response
+adapters, ExecutionFacade, or response-handler protocols. A follow-up Common
+cleanup can remove it once old imports are gone.
 
 ### 4.5 Delivery Module Protocols
 
@@ -548,19 +637,22 @@ class EventPublisher(Protocol):
     - In particular: run_command_handler.record_processing_status() must execute
       before emit("processing_status", ...).
     - EventPublisher is a pure delivery pipe — it NEVER calls back into business modules.
-    - EventPublisher MAY deduplicate terminal status events (idempotency).
+    - EventPublisher/Delivery MUST preserve legacy terminal `ProcessingStatusEvent`
+      deduplication: duplicate `completed`, `failed`, or `canceled`
+      processing-status frames for the same `(room_id, message_id)` are
+      suppressed through the shared L1/Redis or equivalent dedup layer.
     """
 
-    async def emit(self, event: DomainEvent) -> None: ...
+    async def emit(self, event: DeliveryEvent) -> None: ...
     async def emit_internal(self, event: "InternalEvent") -> None: ...
         """Dispatch internal cross-module events. NOT delivered to SSE clients.
         Handler failures are logged + dead-lettered, never propagated."""
     def register_internal_handler(self, event_type: str, handler: Callable) -> None: ...
         """Register handler for internal events. Called during container assembly."""
     async def start(self) -> None: ...
-        """Start Redis Pub/Sub listener for cross-worker fan-out. Called during lifespan startup."""
+        """Component hook. DeliveryFacade.start() owns app-shell startup."""
     async def stop(self) -> None: ...
-        """Drain pending deliveries and disconnect Pub/Sub. Called during shutdown."""
+        """Drain/cancel pending internal handler tasks. Facade owns bus shutdown."""
 
 
 @runtime_checkable
@@ -573,7 +665,7 @@ class SSETransport(Protocol):
     - This is required because cancellation must propagate to in-memory TTLCache per worker.
     """
 
-    async def connect(self, room_id: str, connection_id: str) -> AsyncIterator[dict]: ...
+    def connect(self, room_id: str, connection_id: str) -> AsyncIterator[dict]: ...
     async def disconnect(self, connection_id: str) -> None: ...
     def is_cancelled(self, message_id: str) -> bool: ...
     async def mark_cancelled(self, message_id: str) -> None: ...
@@ -582,16 +674,29 @@ class SSETransport(Protocol):
         """Start change-stream watcher for cancellation propagation. Runs per-worker."""
 ```
 
+`SSETransport.connect()` is the narrow exception to the "cross-module methods are async"
+rule: it is synchronous because it returns an async iterator directly, allowing callers to
+write `async for frame in transport.connect(...): ...` without first awaiting a generator
+factory. All other Delivery protocol methods remain async when they perform async work.
+
 **DomainEvent Discriminated Union (B1 fix):**
 
 ```python
 # common/dto/delivery.py
 
-class DomainEventBase(BaseModel):
+class DeliveryEnvelope(BaseModel):
+    event_type: str
     room_id: str
-    timestamp: datetime
+    timestamp: datetime | None = None
+    trace_id: str | None = None
+    payload: dict = Field(default_factory=dict)
 
-class ProcessingStatusEvent(DomainEventBase):
+class DeliveryEventBase(BaseModel):
+    room_id: str
+    timestamp: datetime | None = None
+    trace_id: str | None = None
+
+class ProcessingStatusEvent(DeliveryEventBase):
     event_type: Literal["processing_status"] = "processing_status"
     message_id: str
     status: Literal["queued", "processing", "completed", "failed", "canceled"]
@@ -600,32 +705,38 @@ class ProcessingStatusEvent(DomainEventBase):
     client_request_id: str | None = None
     agents: list[dict] | None = None
 
-class RunEventNotification(DomainEventBase):
+# Legacy frontend statuses outside this Literal, currently including
+# awaiting_input, rejected, rate_limited, and error, stay on the Delivery
+# compatibility processing-status frame until the DTO/translator is explicitly
+# widened in a frontend-coordinated migration.
+
+class RunEventNotification(DeliveryEventBase):
     event_type: Literal["run_event"] = "run_event"
     event_id: str
     run_id: str
     seq: int
     run_event_type: str
-    payload: dict
+    payload: dict = Field(default_factory=dict)
+    correlation_id: str | None = None
 
-class AgentMessagePartial(DomainEventBase):
+class AgentMessagePartial(DeliveryEventBase):
     event_type: Literal["agent_message_partial"] = "agent_message_partial"
     message_id: str
     agent_id: str
     content_delta: str
 
-class AgentMessageFinal(DomainEventBase):
+class AgentMessageFinal(DeliveryEventBase):
     event_type: Literal["agent_message_final"] = "agent_message_final"
     message_id: str
     agent_id: str
     content: dict
 
-class CancellationEvent(DomainEventBase):
+class CancellationEvent(DeliveryEventBase):
     event_type: Literal["cancellation"] = "cancellation"
     message_id: str
     reason: str | None = None
 
-class HITLRequestEvent(DomainEventBase):
+class HITLRequestEvent(DeliveryEventBase):
     event_type: Literal["hitl_request"] = "hitl_request"
     request_id: str
     prompt: str
@@ -633,12 +744,12 @@ class HITLRequestEvent(DomainEventBase):
     source: str
     message_id: str
 
-class HITLResolvedEvent(DomainEventBase):
+class HITLResolvedEvent(DeliveryEventBase):
     event_type: Literal["hitl_resolved"] = "hitl_resolved"
     request_id: str
     message_id: str
 
-class HubAgentEvent(DomainEventBase):
+class HubAgentEvent(DeliveryEventBase):
     """Frontend-visible: UI rendering of hub agent activity."""
     event_type: Literal["hub_agent_event"] = "hub_agent_event"
     hub_id: str
@@ -647,14 +758,14 @@ class HubAgentEvent(DomainEventBase):
     status: str  # "working" | "completed" | "error"
     partial: str | None = None  # Streaming partial content for UI
 
-class DebateRoundEvent(DomainEventBase):
+class DebateRoundEvent(DeliveryEventBase):
     event_type: Literal["debate_round"] = "debate_round"
     round_number: int
     agent_id: str
     message_id: str
 
 # Discriminated union type
-DomainEvent = Annotated[
+DeliveryEvent = Annotated[
     ProcessingStatusEvent | RunEventNotification | AgentMessagePartial |
     AgentMessageFinal | CancellationEvent | HITLRequestEvent | HITLResolvedEvent |
     HubAgentEvent | DebateRoundEvent,
@@ -667,6 +778,34 @@ DomainEvent = Annotated[
 - Event **wire format translation** (domain → SSE frame) is owned by Delivery module
 - Cross-worker delivery: in-process on emitting worker, Redis Pub/Sub fan-out to other workers
 - HubRuntimeBridge publish events: arrive on one worker via HTTP, emit locally, Redis Pub/Sub to others
+- `emit()` is frontend-visible delivery only. Internal module-to-module dispatch is handled
+  exclusively by `emit_internal()`.
+- `RunEventNotification` SSE frames always include `correlation_id`, using `None` when no
+  correlation id is available, matching the legacy wire shape.
+- Trace ids are preserved only when explicit: typed SSE frames use `frame["data"]["trace_id"]`,
+  Redis fan-out envelopes use top-level `envelope["trace_id"]`, and legacy raw-frame delivery
+  does not mutate the delivered frame to inject a trace id.
+
+**Phase 6 compatibility seam:**
+- `services/sse_services.py` is now a C3 migration adapter. Startup binds it to
+  `DeliveryFacade`; before binding, public methods fail fast.
+- Legacy SSE methods not represented in `DeliveryEvent` use
+  `DeliveryFacade.compat.emit_legacy_frame()`, which is the only adapter-visible path to
+  `EventPublisherImpl._emit_legacy_frame()`.
+- Legacy `send_processing_status()` stays on the raw-frame path so it can preserve legacy
+  statuses such as `rejected`, `rate_limited`, `error`, and `awaiting_input`, plus string
+  `details`. Terminal dedup still happens inside Delivery.
+- Redis room subscriptions are bounded by `DeliveryConfig`: default
+  `redis_room_subscription_production_limit=40`,
+  `redis_subscription_reserved_connections=10`, and `redis_max_connections=50`. Deployments
+  that need more active rooms per worker must raise the actual Redis Pub/Sub pool size and
+  Delivery config together, or implement multiplexed Pub/Sub first.
+- Delivery does not resolve `client_request_id` from the database, does not call
+  `record_processing_status()`, and does not evaluate `run_event_sse_enabled()`.
+- Phase 7a callers preserve the old run-event branch by calling
+  `record_and_maybe_broadcast_run_event()` / `RunLifecycleService.record_processing_status()`
+  before legacy processing-status delivery. Phase 7b migrates those callers to typed
+  `RunEventNotification`.
 
 **Internal Domain Events (N8 fix):**
 
@@ -706,10 +845,23 @@ class HubAgentResponseInternal(InternalEventBase):
     task_id: str
     room_id: str
     is_terminal: bool
-    payload: dict  # Full a2a-normalized response with continuation_message_id, retry_count
+    payload: dict  # A2A-normalized response; internal adapter requires kind plus message_id or continuation_message_id
 
 InternalEvent = MessageCommitted | RunStateChanged | HubAgentResponseInternal
 ```
+
+For Phase 7b handler registration, `HubAgentResponseInternal.payload` must be
+normalized before Execution handles it. Required fields are `kind` and either
+`message_id` or `continuation_message_id`; optional fields mirror the
+`AgentEvent` normalized event fields (`text`, `state`, `parts`, `artifacts`,
+`client_request_id`, `lifecycle_message_id`, etc.). If Hub only knows
+`continuation_message_id`, the Execution adapter maps that to the
+response-handler `message_id` deliberately and tests that mapping.
+If Hub emits a `processing_status` payload with `lifecycle_message_id`, the
+upstream Hub normalizer must first validate that id against the agent message's
+turn/root user message id and set `lifecycle_message_id_verified=True`. Phase
+7b rejects unverified Hub lifecycle ids to match the existing relay behavior,
+which drops mismatched `user_message_id` values before lifecycle writes.
 
 **Internal event delivery mechanism:**
 - Same `EventPublisher.register_internal_handler()` mechanism as §7.3
@@ -719,10 +871,16 @@ InternalEvent = MessageCommitted | RunStateChanged | HubAgentResponseInternal
   - Does NOT deliver to SSE clients
 - This keeps one bus implementation with two entry points (`emit` for frontend-visible, `emit_internal` for module-to-module)
 
-**At-least-once + idempotent delivery for `HubAgentResponseInternal`:**
+**At-least-once + idempotent delivery for `HubAgentResponseInternal` target state:**
+
+The durable ownership/idempotency behavior below is a Phase 8 HubRuntimeBridge
+target, not Phase 7b scope. Phase 7b may register the Execution internal handler
+seam, but it must not claim this durability is delivered until the Hub response
+processing port and idempotency repository exist.
+
 - `HubFacade.publish_from_hub()` first persists the response to `run_events` collection with idempotency key `(hub_id, task_id, response_seq)` before calling `emit_internal()`.
-- `ExecutionFacade` maintains `_owned_hub_tasks: dict[str, str]` mapping `task_id → run_id` for tasks dispatched by this worker.
-- Internal handler checks `task_id in self._owned_hub_tasks` — only the owner-worker processes; other workers discard.
+- Phase 8 Hub response owner maintains an owned-task map for tasks dispatched by this worker.
+- Internal handler checks the Phase 8 owner map — only the owner-worker processes; other workers discard.
 - Handler deduplicates via the idempotency key against already-processed events in the run's event log.
 - If the owner-worker crashes: the response is durable in `run_events`. On next startup, `heal_diverged_runs()` replays unprocessed durable responses.
 - Pub/Sub delivery is at-least-once (Redis may redeliver on reconnect); idempotency key ensures no double-processing.
@@ -773,7 +931,7 @@ class HubLivenessReader(Protocol):
 @runtime_checkable
 class GatewayService(Protocol):
     """External gateway API — used by API layer.
-    
+
     NOTE (A7 fix): Hub-source agents must return 502. Platform calls
     AgentRegistry.is_directly_callable() — Platform does NOT understand hub semantics,
     it just respects the boolean.
@@ -913,6 +1071,12 @@ class MongoDAL(Protocol):
 
 
 @runtime_checkable
+class MongoChangeStream(Protocol):
+    async def __aenter__(self) -> AsyncIterator[dict]: ...
+    async def __aexit__(self, exc_type, exc, tb) -> bool | None: ...
+
+
+@runtime_checkable
 class MongoCollection(Protocol):
     """Single collection operations — implementation detail of Repository layer."""
 
@@ -929,8 +1093,12 @@ class MongoCollection(Protocol):
     async def aggregate(self, pipeline: list[dict]) -> list[dict]: ...
     async def create_index(self, keys: list[tuple], **kwargs) -> str: ...
     async def find_one_by_stable_or_native_id(self, stable_id_field: str, id_value: str) -> dict | None: ...
-    def watch(self, pipeline: list[dict] | None = None, **kwargs) -> AsyncIterator[dict]: ...
+    def watch(self, pipeline: list[dict] | None = None, **kwargs) -> MongoChangeStream: ...
 ```
+
+`MongoCollection.watch()` models Motor's async-context-manager change stream shape. Delivery's
+per-worker cancellation watcher uses `async with collection.watch(...) as stream:` so change
+streams are cleaned up on reconnect, cancellation, and shutdown.
 
 #### 4.9.2 Domain-Scoped Repository Protocols
 
@@ -1141,12 +1309,21 @@ class LeaderElector(Protocol):
 
 @runtime_checkable
 class IndexRegistry(Protocol):
-    """Centralized index management (B6 fix). Modules register their indexes; 
+    """Centralized index management (B6 fix). Modules register their indexes;
     Shell ensures all created before serving traffic."""
 
     def register(self, module_name: str, collection: str, index_spec: list[tuple], **kwargs) -> None: ...
     async def ensure_all(self) -> None: ...
 ```
+
+Redis DAL failure contract after Phase 6:
+- Empty Redis URL remains graceful and keeps disabled/no-op behavior for local development.
+- When Redis is configured, driver failures from `RedisKV.get()`, `set()`, `delete()`,
+  `increment()`, `setnx()`, and `exists()` raise `TransientError`.
+- Configured-driver failures from `RedisPubSub.publish()` and subscribe/listen setup surface to
+  Delivery so the event bus can reconnect and health can report disconnected.
+- Configured-driver failures from `RedisStreams.xadd()` and `xread()` raise `TransientError`.
+- `ping()` remains a health boolean and `close()` remains best-effort cleanup.
 
 `MongoCollection.find_one_by_stable_or_native_id(stable_id_field, id_value)` is the DAL-owned fallback for legacy compacted content pointers. BSON/ObjectId conversion stays inside `dal/mongo/client.py`; Common protocols and business modules do not construct provider-native `_id` queries. Vector index missing/unavailable states are reported through `common.errors.VectorIndexUnavailableError` so Context & Memory does not depend on Pinecone exception types.
 
@@ -1162,7 +1339,7 @@ execution/
 ├── facade.py                      # ExecutionFacade: implements ExecutionEngine + HITLManager + HubAgentResponseSink
 ├── ports.py                       # Internal Protocols (module-private)
 │
-├── orchestrator/                  # Supervisor loop, debate, queue execution
+├── orchestration/                 # Supervisor loop, debate, queue execution
 │   ├── __init__.py
 │   ├── supervisor_executor.py     # Adaptive step-at-a-time supervisor loop
 │   ├── queue_executor.py          # Simple sequential execution
@@ -1199,18 +1376,54 @@ execution/
     └── hitl_repo.py
 ```
 
+> **Phase 7b scope note (2026-05-17):** The structure above remains the target
+> architecture. The Phase 7b plan delivers the Execution module boundary,
+> compatibility shims, typed Delivery emits, and adapter-backed run/HITL
+> persistence. It intentionally defers the `execution/repository/` package and
+> the full lifecycle-command port (`create_run`, `start_run`, `complete_run`,
+> `fail_run`, `pause_run`, `cancel_run`, `emit_event`) to a follow-up phase.
+> Phase 7b also uses pragmatic adapter filenames such as
+> `execution/run_lifecycle.py`, `execution/run_queries.py`,
+> `execution/hitl/service.py`, `execution/hitl/detector.py`, and
+> `execution/dispatch/transports/direct.py`; the tree above is the target layout,
+> not a claim that those target paths are fully delivered by the Phase 7b plan.
+> Phase 7b still includes the existing watchdog-specific
+> `append_run_timeout_failure(room_id, run_id, stale_minutes=...)` adapter so
+> stale-run recovery keeps its current timeout event semantics.
+> Until repositories land, `ExecutionEngine.get_run()` and `get_runs_for_room()`
+> are served by an adapter-backed run read port that preserves the current
+> active-run response fields such as `trigger_message_id`.
+> The initial Phase 7b `HITLCoordinator` seam starts with the currently used
+> `request_input()` method plus `cancel_request()` for supervisor clarification
+> cleanup; query helpers such as `is_hitl_pending()` and `get_active_hitl()`
+> remain target-design methods until needed by runtime call sites. The Phase 7b
+> plan also keeps adapter-oriented filenames
+> (`execution/run_lifecycle.py`, `execution/hitl/service.py`,
+> `execution/hitl/detector.py`, `execution/dispatch/agent_dispatcher.py`, and
+> `execution/dispatch/transports/direct.py`) rather than fully matching this
+> target tree; layout normalization is follow-up cleanup.
+
 ### 5.2 Internal Protocol Seams
 
 ```python
 # execution/ports.py (module-private, NOT in common/)
+from enum import Enum
+from typing import Any
+
+ProcessingStatusLike = str | Enum
+
 
 class HITLCoordinator(Protocol):
     """Orchestrator → HITL: create/resolve/check interruptions."""
 
+    # Mirrors current HITLService positional order; callers should use keywords.
     async def request_input(
-        self, room_id: str, user_message_id: str, prompt: str, source: str, **kwargs
+        self, room_id: str, user_message_id: str, source: str, prompt: str, **kwargs
     ) -> HITLRequest | None: ...
 
+    async def cancel_request(self, request_id: str, room_id: str) -> None: ...
+
+    # Target query helpers, not initially required by Phase 7b runtime call sites.
     async def is_hitl_pending(self, room_id: str, user_message_id: str) -> bool: ...
     async def get_active_hitl(self, user_message_id: str) -> HITLRequest | None: ...
 
@@ -1224,7 +1437,7 @@ class AgentDispatchPort(Protocol):
 
 class RunLifecyclePort(Protocol):
     """Orchestrator → Run: state transitions.
-    
+
     INVARIANT (A1): record_processing_status() MUST be called before
     EventPublisher.emit(ProcessingStatusEvent(...)) — Delivery never calls back here.
     """
@@ -1237,11 +1450,29 @@ class RunLifecyclePort(Protocol):
     async def cancel_run(self, run_id: str) -> None: ...
     async def emit_event(self, run_id: str, event_type: str, payload: dict) -> None: ...
     async def record_processing_status(
-        self, room_id: str, status: str, message_id: str,
-        client_request_id: str | None = None, details: dict | None = None
+        self,
+        room_id: str,
+        status: ProcessingStatusLike,
+        message_id: str | None,
+        *,
+        client_request_id: str | None = None,
+        details: dict[str, Any] | None = None,
+        error_message: str | None = None,
     ) -> dict | None: ...
     async def heal_diverged_runs(self, limit: int = 500) -> int: ...
+    async def append_run_timeout_failure(
+        self, room_id: str, run_id: str, *, stale_minutes: int
+    ) -> dict | None: ...
 ```
+
+Phase 7b keeps `record_processing_status()` narrow and legacy-compatible:
+`message_id` may be `None` for send-only/compatibility paths, typed frontend
+details stay structured as `details: dict[str, Any] | None`, and legacy failure
+text flows through the separate `error_message` argument so implementers do not
+collapse lifecycle failure text back into typed frontend `details`.
+`ProcessingStatusLike` is the shared Phase 7b status input type for raw strings
+and enum-like values such as `SSEProcessingStatus`; Execution normalizes it to a
+plain string before calling lifecycle persistence or legacy delivery adapters.
 
 ### 5.3 What Does NOT Get a Protocol (Direct Import)
 
@@ -1251,7 +1482,12 @@ class RunLifecyclePort(Protocol):
 | `run/metrics.py` | Derived value computation |
 | `hitl/hitl_detector.py` | Pure heuristic (pattern matching) |
 | `state/task_state_manager.py` | In-memory bookkeeping, only used by orchestrator |
-| `dispatch/response_handler.py` | Stateless transformer, tightly coupled to dispatch |
+
+Phase 7b exception: `dispatch/response_handler.py` is stateful and performs DB,
+SSE, HITL continuation, and notification side effects. The Phase 7b plan
+introduces an `AgentResponseHandlerPort` seam for facade Hub-response handling
+and app-shell shared handler construction; it is not treated as a direct
+no-protocol import.
 
 ### 5.4 Processing Status Call Flow (A1 Resolution)
 
@@ -1262,14 +1498,31 @@ Orchestrator: agent response arrives
     │      → writes to runs + run_events collections
     │      → returns last_run_event_payload (for run_event SSE)
     │
-    ├─ 2. event_publisher.emit(ProcessingStatusEvent(room_id, message_id, "completed", ...))
+    ├─ 2. (if run_event_sse_enabled) event_publisher.emit(RunEventNotification(...))
     │      → Delivery translates to SSE frame → delivers to clients
     │
-    └─ 3. (if run_event_sse_enabled) event_publisher.emit(RunEventNotification(...))
+    └─ 3. event_publisher.emit(ProcessingStatusEvent(room_id, message_id, "completed", ...))
            → Delivery translates to SSE frame → delivers to clients
 
-Delivery NEVER calls run_command_handler. It is a pure pipe.
+Phase 6 uses the legacy `sse_manager.broadcast_to_room(..., "run_event", ...)` path for
+step 2 until Phase 7b migrates callers to typed `RunEventNotification`. Delivery NEVER calls
+run_command_handler. It is a pure pipe.
 ```
+
+Phase 7b preserves the Phase 7a / legacy frontend-visible ordering:
+`record_processing_status()` → optional `RunEventNotification` →
+`ProcessingStatusEvent`. Changing this order would require a separate
+frontend-coordinated migration. Processing statuses not accepted by
+`ProcessingStatusEvent` (`awaiting_input`, `rejected`, `rate_limited`, `error`)
+must use a documented Delivery compatibility frame until the DTO/translator is
+explicitly widened.
+Phase 7b reaches that compatibility frame through an explicit Execution-local
+port backed by the bound Phase 6 C3 adapter; `DeliveryDeps` does not expose
+`DeliveryFacade.compat`.
+Supported statuses may also remain on that compatibility frame when the current
+frontend payload uses legacy raw string `details`; Phase 7b must not silently
+convert those strings into structured `dict` details without a coordinated DTO
+and frontend migration.
 
 ### 5.5 In-Flight Task Tracking (fix 2.10)
 
@@ -1279,28 +1532,40 @@ Delivery NEVER calls run_command_handler. It is a pure pipe.
 class ExecutionFacade:
     def __init__(self, ...):
         self._inflight: set[asyncio.Task] = set()
-        self._owned_hub_tasks: dict[str, str] = {}  # task_id → run_id (for hub response routing)
 
-    def _spawn_orchestration(self, coro: Coroutine, hub_task_id: str | None = None) -> asyncio.Task:
+    def _spawn_orchestration(self, coro: Coroutine) -> asyncio.Task:
         """Spawn a tracked background orchestration task."""
         task = traced_create_task(coro, name=f"orchestrate-{uuid4().hex[:8]}")
         self._inflight.add(task)
         task.add_done_callback(self._inflight.discard)
-        if hub_task_id:
-            self._owned_hub_tasks[hub_task_id] = task.get_name()
-            task.add_done_callback(lambda _: self._owned_hub_tasks.pop(hub_task_id, None))
         return task
 
     async def cancel_inflight_tasks(self) -> int:
         """Cancel all in-flight orchestration tasks. Called during graceful shutdown."""
-        count = len(self._inflight)
-        for t in self._inflight:
+        tasks = set(self._inflight)
+        count = len(tasks)
+        for t in tasks:
             t.cancel()
-        await asyncio.gather(*self._inflight, return_exceptions=True)
-        # Each cancelled run transitions to RunState.CANCELED via orchestrator's
-        # CancelledError handler in supervisor_executor/queue_executor
+        await asyncio.gather(*tasks, return_exceptions=True)
+        # Phase 7b implementation must add and test orchestrator CancelledError
+        # handlers so each cancelled run transitions to RunState.CANCELED before
+        # shutdown cancellation is considered complete.
         return count
 ```
+
+Phase 8 Hub response ownership target sketch:
+
+```python
+class HubResponseOwner:
+    def __init__(self) -> None:
+        self._owned_hub_tasks: dict[str, str] = {}  # task_id -> run_id / worker owner
+
+    def track_hub_task(self, task_id: str, run_id: str) -> None: ...
+    def owns_hub_task(self, task_id: str) -> bool: ...
+```
+
+Phase 7b registers only the Hub response handler seam; it does not implement
+ownership maps, idempotency, duplicate detection, or durable replay.
 
 All background orchestrations (supervisor loop, queue execution, debate dispatch) MUST be
 created via `_spawn_orchestration`, never bare `asyncio.create_task`.
@@ -1327,7 +1592,9 @@ async def lifespan(app: FastAPI):
     await container.dal.index_registry.ensure_all()
 
     # === Phase 1.6: Heal diverged runs (A5 fix) ===
-    # MUST happen after indexes, BEFORE serving traffic.
+    # MUST happen after indexes and after Execution deps are constructed,
+    # BEFORE background services or serving traffic. Do not silently skip when
+    # Execution wiring is expected to exist.
     # Event sourcing integrity: if event committed but head update lost during crash,
     # reconstruct run head from events.
     healed = await container.execution.execution_engine.heal_diverged_runs(limit=500)
@@ -1359,11 +1626,13 @@ async def lifespan(app: FastAPI):
 
     await scheduler.start()
 
-    # === Phase 2.5: SSE infrastructure ===
-    # Cancellation watcher: runs in EVERY worker (A6), NOT leader-elected
-    await container.delivery.sse_transport.start_cancellation_watcher()
-    # Event broker (Redis Pub/Sub): runs in every worker
-    await container.delivery.event_publisher.start()
+    # === Phase 1.8: Delivery startup ===
+    # DeliveryFacade.start() is the only app-shell Delivery startup API. It starts
+    # cancellation watcher readiness first, then Redis Pub/Sub subscriptions/health,
+    # then EventPublisher's handler lifecycle hook.
+    await delivery_facade.start()
+    sse_manager.bind_facade(delivery_facade)  # temporary C3 adapter binding
+    app.state.delivery_facade = delivery_facade
 
     # === Phase 3: HubRuntimeBridge background ===
     await container.hub.hub_management.start_heartbeat_monitor()
@@ -1372,13 +1641,15 @@ async def lifespan(app: FastAPI):
     yield
 
     # === Graceful shutdown (N10: cancel in-flight orchestration) ===
-    container.delivery.sse_transport.set_draining(True)
-    # Cancel tracked background orchestration tasks; each cancelled run → RunState.CANCELED
+    # Cancel tracked background orchestration tasks before Delivery/SSE drain so
+    # cancellation lifecycle/status frames can still be emitted.
     await container.execution.execution_engine.cancel_inflight_tasks()
-    await asyncio.sleep(settings.shutdown_drain_seconds)
+    sse_manager.set_draining(True)
+    await asyncio.sleep(delivery_config.shutdown_drain_seconds)
     await scheduler.stop()
     await container.hub.hub_management.stop()
-    await container.delivery.event_publisher.stop()
+    await delivery_facade.stop()  # closes SSE connections, unsubscribes rooms, stops bus/watcher
+    sse_manager.unbind_facade()
     await container.dal.mongo.close()
     # Redis pools are Optional (None in single-worker no-redis mode)
     if container.dal.redis_kv:
@@ -1388,6 +1659,19 @@ async def lifespan(app: FastAPI):
     if container.dal.redis_streams:
         await container.dal.redis_streams.close()
 ```
+
+Phase 6 implementation detail: the current repository does not yet have a single
+`DALContainer`; `container.py` exposes focused helpers instead:
+`create_mongo_dal()`, `create_vector_dal()`, `create_delivery_config()`,
+`create_delivery_redis_clients()`, `create_delivery_cancellation_collection()`,
+`create_delivery_facade()`, and `create_delivery_deps()`. `main.py` calls these helpers and
+does not import concrete `delivery.*`, `dal.*`, or legacy SSE `RedisBroker` implementations.
+
+Health and multi-worker safety now use explicit fields:
+`delivery_pubsub_connected`, `delivery_kv_connected`, `legacy_redis_service_connected`,
+`relay_streams_available`, `change_stream_connected`, and `redis_expected`. Deprecated
+aliases (`broker_connected`, `broker_expected`, `redis_service_connected`) remain in
+`/health` for backend compatibility.
 
 ### 6.2 Sub-Container Design
 
@@ -1554,19 +1838,42 @@ class EventPublisherImpl:
         try:
             await self._deliver_to_sse(event)
         except Exception as exc:
-            logger.warning("sse_delivery_failed", event_type=event.event_type, error=str(exc))
+            logger.warning(
+                "sse_delivery_failed: event_type=%s error=%s",
+                event.event_type,
+                exc,
+            )
         # 2. Fan-out to other workers (Redis Pub/Sub) — best-effort
         try:
             await self._fanout_cross_instance(event)
         except Exception as exc:
-            logger.error("fanout_failed", event_type=event.event_type, error=str(exc))
+            logger.error(
+                "fanout_failed: event_type=%s error=%s",
+                event.event_type,
+                exc,
+            )
             await self._dead_letter(event, exc)
-        # 3. Dispatch to internal handlers — best-effort
+
+    async def emit_internal(self, event: InternalEvent) -> None:
+        """Dispatch module-to-module events only; no frontend SSE delivery."""
+        try:
+            await self._fanout_internal_cross_instance(event)
+        except Exception as exc:
+            logger.error(
+                "internal_fanout_failed: event_type=%s error=%s",
+                event.event_type,
+                exc,
+            )
+            await self._dead_letter(event, exc)
         for handler in self._internal_handlers.get(event.event_type, []):
             try:
                 await handler(event)
             except Exception as exc:
-                logger.error("internal_handler_failed", event_type=event.event_type, error=str(exc))
+                logger.error(
+                    "internal_handler_failed: event_type=%s error=%s",
+                    event.event_type,
+                    exc,
+                )
                 await self._dead_letter(event, exc)
 ```
 
@@ -1712,10 +2019,10 @@ Rules:
 
 ### 8.2 Migration Phases (C1 fix: realistic timeline)
 
-> **Total estimated: 18-22 weeks** (vs original 9 weeks)  
+> **Total estimated: 18-22 weeks** (vs original 9 weeks)
 > Strategy: "Facade wrap first, internal rewrite second" — each phase has a wrap sub-phase (fast, low risk) and a rewrite sub-phase (slower, needs golden tests).
 >
-> **Repository implementation:** Domain-scoped Repository Protocols (§4.9.2) are implemented as part of each business module phase. Phase 3 includes `AgentRepository` impl in `agent/repository/`; Phase 4 includes `RoomRepository` + `MessageRepository`; Phase 5 includes `MemoryRepository`; Phase 6+7 includes `RunRepository` + `RunEventRepository` + `HITLRepository`; Phase 8 includes `HubRepository`.
+> **Repository implementation:** Domain-scoped Repository Protocols (§4.9.2) are implemented as part of each business module phase. Phase 3 includes `AgentRepository` impl in `agent/repository/`; Phase 4 includes `RoomRepository` + `MessageRepository`; Phase 5 includes `MemoryRepository`; Phase 6+7 defines the target `RunRepository` + `RunEventRepository` + `HITLRepository`, but the current Phase 7b plan defers those implementations and uses adapter-backed persistence; Phase 8 includes `HubRepository`.
 
 #### Phase 0a: Common Foundation (1 week)
 
@@ -1811,15 +2118,30 @@ Rules:
 
 #### Phase 6+7: Delivery + Execution (4 weeks, partially parallel — N9 fix)
 
-> **Why interleaved:** Delivery cannot be pure until callers stop using `send_processing_status()` 
-> (which embeds `record_processing_status`). Callers are in Execution. These phases must overlap:
+> **Why interleaved:** Historically, Delivery could not be pure until Execution
+> callers stopped relying on the old `send_processing_status()` record-and-send
+> coupling. Phase 7a separated lifecycle recording from SSE delivery; Phase 7b
+> assumes the post-Phase-6/7a prerequisite where SSE no longer calls
+> `run_command_handler`.
+>
+> **Current status (2026-05-17):** Phase 7a is complete. The remaining Phase 7 work is
+> Phase 7b, the Execution module rewrite, and is planned in
+> `docs/superpowers/plans/2026-05-17-phase-7-execution-module.md`. Phase 7b must start
+> from a branch where Phase 6 Delivery extraction has landed, because the remaining
+> Execution migration emits typed `RunEventNotification` / `ProcessingStatusEvent`
+> events for supported statuses and documented compatibility frames for unsupported
+> legacy statuses, preserving the Phase 7a wire order.
+> Phase 7b does not fully deliver the target `execution/repository/` package or
+> full lifecycle-command port; those remain follow-up target-architecture work.
 
 **Phase 7a (week 1-2): Execution caller migration — "record-then-emit"**
 - Modify all Execution callers to explicitly call `record_processing_status()` THEN `sse_manager.send_*()` (separating the record from the send)
-- This works against the OLD sse_manager (which now has a redundant no-op record inside send)
-- Golden tests written for sendMessage, hitl/resolve against OLD implementation
+- `RunLifecycleService.record_processing_status()` returns the optional run-event payload so callers can preserve legacy `run_event` SSE ordering before processing-status delivery.
+- Phase 7a golden and manifest tests prove `record_processing_status()` -> legacy `run_event` broadcast -> processing-status delivery ordering.
+- This works against the post-Phase-7a SSE manager, which is delivery/dedup only;
+  lifecycle writes live in `services/run_command_handler.py`.
 
-**Phase 6 (week 2-3): Delivery module extraction**
+**Phase 6 (week 2-3): Delivery module extraction — implemented on branch `phase-6-delivery-module`**
 - `delivery/facade.py` implementing EventPublisher, SSETransport
 - DomainEvent → SSE frame translator
 - Cross-instance pub/sub (Redis)
@@ -1827,15 +2149,20 @@ Rules:
 - Deduplication (TTLCache per terminal status)
 - `register_internal_handler()` + `emit_internal()` for internal events
 - **No business logic** — verify by asserting no business module imports in delivery/
-- At this point, old `sse_manager.send_processing_status()` record call is dead code (callers already record separately)
+- `services/sse_services.py` is a fail-fast C3 adapter bound to `DeliveryFacade` during startup.
+- `main.py` constructs Delivery through `container.py` helpers and does not import concrete `delivery.*`, concrete `dal.*`, or legacy SSE `RedisBroker`.
+- Old `sse_manager.send_processing_status()` is transport-only: no `record_processing_status()`, no `run_event_sse_enabled()`, no DB fallback.
+- At this point, the historical record-inside-send path is gone: callers already
+  record separately and the C3 SSE adapter is delivery-only.
 
 **Phase 7b (week 3-4): Execution internal rewrite**
 - `execution/facade.py` with full orchestrator, HITL, dispatch
 - Internal Protocol seams: HITLCoordinator, AgentDispatchPort, RunLifecyclePort
-- Callers now emit via new `EventPublisher.emit(ProcessingStatusEvent(...))`
+- Callers now emit via the Execution helper: optional `RunEventNotification`, then `ProcessingStatusEvent` or a documented compatibility frame for unsupported legacy statuses
 - `_heal_diverged_runs_on_startup` preserved
 - Room-level locking preserved
 - Shadow mode on high-risk endpoints (sendMessage, hitl/resolve)
+- Detailed task breakdown: `docs/superpowers/plans/2026-05-17-phase-7-execution-module.md`
 
 **Gate:** Full message flow end-to-end. HITL pause/resume. Shadow mode zero drift. No `run_command_handler` calls from Delivery.
 
@@ -1868,7 +2195,7 @@ During transition, old singletons delegate to new facades:
 
 class AgentService:
     """Legacy wrapper — delegates to new AgentFacade.
-    
+
     NOTE (C3 fix): This is NOT an import-time singleton anymore.
     Container calls bind_facade() during startup.
     Before bind_facade(): raises RuntimeError (fail-fast, not silent legacy path).
@@ -1919,17 +2246,17 @@ class AgentService:
 | Memory search | `services/memory_search_service.py` | Context & Memory | `service/memory_search.py` |
 | User memories | `services/memory_service.py` | Context & Memory | `service/user_memory.py` |
 | **Execution** | | | |
-| Message dispatch | `modules/RoomMessageCenter.py` | Execution | `orchestrator/` + `dispatch/` |
-| Supervisor loop | `modules/SupervisorExecutor.py` | Execution | `orchestrator/supervisor_executor.py` |
-| Debate mode | `modules/debate_dispatcher.py` | Execution | `orchestrator/debate_dispatcher.py` |
-| Queue execution | `modules/QueueExecutor.py` | Execution | `orchestrator/queue_executor.py` |
-| Run lifecycle | `services/run_lifecycle_service.py` | Execution | `run/lifecycle.py` |
-| Run events | `services/run_command_handler.py` | Execution | `run/command_handler.py` |
-| record_processing_status | `services/sse_services.py` (WRONG!) | Execution | `run/command_handler.py` (MOVED!) |
-| HITL requests | `services/hitl_service.py` | Execution | `hitl/hitl_service.py` |
+| Message dispatch | `modules/RoomMessageCenter.py` | Execution | `orchestration/` + `dispatch/` |
+| Supervisor loop | `modules/SupervisorExecutor.py` | Execution | `orchestration/supervisor_executor.py` |
+| Debate mode | `modules/debate_dispatcher.py` | Execution | `orchestration/debate_dispatcher.py` |
+| Queue execution | `modules/QueueExecutor.py` | Execution | `orchestration/queue_executor.py` |
+| Run lifecycle | `services/run_lifecycle_service.py` | Execution | `run_lifecycle.py` in Phase 7b; target `run/lifecycle.py` |
+| Run events | `services/run_command_handler.py` | Execution | `run_lifecycle.py` adapter in Phase 7b; target `run/command_handler.py` |
+| record_processing_status | `services/run_command_handler.py` | Execution | `events.py` + `run_lifecycle.py` adapter in Phase 7b |
+| HITL requests | `services/hitl_service.py` | Execution | `hitl/service.py` in Phase 7b; target `hitl/hitl_service.py` |
 | Room-level locking | `modules/RoomMessageCenter.py` | Execution | `state/locking.py` |
 | heal_diverged_runs_on_startup | `main.py` | Execution | `run/lifecycle.py` (exposed via Protocol) |
-| A2A long-running tasks | `api/a2a_tasks.py` | Execution (API) | `api/a2a_task_routes.py` |
+| A2A long-running tasks | `api/a2a_tasks.py` | Execution (API) | Phase 7b deferred; target `api/a2a_task_routes.py` |
 | Webhooks | `api/webhooks.py` | Execution (API) | `api/webhook_routes.py` |
 | **Legacy Workflow** (DECOMMISSIONED — see Phase 0d) | | | |
 | Task decomposition / assignment / execution / CRUD | `modules/WorkflowCenter.py`, `services/task_service.py`, `api/orchestration_center.py`, `api/task.py` | DELETED | Endpoints removed; collections dropped in Phase 8 cleanup |
@@ -1983,21 +2310,23 @@ class AgentService:
 
 1. **No module imports another module's internal code** — only Protocols and DTOs from `common/`
 2. **`container.py` is the ONLY place that imports concrete implementations** across module boundaries
-3. **Every cross-module method is async** — no blocking I/O
+3. **Every cross-module method is async** — no blocking I/O, except `SSETransport.connect()` which synchronously returns an async iterator
 4. **DTOs are immutable** (frozen Pydantic models)
-5. **EventPublisher.emit() is fire-and-forget** — emitter does not wait for subscriber
+5. **EventPublisher.emit() is best-effort and awaited; `emit_internal()` is fire-and-forget for subscribers** — delivery/fan-out steps are awaited in call order, internal handlers do not block emitters, and failures are logged/dead-lettered without propagating to the emitter
 6. **Business side effects MUST complete before EventPublisher.emit()** — Delivery never calls back into business modules (A1)
 7. **Room execution lock must be held** before supervisor/queue execution starts
 8. **Settings are read-only after container creation**
 9. **Background jobs run under LeaderElector** — exactly once per job
 10. **Cancellation watcher runs in EVERY worker** — not leader-elected (A6)
-11. **a2a-sdk types never appear outside `a2a_adapter/`**
+11. **a2a-sdk types are target-state confined to `a2a_adapter/`** — Phase 7b
+    temporarily allowlists exact moved Execution dispatch/orchestration files;
+    new HITL/cancellation code must not use A2A SDK types.
 12. **LLM provider SDK types never appear outside `llm_gateway/`**
 13. **Room writes canonical messages; Context & Memory projects derived artifacts**
 14. **HubRuntimeBridge never writes to agents_collection directly** — calls AgentRegistryWriter
 15. **Execution internal Protocols** (HITLCoordinator, AgentDispatchPort, RunLifecyclePort) defined in `execution/ports.py`, not `common/`
 16. **Run head must be healed from events on startup** before serving traffic (A5)
-17. **Graceful shutdown must set_draining(True) and sleep shutdown_drain_seconds** before closing connections
+17. **Graceful shutdown cancels in-flight Execution tasks before `set_draining(True)`, then sleeps `delivery_config.shutdown_drain_seconds` before `DeliveryFacade.stop()` closes connections**
 18. **Startup failure must NOT set_draining** — prevents singleton state poisoning on partial init
 19. **Discovery API (X-API-Key) does NOT filter by visibility** — any indexed agent discoverable (B3)
 21. **Graceful shutdown must cancel in-flight background orchestration tasks** — `asyncio.create_task`-spawned orchestrations must be tracked and cancelled during shutdown; cancelled runs transition to `RunState.CANCELED` (N10)
@@ -2053,7 +2382,12 @@ class UpstreamError(HybroError):
 | **Adapter** (A2A, LLM) | SDK exceptions, HTTP errors | Wraps as `UpstreamError` or `TransientError` (timeout) |
 | **Business Module** | `HybroError` subtypes from dependencies | Raises its own `HybroError` subtypes; NEVER catches and swallows silently |
 | **API Layer** | All `HybroError` subtypes | Maps to HTTP response via `error_handler` middleware |
-| **EventPublisher** | Handler exceptions | Logs + emits to dead-letter; does NOT propagate to emitter (fire-and-forget) |
+| **EventPublisher** | Handler exceptions | Logs + emits to dead-letter; does NOT propagate to emitter |
+
+Delivery dead-lettering publishes structured envelopes to the configured Redis dead-letter
+channel when Pub/Sub is available; the in-memory deque is only fallback/test aid. Local SSE
+connection failures are warning-only and do not suppress Redis fan-out. Translator, fan-out,
+and internal handler failures never propagate to callers.
 
 ### 11.3 API Layer Error Mapping
 
@@ -2082,7 +2416,7 @@ async def hybro_error_handler(request: Request, exc: HybroError) -> JSONResponse
 
 - Protocol methods document which `HybroError` subtypes they may raise in docstrings
 - A module MUST NOT catch errors from another module's Protocol to silently succeed — callers propagate or explicitly translate to their own error type
-- `EventPublisher.emit()` NEVER raises to callers — internal failures go to dead-letter topic + structured log
+- `EventPublisher.emit()` and `emit_internal()` NEVER raise to callers — delivery/internal failures go to dead-letter topic + structured log
 - Background jobs catch `TransientError` for retry, log `HybroError` as warning, and propagate unknown exceptions as fatal
 
 ---
@@ -2112,52 +2446,95 @@ def configure_logging(settings: "Settings"):
 - Log levels: `DEBUG` for internal state transitions, `INFO` for cross-module calls, `WARNING` for recoverable errors, `ERROR` for unrecoverable
 - No string formatting in hot paths — use structlog lazy binding
 
-### 12.2 Distributed Tracing (OpenTelemetry)
+### 12.2 Distributed Trace Context
 
 ```python
 # common/observability/tracing.py
 
-from opentelemetry import trace
+import asyncio
+import contextvars
+from collections.abc import Awaitable
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextlib import nullcontext
+from typing import Any, ContextManager, Protocol, runtime_checkable
 
-tracer = trace.get_tracer("hybro-multi-agents")
+
+_trace_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "hybro_trace_id",
+    default=None,
+)
+
+
+@runtime_checkable
+class TracingProvider(Protocol):
+    def start_span(
+        self,
+        name: str,
+        attributes: dict[str, str] | None = None,
+    ) -> ContextManager[None]: ...
+
+
+class NoopTracingProvider:
+    def start_span(
+        self,
+        name: str,
+        attributes: dict[str, str] | None = None,
+    ) -> ContextManager[None]:
+        return nullcontext()
+
+
+def traced_create_task(
+    coro: Awaitable[Any],
+    *,
+    name: str | None = None,
+) -> asyncio.Task:
+    context = contextvars.copy_context()
+    return asyncio.create_task(coro, name=name, context=context)
+
+
+def get_current_trace_id() -> str | None:
+    return _trace_id.get()
+
+
+@contextmanager
+def trace_id_context(trace_id: str | None) -> Iterator[None]:
+    token = _trace_id.set(trace_id)
+    try:
+        yield
+    finally:
+        _trace_id.reset(token)
 ```
+
+Phase 7b keeps tracing helper support dependency-free. If OpenTelemetry is added
+in a later phase, it should be integrated behind `traced_create_task()` and the
+facade tracing hooks without changing facade call sites.
 
 **Span hierarchy per request:**
 
 ```
 [API] POST /roomCenter/sendMessage
-  └── [Execution] execute()
-        ├── [Room] save_user_message()
-        ├── [Execution] create_run()
-        ├── [Execution] orchestrate() (background — linked span)
-        │     ├── [ContextMemory] assemble_context()
-        │     ├── [A2A] send_message() / [Hub] send_to_hub()
-        │     ├── [Execution] record_processing_status()
-        │     └── [Delivery] emit(ProcessingStatusEvent)
-        └── [API] return ExecutionAck
+  ├── [Execution] execute()
+  │     ├── [Room] save_user_message()
+  │     └── [API] return ExecutionAck
+  └── [FastAPI BackgroundTasks] start_orchestration(request, ack)
+        └── [Execution] start_orchestration()
+              └── [Execution] orchestrate() (tracked background — linked span)
+                    ├── [Execution] create/update run lifecycle as today
+                    ├── [ContextMemory] assemble_context()
+                    ├── [A2A] send_message() / [Hub] send_to_hub()
+                    ├── [Execution] record_processing_status()
+                    ├── [Delivery] emit(RunEventNotification) (optional)
+                    └── [Delivery] emit(ProcessingStatusEvent)
 ```
 
 **Rules:**
 - Each module facade method creates a span with `module.<method>` name
 - Cross-module Protocol calls propagate trace context automatically (in-process)
-- Background tasks MUST use `traced_create_task()` helper (OTel context does NOT auto-propagate across `asyncio.create_task`):
-  ```python
-  # common/observability/tracing.py
-  def traced_create_task(coro, *, name: str | None = None) -> asyncio.Task:
-      """Create asyncio task with OTel context propagation + link to parent span."""
-      ctx = context.get_current()
-      parent_span = trace.get_current_span()
-      async def _wrapped():
-          token = context.attach(ctx)
-          try:
-              with tracer.start_as_current_span(name or coro.__name__, links=[Link(parent_span.get_span_context())]):
-                  return await coro
-          finally:
-              context.detach(token)
-      return asyncio.create_task(_wrapped(), name=name)
-  ```
-- **Invariant:** All `asyncio.create_task` calls within facades MUST use `traced_create_task()` — bare `create_task` produces orphan spans
-- EventPublisher includes `trace_id` in event payload for cross-worker correlation
+- Background tasks MUST use `traced_create_task()` helper so context propagation and task naming remain centralized.
+- Phase 6 intentionally implements contextvars/task-name propagation only; it does not import OpenTelemetry or synthesize trace ids. OpenTelemetry span links remain a future enhancement.
+- **Invariant:** All `asyncio.create_task` calls within Delivery and Execution facades MUST use the injected task runner / `traced_create_task()`; bare task creation bypasses the facade tracing seam and is rejected by tests where enforceable.
+- EventPublisher includes explicit `trace_id` values in typed SSE frame data and Redis envelopes for cross-worker correlation.
 - DAL spans: `dal.mongo.<collection>.<operation>`, `dal.redis.<pool>.<command>`
 
 ### 12.3 Key Metrics
@@ -2245,6 +2622,10 @@ type = "forbidden"
 source_modules = ["agent", "room", "context_memory", "execution", "delivery", "platform", "hub_runtime_bridge", "jobs", "api"]
 forbidden_modules = ["openai", "google.genai", "aioboto3"]
 ```
+
+The A2A contract above is the target-state contract. Phase 7b uses an exact AST
+allowlist for moved Execution files that still carry A2A protocol translation
+during extraction; new HITL/cancellation code must not use that allowlist.
 
 **AST scan (CI) — replaces the no-op import-linter contract (fix 2.8):**
 ```python
@@ -2360,9 +2741,9 @@ async def test_send_message_response_contract(client, seeded_room):
 | 16 | Config unification in Phase 0b | Silent breakage risk from env var mismatch | Defer (risk accumulates) |
 | 17 | Domain-scoped Repository Protocols | Prevent cross-module raw query coupling; explicit schema ownership | Single generic MongoDAL (god interface) |
 | 18 | HybroError hierarchy for cross-module errors | Consistent error propagation without catching/re-raising SDK exceptions | Untyped exceptions (no contract) |
-| 19 | OpenTelemetry spans per facade method | Cross-module tracing impossible to retrofit; need upfront span design | Add later (orphan spans, lost context) |
+| 19 | Trace context seam per facade method | Cross-module tracing is hard to retrofit; Phase 7b keeps no-dependency hooks that OpenTelemetry can wrap later | Ad hoc tracing later (lost context) |
 | 20 | Hub event split: frontend HubAgentEvent + internal HubAgentResponseInternal | Different payloads for different consumers; breaks dual-purpose coupling | Single event (payload mismatch) |
-| 21 | `traced_create_task()` mandatory for background orchestration | OTel context doesn't auto-propagate; bare create_task → orphan spans | Manual context passing (error-prone) |
+| 21 | `traced_create_task()` mandatory for background orchestration | Centralizes context propagation and task naming without adding Phase 7b dependencies | Manual context passing (error-prone) |
 
 ---
 
@@ -2615,7 +2996,7 @@ Current `_enrich_hub_fields` joins `agents × hubs` to set `hub_owner_id` and `i
 | 2026-05-05 | Phase 6+7 interleaved (record-then-emit first) | Cannot extract pure Delivery until callers stop embedding record (N9) |
 | 2026-05-05 | Shutdown cancels in-flight orchestration; heal fallback documented | Invariants 21+22 (N10) |
 | 2026-05-05 | Added §12 Error Handling: HybroError hierarchy + propagation rules | Protocol implementors need consistent error contract |
-| 2026-05-05 | Added §13 Observability: structlog + OTel spans + metrics table | Cross-module tracing is impossible to retrofit without upfront span design |
+| 2026-05-05 | Added §13 Observability: structlog + trace context seam + metrics table | Cross-module tracing is impossible to retrofit without upfront span design |
 | 2026-05-05 | MongoDAL split into domain-scoped Repository Protocols (§4.9.2) | Prevents cross-module raw query coupling; explicit schema ownership |
 | 2026-05-05 | Legacy Workflow DELETED (not wrapped) | Dead code; zero value in wrapping; saves 1.5 weeks + maintenance |
 | 2026-05-05 | HubAgentEvent split: frontend (status) + HubAgentResponseInternal (orchestration) | Different payloads for different consumers; fixes dual-purpose conflict (fix 2.1) |
@@ -2625,8 +3006,12 @@ Current `_enrich_hub_fields` joins `agents × hubs` to set `hub_owner_id` and `i
 | 2026-05-05 | ping() added to all Redis + Vector Protocols | Health check requires real connectivity validation (fix 2.5/2.6) |
 | 2026-05-05 | Repository Protocols return dict (intentional) | Type safety at facade boundary; avoids double-validation cost (fix 2.7) |
 | 2026-05-05 | No-op import-linter os.getenv contract removed | Contract was always-pass; only AST scan enforces (fix 2.8) |
-| 2026-05-05 | traced_create_task() mandatory helper | OTel context doesn't auto-propagate across asyncio.create_task (fix 2.9) |
+| 2026-05-05 | traced_create_task() mandatory helper | Centralized background task context propagation without requiring new Phase 7b dependencies (fix 2.9) |
 | 2026-05-05 | ExecutionFacade._inflight set + _spawn_orchestration() | In-flight task tracking for graceful shutdown (fix 2.10) |
 | 2026-05-05 | Repository impl noted per migration phase | Prevents ambiguity about when Repositories are built (fix 2.11) |
 | 2026-05-05 | §15 Key Design Decisions expanded to 21 entries | Was stale at 16; now includes all major decisions (fix 2.12) |
 | 2026-05-05 | Added §19 Potential Future Protocol Additions | Documents hardest-to-retrofit seams; validates module boundaries accommodate them |
+| 2026-05-17 | Phase 6 Delivery extracted behind C3 `sse_manager` adapter | Delivery owns SSE transport, Redis fan-out, cancellation, dedup, translation, and internal event dispatch; app shell binds facade during startup |
+| 2026-05-17 | Phase 6 tracing uses contextvars/task names, not OpenTelemetry links | Implemented helper preserves explicit trace ids without synthesizing ids; OTel span links remain future work |
+| 2026-05-17 | Legacy raw SSE frames isolated behind `DeliveryFacade.compat.emit_legacy_frame()` | Keeps unsupported legacy event shapes working until Phase 7b migrates callers to typed `DeliveryEvent` DTOs |
+| 2026-05-17 | Main app shell no longer owns concrete DAL or legacy SSE broker construction | `container.py` owns concrete DAL/Delivery wiring; health uses explicit Delivery KV/PubSub and legacy RedisService fields |

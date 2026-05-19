@@ -7,6 +7,7 @@ from common.protocols import (
     DistributedLock,
     IndexRegistry,
     LeaderElector,
+    MongoChangeStream,
     MongoCollection,
     MongoDAL,
     ObjectStorageDAL,
@@ -44,6 +45,16 @@ def test_dal_implementations_satisfy_runtime_protocols():
     assert isinstance(DistributedLockImpl(client=MagicMock()), DistributedLock)
     assert isinstance(LeaderElectorImpl(client=MagicMock(), instance_id="i1"), LeaderElector)
     assert isinstance(IndexRegistryImpl(mongo=MagicMock()), IndexRegistry)
+
+
+def test_mongo_change_stream_protocol_is_exported():
+    import common.protocols as protocols
+    from common.protocols import dal_protocols
+
+    assert protocols.MongoChangeStream is MongoChangeStream
+    assert dal_protocols.MongoChangeStream is MongoChangeStream
+    assert "MongoChangeStream" in protocols.__all__
+    assert "MongoChangeStream" in dal_protocols.__all__
 
 
 def test_dal_top_level_exports_are_explicit():

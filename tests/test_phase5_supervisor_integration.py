@@ -1076,9 +1076,9 @@ class TestHandleV2RunResultUnifiedSummary:
             mock_sse.send_processing_status = AsyncMock()
             mock_sse.remove_token = MagicMock()
 
-            from modules.RoomMessageCenter import RoomMessageCenter
+            from execution.orchestration.factory import create_room_message_center
 
-            rmc = RoomMessageCenter()
+            rmc = create_room_message_center()
             rmc._emit_unified_summary = AsyncMock()
             rmc._trigger_compaction_safe = AsyncMock()
             yield rmc

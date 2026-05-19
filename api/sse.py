@@ -5,16 +5,26 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from fastapi.responses import StreamingResponse
 
 from common.auth import ClerkUser, get_current_user, get_current_user_with_query_token
+from common.protocols import ExecutionEngine
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from database.mongodb import mongodb
-from services.a2a_constants import SSEProcessingStatus
 from services.database_service import db_service
-from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
 from services.sse_services import sse_manager
 
 logger = get_logger(__name__)
 router = APIRouter()
+execution_engine: ExecutionEngine | None = None
+
+
+def bind_execution_deps(deps) -> None:
+    global execution_engine
+    execution_engine = deps.execution_engine
+
+
+def _require_execution_engine() -> ExecutionEngine:
+    if execution_engine is None:
+        raise RuntimeError("ExecutionDeps have not been bound")
+    return execution_engine
 
 
 @router.get("/sse/room/{room_id}/stream")
@@ -133,90 +143,17 @@ async def cancel_message(
                 detail="You do not have permission to cancel this message",
             )
 
-        # Cancel locally + broadcast to other instances via broker
-        await sse_manager.cancel_message_and_broadcast(message_id)
-
-        # Cancel any pending HITL requests associated with this message
-        from services.hitl_service import hitl_service
-        await hitl_service.cancel_requests_for_message(message_id)
-
-        # Persist to MongoDB (will trigger change stream for other instances)
-        success = await mongodb.cancel_message(message_id, user.user_id)
-
+        success = await _require_execution_engine().cancel(
+            room_id=message.room_id,
+            message_id=message_id,
+            requested_by_user_id=user.user_id,
+        )
         if not success:
-            sse_manager.clear_cancellation(message_id)
             raise HTTPException(
                 status_code=500, detail="Failed to persist cancellation to database"
             )
 
         logger.info(f"Message {message_id} cancelled by user {user.user_id}")
-
-        # Clear room processing status for the user message (must use user message ID)
-        await record_and_maybe_broadcast_run_event(
-            message.room_id,
-            SSEProcessingStatus.CANCELED,
-            message_id,
-            sse=sse_manager,
-        )
-        await sse_manager.send_processing_status(
-            message.room_id, SSEProcessingStatus.CANCELED, message_id
-        )
-
-        # Phase 7a: root cancellation lifecycle/frontend clear is complete above.
-        # Paused-agent DB task-state updates, task notifications, and remote
-        # cancels are separate best-effort cleanup; failures here must not
-        # block the root cancellation result.
-        try:
-            from a2a.types import TaskState
-            from services.a2a_service import a2a_service
-            from services.task_notification_service import notify_task_update
-
-            agent_msgs = await db_service.get_room_agent_messages_by_related_message_id(
-                message_id
-            )
-            for agent_msg in agent_msgs:
-                if not agent_msg.has_task_tracking:
-                    continue
-                # Update task state in DB to canceled (terminal)
-                await db_service.update_task_state_on_message(
-                    agent_msg.message_id,
-                    TaskState.canceled.value,
-                    message_text="Task was canceled",
-                )
-                # Notify frontend via SSE (no need for send_processing_status
-                # since we already cleared it above with the user message ID)
-                await notify_task_update(
-                    message_id=agent_msg.message_id,
-                    state=TaskState.canceled,
-                    room_id=agent_msg.room_id,
-                    user_id=agent_msg.user_id or "",
-                )
-                # Best-effort: tell remote agent to stop processing
-                if agent_msg.agent_url:
-                    task = (
-                        agent_msg.message_content.message_task
-                        if agent_msg.message_content
-                        else None
-                    )
-                    if task and task.id:
-                        try:
-                            agent_card = await a2a_service.get_agent_card_from_url(
-                                agent_msg.agent_url
-                            )
-                            await a2a_service.cancel_remote_task(agent_card, task.id)
-                            logger.info(
-                                "Sent remote cancel for task %s (agent %s)",
-                                task.id,
-                                agent_msg.agent_url,
-                            )
-                        except Exception as cancel_err:
-                            logger.debug(
-                                "Remote cancel failed for task %s: %s (best-effort)",
-                                task.id,
-                                cancel_err,
-                            )
-        except Exception as e:
-            logger.debug("Failed to cancel agent tasks: %s (best-effort)", e)
 
         return {
             "success": True,

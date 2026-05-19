@@ -11,7 +11,6 @@ Tests cover:
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from a2a.types import TaskState
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -21,7 +20,6 @@ from api.sse import (
     get_room_sse_status,
     cancel_message,
 )
-from services.a2a_constants import SSEProcessingStatus
 from tests.conftest import PATCH
 
 
@@ -117,8 +115,10 @@ class TestCancelMessage:
 
         assert result["success"] is True
         assert result["message_id"] == sample_user_message.message_id
-        deps["sse_manager"].cancel_message_and_broadcast.assert_called_once_with(
-            sample_user_message.message_id
+        deps["execution_engine"].cancel.assert_awaited_once_with(
+            room_id=sample_user_message.room_id,
+            message_id=sample_user_message.message_id,
+            requested_by_user_id=mock_user.user_id,
         )
 
     @pytest.mark.asyncio
@@ -163,73 +163,68 @@ class TestCancelMessage:
         assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
-    async def test_clears_cancellation_on_db_failure(
+    async def test_returns_500_when_execution_cancel_returns_false(
         self, mock_user, sample_room, sample_user_message, patch_sse_deps
     ):
-        """Should clear local cancellation if database persist fails."""
+        """Should return 500 when execution cancellation persistence fails."""
         deps = patch_sse_deps
         deps["db_service"].get_room_user_message_by_message_id.return_value = sample_user_message
         deps["db_service"].get_room_by_room_id.return_value = sample_room
-        deps["mongodb"].cancel_message.return_value = False
+        deps["execution_engine"].cancel.return_value = False
 
         with pytest.raises(HTTPException) as exc_info:
             await cancel_message(sample_user_message.message_id, mock_user)
 
         assert exc_info.value.status_code == 500
-        deps["sse_manager"].clear_cancellation.assert_called_once_with(
-            sample_user_message.message_id
-        )
+        assert "Failed to persist cancellation" in exc_info.value.detail
 
     @pytest.mark.asyncio
-    async def test_cancels_hitl_requests_for_message(
+    async def test_execution_cancel_receives_audit_user(
         self, mock_user, sample_room, sample_user_message, patch_sse_deps
     ):
-        """Should cancel any pending HITL requests for the message."""
+        """Should pass room, message, and requesting user to Execution."""
         deps = patch_sse_deps
         deps["db_service"].get_room_user_message_by_message_id.return_value = sample_user_message
         deps["db_service"].get_room_by_room_id.return_value = sample_room
 
         await cancel_message(sample_user_message.message_id, mock_user)
 
-        deps["hitl_service"].cancel_requests_for_message.assert_called_once_with(
-            sample_user_message.message_id
+        deps["execution_engine"].cancel.assert_awaited_once_with(
+            room_id=sample_user_message.room_id,
+            message_id=sample_user_message.message_id,
+            requested_by_user_id=mock_user.user_id,
         )
 
     @pytest.mark.asyncio
-    async def test_handles_hitl_cancellation_failure(
+    async def test_handles_execution_cancel_failure(
         self, mock_user, sample_room, sample_user_message, patch_sse_deps
     ):
-        """Should return 500 if hitl_service.cancel_requests_for_message raises."""
+        """Should return 500 if Execution cancellation raises."""
         deps = patch_sse_deps
         deps["db_service"].get_room_user_message_by_message_id.return_value = sample_user_message
         deps["db_service"].get_room_by_room_id.return_value = sample_room
-        deps["hitl_service"].cancel_requests_for_message = AsyncMock(
-            side_effect=Exception("HITL service down")
+        deps["execution_engine"].cancel.side_effect = Exception(
+            "Execution cancel down"
         )
 
         with pytest.raises(HTTPException) as exc_info:
             await cancel_message(sample_user_message.message_id, mock_user)
 
         assert exc_info.value.status_code == 500
-        assert "HITL service down" in exc_info.value.detail
+        assert "Execution cancel down" in exc_info.value.detail
 
     @pytest.mark.asyncio
-    async def test_handles_sse_cancel_failure(
+    async def test_route_does_not_call_sse_cancel_directly(
         self, mock_user, sample_room, sample_user_message, patch_sse_deps
     ):
-        """Should return 500 if sse_manager.cancel_message raises."""
+        """SSE route delegates cancellation internals to Execution."""
         deps = patch_sse_deps
         deps["db_service"].get_room_user_message_by_message_id.return_value = sample_user_message
         deps["db_service"].get_room_by_room_id.return_value = sample_room
-        deps["sse_manager"].cancel_message_and_broadcast = AsyncMock(
-            side_effect=Exception("SSE error")
-        )
 
-        with pytest.raises(HTTPException) as exc_info:
-            await cancel_message(sample_user_message.message_id, mock_user)
+        await cancel_message(sample_user_message.message_id, mock_user)
 
-        assert exc_info.value.status_code == 500
-        assert "SSE error" in exc_info.value.detail
+        deps["sse_manager"].cancel_message_and_broadcast.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_paused_agent_cleanup_failure_does_not_block_root_cancellation(
@@ -251,65 +246,13 @@ class TestCancelMessage:
         ].get_room_agent_messages_by_related_message_id.return_value = [
             sample_agent_message_with_task
         ]
+        deps["execution_engine"].cancel.return_value = True
 
-        events: list[str] = []
-
-        async def record_root_cancel(*args, **kwargs):
-            events.append("record_root_cancel")
-
-        async def clear_frontend(*args, **kwargs):
-            events.append("clear_frontend")
-
-        async def update_paused_agent(*args, **kwargs):
-            events.append("update_paused_agent")
-            return True
-
-        async def fail_paused_agent_notify(*args, **kwargs):
-            events.append("notify_paused_agent")
-            raise RuntimeError("notify down")
-
-        record = AsyncMock(side_effect=record_root_cancel)
-        notify_task_update = AsyncMock(side_effect=fail_paused_agent_notify)
-        deps["sse_manager"].send_processing_status.side_effect = clear_frontend
-        deps["db_service"].update_task_state_on_message.side_effect = (
-            update_paused_agent
-        )
-
-        with (
-            patch("api.sse.record_and_maybe_broadcast_run_event", record),
-            patch(
-                "services.task_notification_service.notify_task_update",
-                notify_task_update,
-            ),
-        ):
-            result = await cancel_message(sample_user_message.message_id, mock_user)
+        result = await cancel_message(sample_user_message.message_id, mock_user)
 
         assert result["success"] is True
-        record.assert_awaited_once_with(
-            sample_user_message.room_id,
-            SSEProcessingStatus.CANCELED,
-            sample_user_message.message_id,
-            sse=deps["sse_manager"],
+        deps["execution_engine"].cancel.assert_awaited_once_with(
+            room_id=sample_user_message.room_id,
+            message_id=sample_user_message.message_id,
+            requested_by_user_id=mock_user.user_id,
         )
-        deps["sse_manager"].send_processing_status.assert_awaited_once_with(
-            sample_user_message.room_id,
-            SSEProcessingStatus.CANCELED,
-            sample_user_message.message_id,
-        )
-        deps["db_service"].update_task_state_on_message.assert_awaited_once_with(
-            sample_agent_message_with_task.message_id,
-            TaskState.canceled.value,
-            message_text="Task was canceled",
-        )
-        notify_task_update.assert_awaited_once_with(
-            message_id=sample_agent_message_with_task.message_id,
-            state=TaskState.canceled,
-            room_id=sample_agent_message_with_task.room_id,
-            user_id=sample_agent_message_with_task.user_id or "",
-        )
-        assert events == [
-            "record_root_cancel",
-            "clear_frontend",
-            "update_paused_agent",
-            "notify_paused_agent",
-        ]
