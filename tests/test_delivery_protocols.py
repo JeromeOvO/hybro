@@ -29,6 +29,107 @@ async def test_delivery_compatibility_emits_legacy_frame_through_facade_api():
     assert facade.calls == [("room-1", {"type": "processing"})]
 
 
+@pytest.mark.asyncio
+async def test_delivery_compatibility_uses_only_facade_public_api():
+    import inspect
+
+    from delivery.facade import DeliveryCompatibility
+
+    class Facade:
+        delivery_kv_connected = True
+        delivery_pubsub_connected = True
+        redis_connected = True
+        broker_connected = True
+        change_stream_connected = True
+        room_connections = {"room-1": ["conn-1"]}
+
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def emit_legacy_frame(self, room_id: str, frame: dict) -> None:
+            self.calls.append(("emit_legacy_frame", room_id, frame))
+
+        async def open_connection(self, room_id: str):
+            self.calls.append(("open_connection", room_id))
+            return "connection"
+
+        async def remove_connection(self, room_id: str, connection_id: str) -> None:
+            self.calls.append(("remove_connection", room_id, connection_id))
+
+        def get_room_status(self, room_id: str) -> dict:
+            self.calls.append(("get_room_status", room_id))
+            return {"room_id": room_id}
+
+        def is_cancelled(self, message_id: str) -> bool:
+            self.calls.append(("is_cancelled", message_id))
+            return False
+
+        def cancel_message(self, message_id: str) -> None:
+            self.calls.append(("cancel_message", message_id))
+
+        async def cancel_message_and_broadcast(self, message_id: str) -> None:
+            self.calls.append(("cancel_message_and_broadcast", message_id))
+
+        async def check_cancelled(self, message_id: str) -> bool:
+            self.calls.append(("check_cancelled", message_id))
+            return False
+
+        def clear_cancellation(self, message_id: str) -> None:
+            self.calls.append(("clear_cancellation", message_id))
+
+        def create_token(self, message_id: str):
+            self.calls.append(("create_token", message_id))
+            return "token"
+
+        def get_token(self, message_id: str):
+            self.calls.append(("get_token", message_id))
+            return "token"
+
+        def remove_token(self, message_id: str) -> None:
+            self.calls.append(("remove_token", message_id))
+
+        async def start_change_stream_watcher(self) -> None:
+            self.calls.append(("start_change_stream_watcher",))
+
+        async def stop_change_stream_watcher(self) -> None:
+            self.calls.append(("stop_change_stream_watcher",))
+
+        def set_draining(self, draining: bool) -> None:
+            self.calls.append(("set_draining", draining))
+
+        async def refresh_health(self) -> None:
+            self.calls.append(("refresh_health",))
+
+    facade = Facade()
+    compat = DeliveryCompatibility(facade)
+
+    assert await compat.open_connection("room-1") == "connection"
+    await compat.remove_connection("room-1", "conn-1")
+    assert compat.get_room_status("room-1") == {"room_id": "room-1"}
+    assert compat.room_connections == {"room-1": ["conn-1"]}
+    assert compat.is_cancelled("msg-1") is False
+    compat.cancel_message("msg-1")
+    await compat.cancel_message_and_broadcast("msg-1")
+    assert await compat.check_cancelled("msg-1") is False
+    compat.clear_cancellation("msg-1")
+    assert compat.create_token("msg-1") == "token"
+    assert compat.get_token("msg-1") == "token"
+    compat.remove_token("msg-1")
+    await compat.start_change_stream_watcher()
+    await compat.stop_change_stream_watcher()
+    compat.set_draining(True)
+    assert compat.change_stream_connected is True
+    assert compat.delivery_kv_connected is True
+    assert compat.delivery_pubsub_connected is True
+    await compat.refresh_health()
+    assert compat.redis_connected is True
+    assert compat.broker_connected is True
+
+    source = inspect.getsource(DeliveryCompatibility)
+    assert "._sse_transport" not in source
+    assert "._cancellation_watcher" not in source
+
+
 FORBIDDEN_DELIVERY_ROOTS = {
     "a2a_adapter",
     "agent",

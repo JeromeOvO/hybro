@@ -12,47 +12,47 @@ class DeliveryCompatibility:
         await self._facade.emit_legacy_frame(room_id, frame)
 
     async def open_connection(self, room_id: str) -> Any:
-        return await self._facade._sse_transport.open_connection(room_id)
+        return await self._facade.open_connection(room_id)
 
     async def remove_connection(self, room_id: str, connection_id: str) -> None:
-        await self._facade._sse_transport.remove_connection(room_id, connection_id)
+        await self._facade.remove_connection(room_id, connection_id)
 
     def get_room_status(self, room_id: str) -> dict:
-        return self._facade._sse_transport.get_room_status(room_id)
+        return self._facade.get_room_status(room_id)
 
     @property
     def room_connections(self) -> dict:
-        return self._facade._sse_transport.room_connections
+        return self._facade.room_connections
 
     def is_cancelled(self, message_id: str) -> bool:
-        return self._facade._sse_transport.is_cancelled(message_id)
+        return self._facade.is_cancelled(message_id)
 
     def cancel_message(self, message_id: str) -> None:
-        self._facade._sse_transport.cancel_message(message_id)
+        self._facade.cancel_message(message_id)
 
     async def cancel_message_and_broadcast(self, message_id: str) -> None:
-        await self._facade._sse_transport.cancel_message_and_broadcast(message_id)
+        await self._facade.cancel_message_and_broadcast(message_id)
 
     async def check_cancelled(self, message_id: str) -> bool:
-        return await self._facade._sse_transport.check_cancelled(message_id)
+        return await self._facade.check_cancelled(message_id)
 
     def clear_cancellation(self, message_id: str) -> None:
-        self._facade._sse_transport.clear_cancellation(message_id)
+        self._facade.clear_cancellation(message_id)
 
     def create_token(self, message_id: str) -> Any:
-        return self._facade._sse_transport.create_token(message_id)
+        return self._facade.create_token(message_id)
 
     def get_token(self, message_id: str) -> Any:
-        return self._facade._sse_transport.get_token(message_id)
+        return self._facade.get_token(message_id)
 
     def remove_token(self, message_id: str) -> None:
-        self._facade._sse_transport.remove_token(message_id)
+        self._facade.remove_token(message_id)
 
     async def start_change_stream_watcher(self) -> None:
-        await self._facade._sse_transport.start_cancellation_watcher()
+        await self._facade.start_change_stream_watcher()
 
     async def stop_change_stream_watcher(self) -> None:
-        await self._facade._sse_transport.stop_cancellation_watcher()
+        await self._facade.stop_change_stream_watcher()
 
     async def start_redis_service(self, redis_service: Any | None = None) -> None:
         return None
@@ -71,8 +71,7 @@ class DeliveryCompatibility:
 
     @property
     def change_stream_connected(self) -> bool:
-        watcher = self._facade._cancellation_watcher
-        return bool(getattr(watcher, "change_stream_connected", False))
+        return self._facade.change_stream_connected
 
     @property
     def delivery_kv_connected(self) -> bool:
@@ -145,6 +144,49 @@ class DeliveryFacade:
 
     async def emit_legacy_frame(self, room_id: str, frame: dict) -> None:
         await self._event_publisher._emit_legacy_frame(room_id, frame)
+
+    async def open_connection(self, room_id: str) -> Any:
+        return await self._sse_transport.open_connection(room_id)
+
+    async def remove_connection(self, room_id: str, connection_id: str) -> None:
+        await self._sse_transport.remove_connection(room_id, connection_id)
+
+    def get_room_status(self, room_id: str) -> dict:
+        return self._sse_transport.get_room_status(room_id)
+
+    @property
+    def room_connections(self) -> dict:
+        return self._sse_transport.room_connections
+
+    def is_cancelled(self, message_id: str) -> bool:
+        return self._sse_transport.is_cancelled(message_id)
+
+    def cancel_message(self, message_id: str) -> None:
+        self._sse_transport.cancel_message(message_id)
+
+    async def cancel_message_and_broadcast(self, message_id: str) -> None:
+        await self._sse_transport.cancel_message_and_broadcast(message_id)
+
+    async def check_cancelled(self, message_id: str) -> bool:
+        return await self._sse_transport.check_cancelled(message_id)
+
+    def clear_cancellation(self, message_id: str) -> None:
+        self._sse_transport.clear_cancellation(message_id)
+
+    def create_token(self, message_id: str) -> Any:
+        return self._sse_transport.create_token(message_id)
+
+    def get_token(self, message_id: str) -> Any:
+        return self._sse_transport.get_token(message_id)
+
+    def remove_token(self, message_id: str) -> None:
+        self._sse_transport.remove_token(message_id)
+
+    async def start_change_stream_watcher(self) -> None:
+        await self._sse_transport.start_cancellation_watcher()
+
+    async def stop_change_stream_watcher(self) -> None:
+        await self._sse_transport.stop_cancellation_watcher()
 
     async def refresh_health(self) -> None:
         if self._redis_kv is None:
