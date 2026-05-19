@@ -19,7 +19,10 @@ from common.protocols import (
     EventPublisher,
     ExecutionEngine,
     HubAgentResponseSink,
+    HubDispatchPolicy,
+    HubDispatchPort,
     HubLivenessReader,
+    HubManagement,
     HITLManager,
     LLMProvider,
     MemoryManager,
@@ -102,6 +105,15 @@ class ExecutionDeps:
     execution_engine: ExecutionEngine
     hitl_manager: HITLManager
     hub_agent_response_sink: HubAgentResponseSink
+
+
+@dataclass(frozen=True)
+class HubDeps:
+    hub_management: HubManagement
+    hub_liveness: HubLivenessReader
+    hub_dispatch_port: HubDispatchPort
+    hub_dispatch_policy: HubDispatchPolicy
+    hub_facade: Any
 
 
 def create_mongo_dal(*, database: Any) -> MongoDAL:
@@ -262,6 +274,28 @@ def create_execution_deps(facade) -> ExecutionDeps:
         execution_engine=facade,
         hitl_manager=facade,
         hub_agent_response_sink=facade,
+    )
+
+
+def create_hub_facade(**kwargs: Any):
+    from hub_runtime_bridge import HubFacade
+
+    return HubFacade(**kwargs)
+
+
+def create_hub_deps(facade: Any) -> HubDeps:
+    from hub_runtime_bridge.dispatch_adapter import HubDispatchAdapter
+    from hub_runtime_bridge.service.dispatch_policy import HubDispatchPolicy as HubPolicy
+
+    return HubDeps(
+        hub_management=facade,
+        hub_liveness=facade,
+        hub_dispatch_port=HubDispatchAdapter(
+            facade,
+            liveness_cache=getattr(facade, "_liveness_cache", None),
+        ),
+        hub_dispatch_policy=HubPolicy(facade),
+        hub_facade=facade,
     )
 
 

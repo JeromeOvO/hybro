@@ -403,10 +403,6 @@ async def lifespan(app: FastAPI):
             room_center.bind_execution_deps(_execution_deps)
             hitl.bind_execution_deps(_execution_deps)
             sse.bind_execution_deps(_execution_deps)
-            _delivery_deps.event_publisher.register_internal_handler(
-                "hub_agent_response_internal",
-                _execution_deps.hub_agent_response_sink.handle_hub_agent_response,
-            )
             app.state.execution_facade = execution_facade
             app.state.execution_deps = _execution_deps
 
@@ -601,13 +597,29 @@ async def lifespan(app: FastAPI):
             RelayHubLivenessReader,
             init_relay_service,
         )
+        from execution.facade import hub_agent_response_internal_to_agent_event
         from modules.RoomMessageCenter import room_message_center as _rmc
         _rmc.set_redis_service(_redis_service)
         _relay_svc = init_relay_service(
             mongo=mongodb, database_service=_db_svc, sse_manager=sse_manager,
             room_message_center=_rmc,
             hitl_coordinator=hitl_service,
+            event_publisher=_delivery_deps.event_publisher if _delivery_deps else None,
+            worker_id=(
+                _delivery_facade.instance_id
+                if _delivery_facade is not None
+                else None
+            ),
+            response_converter=hub_agent_response_internal_to_agent_event,
         )
+        if _delivery_deps is not None:
+            router = _relay_svc.internal_response_dispatcher
+            if router is None:
+                raise RuntimeError("Hub internal response router is not bound")
+            _delivery_deps.event_publisher.register_internal_handler(
+                "hub_agent_response_internal",
+                router.dispatch_hub_internal_response,
+            )
         _relay_svc.set_leader_election(_leader)
         if _agent_deps is not None:
             hub_liveness_reader = RelayHubLivenessReader(_relay_svc)

@@ -4,6 +4,7 @@ from common.dto import (
     AgentCardSnapshot,
     AgentInfo,
     AgentMatchResult,
+    HubAgentCounts,
     HubAgentDescriptor,
     SyncedHubAgent,
 )
@@ -71,11 +72,23 @@ class AgentRegistryWriter(Protocol):
     async def mark_hub_agents_offline(self, hub_id: str) -> None: ...
 
 
+@runtime_checkable
+class HubAgentStatusReader(Protocol):
+    async def count_hub_agents(self, hub_id: str) -> HubAgentCounts: ...
+
+
+@runtime_checkable
+class AgentCallCounter(Protocol):
+    async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> None: ...
+
+
 __all__ = [
+    "AgentCallCounter",
     "AgentManagement",
     "AgentExclusionReader",
     "AgentMatcher",
     "AgentMessageMatcher",
     "AgentRegistry",
     "AgentRegistryWriter",
+    "HubAgentStatusReader",
 ]

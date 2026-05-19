@@ -20,6 +20,7 @@ from agent.translators import (
 )
 from agent.url_utils import is_local_agent_url, normalize_agent_url
 from common.dto import VectorRecord
+from common.dto import HubAgentCounts
 from common.dto.agent import (
     AgentCardSnapshot,
     AgentInfo,
@@ -397,6 +398,13 @@ class AgentFacade:
 
     async def mark_hub_agents_offline(self, hub_id: str) -> None:
         await self._repository.mark_hub_agents_offline(hub_id)
+
+    async def count_hub_agents(self, hub_id: str) -> HubAgentCounts:
+        active, inactive = await self._repository.count_hub_agents(hub_id)
+        return HubAgentCounts(active=active, inactive=inactive)
+
+    async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> None:
+        await self._repository.increment_agent_call_count(agent_id, success=success)
 
     async def resolve_agent_card_from_url(
         self, url: str

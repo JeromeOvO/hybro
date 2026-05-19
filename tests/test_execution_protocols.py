@@ -212,16 +212,12 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
         "execution/dispatch/agent_message_processor.py": {
             "services.agent_health_service",
             "services.database_service",
-            "services.relay_service",
             "services.room_services",
             "services.sse_services",
         },
         "execution/dispatch/dispatch_middleware.py": {"a2a.types"},
         "execution/dispatch/middleware/cloud_health.py": {
             "services.agent_health_service",
-        },
-        "execution/dispatch/middleware/hub_transport.py": {
-            "services.relay_service",
         },
         "execution/dispatch/response_handler.py": {
             "a2a.types",
@@ -237,10 +233,7 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
             "services.s3_service",
         },
         "execution/dispatch/transports/relay.py": {
-            "a2a.types",
-            "database.mongodb",
             "services.database_service",
-            "services.relay_service",
             "services.sse_services",
         },
         "execution/dispatch/transports/webhook.py": {

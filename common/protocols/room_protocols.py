@@ -5,6 +5,7 @@ from common.dto import (
     AgentMessageInput,
     AgentInfo,
     CreateRoomRequest,
+    HubPublishLineageSnapshot,
     MembershipUpdateRequest,
     RoomInfo,
     RoomMessageInfo,
@@ -64,12 +65,40 @@ class RoomOwnershipReader(Protocol):
 
 
 @runtime_checkable
+class HubPublishAuthorizationReader(Protocol):
+    async def authorize_hub_publish(
+        self, *, hub_id: str, owner_id: str, room_id: str, agent_message_id: str
+    ) -> HubPublishLineageSnapshot | None: ...
+
+
+@runtime_checkable
+class HubPublishLineageReader(Protocol):
+    async def get_hub_publish_lineage(
+        self, *, room_id: str, agent_message_id: str
+    ) -> HubPublishLineageSnapshot | None: ...
+
+
+@runtime_checkable
+class MessageCancellationReader(Protocol):
+    async def is_message_cancelled(self, message_id: str) -> bool: ...
+
+
+@runtime_checkable
+class RoomAgentTaskTracker(Protocol):
+    async def track_hub_task(self, message_id: str, task_data: dict) -> None: ...
+
+
+@runtime_checkable
 class RoomMembershipSeedSource(Protocol):
     async def get_saved_group(self, group_id: str) -> SavedAgentGroupSnapshot | None: ...
     async def list_current_agents(self, user_id: str | None) -> list[AgentInfo]: ...
 
 
 __all__ = [
+    "HubPublishAuthorizationReader",
+    "HubPublishLineageReader",
+    "MessageCancellationReader",
+    "RoomAgentTaskTracker",
     "RoomHistoryReader",
     "RoomManagement",
     "RoomMembershipSeedSource",

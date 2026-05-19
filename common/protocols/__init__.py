@@ -6,6 +6,8 @@ from common.protocols.agent_protocols import (
     AgentMessageMatcher,
     AgentRegistry,
     AgentRegistryWriter,
+    AgentCallCounter,
+    HubAgentStatusReader,
 )
 from common.protocols.context_memory_protocols import (
     ContextAssembler,
@@ -33,8 +35,11 @@ from common.protocols.execution_protocols import (
 )
 from common.protocols.hub_protocols import (
     HubDispatchPort,
+    HubDispatchPolicy,
+    HubInternalResponseDispatcher,
     HubLivenessReader,
     HubManagement,
+    OfflineHubFailurePort,
 )
 from common.protocols.llm_protocols import LLMProvider, ModelRegistry
 from common.protocols.platform_protocols import FileStorage, GatewayService, RateLimiter
@@ -43,6 +48,8 @@ from common.protocols.repository_protocols import (
     ContentStorageRepository,
     HITLRepository,
     HubRepository,
+    HubResponseJournal,
+    HubTaskOwnershipStore,
     MemoryRepository,
     MessageRepository,
     RoomRepository,
@@ -51,7 +58,11 @@ from common.protocols.repository_protocols import (
 )
 from common.protocols.room_protocols import (
     RoomHistoryReader,
+    HubPublishAuthorizationReader,
+    HubPublishLineageReader,
+    MessageCancellationReader,
     RoomManagement,
+    RoomAgentTaskTracker,
     RoomMembershipSeedSource,
     RoomMessageStore,
     RoomOwnershipReader,
@@ -59,6 +70,7 @@ from common.protocols.room_protocols import (
 )
 
 __all__ = [
+    "AgentCallCounter",
     "AgentCardResolver",
     "AgentExclusionReader",
     "AgentManagement",
@@ -78,15 +90,23 @@ __all__ = [
     "HITLManager",
     "HITLRepository",
     "HubAgentResponseSink",
+    "HubAgentStatusReader",
     "HubDispatchPort",
+    "HubDispatchPolicy",
+    "HubInternalResponseDispatcher",
     "HubLivenessReader",
     "HubManagement",
     "HubRepository",
+    "HubResponseJournal",
+    "HubTaskOwnershipStore",
+    "HubPublishAuthorizationReader",
+    "HubPublishLineageReader",
     "IndexRegistry",
     "LLMProvider",
     "LeaderElector",
     "MongoChangeStream",
     "MemoryManager",
+    "MessageCancellationReader",
     "MemoryProjector",
     "MemoryRepository",
     "MessageRepository",
@@ -94,11 +114,13 @@ __all__ = [
     "MongoCollection",
     "MongoDAL",
     "ObjectStorageDAL",
+    "OfflineHubFailurePort",
     "RateLimiter",
     "RedisKV",
     "RedisPubSub",
     "RedisStreams",
     "RoomHistoryReader",
+    "RoomAgentTaskTracker",
     "RoomManagement",
     "RoomMembershipSeedSource",
     "RoomMessageStore",

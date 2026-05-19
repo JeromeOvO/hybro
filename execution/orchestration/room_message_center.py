@@ -122,7 +122,7 @@ class RoomMessageCenter:
 
         # Relay service + dispatch middleware are initialized eagerly in
         # init_relay_service().  AgentMessageProcessor resolves the singleton
-        # lazily on first use and registers the already-built transport.
+        # lazily on first use and builds the outbound transport in Execution.
         self.agent_message_processor = AgentMessageProcessor(
             sse_manager=self.sse_manager,
             room_services=self.room_services,

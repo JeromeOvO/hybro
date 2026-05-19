@@ -1,0 +1,13 @@
+{
+  "collections": [
+    "base_tasks",
+    "meta_tasks",
+    "task_sessions",
+    "chat_contexts"
+  ],
+  "cleanup_allowed": false,
+  "blockers": [
+    "api/orchestration_center.py",
+    "api/task.py"
+  ]
+}
