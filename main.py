@@ -104,6 +104,40 @@ else:
     )
 
 
+def _assert_startup_bindings_complete(app: FastAPI) -> None:
+    errors: list[str] = []
+
+    if getattr(room_center, "execution_engine", None) is None:
+        errors.append("api.room_center.execution_engine")
+
+    from execution.orchestration.room_message_center import (
+        room_message_center as execution_room_message_center,
+    )
+
+    if getattr(execution_room_message_center, "_runtime", None) is None:
+        errors.append("execution.room_message_center")
+
+    if getattr(sse_manager, "_facade", None) is None:
+        errors.append("sse_manager.delivery_facade")
+
+    from services.hitl_service import hitl_service
+
+    if getattr(hitl_service, "_service", None) is None:
+        errors.append("hitl_service")
+
+    if getattr(app.state, "execution_deps", None) is None:
+        errors.append("app.state.execution_deps")
+
+    if errors:
+        raise RuntimeError(
+            "Startup binding incomplete - missing: "
+            + ", ".join(errors)
+            + ". Cannot serve traffic."
+        )
+
+    logger.info("All startup bindings verified")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager to handle startup and shutdown events.
@@ -626,6 +660,7 @@ async def lifespan(app: FastAPI):
         raise
 
     # ── Phase 3: Serve + Normal Shutdown ──
+    _assert_startup_bindings_complete(app)
     try:
         yield
     finally:

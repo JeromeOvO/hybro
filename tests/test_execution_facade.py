@@ -1,5 +1,6 @@
 import asyncio
 from types import SimpleNamespace
+from typing import get_type_hints
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -79,6 +80,14 @@ def _make_facade(**overrides):
     deps.update(overrides)
     facade = ExecutionFacade(**deps)
     return facade, deps
+
+
+def test_constructor_core_dependencies_are_typed_ports():
+    hints = get_type_hints(ExecutionFacade.__init__)
+
+    assert hints["room_center"].__name__ == "RoomCenterPort"
+    assert hints["room_message_center"].__name__ == "RoomMessageCenterPort"
+    assert hints["hitl_service"].__name__ == "HITLServicePort"
 
 
 @pytest.mark.asyncio

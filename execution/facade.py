@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any
+from typing import Any, Protocol
 
 from common.dto import (
     ExecutionAck,
@@ -76,6 +76,49 @@ VALID_PROCESSING_STATUS_STATES = {
     "rate_limited",
     "error",
 }
+
+
+class RoomCenterPort(Protocol):
+    async def send_message_to_room(
+        self,
+        request: RoomCenterUserMessageRequest,
+        target_group: Any = None,
+        mentioned_agent_ids: Any = None,
+    ) -> Any: ...
+
+
+class RoomMessageCenterPort(Protocol):
+    async def process_room_user_message(
+        self,
+        request: OrchestrationRequest,
+    ) -> OrchestrationResponse: ...
+
+
+class HITLServicePort(Protocol):
+    async def request_input(
+        self,
+        room_id: str,
+        user_message_id: str,
+        source: str,
+        prompt: str,
+        **kwargs: Any,
+    ) -> Any | None: ...
+
+    async def handle_response(
+        self,
+        room_id: str,
+        request_id: str,
+        user_input: str,
+        user_id: str,
+    ) -> dict[str, Any]: ...
+
+    async def get_pending_requests(self, room_id: str) -> list[Any]: ...
+
+    async def cancel_request(
+        self,
+        request_id: str,
+        room_id: str | None = None,
+    ) -> Any: ...
 
 
 def _thaw_hub_payload_value(value: Any) -> Any:
@@ -275,9 +318,9 @@ class ExecutionFacade:
     def __init__(
         self,
         *,
-        room_center,
-        room_message_center,
-        hitl_service,
+        room_center: RoomCenterPort,
+        room_message_center: RoomMessageCenterPort,
+        hitl_service: HITLServicePort,
         run_lifecycle: RunLifecyclePort,
         run_reader: RunReadPort,
         cancellation_state: CancellationStatePort,

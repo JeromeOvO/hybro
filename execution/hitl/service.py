@@ -852,6 +852,13 @@ class HITLService:
                         req_id,
                     )
             else:
+                group_id = doc.get("group_id")
+                claim_id = doc.get("claim_id")
+                if group_id and claim_id:
+                    await self.database_service.release_hitl_group_routing(
+                        group_id,
+                        claim_id,
+                    )
                 ok = await self.database_service.cas_update_hitl_request(
                     req_id,
                     expected_status=HITLStatus.PROCESSING.value,

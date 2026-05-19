@@ -74,60 +74,22 @@ class RoomMessageCenter:
     def __init__(
         self,
         *,
-        room_services=None,
-        database_service=None,
-        sse_manager=None,
-        room_coordinator_service=None,
-        openai_service=None,
-        notification_service=None,
-        agent_resolver_service=None,
-        a2a_service=None,
-        task_service=None,
-        room_memory_service=None,
-        debate_service=None,
-        rate_limit_service=None,
-        room_supervisor_service=None,
-        hitl_coordinator=None,
-        task_notifications=None,
+        room_services,
+        database_service,
+        sse_manager,
+        room_coordinator_service,
+        openai_service,
+        notification_service,
+        agent_resolver_service,
+        a2a_service,
+        task_service,
+        room_memory_service,
+        debate_service,
+        rate_limit_service,
+        room_supervisor_service,
+        hitl_coordinator,
+        task_notifications,
     ):
-        room_services = room_services if room_services is not None else globals()["room_services"]
-        database_service = database_service if database_service is not None else db_service
-        sse_manager = sse_manager if sse_manager is not None else globals()["sse_manager"]
-        room_coordinator_service = (
-            room_coordinator_service
-            if room_coordinator_service is not None
-            else globals()["room_coordinator_service"]
-        )
-        openai_service = openai_service if openai_service is not None else globals()["openai_service"]
-        notification_service = (
-            notification_service
-            if notification_service is not None
-            else globals()["notification_service"]
-        )
-        agent_resolver_service = (
-            agent_resolver_service
-            if agent_resolver_service is not None
-            else globals()["agent_resolver_service"]
-        )
-        a2a_service = a2a_service if a2a_service is not None else globals()["a2a_service"]
-        task_service = task_service if task_service is not None else globals()["task_service"]
-        room_memory_service = (
-            room_memory_service
-            if room_memory_service is not None
-            else globals()["room_memory_service"]
-        )
-        debate_service = debate_service if debate_service is not None else globals()["debate_service"]
-        rate_limit_service = (
-            rate_limit_service
-            if rate_limit_service is not None
-            else globals()["rate_limit_service"]
-        )
-        room_supervisor_service = (
-            room_supervisor_service
-            if room_supervisor_service is not None
-            else globals()["room_supervisor_service"]
-        )
-
         self.room_services = room_services
         self.database_service = database_service
         self.sse_manager = sse_manager

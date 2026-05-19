@@ -9,7 +9,7 @@ class DeliveryCompatibility:
         self._facade = facade
 
     async def emit_legacy_frame(self, room_id: str, frame: dict) -> None:
-        await self._facade._event_publisher._emit_legacy_frame(room_id, frame)
+        await self._facade.emit_legacy_frame(room_id, frame)
 
     async def open_connection(self, room_id: str) -> Any:
         return await self._facade._sse_transport.open_connection(room_id)
@@ -142,6 +142,9 @@ class DeliveryFacade:
     @property
     def broker_connected(self) -> bool:
         return self.delivery_pubsub_connected
+
+    async def emit_legacy_frame(self, room_id: str, frame: dict) -> None:
+        await self._event_publisher._emit_legacy_frame(room_id, frame)
 
     async def refresh_health(self) -> None:
         if self._redis_kv is None:

@@ -29,6 +29,20 @@ from models.hitl import (
 from services.hitl_service import HITLService, MAX_HITL_ROUNDS
 
 
+class _AsyncCursor:
+    def __init__(self, docs):
+        self._docs = iter(docs)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._docs)
+        except StopIteration:
+            raise StopAsyncIteration
+
+
 # =============================================================================
 # HITL Service Fixtures
 # =============================================================================
@@ -861,3 +875,35 @@ class TestEmitHitlEvent:
         data = mock_hitl_sse_manager.broadcast_to_room.call_args[0][2]
         assert data["client_request_id"] == "cr-from-user-row"
         mock_hitl_db_service.resolve_client_request_id_for_message_id.assert_not_called()
+
+
+class TestRecoverStaleProcessing:
+    @pytest.mark.asyncio
+    async def test_releases_stale_group_routing_claim_before_reverting_to_pending(
+        self, hitl_service, mock_hitl_db_service
+    ):
+        stale_doc = {
+            "request_id": "hitl-1",
+            "status": HITLStatus.PROCESSING.value,
+            "group_id": "group-1",
+            "claim_id": "claim-1",
+            "routing_completed_at": None,
+        }
+        hitl_requests = MagicMock()
+        hitl_requests.find.return_value = _AsyncCursor([stale_doc])
+        mock_hitl_db_service.mongo = MagicMock(
+            db=MagicMock(hitl_requests=hitl_requests)
+        )
+        hitl_service._db_service = mock_hitl_db_service
+
+        recovered = await hitl_service.recover_stale_processing()
+
+        assert recovered == 1
+        mock_hitl_db_service.release_hitl_group_routing.assert_awaited_once_with(
+            "group-1",
+            "claim-1",
+        )
+        mock_hitl_db_service.cas_update_hitl_request.assert_awaited_once()
+        _, kwargs = mock_hitl_db_service.cas_update_hitl_request.await_args
+        assert kwargs["status"] == HITLStatus.PENDING.value
+        assert kwargs["claim_id"] is None

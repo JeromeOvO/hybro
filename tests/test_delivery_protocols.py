@@ -10,6 +10,25 @@ from types import SimpleNamespace
 import pytest
 
 
+@pytest.mark.asyncio
+async def test_delivery_compatibility_emits_legacy_frame_through_facade_api():
+    from delivery.facade import DeliveryCompatibility
+
+    class Facade:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def emit_legacy_frame(self, room_id: str, frame: dict) -> None:
+            self.calls.append((room_id, frame))
+
+    facade = Facade()
+    compat = DeliveryCompatibility(facade)
+
+    await compat.emit_legacy_frame("room-1", {"type": "processing"})
+
+    assert facade.calls == [("room-1", {"type": "processing"})]
+
+
 FORBIDDEN_DELIVERY_ROOTS = {
     "a2a_adapter",
     "agent",

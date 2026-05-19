@@ -177,6 +177,36 @@ def test_normal_shutdown_requires_execution_deps_before_drain():
     assert "app.state.execution_deps" in normal_shutdown
 
 
+def test_startup_binding_assertion_reports_all_missing_bindings(monkeypatch):
+    from api import room_center as room_center_api
+    from execution.orchestration.room_message_center import room_message_center
+    from main import _assert_startup_bindings_complete
+    from services.hitl_service import hitl_service
+    from services.sse_services import sse_manager
+
+    monkeypatch.setattr(room_center_api, "execution_engine", None)
+    monkeypatch.setattr(room_message_center, "_runtime", None)
+    monkeypatch.setattr(sse_manager, "_facade", None)
+    monkeypatch.setattr(hitl_service, "_service", None)
+    fake_app = SimpleNamespace(state=SimpleNamespace(execution_deps=None))
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _assert_startup_bindings_complete(fake_app)
+
+    message = str(exc_info.value)
+    assert "api.room_center.execution_engine" in message
+    assert "execution.room_message_center" in message
+    assert "sse_manager.delivery_facade" in message
+    assert "hitl_service" in message
+    assert "app.state.execution_deps" in message
+
+
+def test_lifespan_asserts_bindings_before_serving_traffic():
+    source = Path("main.py").read_text()
+
+    assert "# ── Phase 3: Serve + Normal Shutdown ──\n    _assert_startup_bindings_complete(app)\n    try:\n        yield" in source
+
+
 def _patch_infrastructure_noop(monkeypatch):
     """Patch all infrastructure to no-op for lifespan testing."""
     # MongoDB

@@ -386,6 +386,28 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.task_notifications is deps["task_notifications"]
 
 
+def test_room_message_center_factory_owns_default_dependency_wiring():
+    import inspect
+
+    from execution.orchestration.factory import create_room_message_center
+    from execution.orchestration.room_message_center import RoomMessageCenter
+
+    assert "globals()" not in inspect.getsource(RoomMessageCenter.__init__)
+
+    runtime = create_room_message_center()
+
+    assert runtime.database_service is not None
+    assert runtime.sse_manager is not None
+    assert runtime.room_services is not None
+
+
+def test_room_message_center_constructor_requires_explicit_dependencies():
+    from execution.orchestration.room_message_center import RoomMessageCenter
+
+    with pytest.raises(TypeError):
+        RoomMessageCenter()
+
+
 class _FakeCursor:
     def __init__(self, docs=None, error: Exception | None = None):
         self.docs = docs or []
