@@ -1,7 +1,6 @@
 from typing import Any
 
 from fastapi import HTTPException
-from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 
 from api import viewset
@@ -113,7 +112,7 @@ class AgentViewSet(viewset.ViewSet):
                 _require_vector_index().delete([str(primary_key)])
         return result
 
-    async def _handle_operation(self, action: str, db: AsyncIOMotorDatabase, *args):
+    async def _handle_operation(self, action: str, db: object, *args):
         """Generic handler for CRUD operations."""
         repo = viewset._create_repository(
             collection_name=self.collection_name,

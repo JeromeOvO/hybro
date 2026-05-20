@@ -10,7 +10,9 @@ from fastapi.routing import APIRoute
 
 FORBIDDEN_API_IMPORT_PREFIXES = (
     "database",
+    "motor",
     "modules",
+    "pymongo",
     "services",
     "delivery",
     "execution",
@@ -309,6 +311,31 @@ def test_api_key_management_routes_are_owned_by_store_protocol():
     )
 
 
+def test_agent_viewset_mutations_record_vector_side_effect_protocols():
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    expected = {
+        "app_shell.bound.EmbeddingProvider",
+        "app_shell.bound.VectorIndex",
+    }
+    violations: list[str] = []
+
+    for route in routes:
+        if route["path"] not in {"/api/v1/agents", "/api/v1/agents/{item_id}"}:
+            continue
+        if not set(route["methods"]) & {"POST", "PUT", "PATCH", "DELETE"}:
+            continue
+        supporting = set(route.get("supporting_protocols") or [])
+        missing = expected - supporting
+        if missing:
+            violations.append(
+                f"{route['path']} {','.join(route['methods'])}: missing {sorted(missing)}"
+            )
+
+    assert not violations, "Agent mutation route inventory omits side-effect protocols:\n" + "\n".join(
+        violations
+    )
+
+
 def test_legacy_workflow_routes_keep_public_shape_without_execution_dependencies():
     from main import app
 
@@ -598,9 +625,21 @@ def test_route_owner_protocols_do_not_expose_any_annotations():
 def test_platform_route_protocols_do_not_expose_any_or_wildcard_params():
     from typing import Any
 
-    from common.protocols import FileStorage, GatewayDiscoveryProvider, GatewayService
+    from common.protocols import (
+        APIKeyRateLimiter,
+        FileStorage,
+        GatewayDiscoveryProvider,
+        GatewayService,
+        RateLimiter,
+    )
 
-    protocols = (GatewayDiscoveryProvider, GatewayService, FileStorage)
+    protocols = (
+        APIKeyRateLimiter,
+        FileStorage,
+        GatewayDiscoveryProvider,
+        GatewayService,
+        RateLimiter,
+    )
     violations: list[str] = []
 
     for protocol in protocols:

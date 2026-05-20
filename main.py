@@ -226,7 +226,6 @@ async def lifespan(app: FastAPI):
             from services.agent_service import agent_service
             from services.compaction_service import compaction_service
             from services.context_assembly_service import context_assembly_service
-            from services.discovery_service import discovery_service
             from services.memory_search_service import memory_search_service
             from services.memory_service import room_memory_service
             from services.notification_service import notification_service
@@ -584,7 +583,6 @@ async def lifespan(app: FastAPI):
                 agent_card_resolver=agent_card_resolver,
                 object_storage=object_storage,
                 content_storage_repository=context_memory_facade.content_repository,
-                discovery_provider=discovery_service,
                 logger=logger,
             )
             platform_facade = create_platform_facade(

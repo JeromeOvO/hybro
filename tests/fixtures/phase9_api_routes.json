@@ -274,7 +274,11 @@
     "name": "create_endpoint",
     "owning_protocol": "app_shell.bound.ViewSetRepository",
     "path": "/api/v1/agents",
-    "response_model": "AgentResponse"
+    "response_model": "AgentResponse",
+    "supporting_protocols": [
+      "app_shell.bound.EmbeddingProvider",
+      "app_shell.bound.VectorIndex"
+    ]
   },
   {
     "auth_dependencies": [
@@ -287,7 +291,11 @@
     "name": "delete_endpoint",
     "owning_protocol": "app_shell.bound.ViewSetRepository",
     "path": "/api/v1/agents/{item_id}",
-    "response_model": null
+    "response_model": null,
+    "supporting_protocols": [
+      "app_shell.bound.EmbeddingProvider",
+      "app_shell.bound.VectorIndex"
+    ]
   },
   {
     "auth_dependencies": [
@@ -313,7 +321,11 @@
     "name": "patch_endpoint",
     "owning_protocol": "app_shell.bound.ViewSetRepository",
     "path": "/api/v1/agents/{item_id}",
-    "response_model": "AgentResponse"
+    "response_model": "AgentResponse",
+    "supporting_protocols": [
+      "app_shell.bound.EmbeddingProvider",
+      "app_shell.bound.VectorIndex"
+    ]
   },
   {
     "auth_dependencies": [
@@ -326,7 +338,11 @@
     "name": "update_endpoint",
     "owning_protocol": "app_shell.bound.ViewSetRepository",
     "path": "/api/v1/agents/{item_id}",
-    "response_model": "AgentResponse"
+    "response_model": "AgentResponse",
+    "supporting_protocols": [
+      "app_shell.bound.EmbeddingProvider",
+      "app_shell.bound.VectorIndex"
+    ]
   },
   {
     "auth_dependencies": [

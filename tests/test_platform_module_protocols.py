@@ -230,3 +230,10 @@ def test_main_binds_discovery_route_to_platform_facade():
     source = Path("main.py").read_text()
 
     assert "discovery.bind_discovery_dependencies(\n                platform_facade.discovery_service" in source
+
+
+def test_gateway_discovery_is_not_backed_by_legacy_discovery_service():
+    source = Path("main.py").read_text()
+
+    assert "from services.discovery_service import discovery_service" not in source
+    assert "discovery_provider=discovery_service" not in source
