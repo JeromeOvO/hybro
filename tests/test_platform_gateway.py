@@ -332,6 +332,7 @@ def _gateway(
     matcher=None,
     config: PlatformConfig | None = None,
     discovery_provider=None,
+    discovery_query_expander=None,
     agent_rate_limit_collection=None,
 ):
     agent = agent or _agent()
@@ -350,6 +351,7 @@ def _gateway(
             agent_registry=FakeRegistry({agent.agent_id: agent}, cards),
             agent_matcher=matcher or FakeMatcher([]),
             discovery_provider=discovery_provider,
+            discovery_query_expander=discovery_query_expander,
             agent_transport=transport or FakeTransport(),
             agent_rate_limit_collection=agent_rate_limit_collection,
         ),
@@ -597,6 +599,48 @@ async def test_platform_discovery_expands_query_and_filters_by_confidence_thresh
     assert matcher.calls[0]["query"] == "expanded search query"
     assert response.query == "raw query"
     assert [agent.agent_id for agent in response.agents] == ["agent-high"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_discovery_expands_query_and_filters_by_confidence_threshold():
+    low_agent = _agent(
+        agent_id="agent-low",
+        name="Low",
+        url="https://low.example/a2a",
+        raw_card={"name": "Low", "url": "https://low.example/a2a"},
+    )
+    high_agent = _agent(
+        agent_id="agent-high",
+        name="High",
+        url="https://high.example/a2a",
+        raw_card={"name": "High", "url": "https://high.example/a2a"},
+    )
+    matcher = FakeMatcher(
+        [
+            AgentMatchResult(agent_id="agent-low", score=0.69, agent=low_agent),
+            AgentMatchResult(agent_id="agent-high", score=0.71, agent=high_agent),
+        ]
+    )
+    expander = FakeDiscoveryQueryExpander("expanded gateway query")
+    gateway = _gateway(
+        agent=high_agent,
+        matcher=matcher,
+        config=PlatformConfig(
+            gateway_base_url="https://api.hybro.ai/api/v1",
+            discovery_confidence_threshold=0.70,
+        ),
+        discovery_query_expander=expander,
+    )
+
+    response = await gateway.discover_agents("raw gateway query", 10, "user-1")
+
+    assert expander.calls == ["raw gateway query"]
+    assert matcher.calls[0]["query"] == "expanded gateway query"
+    assert response.query == "raw gateway query"
+    assert [agent.agent_id for agent in response.agents] == ["agent-high"]
+    assert response.agents[0].agent_card["url"].endswith(
+        "/gateway/agents/agent-high/message/send"
+    )
 
 
 @pytest.mark.asyncio
