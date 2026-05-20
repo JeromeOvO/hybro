@@ -147,13 +147,6 @@
       "contract": "sdk_confinement",
       "expiry_task": "Final SDK confinement migration",
       "owner": "phase-9-platform-api-cleanup",
-      "path": "hub_runtime_bridge/adapters/a2a_card.py",
-      "reason": "HubRuntimeBridge adapter still accepts A2A AgentCard objects for legacy compatibility; keep documented until adapter boundary is split out or reclassified."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
       "path": "hub_runtime_bridge/adapters/legacy_failure.py",
       "reason": "HubRuntimeBridge legacy failure adapter still constructs A2A SDK failure payloads for compatibility."
     },
