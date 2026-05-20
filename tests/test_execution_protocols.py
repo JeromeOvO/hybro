@@ -354,9 +354,29 @@ def test_room_message_center_uses_common_room_lock_protocol():
     assert "infrastructure.redis_service" not in source
     assert "._client" not in source
     assert hints["room_lock"] == RoomDistributedLock | None
-    assert inspect.signature(RoomMessageCenter.set_redis_service).parameters[
-        "redis_service"
-    ].annotation == inspect.Signature.empty
+    assert (
+        get_type_hints(RoomMessageCenter.set_redis_service)["redis_service"]
+        == RoomDistributedLock | None
+    )
+
+
+def test_app_shell_room_lock_uses_public_redis_protocol_surface():
+    import inspect
+    from pathlib import Path
+    from typing import get_type_hints
+
+    from app_shell.room_lock import RedisLockStore, RedisRoomDistributedLock
+
+    source = Path("app_shell/room_lock.py").read_text()
+    init_hints = get_type_hints(RedisRoomDistributedLock.__init__)
+
+    assert "Any" not in source
+    assert "._client" not in source
+    assert "_client" not in source
+    assert ".set_nx(" in source
+    assert init_hints["redis_service"] == RedisLockStore | None
+    acquire_hints = get_type_hints(RedisRoomDistributedLock.acquire)
+    assert acquire_hints["ttl"] is int
 
 
 class _FakeCursor:

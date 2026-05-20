@@ -80,7 +80,8 @@
       "package": "modules",
       "py_files": 26,
       "runtime_import_files": [
-        "main.py"
+        "main.py",
+        "services/debate_service.py"
       ],
       "runtime_blockers": [
         "main.py imports legacy module compatibility objects during app-shell startup binding."
@@ -131,6 +132,12 @@
       "py_files": 36,
       "runtime_import_files": [
         "main.py",
+        "modules/AgentCenter.py",
+        "modules/InspectionCenter.py",
+        "modules/MemoryCenter.py",
+        "modules/RoomCenter.py",
+        "modules/TaskCenter.py",
+        "modules/WorkflowCenter.py",
         "scripts/backfill_domain_aliases.py",
         "scripts/reupsert_agents_pinecone.py"
       ],
@@ -204,11 +211,25 @@
       "runtime_import_files": [
         "container.py",
         "database/mongodb.py",
+        "infrastructure/brokers/__init__.py",
+        "infrastructure/brokers/redis_broker.py",
+        "infrastructure/redis_service.py",
         "main.py",
-        "scripts/_discovery_client.py"
+        "scripts/_discovery_client.py",
+        "services/a2a_service.py",
+        "services/agent_capability_issue_service.py",
+        "services/agent_health_service.py",
+        "services/agent_liveness_service.py",
+        "services/agent_resolver_service.py",
+        "services/bedrock_service.py",
+        "services/database_service.py",
+        "services/openai_service.py",
+        "services/relay_service.py",
+        "services/room_supervisor_service.py",
+        "services/s3_service.py"
       ],
       "runtime_blockers": [
-        "main.py, container.py, scripts, and database compatibility paths still import config.settings."
+        "main.py, container.py, scripts, database compatibility paths, services compatibility paths, and infrastructure compatibility paths still import config.settings."
       ],
       "status": "blocked",
       "test_import_files": [
@@ -229,7 +250,9 @@
       "package": "infrastructure",
       "py_files": 7,
       "runtime_import_files": [
-        "main.py"
+        "main.py",
+        "services/agent_health_service.py",
+        "services/relay_service.py"
       ],
       "runtime_blockers": [
         "Legacy infrastructure broker compatibility paths still import config.settings."

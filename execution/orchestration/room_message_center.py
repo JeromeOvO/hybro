@@ -288,7 +288,7 @@ class RoomMessageCenter:
         # Turn-event dual-write wiring removed. Runtime now uses
         # message/task SSE as the single source of truth.
 
-    def set_redis_service(self, redis_service) -> None:
+    def set_redis_service(self, redis_service: RoomDistributedLock | None) -> None:
         self.set_room_distributed_lock(redis_service)
         # Turn-event dual-write wiring removed. Runtime now uses
         # message/task SSE as the single source of truth.

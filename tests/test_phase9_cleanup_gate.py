@@ -30,12 +30,14 @@ FORBIDDEN_PRODUCTION_IMPORT_PREFIXES = (
 )
 
 LEGACY_PACKAGES = {"modules", "services", "config", "infrastructure"}
+LEGACY_RUNTIME_ROOTS = tuple(sorted(LEGACY_PACKAGES))
 PACKAGE_REMOVAL_RUNTIME_ROOTS = (
     "main.py",
     "container.py",
     "scripts",
     "database",
     *PRODUCTION_ROOTS,
+    *LEGACY_RUNTIME_ROOTS,
 )
 
 FORBIDDEN_LEGACY_SHIM_IMPORT_PREFIXES = (
@@ -649,6 +651,14 @@ def test_shipped_legacy_packages_have_package_removal_checklist_entries():
     assert not violations, "Shipped legacy packages lack removal evidence:\n" + "\n".join(
         violations
     )
+
+
+def test_package_removal_runtime_scan_includes_shipped_legacy_roots():
+    roots = set(PACKAGE_REMOVAL_RUNTIME_ROOTS)
+    packages = set(tomllib.loads(Path("pyproject.toml").read_text())["tool"]["setuptools"]["packages"])
+    shipped_legacy = packages & LEGACY_PACKAGES
+
+    assert shipped_legacy.issubset(roots)
 
 
 def test_legacy_workflow_cleanup_readiness_is_explicit():

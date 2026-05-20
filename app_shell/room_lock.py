@@ -1,10 +1,17 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Protocol
 
 from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class RedisLockStore(Protocol):
+    is_connected: bool
+
+    async def set_nx(self, key: str, value: str, ex: int | None = None) -> bool: ...
+    async def eval_script(self, script: str, num_keys: int, *args: str) -> object: ...
 
 
 class RedisRoomDistributedLock:
@@ -15,23 +22,18 @@ class RedisRoomDistributedLock:
         "return redis.call('del',KEYS[1]) else return 0 end"
     )
 
-    def __init__(self, redis_service: Any | None) -> None:
+    def __init__(self, redis_service: RedisLockStore | None) -> None:
         self._redis_service = redis_service
 
     async def acquire(self, room_id: str, owner: str, ttl: int) -> bool | None:
         if self._redis_service is None or not self._redis_service.is_connected:
             return None
-        client = getattr(self._redis_service, "_client", None)
-        if client is None:
-            return None
         try:
-            result = await client.set(
+            return await self._redis_service.set_nx(
                 f"{self._ROOM_LOCK_PREFIX}{room_id}",
                 owner,
-                nx=True,
                 ex=ttl,
             )
-            return result is not None
         except Exception:
             logger.debug(
                 "Redis error during distributed lock acquire for room %s",
@@ -60,4 +62,4 @@ class RedisRoomDistributedLock:
             )
 
 
-__all__ = ["RedisRoomDistributedLock"]
+__all__ = ["RedisLockStore", "RedisRoomDistributedLock"]
