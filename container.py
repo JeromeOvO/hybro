@@ -72,7 +72,7 @@ from delivery.sse.manager import SSETransportImpl
 from delivery.types import TaskRunner
 from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
 from platform_module import PlatformConfig, PlatformDeps, PlatformFacade
-from platform_module.deps import LoggerLike
+from platform_module.deps import DiscoveryQueryExpander, LoggerLike
 
 
 @dataclass(frozen=True)
@@ -195,6 +195,9 @@ def create_platform_config(app_settings: Any = settings) -> PlatformConfig:
             app_settings, "discovery_rate_limit_global", 1000
         ),
         discovery_default_limit=getattr(app_settings, "discovery_default_limit", 5),
+        discovery_confidence_threshold=getattr(
+            app_settings, "discovery_confidence_threshold", 0.0
+        ),
         max_upload_size_bytes=getattr(app_settings, "max_file_size_mb", 25)
         * 1024
         * 1024,
@@ -220,6 +223,7 @@ def create_platform_deps(
     object_storage: ObjectStorageDAL | None = None,
     content_storage_repository: ContentStorageRepository | None = None,
     discovery_provider: GatewayDiscoveryProvider | None = None,
+    discovery_query_expander: DiscoveryQueryExpander | None = None,
     redis: RedisKV | None = None,
     logger: LoggerLike | None = None,
 ) -> PlatformDeps:
@@ -228,6 +232,7 @@ def create_platform_deps(
         agent_matcher=agent_deps.agent_matcher,
         agent_management=agent_deps.agent_management,
         discovery_provider=discovery_provider,
+        discovery_query_expander=discovery_query_expander,
         agent_transport=agent_transport,
         agent_card_resolver=agent_card_resolver,
         redis=redis,

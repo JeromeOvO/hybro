@@ -23,6 +23,10 @@ class LoggerLike(Protocol):
     def error(self, message: str, *args, **kwargs) -> None: ...
 
 
+class DiscoveryQueryExpander(Protocol):
+    async def expand_query_for_discovery(self, query: str) -> str: ...
+
+
 class FileMetadataRepository(Protocol):
     async def create(self, data: dict) -> str: ...
     async def get(self, file_id: str) -> dict | None: ...
@@ -44,6 +48,7 @@ class PlatformDeps:
     agent_matcher: AgentMatcher | None = None
     agent_management: AgentManagement | None = None
     discovery_provider: GatewayDiscoveryProvider | None = None
+    discovery_query_expander: DiscoveryQueryExpander | None = None
     agent_transport: AgentTransport | None = None
     agent_card_resolver: AgentCardResolver | None = None
     redis: RedisKV | None = None
@@ -60,6 +65,7 @@ class PlatformDeps:
 
 __all__ = [
     "FileMetadataRepository",
+    "DiscoveryQueryExpander",
     "LoggerLike",
     "PlatformDeps",
     "RateLimitCollection",

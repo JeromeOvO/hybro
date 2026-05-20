@@ -20,14 +20,22 @@ class PlatformDiscovery:
         if self._deps.agent_matcher is None:
             raise RuntimeError("PlatformDiscovery requires a discovery provider or matcher")
 
+        match_query = query
+        if self._deps.discovery_query_expander is not None:
+            match_query = await self._deps.discovery_query_expander.expand_query_for_discovery(
+                query
+            )
+
         matches = await self._deps.agent_matcher.match_agents(
-            query,
+            match_query,
             limit=limit or self._config.discovery_default_limit,
             respect_visibility=False,
             requesting_user_id=None,
         )
         results: list[GatewayDiscoveryAgentResult] = []
         for match in matches:
+            if match.score < self._config.discovery_confidence_threshold:
+                continue
             agent = match.agent
             if agent is None and self._deps.agent_registry is not None:
                 agent = await self._deps.agent_registry.get_agent(match.agent_id)

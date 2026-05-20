@@ -43,6 +43,7 @@ class FakeRegistry:
 class FakeMatcher:
     def __init__(self, matches: list[AgentMatchResult]):
         self.matches = matches
+        self.calls: list[dict] = []
 
     async def match_agents(
         self,
@@ -52,6 +53,15 @@ class FakeMatcher:
         respect_visibility: bool = True,
         requesting_user_id: str | None = None,
     ) -> list[AgentMatchResult]:
+        self.calls.append(
+            {
+                "query": query,
+                "limit": limit,
+                "filter_ids": filter_ids,
+                "respect_visibility": respect_visibility,
+                "requesting_user_id": requesting_user_id,
+            }
+        )
         return self.matches[:limit]
 
 
@@ -63,6 +73,16 @@ class FakeDiscoveryProvider:
     async def discover_agents(self, query: str, limit: int | None = None):
         self.calls.append((query, limit))
         return self.response
+
+
+class FakeDiscoveryQueryExpander:
+    def __init__(self, expanded_query: str):
+        self.expanded_query = expanded_query
+        self.calls: list[str] = []
+
+    async def expand_query_for_discovery(self, query: str) -> str:
+        self.calls.append(query)
+        return self.expanded_query
 
 
 class InMemoryRateLimitCollection:
@@ -541,6 +561,42 @@ async def test_discovery_returns_gateway_masked_cards():
     assert result.agents[0].agent_card["url"].endswith(
         "/gateway/agents/agent-1/message/send"
     )
+
+
+@pytest.mark.asyncio
+async def test_platform_discovery_expands_query_and_filters_by_confidence_threshold():
+    from platform_module.discovery import PlatformDiscovery
+
+    agent_high = AgentInfo(
+        agent_id="agent-high",
+        name="High",
+        url="https://high.example",
+        raw_card={"name": "High", "url": "https://high.example"},
+    )
+    agent_low = AgentInfo(
+        agent_id="agent-low",
+        name="Low",
+        url="https://low.example",
+        raw_card={"name": "Low", "url": "https://low.example"},
+    )
+    matcher = FakeMatcher(
+        [
+            AgentMatchResult(agent_id="agent-low", score=0.69, agent=agent_low),
+            AgentMatchResult(agent_id="agent-high", score=0.71, agent=agent_high),
+        ]
+    )
+    expander = FakeDiscoveryQueryExpander("expanded search query")
+    discovery = PlatformDiscovery(
+        PlatformConfig(discovery_confidence_threshold=0.70),
+        PlatformDeps(agent_matcher=matcher, discovery_query_expander=expander),
+    )
+
+    response = await discovery.discover_agents("raw query", limit=10)
+
+    assert expander.calls == ["raw query"]
+    assert matcher.calls[0]["query"] == "expanded search query"
+    assert response.query == "raw query"
+    assert [agent.agent_id for agent in response.agents] == ["agent-high"]
 
 
 @pytest.mark.asyncio

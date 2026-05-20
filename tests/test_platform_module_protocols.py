@@ -234,14 +234,42 @@ def test_container_platform_factory_uses_protocol_annotations():
 
     from container import create_platform_deps
     from common.protocols import AgentCardResolver, AgentTransport, GatewayDiscoveryProvider
-    from platform_module.deps import LoggerLike
+    from platform_module.deps import DiscoveryQueryExpander, LoggerLike
 
     hints = get_type_hints(create_platform_deps)
 
     assert hints["agent_transport"] is AgentTransport
     assert hints["agent_card_resolver"] == AgentCardResolver | None
     assert hints["discovery_provider"] == GatewayDiscoveryProvider | None
+    assert hints["discovery_query_expander"] == DiscoveryQueryExpander | None
     assert hints["logger"] == LoggerLike | None
+
+
+def test_platform_config_carries_discovery_confidence_threshold_from_settings():
+    from container import create_platform_config
+
+    class Settings:
+        gateway_base_url = ""
+        api_prefix = "/api/v1"
+        gateway_rate_limit_per_key = 100
+        gateway_rate_limit_global = 1000
+        discovery_rate_limit_per_key = 100
+        discovery_rate_limit_global = 1000
+        discovery_default_limit = 5
+        discovery_confidence_threshold = 0.73
+        max_file_size_mb = 25
+        s3_presigned_url_ttl = 3600
+        compaction_content_ttl_days = 0
+
+    config = create_platform_config(Settings())
+
+    assert config.discovery_confidence_threshold == 0.73
+
+
+def test_main_injects_discovery_query_expander_into_platform_deps():
+    source = Path("main.py").read_text()
+
+    assert "discovery_query_expander=openai_service" in source
 
 
 def test_file_route_dependencies_can_be_rebound_without_concrete_services():
@@ -268,7 +296,7 @@ def test_platform_config_is_scalar_only():
     from platform_module import PlatformConfig
 
     config = PlatformConfig()
-    scalar_types = (str, int, tuple)
+    scalar_types = (str, int, float, tuple)
 
     assert config.max_upload_size_bytes > 0
     for field in fields(config):

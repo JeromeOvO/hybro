@@ -551,6 +551,10 @@ def test_gateway_service_shim_has_been_removed():
     assert not Path("services/gateway_service.py").exists()
 
 
+def test_discovery_service_shim_has_been_removed():
+    assert not Path("services/discovery_service.py").exists()
+
+
 def test_file_upload_service_shim_has_been_removed():
     assert not Path("services/file_upload_service.py").exists()
 
