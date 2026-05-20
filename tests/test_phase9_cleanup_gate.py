@@ -297,6 +297,12 @@ def test_common_package_has_no_module_or_app_shell_imports():
     assert not violations, "Forbidden Common imports remain:\n" + "\n".join(violations)
 
 
+def test_turn_id_helper_is_common_leaf_without_manifest_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="common_import_boundary")
+
+    assert "common/utils/turn_id.py" not in blocked_paths
+
+
 def test_retained_legacy_service_shims_do_not_keep_concrete_implementations():
     violations = _legacy_service_shim_violations()
 
