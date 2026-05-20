@@ -28,13 +28,6 @@
       "contract": "sdk_confinement",
       "expiry_task": "Final SDK confinement migration",
       "owner": "phase-9-platform-api-cleanup",
-      "path": "main.py",
-      "reason": "App-shell startup still converts string task states with the A2A SDK TaskState enum while legacy notification adapters remain in service; move this conversion behind A2A adapter/Common state translation before final SDK confinement is claimed."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
       "path": "api/a2a_tasks.py",
       "reason": "Public A2A task route schemas still expose SDK TaskState types for compatibility; must move behind route translators before final SDK confinement is claimed."
     },

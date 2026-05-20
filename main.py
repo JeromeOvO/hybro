@@ -5,7 +5,6 @@ import sys
 import time
 from contextlib import asynccontextmanager
 
-from a2a.types import TaskState
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -378,6 +377,7 @@ async def lifespan(app: FastAPI):
                 _notify_task_update_impl,
                 notify_task_update,
             )
+            from a2a_adapter.task_status import coerce_task_state
             room_center.bind_room_dependencies(
                 center=RoomCenter(),
                 message_center=execution_room_message_center,
@@ -390,8 +390,7 @@ async def lifespan(app: FastAPI):
 
             async def notify_task_update_with_string_state(**kwargs):
                 state = kwargs.get("state")
-                if isinstance(state, str):
-                    kwargs["state"] = TaskState(state)
+                kwargs["state"] = coerce_task_state(state)
                 return await notify_task_update(**kwargs)
 
             bind_hitl_service(
