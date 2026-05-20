@@ -28,13 +28,6 @@
       "contract": "legacy_import_boundary",
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
       "owner": "phase-9-platform-api-cleanup",
-      "path": "jobs/compaction_sweep.py",
-      "reason": "Background compaction sweep still calls legacy MongoDB and compaction service singletons; deletion or app-shell dependency binding requires compaction job migration readiness."
-    },
-    {
-      "contract": "legacy_import_boundary",
-      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
-      "owner": "phase-9-platform-api-cleanup",
       "path": "jobs/stale_task_checker.py",
       "reason": "Stale task checker still uses legacy task polling, notification, metrics, database, and settings singletons; recovery behavior is preserved until a protocol-bound job migration lands."
     },

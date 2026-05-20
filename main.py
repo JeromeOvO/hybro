@@ -45,7 +45,7 @@ from jobs.cleanup_orphaned_uploads import (
     OrphanedUploadCleanerDeps,
     orphaned_upload_cleaner,
 )
-from jobs.compaction_sweep import compaction_sweep
+from jobs.compaction_sweep import CompactionSweepDeps, compaction_sweep
 from jobs.constants import ALL_JOB_NAMES
 from jobs.stale_task_checker import stale_task_checker
 from services.agent_health_service import agent_health_service
@@ -776,6 +776,13 @@ async def lifespan(app: FastAPI):
                 )
             )
         compaction_sweep.set_leader_election(_leader)
+        compaction_sweep.set_sweep_deps(
+            CompactionSweepDeps(
+                room_memories_collection=mongodb.room_memories_collection,
+                get_room_ids_with_non_terminal_runs=mongodb.get_room_ids_with_non_terminal_runs,
+                compaction_service=compaction_service,
+            )
+        )
         orphaned_upload_cleaner.set_leader_election(_leader)
         orphaned_upload_cleaner.set_cleanup_deps(
             OrphanedUploadCleanerDeps(

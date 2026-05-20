@@ -321,6 +321,12 @@ def test_orphaned_upload_cleaner_has_no_legacy_boundary_blocker():
     assert "jobs/cleanup_orphaned_uploads.py" not in blocked_paths
 
 
+def test_compaction_sweep_has_no_legacy_boundary_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="legacy_import_boundary")
+
+    assert "jobs/compaction_sweep.py" not in blocked_paths
+
+
 def test_retained_legacy_service_shims_do_not_keep_concrete_implementations():
     violations = _legacy_service_shim_violations()
 

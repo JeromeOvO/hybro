@@ -84,7 +84,7 @@ class TestCompactionSweep:
     @pytest.mark.asyncio
     async def test_sweep_uses_correct_attribute_names(self, mock_compaction_config):
         """Verify sweep accesses room_memories_collection and compacted_count."""
-        from jobs.compaction_sweep import CompactionSweep
+        from jobs.compaction_sweep import CompactionSweep, CompactionSweepDeps
 
         sweep = CompactionSweep(interval_minutes=60)
 
@@ -106,15 +106,15 @@ class TestCompactionSweep:
         mock_mem_coll = MagicMock()
         mock_mem_coll.find.return_value = mock_mem_cursor
 
-        mock_mongodb = MagicMock()
-        mock_mongodb.room_memories_collection = mock_mem_coll
-        mock_mongodb.get_room_ids_with_non_terminal_runs = AsyncMock(return_value=[])
+        sweep.set_sweep_deps(
+            CompactionSweepDeps(
+                room_memories_collection=mock_mem_coll,
+                get_room_ids_with_non_terminal_runs=AsyncMock(return_value=[]),
+                compaction_service=mock_compaction_svc,
+            )
+        )
 
-        with (
-            patch("database.mongodb.mongodb", mock_mongodb),
-            patch("services.compaction_service.compaction_service", mock_compaction_svc),
-        ):
-            stats = await sweep.sweep()
+        stats = await sweep.sweep()
 
         assert stats["scanned"] == 1
         assert stats["compacted"] == 1
@@ -123,7 +123,7 @@ class TestCompactionSweep:
     @pytest.mark.asyncio
     async def test_sweep_skips_rooms_with_active_processing(self, mock_compaction_config):
         """Rooms with non-terminal runs should be skipped."""
-        from jobs.compaction_sweep import CompactionSweep
+        from jobs.compaction_sweep import CompactionSweep, CompactionSweepDeps
 
         sweep = CompactionSweep(interval_minutes=60)
 
@@ -146,17 +146,17 @@ class TestCompactionSweep:
         mock_mem_coll = MagicMock()
         mock_mem_coll.find.return_value = mock_mem_cursor
 
-        mock_mongodb = MagicMock()
-        mock_mongodb.room_memories_collection = mock_mem_coll
-        mock_mongodb.get_room_ids_with_non_terminal_runs = AsyncMock(
-            return_value=["active_room"]
+        sweep.set_sweep_deps(
+            CompactionSweepDeps(
+                room_memories_collection=mock_mem_coll,
+                get_room_ids_with_non_terminal_runs=AsyncMock(
+                    return_value=["active_room"]
+                ),
+                compaction_service=mock_compaction_svc,
+            )
         )
 
-        with (
-            patch("database.mongodb.mongodb", mock_mongodb),
-            patch("services.compaction_service.compaction_service", mock_compaction_svc),
-        ):
-            stats = await sweep.sweep()
+        stats = await sweep.sweep()
 
         assert stats["scanned"] == 2
         assert stats["skipped"] == 1
