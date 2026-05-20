@@ -5,6 +5,7 @@ from typing import Any
 
 from common.protocols import MongoCollection, MongoDAL
 from common.utils.logger import get_logger
+from common.utils.time import utcnow
 
 logger = get_logger(__name__)
 
@@ -361,13 +362,18 @@ class ContentStorageMongoRepository:
         self, room_id: str, query: str, limit: int = 50
     ) -> list[dict]:
         return await self._content.find(
-            {"room_id": room_id, "$text": {"$search": query}},
+            {
+                "room_id": room_id,
+                "$text": {"$search": query},
+                **_unexpired_content_query(),
+            },
             projection={
                 "score": {"$meta": "textScore"},
                 "turn_id": 1,
                 "turn_notes": 1,
                 "content_type": 1,
                 "stored_at": 1,
+                "expires_at": 1,
             },
             sort=[("score", {"$meta": "textScore"})],
             limit=limit,
@@ -379,8 +385,12 @@ class ContentStorageMongoRepository:
         if not turn_ids:
             return []
         return await self._content.find(
-            {"room_id": room_id, "turn_id": {"$in": turn_ids}},
-            projection={"turn_id": 1, "turn_notes": 1},
+            {
+                "room_id": room_id,
+                "turn_id": {"$in": turn_ids},
+                **_unexpired_content_query(),
+            },
+            projection={"turn_id": 1, "turn_notes": 1, "expires_at": 1},
             limit=len(turn_ids),
         )
 
@@ -388,6 +398,16 @@ class ContentStorageMongoRepository:
 def _sanitize_update(updates: dict) -> dict:
     immutable = {"_id", "room_id", "memory_id"}
     return {key: value for key, value in updates.items() if key not in immutable}
+
+
+def _unexpired_content_query() -> dict:
+    return {
+        "$or": [
+            {"expires_at": {"$exists": False}},
+            {"expires_at": None},
+            {"expires_at": {"$gt": utcnow()}},
+        ]
+    }
 
 
 def _history_contains_turn(doc: dict, turn_id: str) -> bool:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -1057,6 +1057,46 @@ async def test_content_text_search_projection_excludes_full_content(content_repo
     assert projection["stored_at"] == 1
 
 
+@pytest.mark.asyncio
+async def test_content_text_search_filters_expired_documents(content_repo, mongo):
+    await content_repo.text_search("r1", "query", limit=10)
+
+    query, _kwargs = mongo.collections["conversation_content"].find_calls[-1]
+    expiry_filter = query["$or"]
+
+    assert {"expires_at": {"$exists": False}} in expiry_filter
+    assert {"expires_at": None} in expiry_filter
+    assert any(
+        isinstance(item.get("expires_at"), dict) and "$gt" in item["expires_at"]
+        for item in expiry_filter
+    )
+
+
+@pytest.mark.asyncio
+async def test_content_hydrate_turn_notes_filters_expired_documents(content_repo, mongo):
+    coll = mongo.collections["conversation_content"]
+    await coll.insert_one(
+        {
+            "room_id": "r1",
+            "turn_id": "expired",
+            "turn_notes": {"one_liner": "expired"},
+            "expires_at": datetime.now(timezone.utc) - timedelta(days=1),
+        }
+    )
+    await coll.insert_one(
+        {
+            "room_id": "r1",
+            "turn_id": "active",
+            "turn_notes": {"one_liner": "active"},
+            "expires_at": datetime.now(timezone.utc) + timedelta(days=1),
+        }
+    )
+
+    docs = await content_repo.hydrate_turn_notes("r1", ["expired", "active"])
+
+    assert [doc["turn_id"] for doc in docs] == ["active"]
+
+
 def _matches(doc: dict, query: dict) -> bool:
     for key, expected in query.items():
         if key == "$and":
@@ -1083,6 +1123,13 @@ def _matches(doc: dict, query: dict) -> bool:
                     return False
             elif "$in" in expected:
                 if actual not in expected["$in"]:
+                    return False
+            elif "$gt" in expected:
+                if actual is None or actual <= expected["$gt"]:
+                    return False
+            elif "$exists" in expected:
+                exists = actual is not None
+                if exists is not bool(expected["$exists"]):
                     return False
             else:
                 return False
