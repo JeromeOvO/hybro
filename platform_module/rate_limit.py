@@ -172,6 +172,23 @@ class PlatformAgentRateLimiter:
             }
         )
 
+    async def check_rate_limit(
+        self,
+        agent_id: str,
+        user_id: str,
+        rate_limit_per_user: int | None,
+        rate_limit_system: int | None,
+    ) -> AgentRateLimitResult:
+        return await self.check_agent_limit(
+            agent_id,
+            user_id,
+            rate_limit_per_user,
+            rate_limit_system,
+        )
+
+    async def record_request(self, agent_id: str, user_id: str) -> None:
+        await self.record_agent_request(agent_id, user_id)
+
 
 class PlatformAPIKeyRateLimiter:
     def __init__(

@@ -150,6 +150,26 @@ async def test_agent_rate_limiter_records_requests():
 
 
 @pytest.mark.asyncio
+async def test_agent_rate_limiter_exposes_execution_method_names():
+    from platform_module.rate_limit import PlatformAgentRateLimiter
+
+    collection = InMemoryRateLimitCollection()
+    limiter = PlatformAgentRateLimiter(collection=collection, clock=lambda: NOW)
+
+    result = await limiter.check_rate_limit("agent-1", "user-1", 2, 5)
+    await limiter.record_request("agent-1", "user-1")
+
+    assert result.allowed is True
+    assert collection.docs == [
+        {
+            "agent_id": "agent-1",
+            "user_id": "user-1",
+            "timestamp": NOW.replace(tzinfo=None),
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_api_key_rate_limiter_blocks_per_key_and_global_limits():
     from platform_module.rate_limit import PlatformAPIKeyRateLimiter
 

@@ -229,7 +229,6 @@ async def lifespan(app: FastAPI):
             from services.memory_service import room_memory_service
             from services.notification_service import notification_service
             from services.debate_service import debate_service
-            from services.rate_limit_service import rate_limit_service
             from services.room_coordinator_service import room_coordinator_service
             from services.room_membership_source import LegacyRoomMembershipSeedSource
             from services.room_services import build_turn_content, room_services
@@ -246,6 +245,7 @@ async def lifespan(app: FastAPI):
             from modules.RoomCenter import RoomCenter
             from database.mongodb import get_db
             from database.repository import Repository
+            from platform_module.rate_limit import PlatformAgentRateLimiter
 
             bind_a2a_storage_dependencies(
                 storage_service=s3_service,
@@ -254,7 +254,9 @@ async def lifespan(app: FastAPI):
             )
             bind_context_llm_provider(openai_service)
             await mongodb.create_context_memory_indexes()
-            rate_limit_service.bind(collection=mongodb.agent_requests_collection)
+            agent_rate_limiter = PlatformAgentRateLimiter(
+                collection=mongodb.agent_requests_collection,
+            )
             viewset.bind_viewset_dependencies(
                 get_db=get_db,
                 create_repository=Repository,
@@ -459,7 +461,7 @@ async def lifespan(app: FastAPI):
                     task_service=task_service,
                     room_memory_service=room_memory_service,
                     debate_service=debate_service,
-                    rate_limit_service=rate_limit_service,
+                    rate_limit_service=agent_rate_limiter,
                     room_supervisor_service=room_supervisor_service,
                     hitl_coordinator=hitl_service,
                     task_notifications=TaskNotificationAdapter(
