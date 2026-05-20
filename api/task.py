@@ -42,7 +42,6 @@ def _legacy_task_gone() -> JSONResponse:
 @router.get("/task/queryTask/{task_id}")
 async def query_task(
     task_id: str,
-    center: Any = None,
 ):
     return _legacy_task_gone()
 
@@ -50,7 +49,6 @@ async def query_task(
 @router.get("/task/queryBaseTask/{task_id}")
 async def query_base_task(
     task_id: str,
-    center: Any = None,
 ):
     return _legacy_task_gone()
 
@@ -58,7 +56,6 @@ async def query_base_task(
 @router.get("/task/getAllSessions/{user_name}")
 async def get_all_sessions(
     user_name: str,
-    center: Any = None,
 ):
     return _legacy_task_gone()
 
@@ -66,7 +63,6 @@ async def get_all_sessions(
 @router.get("/task/getBaseTasksBySessionId/{session_id}")
 async def get_base_task_by_session_id(
     session_id: str,
-    center: Any = None,
 ):
     return _legacy_task_gone()
 
@@ -74,6 +70,5 @@ async def get_base_task_by_session_id(
 @router.get("/task/getMetaTasksByParentTaskId/{parent_task_id}")
 async def get_meta_tasks_by_parent_task_id(
     parent_task_id: str,
-    center: Any = None,
 ):
     return _legacy_task_gone()

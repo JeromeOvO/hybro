@@ -76,7 +76,7 @@ class TestProcessRoomUserMessage:
         })
         mock_bg = MagicMock()
 
-        result = await process_room_user_message(mock_request, mock_bg, mock_user)
+        result = await process_room_user_message(mock_request, mock_bg)
 
         assert result.status_code == 410
         body = result.body
@@ -112,7 +112,7 @@ class TestLegacyWorkflowRoutes:
             setattr(workflow, method_name, AsyncMock(return_value={"unexpected": True}))
         request = MagicMock()
 
-        result = await handler(request, workflow=workflow)
+        result = await handler()
 
         assert result.status_code == 410
         assert workflow.mock_calls == []

@@ -243,7 +243,21 @@ def test_old_implementation_packages_are_not_shipped_without_blocker():
 
 def test_legacy_workflow_cleanup_readiness_is_explicit():
     readiness = _manifest().get("legacy_workflow_decommission", {})
+    ready = readiness.get("ready")
+    evidence = readiness.get("evidence") or []
 
-    assert readiness.get("ready") is True or readiness.get("evidence"), (
-        "Legacy workflow cleanup is not proven; add readiness evidence or a blocker"
-    )
+    assert isinstance(ready, bool), "Legacy workflow readiness must be explicit"
+    if ready:
+        assert evidence, "Legacy workflow cleanup is marked ready without evidence"
+        return
+
+    blockers = [
+        item
+        for item in evidence
+        if item.get("classification") == "blocked_decommission_readiness"
+    ]
+    assert blockers, "Blocked legacy workflow cleanup needs explicit blocker evidence"
+    for blocker in blockers:
+        assert blocker.get("owner")
+        assert blocker.get("reason")
+        assert blocker.get("required_before_delete")

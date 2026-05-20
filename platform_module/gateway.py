@@ -300,6 +300,14 @@ class PlatformGateway:
         if "jsonrpc" in event and ("result" in event or "error" in event):
             return event
         payload = event.get("payload")
+        if event.get("event_type") == "error" and isinstance(payload, dict):
+            error = payload.get("error")
+            if error is not None:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": str(event.get("task_id") or event.get("taskId") or ""),
+                    "error": error if isinstance(error, dict) else {"message": str(error)},
+                }
         raw = payload.get("raw") if isinstance(payload, dict) else None
         envelope_id = None
         if isinstance(raw, dict):

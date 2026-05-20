@@ -149,3 +149,47 @@ def test_phase9_route_inventory_owners_resolve_to_real_symbols():
             missing.append(f"{route['path']}: {owner}")
 
     assert not missing, "Unresolved route owners:\n" + "\n".join(missing)
+
+
+def test_legacy_workflow_routes_are_parameterless_410_adapters():
+    from main import app
+
+    recorded_routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    legacy_keys = {
+        (
+            route["path"],
+            tuple(route["methods"]),
+            route["name"],
+        )
+        for route in recorded_routes
+        if route["owning_protocol"] == "legacy_workflow_decommission_manifest"
+    }
+
+    violations: list[str] = []
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        methods = tuple(
+            sorted(method for method in route.methods if method not in {"HEAD", "OPTIONS"})
+        )
+        key = (route.path, methods, route.name)
+        if key not in legacy_keys:
+            continue
+        query_params = [param.name for param in route.dependant.query_params]
+        body_params = [param.name for param in route.dependant.body_params]
+        dependencies = [
+            getattr(dependency.call, "__name__", repr(dependency.call))
+            for dependency in route.dependant.dependencies
+        ]
+        duplicate_dependencies = sorted(
+            name for name in set(dependencies) if dependencies.count(name) > 1
+        )
+        if query_params or body_params or duplicate_dependencies:
+            violations.append(
+                f"{route.path}: query={query_params} body={body_params} "
+                f"duplicate_deps={duplicate_dependencies}"
+            )
+
+    assert not violations, "Legacy 410 routes leak public params:\n" + "\n".join(
+        violations
+    )

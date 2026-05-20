@@ -62,50 +62,32 @@ TaskRequestDep = Depends(_get_task_request)
 
 
 @router.post("/orchestrationCenter/decomposeTask")
-async def decompose_task(
-    req: Any = None,
-    workflow: Any = None,
-):
+async def decompose_task():
     return _legacy_workflow_gone()
 
 
 @router.post("/orchestrationCenter/assignAgentsToMetaTasks")
-async def assign_agents_to_meta_tasks_by_parent_task_id(
-    req: Any = None,
-    workflow: Any = None,
-):
+async def assign_agents_to_meta_tasks_by_parent_task_id():
     return _legacy_workflow_gone()
 
 
 @router.post("/orchestrationCenter/assignAgentToMetaTask")
-async def assign_agent_to_meta_task(
-    req: Any = None,
-    workflow: Any = None,
-):
+async def assign_agent_to_meta_task():
     return _legacy_workflow_gone()
 
 
 @router.post("/orchestrationCenter/runWorkflow")
-async def run_workflow(
-    req: Any = None,
-    workflow: Any = None,
-):
+async def run_workflow():
     return _legacy_workflow_gone()
 
 
 @router.post("/orchestrationCenter/retryMetaTask")
-async def retry_meta_task(
-    req: Any = None,
-    workflow: Any = None,
-):
+async def retry_meta_task():
     return _legacy_workflow_gone()
 
 
 @router.post("/orchestrationCenter/summarizeMetaTaskForBaseTask")
-async def summarize_meta_task_for_base_task(
-    req: Any = None,
-    workflow: Any = None,
-):
+async def summarize_meta_task_for_base_task():
     return _legacy_workflow_gone()
 
 
@@ -116,7 +98,6 @@ async def summarize_meta_task_for_base_task(
 async def process_room_user_message(
     request: Request,
     background_tasks: BackgroundTasks,
-    user: ClerkUser = Depends(get_current_user),
 ):
     """
     **Deprecated.** Message processing is now triggered internally by sendMessage.

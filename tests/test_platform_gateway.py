@@ -1,7 +1,13 @@
 import pytest
 from a2a.types import Message, Part, Role, TextPart
 
-from common.dto import AgentCardSnapshot, AgentInfo, AgentMatchResult, AgentTaskResult
+from common.dto import (
+    AgentCardSnapshot,
+    AgentInfo,
+    AgentMatchResult,
+    AgentStreamEvent,
+    AgentTaskResult,
+)
 from platform_module import PlatformConfig, PlatformDeps
 
 
@@ -227,6 +233,18 @@ class JsonRpcListResultTransport(FakeTransport):
             },
             "final": True,
         }
+
+
+class AdapterErrorStreamTransport(FakeTransport):
+    async def stream_message(self, agent_url: str, message, **kwargs):
+        self.streamed.append((agent_url, message, kwargs))
+        yield AgentStreamEvent(
+            task_id="",
+            agent_id=message.agent_id,
+            event_type="error",
+            payload={"error": "boom"},
+            final=True,
+        )
 
 
 def _agent(**overrides) -> AgentInfo:
@@ -590,6 +608,22 @@ async def test_stream_preserves_upstream_jsonrpc_list_result():
             "jsonrpc": "2.0",
             "id": "rpc-stream-list-1",
             "result": [{"id": "task-1"}],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_maps_adapter_error_event_to_jsonrpc_error():
+    gateway = _gateway(transport=AdapterErrorStreamTransport())
+
+    stream = gateway.stream_message("agent-1", {"text": "hi"}, "owner-1")
+    events = [event async for event in stream]
+
+    assert events == [
+        {
+            "jsonrpc": "2.0",
+            "id": "",
+            "error": {"message": "boom"},
         }
     ]
 

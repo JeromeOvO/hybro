@@ -40,7 +40,7 @@ class TestLegacyTaskRoutes:
         ):
             setattr(center, method_name, AsyncMock(return_value={"unexpected": True}))
 
-        result = await handler(argument, center=center)
+        result = await handler(argument)
 
         assert result.status_code == 410
         assert center.mock_calls == []
