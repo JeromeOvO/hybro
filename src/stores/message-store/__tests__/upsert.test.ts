@@ -5,6 +5,7 @@ import type { MessageEntity, IncomingMessage } from '../types'
 // ── Helpers ──────────────────────────────────────────────────
 
 function makeEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
+  const timestamp = overrides.timestamp ?? '2026-02-17T10:00:00Z'
   return {
     id: 'msg-1',
     roomId: 'room-1',
@@ -16,7 +17,7 @@ function makeEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
     sourceVersion: 1,
     displayType: 'agent-bubble',
     isEphemeral: false,
-    createdAt: 1000,
+    createdAt: new Date(timestamp).getTime(),
     updatedAt: 1000,
     ...overrides,
   }

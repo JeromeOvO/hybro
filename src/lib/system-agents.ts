@@ -16,23 +16,23 @@ export const SYSTEM_AGENTS: Record<string, SystemAgentInfo> = {
       'A built-in agent that facilitates human-in-the-loop interactions, collecting clarifications and confirmations from the user.',
   },
   summary: {
-    name: 'Summary Agent',
+    name: 'HYBRO AI',
     description:
       'A built-in agent that summarizes responses from multiple agents in a room.',
   },
-  // Historical backward compatibility — all map to "Summary Agent"
+  // Historical backward compatibility — all map to "HYBRO AI"
   supervisor_synthesis: {
-    name: 'Summary Agent',
+    name: 'HYBRO AI',
     description:
       'A built-in agent that summarizes responses from multiple agents in a room.',
   },
   debate_summary: {
-    name: 'Summary Agent',
+    name: 'HYBRO AI',
     description:
       'A built-in agent that summarizes responses from multiple agents in a room.',
   },
   non_debate_summary: {
-    name: 'Summary Agent',
+    name: 'HYBRO AI',
     description:
       'A built-in agent that summarizes responses from multiple agents in a room.',
   },
