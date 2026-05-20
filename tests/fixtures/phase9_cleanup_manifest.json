@@ -77,13 +77,6 @@
       "contract": "sdk_confinement",
       "expiry_task": "Final SDK confinement migration",
       "owner": "phase-9-platform-api-cleanup",
-      "path": "execution/dispatch/dispatch_middleware.py",
-      "reason": "Phase 7b temporary Execution A2A SDK allowlist remains; migrate to Common DTOs or A2A adapter protocol types."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
       "path": "execution/dispatch/response_handler.py",
       "reason": "Phase 7b temporary Execution A2A SDK allowlist remains; migrate task-state handling to SDK-free Common constants."
     },

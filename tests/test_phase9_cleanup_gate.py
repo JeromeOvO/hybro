@@ -343,6 +343,12 @@ def test_legacy_public_models_have_no_sdk_confinement_blockers():
     assert "models/room.py" not in blocked_paths
 
 
+def test_execution_dispatch_middleware_has_no_sdk_confinement_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "execution/dispatch/dispatch_middleware.py" not in blocked_paths
+
+
 def test_common_package_has_no_module_or_app_shell_imports():
     violations = _common_import_violations()
 
