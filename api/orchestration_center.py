@@ -4,11 +4,12 @@ from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Re
 from fastapi.params import Depends as DependsParam
 from fastapi.responses import JSONResponse
 
+from app_shell.bound import LegacyWorkflowCenter
 from common.auth import ClerkUser, get_current_user
 from models.request import OrchestrationRequest
 
 router = APIRouter()
-workflow_center: Any | None = None
+workflow_center: LegacyWorkflowCenter | None = None
 LEGACY_GONE_RESPONSES = {
     410: {
         "description": "Legacy workflow endpoint deprecated",
@@ -16,13 +17,13 @@ LEGACY_GONE_RESPONSES = {
 }
 
 
-def bind_orchestration_dependencies(workflow: Any) -> None:
+def bind_orchestration_dependencies(workflow: LegacyWorkflowCenter) -> None:
     global workflow_center
 
     workflow_center = workflow
 
 
-def get_workflow_center() -> Any:
+def get_workflow_center() -> LegacyWorkflowCenter:
     if workflow_center is None:
         raise RuntimeError("Workflow center dependency has not been bound")
     return workflow_center

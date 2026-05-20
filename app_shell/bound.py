@@ -1,8 +1,11 @@
 from collections.abc import Mapping
 from typing import Any, Protocol, runtime_checkable
 
+from models.agent import Agent, AgentCapabilityIssue, IssueStatus
 from models.request import InspectionCenterRequest
+from models.request import AgentCenterRequest
 from models.response import (
+    AgentCenterResponse,
     InsepectionCenterConnectionValidationResponse,
     InspectionCenterResponse,
 )
@@ -48,6 +51,87 @@ class WebhookTransportFactory(Protocol):
 
 
 @runtime_checkable
+class AgentCenterRouteOwner(Protocol):
+    async def register_agent(self, request: AgentCenterRequest) -> AgentCenterResponse: ...
+    async def get_agents_by_provider_id(
+        self, request: AgentCenterRequest
+    ) -> AgentCenterResponse: ...
+    async def remove_agent(self, request: AgentCenterRequest) -> AgentCenterResponse: ...
+    async def update_agent(self, request: AgentCenterRequest) -> AgentCenterResponse: ...
+    async def get_agent_card_from_url(
+        self, request: AgentCenterRequest
+    ) -> AgentCenterResponse: ...
+    async def query_agent_by_agent_id(
+        self, request: AgentCenterRequest
+    ) -> AgentCenterResponse: ...
+    async def get_all_agents(self, request: AgentCenterRequest) -> AgentCenterResponse: ...
+    async def get_all_active_agents(
+        self, request: AgentCenterRequest
+    ) -> AgentCenterResponse: ...
+    async def get_agents_with_conditions(
+        self, request: AgentCenterRequest
+    ) -> AgentCenterResponse: ...
+    def _mask_sensitive_information(
+        self, response: AgentCenterResponse, fields: list[str]
+    ) -> AgentCenterResponse: ...
+
+
+@runtime_checkable
+class AgentLookup(Protocol):
+    async def get_agent_by_agent_id(self, agent_id: str) -> Agent | None: ...
+
+
+@runtime_checkable
+class AgentCapabilityIssueStore(Protocol):
+    async def get_issues_for_agent(
+        self,
+        agent_id: str,
+        *,
+        status: IssueStatus | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[AgentCapabilityIssue]: ...
+    async def resolve_all_for_agent(self, agent_id: str, provider_id: str) -> int: ...
+    async def get_issue_by_id(self, issue_id: str) -> AgentCapabilityIssue | None: ...
+    async def resolve_issue(
+        self, issue_id: str, provider_id: str
+    ) -> AgentCapabilityIssue | None: ...
+
+
+@runtime_checkable
+class AgentLivenessChecker(Protocol):
+    async def __call__(self, agent: Agent) -> Agent: ...
+
+
+@runtime_checkable
+class AgentSelectionSuggester(Protocol):
+    async def suggest_agents(
+        self, message_text: str, top_k: int = 3
+    ) -> dict[str, object]: ...
+
+
+@runtime_checkable
+class EmbeddingProvider(Protocol):
+    async def get_embedding(self, text: str) -> list[float] | None: ...
+
+
+@runtime_checkable
+class VectorIndex(Protocol):
+    def upsert(self, vectors: list[dict[str, object]]) -> object: ...
+    def delete(self, ids: list[str]) -> object: ...
+
+
+@runtime_checkable
+class LegacyWorkflowCenter(Protocol):
+    pass
+
+
+@runtime_checkable
+class LegacyTaskCenter(Protocol):
+    pass
+
+
+@runtime_checkable
 class LegacyMemoryCenter(Protocol):
     async def add_chat_context(self, request: object) -> object: ...
     async def get_chat_context_by_session_id(self, request: object) -> object: ...
@@ -74,10 +158,19 @@ class SSEManagerRouteOwner(Protocol):
 
 
 __all__ = [
+    "AgentCapabilityIssueStore",
+    "AgentCenterRouteOwner",
+    "AgentLivenessChecker",
+    "AgentLookup",
+    "AgentSelectionSuggester",
+    "EmbeddingProvider",
     "InspectionCenter",
     "LegacyMemoryCenter",
+    "LegacyTaskCenter",
+    "LegacyWorkflowCenter",
     "RoomCenterRouteOwner",
     "SSEManagerRouteOwner",
+    "VectorIndex",
     "ViewSetRepository",
     "WebhookTransport",
     "WebhookTransportFactory",

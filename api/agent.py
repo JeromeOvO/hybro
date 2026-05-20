@@ -1,8 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
-from typing import Any
 from uuid import uuid4
 
 from api.agent_viewset import AgentViewSet
+from app_shell.bound import (
+    AgentCapabilityIssueStore,
+    AgentCenterRouteOwner,
+    AgentLivenessChecker,
+    AgentLookup,
+)
 from common.auth import ClerkUser, get_current_user, get_optional_user, resolve_provider_name
 from common.protocols import AgentAvatarManager
 from models.agent import IssueStatus
@@ -12,18 +17,18 @@ from models.response import AgentCenterResponse
 router = APIRouter()
 agent_viewset = AgentViewSet()
 router.include_router(agent_viewset.get_router())
-agent_center: Any | None = None
-agent_service: Any | None = None
-capability_issue_service: Any | None = None
+agent_center: AgentCenterRouteOwner | None = None
+agent_service: AgentLookup | None = None
+capability_issue_service: AgentCapabilityIssueStore | None = None
 agent_avatar_manager: AgentAvatarManager | None = None
-agent_liveness_checker: Any | None = None
+agent_liveness_checker: AgentLivenessChecker | None = None
 
 
 def bind_agent_dependencies(
     *,
-    center: Any,
-    service: Any,
-    issue_service: Any,
+    center: AgentCenterRouteOwner,
+    service: AgentLookup,
+    issue_service: AgentCapabilityIssueStore,
     avatar_manager: AgentAvatarManager,
 ) -> None:
     global agent_center, agent_service, capability_issue_service, agent_avatar_manager
@@ -34,25 +39,25 @@ def bind_agent_dependencies(
     agent_avatar_manager = avatar_manager
 
 
-def bind_agent_liveness_checker(checker: Any) -> None:
+def bind_agent_liveness_checker(checker: AgentLivenessChecker) -> None:
     global agent_liveness_checker
 
     agent_liveness_checker = checker
 
 
-def _require_agent_center() -> Any:
+def _require_agent_center() -> AgentCenterRouteOwner:
     if agent_center is None:
         raise RuntimeError("Agent center dependency has not been bound")
     return agent_center
 
 
-def _require_agent_service() -> Any:
+def _require_agent_service() -> AgentLookup:
     if agent_service is None:
         raise RuntimeError("Agent service dependency has not been bound")
     return agent_service
 
 
-def _require_capability_issue_service() -> Any:
+def _require_capability_issue_service() -> AgentCapabilityIssueStore:
     if capability_issue_service is None:
         raise RuntimeError("Capability issue dependency has not been bound")
     return capability_issue_service
@@ -64,7 +69,7 @@ def _require_agent_avatar_manager() -> AgentAvatarManager:
     return agent_avatar_manager
 
 
-def _require_agent_liveness_checker() -> Any:
+def _require_agent_liveness_checker() -> AgentLivenessChecker:
     if agent_liveness_checker is None:
         raise RuntimeError("Agent liveness dependency has not been bound")
     return agent_liveness_checker

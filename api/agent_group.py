@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.params import Depends as DependsParam
 
+from app_shell.database_service import AgentGroupStore
 from models.agent_group import (
     BUILTIN_GROUP_ALL_AGENTS,
     BUILTIN_GROUP_ROOM_TEAM,
@@ -16,16 +17,16 @@ from models.agent_group import (
 )
 
 router = APIRouter()
-db_service: Any | None = None
+db_service: AgentGroupStore | None = None
 
 
-def bind_agent_group_dependencies(database_service: Any) -> None:
+def bind_agent_group_dependencies(database_service: AgentGroupStore) -> None:
     global db_service
 
     db_service = database_service
 
 
-def get_db_service() -> Any:
+def get_db_service() -> AgentGroupStore:
     if db_service is None:
         raise RuntimeError("Agent group database dependency has not been bound")
     return db_service
@@ -40,7 +41,7 @@ def _resolve_dependency(value: Any, provider) -> Any:
 @router.post("/agentGroups")
 async def create_agent_group(
     request: Request,
-    db: Any = Depends(get_db_service),
+    db: AgentGroupStore = Depends(get_db_service),
 ):
     """
     Create a new agent group.
@@ -85,7 +86,7 @@ async def create_agent_group(
 @router.get("/agentGroups")
 async def list_agent_groups(
     owner_id: str | None = Query(default=None),
-    db: Any = Depends(get_db_service),
+    db: AgentGroupStore = Depends(get_db_service),
 ):
     """
     List all agent groups for a user.
@@ -126,7 +127,7 @@ async def list_agent_groups(
 @router.get("/agentGroups/{group_id}")
 async def get_agent_group(
     group_id: str,
-    db: Any = Depends(get_db_service),
+    db: AgentGroupStore = Depends(get_db_service),
 ):
     """
     Get a specific agent group by ID.
@@ -180,7 +181,7 @@ async def get_agent_group(
 async def update_agent_group(
     group_id: str,
     request: Request,
-    db: Any = Depends(get_db_service),
+    db: AgentGroupStore = Depends(get_db_service),
 ):
     """
     Update an agent group.
@@ -232,7 +233,7 @@ async def update_agent_group(
 @router.delete("/agentGroups/{group_id}")
 async def delete_agent_group(
     group_id: str,
-    db: Any = Depends(get_db_service),
+    db: AgentGroupStore = Depends(get_db_service),
 ):
     """
     Delete an agent group.

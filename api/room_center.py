@@ -4,7 +4,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.params import Depends as DependsParam
 from fastapi.responses import JSONResponse
 
-from app_shell.bound import RoomCenterRouteOwner
+from app_shell.bound import AgentSelectionSuggester, RoomCenterRouteOwner
 from app_shell.database_service import A2ATaskReader
 from common.auth import ClerkUser, get_current_user
 from common.dto import ExecutionRequest, RunInfo
@@ -22,7 +22,7 @@ router = APIRouter()
 room_center: RoomCenterRouteOwner | None = None
 room_message_center: object | None = None
 db_service: A2ATaskReader | None = None
-agent_selection_service: object | None = None
+agent_selection_service: AgentSelectionSuggester | None = None
 execution_engine: ExecutionEngine | None = None
 
 
@@ -31,7 +31,7 @@ def bind_room_dependencies(
     center: RoomCenterRouteOwner,
     message_center: object,
     database_service: A2ATaskReader,
-    selection_service: object,
+    selection_service: AgentSelectionSuggester,
 ) -> None:
     global room_center, room_message_center, db_service, agent_selection_service
 
@@ -64,7 +64,7 @@ def _require_db_service() -> A2ATaskReader:
     return db_service
 
 
-def get_agent_selection_service() -> object:
+def get_agent_selection_service() -> AgentSelectionSuggester:
     if agent_selection_service is None:
         raise RuntimeError("Agent selection dependency has not been bound")
     return agent_selection_service
@@ -436,7 +436,7 @@ async def send_message(
 @router.post("/roomCenter/suggestAgents")
 async def suggest_agents(
     request: Request,
-    selection_service: Any = Depends(get_agent_selection_service),
+    selection_service: AgentSelectionSuggester = Depends(get_agent_selection_service),
 ):
     """
     Suggest agents for a message based on content analysis.

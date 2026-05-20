@@ -120,16 +120,10 @@ def test_api_bindings_do_not_expose_concrete_store_or_service_names():
     )
 
 
-def test_named_api_bindings_do_not_use_any_typed_dependency_globals():
-    watched_paths = {
-        Path("api/room_center.py"),
-        Path("api/memory_center.py"),
-        Path("api/relay.py"),
-        Path("api/sse.py"),
-    }
+def test_api_bindings_do_not_use_any_typed_dependency_seams():
     violations: list[str] = []
 
-    for path in sorted(watched_paths):
+    for path in sorted(Path("api").glob("*.py")):
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in tree.body:
             if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
@@ -139,6 +133,21 @@ def test_named_api_bindings_do_not_use_any_typed_dependency_globals():
                 for arg in (*node.args.args, *node.args.kwonlyargs):
                     if arg.annotation is not None and ast.unparse(arg.annotation) == "Any":
                         violations.append(f"{path}:{node.lineno}: {node.name}.{arg.arg}")
+            if isinstance(node, ast.FunctionDef) and node.name.startswith("get_"):
+                if node.returns is not None and ast.unparse(node.returns) == "Any":
+                    violations.append(f"{path}:{node.lineno}: {node.name}.return")
+            if isinstance(node, ast.AsyncFunctionDef):
+                for arg in (*node.args.args, *node.args.kwonlyargs):
+                    if arg.annotation is not None and ast.unparse(arg.annotation) == "Any":
+                        default = None
+                        arg_names = [item.arg for item in node.args.args]
+                        if arg.arg in arg_names:
+                            index = arg_names.index(arg.arg)
+                            default_index = index - (len(arg_names) - len(node.args.defaults))
+                            if default_index >= 0:
+                                default = node.args.defaults[default_index]
+                        if isinstance(default, ast.Call) and ast.unparse(default.func).endswith("Depends"):
+                            violations.append(f"{path}:{node.lineno}: {node.name}.{arg.arg}")
 
     assert not violations, "API bindings still use Any for dependency seams:\n" + "\n".join(
         violations

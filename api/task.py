@@ -4,8 +4,10 @@ from fastapi import APIRouter
 from fastapi.params import Depends as DependsParam
 from fastapi.responses import JSONResponse
 
+from app_shell.bound import LegacyTaskCenter
+
 router = APIRouter()
-task_center: Any | None = None
+task_center: LegacyTaskCenter | None = None
 LEGACY_GONE_RESPONSES = {
     410: {
         "description": "Legacy task endpoint deprecated",
@@ -13,13 +15,13 @@ LEGACY_GONE_RESPONSES = {
 }
 
 
-def bind_task_dependencies(center: Any) -> None:
+def bind_task_dependencies(center: LegacyTaskCenter) -> None:
     global task_center
 
     task_center = center
 
 
-def get_task_center() -> Any:
+def get_task_center() -> LegacyTaskCenter:
     if task_center is None:
         raise RuntimeError("Task center dependency has not been bound")
     return task_center

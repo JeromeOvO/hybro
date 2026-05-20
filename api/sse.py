@@ -63,7 +63,7 @@ def _resolve_dependency(value: Any, provider) -> Any:
 async def stream_room_messages(
     room_id: str = Path(..., description="room ID"),
     user: ClerkUser = Depends(get_current_user_with_query_token),
-    manager: Any = Depends(get_sse_manager),
+    manager: SSEManagerRouteOwner = Depends(get_sse_manager),
 ):
     """
     create SSE message stream for specified room
@@ -129,7 +129,7 @@ async def stream_room_messages(
 async def get_room_sse_status(
     room_id: str = Path(..., description="room ID"),
     user: ClerkUser = Depends(get_current_user_with_query_token),
-    manager: Any = Depends(get_sse_manager),
+    manager: SSEManagerRouteOwner = Depends(get_sse_manager),
 ):
     """
     get SSE connection status for specified room
@@ -149,7 +149,7 @@ async def get_room_sse_status(
 async def cancel_message(
     message_id: str = Path(..., description="Message ID to cancel"),
     user: ClerkUser = Depends(get_current_user),
-    db: Any = Depends(get_db_service),
+    db: A2ATaskReader = Depends(get_db_service),
 ):
     """
     Cancel an ongoing message processing workflow.

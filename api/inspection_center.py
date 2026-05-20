@@ -4,19 +4,20 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.params import Depends as DependsParam
 from loguru import logger
 
+from app_shell.bound import InspectionCenter
 from models.request import InspectionCenterRequest
 
 router = APIRouter()
-inspection_center: Any | None = None
+inspection_center: InspectionCenter | None = None
 
 
-def bind_inspection_dependencies(center: Any) -> None:
+def bind_inspection_dependencies(center: InspectionCenter) -> None:
     global inspection_center
 
     inspection_center = center
 
 
-def get_inspection_center() -> Any:
+def get_inspection_center() -> InspectionCenter:
     if inspection_center is None:
         raise RuntimeError("Inspection center dependency has not been bound")
     return inspection_center
@@ -31,7 +32,7 @@ def _resolve_dependency(value: Any, provider) -> Any:
 @router.post("/inspectionCenter/inspectAgentCard")
 async def inspect_agent(
     request: Request,
-    center: Any = Depends(get_inspection_center),
+    center: InspectionCenter = Depends(get_inspection_center),
 ):
     request_data = await request.json()
     agent_url = request_data.get("agent_url")
@@ -49,7 +50,7 @@ async def inspect_agent(
 @router.post("/inspectionCenter/inspectA2AConnection")
 async def inspect_a2a_connection(
     request: Request,
-    center: Any = Depends(get_inspection_center),
+    center: InspectionCenter = Depends(get_inspection_center),
 ):
     request_data = await request.json()
     agent_url = request_data.get("agent_url")

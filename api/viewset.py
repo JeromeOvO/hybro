@@ -40,7 +40,7 @@ def bind_viewset_dependencies(
     repository_factory = create_repository
 
 
-def get_viewset_db() -> Any:
+def get_viewset_db() -> object:
     if db_provider is None:
         raise RuntimeError("ViewSet database dependency has not been bound")
     return db_provider()

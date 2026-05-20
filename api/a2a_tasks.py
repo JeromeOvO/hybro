@@ -11,13 +11,14 @@ from a2a.types import TaskState
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.params import Depends as DependsParam
 
+from app_shell.database_service import A2ATaskReader
 from common.auth import ClerkUser, get_current_user
 from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 router = APIRouter()
-db_service: Any | None = None
+db_service: A2ATaskReader | None = None
 
 PENDING_STATES = {TaskState.submitted, TaskState.working}
 INTERACTIVE_STATES = {TaskState.input_required, TaskState.auth_required}
@@ -38,13 +39,13 @@ def get_retry_after_seconds(state: TaskState) -> int | None:
     return 30
 
 
-def bind_a2a_task_dependencies(database_service: Any) -> None:
+def bind_a2a_task_dependencies(database_service: A2ATaskReader) -> None:
     global db_service
 
     db_service = database_service
 
 
-def get_db_service() -> Any:
+def get_db_service() -> A2ATaskReader:
     if db_service is None:
         raise RuntimeError("A2A task database dependency has not been bound")
     return db_service
@@ -60,7 +61,7 @@ def _resolve_dependency(value: Any, provider) -> Any:
 async def get_task_status(
     message_id: str,
     current_user: ClerkUser = Depends(get_current_user),
-    db: Any = Depends(get_db_service),
+    db: A2ATaskReader = Depends(get_db_service),
 ) -> dict[str, Any]:
     """
     Get the status of a long-running A2A task.
@@ -106,7 +107,7 @@ async def list_room_tasks(
     room_id: str,
     limit: int = 50,
     current_user: ClerkUser = Depends(get_current_user),
-    db: Any = Depends(get_db_service),
+    db: A2ATaskReader = Depends(get_db_service),
 ) -> dict[str, Any]:
     """
     List all A2A tasks for a room.
@@ -160,7 +161,7 @@ async def list_room_tasks(
 @router.get("/users/me/a2a-tasks")
 async def list_user_pending_tasks(
     current_user: ClerkUser = Depends(get_current_user),
-    db: Any = Depends(get_db_service),
+    db: A2ATaskReader = Depends(get_db_service),
 ) -> dict[str, Any]:
     """
     List all pending A2A tasks for the current user.

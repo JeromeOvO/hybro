@@ -31,7 +31,7 @@ def _resolve_dependency(value: Any, provider) -> Any:
 @router.post("/memoryCenter/addChatContext")
 async def add_chat_context(
     request: Request,
-    center: Any = Depends(get_memory_center),
+    center: LegacyMemoryCenter = Depends(get_memory_center),
 ):
     center = _resolve_dependency(center, get_memory_center)
     request_data = await request.json()
@@ -48,7 +48,7 @@ async def add_chat_context(
 @router.post("/memoryCenter/getChatContextBySessionId")
 async def get_chat_context_by_session_id(
     request: Request,
-    center: Any = Depends(get_memory_center),
+    center: LegacyMemoryCenter = Depends(get_memory_center),
 ):
     center = _resolve_dependency(center, get_memory_center)
     request_data = await request.json()
@@ -66,7 +66,7 @@ async def get_chat_context_by_session_id(
 @router.post("/memoryCenter/updateChatContextBySessionId")
 async def update_chat_context_by_session_id(
     request: Request,
-    center: Any = Depends(get_memory_center),
+    center: LegacyMemoryCenter = Depends(get_memory_center),
 ):
     center = _resolve_dependency(center, get_memory_center)
     request_data = await request.json()
@@ -91,7 +91,7 @@ async def update_chat_context_by_session_id(
 @router.post("/memoryCenter/deleteChatContextBySessionId")
 async def delete_chat_context_by_session_id(
     request: Request,
-    center: Any = Depends(get_memory_center),
+    center: LegacyMemoryCenter = Depends(get_memory_center),
 ):
     center = _resolve_dependency(center, get_memory_center)
     request_data = await request.json()

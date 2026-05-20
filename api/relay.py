@@ -67,7 +67,7 @@ class RegisterHubResponse(BaseModel):
 async def relay_register(
     body: RegisterHubRequest,
     api_key: APIKey = Depends(get_api_key_no_track),
-    svc: Any = Depends(get_relay_service),
+    svc: HubManagement = Depends(get_relay_service),
 ):
     svc = _resolve_dependency(svc, get_relay_service)
     hub = await svc.register_hub(body.hub_id, api_key)
@@ -84,7 +84,7 @@ async def relay_events(
     request: Request,
     last_event_id: str | None = Query(None),
     api_key: APIKey = Depends(get_api_key_no_track),
-    svc: Any = Depends(get_relay_service),
+    svc: HubManagement = Depends(get_relay_service),
 ):
     svc = _resolve_dependency(svc, get_relay_service)
 
@@ -127,7 +127,7 @@ async def relay_publish(
     hub_id: str,
     body: HubPublishRequest,
     api_key: APIKey = Depends(get_api_key),
-    svc: Any = Depends(get_relay_service),
+    svc: HubManagement = Depends(get_relay_service),
 ):
     svc = _resolve_dependency(svc, get_relay_service)
 
@@ -154,7 +154,7 @@ async def relay_sync_agents(
     hub_id: str,
     body: HubAgentSyncRequest,
     api_key: APIKey = Depends(get_api_key_no_track),
-    svc: Any = Depends(get_relay_service),
+    svc: HubManagement = Depends(get_relay_service),
 ):
     svc = _resolve_dependency(svc, get_relay_service)
     try:
@@ -175,7 +175,7 @@ async def relay_sync_agents(
 @router.get("/hub/status", response_model=HubStatusResponse)
 async def relay_status(
     api_key: APIKey = Depends(get_api_key),
-    svc: Any = Depends(get_relay_service),
+    svc: HubManagement = Depends(get_relay_service),
 ):
     svc = _resolve_dependency(svc, get_relay_service)
     hubs = await svc.get_hub_status(api_key.user_id)
@@ -190,7 +190,7 @@ async def relay_status(
 async def relay_heartbeat(
     hub_id: str,
     api_key: APIKey = Depends(get_api_key_no_track),
-    svc: Any = Depends(get_relay_service),
+    svc: HubManagement = Depends(get_relay_service),
 ):
     """Lightweight liveness signal from the hub daemon."""
     svc = _resolve_dependency(svc, get_relay_service)

@@ -6,17 +6,18 @@ from pydantic import BaseModel
 
 from api import viewset
 from api.viewset import REPO_ACTIONS_MAP
+from app_shell.bound import EmbeddingProvider, VectorIndex
 from models.request import AgentCreate, AgentPatch, AgentUpdate
 from models.response import AgentResponse, PaginatedResponse, PaginationMeta
 
-embedding_provider: Any | None = None
-vector_index: Any | None = None
+embedding_provider: EmbeddingProvider | None = None
+vector_index: VectorIndex | None = None
 
 
 def bind_agent_viewset_dependencies(
     *,
-    embedding_source: Any,
-    vector_index_service: Any,
+    embedding_source: EmbeddingProvider,
+    vector_index_service: VectorIndex,
 ) -> None:
     global embedding_provider, vector_index
 
@@ -24,13 +25,13 @@ def bind_agent_viewset_dependencies(
     vector_index = vector_index_service
 
 
-def _require_embedding_provider() -> Any:
+def _require_embedding_provider() -> EmbeddingProvider:
     if embedding_provider is None:
         raise RuntimeError("AgentViewSet embedding dependency has not been bound")
     return embedding_provider
 
 
-def _require_vector_index() -> Any:
+def _require_vector_index() -> VectorIndex:
     if vector_index is None:
         raise RuntimeError("AgentViewSet vector dependency has not been bound")
     return vector_index

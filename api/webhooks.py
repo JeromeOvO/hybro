@@ -9,22 +9,23 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.params import Depends as DependsParam
 
+from app_shell.bound import WebhookTransport, WebhookTransportFactory
 from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 router = APIRouter()
 
-webhook_transport_factory: Callable[[], Any] | None = None
+webhook_transport_factory: WebhookTransportFactory | None = None
 
 
-def bind_webhook_dependencies(factory: Callable[[], Any]) -> None:
+def bind_webhook_dependencies(factory: WebhookTransportFactory) -> None:
     global webhook_transport_factory
 
     webhook_transport_factory = factory
 
 
-def get_webhook_transport() -> Any:
+def get_webhook_transport() -> WebhookTransport:
     if webhook_transport_factory is None:
         raise RuntimeError("Webhook transport dependency has not been bound")
     return webhook_transport_factory()
@@ -42,7 +43,7 @@ async def handle_a2a_webhook(
     message_id: str,
     authorization: str = Header(default=""),
     x_a2a_notification_token: str = Header(default="", alias="X-A2A-Notification-Token"),
-    transport: Any = Depends(get_webhook_transport),
+    transport: WebhookTransport = Depends(get_webhook_transport),
 ) -> dict[str, Any]:
     """Receive task updates from A2A agents.
 
