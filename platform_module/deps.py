@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Protocol
 from uuid import uuid4
 
 from common.protocols import (
@@ -11,6 +11,7 @@ from common.protocols import (
     AgentRegistry,
     AgentTransport,
     ContentStorageRepository,
+    GatewayDiscoveryProvider,
     ObjectStorageDAL,
     RedisKV,
 )
@@ -42,7 +43,7 @@ class PlatformDeps:
     agent_registry: AgentRegistry | None = None
     agent_matcher: AgentMatcher | None = None
     agent_management: AgentManagement | None = None
-    discovery_provider: Any | None = None
+    discovery_provider: GatewayDiscoveryProvider | None = None
     agent_transport: AgentTransport | None = None
     agent_card_resolver: AgentCardResolver | None = None
     redis: RedisKV | None = None

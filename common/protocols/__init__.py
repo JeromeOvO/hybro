@@ -42,7 +42,12 @@ from common.protocols.hub_protocols import (
     OfflineHubFailurePort,
 )
 from common.protocols.llm_protocols import LLMProvider, ModelRegistry
-from common.protocols.platform_protocols import FileStorage, GatewayService, RateLimiter
+from common.protocols.platform_protocols import (
+    FileStorage,
+    GatewayDiscoveryProvider,
+    GatewayService,
+    RateLimiter,
+)
 from common.protocols.repository_protocols import (
     AgentRepository,
     ContentStorageRepository,
@@ -86,6 +91,7 @@ __all__ = [
     "EventPublisher",
     "ExecutionEngine",
     "FileStorage",
+    "GatewayDiscoveryProvider",
     "GatewayService",
     "HITLManager",
     "HITLRepository",

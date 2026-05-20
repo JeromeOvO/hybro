@@ -617,6 +617,7 @@ def test_protocol_methods_match_design_doc():
             "send_message",
             "stream_message",
         },
+        protocols.GatewayDiscoveryProvider: {"discover_agents"},
         protocols.RateLimiter: {"check", "check_global"},
         protocols.FileStorage: {"upload", "get_url", "delete", "list_for_room"},
         protocols.AgentTransport: {"send_message", "stream_message"},

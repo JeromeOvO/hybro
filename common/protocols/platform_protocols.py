@@ -4,6 +4,11 @@ from common.dto import FileInfo, RateLimitResult
 
 
 @runtime_checkable
+class GatewayDiscoveryProvider(Protocol):
+    async def discover_agents(self, query: str, limit: int | None = None): ...
+
+
+@runtime_checkable
 class GatewayService(Protocol):
     async def discover_agents(
         self, query: str, limit: int | None, user_id: str
@@ -41,4 +46,9 @@ class FileStorage(Protocol):
     async def list_for_room(self, room_id: str) -> list[FileInfo]: ...
 
 
-__all__ = ["FileStorage", "GatewayService", "RateLimiter"]
+__all__ = [
+    "FileStorage",
+    "GatewayDiscoveryProvider",
+    "GatewayService",
+    "RateLimiter",
+]

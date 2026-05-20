@@ -645,6 +645,25 @@ async def test_object_storage_dal_impl_uses_aioboto3_session_directly():
 
 
 @pytest.mark.asyncio
+async def test_object_storage_dal_get_text_returns_none_for_missing_key():
+    from botocore.exceptions import ClientError
+    from dal.s3.client import ObjectStorageDALImpl
+
+    client = AsyncMock()
+    client.get_object.side_effect = ClientError(
+        {"Error": {"Code": "NoSuchKey", "Message": "missing"}},
+        "GetObject",
+    )
+    context = AsyncMock()
+    context.__aenter__.return_value = client
+    session = MagicMock()
+    session.client.return_value = context
+    storage = ObjectStorageDALImpl(session=session, bucket="bucket", region="us-west-2")
+
+    assert await storage.get_text("missing") is None
+
+
+@pytest.mark.asyncio
 async def test_index_registry_ensures_registered_indexes_in_order():
     from dal.index_registry import IndexRegistryImpl
 
