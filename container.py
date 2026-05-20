@@ -178,22 +178,19 @@ def create_platform_config(app_settings: Any = settings) -> PlatformConfig:
 
     return PlatformConfig(
         gateway_base_url=getattr(app_settings, "gateway_base_url", ""),
+        api_prefix=getattr(app_settings, "api_prefix", "/api/v1"),
         gateway_rate_limit_per_key=getattr(
             app_settings, "gateway_rate_limit_per_key", 100
-        )
-        or 100,
+        ),
         gateway_rate_limit_global=getattr(
             app_settings, "gateway_rate_limit_global", 1000
-        )
-        or 1000,
+        ),
         discovery_rate_limit_per_key=getattr(
             app_settings, "discovery_rate_limit_per_key", 100
-        )
-        or 100,
+        ),
         discovery_rate_limit_global=getattr(
             app_settings, "discovery_rate_limit_global", 1000
-        )
-        or 1000,
+        ),
         max_upload_size_bytes=getattr(app_settings, "max_file_size_mb", 25)
         * 1024
         * 1024,

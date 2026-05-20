@@ -161,18 +161,11 @@ async def gateway_stream(
     await _check_rate_limit(rate_limiter, api_key)
 
     try:
-        if hasattr(svc, "prepare_stream"):
-            event_stream = await svc.prepare_stream(
-                agent_id=agent_id,
-                message=body.message,
-                user_id=api_key.user_id,
-            )
-        else:
-            event_stream = svc.stream_message(
-                agent_id=agent_id,
-                message=body.message,
-                user_id=api_key.user_id,
-            )
+        event_stream = await svc.prepare_stream(
+            agent_id=agent_id,
+            message=body.message,
+            user_id=api_key.user_id,
+        )
     except GatewayPlatformError as exc:
         _raise_http_error(exc)
 

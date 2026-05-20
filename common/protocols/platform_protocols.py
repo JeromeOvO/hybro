@@ -12,6 +12,9 @@ class GatewayService(Protocol):
     async def send_message(
         self, agent_id: str, message: Any, user_id: str
     ) -> Any: ...
+    async def prepare_stream(
+        self, agent_id: str, message: Any, user_id: str
+    ) -> AsyncIterator[dict]: ...
     async def stream_message(
         self, agent_id: str, message: Any, user_id: str
     ) -> AsyncIterator[dict]: ...

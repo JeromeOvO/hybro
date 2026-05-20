@@ -612,6 +612,7 @@ def test_protocol_methods_match_design_doc():
         protocols.GatewayService: {
             "discover_agents",
             "get_agent_card",
+            "prepare_stream",
             "send_message",
             "stream_message",
         },

@@ -95,13 +95,19 @@ def _card(agent_id: str = "agent-1") -> AgentCardSnapshot:
     )
 
 
-def _gateway(*, agent: AgentInfo | None = None, transport=None, matcher=None):
+def _gateway(
+    *,
+    agent: AgentInfo | None = None,
+    transport=None,
+    matcher=None,
+    config: PlatformConfig | None = None,
+):
     agent = agent or _agent()
     cards = {agent.agent_id: _card(agent.agent_id)}
     from platform_module.gateway import PlatformGateway
 
     return PlatformGateway(
-        config=PlatformConfig(gateway_base_url="https://api.hybro.ai/api/v1"),
+        config=config or PlatformConfig(gateway_base_url="https://api.hybro.ai/api/v1"),
         deps=PlatformDeps(
             agent_registry=FakeRegistry({agent.agent_id: agent}, cards),
             agent_matcher=matcher or FakeMatcher([]),
@@ -118,6 +124,14 @@ def test_masks_all_supported_agent_card_urls():
     expected = "https://api.hybro.ai/api/v1/gateway/agents/agent-1/message/send"
     assert masked["url"] == expected
     assert masked["supportedInterfaces"][0]["url"] == expected
+
+
+def test_masks_agent_card_with_configured_api_prefix_when_base_url_empty():
+    gateway = _gateway(config=PlatformConfig(gateway_base_url="", api_prefix="/v9"))
+
+    masked = gateway.mask_agent_card_dict(_card().raw_card, "agent-1")
+
+    assert masked["url"] == "/v9/gateway/agents/agent-1/message/send"
 
 
 @pytest.mark.asyncio

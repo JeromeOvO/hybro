@@ -51,6 +51,7 @@ def test_gateway_protocol_matches_route_facing_platform_surface():
         "discover_agents",
         "get_agent_card",
         "send_message",
+        "prepare_stream",
         "stream_message",
     ):
         protocol_params = list(
@@ -67,6 +68,7 @@ def test_container_builds_platform_config_from_scalar_settings():
 
     class Settings:
         gateway_base_url = "https://api.example/v1"
+        api_prefix = "/custom-api"
         gateway_rate_limit_per_key = 7
         gateway_rate_limit_global = 70
         discovery_rate_limit_per_key = 8
@@ -78,12 +80,35 @@ def test_container_builds_platform_config_from_scalar_settings():
     config = create_platform_config(Settings())
 
     assert config.gateway_base_url == "https://api.example/v1"
+    assert config.api_prefix == "/custom-api"
     assert config.gateway_rate_limit_per_key == 7
     assert config.discovery_rate_limit_global == 80
     assert config.max_upload_size_bytes == 3 * 1024 * 1024
     assert config.presigned_url_ttl_seconds == 90
     assert config.content_storage_ttl_seconds == 2 * 24 * 60 * 60
     assert "image/png" in config.allowed_mime_types
+
+
+def test_container_preserves_disabled_platform_rate_limits():
+    from container import create_platform_config
+
+    class Settings:
+        gateway_base_url = ""
+        api_prefix = "/api/v9"
+        gateway_rate_limit_per_key = None
+        gateway_rate_limit_global = None
+        discovery_rate_limit_per_key = None
+        discovery_rate_limit_global = None
+        max_file_size_mb = 25
+        s3_presigned_url_ttl = 3600
+        compaction_content_ttl_days = 0
+
+    config = create_platform_config(Settings())
+
+    assert config.gateway_rate_limit_per_key is None
+    assert config.gateway_rate_limit_global is None
+    assert config.discovery_rate_limit_per_key is None
+    assert config.discovery_rate_limit_global is None
 
 
 def test_container_builds_platform_facade_from_protocol_dependencies():

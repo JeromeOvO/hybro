@@ -30,7 +30,8 @@ class PlatformGateway:
         )
 
     def _gateway_url_for_agent(self, agent_id: str) -> str:
-        base = self._config.gateway_base_url.rstrip("/") or "/api/v1"
+        base = self._config.gateway_base_url.rstrip() or self._config.api_prefix
+        base = base.rstrip("/") or "/api/v1"
         return f"{base}/gateway/agents/{agent_id}/message/send"
 
     def mask_agent_card_dict(self, agent_card_dict: dict, agent_id: str) -> dict:
