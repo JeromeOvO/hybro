@@ -59,6 +59,20 @@ def _annotation_has_broad_shape(annotation: ast.AST | None) -> bool:
     return False
 
 
+def _annotation_contains_broad_object(annotation) -> bool:
+    if annotation is inspect.Signature.empty:
+        return False
+    if annotation is object:
+        return True
+    text = str(annotation)
+    return (
+        " object" in text
+        or "[str, object]" in text
+        or "| object" in text
+        or "typing.Any" in text
+    )
+
+
 def _load_allowlist() -> set[tuple[str, str]]:
     raw = json.loads(ALLOWLIST_PATH.read_text())
     allowed: set[tuple[str, str]] = set()
@@ -596,6 +610,9 @@ def test_platform_route_protocols_do_not_expose_any_or_wildcard_params():
             signature = inspect.signature(value)
             if signature.return_annotation in {Any, inspect.Signature.empty}:
                 violations.append(f"{protocol.__name__}.{name} return")
+            if protocol in {GatewayDiscoveryProvider, GatewayService}:
+                if _annotation_contains_broad_object(signature.return_annotation):
+                    violations.append(f"{protocol.__name__}.{name} return")
             for parameter in signature.parameters.values():
                 if parameter.kind in {
                     inspect.Parameter.VAR_POSITIONAL,
@@ -606,6 +623,11 @@ def test_platform_route_protocols_do_not_expose_any_or_wildcard_params():
                     violations.append(
                         f"{protocol.__name__}.{name}.{parameter.name}"
                     )
+                if protocol in {GatewayDiscoveryProvider, GatewayService}:
+                    if _annotation_contains_broad_object(parameter.annotation):
+                        violations.append(
+                            f"{protocol.__name__}.{name}.{parameter.name}"
+                        )
 
     assert not violations, "Platform route protocols expose broad shapes:\n" + "\n".join(
         violations

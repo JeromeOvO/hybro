@@ -16,7 +16,6 @@ import pytest
 from a2a.types import (
     Message,
     Role,
-    SendMessageResponse,
     TextPart,
 )
 from fastapi import HTTPException
@@ -35,6 +34,7 @@ from models.gateway import (
     GatewayDiscoveryResponse,
     GatewaySendRequest,
 )
+from common.dto import GatewayResponse, InternalAgentMessage
 from common.errors import GatewayPlatformError
 from common.errors import PlatformRouteError
 from tests.conftest import FROZEN_TIME, PATCH
@@ -167,7 +167,7 @@ class TestGatewayDiscover:
 class TestGatewaySend:
     @pytest.mark.asyncio
     async def test_sends_message(self, sample_api_key, sample_message):
-        mock_response = MagicMock(spec=SendMessageResponse)
+        mock_response = GatewayResponse(status_code=200, payload={"ok": True})
         mock_svc = _mock_gateway_service()
         mock_svc.send_message = AsyncMock(return_value=mock_response)
         mock_rl = _mock_rate_limit()
@@ -177,10 +177,15 @@ class TestGatewaySend:
         with patch(PATCH["gateway.gateway_rate_limit_service"], mock_rl):
             result = await gateway_send("agent-001", body, sample_api_key, mock_svc)
 
-        assert result is mock_response
+        assert result == {"ok": True}
         mock_svc.send_message.assert_called_once_with(
             agent_id="agent-001",
-            message=sample_message,
+            message=InternalAgentMessage(
+                agent_id="agent-001",
+                role="user",
+                parts=[{"kind": "text", "text": "Hello agent"}],
+                metadata={},
+            ),
             user_id="user-001",
         )
 
@@ -232,7 +237,9 @@ class TestGatewayGetCard:
     async def test_returns_masked_card(self, sample_api_key):
         masked_card = {"name": "Test", "url": "https://gateway/agents/agent-001/message/send"}
         mock_svc = _mock_gateway_service()
-        mock_svc.get_agent_card = AsyncMock(return_value=masked_card)
+        mock_svc.get_agent_card = AsyncMock(
+            return_value=GatewayResponse(status_code=200, payload=masked_card)
+        )
         mock_rl = _mock_rate_limit()
 
         with patch(PATCH["gateway.gateway_rate_limit_service"], mock_rl):
@@ -264,7 +271,12 @@ class TestGatewayStream:
         assert result.media_type == "text/event-stream"
         mock_svc.prepare_stream.assert_called_once_with(
             agent_id="agent-001",
-            message=sample_message,
+            message=InternalAgentMessage(
+                agent_id="agent-001",
+                role="user",
+                parts=[{"kind": "text", "text": "Hello agent"}],
+                metadata={},
+            ),
             user_id="user-001",
         )
 

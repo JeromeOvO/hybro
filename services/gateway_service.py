@@ -7,6 +7,7 @@ temporary legacy imports until the services package is removed.
 
 from collections.abc import AsyncIterator
 
+from common.dto import GatewayDiscoveryResponse, GatewayResponse, InternalAgentMessage
 from common.protocols import GatewayService as GatewayServiceProtocol
 
 
@@ -31,25 +32,25 @@ class GatewayService:
 
     async def discover_agents(
         self, query: str, limit: int | None, user_id: str
-    ) -> object:
+    ) -> GatewayDiscoveryResponse:
         return await self._require_delegate().discover_agents(query, limit, user_id)
 
-    async def get_agent_card(self, agent_id: str, user_id: str) -> dict[str, object]:
+    async def get_agent_card(self, agent_id: str, user_id: str) -> GatewayResponse:
         return await self._require_delegate().get_agent_card(agent_id, user_id)
 
     async def send_message(
-        self, agent_id: str, message: object, user_id: str
-    ) -> object:
+        self, agent_id: str, message: InternalAgentMessage, user_id: str
+    ) -> GatewayResponse:
         return await self._require_delegate().send_message(agent_id, message, user_id)
 
     async def prepare_stream(
-        self, agent_id: str, message: object, user_id: str
-    ) -> AsyncIterator[dict[str, object]]:
+        self, agent_id: str, message: InternalAgentMessage, user_id: str
+    ) -> AsyncIterator[GatewayResponse]:
         return await self._require_delegate().prepare_stream(agent_id, message, user_id)
 
     async def stream_message(
-        self, agent_id: str, message: object, user_id: str
-    ) -> AsyncIterator[dict[str, object]]:
+        self, agent_id: str, message: InternalAgentMessage, user_id: str
+    ) -> AsyncIterator[GatewayResponse]:
         async for event in self._require_delegate().stream_message(
             agent_id, message, user_id
         ):

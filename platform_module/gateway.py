@@ -6,6 +6,7 @@ from common.dto import (
     AgentTaskResult,
     GatewayDiscoveryAgentResult,
     GatewayDiscoveryResponse,
+    GatewayResponse,
     InternalAgentMessage,
 )
 from common.errors import GatewayPlatformError
@@ -150,23 +151,27 @@ class PlatformGateway:
             return value.get(name)
         return getattr(value, name, None)
 
-    async def get_agent_card(self, agent_id: str, user_id: str) -> dict:
+    async def get_agent_card(self, agent_id: str, user_id: str) -> GatewayResponse:
         agent = await self.get_agent_for_gateway(agent_id, user_id)
         card = await self._card_for_agent(agent)
-        return self.mask_agent_card_dict(card, agent_id)
+        return GatewayResponse(
+            status_code=200,
+            payload=self.mask_agent_card_dict(card, agent_id),
+        )
 
     async def send_message(
-        self, agent_id: str, message: Any, user_id: str
-    ) -> dict:
+        self, agent_id: str, message: InternalAgentMessage, user_id: str
+    ) -> GatewayResponse:
         agent = await self.get_agent_for_gateway(agent_id, user_id)
         await self._ensure_directly_callable(agent)
         await self._check_agent_rate_limit(agent, user_id)
         transport = self._require_transport()
+        internal_message = self._message_to_internal(agent_id, message)
 
         try:
             result = await transport.send_message(
                 agent.url or "",
-                self._message_to_internal(agent_id, message),
+                internal_message,
                 user_id=user_id,
             )
             if getattr(result, "status", None) == "error":
@@ -181,7 +186,10 @@ class PlatformGateway:
                     },
                 )
             await self._record_agent_request(agent, user_id)
-            return self._task_result_to_a2a_response(result)
+            return GatewayResponse(
+                status_code=200,
+                payload=self._task_result_to_a2a_response(result),
+            )
         except GatewayPlatformError:
             raise
         except Exception as exc:
@@ -194,15 +202,15 @@ class PlatformGateway:
             ) from exc
 
     async def stream_message(
-        self, agent_id: str, message: Any, user_id: str
-    ) -> AsyncIterator[dict]:
+        self, agent_id: str, message: InternalAgentMessage, user_id: str
+    ) -> AsyncIterator[GatewayResponse]:
         event_stream = await self.prepare_stream(agent_id, message, user_id)
         async for event in event_stream:
             yield event
 
     async def prepare_stream(
-        self, agent_id: str, message: Any, user_id: str
-    ) -> AsyncIterator[dict]:
+        self, agent_id: str, message: InternalAgentMessage, user_id: str
+    ) -> AsyncIterator[GatewayResponse]:
         agent = await self.get_agent_for_gateway(agent_id, user_id)
         await self._ensure_directly_callable(agent)
         await self._check_agent_rate_limit(agent, user_id)
@@ -211,7 +219,7 @@ class PlatformGateway:
         card = await self._card_for_agent(agent)
 
         if not self._supports_streaming(agent, card):
-            async def _sync_event() -> AsyncIterator[dict]:
+            async def _sync_event() -> AsyncIterator[GatewayResponse]:
                 try:
                     result = await transport.send_message(
                         agent.url or "",
@@ -228,9 +236,12 @@ class PlatformGateway:
                                     f"{getattr(result, 'error', None) or 'unknown error'}"
                                 ),
                             },
-                        )
+                    )
                     await self._record_agent_request(agent, user_id)
-                    yield self._task_result_to_a2a_response(result)
+                    yield GatewayResponse(
+                        status_code=200,
+                        payload=self._task_result_to_a2a_response(result),
+                    )
                 except GatewayPlatformError:
                     raise
                 except Exception as exc:
@@ -244,14 +255,17 @@ class PlatformGateway:
 
             return _sync_event()
 
-        async def _events() -> AsyncIterator[dict]:
+        async def _events() -> AsyncIterator[GatewayResponse]:
             try:
                 async for event in transport.stream_message(
                     agent.url or "",
                     internal_message,
                     user_id=user_id,
                 ):
-                    yield self._stream_event_to_a2a_response(event)
+                    yield GatewayResponse(
+                        status_code=200,
+                        payload=self._stream_event_to_a2a_response(event),
+                    )
                 await self._record_agent_request(agent, user_id)
             except GatewayPlatformError:
                 raise

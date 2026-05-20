@@ -15,6 +15,7 @@ from fastapi.params import Depends as DependsParam
 from fastapi.responses import StreamingResponse
 
 from common.api_key_auth import get_api_key
+from common.dto import GatewayResponse, InternalAgentMessage
 from common.errors import GatewayPlatformError, PlatformRouteError
 from common.protocols import APIKeyRateLimiter, GatewayService
 from common.utils.logger import get_logger
@@ -91,6 +92,43 @@ def _raise_http_error(error: PlatformRouteError) -> None:
     ) from error
 
 
+def _gateway_message_to_common(agent_id: str, message) -> InternalAgentMessage:
+    if isinstance(message, InternalAgentMessage):
+        return message
+    if isinstance(message, dict):
+        parts = message.get("parts")
+        if parts is None and "text" in message:
+            parts = [{"kind": "text", "text": message["text"]}]
+        return InternalAgentMessage(
+            agent_id=agent_id,
+            role=str(message.get("role", "user")),
+            parts=parts or [],
+            metadata=message.get("metadata", {}),
+        )
+    if hasattr(message, "model_dump"):
+        payload = message.model_dump(mode="json", exclude_none=True)
+        parts = payload.get("parts")
+        if parts is None and "text" in payload:
+            parts = [{"kind": "text", "text": payload["text"]}]
+        return InternalAgentMessage(
+            agent_id=agent_id,
+            role=str(payload.get("role", "user")),
+            parts=parts or [],
+            metadata=payload.get("metadata", {}),
+        )
+    return InternalAgentMessage(
+        agent_id=agent_id,
+        role=str(getattr(message, "role", "user")),
+        parts=[{"value": str(message)}],
+    )
+
+
+def _gateway_payload(response: GatewayResponse):
+    if not isinstance(response, GatewayResponse):
+        return response
+    return response.payload
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -144,13 +182,13 @@ async def gateway_send(
     try:
         result = await svc.send_message(
             agent_id=agent_id,
-            message=body.message,
+            message=_gateway_message_to_common(agent_id, body.message),
             user_id=api_key.user_id,
         )
     except GatewayPlatformError as exc:
         _raise_http_error(exc)
     await _record_request(rate_limiter, api_key)
-    return result
+    return _gateway_payload(result)
 
 
 @router.post(
@@ -170,7 +208,7 @@ async def gateway_stream(
     try:
         event_stream = await svc.prepare_stream(
             agent_id=agent_id,
-            message=body.message,
+            message=_gateway_message_to_common(agent_id, body.message),
             user_id=api_key.user_id,
         )
     except GatewayPlatformError as exc:
@@ -179,7 +217,9 @@ async def gateway_stream(
     async def _event_generator():
         try:
             async for event in event_stream:
-                if hasattr(event, "model_dump_json"):
+                if isinstance(event, GatewayResponse):
+                    payload = json.dumps(event.payload)
+                elif hasattr(event, "model_dump_json"):
                     payload = event.model_dump_json()
                 else:
                     payload = json.dumps(event)
@@ -237,4 +277,4 @@ async def gateway_get_card(
     except GatewayPlatformError as exc:
         _raise_http_error(exc)
     await _record_request(rate_limiter, api_key)
-    return GatewayCardResponse(agent_id=agent_id, agent_card=card)
+    return GatewayCardResponse(agent_id=agent_id, agent_card=_gateway_payload(card))

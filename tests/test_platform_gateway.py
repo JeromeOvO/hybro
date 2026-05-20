@@ -421,7 +421,8 @@ async def test_send_preserves_public_a2a_message_parts():
 async def test_send_returns_public_a2a_response_envelope():
     gateway = _gateway()
 
-    result = await gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+    response = await gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+    result = response.payload
 
     assert result == {
         "jsonrpc": "2.0",
@@ -434,7 +435,8 @@ async def test_send_returns_public_a2a_response_envelope():
 async def test_send_preserves_upstream_jsonrpc_id():
     gateway = _gateway(transport=JsonRpcTransport())
 
-    result = await gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+    response = await gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+    result = response.payload
 
     assert result == {
         "jsonrpc": "2.0",
@@ -447,7 +449,8 @@ async def test_send_preserves_upstream_jsonrpc_id():
 async def test_send_preserves_upstream_jsonrpc_error_envelope():
     gateway = _gateway(transport=JsonRpcErrorTransport())
 
-    result = await gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+    response = await gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+    result = response.payload
 
     assert result == {
         "jsonrpc": "2.0",
@@ -460,7 +463,8 @@ async def test_send_preserves_upstream_jsonrpc_error_envelope():
 async def test_send_preserves_upstream_jsonrpc_list_result():
     gateway = _gateway(transport=JsonRpcListResultTransport())
 
-    result = await gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+    response = await gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+    result = response.payload
 
     assert result == {
         "jsonrpc": "2.0",
@@ -576,7 +580,7 @@ async def test_stream_yields_transport_events():
     gateway = _gateway()
 
     stream = gateway.stream_message("agent-1", {"text": "hi"}, "owner-1")
-    events = [event async for event in stream]
+    events = [event.payload async for event in stream]
 
     assert events == [
         {
@@ -592,7 +596,7 @@ async def test_stream_preserves_upstream_jsonrpc_id():
     gateway = _gateway(transport=JsonRpcTransport())
 
     stream = gateway.stream_message("agent-1", {"text": "hi"}, "owner-1")
-    events = [event async for event in stream]
+    events = [event.payload async for event in stream]
 
     assert events == [
         {
@@ -608,7 +612,7 @@ async def test_stream_preserves_upstream_jsonrpc_error_envelope():
     gateway = _gateway(transport=JsonRpcErrorTransport())
 
     stream = gateway.stream_message("agent-1", {"text": "hi"}, "owner-1")
-    events = [event async for event in stream]
+    events = [event.payload async for event in stream]
 
     assert events == [
         {
@@ -624,7 +628,7 @@ async def test_stream_preserves_upstream_jsonrpc_list_result():
     gateway = _gateway(transport=JsonRpcListResultTransport())
 
     stream = gateway.stream_message("agent-1", {"text": "hi"}, "owner-1")
-    events = [event async for event in stream]
+    events = [event.payload async for event in stream]
 
     assert events == [
         {
@@ -640,7 +644,7 @@ async def test_stream_maps_adapter_error_event_to_jsonrpc_error():
     gateway = _gateway(transport=AdapterErrorStreamTransport())
 
     stream = gateway.stream_message("agent-1", {"text": "hi"}, "owner-1")
-    events = [event async for event in stream]
+    events = [event.payload async for event in stream]
 
     assert events == [
         {
@@ -656,7 +660,7 @@ async def test_stream_maps_translated_raw_error_event_to_jsonrpc_error():
     gateway = _gateway(transport=TranslatedRawErrorStreamTransport())
 
     stream = gateway.stream_message("agent-1", {"text": "hi"}, "owner-1")
-    events = [event async for event in stream]
+    events = [event.payload async for event in stream]
 
     assert events == [
         {
@@ -672,7 +676,7 @@ async def test_stream_sanitizes_malformed_dict_error_payloads():
     gateway = _gateway(transport=MalformedDictErrorStreamTransport())
 
     stream = gateway.stream_message("agent-1", {"text": "hi"}, "owner-1")
-    events = [event async for event in stream]
+    events = [event.payload async for event in stream]
 
     assert events == [
         {
@@ -699,7 +703,7 @@ async def test_non_streaming_agent_stream_falls_back_to_sync_send():
     )
 
     stream = await gateway.prepare_stream("agent-1", {"text": "hi"}, "owner-1")
-    events = [event async for event in stream]
+    events = [event.payload async for event in stream]
 
     assert transport.sent
     assert not transport.streamed

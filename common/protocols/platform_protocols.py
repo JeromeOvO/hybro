@@ -1,7 +1,13 @@
 from datetime import datetime
 from typing import Any, AsyncIterator, Protocol, runtime_checkable
 
-from common.dto import FileInfo, GatewayDiscoveryResponse, RateLimitResult
+from common.dto import (
+    FileInfo,
+    GatewayDiscoveryResponse,
+    GatewayResponse,
+    InternalAgentMessage,
+    RateLimitResult,
+)
 
 
 @runtime_checkable
@@ -39,24 +45,24 @@ class APIKeyStore(Protocol):
 class GatewayDiscoveryProvider(Protocol):
     async def discover_agents(
         self, query: str, limit: int | None = None
-    ) -> GatewayDiscoveryResponse | object: ...
+    ) -> GatewayDiscoveryResponse: ...
 
 
 @runtime_checkable
 class GatewayService(Protocol):
     async def discover_agents(
         self, query: str, limit: int | None, user_id: str
-    ) -> GatewayDiscoveryResponse | object: ...
-    async def get_agent_card(self, agent_id: str, user_id: str) -> dict[str, object]: ...
+    ) -> GatewayDiscoveryResponse: ...
+    async def get_agent_card(self, agent_id: str, user_id: str) -> GatewayResponse: ...
     async def send_message(
-        self, agent_id: str, message: object, user_id: str
-    ) -> object: ...
+        self, agent_id: str, message: InternalAgentMessage, user_id: str
+    ) -> GatewayResponse: ...
     async def prepare_stream(
-        self, agent_id: str, message: object, user_id: str
-    ) -> AsyncIterator[dict[str, object]]: ...
+        self, agent_id: str, message: InternalAgentMessage, user_id: str
+    ) -> AsyncIterator[GatewayResponse]: ...
     async def stream_message(
-        self, agent_id: str, message: object, user_id: str
-    ) -> AsyncIterator[dict[str, object]]: ...
+        self, agent_id: str, message: InternalAgentMessage, user_id: str
+    ) -> AsyncIterator[GatewayResponse]: ...
 
 
 @runtime_checkable
