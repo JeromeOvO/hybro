@@ -33,6 +33,7 @@ from common.protocols.execution_protocols import (
     ExecutionEngine,
     HITLManager,
     HubAgentResponseSink,
+    RoomDistributedLock,
 )
 from common.protocols.hub_protocols import (
     HubDispatchPort,
@@ -138,6 +139,7 @@ __all__ = [
     "RedisPubSub",
     "RedisStreams",
     "RoomHistoryReader",
+    "RoomDistributedLock",
     "RoomAgentTaskTracker",
     "RoomManagement",
     "RoomMembershipSeedSource",

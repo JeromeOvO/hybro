@@ -10,6 +10,7 @@ import asyncio
 
 import pytest
 
+from app_shell.room_lock import RedisRoomDistributedLock
 from infrastructure.redis_service import RedisService
 from modules.RoomMessageCenter import (
     RoomMessageCenter,
@@ -28,7 +29,7 @@ def _make_rmc(redis_service: RedisService) -> RoomMessageCenter:
     """Build a minimal RoomMessageCenter wired to a real RedisService."""
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
     rmc._room_locks = {}
-    rmc._redis = redis_service
+    rmc._room_distributed_lock = RedisRoomDistributedLock(redis_service)
     return rmc
 
 

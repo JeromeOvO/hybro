@@ -34,7 +34,7 @@ PACKAGE_REMOVAL_RUNTIME_ROOTS = (
     "container.py",
     "scripts",
     "database",
-    "infrastructure",
+    *PRODUCTION_ROOTS,
 )
 
 FORBIDDEN_LEGACY_SHIM_IMPORT_PREFIXES = (

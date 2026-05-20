@@ -340,6 +340,25 @@ def test_room_message_center_constructor_requires_explicit_dependencies():
         RoomMessageCenter()
 
 
+def test_room_message_center_uses_common_room_lock_protocol():
+    import inspect
+    from pathlib import Path
+    from typing import get_type_hints
+
+    from common.protocols import RoomDistributedLock
+    from execution.orchestration.room_message_center import RoomMessageCenter
+
+    source = Path("execution/orchestration/room_message_center.py").read_text()
+    hints = get_type_hints(RoomMessageCenter.set_room_distributed_lock)
+
+    assert "infrastructure.redis_service" not in source
+    assert "._client" not in source
+    assert hints["room_lock"] == RoomDistributedLock | None
+    assert inspect.signature(RoomMessageCenter.set_redis_service).parameters[
+        "redis_service"
+    ].annotation == inspect.Signature.empty
+
+
 class _FakeCursor:
     def __init__(self, docs=None, error: Exception | None = None):
         self.docs = docs or []

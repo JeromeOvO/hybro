@@ -204,9 +204,6 @@
       "runtime_import_files": [
         "container.py",
         "database/mongodb.py",
-        "infrastructure/brokers/__init__.py",
-        "infrastructure/brokers/redis_broker.py",
-        "infrastructure/redis_service.py",
         "main.py",
         "scripts/_discovery_client.py"
       ],

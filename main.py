@@ -832,9 +832,10 @@ async def lifespan(app: FastAPI):
             RelayHubLivenessReader,
             init_relay_service,
         )
+        from app_shell.room_lock import RedisRoomDistributedLock
         from execution.facade import hub_agent_response_internal_to_agent_event
         from modules.RoomMessageCenter import room_message_center as _rmc
-        _rmc.set_redis_service(_redis_service)
+        _rmc.set_room_distributed_lock(RedisRoomDistributedLock(_redis_service))
         _relay_svc = init_relay_service(
             mongo=mongodb, database_service=_db_svc, sse_manager=sse_manager,
             room_message_center=_rmc,

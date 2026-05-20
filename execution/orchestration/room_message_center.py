@@ -4,11 +4,12 @@ import asyncio
 import time
 from collections import deque
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import uuid4
 
 from a2a_adapter.task_status import build_completed_text_task
 from common.a2a_constants import CommonTaskState, SSEProcessingStatus, is_terminal_state
+from common.protocols import RoomDistributedLock
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -51,9 +52,6 @@ memory_search_service = None
 compaction_service = None
 build_turn_content = None
 SupervisorPlanningError = RuntimeError
-
-if TYPE_CHECKING:
-    from infrastructure.redis_service import RedisService
 
 logger = get_logger(__name__)
 
@@ -212,7 +210,7 @@ class RoomMessageCenter:
         # intra-process fairness.  Without Redis the asyncio lock alone guards
         # the critical section (single-worker only).
         self._room_locks: dict[str, asyncio.Lock] = {}
-        self._redis: RedisService | None = None
+        self._room_distributed_lock: RoomDistributedLock | None = None
         self._room_facade = None
         self._room_bound = False
         self._processing_status_emitter = None
@@ -283,8 +281,15 @@ class RoomMessageCenter:
             )
         return self._room_facade
 
-    def set_redis_service(self, redis_service: RedisService | None) -> None:
-        self._redis = redis_service
+    def set_room_distributed_lock(
+        self, room_lock: RoomDistributedLock | None
+    ) -> None:
+        self._room_distributed_lock = room_lock
+        # Turn-event dual-write wiring removed. Runtime now uses
+        # message/task SSE as the single source of truth.
+
+    def set_redis_service(self, redis_service) -> None:
+        self.set_room_distributed_lock(redis_service)
         # Turn-event dual-write wiring removed. Runtime now uses
         # message/task SSE as the single source of truth.
 
@@ -304,44 +309,18 @@ class RoomMessageCenter:
         worker already holds it, or ``None`` if Redis is unavailable or
         erroring (caller should fall back to local-only locking).
 
-        Bypasses ``RedisService.set_nx`` intentionally — that wrapper
-        swallows exceptions and returns ``False``, making Redis errors
-        indistinguishable from contention.
+        The injected lock preserves the tri-state result so Redis errors
+        remain distinguishable from contention.
         """
-        if self._redis is None or not self._redis.is_connected:
+        if self._room_distributed_lock is None:
             return None
-        client = self._redis._client
-        if client is None:
-            return None
-        try:
-            result = await client.set(
-                f"{self._ROOM_LOCK_PREFIX}{room_id}", owner, nx=True, ex=ttl,
-            )
-            return result is not None
-        except Exception:
-            logger.debug(
-                "Redis error during distributed lock acquire for room %s",
-                room_id, exc_info=True,
-            )
-            return None
+        return await self._room_distributed_lock.acquire(room_id, owner, ttl)
 
     async def _release_distributed_lock(self, room_id: str, owner: str) -> None:
         """Release the Redis distributed lock only if we still own it."""
-        if self._redis is None or not self._redis.is_connected:
+        if self._room_distributed_lock is None:
             return
-        try:
-            await self._redis.eval_script(
-                self._RELEASE_LOCK_LUA,
-                1,
-                f"{self._ROOM_LOCK_PREFIX}{room_id}",
-                owner,
-            )
-        except Exception:
-            logger.warning(
-                "Redis error during distributed lock release for room %s (owner=%s); "
-                "key will expire via TTL",
-                room_id, owner[:8], exc_info=True,
-            )
+        await self._room_distributed_lock.release(room_id, owner)
 
     async def _acquire_room_lock(
         self, room_id: str, timeout: float = ROOM_LOCK_TIMEOUT_SECONDS,
@@ -358,9 +337,7 @@ class RoomMessageCenter:
         for single-worker deployment).
         """
         owner = uuid4().hex
-        use_distributed = (
-            self._redis is not None and self._redis.is_connected
-        )
+        use_distributed = self._room_distributed_lock is not None
 
         loop = asyncio.get_event_loop()
         t0 = loop.time()
