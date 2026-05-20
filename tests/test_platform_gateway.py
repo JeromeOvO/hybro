@@ -490,6 +490,54 @@ async def test_send_passes_card_output_modes_to_transport():
 
 
 @pytest.mark.asyncio
+async def test_send_expands_card_output_mode_shorthands_to_supported_mimes():
+    transport = FakeTransport()
+    gateway = _gateway(
+        agent=_agent(
+            raw_card={
+                "name": "Agent",
+                "url": "https://agent.example/a2a",
+                "capabilities": {"streaming": True},
+                "defaultOutputModes": ["text", "image"],
+            }
+        ),
+        transport=transport,
+    )
+
+    await gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+
+    _agent_url, _internal_message, kwargs = transport.sent[0]
+    assert kwargs["accepted_output_modes"] == [
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "text/plain",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_send_defaults_empty_card_output_modes_to_text_plain():
+    transport = FakeTransport()
+    gateway = _gateway(
+        agent=_agent(
+            raw_card={
+                "name": "Agent",
+                "url": "https://agent.example/a2a",
+                "capabilities": {"streaming": True},
+                "defaultOutputModes": [],
+            }
+        ),
+        transport=transport,
+    )
+
+    await gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+
+    _agent_url, _internal_message, kwargs = transport.sent[0]
+    assert kwargs["accepted_output_modes"] == ["text/plain"]
+
+
+@pytest.mark.asyncio
 async def test_send_records_agent_call_counter_success_and_failure():
     success_counter = FakeCallCounter()
     success_gateway = _gateway(agent_call_counter=success_counter)

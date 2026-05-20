@@ -14,6 +14,35 @@ from platform_module.config import PlatformConfig
 from platform_module.deps import PlatformDeps
 from platform_module.rate_limit import PlatformAgentRateLimiter
 
+_PLATFORM_SUPPORTED_OUTPUT_MODES = {
+    "text/plain",
+    "text/markdown",
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "audio/wav",
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/webm",
+    "video/mp4",
+    "video/webm",
+    "application/json",
+    "application/pdf",
+    "application/xml",
+    "application/zip",
+}
+
+_OUTPUT_MODE_MIMES = {
+    "text": {"text/plain"},
+    "image": {"image/png", "image/jpeg", "image/gif", "image/webp"},
+    "audio": {"audio/wav", "audio/mpeg", "audio/mp4", "audio/webm"},
+    "video": {"video/mp4", "video/webm"},
+    "json": {"application/json"},
+    "form": {"text/plain"},
+    "markdown": {"text/markdown", "text/plain"},
+}
+
 
 def _mutable_copy(value: Any) -> Any:
     if isinstance(value, dict):
@@ -412,9 +441,23 @@ class PlatformGateway:
     @staticmethod
     def _accepted_output_modes(card: dict) -> list[str] | None:
         modes = card.get("defaultOutputModes") or card.get("default_output_modes")
-        if not isinstance(modes, list):
-            return None
-        return [str(mode) for mode in modes if mode]
+        if not isinstance(modes, list) or not modes:
+            modes = ["text"]
+
+        accepted: set[str] = set()
+        for mode in modes:
+            mode_text = str(mode)
+            if "/" in mode_text:
+                accepted.add(mode_text)
+            elif mode_text in _OUTPUT_MODE_MIMES:
+                accepted.update(_OUTPUT_MODE_MIMES[mode_text])
+            else:
+                accepted.add("text/plain")
+
+        accepted &= _PLATFORM_SUPPORTED_OUTPUT_MODES
+        if not accepted:
+            accepted = {"text/plain"}
+        return sorted(accepted)
 
     async def _ensure_directly_callable(self, agent: AgentInfo) -> None:
         if agent.source == "hub" or agent.hub_id:
