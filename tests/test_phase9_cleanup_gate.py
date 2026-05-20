@@ -315,6 +315,12 @@ def test_context_utils_are_common_leaf_without_manifest_blocker():
     assert "common/utils/context_utils.py" not in blocked_paths
 
 
+def test_orphaned_upload_cleaner_has_no_legacy_boundary_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="legacy_import_boundary")
+
+    assert "jobs/cleanup_orphaned_uploads.py" not in blocked_paths
+
+
 def test_retained_legacy_service_shims_do_not_keep_concrete_implementations():
     violations = _legacy_service_shim_violations()
 

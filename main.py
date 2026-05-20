@@ -41,7 +41,10 @@ from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
 from config.settings import settings
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
-from jobs.cleanup_orphaned_uploads import orphaned_upload_cleaner
+from jobs.cleanup_orphaned_uploads import (
+    OrphanedUploadCleanerDeps,
+    orphaned_upload_cleaner,
+)
 from jobs.compaction_sweep import compaction_sweep
 from jobs.constants import ALL_JOB_NAMES
 from jobs.stale_task_checker import stale_task_checker
@@ -774,6 +777,13 @@ async def lifespan(app: FastAPI):
             )
         compaction_sweep.set_leader_election(_leader)
         orphaned_upload_cleaner.set_leader_election(_leader)
+        orphaned_upload_cleaner.set_cleanup_deps(
+            OrphanedUploadCleanerDeps(
+                file_uploads_collection=mongodb.file_uploads_collection,
+                room_user_messages_collection=mongodb.room_user_messages_collection,
+                object_storage=s3_service,
+            )
+        )
 
         _bg_started = True
         await agent_health_service.start()

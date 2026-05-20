@@ -28,13 +28,6 @@
       "contract": "legacy_import_boundary",
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
       "owner": "phase-9-platform-api-cleanup",
-      "path": "jobs/cleanup_orphaned_uploads.py",
-      "reason": "Background orphan upload cleanup still calls legacy MongoDB and S3 singletons; deletion or app-shell dependency binding requires a dedicated job migration."
-    },
-    {
-      "contract": "legacy_import_boundary",
-      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
-      "owner": "phase-9-platform-api-cleanup",
       "path": "jobs/compaction_sweep.py",
       "reason": "Background compaction sweep still calls legacy MongoDB and compaction service singletons; deletion or app-shell dependency binding requires compaction job migration readiness."
     },
