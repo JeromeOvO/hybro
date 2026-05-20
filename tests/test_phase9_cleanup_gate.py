@@ -327,6 +327,11 @@ def test_agent_rate_limit_service_shim_has_been_removed():
     assert not Path("services/rate_limit_service.py").exists()
 
 
+def test_gateway_and_discovery_rate_limit_service_shims_have_been_removed():
+    assert not Path("services/gateway_rate_limit_service.py").exists()
+    assert not Path("services/discovery_rate_limit_service.py").exists()
+
+
 def test_old_implementation_packages_are_not_shipped_without_blocker():
     manifest = _manifest()
     blockers = manifest.get("blocked_cleanup", [])

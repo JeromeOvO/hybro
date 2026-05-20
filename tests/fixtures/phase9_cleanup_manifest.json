@@ -250,18 +250,6 @@
     {
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
       "owner": "phase-9-platform-api-cleanup",
-      "path": "services/gateway_rate_limit_service.py",
-      "reason": "Delegating compatibility shim retained until gateway route dependency binding moves to Platform."
-    },
-    {
-      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "services/discovery_rate_limit_service.py",
-      "reason": "Delegating compatibility shim retained until discovery route dependency binding moves to Platform."
-    },
-    {
-      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
-      "owner": "phase-9-platform-api-cleanup",
       "path": "services/file_upload_service.py",
       "reason": "Delegating compatibility shim retained until existing service-level tests and callers move to Platform file storage."
     },
