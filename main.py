@@ -380,7 +380,6 @@ async def lifespan(app: FastAPI):
             from a2a_adapter.task_status import coerce_task_state
             room_center.bind_room_dependencies(
                 center=RoomCenter(),
-                message_center=execution_room_message_center,
                 database_service=_db_svc,
                 selection_service=agent_selection_service,
             )

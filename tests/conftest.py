@@ -41,7 +41,6 @@ FROZEN_TIME = datetime(2026, 1, 15, 12, 0, 0)
 PATCH = {
     "room_center.db_service": "api.room_center.db_service",
     "room_center.room_center": "api.room_center.room_center",
-    "room_center.room_message_center": "api.room_center.room_message_center",
     "agent.agent_center": "api.agent.agent_center",
     "agent.agent_service": "api.agent.agent_service",
     "hitl.verify_room_ownership": "api.hitl.verify_room_ownership",
@@ -586,14 +585,13 @@ def patch_sse_deps(mock_db_service, mock_sse_manager, mock_mongodb, mock_hitl_se
 
 
 @pytest.fixture
-def patch_room_center_deps(mock_db_service, mock_room_center, mock_room_message_center):
+def patch_room_center_deps(mock_db_service, mock_room_center):
     """Patch all room center endpoint dependencies at once."""
     from contextlib import ExitStack
     from common.dto import ExecutionAck
     with ExitStack() as stack:
         stack.enter_context(patch(PATCH["room_center.db_service"], mock_db_service))
         stack.enter_context(patch(PATCH["room_center.room_center"], mock_room_center))
-        stack.enter_context(patch(PATCH["room_center.room_message_center"], mock_room_message_center))
         execution_engine = MagicMock()
         execution_engine.execute = AsyncMock(
             return_value=ExecutionAck(success=True, message_id="new-message-id")
@@ -604,7 +602,6 @@ def patch_room_center_deps(mock_db_service, mock_room_center, mock_room_message_
         yield {
             "db_service": mock_db_service,
             "room_center": mock_room_center,
-            "room_message_center": mock_room_message_center,
             "execution_engine": execution_engine,
         }
 

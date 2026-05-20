@@ -20,7 +20,6 @@ from models.response import ActiveRunRef, RoomCenterActiveRunsResponse, RoomCent
 
 router = APIRouter()
 room_center: RoomCenterRouteOwner | None = None
-room_message_center: object | None = None
 db_service: A2ATaskReader | None = None
 agent_selection_service: AgentSelectionSuggester | None = None
 execution_engine: ExecutionEngine | None = None
@@ -29,14 +28,12 @@ execution_engine: ExecutionEngine | None = None
 def bind_room_dependencies(
     *,
     center: RoomCenterRouteOwner,
-    message_center: object,
     database_service: A2ATaskReader,
     selection_service: AgentSelectionSuggester,
 ) -> None:
-    global room_center, room_message_center, db_service, agent_selection_service
+    global room_center, db_service, agent_selection_service
 
     room_center = center
-    room_message_center = message_center
     db_service = database_service
     agent_selection_service = selection_service
 
@@ -50,12 +47,6 @@ def _require_room_center() -> RoomCenterRouteOwner:
     if room_center is None:
         raise RuntimeError("Room center dependency has not been bound")
     return room_center
-
-
-def _require_room_message_center() -> object:
-    if room_message_center is None:
-        raise RuntimeError("Room message center dependency has not been bound")
-    return room_message_center
 
 
 def _require_db_service() -> A2ATaskReader:

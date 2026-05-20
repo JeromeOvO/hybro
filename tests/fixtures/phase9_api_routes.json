@@ -1189,11 +1189,14 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "common.protocols.ExecutionEngine",
     "path": "/api/v1/roomCenter/inquiryActiveRuns",
     "response_class": null,
     "response_model": null,
     "status_code": null,
+    "supporting_protocols": [
+      "app_shell.database_service.A2ATaskReader"
+    ],
     "streaming_response": null
   },
   {
@@ -1269,11 +1272,14 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "common.protocols.ExecutionEngine",
     "path": "/api/v1/roomCenter/sendMessage",
     "response_class": null,
     "response_model": null,
     "status_code": null,
+    "supporting_protocols": [
+      "app_shell.database_service.A2ATaskReader"
+    ],
     "streaming_response": null
   },
   {
@@ -1289,7 +1295,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "app_shell.bound.AgentSelectionSuggester",
     "path": "/api/v1/roomCenter/suggestAgents",
     "response_class": null,
     "response_model": null,

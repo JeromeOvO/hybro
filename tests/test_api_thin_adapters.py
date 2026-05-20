@@ -54,6 +54,8 @@ def _annotation_has_broad_shape(annotation: ast.AST | None) -> bool:
     for node in ast.walk(annotation):
         if isinstance(node, ast.Name) and node.id == "Any":
             return True
+        if isinstance(node, ast.Name) and node.id == "object":
+            return True
         if isinstance(node, ast.Attribute) and node.attr == "Any":
             return True
         if isinstance(node, ast.Constant) and node.value is Ellipsis:
@@ -393,6 +395,83 @@ def test_agent_viewset_mutations_record_vector_side_effect_protocols():
             )
 
     assert not violations, "Agent mutation route inventory omits side-effect protocols:\n" + "\n".join(
+        violations
+    )
+
+
+def test_room_center_route_inventory_records_live_protocol_owners():
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    by_name = {
+        route["name"]: route
+        for route in routes
+        if route["module"] == "api.room_center"
+    }
+    expected = {
+        "inquiry_active_runs": {
+            "owner": "common.protocols.ExecutionEngine",
+            "supporting": {"app_shell.database_service.A2ATaskReader"},
+        },
+        "send_message": {
+            "owner": "common.protocols.ExecutionEngine",
+            "supporting": {"app_shell.database_service.A2ATaskReader"},
+        },
+        "suggest_agents": {
+            "owner": "app_shell.bound.AgentSelectionSuggester",
+            "supporting": set(),
+        },
+    }
+    violations: list[str] = []
+
+    for name, expectation in expected.items():
+        route = by_name[name]
+        if route["owning_protocol"] != expectation["owner"]:
+            violations.append(
+                f"{name}: owner={route['owning_protocol']} expected={expectation['owner']}"
+            )
+        supporting = set(route.get("supporting_protocols") or [])
+        missing = expectation["supporting"] - supporting
+        if missing:
+            violations.append(f"{name}: missing supporting {sorted(missing)}")
+
+    assert not violations, "Room-center route inventory mismatches live protocols:\n" + "\n".join(
+        violations
+    )
+
+
+def test_room_center_protocol_inventory_matches_handler_calls():
+    from api import room_center
+
+    expectations = {
+        "inquiry_active_runs": (
+            "common.protocols.ExecutionEngine",
+            ["get_runs_for_room"],
+        ),
+        "send_message": (
+            "common.protocols.ExecutionEngine",
+            ["execute(", "start_orchestration"],
+        ),
+        "suggest_agents": (
+            "app_shell.bound.AgentSelectionSuggester",
+            ["suggest_agents"],
+        ),
+    }
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    by_name = {
+        route["name"]: route
+        for route in routes
+        if route["module"] == "api.room_center"
+    }
+    violations: list[str] = []
+
+    for handler_name, (owner, method_names) in expectations.items():
+        source = inspect.getsource(getattr(room_center, handler_name))
+        if by_name[handler_name]["owning_protocol"] != owner:
+            violations.append(f"{handler_name}: {by_name[handler_name]['owning_protocol']}")
+        for call_marker in method_names:
+            if call_marker not in source:
+                violations.append(f"{handler_name}: missing call {call_marker}")
+
+    assert not violations, "Room-center protocol inventory does not match handlers:\n" + "\n".join(
         violations
     )
 
