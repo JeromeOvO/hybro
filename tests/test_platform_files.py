@@ -1,7 +1,8 @@
 import pytest
 
 from platform_module import PlatformConfig, PlatformDeps
-from platform_module.files import FileStoragePlatformError, PlatformFileStorage
+from common.errors import FileStoragePlatformError
+from platform_module.files import PlatformFileStorage
 
 
 class FakeObjectStorage:

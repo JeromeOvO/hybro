@@ -20,7 +20,8 @@ from models.file_upload import (
 )
 from config.settings import settings
 from platform_module import PlatformConfig, PlatformDeps
-from platform_module.files import FileStoragePlatformError, PlatformFileStorage
+from common.errors import FileStoragePlatformError
+from platform_module.files import PlatformFileStorage
 
 logger = get_logger(__name__)
 

@@ -13,6 +13,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from common.api_key_auth import get_api_key
+from common.errors import PlatformRouteError
 from models.api_key import APIKey
 from models.response import DiscoveryErrorResponse, DiscoveryResponse
 
@@ -67,6 +68,17 @@ def _resolve_dependency(value: Any, provider) -> Any:
     if isinstance(value, DependsParam):
         return provider()
     return value
+
+
+def _raise_http_error(error: PlatformRouteError) -> None:
+    headers = None
+    if isinstance(error.detail, dict) and "retry_after" in error.detail:
+        headers = {"Retry-After": str(error.detail["retry_after"])}
+    raise HTTPException(
+        status_code=error.status_code,
+        detail=error.detail,
+        headers=headers,
+    ) from error
 
 
 @router.post(
@@ -144,7 +156,10 @@ async def discover_agents(
     )
     
     # Check rate limits before processing
-    await rate_limiter.check_rate_limit(api_key)
+    try:
+        await rate_limiter.check_rate_limit(api_key)
+    except PlatformRouteError as exc:
+        _raise_http_error(exc)
     svc = _resolve_dependency(svc, get_discovery_service)
     
     try:

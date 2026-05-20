@@ -224,3 +224,14 @@ async def test_stream_yields_transport_events():
     events = [event async for event in stream]
 
     assert events == [{"task_id": "task-1", "event_type": "partial"}]
+
+
+@pytest.mark.asyncio
+async def test_prepare_stream_raises_before_streaming_for_hub_agent():
+    gateway = _gateway(agent=_agent(source="hub"))
+
+    with pytest.raises(Exception) as exc_info:
+        await gateway.prepare_stream("agent-1", {"text": "hi"}, "owner-1")
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail["error"] == "hub_agent_not_directly_callable"

@@ -15,6 +15,7 @@ from fastapi.params import Depends as DependsParam
 from fastapi.responses import StreamingResponse
 
 from common.api_key_auth import get_api_key
+from common.errors import GatewayPlatformError, PlatformRouteError
 from common.utils.logger import get_logger
 from models.api_key import APIKey
 from models.gateway import (
@@ -23,7 +24,6 @@ from models.gateway import (
     GatewayDiscoveryResponse,
     GatewaySendRequest,
 )
-from platform_module.gateway import GatewayPlatformError
 
 logger = get_logger(__name__)
 
@@ -63,14 +63,17 @@ def _resolve_dependency(value: Any, provider) -> Any:
 
 
 async def _check_rate_limit(rate_limiter: Any, api_key: APIKey) -> None:
-    await rate_limiter.check_rate_limit(api_key)
+    try:
+        await rate_limiter.check_rate_limit(api_key)
+    except PlatformRouteError as exc:
+        _raise_http_error(exc)
 
 
 async def _record_request(rate_limiter: Any, api_key: APIKey) -> None:
     await rate_limiter.record_request(api_key)
 
 
-def _raise_http_error(error: GatewayPlatformError) -> None:
+def _raise_http_error(error: PlatformRouteError) -> None:
     headers = None
     if "retry_after" in error.detail:
         headers = {"Retry-After": str(error.detail["retry_after"])}

@@ -174,3 +174,29 @@ async def test_protocol_rate_limiter_returns_common_dto():
     assert result.info is not None
     assert result.info.limit == 1
     assert result.info.remaining == 0
+
+
+@pytest.mark.asyncio
+async def test_route_api_key_rate_limiter_preserves_legacy_route_contract():
+    from common.errors import PlatformRouteError
+    from platform_module.rate_limit import PlatformRouteAPIKeyRateLimiter
+
+    collection = InMemoryRateLimitCollection(
+        [{"key_id": "key-1", "timestamp": NOW - timedelta(minutes=10)}]
+    )
+    limiter = PlatformRouteAPIKeyRateLimiter(
+        collection=collection,
+        clock=lambda: NOW,
+        per_key_limit=1,
+        global_limit=10,
+    )
+
+    class APIKey:
+        key_id = "key-1"
+
+    with pytest.raises(PlatformRouteError) as exc_info:
+        await limiter.check_rate_limit(APIKey())
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.detail["error"] == "rate_limit_exceeded"
+    assert exc_info.value.detail["retry_after"] > 0

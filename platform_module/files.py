@@ -1,15 +1,9 @@
 from __future__ import annotations
 
 from common.dto import FileInfo
+from common.errors import FileStoragePlatformError
 from platform_module.config import PlatformConfig
 from platform_module.deps import PlatformDeps
-
-
-class FileStoragePlatformError(Exception):
-    def __init__(self, status_code: int, detail: str) -> None:
-        super().__init__(detail)
-        self.status_code = status_code
-        self.detail = detail
 
 
 class PlatformFileStorage:
@@ -171,4 +165,4 @@ class PlatformFileStorage:
         )
 
 
-__all__ = ["FileStoragePlatformError", "PlatformFileStorage"]
+__all__ = ["PlatformFileStorage"]

@@ -5,9 +5,9 @@ from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.params import Depends as DependsParam
 
 from common.auth import ClerkUser, get_current_user
+from common.errors import FileStoragePlatformError
 from common.protocols import FileStorage
 from models.file_upload import FileUploadResponse
-from platform_module.files import FileStoragePlatformError
 
 router = APIRouter(prefix="/files", tags=["files"])
 

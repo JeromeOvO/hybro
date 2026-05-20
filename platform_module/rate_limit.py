@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 from common.dto import RateLimitInfo, RateLimitResult
+from common.errors import PlatformRouteError
 
 
 class RateLimitCollection(Protocol):
@@ -288,6 +289,47 @@ class PlatformProtocolRateLimiter:
         )
 
 
+class PlatformRouteAPIKeyRateLimiter:
+    def __init__(
+        self,
+        collection: RateLimitCollection | None = None,
+        *,
+        clock: Callable[[], datetime] = _utcnow,
+        per_key_limit: int,
+        global_limit: int,
+        per_key_limit_message: Callable[[int], str] | None = None,
+        global_limit_message: str = "Service temporarily unavailable due to high traffic",
+    ) -> None:
+        self._api_key_limiter = PlatformAPIKeyRateLimiter(
+            collection=collection,
+            clock=clock,
+            per_key_limit_message=per_key_limit_message,
+            global_limit_message=global_limit_message,
+        )
+        self._per_key_limit = per_key_limit
+        self._global_limit = global_limit
+
+    async def check_rate_limit(self, api_key) -> None:
+        result = await self._api_key_limiter.check_api_key_limit(
+            api_key.key_id,
+            self._per_key_limit,
+            self._global_limit,
+        )
+        if result.allowed:
+            return
+        raise PlatformRouteError(
+            429,
+            {
+                "error": "rate_limit_exceeded",
+                "message": result.message,
+                "retry_after": result.retry_after_seconds or 3600,
+            },
+        )
+
+    async def record_request(self, api_key) -> None:
+        await self._api_key_limiter.record_api_key_request(api_key.key_id)
+
+
 __all__ = [
     "APIKeyRateLimitResult",
     "AgentRateLimitResult",
@@ -295,5 +337,6 @@ __all__ = [
     "PlatformAPIKeyRateLimiter",
     "PlatformAgentRateLimiter",
     "PlatformProtocolRateLimiter",
+    "PlatformRouteAPIKeyRateLimiter",
     "RateLimitCollection",
 ]

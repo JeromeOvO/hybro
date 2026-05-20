@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 
 from api.discovery import discover_agents, DiscoveryRequest
+from common.errors import PlatformRouteError
 from models.api_key import APIKey
 from models.response import DiscoveryResponse
 from tests.conftest import PATCH, FROZEN_TIME
@@ -136,3 +137,31 @@ class TestDiscoverAgents:
             )
 
         assert exc.value.status_code == 429
+
+    @pytest.mark.asyncio
+    async def test_maps_platform_rate_limit_error(self, sample_api_key):
+        """Should map common Platform rate-limit errors to HTTPException."""
+        mock_rate_limit = MagicMock()
+        mock_rate_limit.check_rate_limit = AsyncMock(
+            side_effect=PlatformRouteError(
+                429,
+                {
+                    "error": "rate_limit_exceeded",
+                    "message": "Rate limit exceeded",
+                    "retry_after": 60,
+                },
+            )
+        )
+
+        request_body = DiscoveryRequest(query="test")
+
+        with pytest.raises(HTTPException) as exc:
+            await discover_agents(
+                request_body,
+                sample_api_key,
+                rate_limiter=mock_rate_limit,
+                default_limit=10,
+            )
+
+        assert exc.value.status_code == 429
+        assert exc.value.headers == {"Retry-After": "60"}

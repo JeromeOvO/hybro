@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from common.dto import AgentInfo, AgentTaskResult, InternalAgentMessage
+from common.errors import GatewayPlatformError
 from models.gateway import GatewayDiscoveryAgentResult, GatewayDiscoveryResponse
 from platform_module.config import PlatformConfig
 from platform_module.deps import PlatformDeps
@@ -16,13 +17,6 @@ def _mutable_copy(value: Any) -> Any:
     if isinstance(value, tuple):
         return [_mutable_copy(item) for item in value]
     return value
-
-
-class GatewayPlatformError(Exception):
-    def __init__(self, status_code: int, detail: dict) -> None:
-        self.status_code = status_code
-        self.detail = detail
-        super().__init__(detail.get("message") or detail.get("error") or str(detail))
 
 
 class PlatformGateway:
@@ -147,32 +141,43 @@ class PlatformGateway:
     async def stream_message(
         self, agent_id: str, message: Any, user_id: str
     ) -> AsyncIterator[dict]:
+        event_stream = await self.prepare_stream(agent_id, message, user_id)
+        async for event in event_stream:
+            yield event
+
+    async def prepare_stream(
+        self, agent_id: str, message: Any, user_id: str
+    ) -> AsyncIterator[dict]:
         agent = await self.get_agent_for_gateway(agent_id, user_id)
         await self._ensure_directly_callable(agent)
         await self._check_agent_rate_limit(agent, user_id)
         transport = self._require_transport()
+        internal_message = self._message_to_internal(agent_id, message)
 
-        try:
-            async for event in transport.stream_message(
-                agent.url or "",
-                self._message_to_internal(agent_id, message),
-                user_id=user_id,
-            ):
-                yield (
-                    event.model_dump(mode="python")
-                    if hasattr(event, "model_dump")
-                    else event
-                )
-        except GatewayPlatformError:
-            raise
-        except Exception as exc:
-            raise GatewayPlatformError(
-                502,
-                {
-                    "error": "agent_error",
-                    "message": f"Agent communication failed: {exc}",
-                },
-            ) from exc
+        async def _events() -> AsyncIterator[dict]:
+            try:
+                async for event in transport.stream_message(
+                    agent.url or "",
+                    internal_message,
+                    user_id=user_id,
+                ):
+                    yield (
+                        event.model_dump(mode="python")
+                        if hasattr(event, "model_dump")
+                        else event
+                    )
+            except GatewayPlatformError:
+                raise
+            except Exception as exc:
+                raise GatewayPlatformError(
+                    502,
+                    {
+                        "error": "agent_error",
+                        "message": f"Agent communication failed: {exc}",
+                    },
+                ) from exc
+
+        return _events()
 
     async def _card_for_agent(self, agent: AgentInfo) -> dict:
         if self._deps.agent_registry is not None:
@@ -260,4 +265,4 @@ class PlatformGateway:
         )
 
 
-__all__ = ["GatewayPlatformError", "PlatformGateway"]
+__all__ = ["PlatformGateway"]
