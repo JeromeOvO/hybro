@@ -91,7 +91,7 @@ def test_phase9_route_inventory_matches_live_app_routes():
             route["path"],
             tuple(route["methods"]),
             route["name"],
-        ): route.get("response_model")
+        ): route
         for route in recorded_routes
         if route["path"] not in docs_paths
     }
@@ -107,6 +107,23 @@ def test_phase9_route_inventory_matches_live_app_routes():
             if route.response_model is not None
             else None
         )
-        live[(route.path, methods, route.name)] = response_model
+        dependencies = sorted(
+            getattr(dependency.call, "__name__", repr(dependency.call))
+            for dependency in route.dependant.dependencies
+        )
+        live[(route.path, methods, route.name)] = {
+            "auth_dependencies": dependencies,
+            "response_model": response_model,
+        }
 
-    assert recorded == live
+    assert set(recorded) == set(live)
+    for key, route in recorded.items():
+        assert route["response_model"] == live[key]["response_model"]
+        assert sorted(route["auth_dependencies"]) == live[key]["auth_dependencies"]
+        if route["module"] in {
+            "api.discovery",
+            "api.files",
+            "api.gateway",
+            "api.discovery_api_keys",
+        }:
+            assert not route["owning_protocol"].startswith("blocked:")
