@@ -1,27 +1,9 @@
-from collections.abc import AsyncIterator
-
 from common.dto import FileInfo, GatewayRequest, GatewayResponse, RateLimitResult
 from common.protocols import FileStorage, GatewayService, RateLimiter
 from platform_module.config import PlatformConfig
 from platform_module.deps import PlatformDeps
+from platform_module.gateway import PlatformGateway
 from platform_module.rate_limit import PlatformProtocolRateLimiter
-
-
-class PlatformGatewayService:
-    def __init__(self, config: PlatformConfig, deps: PlatformDeps) -> None:
-        self._config = config
-        self._deps = deps
-
-    async def send_message(
-        self, api_key: str, request: GatewayRequest
-    ) -> GatewayResponse:
-        raise NotImplementedError("Platform gateway send is not migrated yet")
-
-    async def stream_message(
-        self, api_key: str, request: GatewayRequest
-    ) -> AsyncIterator[dict]:
-        raise NotImplementedError("Platform gateway stream is not migrated yet")
-        yield {}
 
 
 class PlatformFileStorage:
@@ -53,7 +35,7 @@ class PlatformFacade:
     def __init__(self, config: PlatformConfig, deps: PlatformDeps) -> None:
         self.config = config
         self.deps = deps
-        self._gateway_service = PlatformGatewayService(config, deps)
+        self._gateway_service = PlatformGateway(config, deps)
         self._gateway_rate_limiter = PlatformProtocolRateLimiter(
             deps.gateway_rate_limit_collection,
             scope="gateway",

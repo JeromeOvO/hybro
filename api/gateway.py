@@ -8,8 +8,10 @@ All endpoints require X-API-Key authentication.
 """
 
 import json
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.params import Depends as DependsParam
 from fastapi.responses import StreamingResponse
 
 from common.api_key_auth import get_api_key
@@ -21,23 +23,62 @@ from models.gateway import (
     GatewayDiscoveryResponse,
     GatewaySendRequest,
 )
-from services.gateway_rate_limit_service import gateway_rate_limit_service
-from services.gateway_service import (
-    GatewayService,
-    gateway_service,
-)
+from platform_module.gateway import GatewayPlatformError
 
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+gateway_service: Any | None = None
+gateway_rate_limit_service: Any | None = None
 
 
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
 
-def _get_svc() -> GatewayService:
+def bind_gateway_dependencies(service: Any, rate_limiter: Any) -> None:
+    global gateway_service, gateway_rate_limit_service
+
+    gateway_service = service
+    gateway_rate_limit_service = rate_limiter
+
+
+def get_gateway_service() -> Any:
+    if gateway_service is None:
+        raise RuntimeError("Gateway service dependency has not been bound")
     return gateway_service
+
+
+def get_gateway_rate_limiter() -> Any:
+    if gateway_rate_limit_service is None:
+        raise RuntimeError("Gateway rate limiter dependency has not been bound")
+    return gateway_rate_limit_service
+
+
+def _resolve_dependency(value: Any, provider) -> Any:
+    if isinstance(value, DependsParam):
+        return provider()
+    return value
+
+
+async def _check_rate_limit(rate_limiter: Any, api_key: APIKey) -> None:
+    await rate_limiter.check_rate_limit(api_key)
+
+
+async def _record_request(rate_limiter: Any, api_key: APIKey) -> None:
+    await rate_limiter.record_request(api_key)
+
+
+def _raise_http_error(error: GatewayPlatformError) -> None:
+    headers = None
+    if "retry_after" in error.detail:
+        headers = {"Retry-After": str(error.detail["retry_after"])}
+    raise HTTPException(
+        status_code=error.status_code,
+        detail=error.detail,
+        headers=headers,
+    ) from error
 
 
 # ---------------------------------------------------------------------------
@@ -52,9 +93,11 @@ def _get_svc() -> GatewayService:
 async def gateway_discover(
     body: GatewayDiscoverRequest,
     api_key: APIKey = Depends(get_api_key),
-    svc: GatewayService = Depends(_get_svc),
+    svc: Any = Depends(get_gateway_service),
+    rate_limiter: Any = Depends(get_gateway_rate_limiter),
 ):
-    await gateway_rate_limit_service.check_rate_limit(api_key)
+    rate_limiter = _resolve_dependency(rate_limiter, get_gateway_rate_limiter)
+    await _check_rate_limit(rate_limiter, api_key)
     try:
         result = await svc.discover_agents(
             query=body.query,
@@ -63,13 +106,15 @@ async def gateway_discover(
         )
     except HTTPException:
         raise
+    except GatewayPlatformError as exc:
+        _raise_http_error(exc)
     except Exception as e:
         logger.error(f"Gateway discover failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail={"error": "discovery_error", "message": "Agent discovery service unavailable"},
         ) from e
-    await gateway_rate_limit_service.record_request(api_key)
+    await _record_request(rate_limiter, api_key)
     return result
 
 
@@ -81,15 +126,20 @@ async def gateway_send(
     agent_id: str,
     body: GatewaySendRequest,
     api_key: APIKey = Depends(get_api_key),
-    svc: GatewayService = Depends(_get_svc),
+    svc: Any = Depends(get_gateway_service),
+    rate_limiter: Any = Depends(get_gateway_rate_limiter),
 ):
-    await gateway_rate_limit_service.check_rate_limit(api_key)
-    result = await svc.send_message(
-        agent_id=agent_id,
-        message=body.message,
-        user_id=api_key.user_id,
-    )
-    await gateway_rate_limit_service.record_request(api_key)
+    rate_limiter = _resolve_dependency(rate_limiter, get_gateway_rate_limiter)
+    await _check_rate_limit(rate_limiter, api_key)
+    try:
+        result = await svc.send_message(
+            agent_id=agent_id,
+            message=body.message,
+            user_id=api_key.user_id,
+        )
+    except GatewayPlatformError as exc:
+        _raise_http_error(exc)
+    await _record_request(rate_limiter, api_key)
     return result
 
 
@@ -101,25 +151,41 @@ async def gateway_stream(
     agent_id: str,
     body: GatewaySendRequest,
     api_key: APIKey = Depends(get_api_key),
-    svc: GatewayService = Depends(_get_svc),
+    svc: Any = Depends(get_gateway_service),
+    rate_limiter: Any = Depends(get_gateway_rate_limiter),
 ):
-    await gateway_rate_limit_service.check_rate_limit(api_key)
+    rate_limiter = _resolve_dependency(rate_limiter, get_gateway_rate_limiter)
+    await _check_rate_limit(rate_limiter, api_key)
 
-    event_stream = await svc.prepare_stream(
-        agent_id=agent_id,
-        message=body.message,
-        user_id=api_key.user_id,
-    )
+    try:
+        if hasattr(svc, "prepare_stream"):
+            event_stream = await svc.prepare_stream(
+                agent_id=agent_id,
+                message=body.message,
+                user_id=api_key.user_id,
+            )
+        else:
+            event_stream = svc.stream_message(
+                agent_id=agent_id,
+                message=body.message,
+                user_id=api_key.user_id,
+            )
+    except GatewayPlatformError as exc:
+        _raise_http_error(exc)
 
     async def _event_generator():
         try:
             async for event in event_stream:
-                yield f"data: {event.model_dump_json()}\n\n"
+                if hasattr(event, "model_dump_json"):
+                    payload = event.model_dump_json()
+                else:
+                    payload = json.dumps(event)
+                yield f"data: {payload}\n\n"
         except Exception as e:
             logger.error(f"Gateway SSE stream error for agent {agent_id}: {e}")
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
         finally:
-            await gateway_rate_limit_service.record_request(api_key)
+            await _record_request(rate_limiter, api_key)
 
     return StreamingResponse(
         _event_generator(),
@@ -139,9 +205,14 @@ async def gateway_stream(
 async def gateway_get_card(
     agent_id: str,
     api_key: APIKey = Depends(get_api_key),
-    svc: GatewayService = Depends(_get_svc),
+    svc: Any = Depends(get_gateway_service),
+    rate_limiter: Any = Depends(get_gateway_rate_limiter),
 ):
-    await gateway_rate_limit_service.check_rate_limit(api_key)
-    card = await svc.get_agent_card(agent_id=agent_id, user_id=api_key.user_id)
-    await gateway_rate_limit_service.record_request(api_key)
+    rate_limiter = _resolve_dependency(rate_limiter, get_gateway_rate_limiter)
+    await _check_rate_limit(rate_limiter, api_key)
+    try:
+        card = await svc.get_agent_card(agent_id=agent_id, user_id=api_key.user_id)
+    except GatewayPlatformError as exc:
+        _raise_http_error(exc)
+    await _record_request(rate_limiter, api_key)
     return GatewayCardResponse(agent_id=agent_id, agent_card=card)

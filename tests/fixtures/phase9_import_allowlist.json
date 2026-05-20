@@ -1,1 +1,310 @@
-[]
+[
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.a2a_constants.NON_TERMINAL_STATES",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/a2a_tasks.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.a2a_constants.get_retry_after_seconds",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/a2a_tasks.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.database_service.db_service",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/a2a_tasks.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "database.mongodb.mongodb",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/agent.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "modules.AgentCenter.AgentCenter",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/agent.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.agent_capability_issue_service.capability_issue_service",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/agent.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.agent_service.agent_service",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/agent.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.s3_service.s3_service",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/agent.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.agent_liveness_service.check_and_sync_liveness",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/agent.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.database_service.db_service",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/agent_group.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "database.pinecone_db.pinecone_db",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/agent_viewset.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "database.repository.Repository",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/agent_viewset.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.openai_service.openai_service",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/agent_viewset.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.discovery_rate_limit_service.discovery_rate_limit_service",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/discovery.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.discovery_service.discovery_service",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/discovery.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "database.mongodb.mongodb",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/discovery_api_keys.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.file_upload_service.file_upload_service",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/files.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "execution.hitl.exceptions.HITLError",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/hitl.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "execution.hitl.exceptions.HITLConflictError",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/hitl.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "execution.hitl.exceptions.HITLContinuationLostError",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/hitl.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "execution.hitl.exceptions.HITLNotFoundError",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/hitl.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "execution.hitl.exceptions.HITLRoomMismatchError",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/hitl.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "execution.hitl.exceptions.HITLRoutingFailedError",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/hitl.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.relay_service.relay_service",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/hub.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "modules.InspectionCenter.InspectionCenter",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/inspection_center.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "modules.MemoryCenter.MemoryCenter",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/memory_center.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "modules.RoomMessageCenter.room_message_center",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/orchestration_center.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "modules.WorkflowCenter.workflow_center",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/orchestration_center.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.relay_service.relay_service",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/relay.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "modules.RoomMessageCenter.room_message_center",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/room_center.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "modules.RoomCenter.RoomCenter",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/room_center.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.database_service.db_service",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/room_center.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.agent_selection_service.agent_selection_service",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/room_center.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.database_service.db_service",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/sse.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.sse_services.sse_manager",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/sse.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "modules.TaskCenter.TaskCenter",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/task.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "database.mongodb.get_db",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/viewset.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "database.repository.Repository",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/viewset.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "modules.agent_response_handler.AgentResponseHandler",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/webhooks.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "modules.transports.webhook.WebhookTransport",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/webhooks.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "modules.transports.webhook.parse_stream_response",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/webhooks.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.database_service.db_service",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/webhooks.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "services.sse_services.sse_manager",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/webhooks.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  },
+  {
+    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
+    "import": "modules.RoomMessageCenter.room_message_center",
+    "owner": "phase-9-api-adapter-conversion",
+    "path": "api/webhooks.py",
+    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
+  }
+]
