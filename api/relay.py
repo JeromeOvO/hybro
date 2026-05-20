@@ -6,8 +6,10 @@ All endpoints require X-API-Key authentication (reuses common.api_key_auth).
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.params import Depends as DependsParam
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -25,10 +27,25 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/relay")
 
+relay_service: Any | None = None
 
-def _get_relay_service():
-    from services.relay_service import relay_service
+
+def bind_relay_dependencies(service: Any) -> None:
+    global relay_service
+
+    relay_service = service
+
+
+def get_relay_service() -> Any:
+    if relay_service is None:
+        raise RuntimeError("Relay service dependency has not been bound")
     return relay_service
+
+
+def _resolve_dependency(value: Any, provider) -> Any:
+    if isinstance(value, DependsParam):
+        return provider()
+    return value
 
 
 # ------------------------------------------------------------------
@@ -49,8 +66,9 @@ class RegisterHubResponse(BaseModel):
 async def relay_register(
     body: RegisterHubRequest,
     api_key: APIKey = Depends(get_api_key_no_track),
+    svc: Any = Depends(get_relay_service),
 ):
-    svc = _get_relay_service()
+    svc = _resolve_dependency(svc, get_relay_service)
     hub = await svc.register_hub(body.hub_id, api_key)
     return RegisterHubResponse(hub_id=hub.hub_id, user_id=hub.user_id)
 
@@ -65,8 +83,9 @@ async def relay_events(
     request: Request,
     last_event_id: str | None = Query(None),
     api_key: APIKey = Depends(get_api_key_no_track),
+    svc: Any = Depends(get_relay_service),
 ):
-    svc = _get_relay_service()
+    svc = _resolve_dependency(svc, get_relay_service)
 
     # Prefer standard SSE header, fall back to query param
     resume_from = request.headers.get("Last-Event-ID") or last_event_id
@@ -107,8 +126,9 @@ async def relay_publish(
     hub_id: str,
     body: HubPublishRequest,
     api_key: APIKey = Depends(get_api_key),
+    svc: Any = Depends(get_relay_service),
 ):
-    svc = _get_relay_service()
+    svc = _resolve_dependency(svc, get_relay_service)
 
     try:
         await svc.process_publish(hub_id, body, api_key)
@@ -133,8 +153,9 @@ async def relay_sync_agents(
     hub_id: str,
     body: HubAgentSyncRequest,
     api_key: APIKey = Depends(get_api_key_no_track),
+    svc: Any = Depends(get_relay_service),
 ):
-    svc = _get_relay_service()
+    svc = _resolve_dependency(svc, get_relay_service)
     try:
         synced = await svc.sync_agents(
             hub_id, body.agents, api_key, prune_missing=body.prune_missing,
@@ -153,8 +174,9 @@ async def relay_sync_agents(
 @router.get("/hub/status", response_model=HubStatusResponse)
 async def relay_status(
     api_key: APIKey = Depends(get_api_key),
+    svc: Any = Depends(get_relay_service),
 ):
-    svc = _get_relay_service()
+    svc = _resolve_dependency(svc, get_relay_service)
     hubs = await svc.get_hub_status(api_key.user_id)
     return HubStatusResponse(hubs=hubs)
 
@@ -167,9 +189,10 @@ async def relay_status(
 async def relay_heartbeat(
     hub_id: str,
     api_key: APIKey = Depends(get_api_key_no_track),
+    svc: Any = Depends(get_relay_service),
 ):
     """Lightweight liveness signal from the hub daemon."""
-    svc = _get_relay_service()
+    svc = _resolve_dependency(svc, get_relay_service)
     try:
         await svc.record_hub_heartbeat(hub_id, api_key)
     except PermissionError as exc:

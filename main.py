@@ -134,6 +134,8 @@ def _assert_startup_bindings_complete(app: FastAPI) -> None:
         errors.append("api.gateway.gateway_service")
     if getattr(files, "file_storage", None) is None:
         errors.append("api.files.file_storage")
+    if getattr(relay, "relay_service", None) is None:
+        errors.append("api.relay.relay_service")
 
     if errors:
         raise RuntimeError(
@@ -670,6 +672,7 @@ async def lifespan(app: FastAPI):
             ),
             response_converter=hub_agent_response_internal_to_agent_event,
         )
+        relay.bind_relay_dependencies(_relay_svc)
         if _delivery_deps is not None:
             router = _relay_svc.internal_response_dispatcher
             if router is None:
