@@ -92,7 +92,10 @@ def test_get_task_response_helper_returns_none_for_jsonrpc_errors():
     from types import SimpleNamespace
 
     from a2a.types import JSONRPCErrorResponse, JSONRPCError
-    from a2a_adapter.task_requests import extract_get_task_result
+    from a2a_adapter.task_requests import (
+        extract_get_task_result,
+        is_jsonrpc_error_response,
+    )
 
     response = SimpleNamespace(
         root=JSONRPCErrorResponse(
@@ -102,6 +105,43 @@ def test_get_task_response_helper_returns_none_for_jsonrpc_errors():
     )
 
     assert extract_get_task_result(response) is None
+    assert is_jsonrpc_error_response(response)
+
+
+def test_message_factory_builds_sdk_message_from_parts():
+    from a2a.types import TextPart
+    from a2a_adapter.message_factory import build_message_from_parts
+
+    message = build_message_from_parts(
+        role="agent",
+        message_id="msg-1",
+        parts=[TextPart(text="hello")],
+    )
+
+    assert message.role == "agent"
+    assert message.message_id == "msg-1"
+    assert message.parts[0].model_dump(mode="json")["text"] == "hello"
+
+
+def test_artifact_factory_materializes_non_text_parts_on_task():
+    from types import SimpleNamespace
+
+    from a2a_adapter.task_artifacts import materialize_non_text_parts_as_artifact
+
+    task = SimpleNamespace(artifacts=None)
+
+    materialize_non_text_parts_as_artifact(
+        task,
+        [{"kind": "data", "data": {"value": 1}}],
+    )
+
+    assert task.artifacts is not None
+    assert len(task.artifacts) == 1
+    assert task.artifacts[0].parts[0].model_dump(mode="json") == {
+        "kind": "data",
+        "metadata": None,
+        "data": {"value": 1},
+    }
 
 
 def test_translator_a2a_task_to_result_normalizes_task_status_result_and_error_text():

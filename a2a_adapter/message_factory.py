@@ -19,4 +19,19 @@ def build_user_text_message(
     )
 
 
-__all__ = ["build_user_text_message"]
+def build_message_from_parts(
+    *,
+    role: Any,
+    message_id: str | None,
+    parts: list[Any],
+    kind: str = "message",
+) -> Message:
+    return Message(
+        kind=kind,
+        role=role,
+        message_id=message_id or uuid4().hex,
+        parts=parts,
+    )
+
+
+__all__ = ["build_message_from_parts", "build_user_text_message"]

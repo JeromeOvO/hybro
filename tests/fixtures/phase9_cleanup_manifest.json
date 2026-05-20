@@ -30,13 +30,6 @@
       "owner": "phase-9-platform-api-cleanup",
       "path": "common/types.py",
       "reason": "Legacy Common type aliases still re-export SDK part and task-state types; replace with SDK-free Common DTOs."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "execution/dispatch/transports/direct.py",
-      "reason": "Direct transport still handles A2A SDK request, task, message, and artifact objects inline; this must be isolated in A2A adapter code."
     }
   ],
   "content_storage_callers": [
