@@ -128,34 +128,6 @@
       "owner": "phase-9-platform-api-cleanup",
       "path": "jobs/stale_task_checker.py",
       "reason": "Stale task checker still polls and constructs A2A SDK task payloads directly; migrate polling through A2A adapter protocols."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "models/agent.py",
-      "reason": "Legacy public Pydantic route/domain model still exposes A2A SDK AgentCard; route translators must replace this import before final SDK confinement is claimed."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "models/request.py",
-      "reason": "Legacy public request models still expose A2A SDK schemas; route translators must replace these imports before final SDK confinement is claimed."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "models/response.py",
-      "reason": "Legacy public response models still expose A2A SDK schemas; route translators must replace these imports before final SDK confinement is claimed."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "models/room.py",
-      "reason": "Legacy room model still exposes A2A SDK Task; route translators must replace this import before final SDK confinement is claimed."
     }
   ],
   "content_storage_callers": [

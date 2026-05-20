@@ -334,6 +334,15 @@ def test_common_a2a_client_has_no_sdk_confinement_blockers():
     assert "common/client/client.py" not in blocked_paths
 
 
+def test_legacy_public_models_have_no_sdk_confinement_blockers():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "models/agent.py" not in blocked_paths
+    assert "models/request.py" not in blocked_paths
+    assert "models/response.py" not in blocked_paths
+    assert "models/room.py" not in blocked_paths
+
+
 def test_common_package_has_no_module_or_app_shell_imports():
     violations = _common_import_violations()
 

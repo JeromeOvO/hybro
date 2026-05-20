@@ -2,10 +2,10 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from a2a.types import AgentCard, Message, Task, TextPart
-from pydantic import BaseModel, ConfigDict, Field
+from common.types import AgentCard
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from models.agent import Agent, AgentStatus
+from models.agent import Agent, AgentStatus, coerce_legacy_agent_card
 from models.memory import ChatContext, RoomMemory
 from models.room import Room, RoomAgentMessage, RoomMessage, RoomUserMessage, UserAttachment
 from models.task import BaseTask, MetaTask, TaskSession
@@ -48,16 +48,16 @@ class TaskRequest(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid4()))
     query: str
     context: dict[str, Any] | None = Field(default_factory=dict)
-    message: Message | None = None
+    message: Any | None = None
 
-    def to_message(self) -> Message:
+    def to_message(self) -> Any:
         """Convert request to A2A protocol Message"""
         if self.message:
             return self.message
 
-        # Create message if not provided
-        parts = [TextPart(text=self.query)]
-        return Message(role="user", parts=parts, metadata=self.context)
+        from a2a_adapter.message_factory import build_user_text_message
+
+        return build_user_text_message(self.query, metadata=self.context)
 
 
 class AgentTaskRequest(BaseModel):
@@ -66,26 +66,25 @@ class AgentTaskRequest(BaseModel):
     step_id: str
     input_data: Any
     context: dict[str, Any] | None = Field(default_factory=dict)
-    message: Message | None = None
+    message: Any | None = None
 
-    def to_message(self) -> Message:
+    def to_message(self) -> Any:
         """Convert agent task request to A2A protocol Message"""
         if self.message:
             return self.message
 
         # Create message from input data
         if isinstance(self.input_data, str):
-            parts = [TextPart(text=self.input_data)]
+            text = self.input_data
         elif isinstance(self.input_data, dict) and "text" in self.input_data:
-            parts = [TextPart(text=self.input_data["text"])]
+            text = self.input_data["text"]
         else:
             # Try to convert to string or use as-is
             try:
                 text = str(self.input_data)
-                parts = [TextPart(text=text)]
             except:
                 # Use generic text if conversion fails
-                parts = [TextPart(text=f"Processing step {self.step_id}")]
+                text = f"Processing step {self.step_id}"
 
         # Add metadata
         metadata = {
@@ -95,7 +94,9 @@ class AgentTaskRequest(BaseModel):
             **self.context,
         }
 
-        return Message(role="user", parts=parts, metadata=metadata)
+        from a2a_adapter.message_factory import build_user_text_message
+
+        return build_user_text_message(text, metadata=metadata)
 
 
 # for user
@@ -141,6 +142,11 @@ class AgentCenterRequest(BaseModel):
     agent: Agent | None = None
     agent_count: int | None = 0
 
+    @field_validator("agent_card", mode="before")
+    @classmethod
+    def _coerce_agent_card(cls, value: Any) -> Any:
+        return coerce_legacy_agent_card(value)
+
 
 class BaseAgent(BaseModel):
     agent_url: str | None = None
@@ -156,6 +162,11 @@ class BaseAgent(BaseModel):
     # Visibility: True = public (everyone can see/use), False = private (owner only)
     is_public: bool | None = None
     model_config = ConfigDict(use_enum_values=True)
+
+    @field_validator("agent_card", mode="before")
+    @classmethod
+    def _coerce_agent_card(cls, value: Any) -> Any:
+        return coerce_legacy_agent_card(value)
 
 
 class AgentCreate(BaseAgent):
@@ -205,8 +216,8 @@ class TaskCenterRequest(BaseModel):
     meta_task: MetaTask | None = None
     base_task: BaseTask | None = None
     task_session: TaskSession | None = None
-    task: Task | None = None
-    message: Message | None = None
+    task: Any | None = None
+    message: Any | None = None
     user_input: str | None = None
     execution_order: int = 0
     depends_on_tasks: list[str] | None = None
@@ -278,7 +289,7 @@ class RoomCenterAgentMessageRequest(BaseModel):
     related_message_id: str | None = None
     agent_id: str | None = None
     agent_name: str | None = None
-    agent_message_content: Task | None = None
+    agent_message_content: Any | None = None
     message_created_at: datetime | None = None
     extend_info: dict[str, Any] | None = None
     message: RoomAgentMessage | None = None

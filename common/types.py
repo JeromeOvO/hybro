@@ -299,9 +299,27 @@ class AgentProvider(BaseModel):
 
 
 class AgentCapabilities(BaseModel):
-    streaming: bool = False
-    pushNotifications: bool = False
-    stateTransitionHistory: bool = False
+    model_config = ConfigDict(extra="allow")
+
+    streaming: bool | None = False
+    pushNotifications: bool | None = False
+    stateTransitionHistory: bool | None = False
+
+    @property
+    def push_notifications(self) -> bool | None:
+        return self.pushNotifications
+
+    @push_notifications.setter
+    def push_notifications(self, value: bool | None) -> None:
+        self.pushNotifications = value
+
+    @property
+    def state_transition_history(self) -> bool | None:
+        return self.stateTransitionHistory
+
+    @state_transition_history.setter
+    def state_transition_history(self, value: bool | None) -> None:
+        self.stateTransitionHistory = value
 
 
 class AgentAuthentication(BaseModel):
@@ -320,6 +338,8 @@ class AgentSkill(BaseModel):
 
 
 class AgentCard(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     name: str
     description: str | None = None
     url: str
@@ -331,6 +351,30 @@ class AgentCard(BaseModel):
     defaultInputModes: list[str] = ["text"]
     defaultOutputModes: list[str] = ["text"]
     skills: list[AgentSkill]
+
+    @property
+    def documentation_url(self) -> str | None:
+        return self.documentationUrl
+
+    @documentation_url.setter
+    def documentation_url(self, value: str | None) -> None:
+        self.documentationUrl = value
+
+    @property
+    def default_input_modes(self) -> list[str]:
+        return self.defaultInputModes
+
+    @default_input_modes.setter
+    def default_input_modes(self, value: list[str]) -> None:
+        self.defaultInputModes = value
+
+    @property
+    def default_output_modes(self) -> list[str]:
+        return self.defaultOutputModes
+
+    @default_output_modes.setter
+    def default_output_modes(self, value: list[str]) -> None:
+        self.defaultOutputModes = value
 
 
 class A2AClientError(Exception):
