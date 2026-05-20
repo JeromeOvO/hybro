@@ -5,18 +5,22 @@ Public API for external developers to discover agents using semantic search.
 Requires API key authentication via X-API-Key header.
 """
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.params import Depends as DependsParam
 from loguru import logger
 from pydantic import BaseModel, Field
 
 from common.api_key_auth import get_api_key
-from config.settings import settings
 from models.api_key import APIKey
 from models.response import DiscoveryErrorResponse, DiscoveryResponse
-from services.discovery_rate_limit_service import discovery_rate_limit_service
-from services.discovery_service import discovery_service
 
 router = APIRouter()
+
+discovery_service: Any | None = None
+discovery_rate_limit_service: Any | None = None
+discovery_default_limit: int = 10
 
 
 class DiscoveryRequest(BaseModel):
@@ -28,6 +32,41 @@ class DiscoveryRequest(BaseModel):
         le=100,
         description="Maximum number of agents to return (default: 10, max: 100)"
     )
+
+
+def bind_discovery_dependencies(
+    service: Any,
+    rate_limiter: Any,
+    *,
+    default_limit: int = 10,
+) -> None:
+    global discovery_service, discovery_rate_limit_service, discovery_default_limit
+
+    discovery_service = service
+    discovery_rate_limit_service = rate_limiter
+    discovery_default_limit = default_limit
+
+
+def get_discovery_service() -> Any:
+    if discovery_service is None:
+        raise RuntimeError("Discovery service dependency has not been bound")
+    return discovery_service
+
+
+def get_discovery_rate_limiter() -> Any:
+    if discovery_rate_limit_service is None:
+        raise RuntimeError("Discovery rate limiter dependency has not been bound")
+    return discovery_rate_limit_service
+
+
+def get_discovery_default_limit() -> int:
+    return discovery_default_limit
+
+
+def _resolve_dependency(value: Any, provider) -> Any:
+    if isinstance(value, DependsParam):
+        return provider()
+    return value
 
 
 @router.post(
@@ -73,6 +112,9 @@ with a similarity score above the confidence threshold.
 async def discover_agents(
     request_body: DiscoveryRequest,
     api_key: APIKey = Depends(get_api_key),
+    svc: Any = Depends(get_discovery_service),
+    rate_limiter: Any = Depends(get_discovery_rate_limiter),
+    default_limit: int = Depends(get_discovery_default_limit),
 ) -> DiscoveryResponse:
     """
     Discover agents based on a text query.
@@ -94,16 +136,19 @@ async def discover_agents(
     """
     # Log the request (anonymized)
     query_preview = request_body.query[:50] + "..." if len(request_body.query) > 50 else request_body.query
+    rate_limiter = _resolve_dependency(rate_limiter, get_discovery_rate_limiter)
+    default_limit = _resolve_dependency(default_limit, get_discovery_default_limit)
     logger.info(
         f"Discovery API: Request from key {api_key.key_id[:8]}... | "
-        f"Query: '{query_preview}' | Limit: {request_body.limit or settings.discovery_default_limit}"
+        f"Query: '{query_preview}' | Limit: {request_body.limit or default_limit}"
     )
     
     # Check rate limits before processing
-    await discovery_rate_limit_service.check_rate_limit(api_key)
+    await rate_limiter.check_rate_limit(api_key)
+    svc = _resolve_dependency(svc, get_discovery_service)
     
     try:
-        result = await discovery_service.discover_agents(
+        result = await svc.discover_agents(
             query=request_body.query,
             limit=request_body.limit,
         )
@@ -121,11 +166,10 @@ async def discover_agents(
             },
         ) from e
 
-    await discovery_rate_limit_service.record_request(api_key)
+    await rate_limiter.record_request(api_key)
 
     logger.info(
         f"Discovery API: Returned {result.count} agents for key {api_key.key_id[:8]}..."
     )
 
     return result
-

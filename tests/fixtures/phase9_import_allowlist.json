@@ -92,20 +92,6 @@
   },
   {
     "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
-    "import": "services.discovery_rate_limit_service.discovery_rate_limit_service",
-    "owner": "phase-9-api-adapter-conversion",
-    "path": "api/discovery.py",
-    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
-  },
-  {
-    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
-    "import": "services.discovery_service.discovery_service",
-    "owner": "phase-9-api-adapter-conversion",
-    "path": "api/discovery.py",
-    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
-  },
-  {
-    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
     "import": "database.mongodb.mongodb",
     "owner": "phase-9-api-adapter-conversion",
     "path": "api/discovery_api_keys.py",

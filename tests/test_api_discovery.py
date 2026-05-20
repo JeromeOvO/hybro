@@ -54,9 +54,13 @@ class TestDiscoverAgents:
 
         request_body = DiscoveryRequest(query="data analysis", limit=5)
 
-        with patch(PATCH["discovery.discovery_service"], mock_discovery), \
-             patch(PATCH["discovery.discovery_rate_limit_service"], mock_rate_limit):
-            result = await discover_agents(request_body, sample_api_key)
+        result = await discover_agents(
+            request_body,
+            sample_api_key,
+            svc=mock_discovery,
+            rate_limiter=mock_rate_limit,
+            default_limit=10,
+        )
 
         assert result.query == "data analysis"
         mock_rate_limit.check_rate_limit.assert_called_once_with(sample_api_key)
@@ -78,9 +82,13 @@ class TestDiscoverAgents:
 
         request_body = DiscoveryRequest(query="obscure topic")
 
-        with patch(PATCH["discovery.discovery_service"], mock_discovery), \
-             patch(PATCH["discovery.discovery_rate_limit_service"], mock_rate_limit):
-            result = await discover_agents(request_body, sample_api_key)
+        result = await discover_agents(
+            request_body,
+            sample_api_key,
+            svc=mock_discovery,
+            rate_limiter=mock_rate_limit,
+            default_limit=10,
+        )
 
         assert result.query == "obscure topic"
         assert result.agents == []
@@ -98,10 +106,14 @@ class TestDiscoverAgents:
 
         request_body = DiscoveryRequest(query="test")
 
-        with patch(PATCH["discovery.discovery_service"], mock_discovery), \
-             patch(PATCH["discovery.discovery_rate_limit_service"], mock_rate_limit):
-            with pytest.raises(HTTPException) as exc:
-                await discover_agents(request_body, sample_api_key)
+        with pytest.raises(HTTPException) as exc:
+            await discover_agents(
+                request_body,
+                sample_api_key,
+                svc=mock_discovery,
+                rate_limiter=mock_rate_limit,
+                default_limit=10,
+            )
 
         assert exc.value.status_code == 500
 
@@ -115,8 +127,12 @@ class TestDiscoverAgents:
 
         request_body = DiscoveryRequest(query="test")
 
-        with patch(PATCH["discovery.discovery_rate_limit_service"], mock_rate_limit):
-            with pytest.raises(HTTPException) as exc:
-                await discover_agents(request_body, sample_api_key)
+        with pytest.raises(HTTPException) as exc:
+            await discover_agents(
+                request_body,
+                sample_api_key,
+                rate_limiter=mock_rate_limit,
+                default_limit=10,
+            )
 
         assert exc.value.status_code == 429

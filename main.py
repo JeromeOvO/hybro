@@ -209,6 +209,8 @@ async def lifespan(app: FastAPI):
             from services.compaction_service import compaction_service
             from services.content_storage_service import content_storage_service
             from services.context_assembly_service import context_assembly_service
+            from services.discovery_rate_limit_service import discovery_rate_limit_service
+            from services.discovery_service import discovery_service
             from services.memory_search_service import memory_search_service
             from services.memory_service import room_memory_service
             from services.room_membership_source import LegacyRoomMembershipSeedSource
@@ -460,6 +462,11 @@ async def lifespan(app: FastAPI):
             gateway.bind_gateway_dependencies(
                 platform_facade.gateway_service,
                 gateway_rate_limit_service,
+            )
+            discovery.bind_discovery_dependencies(
+                discovery_service,
+                discovery_rate_limit_service,
+                default_limit=settings.discovery_default_limit,
             )
             files.bind_file_dependencies(
                 platform_facade.file_storage,
