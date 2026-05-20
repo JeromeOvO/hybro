@@ -244,12 +244,6 @@
     {
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
       "owner": "phase-9-platform-api-cleanup",
-      "path": "services/gateway_service.py",
-      "reason": "Fail-fast/delegating compatibility shim retained only for legacy import paths; runtime gateway behavior is owned by platform_module."
-    },
-    {
-      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
-      "owner": "phase-9-platform-api-cleanup",
       "path": "services/file_upload_service.py",
       "reason": "Delegating compatibility shim retained until existing service-level tests and callers move to Platform file storage."
     },
