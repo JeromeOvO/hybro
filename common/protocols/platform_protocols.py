@@ -19,6 +19,14 @@ class APIKeyAuthenticator(Protocol):
 
 
 @runtime_checkable
+class APIKeyStore(Protocol):
+    async def get_api_keys_by_user(self, user_id: str) -> list[Any]: ...
+    async def add_api_key(self, api_key: Any) -> Any: ...
+    async def get_api_key_by_id(self, key_id: str) -> Any | None: ...
+    async def deactivate_api_key(self, key_id: str) -> bool: ...
+
+
+@runtime_checkable
 class GatewayDiscoveryProvider(Protocol):
     async def discover_agents(self, query: str, limit: int | None = None): ...
 
@@ -72,6 +80,7 @@ __all__ = [
     "APIKeyAuthenticator",
     "APIKeyRateLimiter",
     "APIKeyPrincipal",
+    "APIKeyStore",
     "FileStorage",
     "GatewayDiscoveryProvider",
     "GatewayService",

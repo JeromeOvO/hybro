@@ -15,13 +15,13 @@ vector_index: Any | None = None
 
 def bind_agent_viewset_dependencies(
     *,
-    openai_service: Any,
-    pinecone_db: Any,
+    embedding_source: Any,
+    vector_index_service: Any,
 ) -> None:
     global embedding_provider, vector_index
 
-    embedding_provider = openai_service
-    vector_index = pinecone_db
+    embedding_provider = embedding_source
+    vector_index = vector_index_service
 
 
 def _require_embedding_provider() -> Any:

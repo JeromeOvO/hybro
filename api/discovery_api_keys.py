@@ -14,6 +14,7 @@ from loguru import logger
 
 from common.api_key_auth import hash_api_key
 from common.auth import ClerkUser, get_current_user
+from common.protocols import APIKeyStore
 from models.api_key import APIKey
 from models.request import APIKeyCreateRequest
 from models.response import (
@@ -25,19 +26,19 @@ from models.response import (
 )
 
 router = APIRouter()
-mongodb: Any | None = None
+api_key_store: APIKeyStore | None = None
 
 
-def bind_api_key_store(store: Any) -> None:
-    global mongodb
+def bind_api_key_store(store: APIKeyStore) -> None:
+    global api_key_store
 
-    mongodb = store
+    api_key_store = store
 
 
-def get_api_key_store() -> Any:
-    if mongodb is None:
+def get_api_key_store() -> APIKeyStore:
+    if api_key_store is None:
         raise RuntimeError("API key store dependency has not been bound")
-    return mongodb
+    return api_key_store
 
 
 def _resolve_dependency(value: Any, provider) -> Any:
@@ -63,7 +64,7 @@ def generate_api_key() -> str:
 )
 async def list_api_keys(
     current_user: ClerkUser = Depends(get_current_user),
-    store: Any = Depends(get_api_key_store),
+    store: APIKeyStore = Depends(get_api_key_store),
 ) -> APIKeyListResponse:
     """List all API keys belonging to the authenticated user."""
     store = _resolve_dependency(store, get_api_key_store)
@@ -106,7 +107,7 @@ async def list_api_keys(
 async def create_api_key(
     request_body: APIKeyCreateRequest,
     current_user: ClerkUser = Depends(get_current_user),
-    store: Any = Depends(get_api_key_store),
+    store: APIKeyStore = Depends(get_api_key_store),
 ) -> APIKeyCreateResponse:
     """Create a new API key and return its plaintext value once."""
     key_name = request_body.name.strip()
@@ -154,7 +155,7 @@ async def create_api_key(
 async def deactivate_api_key(
     key_id: str,
     current_user: ClerkUser = Depends(get_current_user),
-    store: Any = Depends(get_api_key_store),
+    store: APIKeyStore = Depends(get_api_key_store),
 ) -> APIKeyOperationResponse:
     """Soft-delete an API key owned by the authenticated user."""
     store = _resolve_dependency(store, get_api_key_store)

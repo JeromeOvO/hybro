@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from api.agent_viewset import AgentViewSet
 from common.auth import ClerkUser, get_current_user, get_optional_user, resolve_provider_name
+from common.protocols import AgentAvatarManager
 from models.agent import IssueStatus
 from models.request import AgentCenterRequest, AgentSettingsUpdateRequest
 from models.response import AgentCenterResponse
@@ -14,8 +15,7 @@ router.include_router(agent_viewset.get_router())
 agent_center: Any | None = None
 agent_service: Any | None = None
 capability_issue_service: Any | None = None
-s3_service: Any | None = None
-mongodb: Any | None = None
+agent_avatar_manager: AgentAvatarManager | None = None
 agent_liveness_checker: Any | None = None
 
 
@@ -24,16 +24,14 @@ def bind_agent_dependencies(
     center: Any,
     service: Any,
     issue_service: Any,
-    storage_service: Any,
-    mongo: Any,
+    avatar_manager: AgentAvatarManager,
 ) -> None:
-    global agent_center, agent_service, capability_issue_service, s3_service, mongodb
+    global agent_center, agent_service, capability_issue_service, agent_avatar_manager
 
     agent_center = center
     agent_service = service
     capability_issue_service = issue_service
-    s3_service = storage_service
-    mongodb = mongo
+    agent_avatar_manager = avatar_manager
 
 
 def bind_agent_liveness_checker(checker: Any) -> None:
@@ -60,16 +58,10 @@ def _require_capability_issue_service() -> Any:
     return capability_issue_service
 
 
-def _require_s3_service() -> Any:
-    if s3_service is None:
-        raise RuntimeError("S3 service dependency has not been bound")
-    return s3_service
-
-
-def _require_mongodb() -> Any:
-    if mongodb is None:
-        raise RuntimeError("MongoDB dependency has not been bound")
-    return mongodb
+def _require_agent_avatar_manager() -> AgentAvatarManager:
+    if agent_avatar_manager is None:
+        raise RuntimeError("Agent avatar dependency has not been bound")
+    return agent_avatar_manager
 
 
 def _require_agent_liveness_checker() -> Any:
@@ -281,19 +273,11 @@ async def upload_agent_avatar(
     ext = _AVATAR_EXT_MAP[file.content_type]
     s3_key = f"agent-avatars/{agent_id}/{uuid4().hex}.{ext}"
 
-    storage = _require_s3_service()
-    await storage.upload_file(
-        file_data=content,
+    icon_url = await _require_agent_avatar_manager().store_avatar(
+        agent_id=agent_id,
         s3_key=s3_key,
+        content=content,
         content_type=file.content_type,
-        content_length=len(content),
-    )
-
-    icon_url = storage.get_public_url(s3_key)
-
-    await _require_mongodb().agents_collection.update_one(
-        {"agent_id": agent_id},
-        {"$set": {"agent_card.iconUrl": icon_url}},
     )
 
     return {"iconUrl": icon_url}

@@ -1,5 +1,6 @@
 from common.protocols.a2a_protocols import AgentCardResolver, AgentTransport
 from common.protocols.agent_protocols import (
+    AgentAvatarManager,
     AgentExclusionReader,
     AgentManagement,
     AgentMatcher,
@@ -46,6 +47,7 @@ from common.protocols.platform_protocols import (
     APIKeyAuthenticator,
     APIKeyPrincipal,
     APIKeyRateLimiter,
+    APIKeyStore,
     FileStorage,
     GatewayDiscoveryProvider,
     GatewayService,
@@ -79,6 +81,7 @@ from common.protocols.room_protocols import (
 
 __all__ = [
     "AgentCallCounter",
+    "AgentAvatarManager",
     "AgentCardResolver",
     "AgentExclusionReader",
     "AgentManagement",
@@ -91,6 +94,7 @@ __all__ = [
     "APIKeyAuthenticator",
     "APIKeyPrincipal",
     "APIKeyRateLimiter",
+    "APIKeyStore",
     "ContextAssembler",
     "ContentStorageRepository",
     "DistributedLock",

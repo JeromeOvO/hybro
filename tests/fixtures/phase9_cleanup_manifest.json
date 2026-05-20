@@ -32,6 +32,13 @@
       "reason": "Common A2A helper still references legacy file upload model constants; move constants to Common before final leaf-module cleanup."
     },
     {
+      "contract": "a2a_storage_signing",
+      "expiry_task": "Final Common leaf-module cleanup",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "common/utils/a2a_helpers.py",
+      "reason": "Common A2A helper still performs artifact upload and URL signing through an app-shell-bound storage service; move this behavior behind Platform/ObjectStorage protocols before final Common leaf-module cleanup."
+    },
+    {
       "contract": "common_import_boundary",
       "expiry_task": "Final Common leaf-module cleanup",
       "owner": "phase-9-platform-api-cleanup",

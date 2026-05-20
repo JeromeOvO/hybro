@@ -61,6 +61,18 @@ class AgentManagement(Protocol):
 
 
 @runtime_checkable
+class AgentAvatarManager(Protocol):
+    async def store_avatar(
+        self,
+        *,
+        agent_id: str,
+        s3_key: str,
+        content: bytes,
+        content_type: str,
+    ) -> str: ...
+
+
+@runtime_checkable
 class AgentRegistryWriter(Protocol):
     async def sync_hub_agents(
         self,
@@ -85,6 +97,7 @@ class AgentCallCounter(Protocol):
 
 __all__ = [
     "AgentCallCounter",
+    "AgentAvatarManager",
     "AgentManagement",
     "AgentExclusionReader",
     "AgentMatcher",

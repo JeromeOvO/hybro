@@ -11,12 +11,24 @@ from fastapi import HTTPException, Request, status
 from loguru import logger
 
 clerk_secret_key: str | None = None
+clerk_authorized_parties: tuple[str, ...] = (
+    "https://hybro.ai",
+    "https://developer.hybro.ai",
+    "http://localhost:3000",
+    "http://dev.localhost:3000",
+)
 
 
-def bind_auth_config(*, clerk_secret_key_value: str) -> None:
-    global clerk_secret_key
+def bind_auth_config(
+    *,
+    clerk_secret_key_value: str,
+    authorized_parties: tuple[str, ...] | None = None,
+) -> None:
+    global clerk_secret_key, clerk_authorized_parties
 
     clerk_secret_key = clerk_secret_key_value
+    if authorized_parties is not None:
+        clerk_authorized_parties = tuple(authorized_parties)
 
 
 def _require_clerk_secret_key() -> str:
@@ -51,17 +63,6 @@ def resolve_provider_name(provider_id: str | None) -> str | None:
         return None
     return _cached_clerk_user_name(provider_id)
 
-# Authorized parties (azp) for Clerk JWT verification
-# These are the origins that are allowed to use the Clerk tokens
-AUTHORIZED_PARTIES = [
-    "https://hybro.ai",
-    "https://developer.hybro.ai",
-    # Include localhost for development
-    "http://localhost:3000",
-    "http://dev.localhost:3000",
-]
-
-
 class ClerkUser:
     """Represents an authenticated Clerk user"""
 
@@ -94,7 +95,7 @@ async def verify_clerk_token_from_request(request: Request) -> ClerkUser:
         # Create authentication options with secret key and authorized parties
         options = AuthenticateRequestOptions(
             secret_key=_require_clerk_secret_key(),
-            authorized_parties=AUTHORIZED_PARTIES,
+            authorized_parties=clerk_authorized_parties,
         )
         request_state = authenticate_request(request, options)
 

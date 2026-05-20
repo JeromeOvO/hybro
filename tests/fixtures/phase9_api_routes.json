@@ -150,7 +150,7 @@
     ],
     "module": "api.agent",
     "name": "upload_agent_avatar",
-    "owning_protocol": "common.protocols.AgentManagement",
+    "owning_protocol": "common.protocols.AgentAvatarManager",
     "path": "/api/v1/agent/{agent_id}/avatar",
     "response_model": null
   },

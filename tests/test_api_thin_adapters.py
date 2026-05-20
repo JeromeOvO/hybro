@@ -74,6 +74,32 @@ def test_api_modules_are_thin_route_adapters():
     assert not violations, "Forbidden API imports:\n" + "\n".join(violations)
 
 
+def test_api_bindings_do_not_expose_concrete_store_or_service_names():
+    forbidden_names = {
+        "mongodb",
+        "mongo",
+        "s3_service",
+        "storage_service",
+        "openai_service",
+    }
+    violations: list[str] = []
+
+    for path in sorted(Path("api").glob("*.py")):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in tree.body:
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                if node.target.id in forbidden_names:
+                    violations.append(f"{path}:{node.lineno}: {node.target.id}")
+            if isinstance(node, ast.FunctionDef) and node.name.startswith("bind_"):
+                for arg in (*node.args.args, *node.args.kwonlyargs):
+                    if arg.arg in forbidden_names:
+                        violations.append(f"{path}:{node.lineno}: {node.name}.{arg.arg}")
+
+    assert not violations, "API bindings expose concrete dependency names:\n" + "\n".join(
+        violations
+    )
+
+
 def test_phase9_route_inventory_is_recorded():
     routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
 

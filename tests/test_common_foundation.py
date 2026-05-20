@@ -1,8 +1,11 @@
 import inspect
+import json
 import tomllib
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -99,6 +102,58 @@ def test_common_foundation_subpackages_are_packaged():
         "common.observability",
         "common.protocols",
     }.issubset(packages)
+
+
+def test_common_a2a_storage_signing_seam_has_explicit_blocker():
+    source = Path("common/utils/a2a_helpers.py").read_text()
+    storage_markers = (
+        "bind_a2a_storage_dependencies",
+        "_require_s3_service",
+        ".upload_file(",
+        ".generate_presigned_url(",
+    )
+    if not any(marker in source for marker in storage_markers):
+        return
+
+    manifest = json.loads(Path("tests/fixtures/phase9_cleanup_manifest.json").read_text())
+    blockers = [
+        entry
+        for entry in manifest["blocked_cleanup"]
+        if entry.get("path") == "common/utils/a2a_helpers.py"
+        and entry.get("contract") == "a2a_storage_signing"
+        and entry.get("owner")
+        and entry.get("expiry_task")
+    ]
+
+    assert blockers, "A2A helper storage/signing behavior needs an explicit blocker"
+
+
+@pytest.mark.asyncio
+async def test_auth_config_binds_authorized_parties(monkeypatch):
+    import common.auth as auth
+
+    captured = {}
+
+    def fake_authenticate_request(request, options):
+        captured["authorized_parties"] = options.authorized_parties
+        captured["secret_key"] = options.secret_key
+        return SimpleNamespace(
+            is_signed_in=True,
+            payload={"sub": "user-1", "sid": "session-1"},
+        )
+
+    monkeypatch.setattr(auth, "authenticate_request", fake_authenticate_request)
+
+    auth.bind_auth_config(
+        clerk_secret_key_value="secret",
+        authorized_parties=("https://test.example",),
+    )
+    user = await auth.verify_clerk_token_from_request(MagicMock())
+
+    assert user.user_id == "user-1"
+    assert captured["secret_key"] == "secret"
+    assert captured["authorized_parties"] == ("https://test.example",)
+    assert "AUTHORIZED_PARTIES" not in Path("common/auth.py").read_text()
 
 
 def test_common_foundation_dtos_can_be_instantiated():

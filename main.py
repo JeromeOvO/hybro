@@ -49,7 +49,10 @@ from services.agent_health_service import agent_health_service
 from services.sse_services import sse_manager
 
 load_dotenv()
-bind_auth_config(clerk_secret_key_value=settings.clerk_secret_key)
+bind_auth_config(
+    clerk_secret_key_value=settings.clerk_secret_key,
+    authorized_parties=tuple(settings.frontend_origins),
+)
 bind_api_key_authenticator(MongoAPIKeyAuthenticator(mongodb))
 
 
@@ -256,15 +259,41 @@ async def lifespan(app: FastAPI):
                 create_repository=Repository,
             )
             agent_viewset.bind_agent_viewset_dependencies(
-                openai_service=openai_service,
-                pinecone_db=pinecone_db,
+                embedding_source=openai_service,
+                vector_index_service=pinecone_db,
             )
+
+            class AppShellAgentAvatarManager:
+                def __init__(self, storage, agent_store) -> None:
+                    self._storage = storage
+                    self._agent_store = agent_store
+
+                async def store_avatar(
+                    self,
+                    *,
+                    agent_id: str,
+                    s3_key: str,
+                    content: bytes,
+                    content_type: str,
+                ) -> str:
+                    await self._storage.upload_file(
+                        file_data=content,
+                        s3_key=s3_key,
+                        content_type=content_type,
+                        content_length=len(content),
+                    )
+                    icon_url = self._storage.get_public_url(s3_key)
+                    await self._agent_store.agents_collection.update_one(
+                        {"agent_id": agent_id},
+                        {"$set": {"agent_card.iconUrl": icon_url}},
+                    )
+                    return icon_url
+
             agent.bind_agent_dependencies(
                 center=AgentCenter(),
                 service=agent_service,
                 issue_service=capability_issue_service,
-                storage_service=s3_service,
-                mongo=mongodb,
+                avatar_manager=AppShellAgentAvatarManager(s3_service, mongodb),
             )
             inspection_center.bind_inspection_dependencies(InspectionCenter())
             memory_center.bind_memory_dependencies(MemoryCenter())
