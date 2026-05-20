@@ -594,6 +594,7 @@ def test_protocol_methods_match_design_doc():
             "get_message_thread",
         },
         protocols.RoomOwnershipReader: {
+            "get_room_owner",
             "verify_room_agent_membership",
             "verify_room_hub_ownership",
         },

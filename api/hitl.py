@@ -8,13 +8,13 @@ See docs/HITL_DESIGN.md §7.4 for design details.
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from api.room_center import verify_room_ownership
 from common.auth import ClerkUser, get_current_user
-from common.protocols import HITLManager
+from common.protocols import HITLManager, RoomOwnershipReader
 from models.hitl import HITLResponseRequest
 
 router = APIRouter(prefix="/rooms/{room_id}/hitl", tags=["hitl"])
 hitl_manager: HITLManager | None = None
+room_ownership_reader: RoomOwnershipReader | None = None
 
 
 def bind_execution_deps(deps) -> None:
@@ -22,10 +22,34 @@ def bind_execution_deps(deps) -> None:
     hitl_manager = deps.hitl_manager
 
 
+def bind_room_ownership_reader(reader: RoomOwnershipReader) -> None:
+    global room_ownership_reader
+    room_ownership_reader = reader
+
+
 def _require_hitl_manager() -> HITLManager:
     if hitl_manager is None:
         raise RuntimeError("ExecutionDeps have not been bound")
     return hitl_manager
+
+
+def _require_room_ownership_reader() -> RoomOwnershipReader:
+    if room_ownership_reader is None:
+        raise RuntimeError("HITL room ownership dependency has not been bound")
+    return room_ownership_reader
+
+
+async def verify_room_ownership(room_id: str, user: ClerkUser) -> None:
+    if not room_id:
+        raise HTTPException(status_code=400, detail="room_id is required")
+
+    owner_id = await _require_room_ownership_reader().get_room_owner(room_id)
+    if owner_id is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if owner_id != user.user_id:
+        raise HTTPException(
+            status_code=403, detail="You do not have permission to access this room"
+        )
 
 
 _HITL_ERROR_STATUS = {

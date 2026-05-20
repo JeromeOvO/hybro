@@ -78,9 +78,12 @@ class TestRespondToHitlRequest:
             user_input="Response",
         )
         
-        mock_db_service.get_room_by_room_id.return_value = sample_room
+        room_ownership_reader = MagicMock()
+        room_ownership_reader.get_room_owner = AsyncMock(
+            return_value=sample_room.room_owner_id
+        )
         
-        with patch(PATCH["room_center.db_service"], mock_db_service):
+        with patch("api.hitl.room_ownership_reader", room_ownership_reader):
             with pytest.raises(HTTPException) as exc_info:
                 await respond_to_hitl_request(
                     sample_room.room_id, body, mock_user_2
@@ -210,9 +213,12 @@ class TestCancelHitlRequest:
         """Should verify room ownership before canceling."""
         request_id = "hitl-request-to-cancel"
         
-        mock_db_service.get_room_by_room_id.return_value = sample_room
+        room_ownership_reader = MagicMock()
+        room_ownership_reader.get_room_owner = AsyncMock(
+            return_value=sample_room.room_owner_id
+        )
         
-        with patch(PATCH["room_center.db_service"], mock_db_service):
+        with patch("api.hitl.room_ownership_reader", room_ownership_reader):
             with pytest.raises(HTTPException) as exc_info:
                 await cancel_hitl_request(
                     sample_room.room_id, request_id, mock_user_2

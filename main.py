@@ -444,6 +444,7 @@ async def lifespan(app: FastAPI):
             _room_facade = _room_deps.room_registry
             room_services.bind_facade(_room_facade)
             room_center.room_center.bind_facade(_room_facade)
+            hitl.bind_room_ownership_reader(_room_facade)
             execution_room_message_center.bind(
                 create_room_message_center(
                     room_services=room_services,
@@ -617,7 +618,10 @@ async def lifespan(app: FastAPI):
             _context_memory_deps = create_context_memory_deps(context_memory_facade)
             context_assembly_service.bind_facade(context_memory_facade)
             memory_search_service.bind_facade(context_memory_facade)
-            content_storage_service.bind_facade(context_memory_facade)
+            content_storage_service.bind_facade(
+                context_memory_facade,
+                platform_storage=platform_facade.content_storage,
+            )
             compaction_service.bind_facade(context_memory_facade)
             room_memory_service.bind_facade(context_memory_facade)
             room_services.bind_context_memory(_context_memory_deps.memory_manager)
@@ -812,6 +816,7 @@ async def lifespan(app: FastAPI):
         )
         app.state.relay_service = _relay_svc
         relay.bind_relay_dependencies(_relay_svc)
+        hub.bind_hub_dependencies(_relay_svc)
         if _delivery_deps is not None:
             router = _relay_svc.internal_response_dispatcher
             if router is None:

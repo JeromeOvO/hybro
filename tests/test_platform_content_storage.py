@@ -121,6 +121,23 @@ async def test_upsert_full_content_writes_hash_and_optional_expiry():
     ]
 
 
+async def test_legacy_content_storage_service_uses_bound_platform_storage_ttl():
+    from services.content_storage_service import ContentStorageService
+
+    platform_storage, repo = _service(ttl_seconds=60)
+    service = ContentStorageService()
+    service.bind_facade(object(), platform_storage=platform_storage)
+
+    await service.upsert_full_content(
+        room_id="room-1",
+        turn_id="turn-1",
+        content="full content",
+        content_type="text",
+    )
+
+    assert repo.upserts[0]["expires_at"] == datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=60)
+
+
 async def test_get_content_by_document_and_turn_id_returns_content_only():
     service, _repo = _service()
     document_id = await service.upsert_full_content(

@@ -83,10 +83,12 @@ class ContentStorageService:
     def __init__(self):
         self._collection_name = "conversation_content"
         self._facade = None
+        self._platform_storage_override = None
         self._bound = False
 
-    def bind_facade(self, facade) -> None:
+    def bind_facade(self, facade, *, platform_storage=None) -> None:
         self._facade = facade
+        self._platform_storage_override = platform_storage
         self._bound = True
 
     def _require_facade(self):
@@ -97,6 +99,8 @@ class ContentStorageService:
         return self._facade
 
     def _platform_storage(self, *, require_facade: bool) -> PlatformContentStorage:
+        if self._platform_storage_override is not None:
+            return self._platform_storage_override
         facade = self._require_facade() if require_facade else self._facade
         repository = (
             _FacadeContentStorageRepository(facade)

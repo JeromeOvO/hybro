@@ -74,6 +74,26 @@ def test_api_modules_are_thin_route_adapters():
     assert not violations, "Forbidden API imports:\n" + "\n".join(violations)
 
 
+def test_api_modules_do_not_import_other_route_modules_for_helpers():
+    allowed_modules = {"api.agent_viewset"}
+    violations: list[str] = []
+    for path in sorted(Path("api").glob("*.py")):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.module is None:
+                continue
+            if (
+                node.module.startswith("api.")
+                and node.module != "api.viewset"
+                and node.module not in allowed_modules
+            ):
+                violations.append(f"{path}:{node.lineno}: {node.module}")
+
+    assert not violations, "API route modules import other route modules:\n" + "\n".join(
+        violations
+    )
+
+
 def test_api_bindings_do_not_expose_concrete_store_or_service_names():
     forbidden_names = {
         "mongodb",
@@ -188,6 +208,20 @@ def test_phase9_route_inventory_does_not_use_platform_implementation_owners():
     ]
 
     assert not violations, "Routes must use common protocols, not platform implementations:\n" + "\n".join(
+        violations
+    )
+
+
+def test_api_key_management_routes_are_owned_by_store_protocol():
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    violations = [
+        f"{route['path']} {route['name']}: {route['owning_protocol']}"
+        for route in routes
+        if route["module"] == "api.discovery_api_keys"
+        and route["owning_protocol"] != "common.protocols.APIKeyStore"
+    ]
+
+    assert not violations, "API-key management routes must use APIKeyStore owner:\n" + "\n".join(
         violations
     )
 
@@ -448,6 +482,34 @@ def test_app_shell_protocol_surfaces_are_specific():
                 }
                 for parameter in params.values()
             ), f"{protocol.__name__}.{name} uses wildcard parameters"
+
+
+def test_route_owner_protocols_do_not_expose_any_annotations():
+    from typing import Any
+
+    from app_shell.bound import ViewSetRepository
+    from app_shell.database_service import A2ATaskReader, AgentGroupStore
+    from common.protocols import APIKeyStore
+
+    protocols = (APIKeyStore, ViewSetRepository, A2ATaskReader, AgentGroupStore)
+    violations: list[str] = []
+
+    for protocol in protocols:
+        for name, value in protocol.__dict__.items():
+            if not callable(value) or name.startswith("_"):
+                continue
+            signature = inspect.signature(value)
+            if signature.return_annotation is Any:
+                violations.append(f"{protocol.__name__}.{name} return")
+            for parameter in signature.parameters.values():
+                if parameter.annotation is Any:
+                    violations.append(
+                        f"{protocol.__name__}.{name}.{parameter.name}"
+                    )
+
+    assert not violations, "Route owner protocols expose Any:\n" + "\n".join(
+        violations
+    )
 
 
 def test_app_shell_protocols_have_single_runtime_marker():

@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, AsyncIterator, Protocol, runtime_checkable
 
 from common.dto import FileInfo, RateLimitResult
@@ -12,6 +13,14 @@ class APIKeyPrincipal(Protocol):
 
 
 @runtime_checkable
+class APIKeyRecord(APIKeyPrincipal, Protocol):
+    created_at: datetime
+    last_used_at: datetime | None
+    usage_count: int
+    key_hash: str
+
+
+@runtime_checkable
 class APIKeyAuthenticator(Protocol):
     async def validate_api_key(
         self, api_key: str, *, track_usage: bool = True
@@ -20,9 +29,9 @@ class APIKeyAuthenticator(Protocol):
 
 @runtime_checkable
 class APIKeyStore(Protocol):
-    async def get_api_keys_by_user(self, user_id: str) -> list[Any]: ...
-    async def add_api_key(self, api_key: Any) -> Any: ...
-    async def get_api_key_by_id(self, key_id: str) -> Any | None: ...
+    async def get_api_keys_by_user(self, user_id: str) -> list[APIKeyRecord]: ...
+    async def add_api_key(self, api_key: APIKeyRecord) -> object: ...
+    async def get_api_key_by_id(self, key_id: str) -> APIKeyRecord | None: ...
     async def deactivate_api_key(self, key_id: str) -> bool: ...
 
 
@@ -80,6 +89,7 @@ __all__ = [
     "APIKeyAuthenticator",
     "APIKeyRateLimiter",
     "APIKeyPrincipal",
+    "APIKeyRecord",
     "APIKeyStore",
     "FileStorage",
     "GatewayDiscoveryProvider",
