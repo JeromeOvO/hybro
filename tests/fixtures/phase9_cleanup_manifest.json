@@ -44,13 +44,6 @@
       "owner": "phase-9-platform-api-cleanup",
       "path": "execution/dispatch/transports/webhook.py",
       "reason": "Webhook transport still parses A2A SDK events inline; this must be isolated in A2A adapter code."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "jobs/stale_task_checker.py",
-      "reason": "Stale task checker still polls and constructs A2A SDK task payloads directly; migrate polling through A2A adapter protocols."
     }
   ],
   "content_storage_callers": [

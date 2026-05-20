@@ -57,6 +57,53 @@ def test_completed_text_task_factory_builds_sdk_task_payload():
     assert task.history == [task.status.message]
 
 
+def test_failed_text_task_factory_builds_sdk_task_payload():
+    from a2a.types import TaskState
+    from a2a_adapter.task_status import build_failed_text_task
+
+    task = build_failed_text_task(
+        task_id="task-1",
+        context_id="ctx-1",
+        error_text="failed",
+    )
+
+    assert task.id == "task-1"
+    assert task.context_id == "ctx-1"
+    assert task.status.state == TaskState.failed
+    assert task.status.message.parts[0].model_dump(mode="json") == {
+        "kind": "text",
+        "metadata": None,
+        "text": "failed",
+    }
+
+
+def test_get_task_request_helpers_keep_sdk_details_in_adapter():
+    from a2a.types import GetTaskRequest
+    from a2a_adapter.task_requests import build_get_task_request
+
+    request = build_get_task_request("task-1")
+
+    assert isinstance(request, GetTaskRequest)
+    assert request.id == "task-1"
+    assert request.params.id == "task-1"
+
+
+def test_get_task_response_helper_returns_none_for_jsonrpc_errors():
+    from types import SimpleNamespace
+
+    from a2a.types import JSONRPCErrorResponse, JSONRPCError
+    from a2a_adapter.task_requests import extract_get_task_result
+
+    response = SimpleNamespace(
+        root=JSONRPCErrorResponse(
+            id="task-1",
+            error=JSONRPCError(code=-32001, message="missing"),
+        )
+    )
+
+    assert extract_get_task_result(response) is None
+
+
 def test_translator_a2a_task_to_result_normalizes_task_status_result_and_error_text():
     from a2a_adapter.translators import a2a_task_to_result
 

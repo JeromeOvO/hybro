@@ -16,10 +16,15 @@ import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
-from uuid import uuid4
 
-from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
-
+from a2a_adapter.task_requests import build_get_task_request, extract_get_task_result
+from a2a_adapter.task_status import build_failed_text_task
+from common.a2a_constants import (
+    CommonTaskState,
+    INTERACTIVE_STATES,
+    NON_TERMINAL_STATES,
+    is_terminal_state,
+)
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from jobs.constants import STALE_TASK_CHECKER
@@ -29,19 +34,6 @@ from models.room import RoomAgentMessage
 logger = get_logger(__name__)
 
 MAX_CONCURRENT_RECOVERIES = 5
-PENDING_STATES = {TaskState.submitted, TaskState.working}
-INTERACTIVE_STATES = {TaskState.input_required, TaskState.auth_required}
-TERMINAL_STATES = {
-    TaskState.completed,
-    TaskState.failed,
-    TaskState.canceled,
-    TaskState.rejected,
-}
-NON_TERMINAL_STATES = PENDING_STATES | INTERACTIVE_STATES
-
-
-def is_terminal_state(state: TaskState) -> bool:
-    return state in TERMINAL_STATES
 
 
 class LeaderGate(Protocol):
@@ -298,7 +290,10 @@ class StaleTaskChecker:
         #    as tracked tasks to be consistent.
         #    We intentionally exclude interactive states (input_required,
         #    auth_required) since non-tracked tasks should never reach those.
-        non_tracked_state_values = [TaskState.submitted.value, TaskState.working.value]
+        non_tracked_state_values = [
+            CommonTaskState.SUBMITTED.value,
+            CommonTaskState.WORKING.value,
+        ]
         non_tracked_stale = await self._db_service.get_non_tracked_stale_task_messages(
             self.task_expiry_hours, non_tracked_state_values
         )
@@ -466,7 +461,7 @@ class StaleTaskChecker:
                 )
                 await self._notify_task_update(
                     message_id=message_id,
-                    state=TaskState.canceled,
+                    state=CommonTaskState.CANCELED,
                     room_id=msg.room_id,
                     user_id=msg.user_id or "",
                 )
@@ -486,7 +481,10 @@ class StaleTaskChecker:
 
             # Update our record
             task_text = None
-            if is_terminal_state(current_task.status.state) and current_task.status.state == TaskState.completed:
+            if (
+                is_terminal_state(current_task.status.state)
+                and current_task.status.state == CommonTaskState.COMPLETED
+            ):
                 from common.utils.a2a_helpers import extract_text_from_artifacts
                 if current_task.artifacts:
                     task_text = extract_text_from_artifacts(current_task.artifacts) or None
@@ -506,7 +504,7 @@ class StaleTaskChecker:
                         msg.related_message_id
                     )
                 if re_cancelled:
-                    new_state = TaskState.canceled
+                    new_state = CommonTaskState.CANCELED
                 await self._notify_task_update(
                     message_id=message_id,
                     state=new_state,
@@ -525,18 +523,12 @@ class StaleTaskChecker:
             # Touch timestamp to prevent immediate re-check
             await self._db_service.touch_task_message(message_id)
 
-    async def _get_task_from_agent(self, agent_card, task_id: str) -> Task | None:
+    async def _get_task_from_agent(self, agent_card, task_id: str) -> Any | None:
         """Get task status from agent."""
-        from a2a.types import GetTaskRequest, JSONRPCErrorResponse, TaskQueryParams
-
         try:
             async with self._a2a_service.create_a2a_client(agent_card) as a2a_client:
-                response = await a2a_client.get_task(
-                    GetTaskRequest(id=task_id, params=TaskQueryParams(id=task_id))
-                )
-                if not response or isinstance(response.root, JSONRPCErrorResponse):
-                    return None
-                return response.root.result
+                response = await a2a_client.get_task(build_get_task_request(task_id))
+                return extract_get_task_result(response)
         except Exception as e:
             logger.error(f"Failed to get task from agent: {e}")
             return None
@@ -636,18 +628,10 @@ class StaleTaskChecker:
         task_id = task.id if task else "unknown"
         context_id = task.context_id if task else ""
 
-        failed_task = Task(
-            id=task_id,
+        failed_task = build_failed_text_task(
+            task_id=task_id,
             context_id=context_id,
-            status=TaskStatus(
-                state=TaskState.failed,
-                message=Message(
-                    message_id=str(uuid4()),
-                    role=Role.agent,
-                    parts=[TextPart(text=error)],
-                ),
-                timestamp=utcnow().isoformat(),
-            ),
+            error_text=error,
         )
 
         await self._db_service.update_task_on_message(
@@ -682,7 +666,7 @@ class StaleTaskChecker:
 
         await self._notify_task_update(
             message_id=message_id,
-            state=TaskState.failed,
+            state=CommonTaskState.FAILED,
             room_id=msg.room_id,
             user_id=msg.user_id or "",
         )

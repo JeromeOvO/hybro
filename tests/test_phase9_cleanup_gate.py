@@ -452,6 +452,12 @@ def test_stale_task_checker_has_no_legacy_boundary_blocker():
     assert "jobs/stale_task_checker.py" not in blocked_paths
 
 
+def test_stale_task_checker_has_no_sdk_confinement_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "jobs/stale_task_checker.py" not in blocked_paths
+
+
 def test_retained_legacy_service_shims_do_not_keep_concrete_implementations():
     violations = _legacy_service_shim_violations()
 

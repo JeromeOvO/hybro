@@ -51,6 +51,33 @@ def build_completed_text_task(
     )
 
 
+def build_failed_text_task(
+    *,
+    task_id: str,
+    error_text: str,
+    context_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> Task:
+    task_context_id = context_id or task_id
+    message = Message(
+        message_id=uuid4().hex,
+        role=Role.agent,
+        parts=[TextPart(text=error_text)],
+        context_id=task_context_id,
+        metadata=metadata or {},
+    )
+    status = TaskStatus(
+        state=TaskState.failed,
+        timestamp=utcnow().isoformat(),
+        message=message,
+    )
+    return Task(
+        id=task_id,
+        context_id=task_context_id,
+        status=status,
+    )
+
+
 def coerce_task_state(state: Any) -> Any:
     if isinstance(state, str):
         return TaskState(state)
@@ -60,6 +87,7 @@ def coerce_task_state(state: Any) -> Any:
 __all__ = [
     "build_completed_text_task",
     "build_failed_task_status",
+    "build_failed_text_task",
     "build_task_status",
     "coerce_task_state",
 ]
