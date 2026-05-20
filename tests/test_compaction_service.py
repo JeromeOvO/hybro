@@ -36,9 +36,8 @@ from models.memory import (
 from services.compaction_service import (
     CompactionService,
 )
-from services.content_storage_service import (
+from platform_module.content_storage import (
     ContentExpiredError,
-    ContentStorageService,
     hash_content,
 )
 
@@ -49,7 +48,7 @@ from services.content_storage_service import (
 
 
 class BoundContentStorageFacade:
-    def __init__(self, service: ContentStorageService):
+    def __init__(self, service):
         self.service = service
 
     async def content_upsert_full_content(
@@ -162,7 +161,7 @@ class BoundContentStorageFacade:
         return stats
 
 
-def bind_content_storage_facade(service: ContentStorageService) -> ContentStorageService:
+def bind_content_storage_facade(service):
     service.bind_facade(BoundContentStorageFacade(service))
     return service
 
@@ -591,7 +590,7 @@ class TestCompactionService:
         self, service, mock_settings
     ):
         """Should populate content_hash in data sent to compact_turns_bulk (§6.3)."""
-        from services.content_storage_service import hash_content
+        from platform_module.content_storage import hash_content
 
         turn = ConversationTurn(
             turn_id="turn-hash-test",

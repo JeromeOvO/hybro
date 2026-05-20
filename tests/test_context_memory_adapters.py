@@ -12,7 +12,6 @@ from models.compaction import ContentReference, StorageType
 from models.memory import ConversationTurn, RoomMemory, TurnRole
 from models.request import RoomCenterMemoryRequest
 from services.compaction_service import CompactionService
-from services.content_storage_service import ContentStorageService
 from services.context_assembly_service import ContextAssemblyService
 from services.memory_search_service import MemorySearchService
 from services.memory_service import RoomMemoryService
@@ -739,60 +738,6 @@ async def test_room_memory_service_agent_response_duplicate_message_is_success()
     assert facade.calls == [("add_agent_response_to_memory", "agent-msg-1")]
 
 
-@pytest.mark.asyncio
-async def test_content_storage_service_delegates_upsert():
-    class Delegate:
-        def __init__(self):
-            self.calls = []
-
-        async def upsert_full_content(self, room_id, turn_id, content, content_type, turn_notes=None):
-            self.calls.append(("upsert_full_content", room_id, turn_id))
-            return "doc1"
-
-    delegate = Delegate()
-    service = ContentStorageService()
-    service.bind(delegate)
-
-    document_id = await service.upsert_full_content("r1", "t1", "hello", "text")
-
-    assert document_id == "doc1"
-    assert delegate.calls == [("upsert_full_content", "r1", "t1")]
-
-
-@pytest.mark.asyncio
-async def test_content_storage_service_expands_s3_before_bind():
-    class Delegate:
-        async def expand_content_reference(self, content_ref, turn_id):
-            return "s3 content"
-
-    service = ContentStorageService(Delegate())
-    content_ref = ContentReference(
-        storage_type=StorageType.S3,
-        s3_bucket="bucket",
-        s3_key="key",
-        created_at=NOW,
-    )
-
-    assert await service.expand_content_reference(content_ref, "t1") == "s3 content"
-
-
-@pytest.mark.asyncio
-async def test_content_storage_service_url_before_bind_stays_not_implemented():
-    class Delegate:
-        async def expand_content_reference(self, content_ref, turn_id):
-            raise NotImplementedError
-
-    service = ContentStorageService(Delegate())
-    content_ref = ContentReference(
-        storage_type=StorageType.URL,
-        url="https://example.test/content",
-        created_at=NOW,
-    )
-
-    with pytest.raises(NotImplementedError):
-        await service.expand_content_reference(content_ref, "t1")
-
-
 def test_bound_context_assembly_updates_truncation_count():
     class TruncatedFacade(FakeFacade):
         def assemble_supervisor_context_from_memory(self, room_memory_doc, current_task, **kwargs):
@@ -832,5 +777,7 @@ async def test_services_fail_fast_before_bind():
         await MemorySearchService().search("query", "r1")
     with pytest.raises(RuntimeError, match="RoomMemoryService.bind_facade\\(\\) not called - startup incomplete"):
         await RoomMemoryService().create_room_memory(RoomCenterMemoryRequest(room_id="r1"))
-    with pytest.raises(RuntimeError, match="ContentStorageService.bind_facade\\(\\) not called - startup incomplete"):
-        await ContentStorageService().upsert_full_content("r1", "t1", "hello", "text")
+    with pytest.raises(RuntimeError, match="CompactionService.bind_content_storage\\(\\) not called - startup incomplete"):
+        await CompactionService().content_storage.upsert_full_content(
+            "r1", "t1", "hello", "text"
+        )

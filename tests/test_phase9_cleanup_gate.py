@@ -340,6 +340,10 @@ def test_file_upload_service_shim_has_been_removed():
     assert not Path("services/file_upload_service.py").exists()
 
 
+def test_content_storage_service_shim_has_been_removed():
+    assert not Path("services/content_storage_service.py").exists()
+
+
 def test_old_implementation_packages_are_not_shipped_without_blocker():
     manifest = _manifest()
     blockers = manifest.get("blocked_cleanup", [])

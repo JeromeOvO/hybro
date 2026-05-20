@@ -222,7 +222,6 @@ async def lifespan(app: FastAPI):
             from services.agent_selection_service import agent_selection_service
             from services.agent_service import agent_service
             from services.compaction_service import compaction_service
-            from services.content_storage_service import content_storage_service
             from services.context_assembly_service import context_assembly_service
             from services.discovery_service import discovery_service
             from services.memory_search_service import memory_search_service
@@ -621,10 +620,7 @@ async def lifespan(app: FastAPI):
             _context_memory_deps = create_context_memory_deps(context_memory_facade)
             context_assembly_service.bind_facade(context_memory_facade)
             memory_search_service.bind_facade(context_memory_facade)
-            content_storage_service.bind_facade(
-                context_memory_facade,
-                platform_storage=platform_facade.content_storage,
-            )
+            compaction_service.bind_content_storage(platform_facade.content_storage)
             compaction_service.bind_facade(context_memory_facade)
             room_memory_service.bind_facade(context_memory_facade)
             room_services.bind_context_memory(_context_memory_deps.memory_manager)

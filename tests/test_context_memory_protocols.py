@@ -420,15 +420,6 @@ def test_non_protocol_helper_call_boundary():
             "fetch_turn_content",
             "get_compaction_stats",
         },
-        "services/content_storage_service.py": {
-            "content_upsert_full_content",
-            "content_get_content_by_document_id",
-            "content_get_content_by_turn_id",
-            "content_expand_mongodb_reference",
-            "content_delete_content_by_turn_id",
-            "content_delete_content_by_room_id",
-            "content_get_content_stats_for_room",
-        },
         "context_memory/events.py": {"project_message_for_event"},
     }
     helper_names = set().union(*allowed_call_sites.values())

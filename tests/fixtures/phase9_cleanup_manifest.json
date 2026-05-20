@@ -240,31 +240,9 @@
       "owner": "phase-9-platform-api-cleanup",
       "path": "models/task.py",
       "reason": "Legacy task model still exposes A2A SDK Task; route translators must replace this import before final SDK confinement is claimed."
-    },
-    {
-      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "services/content_storage_service.py",
-      "reason": "Delegating compatibility shim retained until compaction callers receive Platform content storage from the app shell."
     }
   ],
   "content_storage_callers": [
-    {
-      "classification": "legacy service caller pending Task 6 app-shell binding",
-      "path": "main.py",
-      "references": [
-        "content_storage_service.bind_facade(context_memory_facade)"
-      ]
-    },
-    {
-      "classification": "legacy service caller pending Task 7 route/service conversion",
-      "path": "services/compaction_service.py",
-      "references": [
-        "content_storage_service",
-        "upsert_full_content",
-        "expand_content_reference"
-      ]
-    },
     {
       "classification": "Platform-owned behavior now covered by tests",
       "path": "platform_module/content_storage.py",
