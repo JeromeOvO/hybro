@@ -1,6 +1,7 @@
-from a2a_adapter.jsonrpc_errors import (
-    build_incompatible_types_error,
-    build_not_implemented_error,
+from common.types import (
+    ContentTypeNotSupportedError,
+    JSONRPCResponse,
+    UnsupportedOperationError,
 )
 
 
@@ -19,8 +20,8 @@ def are_modalities_compatible(
 
 
 def new_incompatible_types_error(request_id):
-    return build_incompatible_types_error(request_id)
+    return JSONRPCResponse(id=request_id, error=ContentTypeNotSupportedError())
 
 
 def new_not_implemented_error(request_id):
-    return build_not_implemented_error(request_id)
+    return JSONRPCResponse(id=request_id, error=UnsupportedOperationError())

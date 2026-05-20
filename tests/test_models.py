@@ -31,7 +31,8 @@ from models.memory import (
     ContentType,
 )
 from models.hitl import HITLRequest, HITLStatus, HITLPromptType
-from models.request import AgentTaskRequest, TaskRequest
+from models.request import AgentTaskRequest, TaskCenterRequest, TaskRequest
+from models.response import TaskCenterResponse
 
 
 # =============================================================================
@@ -49,6 +50,25 @@ class TestLegacyTaskRequestModels:
         assert message.role == "user"
         assert message.metadata == {"room_id": "room-1"}
         assert message.model_dump(mode="json", by_alias=True)["messageId"]
+
+    def test_sdk_task_payloads_serialize_with_runtime_serializer(self):
+        task = Task(
+            id="task-1",
+            contextId="ctx-1",
+            status=TaskStatus(state=TaskState.working),
+        )
+
+        content = MessageContent(message_task=task)
+        request = TaskCenterRequest(task=task)
+        response = TaskCenterResponse(success=True, task=task)
+
+        assert content.model_dump(mode="json")["message_task"]["status"] == {
+            "message": None,
+            "state": "working",
+            "timestamp": None,
+        }
+        assert request.model_dump(mode="json")["task"]["contextId"] == "ctx-1"
+        assert response.model_dump(mode="json")["task"]["contextId"] == "ctx-1"
 
     def test_agent_task_request_to_message_builds_valid_sdk_message(self):
         message = AgentTaskRequest(

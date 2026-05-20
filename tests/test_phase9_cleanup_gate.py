@@ -50,6 +50,7 @@ FORBIDDEN_COMMON_IMPORT_PREFIXES = (
     "hub_runtime_bridge",
     "models",
     "platform_module",
+    "a2a_adapter",
 )
 
 SDK_CONFINEMENT_ROOTS = (

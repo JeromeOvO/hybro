@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from pydantic import ValidationError as PydanticValidationError
 
 from common.errors import AppError, NotFoundError, ValidationError
 from common.dto import (
@@ -129,6 +128,7 @@ def test_common_a2a_helpers_do_not_perform_storage_signing():
 
 def test_common_card_resolver_keeps_sdk_agent_card_validation(monkeypatch):
     from common.client.card_resolver import A2ACardResolver
+    from common.types import A2AClientJSONError
 
     class Response:
         def raise_for_status(self):
@@ -155,7 +155,7 @@ def test_common_card_resolver_keeps_sdk_agent_card_validation(monkeypatch):
 
     monkeypatch.setattr("httpx.Client", Client)
 
-    with pytest.raises(PydanticValidationError):
+    with pytest.raises(A2AClientJSONError, match="description"):
         A2ACardResolver("https://agent.example").get_agent_card()
 
 
