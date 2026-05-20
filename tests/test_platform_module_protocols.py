@@ -37,6 +37,7 @@ def test_platform_facade_exposes_common_protocol_surfaces():
     facade = PlatformFacade(config=PlatformConfig(), deps=PlatformDeps())
 
     assert isinstance(facade.gateway_service, GatewayService)
+    assert facade.discovery_service is not None
     assert isinstance(facade.gateway_rate_limiter, RateLimiter)
     assert isinstance(facade.discovery_rate_limiter, RateLimiter)
     assert isinstance(facade.agent_rate_limiter, RateLimiter)
@@ -190,3 +191,9 @@ def test_platform_module_does_not_import_app_shell_or_legacy_services():
                     violations.append(f"{path}:{node.lineno}: {imported_name}")
 
     assert not violations, "Forbidden platform imports:\n" + "\n".join(violations)
+
+
+def test_main_binds_discovery_route_to_platform_facade():
+    source = Path("main.py").read_text()
+
+    assert "discovery.bind_discovery_dependencies(\n                platform_facade.discovery_service" in source

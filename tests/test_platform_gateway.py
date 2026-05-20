@@ -59,6 +59,36 @@ class FakeDiscoveryProvider:
         return self.response
 
 
+class InMemoryRateLimitCollection:
+    def __init__(self) -> None:
+        self.docs: list[dict] = []
+
+    async def count_documents(self, query: dict) -> int:
+        return sum(1 for doc in self.docs if self._matches(doc, query))
+
+    async def find_one(self, query: dict, sort: list[tuple[str, int]] | None = None):
+        matches = [doc for doc in self.docs if self._matches(doc, query)]
+        if sort:
+            key, direction = sort[0]
+            matches.sort(key=lambda doc: doc[key], reverse=direction < 0)
+        return matches[0] if matches else None
+
+    async def insert_one(self, doc: dict):
+        self.docs.append(dict(doc))
+        return None
+
+    @staticmethod
+    def _matches(doc: dict, query: dict) -> bool:
+        for key, expected in query.items():
+            actual = doc.get(key)
+            if isinstance(expected, dict):
+                if "$gt" in expected and not actual > expected["$gt"]:
+                    return False
+            elif actual != expected:
+                return False
+        return True
+
+
 class FakeTransport:
     def __init__(
         self,
@@ -137,6 +167,7 @@ def _gateway(
     matcher=None,
     config: PlatformConfig | None = None,
     discovery_provider=None,
+    agent_rate_limit_collection=None,
 ):
     agent = agent or _agent()
     cards = {
@@ -155,6 +186,7 @@ def _gateway(
             agent_matcher=matcher or FakeMatcher([]),
             discovery_provider=discovery_provider,
             agent_transport=transport or FakeTransport(),
+            agent_rate_limit_collection=agent_rate_limit_collection,
         ),
     )
 
@@ -270,6 +302,41 @@ async def test_send_maps_transport_error_result_to_502():
     assert exc_info.value.status_code == 502
     assert exc_info.value.detail["error"] == "agent_error"
     assert "connection refused" in exc_info.value.detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_send_records_agent_rate_limit_usage():
+    collection = InMemoryRateLimitCollection()
+    gateway = _gateway(
+        agent=_agent(rate_limit_per_user_per_hour=1),
+        agent_rate_limit_collection=collection,
+    )
+
+    await gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+
+    with pytest.raises(Exception) as exc_info:
+        await gateway.send_message("agent-1", {"text": "again"}, "owner-1")
+
+    assert exc_info.value.status_code == 429
+    assert len(collection.docs) == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_records_agent_rate_limit_usage_after_success():
+    collection = InMemoryRateLimitCollection()
+    gateway = _gateway(
+        agent=_agent(rate_limit_per_user_per_hour=1),
+        agent_rate_limit_collection=collection,
+    )
+
+    stream = await gateway.prepare_stream("agent-1", {"text": "hi"}, "owner-1")
+    assert [event async for event in stream]
+
+    with pytest.raises(Exception) as exc_info:
+        await gateway.prepare_stream("agent-1", {"text": "again"}, "owner-1")
+
+    assert exc_info.value.status_code == 429
+    assert len(collection.docs) == 1
 
 
 @pytest.mark.asyncio

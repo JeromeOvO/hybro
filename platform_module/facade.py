@@ -2,6 +2,7 @@ from common.protocols import FileStorage, GatewayService, RateLimiter
 from platform_module.config import PlatformConfig
 from platform_module.content_storage import PlatformContentStorage
 from platform_module.deps import PlatformDeps
+from platform_module.discovery import PlatformDiscovery
 from platform_module.files import PlatformFileStorage
 from platform_module.gateway import PlatformGateway
 from platform_module.rate_limit import PlatformProtocolRateLimiter
@@ -12,6 +13,7 @@ class PlatformFacade:
         self.config = config
         self.deps = deps
         self._gateway_service = PlatformGateway(config, deps)
+        self._discovery_service = PlatformDiscovery(config, deps)
         self._gateway_rate_limiter = PlatformProtocolRateLimiter(
             deps.gateway_rate_limit_collection,
             scope="gateway",
@@ -33,6 +35,10 @@ class PlatformFacade:
     @property
     def gateway_service(self) -> GatewayService:
         return self._gateway_service
+
+    @property
+    def discovery_service(self) -> PlatformDiscovery:
+        return self._discovery_service
 
     @property
     def gateway_rate_limiter(self) -> RateLimiter:

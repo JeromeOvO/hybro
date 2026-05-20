@@ -2,6 +2,8 @@ import ast
 import json
 from pathlib import Path
 
+from fastapi.routing import APIRoute
+
 
 FORBIDDEN_API_IMPORT_PREFIXES = (
     "database",
@@ -77,3 +79,34 @@ def test_phase9_route_inventory_is_recorded():
         assert {"path", "methods", "name", "auth_dependencies", "owning_protocol"}.issubset(
             route
         )
+
+
+def test_phase9_route_inventory_matches_live_app_routes():
+    from main import app
+
+    docs_paths = {"/docs", "/docs/oauth2-redirect", "/openapi.json", "/redoc"}
+    recorded_routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    recorded = {
+        (
+            route["path"],
+            tuple(route["methods"]),
+            route["name"],
+        ): route.get("response_model")
+        for route in recorded_routes
+        if route["path"] not in docs_paths
+    }
+    live = {}
+    for route in app.routes:
+        if not isinstance(route, APIRoute) or route.path in docs_paths:
+            continue
+        methods = tuple(
+            sorted(method for method in route.methods if method not in {"HEAD", "OPTIONS"})
+        )
+        response_model = (
+            getattr(route.response_model, "__name__", str(route.response_model))
+            if route.response_model is not None
+            else None
+        )
+        live[(route.path, methods, route.name)] = response_model
+
+    assert recorded == live

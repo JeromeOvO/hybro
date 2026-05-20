@@ -599,7 +599,7 @@ async def lifespan(app: FastAPI):
                 gateway_rate_limit_service,
             )
             discovery.bind_discovery_dependencies(
-                discovery_service,
+                platform_facade.discovery_service,
                 discovery_rate_limit_service,
                 default_limit=settings.discovery_default_limit,
             )

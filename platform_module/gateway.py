@@ -175,6 +175,7 @@ class PlatformGateway:
                         ),
                     },
                 )
+            await self._record_agent_request(agent, user_id)
             return self._task_result_to_a2a_response(result)
         except GatewayPlatformError:
             raise
@@ -223,6 +224,7 @@ class PlatformGateway:
                                 ),
                             },
                         )
+                    await self._record_agent_request(agent, user_id)
                     yield self._task_result_to_a2a_response(result)
                 except GatewayPlatformError:
                     raise
@@ -245,6 +247,7 @@ class PlatformGateway:
                     user_id=user_id,
                 ):
                     yield self._stream_event_to_a2a_response(event)
+                await self._record_agent_request(agent, user_id)
             except GatewayPlatformError:
                 raise
             except Exception as exc:
@@ -360,6 +363,14 @@ class PlatformGateway:
                     "retry_after": result.retry_after_seconds or 60,
                 },
             )
+
+    async def _record_agent_request(self, agent: AgentInfo, user_id: str) -> None:
+        if (
+            agent.rate_limit_per_user_per_hour is None
+            and agent.rate_limit_system_per_hour is None
+        ):
+            return
+        await self._agent_limiter.record_agent_request(agent.agent_id, user_id)
 
     def _require_transport(self):
         if self._deps.agent_transport is None:

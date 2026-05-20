@@ -145,6 +145,31 @@ def _sdk_import_violations() -> list[str]:
     return violations
 
 
+def _sdk_import_files() -> set[str]:
+    files: set[str] = set()
+    for root in SDK_CONFINEMENT_ROOTS:
+        root_path = Path(root)
+        if not root_path.exists():
+            continue
+        for path in sorted(root_path.rglob("*.py")):
+            tree = ast.parse(path.read_text(), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                    modules = [node.module]
+                else:
+                    continue
+                if any(
+                    module == prefix or module.startswith(f"{prefix}.")
+                    for module in modules
+                    for prefix in FORBIDDEN_SDK_IMPORT_PREFIXES
+                ):
+                    files.add(path.as_posix())
+                    break
+    return files
+
+
 def _common_import_violations() -> list[str]:
     violations: list[str] = []
     for path in sorted(Path("common").rglob("*.py")):
@@ -177,6 +202,13 @@ def test_a2a_sdk_imports_are_confined_or_manifest_blocked():
     violations = _sdk_import_violations()
 
     assert not violations, "Undocumented A2A SDK imports remain:\n" + "\n".join(violations)
+
+
+def test_a2a_sdk_blockers_are_exact_current_files():
+    blocked = _blocked_cleanup_paths(contract="sdk_confinement")
+    imported = _sdk_import_files()
+
+    assert blocked == imported
 
 
 def test_common_package_has_no_module_or_app_shell_imports():
