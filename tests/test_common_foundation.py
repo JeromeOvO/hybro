@@ -104,7 +104,7 @@ def test_common_foundation_subpackages_are_packaged():
     }.issubset(packages)
 
 
-def test_common_a2a_storage_signing_seam_has_explicit_blocker():
+def test_common_a2a_helpers_do_not_perform_storage_signing():
     source = Path("common/utils/a2a_helpers.py").read_text()
     storage_markers = (
         "bind_a2a_storage_dependencies",
@@ -112,8 +112,8 @@ def test_common_a2a_storage_signing_seam_has_explicit_blocker():
         ".upload_file(",
         ".generate_presigned_url(",
     )
-    if not any(marker in source for marker in storage_markers):
-        return
+
+    assert not any(marker in source for marker in storage_markers)
 
     manifest = json.loads(Path("tests/fixtures/phase9_cleanup_manifest.json").read_text())
     blockers = [
@@ -121,11 +121,9 @@ def test_common_a2a_storage_signing_seam_has_explicit_blocker():
         for entry in manifest["blocked_cleanup"]
         if entry.get("path") == "common/utils/a2a_helpers.py"
         and entry.get("contract") == "a2a_storage_signing"
-        and entry.get("owner")
-        and entry.get("expiry_task")
     ]
 
-    assert blockers, "A2A helper storage/signing behavior needs an explicit blocker"
+    assert not blockers
 
 
 @pytest.mark.asyncio
