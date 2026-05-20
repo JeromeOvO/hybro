@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, AsyncIterator, Protocol, runtime_checkable
 
-from common.dto import FileInfo, RateLimitResult
+from common.dto import FileInfo, GatewayDiscoveryResponse, RateLimitResult
 
 
 @runtime_checkable
@@ -37,24 +37,26 @@ class APIKeyStore(Protocol):
 
 @runtime_checkable
 class GatewayDiscoveryProvider(Protocol):
-    async def discover_agents(self, query: str, limit: int | None = None): ...
+    async def discover_agents(
+        self, query: str, limit: int | None = None
+    ) -> GatewayDiscoveryResponse | object: ...
 
 
 @runtime_checkable
 class GatewayService(Protocol):
     async def discover_agents(
         self, query: str, limit: int | None, user_id: str
-    ) -> Any: ...
-    async def get_agent_card(self, agent_id: str, user_id: str) -> dict: ...
+    ) -> GatewayDiscoveryResponse | object: ...
+    async def get_agent_card(self, agent_id: str, user_id: str) -> dict[str, object]: ...
     async def send_message(
-        self, agent_id: str, message: Any, user_id: str
-    ) -> Any: ...
+        self, agent_id: str, message: object, user_id: str
+    ) -> object: ...
     async def prepare_stream(
-        self, agent_id: str, message: Any, user_id: str
-    ) -> AsyncIterator[dict]: ...
+        self, agent_id: str, message: object, user_id: str
+    ) -> AsyncIterator[dict[str, object]]: ...
     async def stream_message(
-        self, agent_id: str, message: Any, user_id: str
-    ) -> AsyncIterator[dict]: ...
+        self, agent_id: str, message: object, user_id: str
+    ) -> AsyncIterator[dict[str, object]]: ...
 
 
 @runtime_checkable
@@ -78,7 +80,7 @@ class FileStorage(Protocol):
         filename: str,
         owner_id: str,
         room_id: str,
-        **kwargs,
+        content_type: str | None = None,
     ) -> FileInfo: ...
     async def get_url(self, file_id: str, ttl: int = 3600) -> str | None: ...
     async def delete(self, file_id: str) -> bool: ...

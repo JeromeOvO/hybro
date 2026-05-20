@@ -4,6 +4,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.params import Depends as DependsParam
 from fastapi.responses import JSONResponse
 
+from app_shell.bound import RoomCenterRouteOwner
+from app_shell.database_service import A2ATaskReader
 from common.auth import ClerkUser, get_current_user
 from common.dto import ExecutionRequest, RunInfo
 from common.protocols import ExecutionEngine
@@ -17,19 +19,19 @@ from models.request import (
 from models.response import ActiveRunRef, RoomCenterActiveRunsResponse, RoomCenterUserMessageResponse
 
 router = APIRouter()
-room_center: Any | None = None
-room_message_center: Any | None = None
-db_service: Any | None = None
-agent_selection_service: Any | None = None
+room_center: RoomCenterRouteOwner | None = None
+room_message_center: object | None = None
+db_service: A2ATaskReader | None = None
+agent_selection_service: object | None = None
 execution_engine: ExecutionEngine | None = None
 
 
 def bind_room_dependencies(
     *,
-    center: Any,
-    message_center: Any,
-    database_service: Any,
-    selection_service: Any,
+    center: RoomCenterRouteOwner,
+    message_center: object,
+    database_service: A2ATaskReader,
+    selection_service: object,
 ) -> None:
     global room_center, room_message_center, db_service, agent_selection_service
 
@@ -44,25 +46,25 @@ def bind_execution_deps(deps) -> None:
     execution_engine = deps.execution_engine
 
 
-def _require_room_center() -> Any:
+def _require_room_center() -> RoomCenterRouteOwner:
     if room_center is None:
         raise RuntimeError("Room center dependency has not been bound")
     return room_center
 
 
-def _require_room_message_center() -> Any:
+def _require_room_message_center() -> object:
     if room_message_center is None:
         raise RuntimeError("Room message center dependency has not been bound")
     return room_message_center
 
 
-def _require_db_service() -> Any:
+def _require_db_service() -> A2ATaskReader:
     if db_service is None:
         raise RuntimeError("Room database dependency has not been bound")
     return db_service
 
 
-def get_agent_selection_service() -> Any:
+def get_agent_selection_service() -> object:
     if agent_selection_service is None:
         raise RuntimeError("Agent selection dependency has not been bound")
     return agent_selection_service

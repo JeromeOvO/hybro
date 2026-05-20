@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from fastapi.params import Depends as DependsParam
 from fastapi.responses import StreamingResponse
 
+from app_shell.bound import SSEManagerRouteOwner
+from app_shell.database_service import A2ATaskReader
 from common.auth import ClerkUser, get_current_user, get_current_user_with_query_token
 from common.protocols import ExecutionEngine
 from common.utils.logger import get_logger
@@ -14,11 +16,14 @@ from common.utils.time import utcnow
 logger = get_logger(__name__)
 router = APIRouter()
 execution_engine: ExecutionEngine | None = None
-db_service: Any | None = None
-sse_manager: Any | None = None
+db_service: A2ATaskReader | None = None
+sse_manager: SSEManagerRouteOwner | None = None
 
 
-def bind_sse_dependencies(database_service: Any, manager: Any) -> None:
+def bind_sse_dependencies(
+    database_service: A2ATaskReader,
+    manager: SSEManagerRouteOwner,
+) -> None:
     global db_service, sse_manager
 
     db_service = database_service
@@ -36,13 +41,13 @@ def _require_execution_engine() -> ExecutionEngine:
     return execution_engine
 
 
-def get_db_service() -> Any:
+def get_db_service() -> A2ATaskReader:
     if db_service is None:
         raise RuntimeError("SSE database dependency has not been bound")
     return db_service
 
 
-def get_sse_manager() -> Any:
+def get_sse_manager() -> SSEManagerRouteOwner:
     if sse_manager is None:
         raise RuntimeError("SSE manager dependency has not been bound")
     return sse_manager

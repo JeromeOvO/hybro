@@ -35,9 +35,8 @@ class PlatformFileStorage:
         filename: str,
         owner_id: str,
         room_id: str,
-        **kwargs,
+        content_type: str | None = None,
     ) -> FileInfo:
-        content_type = kwargs.get("content_type")
         if content_type not in set(self._config.allowed_mime_types):
             raise FileStoragePlatformError(
                 415, f"Unsupported file type: {content_type}"

@@ -120,6 +120,31 @@ def test_api_bindings_do_not_expose_concrete_store_or_service_names():
     )
 
 
+def test_named_api_bindings_do_not_use_any_typed_dependency_globals():
+    watched_paths = {
+        Path("api/room_center.py"),
+        Path("api/memory_center.py"),
+        Path("api/relay.py"),
+        Path("api/sse.py"),
+    }
+    violations: list[str] = []
+
+    for path in sorted(watched_paths):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in tree.body:
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                if ast.unparse(node.annotation).startswith("Any"):
+                    violations.append(f"{path}:{node.lineno}: {node.target.id}")
+            if isinstance(node, ast.FunctionDef) and node.name.startswith("bind_"):
+                for arg in (*node.args.args, *node.args.kwonlyargs):
+                    if arg.annotation is not None and ast.unparse(arg.annotation) == "Any":
+                        violations.append(f"{path}:{node.lineno}: {node.name}.{arg.arg}")
+
+    assert not violations, "API bindings still use Any for dependency seams:\n" + "\n".join(
+        violations
+    )
+
+
 def test_phase9_route_inventory_is_recorded():
     routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
 
@@ -208,6 +233,28 @@ def test_phase9_route_inventory_does_not_use_platform_implementation_owners():
     ]
 
     assert not violations, "Routes must use common protocols, not platform implementations:\n" + "\n".join(
+        violations
+    )
+
+
+def test_phase9_route_inventory_owners_are_protocol_symbols():
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    symbolic_owners = {
+        "fastapi.documentation",
+        "legacy_workflow_decommission_manifest",
+    }
+    violations: list[str] = []
+
+    for route in routes:
+        owner = route["owning_protocol"]
+        if owner in symbolic_owners or owner.startswith("blocked:"):
+            continue
+        module_name, _, symbol_name = owner.rpartition(".")
+        symbol = getattr(importlib.import_module(module_name), symbol_name)
+        if not getattr(symbol, "_is_protocol", False):
+            violations.append(f"{route['path']}: {owner}")
+
+    assert not violations, "Route owners must resolve to Protocols:\n" + "\n".join(
         violations
     )
 
@@ -508,6 +555,37 @@ def test_route_owner_protocols_do_not_expose_any_annotations():
                     )
 
     assert not violations, "Route owner protocols expose Any:\n" + "\n".join(
+        violations
+    )
+
+
+def test_platform_route_protocols_do_not_expose_any_or_wildcard_params():
+    from typing import Any
+
+    from common.protocols import FileStorage, GatewayDiscoveryProvider, GatewayService
+
+    protocols = (GatewayDiscoveryProvider, GatewayService, FileStorage)
+    violations: list[str] = []
+
+    for protocol in protocols:
+        for name, value in protocol.__dict__.items():
+            if not callable(value) or name.startswith("_"):
+                continue
+            signature = inspect.signature(value)
+            if signature.return_annotation in {Any, inspect.Signature.empty}:
+                violations.append(f"{protocol.__name__}.{name} return")
+            for parameter in signature.parameters.values():
+                if parameter.kind in {
+                    inspect.Parameter.VAR_POSITIONAL,
+                    inspect.Parameter.VAR_KEYWORD,
+                }:
+                    violations.append(f"{protocol.__name__}.{name}.{parameter.name}")
+                if parameter.annotation is Any:
+                    violations.append(
+                        f"{protocol.__name__}.{name}.{parameter.name}"
+                    )
+
+    assert not violations, "Platform route protocols expose broad shapes:\n" + "\n".join(
         violations
     )
 

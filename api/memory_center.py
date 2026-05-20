@@ -3,19 +3,20 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.params import Depends as DependsParam
 
+from app_shell.bound import LegacyMemoryCenter
 from models.request import ChatMemoryRequest
 
 router = APIRouter()
-memory_center: Any | None = None
+memory_center: LegacyMemoryCenter | None = None
 
 
-def bind_memory_dependencies(center: Any) -> None:
+def bind_memory_dependencies(center: LegacyMemoryCenter) -> None:
     global memory_center
 
     memory_center = center
 
 
-def get_memory_center() -> Any:
+def get_memory_center() -> LegacyMemoryCenter:
     if memory_center is None:
         raise RuntimeError("Memory center dependency has not been bound")
     return memory_center

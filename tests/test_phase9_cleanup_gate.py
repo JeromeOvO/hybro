@@ -43,6 +43,8 @@ FORBIDDEN_COMMON_IMPORT_PREFIXES = (
 )
 
 SDK_CONFINEMENT_ROOTS = (
+    "main.py",
+    "container.py",
     "api",
     "agent",
     "room",
@@ -126,7 +128,8 @@ def _sdk_import_violations() -> list[str]:
         root_path = Path(root)
         if not root_path.exists():
             continue
-        for path in sorted(root_path.rglob("*.py")):
+        paths = [root_path] if root_path.is_file() else sorted(root_path.rglob("*.py"))
+        for path in paths:
             if _is_blocked(path, blocked_paths):
                 continue
             tree = ast.parse(path.read_text(), filename=str(path))
@@ -152,7 +155,8 @@ def _sdk_import_files() -> set[str]:
         root_path = Path(root)
         if not root_path.exists():
             continue
-        for path in sorted(root_path.rglob("*.py")):
+        paths = [root_path] if root_path.is_file() else sorted(root_path.rglob("*.py"))
+        for path in paths:
             tree = ast.parse(path.read_text(), filename=str(path))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
