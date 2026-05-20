@@ -29,6 +29,13 @@ FORBIDDEN_PRODUCTION_IMPORT_PREFIXES = (
 )
 
 LEGACY_PACKAGES = {"modules", "services", "config", "infrastructure"}
+PACKAGE_REMOVAL_RUNTIME_ROOTS = (
+    "main.py",
+    "container.py",
+    "scripts",
+    "database",
+    "infrastructure",
+)
 
 FORBIDDEN_LEGACY_SHIM_IMPORT_PREFIXES = (
     "a2a",
@@ -271,6 +278,53 @@ def _legacy_service_shim_violations() -> list[str]:
                     ):
                         violations.append(f"{path}:{item.lineno}: collection")
     return violations
+
+
+def _imports_package(path: Path, package: str) -> bool:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            modules = [node.module]
+        else:
+            continue
+        if any(
+            module == package or module.startswith(f"{package}.")
+            for module in modules
+        ):
+            return True
+    return False
+
+
+def _package_python_file_count(package: str) -> int:
+    package_path = Path(package)
+    if not package_path.exists():
+        return 0
+    return len(list(package_path.rglob("*.py")))
+
+
+def _runtime_import_files_for_package(package: str) -> list[str]:
+    files: list[Path] = []
+    for root in PACKAGE_REMOVAL_RUNTIME_ROOTS:
+        root_path = Path(root)
+        if not root_path.exists():
+            continue
+        paths = [root_path] if root_path.is_file() else sorted(root_path.rglob("*.py"))
+        for path in paths:
+            if path.parts and path.parts[0] == package:
+                continue
+            if _imports_package(path, package):
+                files.append(path)
+    return [path.as_posix() for path in sorted(files)]
+
+
+def _test_import_files_for_package(package: str) -> list[str]:
+    return [
+        path.as_posix()
+        for path in sorted(Path("tests").rglob("*.py"))
+        if _imports_package(path, package)
+    ]
 
 
 def test_no_production_imports_from_legacy_singletons():
@@ -540,6 +594,12 @@ def test_legacy_package_blockers_are_tied_to_decommission_evidence():
     for entry in blocked_packages:
         if entry.get("blocked_by") != "legacy_workflow_decommission":
             violations.append(f"{entry['path']}: missing blocked_by=legacy_workflow_decommission")
+        if not entry.get("owner"):
+            violations.append(f"{entry['path']}: missing owner")
+        if not entry.get("expiry_task"):
+            violations.append(f"{entry['path']}: missing expiry_task")
+        if not entry.get("reason"):
+            violations.append(f"{entry['path']}: missing reason")
         if not entry.get("deletion_blockers"):
             violations.append(f"{entry['path']}: missing deletion_blockers")
         if not legacy_workflow.get("evidence"):
@@ -569,6 +629,12 @@ def test_shipped_legacy_packages_have_package_removal_checklist_entries():
             continue
         if entry.get("status") != "blocked":
             violations.append(f"{package}: status must remain blocked while shipped")
+        if entry.get("py_files") != _package_python_file_count(package):
+            violations.append(f"{package}: py_files does not match current package")
+        if entry.get("runtime_import_files") != _runtime_import_files_for_package(package):
+            violations.append(f"{package}: runtime_import_files does not match current imports")
+        if entry.get("test_import_files") != _test_import_files_for_package(package):
+            violations.append(f"{package}: test_import_files does not match current imports")
         if not entry.get("required_before_remove"):
             violations.append(f"{package}: missing required_before_remove")
         if not (entry.get("runtime_blockers") or entry.get("test_blockers")):

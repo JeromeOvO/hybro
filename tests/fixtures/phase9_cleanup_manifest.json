@@ -3,8 +3,8 @@
     {
       "blocked_by": "legacy_workflow_decommission",
       "deletion_blockers": [
-        "48 test import hits still exercise legacy module compatibility paths.",
-        "5 app-shell/runtime imports still bind legacy workflow compatibility objects during startup.",
+        "29 test files still exercise legacy module compatibility paths.",
+        "main.py still binds legacy workflow compatibility objects during startup.",
         "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
       ],
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
@@ -15,8 +15,8 @@
     {
       "blocked_by": "legacy_workflow_decommission",
       "deletion_blockers": [
-        "145 test import hits still exercise legacy service compatibility paths.",
-        "35 app-shell/runtime imports still bind legacy services during startup and shutdown.",
+        "49 test files still exercise legacy service compatibility paths.",
+        "3 runtime files still bind or import legacy services.",
         "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
       ],
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
@@ -27,8 +27,8 @@
     {
       "blocked_by": "legacy_workflow_decommission",
       "deletion_blockers": [
-        "5 test import hits still verify legacy config compatibility.",
-        "6 app-shell/runtime imports still read legacy settings during composition or scripts.",
+        "3 test files still verify legacy config compatibility.",
+        "7 runtime files still import config.settings compatibility paths.",
         "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
       ],
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
@@ -39,8 +39,8 @@
     {
       "blocked_by": "legacy_workflow_decommission",
       "deletion_blockers": [
-        "5 test import hits still verify legacy infrastructure compatibility.",
-        "3 app-shell/runtime imports still use legacy infrastructure broker compatibility paths.",
+        "5 test files still verify legacy infrastructure compatibility.",
+        "main.py still imports legacy infrastructure compatibility paths.",
         "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
       ],
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
@@ -79,12 +79,46 @@
     {
       "package": "modules",
       "py_files": 26,
+      "runtime_import_files": [
+        "main.py"
+      ],
       "runtime_blockers": [
         "main.py imports legacy module compatibility objects during app-shell startup binding."
       ],
       "status": "blocked",
+      "test_import_files": [
+        "tests/test_agent_event_turn_id.py",
+        "tests/test_agent_response_handler.py",
+        "tests/test_api_relay.py",
+        "tests/test_api_room_center.py",
+        "tests/test_api_webhooks.py",
+        "tests/test_call_counters.py",
+        "tests/test_debate_dispatcher.py",
+        "tests/test_direct_transport.py",
+        "tests/test_dispatch_middleware.py",
+        "tests/test_distributed_room_lock.py",
+        "tests/test_distributed_room_lock_integration.py",
+        "tests/test_module_agent_dispatcher.py",
+        "tests/test_module_queue_executor.py",
+        "tests/test_module_room_message_center.py",
+        "tests/test_module_supervisor_executor.py",
+        "tests/test_module_task_state.py",
+        "tests/test_module_workflow_center.py",
+        "tests/test_multimodal_errors.py",
+        "tests/test_p2_modules_services.py",
+        "tests/test_phase5_supervisor_integration.py",
+        "tests/test_phase7a_processing_status_golden.py",
+        "tests/test_pipeline_integration.py",
+        "tests/test_sdr_wave1.py",
+        "tests/test_service_agent.py",
+        "tests/test_supervisor_debate_sequential.py",
+        "tests/test_supervisor_v2_improvements.py",
+        "tests/test_transport_parity.py",
+        "tests/test_turn_id_passthrough.py",
+        "tests/test_unified_summary.py"
+      ],
       "test_blockers": [
-        "48 test import hits under tests/ still import modules.* compatibility paths."
+        "29 test files under tests/ still import modules.* compatibility paths."
       ],
       "required_before_remove": [
         "Migrate remaining tests to Agent, Room, Execution, Delivery, HubRuntimeBridge, or Platform public APIs.",
@@ -95,12 +129,68 @@
     {
       "package": "services",
       "py_files": 37,
+      "runtime_import_files": [
+        "main.py",
+        "scripts/backfill_domain_aliases.py",
+        "scripts/reupsert_agents_pinecone.py"
+      ],
       "runtime_blockers": [
         "main.py imports legacy service compatibility objects during app-shell startup and shutdown binding."
       ],
       "status": "blocked",
+      "test_import_files": [
+        "tests/delivery_adapter_fakes.py",
+        "tests/test_a2a_service_webhook_fallback.py",
+        "tests/test_agent_matcher.py",
+        "tests/test_agent_selection_service_facade.py",
+        "tests/test_api_relay.py",
+        "tests/test_call_counters.py",
+        "tests/test_compaction_service.py",
+        "tests/test_context_assembly_service.py",
+        "tests/test_context_memory_adapters.py",
+        "tests/test_context_memory_bugfixes.py",
+        "tests/test_context_memory_protocols.py",
+        "tests/test_create_and_parse.py",
+        "tests/test_dual_source_attachments.py",
+        "tests/test_flow_contracts.py",
+        "tests/test_get_room_ids_non_terminal_runs.py",
+        "tests/test_guard_consecutive_redelegation.py",
+        "tests/test_heal_head_from_events.py",
+        "tests/test_heartbeat_fixes.py",
+        "tests/test_memory_search_service.py",
+        "tests/test_message_retrieval.py",
+        "tests/test_mode_negotiation.py",
+        "tests/test_multimodal_errors.py",
+        "tests/test_multimodal_integration.py",
+        "tests/test_p2_modules_services.py",
+        "tests/test_phase5_supervisor_integration.py",
+        "tests/test_phase7_execution_event_gate.py",
+        "tests/test_phase7a_processing_status_golden.py",
+        "tests/test_pipeline_integration.py",
+        "tests/test_room_coordinator_service.py",
+        "tests/test_room_membership.py",
+        "tests/test_run_lifecycle_service.py",
+        "tests/test_run_projector.py",
+        "tests/test_run_reducer.py",
+        "tests/test_scope_validation.py",
+        "tests/test_service_agent.py",
+        "tests/test_service_agent_resolver.py",
+        "tests/test_service_bedrock.py",
+        "tests/test_service_database.py",
+        "tests/test_service_hitl.py",
+        "tests/test_service_notification.py",
+        "tests/test_service_openai.py",
+        "tests/test_service_room.py",
+        "tests/test_service_sse.py",
+        "tests/test_service_task_notification.py",
+        "tests/test_sse_adapter_delivery.py",
+        "tests/test_supervisor_bedrock_routing.py",
+        "tests/test_supervisor_v2_improvements.py",
+        "tests/test_turn_annotation.py",
+        "tests/test_turn_id_passthrough.py"
+      ],
       "test_blockers": [
-        "145 test import hits under tests/ still import services.* compatibility paths."
+        "49 test files under tests/ still import services.* compatibility paths."
       ],
       "required_before_remove": [
         "Migrate remaining service tests to module facades, Platform, DAL, Delivery, Execution, HubRuntimeBridge, or Common protocol behavior.",
@@ -111,12 +201,26 @@
     {
       "package": "config",
       "py_files": 2,
+      "runtime_import_files": [
+        "container.py",
+        "database/mongodb.py",
+        "infrastructure/brokers/__init__.py",
+        "infrastructure/brokers/redis_broker.py",
+        "infrastructure/redis_service.py",
+        "main.py",
+        "scripts/_discovery_client.py"
+      ],
       "runtime_blockers": [
         "main.py, container.py, scripts, and database compatibility paths still import config.settings."
       ],
       "status": "blocked",
+      "test_import_files": [
+        "tests/test_common_foundation.py",
+        "tests/test_compaction_service.py",
+        "tests/test_phase0_common.py"
+      ],
       "test_blockers": [
-        "5 test import hits still verify legacy config.settings compatibility."
+        "3 test files still verify legacy config.settings compatibility."
       ],
       "required_before_remove": [
         "Move remaining app-shell, script, and database compatibility imports to common.config or injected scalar config.",
@@ -127,12 +231,22 @@
     {
       "package": "infrastructure",
       "py_files": 7,
+      "runtime_import_files": [
+        "main.py"
+      ],
       "runtime_blockers": [
         "Legacy infrastructure broker compatibility paths still import config.settings."
       ],
       "status": "blocked",
+      "test_import_files": [
+        "tests/test_distributed_room_lock_integration.py",
+        "tests/test_leader_election.py",
+        "tests/test_redis_service.py",
+        "tests/test_relay_streams.py",
+        "tests/test_sse_event_broker.py"
+      ],
       "test_blockers": [
-        "5 test import hits still verify infrastructure compatibility."
+        "5 test files still verify infrastructure compatibility."
       ],
       "required_before_remove": [
         "Move remaining infrastructure broker callers to DAL, Delivery, or app-shell composition points.",
