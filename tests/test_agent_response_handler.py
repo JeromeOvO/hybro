@@ -21,7 +21,15 @@ from execution.dispatch.response_handler import AgentResponseHandler
 # =============================================================================
 
 
-def _make_handler(*, db=None, sse=None, rmc=None, hitl_coordinator=None):
+def _make_handler(
+    *,
+    db=None,
+    sse=None,
+    rmc=None,
+    hitl_coordinator=None,
+    notification_service=None,
+    task_notification_impl=None,
+):
     if db is None:
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=True)
@@ -38,11 +46,15 @@ def _make_handler(*, db=None, sse=None, rmc=None, hitl_coordinator=None):
     if rmc is None:
         rmc = MagicMock()
         rmc.resume_queue_from_continuation = AsyncMock(return_value=True)
+    if notification_service is None:
+        notification_service = MagicMock()
     return AgentResponseHandler(
         db=db,
         sse=sse,
         room_message_center=rmc,
         hitl_coordinator=hitl_coordinator,
+        notification_service=notification_service,
+        task_notification_impl=task_notification_impl,
     )
 
 
@@ -703,22 +715,17 @@ class TestHandlerNotifyTaskUpdate:
 
     @pytest.mark.asyncio
     async def test_delegates_to_shared_impl(self):
-        h = _make_handler()
+        mock_impl = AsyncMock(return_value=True)
+        h = _make_handler(task_notification_impl=mock_impl)
 
-        with pytest.MonkeyPatch.context() as mp:
-            mock_impl = AsyncMock(return_value=True)
-            mp.setattr(
-                "services.task_notification_service._notify_task_update_impl",
-                mock_impl,
-            )
-            result = await h.notify_task_update(
-                message_id="msg-001",
-                state=MagicMock(value="completed"),
-                room_id="room-001",
-                user_id="user-001",
-                error=None,
-                parts=None,
-            )
+        result = await h.notify_task_update(
+            message_id="msg-001",
+            state=MagicMock(value="completed"),
+            room_id="room-001",
+            user_id="user-001",
+            error=None,
+            parts=None,
+        )
 
         assert result is True
         mock_impl.assert_awaited_once()
@@ -731,22 +738,16 @@ class TestHandlerNotifyTaskUpdate:
     @pytest.mark.asyncio
     async def test_notify_helper_delegates_to_method(self):
         """_notify helper calls self.notify_task_update with event fields."""
-        h = _make_handler()
+        mock_impl = AsyncMock(return_value=True)
+        h = _make_handler(task_notification_impl=mock_impl)
+        from a2a.types import TaskState
 
-        with pytest.MonkeyPatch.context() as mp:
-            mock_impl = AsyncMock(return_value=True)
-            mp.setattr(
-                "services.task_notification_service._notify_task_update_impl",
-                mock_impl,
-            )
-            from a2a.types import TaskState
-
-            event = AgentEvent(
-                kind="response", **_base_event(),
-                text="Done!",
-                parts=[{"kind": "text"}],
-            )
-            await h._notify(event, TaskState.completed)
+        event = AgentEvent(
+            kind="response", **_base_event(),
+            text="Done!",
+            parts=[{"kind": "text"}],
+        )
+        await h._notify(event, TaskState.completed)
 
         mock_impl.assert_awaited_once()
         call_kw = mock_impl.call_args.kwargs

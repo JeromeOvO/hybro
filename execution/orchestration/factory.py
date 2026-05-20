@@ -27,6 +27,19 @@ def create_room_message_center(**kwargs: Any) -> RoomMessageCenter:
         "room_supervisor_service": _defaults.room_supervisor_service,
         "hitl_coordinator": None,
         "task_notifications": None,
+        "task_notification_impl": None,
+        "agent_health_service": None,
+        "s3_service": None,
+        "capability_issue_service": None,
+        "context_assembly_service": None,
+        "memory_search_service": None,
+        "compaction_service": None,
+        "build_turn_content_func": None,
+        "supervisor_planning_error_cls": RuntimeError,
+        "orphan_threshold_minutes": 2,
+        "debate_rounds": 1,
+        "cloud_health_cache_ttl": 30.0,
+        "cloud_health_check_timeout": 5.0,
     }
     deps.update(kwargs)
     return RoomMessageCenter(**deps)

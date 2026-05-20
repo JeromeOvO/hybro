@@ -12,7 +12,6 @@ from a2a.types import TaskState
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from config.settings import settings
 from models.request import OrchestrationRequest, RoomCenterAgentMessageRequest
 from models.response import OrchestrationResponse
 from models.room import CoordinatorAgentId
@@ -34,19 +33,20 @@ from execution.dispatch.transports.direct import DirectTransport
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from execution.state.task_state_manager import TaskStateManager
 from common.a2a_constants import SSEProcessingStatus, is_terminal_state
-from services.a2a_service import a2a_service
-from services.agent_resolver_service import agent_resolver_service
-from services.database_service import db_service
-from services.debate_service import debate_service
-from services.memory_service import room_memory_service
-from services.notification_service import notification_service
-from services.rate_limit_service import rate_limit_service
-from services.room_coordinator_service import room_coordinator_service
-from services.openai_service import openai_service
-from services.room_services import room_services
-from services.room_supervisor_service import room_supervisor_service
-from services.sse_services import sse_manager
-from services.task_service import task_service
+
+a2a_service = None
+agent_resolver_service = None
+db_service = None
+debate_service = None
+room_memory_service = None
+notification_service = None
+rate_limit_service = None
+room_coordinator_service = None
+openai_service = None
+room_services = None
+room_supervisor_service = None
+sse_manager = None
+task_service = None
 
 if TYPE_CHECKING:
     from infrastructure.redis_service import RedisService
@@ -89,6 +89,19 @@ class RoomMessageCenter:
         room_supervisor_service,
         hitl_coordinator,
         task_notifications,
+        task_notification_impl=None,
+        agent_health_service=None,
+        s3_service=None,
+        capability_issue_service=None,
+        context_assembly_service=None,
+        memory_search_service=None,
+        compaction_service=None,
+        build_turn_content_func=None,
+        supervisor_planning_error_cls=RuntimeError,
+        orphan_threshold_minutes: int = 2,
+        debate_rounds: int = 1,
+        cloud_health_cache_ttl: float = 30.0,
+        cloud_health_check_timeout: float = 5.0,
     ):
         self.room_services = room_services
         self.database_service = database_service
@@ -96,6 +109,13 @@ class RoomMessageCenter:
         self.room_coordinator_service = room_coordinator_service
         self.openai_service = openai_service
         self.task_notifications = task_notifications
+        self.context_assembly_service = context_assembly_service
+        self.memory_search_service = memory_search_service
+        self.compaction_service = compaction_service
+        self.build_turn_content = build_turn_content_func
+        self.supervisor_planning_error_cls = supervisor_planning_error_cls
+        self.orphan_threshold_minutes = orphan_threshold_minutes
+        self.debate_rounds = debate_rounds
         self.tsm = TaskStateManager(self.room_services, notification_service)
         self.agent_dispatcher = AgentDispatcher(
             agent_resolver=agent_resolver_service,
@@ -108,6 +128,8 @@ class RoomMessageCenter:
             sse=self.sse_manager,
             room_message_center=self,
             hitl_coordinator=hitl_coordinator,
+            notification_service=notification_service,
+            task_notification_impl=task_notification_impl,
         )
 
         # DirectTransport contains all streaming/sync response processing
@@ -118,6 +140,8 @@ class RoomMessageCenter:
             task_service=task_service,
             sse_manager=self.sse_manager,
             database_service=self.database_service,
+            s3_service=s3_service,
+            capability_issue_service=capability_issue_service,
         )
 
         # Relay service + dispatch middleware are initialized eagerly in
@@ -128,6 +152,9 @@ class RoomMessageCenter:
             room_services=self.room_services,
             database_service=self.database_service,
             transports={"direct": self.direct_transport},
+            health_service=agent_health_service,
+            cloud_health_cache_ttl=cloud_health_cache_ttl,
+            cloud_health_check_timeout=cloud_health_check_timeout,
         )
         self.queue_executor = QueueExecutor(
             tsm=self.tsm,
@@ -155,6 +182,7 @@ class RoomMessageCenter:
             agent_message_processor=self.agent_message_processor,
             room_coordinator_service=self.room_coordinator_service,
             hitl_coordinator=hitl_coordinator,
+            debate_rounds=self.debate_rounds,
         )
         self._turn_event_appender = None
 
@@ -444,7 +472,7 @@ class RoomMessageCenter:
         # Idempotency guard (SDR 2.5)
         if request.is_recovery:
             stale_threshold = utcnow() - timedelta(
-                minutes=settings.orphan_threshold_minutes
+                minutes=self.orphan_threshold_minutes
             )
             claimed = await self.database_service.claim_or_reclaim_user_message(
                 request.room_user_message_id, stale_threshold
@@ -942,8 +970,6 @@ class RoomMessageCenter:
 
         Handles all 5 ``RunStatus`` variants.
         """
-        from services.room_supervisor_service import SupervisorPlanningError
-
         extend = user_message.extend_info
         try:
             agent_registry = [
@@ -1035,8 +1061,9 @@ class RoomMessageCenter:
                     )
 
         try:
-            from services.room_services import build_turn_content
-
+            build_turn_content = self.build_turn_content or (
+                lambda text, _attachments: text
+            )
             message_text = build_turn_content(
                 user_message.message_content.message_text or "",
                 user_message.message_content.attachments,
@@ -1054,7 +1081,7 @@ class RoomMessageCenter:
                 resumed_trajectory=resumed_trajectory,
                 user_message=user_message,
             )
-        except SupervisorPlanningError:
+        except self.supervisor_planning_error_cls:
             if is_clarify_resume and resumed_trajectory:
                 original_msg_id = extend.get("clarify_original_message_id")
                 if original_msg_id:
@@ -1316,7 +1343,7 @@ class RoomMessageCenter:
 
             # Add completed agent response to room memory
             if task_result_text and paused_agent_id:
-                await room_memory_service.add_agent_response_to_memory(
+                await self.room_memory_service.add_agent_response_to_memory(
                     room_id=room_id,
                     agent_id=paused_agent_id,
                     agent_name=paused_agent_name or "Agent",
@@ -1330,26 +1357,24 @@ class RoomMessageCenter:
             # HITLService._handle_supervisor_response(). Re-fetch
             # conversation_context to avoid staleness.
             try:
-                from services.context_assembly_service import context_assembly_service
-
                 room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
-                if room_memory:
+                if room_memory and self.context_assembly_service is not None:
                     room_tmp = await self.database_service.get_room_by_room_id(room_id)
                     agent_dicts = [
                         {"agent_id": aid, "agent_name": aname}
                         for aid, aname in ((room_tmp.room_agent_set or {}).items() if room_tmp else [])
                     ]
                     memory_search_results = None
-                    try:
-                        from services.memory_search_service import memory_search_service
-                        search_response = await memory_search_service.search(
-                            query=message_text, room_id=room_id,
-                        )
-                        if search_response.results:
-                            memory_search_results = search_response.results
-                    except Exception:
-                        pass
-                    result_ctx = context_assembly_service.build_supervisor_context(
+                    if self.memory_search_service is not None:
+                        try:
+                            search_response = await self.memory_search_service.search(
+                                query=message_text, room_id=room_id,
+                            )
+                            if search_response.results:
+                                memory_search_results = search_response.results
+                        except Exception:
+                            pass
+                    result_ctx = self.context_assembly_service.build_supervisor_context(
                         room_memory=room_memory,
                         current_task=message_text,
                         agent_registry=agent_dicts,
@@ -1405,30 +1430,27 @@ class RoomMessageCenter:
         # appends the hitl_block — a second refresh would overwrite the user's reply.
         if interrupt_kind != InterruptKind.HITL_SUPERVISOR:
             try:
-                from services.context_assembly_service import context_assembly_service
-
                 room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
-                if room_memory:
+                if room_memory and self.context_assembly_service is not None:
                     agent_dicts = [
                         {"agent_id": aid, "agent_name": aname}
                         for aid, aname in (room.room_agent_set or {}).items()
                     ]
                     memory_search_results = None
-                    try:
-                        from services.memory_search_service import memory_search_service
-
-                        search_response = await memory_search_service.search(
-                            query=message_text,
-                            room_id=room_id,
-                        )
-                        if search_response.results:
-                            memory_search_results = search_response.results
-                    except Exception as search_err:
-                        logger.debug(
-                            "supervisor_v2_resume: memory search skipped: %s",
-                            search_err,
-                        )
-                    result_ctx = context_assembly_service.build_supervisor_context(
+                    if self.memory_search_service is not None:
+                        try:
+                            search_response = await self.memory_search_service.search(
+                                query=message_text,
+                                room_id=room_id,
+                            )
+                            if search_response.results:
+                                memory_search_results = search_response.results
+                        except Exception as search_err:
+                            logger.debug(
+                                "supervisor_v2_resume: memory search skipped: %s",
+                                search_err,
+                            )
+                    result_ctx = self.context_assembly_service.build_supervisor_context(
                         room_memory=room_memory,
                         current_task=message_text,
                         agent_registry=agent_dicts,
@@ -1991,9 +2013,7 @@ class RoomMessageCenter:
             # Add synthesis text to room memory history
             if result.status == RunStatus.COMPLETED and result.synthesis_text:
                 try:
-                    from services.memory_service import room_memory_service
-
-                    synthesis_turn_id = await room_memory_service.add_synthesis_to_history(
+                    synthesis_turn_id = await self.room_memory_service.add_synthesis_to_history(
                         room_id=room_id,
                         synthesis_text=result.synthesis_text,
                         trajectory=result.trajectory,
@@ -2023,9 +2043,7 @@ class RoomMessageCenter:
     ) -> None:
         """Wrapper for room summary update (§9). Awaited before compaction."""
         try:
-            from services.memory_service import room_memory_service
-
-            await room_memory_service.update_room_summary(
+            await self.room_memory_service.update_room_summary(
                 room_id=room_id,
                 synthesis_text=synthesis_text,
                 synthesis_turn_id=synthesis_turn_id,
@@ -2039,9 +2057,8 @@ class RoomMessageCenter:
     async def _trigger_compaction_safe(self, room_id: str) -> None:
         """Wrapper for compaction trigger (§6.5). Awaited within per-room lock."""
         try:
-            from services.compaction_service import compaction_service
-
-            await compaction_service.compact_if_needed(room_id)
+            if self.compaction_service is not None:
+                await self.compaction_service.compact_if_needed(room_id)
         except Exception as e:
             logger.warning(
                 "RoomMessageCenter: Background compaction failed for %s: %s",

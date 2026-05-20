@@ -26,9 +26,6 @@ from execution.dispatch.dispatch_middleware import DispatchChain, DispatchContex
 if TYPE_CHECKING:
     from models.agent import Agent
     from execution.dispatch.transports.base import AgentTransport
-    from services.database_service import DatabaseService
-    from services.room_services import RoomServices
-    from services.sse_services import SSEManager
 
 logger = get_logger(__name__)
 
@@ -50,6 +47,9 @@ class AgentMessageProcessor:
         transports: dict[str, AgentTransport],
         relay_service: object | None = None,
         dispatch_chain: DispatchChain | None = None,
+        health_service: object | None = None,
+        cloud_health_cache_ttl: float = 30.0,
+        cloud_health_check_timeout: float = 5.0,
     ) -> None:
         self.sse_manager = sse_manager
         self.room_services = room_services
@@ -57,6 +57,9 @@ class AgentMessageProcessor:
         self.transports = dict(transports)
         self._relay_service_explicit = relay_service
         self._dispatch_chain_explicit = dispatch_chain
+        self._health_service = health_service
+        self._cloud_health_cache_ttl = cloud_health_cache_ttl
+        self._cloud_health_check_timeout = cloud_health_check_timeout
         self._lazy_initialized = False
         self.relay_service: object | None = relay_service
         self.dispatch_chain: DispatchChain = dispatch_chain or DispatchChain()
@@ -75,9 +78,15 @@ class AgentMessageProcessor:
         if not self._lazy_initialized:
             self._lazy_initialized = True
             from execution.dispatch.middleware.cloud_health import CloudHealthMiddleware
-            from services.agent_health_service import agent_health_service
             chain = DispatchChain()
-            chain.add(CloudHealthMiddleware(agent_health_service))
+            if self._health_service is not None:
+                chain.add(
+                    CloudHealthMiddleware(
+                        self._health_service,
+                        cache_ttl=self._cloud_health_cache_ttl,
+                        check_timeout=self._cloud_health_check_timeout,
+                    )
+                )
             self.dispatch_chain = chain
             logger.info("AgentMessageProcessor: CloudHealthMiddleware initialized")
 

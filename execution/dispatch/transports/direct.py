@@ -34,6 +34,7 @@ from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from models.processing import ProcessingContext, ProcessingResult, ProcessingStatus
 from models.room import RoomAgentMessage
+from models.error import A2AServiceError
 from execution.dispatch.agent_event import AgentEvent
 from execution.dispatch.dispatch_middleware import DispatchContext
 from execution.state.task_state_manager import (
@@ -83,6 +84,8 @@ class DirectTransport(AgentTransport):
         task_service,
         sse_manager,
         database_service,
+        s3_service=None,
+        capability_issue_service=None,
     ) -> None:
         super().__init__(response_handler)
         self.tsm = tsm
@@ -90,14 +93,13 @@ class DirectTransport(AgentTransport):
         self.a2a_service = a2a_service
         self.task_service = task_service
         self.database_service = database_service
-        self._s3_service = None
+        self._s3_service = s3_service
+        self.capability_issue_service = capability_issue_service
 
     @property
     def s3_service(self):
         if self._s3_service is None:
-            from services.s3_service import s3_service
-
-            self._s3_service = s3_service
+            raise RuntimeError("Direct transport S3 dependency has not been bound")
         return self._s3_service
 
     # ------------------------------------------------------------------
@@ -214,26 +216,23 @@ class DirectTransport(AgentTransport):
                 )
 
                 # Record capability issue for the agent
-                try:
-                    from services.agent_capability_issue_service import (
-                        capability_issue_service,
-                    )
-
-                    await capability_issue_service.record_issue(
-                        agent_id=message.agent_id,
-                        error_message=f"Agent streaming failed: {exc}",
-                        query_text=(
-                            message.task_content
-                            or (message.message_content.message_text or "")
-                        ),
-                        room_id=room_id,
-                        message_id=message.message_id,
-                    )
-                except Exception as rec_exc:  # noqa: BLE001
-                    logger.warning(
-                        "DirectTransport: Failed to record capability issue: %s",
-                        rec_exc,
-                    )
+                if self.capability_issue_service is not None:
+                    try:
+                        await self.capability_issue_service.record_issue(
+                            agent_id=message.agent_id,
+                            error_message=f"Agent streaming failed: {exc}",
+                            query_text=(
+                                message.task_content
+                                or (message.message_content.message_text or "")
+                            ),
+                            room_id=room_id,
+                            message_id=message.message_id,
+                        )
+                    except Exception as rec_exc:  # noqa: BLE001
+                        logger.warning(
+                            "DirectTransport: Failed to record capability issue: %s",
+                            rec_exc,
+                        )
 
                 return ProcessingResult(ProcessingStatus.FAILED, "")
             if status != ProcessingStatus.SUCCESS:
@@ -774,26 +773,23 @@ class DirectTransport(AgentTransport):
             await self.sse_manager.send_error(ctx.room_id, error_message)
 
         # Record capability issue for the agent
-        try:
-            from services.agent_capability_issue_service import (
-                capability_issue_service,
-            )
-
-            await capability_issue_service.record_issue(
-                agent_id=ctx.current_message.agent_id,
-                error_message=error_message,
-                query_text=(
-                    ctx.current_message.task_content
-                    or (ctx.current_message.message_content.message_text or "")
-                ),
-                room_id=ctx.room_id,
-                message_id=ctx.current_message.message_id,
-            )
-        except Exception as rec_exc:  # noqa: BLE001
-            logger.warning(
-                "DirectTransport: Failed to record capability issue: %s",
-                rec_exc,
-            )
+        if self.capability_issue_service is not None:
+            try:
+                await self.capability_issue_service.record_issue(
+                    agent_id=ctx.current_message.agent_id,
+                    error_message=error_message,
+                    query_text=(
+                        ctx.current_message.task_content
+                        or (ctx.current_message.message_content.message_text or "")
+                    ),
+                    room_id=ctx.room_id,
+                    message_id=ctx.current_message.message_id,
+                )
+            except Exception as rec_exc:  # noqa: BLE001
+                logger.warning(
+                    "DirectTransport: Failed to record capability issue: %s",
+                    rec_exc,
+                )
 
         return ProcessingStatus.FAILED, streaming_state.full_response_text
 
@@ -1210,8 +1206,6 @@ class DirectTransport(AgentTransport):
             return {"type": "message", "message_id": message_id, "content": ""}
 
         if isinstance(raw_response.root, JSONRPCErrorResponse):
-            from services.a2a_service import A2AServiceError
-
             raise A2AServiceError(str(raw_response.root.error.message))
 
         result = raw_response.root.result
@@ -1366,26 +1360,23 @@ class DirectTransport(AgentTransport):
             await self.sse_manager.send_error(room_id, str(exc))
 
             # Record capability issue for the agent
-            try:
-                from services.agent_capability_issue_service import (
-                    capability_issue_service,
-                )
-
-                await capability_issue_service.record_issue(
-                    agent_id=current_message.agent_id,
-                    error_message=str(exc),
-                    query_text=(
-                        current_message.task_content
-                        or (current_message.message_content.message_text or "")
-                    ),
-                    room_id=room_id,
-                    message_id=current_message.message_id,
-                )
-            except Exception as rec_exc:  # noqa: BLE001
-                logger.warning(
-                    "DirectTransport: Failed to record capability issue: %s",
-                    rec_exc,
-                )
+            if self.capability_issue_service is not None:
+                try:
+                    await self.capability_issue_service.record_issue(
+                        agent_id=current_message.agent_id,
+                        error_message=str(exc),
+                        query_text=(
+                            current_message.task_content
+                            or (current_message.message_content.message_text or "")
+                        ),
+                        room_id=room_id,
+                        message_id=current_message.message_id,
+                    )
+                except Exception as rec_exc:  # noqa: BLE001
+                    logger.warning(
+                        "DirectTransport: Failed to record capability issue: %s",
+                        rec_exc,
+                    )
 
             return False, "", None, None
 

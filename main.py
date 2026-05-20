@@ -214,6 +214,7 @@ async def lifespan(app: FastAPI):
                 capability_issue_service,
             )
             from services.agent_matcher import agent_matcher
+            from services.agent_resolver_service import agent_resolver_service
             from services.agent_selection_service import agent_selection_service
             from services.agent_service import agent_service
             from services.compaction_service import compaction_service
@@ -223,8 +224,17 @@ async def lifespan(app: FastAPI):
             from services.discovery_service import discovery_service
             from services.memory_search_service import memory_search_service
             from services.memory_service import room_memory_service
+            from services.notification_service import notification_service
+            from services.debate_service import debate_service
+            from services.rate_limit_service import rate_limit_service
+            from services.room_coordinator_service import room_coordinator_service
             from services.room_membership_source import LegacyRoomMembershipSeedSource
-            from services.room_services import room_services
+            from services.room_services import build_turn_content, room_services
+            from services.room_supervisor_service import (
+                SupervisorPlanningError,
+                room_supervisor_service,
+            )
+            from services.task_service import task_service
             from services.gateway_rate_limit_service import gateway_rate_limit_service
             from services.openai_service import openai_service
             from services.s3_service import s3_service
@@ -332,7 +342,10 @@ async def lifespan(app: FastAPI):
                 run_command_handler,
                 run_event_sse_enabled,
             )
-            from services.task_notification_service import notify_task_update
+            from services.task_notification_service import (
+                _notify_task_update_impl,
+                notify_task_update,
+            )
             room_center.bind_room_dependencies(
                 center=RoomCenter(),
                 message_center=execution_room_message_center,
@@ -409,10 +422,36 @@ async def lifespan(app: FastAPI):
             room_center.room_center.bind_facade(_room_facade)
             execution_room_message_center.bind(
                 create_room_message_center(
+                    room_services=room_services,
+                    database_service=_db_svc,
+                    sse_manager=sse_manager,
+                    room_coordinator_service=room_coordinator_service,
+                    openai_service=openai_service,
+                    notification_service=notification_service,
+                    agent_resolver_service=agent_resolver_service,
+                    a2a_service=a2a_service,
+                    task_service=task_service,
+                    room_memory_service=room_memory_service,
+                    debate_service=debate_service,
+                    rate_limit_service=rate_limit_service,
+                    room_supervisor_service=room_supervisor_service,
                     hitl_coordinator=hitl_service,
                     task_notifications=TaskNotificationAdapter(
                         notify_task_update_with_string_state
                     ),
+                    task_notification_impl=_notify_task_update_impl,
+                    agent_health_service=agent_health_service,
+                    s3_service=s3_service,
+                    capability_issue_service=capability_issue_service,
+                    context_assembly_service=context_assembly_service,
+                    memory_search_service=memory_search_service,
+                    compaction_service=compaction_service,
+                    build_turn_content_func=build_turn_content,
+                    supervisor_planning_error_cls=SupervisorPlanningError,
+                    orphan_threshold_minutes=settings.orphan_threshold_minutes,
+                    debate_rounds=settings.debate_rounds,
+                    cloud_health_cache_ttl=settings.cloud_health_cache_ttl,
+                    cloud_health_check_timeout=settings.cloud_health_check_timeout,
                 )
             )
             room_center.room_message_center.bind_facade(_room_facade)
@@ -422,8 +461,14 @@ async def lifespan(app: FastAPI):
                     db=_db_svc,
                     sse=sse_manager,
                     room_message_center=room_center.room_message_center,
+                    notification_service=notification_service,
+                    task_notification_impl=_notify_task_update_impl,
                 )
-                return WebhookTransport(response_handler=handler, db=_db_svc)
+                return WebhookTransport(
+                    response_handler=handler,
+                    db=_db_svc,
+                    task_notifier=notify_task_update_with_string_state,
+                )
 
             webhooks.bind_webhook_dependencies(create_webhook_transport)
 

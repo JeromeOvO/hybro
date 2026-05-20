@@ -35,7 +35,6 @@ if TYPE_CHECKING:
     from execution.dispatch.response_handler import AgentResponseHandler
     from execution.dispatch.dispatch_middleware import DispatchContext
     from models.room import RoomAgentMessage
-    from services.database_service import DatabaseService
 
 logger = get_logger(__name__)
 
@@ -47,9 +46,11 @@ class WebhookTransport(AgentTransport):
         self,
         response_handler: AgentResponseHandler,
         db: DatabaseService,
+        task_notifier=None,
     ) -> None:
         super().__init__(response_handler)
         self._db = db
+        self._task_notifier = task_notifier
 
     async def dispatch(
         self,
@@ -119,14 +120,13 @@ class WebhookTransport(AgentTransport):
                 "Webhook for task %s: message was cancelled — discarding payload",
                 message_id,
             )
-            from services.task_notification_service import notify_task_update
-
-            await notify_task_update(
-                message_id=message_id,
-                state=TaskState.canceled,
-                room_id=current_msg.room_id,
-                user_id=current_msg.user_id or "",
-            )
+            if self._task_notifier is not None:
+                await self._task_notifier(
+                    message_id=message_id,
+                    state=TaskState.canceled,
+                    room_id=current_msg.room_id,
+                    user_id=current_msg.user_id or "",
+                )
             return {"status": "canceled"}
 
         current_task = (

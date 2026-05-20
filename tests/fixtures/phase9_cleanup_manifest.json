@@ -65,7 +65,18 @@
     }
   ],
   "legacy_workflow_decommission": {
-    "evidence": [],
+    "evidence": [
+      {
+        "classification": "blocked_decommission_readiness",
+        "owner": "project-owner",
+        "reason": "No Phase 0d/8 evidence in this repository proves legacy workflow routes or collections have zero active frontend traffic. Keep compatibility routes blocked/deprecated until the project owner supplies traffic/readiness evidence and a migration/rollback note.",
+        "required_before_delete": [
+          "route traffic evidence for legacy workflow endpoints",
+          "live-code reference scan covering frontend and deployed workers",
+          "collection backup and rollback plan"
+        ]
+      }
+    ],
     "ready": false
   },
   "package_removal_checklist": [],

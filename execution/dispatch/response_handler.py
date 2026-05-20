@@ -14,10 +14,6 @@ from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
 from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
 
-if TYPE_CHECKING:
-    from services.database_service import DatabaseService
-    from services.sse_services import SSEManager
-
 logger = get_logger(__name__)
 
 
@@ -35,12 +31,16 @@ class AgentResponseHandler:
         room_message_center: object,
         slot_lifecycle=None,
         hitl_coordinator=None,
+        notification_service=None,
+        task_notification_impl=None,
     ) -> None:
         self._db = db
         self._sse = sse
         self._rmc = room_message_center
         self._slot_lifecycle = slot_lifecycle
         self.hitl_coordinator = hitl_coordinator
+        self._notification_service = notification_service
+        self._task_notification_impl = task_notification_impl
         self._processing_status_emitter = None
 
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
@@ -435,12 +435,12 @@ class AgentResponseHandler:
         Preferred over the standalone ``notify_task_update`` function
         because it uses injected services instead of global singletons.
         """
-        from services.notification_service import notification_service
-        from services.task_notification_service import _notify_task_update_impl
+        if self._notification_service is None or self._task_notification_impl is None:
+            raise RuntimeError("Task notification dependencies have not been bound")
 
-        return await _notify_task_update_impl(
+        return await self._task_notification_impl(
             self._db,
-            notification_service,
+            self._notification_service,
             self._sse,
             message_id=message_id,
             state=state,
