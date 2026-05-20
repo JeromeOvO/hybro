@@ -6,9 +6,8 @@ and RoomMessageCenter.
 
 import uuid
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
-
-from a2a.types import Message, Role, Task
 
 from common.utils.logger import get_logger
 
@@ -81,10 +80,16 @@ def extract_parts(parts: list) -> ExtractedParts:
     for part in parts:
         root = getattr(part, "root", part)
         kind = getattr(root, "kind", None)
+        if not isinstance(kind, str):
+            direct_kind = getattr(part, "kind", None)
+            direct_text = getattr(part, "text", None)
+            if isinstance(direct_kind, str) or isinstance(direct_text, str):
+                root = part
+                kind = direct_kind
 
         if kind == "text":
             text = getattr(root, "text", None)
-            if text:
+            if isinstance(text, str) and text:
                 result.text_parts.append(text)
         elif kind == "file":
             result.file_parts.append(
@@ -96,7 +101,7 @@ def extract_parts(parts: list) -> ExtractedParts:
             )
         else:
             text = getattr(root, "text", None)
-            if text:
+            if isinstance(text, str) and text:
                 result.text_parts.append(text)
             else:
                 logger.warning("Unknown part kind=%s, skipping", kind)
@@ -116,7 +121,7 @@ def extract_parts_from_artifacts(artifacts: list) -> ExtractedParts:
     return result
 
 
-def get_text_from_a2a_response(result: Task | Message) -> str:
+def get_text_from_a2a_response(result: Any) -> str:
     """Extract text content from an A2A response (Task or Message).
 
     Args:
@@ -133,7 +138,7 @@ def get_text_from_a2a_response(result: Task | Message) -> str:
     return ""
 
 
-def get_message_from_task(task: Task) -> Message | None:
+def get_message_from_task(task: Any) -> Any | None:
     """Extract message from a Task object.
 
     Per A2A spec, task outputs should be in artifacts. We check:
@@ -149,8 +154,8 @@ def get_message_from_task(task: Task) -> Message | None:
             all_parts.extend(artifact.parts)
         if all_parts:
             logger.debug("Found %d parts in task.artifacts", len(all_parts))
-            message = Message(
-                role=Role.agent,
+            message = SimpleNamespace(
+                role="agent",
                 message_id=str(uuid.uuid4()),
                 task_id=task.id,
                 parts=all_parts,
@@ -165,7 +170,8 @@ def get_message_from_task(task: Task) -> Message | None:
     # Check task.history for the last agent message (fallback)
     if task.history:
         for msg in reversed(task.history):
-            if hasattr(msg, "role") and msg.role == Role.agent:
+            role = getattr(msg, "role", None)
+            if getattr(role, "value", role) == "agent":
                 logger.debug("Found agent message in task.history")
                 return msg
 
@@ -173,7 +179,7 @@ def get_message_from_task(task: Task) -> Message | None:
     return None
 
 
-def get_text_from_message(message: Message | None) -> str:
+def get_text_from_message(message: Any | None) -> str:
     """Extract text from a Message object. Backward-compatible wrapper."""
     if message is None:
         return ""
@@ -210,7 +216,8 @@ def extract_agent_text_from_room_message(msg: object) -> str | None:
             history = getattr(task, "history", None)
             if history:
                 for entry in reversed(history):
-                    if getattr(entry, "role", None) == Role.agent:
+                    role = getattr(entry, "role", None)
+                    if getattr(role, "value", role) == "agent":
                         parts = getattr(entry, "parts", None)
                         if parts:
                             text = extract_parts(parts).text
@@ -226,7 +233,7 @@ def extract_agent_text_from_room_message(msg: object) -> str | None:
         return None
 
 
-def extract_error_message(task: Task) -> str | None:
+def extract_error_message(task: Any) -> str | None:
     """Extract error message from task status."""
     if not task.status.message:
         return None
@@ -240,12 +247,12 @@ def extract_error_message(task: Task) -> str | None:
     return None
 
 
-def extract_status_message(task: Task) -> str | None:
+def extract_status_message(task: Any) -> str | None:
     """Extract human-readable status message."""
     return extract_error_message(task)  # Same extraction logic
 
 
-def task_has_visible_content(task: Task) -> bool:
+def task_has_visible_content(task: Any) -> bool:
     """Return True when task has user-visible output (text or non-text parts)."""
     if not task.artifacts:
         return False

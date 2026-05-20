@@ -422,6 +422,12 @@ def test_a2a_helper_file_constants_are_common_leaf_without_import_blocker():
     assert "common/utils/a2a_helpers.py" not in blocked_paths
 
 
+def test_a2a_helpers_have_no_sdk_confinement_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "common/utils/a2a_helpers.py" not in blocked_paths
+
+
 def test_context_utils_are_common_leaf_without_manifest_blocker():
     blocked_paths = _blocked_cleanup_paths(contract="common_import_boundary")
 
