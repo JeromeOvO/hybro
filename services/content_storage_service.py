@@ -7,12 +7,65 @@ Content is stored in MongoDB's conversation_content collection.
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.3, §6.4, §6.6 for design details.
 """
 
-from common.utils.logger import get_logger
-from context_memory.content_storage import ContentExpiredError, hash_content
 from database.mongodb import mongodb
+from common.utils.logger import get_logger
 from models.compaction import ContentReference, StorageType
+from platform_module import PlatformConfig, PlatformDeps
+from platform_module.content_storage import (
+    ContentExpiredError,
+    PlatformContentStorage,
+    hash_content,
+)
 
 logger = get_logger(__name__)
+
+
+class _FacadeContentStorageRepository:
+    def __init__(self, facade) -> None:
+        self._facade = facade
+
+    async def upsert_full_content(self, **kwargs) -> str:
+        return await self._facade.content_upsert_full_content(
+            room_id=kwargs["room_id"],
+            turn_id=kwargs["turn_id"],
+            content=kwargs["content"],
+            content_type=kwargs["content_type"],
+            turn_notes=kwargs.get("turn_notes"),
+        )
+
+    async def get_content_by_document_id(self, document_id: str) -> dict | None:
+        content = await self._facade.content_get_content_by_document_id(document_id)
+        return {"content": content} if content is not None else None
+
+    async def get_content_by_turn_id(
+        self, room_id: str, turn_id: str
+    ) -> dict | None:
+        content = await self._facade.content_get_content_by_turn_id(room_id, turn_id)
+        return {"content": content} if content is not None else None
+
+    async def delete_content_by_turn_id(self, room_id: str, turn_id: str) -> bool:
+        return await self._facade.content_delete_content_by_turn_id(room_id, turn_id)
+
+    async def delete_content_by_room_id(self, room_id: str) -> int:
+        return await self._facade.content_delete_content_by_room_id(room_id)
+
+    async def get_content_stats_for_room(self, room_id: str) -> dict:
+        return await self._facade.content_get_content_stats_for_room(room_id)
+
+    async def text_search(self, room_id: str, query: str, limit: int = 50) -> list[dict]:
+        return []
+
+    async def hydrate_turn_notes(
+        self, room_id: str, turn_ids: list[str]
+    ) -> list[dict]:
+        return []
+
+
+class _LegacyS3TextObjectStorage:
+    async def download_text(self, key: str) -> str | None:
+        from services.s3_service import s3_service
+
+        return await s3_service.download_text(key)
 
 
 class ContentStorageService:
@@ -42,6 +95,22 @@ class ContentStorageService:
                 "ContentStorageService.bind_facade() not called - startup incomplete"
             )
         return self._facade
+
+    def _platform_storage(self, *, require_facade: bool) -> PlatformContentStorage:
+        facade = self._require_facade() if require_facade else self._facade
+        repository = (
+            _FacadeContentStorageRepository(facade)
+            if facade is not None
+            else None
+        )
+        return PlatformContentStorage(
+            config=PlatformConfig(),
+            deps=PlatformDeps(
+                content_storage_repository=repository,
+                object_storage=_LegacyS3TextObjectStorage(),
+                logger=logger,
+            ),
+        )
 
     @property
     def collection(self):
@@ -75,13 +144,14 @@ class ContentStorageService:
         Returns:
             The document ID (string)
         """
-        facade = self._require_facade()
-        return await facade.content_upsert_full_content(
-            room_id=room_id,
-            turn_id=turn_id,
-            content=content,
-            content_type=content_type,
-            turn_notes=turn_notes,
+        return await self._platform_storage(
+            require_facade=True
+        ).upsert_full_content(
+            room_id,
+            turn_id,
+            content,
+            content_type,
+            turn_notes,
         )
 
     async def get_content_by_document_id(self, document_id: str) -> str | None:
@@ -94,8 +164,9 @@ class ContentStorageService:
         Returns:
             The full content string, or None if not found
         """
-        facade = self._require_facade()
-        return await facade.content_get_content_by_document_id(document_id)
+        return await self._platform_storage(
+            require_facade=True
+        ).get_content_by_document_id(document_id)
 
     async def get_content_by_turn_id(
         self, room_id: str, turn_id: str
@@ -110,8 +181,9 @@ class ContentStorageService:
         Returns:
             The full content string, or None if not found
         """
-        facade = self._require_facade()
-        return await facade.content_get_content_by_turn_id(room_id, turn_id)
+        return await self._platform_storage(
+            require_facade=True
+        ).get_content_by_turn_id(room_id, turn_id)
 
     async def expand_content_reference(
         self, content_ref: ContentReference, turn_id: str
@@ -131,37 +203,9 @@ class ContentStorageService:
             NotImplementedError: If the storage type is not yet implemented (URL)
             ValueError: If the content reference is malformed
         """
-        if content_ref.storage_type == StorageType.MONGODB:
-            facade = self._require_facade()
-            return await facade.content_expand_mongodb_reference(
-                content_ref.model_dump(mode="json"),
-                turn_id,
-            )
-
-        elif content_ref.storage_type == StorageType.S3:
-            if not content_ref.s3_key:
-                raise ValueError(
-                    f"ContentReference for turn {turn_id} has no s3_key"
-                )
-
-            from services.s3_service import s3_service
-
-            content = await s3_service.download_text(content_ref.s3_key)
-            if content is None:
-                raise ContentExpiredError(turn_id, content_ref.s3_key)
-            return content
-
-        elif content_ref.storage_type == StorageType.URL:
-            # FUTURE: URL-based content retrieval (external web content).
-            # Blocked due to SSRF risk — requires allow-listing, timeout,
-            # size limits, and redirect controls before enabling.
-            # See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.8 for design notes.
-            raise NotImplementedError("URL expansion not yet implemented")
-
-        else:
-            raise ValueError(
-                f"Unknown storage type: {content_ref.storage_type}"
-            )
+        return await self._platform_storage(
+            require_facade=content_ref.storage_type == StorageType.MONGODB
+        ).expand_content_reference(content_ref, turn_id)
 
     async def delete_content_by_turn_id(
         self, room_id: str, turn_id: str
@@ -176,10 +220,9 @@ class ContentStorageService:
         Returns:
             True if content was deleted, False if not found
         """
-        facade = self._require_facade()
-        return await facade.content_delete_content_by_turn_id(
-            room_id, turn_id
-        )
+        return await self._platform_storage(
+            require_facade=True
+        ).delete_content_by_turn_id(room_id, turn_id)
 
     async def delete_content_by_room_id(self, room_id: str) -> int:
         """
@@ -191,8 +234,9 @@ class ContentStorageService:
         Returns:
             Number of documents deleted
         """
-        facade = self._require_facade()
-        return await facade.content_delete_content_by_room_id(room_id)
+        return await self._platform_storage(
+            require_facade=True
+        ).delete_content_by_room_id(room_id)
 
     async def get_content_stats_for_room(self, room_id: str) -> dict:
         """
@@ -204,8 +248,9 @@ class ContentStorageService:
         Returns:
             Dict with content statistics
         """
-        facade = self._require_facade()
-        return await facade.content_get_content_stats_for_room(room_id)
+        return await self._platform_storage(
+            require_facade=True
+        ).get_content_stats_for_room(room_id)
 
 
 # Singleton export

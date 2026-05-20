@@ -36,3 +36,4 @@ class PlatformConfig:
         )
     )
     presigned_url_ttl_seconds: int = 3600
+    content_storage_ttl_seconds: int = 0

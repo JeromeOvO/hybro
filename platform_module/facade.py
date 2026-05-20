@@ -1,5 +1,6 @@
 from common.protocols import FileStorage, GatewayService, RateLimiter
 from platform_module.config import PlatformConfig
+from platform_module.content_storage import PlatformContentStorage
 from platform_module.deps import PlatformDeps
 from platform_module.files import PlatformFileStorage
 from platform_module.gateway import PlatformGateway
@@ -27,6 +28,7 @@ class PlatformFacade:
             clock=deps.clock,
         )
         self._file_storage = PlatformFileStorage(config, deps)
+        self._content_storage = PlatformContentStorage(config, deps)
 
     @property
     def gateway_service(self) -> GatewayService:
@@ -47,6 +49,10 @@ class PlatformFacade:
     @property
     def file_storage(self) -> FileStorage:
         return self._file_storage
+
+    @property
+    def content_storage(self) -> PlatformContentStorage:
+        return self._content_storage
 
 
 __all__ = ["PlatformFacade"]
