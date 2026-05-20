@@ -1,28 +1,52 @@
 {
   "blocked_cleanup": [
     {
+      "blocked_by": "legacy_workflow_decommission",
+      "deletion_blockers": [
+        "48 test import hits still exercise legacy module compatibility paths.",
+        "5 app-shell/runtime imports still bind legacy workflow compatibility objects during startup.",
+        "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
+      ],
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
       "owner": "phase-9-platform-api-cleanup",
       "path": "modules",
-      "reason": "Package remains shipped only as compatibility import shims for legacy test and caller import paths while runtime production imports are blocked by the Phase 9 cleanup gate."
+      "reason": "Package remains shipped only as compatibility import shims for legacy test and app-shell binding paths until legacy workflow decommission readiness evidence permits removal."
     },
     {
+      "blocked_by": "legacy_workflow_decommission",
+      "deletion_blockers": [
+        "145 test import hits still exercise legacy service compatibility paths.",
+        "35 app-shell/runtime imports still bind legacy services during startup and shutdown.",
+        "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
+      ],
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
       "owner": "phase-9-platform-api-cleanup",
       "path": "services",
-      "reason": "Package remains shipped for legacy service-level compatibility tests and blocked workflow/content-storage shims documented below; production code is not allowed to import it."
+      "reason": "Package remains shipped for legacy service-level compatibility tests and app-shell binding paths until legacy workflow decommission readiness evidence permits removal."
     },
     {
+      "blocked_by": "legacy_workflow_decommission",
+      "deletion_blockers": [
+        "5 test import hits still verify legacy config compatibility.",
+        "6 app-shell/runtime imports still read legacy settings during composition or scripts.",
+        "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
+      ],
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
       "owner": "phase-9-platform-api-cleanup",
       "path": "config",
-      "reason": "Package remains shipped for compatibility with legacy service modules until those shims are removed; production code must use injected config or common.config."
+      "reason": "Package remains shipped for compatibility with legacy startup, scripts, and tests until remaining legacy workflow package removal is safe."
     },
     {
+      "blocked_by": "legacy_workflow_decommission",
+      "deletion_blockers": [
+        "5 test import hits still verify legacy infrastructure compatibility.",
+        "3 app-shell/runtime imports still use legacy infrastructure broker compatibility paths.",
+        "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
+      ],
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
       "owner": "phase-9-platform-api-cleanup",
       "path": "infrastructure",
-      "reason": "Package remains shipped for legacy infrastructure compatibility paths while DAL, Delivery, and HubRuntimeBridge migration callers finish decommission; production import gates prevent new direct coupling."
+      "reason": "Package remains shipped for legacy infrastructure compatibility paths until remaining legacy workflow and app-shell references can be removed."
     }
   ],
   "content_storage_callers": [
@@ -51,6 +75,71 @@
     ],
     "ready": false
   },
-  "package_removal_checklist": [],
+  "package_removal_checklist": [
+    {
+      "package": "modules",
+      "py_files": 26,
+      "runtime_blockers": [
+        "main.py imports legacy module compatibility objects during app-shell startup binding."
+      ],
+      "status": "blocked",
+      "test_blockers": [
+        "48 test import hits under tests/ still import modules.* compatibility paths."
+      ],
+      "required_before_remove": [
+        "Migrate remaining tests to Agent, Room, Execution, Delivery, HubRuntimeBridge, or Platform public APIs.",
+        "Remove main.py legacy module binding imports after legacy workflow decommission readiness is supplied.",
+        "Delete modules from pyproject.toml only after full test and route inventory verification."
+      ]
+    },
+    {
+      "package": "services",
+      "py_files": 37,
+      "runtime_blockers": [
+        "main.py imports legacy service compatibility objects during app-shell startup and shutdown binding."
+      ],
+      "status": "blocked",
+      "test_blockers": [
+        "145 test import hits under tests/ still import services.* compatibility paths."
+      ],
+      "required_before_remove": [
+        "Migrate remaining service tests to module facades, Platform, DAL, Delivery, Execution, HubRuntimeBridge, or Common protocol behavior.",
+        "Remove main.py legacy service binding imports after legacy workflow decommission readiness is supplied.",
+        "Delete services from pyproject.toml only after full test and route inventory verification."
+      ]
+    },
+    {
+      "package": "config",
+      "py_files": 2,
+      "runtime_blockers": [
+        "main.py, container.py, scripts, and database compatibility paths still import config.settings."
+      ],
+      "status": "blocked",
+      "test_blockers": [
+        "5 test import hits still verify legacy config.settings compatibility."
+      ],
+      "required_before_remove": [
+        "Move remaining app-shell, script, and database compatibility imports to common.config or injected scalar config.",
+        "Migrate legacy config tests to common.config where behavior is still required.",
+        "Delete config from pyproject.toml only after compatibility imports are gone."
+      ]
+    },
+    {
+      "package": "infrastructure",
+      "py_files": 7,
+      "runtime_blockers": [
+        "Legacy infrastructure broker compatibility paths still import config.settings."
+      ],
+      "status": "blocked",
+      "test_blockers": [
+        "5 test import hits still verify infrastructure compatibility."
+      ],
+      "required_before_remove": [
+        "Move remaining infrastructure broker callers to DAL, Delivery, or app-shell composition points.",
+        "Migrate tests away from infrastructure.* compatibility imports.",
+        "Delete infrastructure from pyproject.toml only after no runtime or test imports remain."
+      ]
+    }
+  ],
   "safe_to_delete": []
 }

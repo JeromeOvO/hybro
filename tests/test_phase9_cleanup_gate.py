@@ -525,6 +525,60 @@ def test_old_implementation_packages_are_not_shipped_without_blocker():
     )
 
 
+def test_legacy_package_blockers_are_tied_to_decommission_evidence():
+    manifest = _manifest()
+    blockers = manifest.get("blocked_cleanup", [])
+    legacy_workflow = manifest.get("legacy_workflow_decommission", {})
+    blocked_packages = [
+        entry
+        for entry in blockers
+        if isinstance(entry.get("path"), str)
+        and entry["path"] in LEGACY_PACKAGES
+    ]
+    violations: list[str] = []
+
+    for entry in blocked_packages:
+        if entry.get("blocked_by") != "legacy_workflow_decommission":
+            violations.append(f"{entry['path']}: missing blocked_by=legacy_workflow_decommission")
+        if not entry.get("deletion_blockers"):
+            violations.append(f"{entry['path']}: missing deletion_blockers")
+        if not legacy_workflow.get("evidence"):
+            violations.append(f"{entry['path']}: legacy workflow evidence is empty")
+
+    assert not violations, "Legacy package blockers are too broad:\n" + "\n".join(
+        violations
+    )
+
+
+def test_shipped_legacy_packages_have_package_removal_checklist_entries():
+    manifest = _manifest()
+    packages = set(tomllib.loads(Path("pyproject.toml").read_text())["tool"]["setuptools"]["packages"])
+    shipped_legacy = sorted(packages & LEGACY_PACKAGES)
+    checklist = manifest.get("package_removal_checklist") or []
+    checklist_by_package = {
+        entry.get("package"): entry
+        for entry in checklist
+        if isinstance(entry.get("package"), str)
+    }
+    violations: list[str] = []
+
+    for package in shipped_legacy:
+        entry = checklist_by_package.get(package)
+        if entry is None:
+            violations.append(f"{package}: missing package_removal_checklist entry")
+            continue
+        if entry.get("status") != "blocked":
+            violations.append(f"{package}: status must remain blocked while shipped")
+        if not entry.get("required_before_remove"):
+            violations.append(f"{package}: missing required_before_remove")
+        if not (entry.get("runtime_blockers") or entry.get("test_blockers")):
+            violations.append(f"{package}: missing runtime_blockers or test_blockers")
+
+    assert not violations, "Shipped legacy packages lack removal evidence:\n" + "\n".join(
+        violations
+    )
+
+
 def test_legacy_workflow_cleanup_readiness_is_explicit():
     readiness = _manifest().get("legacy_workflow_decommission", {})
     ready = readiness.get("ready")
