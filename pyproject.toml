@@ -127,6 +127,8 @@ packages = [
     "hub_runtime_bridge.service",
     "hub_runtime_bridge.transport",
     "hub_runtime_bridge.adapters",
+    "platform_module",
+    "platform_module.adapters",
     "models",
     "common",
     "common.config",
