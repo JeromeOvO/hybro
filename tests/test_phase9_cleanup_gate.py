@@ -55,6 +55,7 @@ SDK_CONFINEMENT_ROOTS = (
     "jobs",
     "models",
     "platform_module",
+    "common",
 )
 
 FORBIDDEN_SDK_IMPORT_PREFIXES = ("a2a",)

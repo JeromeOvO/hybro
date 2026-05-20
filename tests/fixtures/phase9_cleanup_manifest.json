@@ -91,6 +91,62 @@
       "contract": "sdk_confinement",
       "expiry_task": "Final SDK confinement migration",
       "owner": "phase-9-platform-api-cleanup",
+      "path": "common/client/card_resolver.py",
+      "reason": "Legacy Common A2A client resolver still exposes SDK AgentCard types; move this compatibility client under A2A adapter or translate to Common DTOs."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "common/client/client.py",
+      "reason": "Legacy Common A2A client still sends and receives SDK request/response types; move this compatibility client under A2A adapter."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "common/server/server.py",
+      "reason": "Legacy Common A2A server still parses SDK JSON-RPC request types; move this compatibility server under A2A adapter."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "common/server/task_manager.py",
+      "reason": "Legacy Common A2A task manager still exposes SDK task and notification types; migrate to Common task DTOs or A2A adapter types."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "common/server/utils.py",
+      "reason": "Legacy Common A2A server utilities still build SDK JSON-RPC errors; move SDK error translation behind the A2A adapter."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "common/types.py",
+      "reason": "Legacy Common type aliases still re-export SDK part and task-state types; replace with SDK-free Common DTOs."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "common/utils/a2a_helpers.py",
+      "reason": "Common A2A helper still handles SDK Message, Role, Task, and artifact URI types; isolate these conversions in A2A adapter."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "common/utils/remote_agent_connection.py",
+      "reason": "Legacy remote agent connection helper still streams SDK task status events; move this client transport behind A2A adapter."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
       "path": "execution/dispatch/dispatch_middleware.py",
       "reason": "Phase 7b temporary Execution A2A SDK allowlist remains; migrate to Common DTOs or A2A adapter protocol types."
     },

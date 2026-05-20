@@ -46,6 +46,19 @@ def _is_forbidden(module: str) -> bool:
     )
 
 
+def _annotation_has_broad_shape(annotation: ast.AST | None) -> bool:
+    if annotation is None:
+        return False
+    for node in ast.walk(annotation):
+        if isinstance(node, ast.Name) and node.id == "Any":
+            return True
+        if isinstance(node, ast.Attribute) and node.attr == "Any":
+            return True
+        if isinstance(node, ast.Constant) and node.value is Ellipsis:
+            return True
+    return False
+
+
 def _load_allowlist() -> set[tuple[str, str]]:
     raw = json.loads(ALLOWLIST_PATH.read_text())
     allowed: set[tuple[str, str]] = set()
@@ -127,18 +140,18 @@ def test_api_bindings_do_not_use_any_typed_dependency_seams():
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in tree.body:
             if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-                if ast.unparse(node.annotation).startswith("Any"):
+                if _annotation_has_broad_shape(node.annotation):
                     violations.append(f"{path}:{node.lineno}: {node.target.id}")
             if isinstance(node, ast.FunctionDef) and node.name.startswith("bind_"):
                 for arg in (*node.args.args, *node.args.kwonlyargs):
-                    if arg.annotation is not None and ast.unparse(arg.annotation) == "Any":
+                    if _annotation_has_broad_shape(arg.annotation):
                         violations.append(f"{path}:{node.lineno}: {node.name}.{arg.arg}")
             if isinstance(node, ast.FunctionDef) and node.name.startswith("get_"):
-                if node.returns is not None and ast.unparse(node.returns) == "Any":
+                if _annotation_has_broad_shape(node.returns):
                     violations.append(f"{path}:{node.lineno}: {node.name}.return")
             if isinstance(node, ast.AsyncFunctionDef):
                 for arg in (*node.args.args, *node.args.kwonlyargs):
-                    if arg.annotation is not None and ast.unparse(arg.annotation) == "Any":
+                    if _annotation_has_broad_shape(arg.annotation):
                         default = None
                         arg_names = [item.arg for item in node.args.args]
                         if arg.arg in arg_names:

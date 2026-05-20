@@ -39,6 +39,23 @@ class ViewSetRepository(Protocol):
 
 
 @runtime_checkable
+class ViewSetDatabaseProvider(Protocol):
+    def __call__(self) -> object: ...
+
+
+@runtime_checkable
+class ViewSetRepositoryFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        collection_name: str,
+        db: object,
+        pinecone: object | None,
+        pk_field: str = "_id",
+    ) -> ViewSetRepository: ...
+
+
+@runtime_checkable
 class WebhookTransport(Protocol):
     async def handle_webhook(
         self, message_id: str, payload: dict[str, Any], token: str
@@ -171,7 +188,9 @@ __all__ = [
     "RoomCenterRouteOwner",
     "SSEManagerRouteOwner",
     "VectorIndex",
+    "ViewSetDatabaseProvider",
     "ViewSetRepository",
+    "ViewSetRepositoryFactory",
     "WebhookTransport",
     "WebhookTransportFactory",
 ]

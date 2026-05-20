@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
+from app_shell.bound import ViewSetDatabaseProvider, ViewSetRepositoryFactory
 from models.request import FilterParams, PaginationParams
 
 # from models.response import PaginatedResponse
@@ -25,14 +26,14 @@ REPO_ACTIONS_MAP = {
     PATCH: "patch",
 }
 
-db_provider: Callable[[], Any] | None = None
-repository_factory: Callable[..., Any] | None = None
+db_provider: ViewSetDatabaseProvider | None = None
+repository_factory: ViewSetRepositoryFactory | None = None
 
 
 def bind_viewset_dependencies(
     *,
-    get_db: Callable[[], Any],
-    create_repository: Callable[..., Any],
+    get_db: ViewSetDatabaseProvider,
+    create_repository: ViewSetRepositoryFactory,
 ) -> None:
     global db_provider, repository_factory
 
