@@ -1,5 +1,5 @@
 """
-Unit tests for Gateway API endpoints and GatewayService.
+Unit tests for Gateway API endpoints.
 
 Tests cover:
 - API key authentication
@@ -14,8 +14,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from a2a.types import (
-    AgentCapabilities,
-    AgentCard,
     Message,
     Role,
     SendMessageResponse,
@@ -30,7 +28,6 @@ from api.gateway import (
     gateway_send,
     gateway_stream,
 )
-from models.agent import Agent, AgentStatus
 from models.api_key import APIKey
 from models.gateway import (
     GatewayCardResponse,
@@ -40,23 +37,7 @@ from models.gateway import (
 )
 from common.errors import GatewayPlatformError
 from common.errors import PlatformRouteError
-from services.gateway_service import GatewayService
 from tests.conftest import FROZEN_TIME, PATCH
-
-
-def _make_agent_card(name: str = "Test", url: str = "https://agent.example.com", **kw) -> AgentCard:
-    defaults = dict(
-        name=name,
-        url=url,
-        version="1.0",
-        skills=[],
-        description="A test agent",
-        capabilities=AgentCapabilities(streaming=False),
-        defaultInputModes=["text"],
-        defaultOutputModes=["text"],
-    )
-    defaults.update(kw)
-    return AgentCard(**defaults)
 
 
 # =============================================================================
@@ -72,17 +53,6 @@ def sample_api_key() -> APIKey:
         user_id="user-001",
         name="Test Key",
         created_at=FROZEN_TIME,
-    )
-
-
-@pytest.fixture
-def sample_agent() -> Agent:
-    return Agent(
-        agent_id="agent-001",
-        provider_id="user-001",
-        agent_card=_make_agent_card(),
-        agent_status=AgentStatus.active,
-        is_public=True,
     )
 
 
@@ -416,103 +386,3 @@ class TestGatewayStream:
 
         assert '"message": "agent_error"' in chunks[0]
         assert '"message": "None"' not in chunks[0]
-
-
-# =============================================================================
-# GatewayService Tests
-# =============================================================================
-
-
-class TestGatewayServiceAccessControl:
-    @pytest.fixture
-    def svc(self):
-        return GatewayService(
-            a2a_svc=MagicMock(),
-            discovery_svc=MagicMock(),
-            rate_limit_svc=MagicMock(),
-        )
-
-    @pytest.mark.asyncio
-    async def test_rejects_inactive_agent(self, svc):
-        inactive = Agent(
-            agent_id="a1",
-            agent_card=_make_agent_card(name="X", url="http://x"),
-            agent_status=AgentStatus.inactive,
-        )
-        with patch("services.gateway_service.mongodb") as mock_db:
-            mock_db.get_agent_by_agent_id = AsyncMock(return_value=inactive)
-            with pytest.raises(HTTPException) as exc:
-                await svc.get_agent_for_gateway("a1", "user-001")
-        assert exc.value.status_code == 404
-
-    @pytest.mark.asyncio
-    async def test_rejects_private_agent_for_non_owner(self, svc):
-        private_agent = Agent(
-            agent_id="a1",
-            provider_id="owner-001",
-            agent_card=_make_agent_card(name="X", url="http://x"),
-            agent_status=AgentStatus.active,
-            is_public=False,
-        )
-        with patch("services.gateway_service.mongodb") as mock_db:
-            mock_db.get_agent_by_agent_id = AsyncMock(return_value=private_agent)
-            with pytest.raises(HTTPException) as exc:
-                await svc.get_agent_for_gateway("a1", "other-user")
-        assert exc.value.status_code == 403
-
-    @pytest.mark.asyncio
-    async def test_allows_private_agent_for_owner(self, svc):
-        private_agent = Agent(
-            agent_id="a1",
-            provider_id="owner-001",
-            agent_card=_make_agent_card(name="X", url="http://x"),
-            agent_status=AgentStatus.active,
-            is_public=False,
-        )
-        with patch("services.gateway_service.mongodb") as mock_db:
-            mock_db.get_agent_by_agent_id = AsyncMock(return_value=private_agent)
-            result = await svc.get_agent_for_gateway("a1", "owner-001")
-        assert result.agent_id == "a1"
-
-    @pytest.mark.asyncio
-    async def test_allows_public_agent_for_anyone(self, svc):
-        public_agent = Agent(
-            agent_id="a1",
-            provider_id="owner-001",
-            agent_card=_make_agent_card(name="X", url="http://x"),
-            agent_status=AgentStatus.active,
-            is_public=True,
-        )
-        with patch("services.gateway_service.mongodb") as mock_db:
-            mock_db.get_agent_by_agent_id = AsyncMock(return_value=public_agent)
-            result = await svc.get_agent_for_gateway("a1", "random-user")
-        assert result.agent_id == "a1"
-
-
-class TestGatewayServiceURLMasking:
-    def test_masks_url_in_dict(self):
-        svc = GatewayService()
-        card = {"name": "Agent", "url": "https://real-agent.com/api"}
-        with patch("services.gateway_service.settings") as mock_settings:
-            mock_settings.gateway_base_url = "https://api.hybro.ai/api/v1"
-            masked = svc.mask_agent_card_dict(card, "agent-001")
-        assert masked["url"] == "https://api.hybro.ai/api/v1/gateway/agents/agent-001/message/send"
-        assert card["url"] == "https://real-agent.com/api"
-
-    def test_masks_typed_agent_card(self):
-        svc = GatewayService()
-        card = _make_agent_card(name="Agent", url="https://real-agent.com/api")
-        with patch("services.gateway_service.settings") as mock_settings:
-            mock_settings.gateway_base_url = "https://api.hybro.ai/api/v1"
-            masked = svc.mask_agent_card(card, "agent-001")
-        assert isinstance(masked, dict)
-        assert masked["url"] == "https://api.hybro.ai/api/v1/gateway/agents/agent-001/message/send"
-
-    def test_fallback_to_api_prefix_when_no_base_url(self):
-        svc = GatewayService()
-        card = {"name": "Agent", "url": "https://x.com"}
-        with patch("services.gateway_service.settings") as mock_settings:
-            mock_settings.gateway_base_url = ""
-            mock_settings.api_prefix = "/api/v1"
-            masked = svc.mask_agent_card_dict(card, "agent-001")
-        assert masked["url"] == "/api/v1/gateway/agents/agent-001/message/send"

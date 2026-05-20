@@ -266,7 +266,7 @@
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
       "owner": "phase-9-platform-api-cleanup",
       "path": "services/gateway_service.py",
-      "reason": "Legacy gateway singleton retained for existing service-level tests until Platform route wiring and parity migration finish."
+      "reason": "Fail-fast/delegating compatibility shim retained only for legacy import paths; runtime gateway behavior is owned by platform_module."
     },
     {
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",

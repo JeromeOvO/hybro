@@ -30,6 +30,19 @@ FORBIDDEN_PRODUCTION_IMPORT_PREFIXES = (
 
 LEGACY_PACKAGES = {"modules", "services", "config", "infrastructure"}
 
+LEGACY_SERVICE_SHIMS = (
+    Path("services/gateway_service.py"),
+)
+
+FORBIDDEN_LEGACY_SHIM_IMPORT_PREFIXES = (
+    "a2a",
+    "database.mongodb",
+    "config.settings",
+    "services.a2a_service",
+    "services.discovery_service",
+    "services.rate_limit_service",
+)
+
 FORBIDDEN_COMMON_IMPORT_PREFIXES = (
     "database",
     "services",
@@ -201,6 +214,30 @@ def _common_import_violations() -> list[str]:
     return violations
 
 
+def _legacy_service_shim_violations() -> list[str]:
+    violations: list[str] = []
+    for path in LEGACY_SERVICE_SHIMS:
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [(alias.name, alias.name) for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                names = [(f"{node.module}.{alias.name}", node.module) for alias in node.names]
+            else:
+                continue
+            for imported_name, module in names:
+                if any(
+                    module == prefix or module.startswith(f"{prefix}.")
+                    for prefix in FORBIDDEN_LEGACY_SHIM_IMPORT_PREFIXES
+                ):
+                    violations.append(f"{path}:{node.lineno}: {imported_name}")
+
+        source = path.read_text()
+        if "_require_delegate" not in source:
+            violations.append(f"{path}: missing fail-fast delegate boundary")
+    return violations
+
+
 def test_no_production_imports_from_legacy_singletons():
     violations = _import_violations()
 
@@ -224,6 +261,14 @@ def test_common_package_has_no_module_or_app_shell_imports():
     violations = _common_import_violations()
 
     assert not violations, "Forbidden Common imports remain:\n" + "\n".join(violations)
+
+
+def test_retained_legacy_service_shims_do_not_keep_concrete_implementations():
+    violations = _legacy_service_shim_violations()
+
+    assert not violations, "Legacy service shims keep concrete implementations:\n" + "\n".join(
+        violations
+    )
 
 
 def test_old_implementation_packages_are_not_shipped_without_blocker():
