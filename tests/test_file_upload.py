@@ -119,6 +119,9 @@ class TestFileUploadRouteAdapter:
     def test_mime_compatible_different_major(self):
         assert PlatformFileStorage._mime_compatible("image/png", "application/pdf") is False
 
+    def test_mime_compatible_same_major(self):
+        assert PlatformFileStorage._mime_compatible("image/jpeg", "image/png") is True
+
     def test_mime_compatible_audio_mp4_ftyp(self):
         assert PlatformFileStorage._mime_compatible("audio/mp4", "video/mp4") is True
 

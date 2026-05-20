@@ -25,19 +25,6 @@ agent_avatar_manager: AgentAvatarManager | None = None
 agent_liveness_checker: AgentLivenessChecker | None = None
 
 
-class _LazyDependency:
-    def __init__(self, provider):
-        self._provider = provider
-
-    def __getattr__(self, name):
-        return getattr(self._provider(), name)
-
-
-class _LazyCallableDependency(_LazyDependency):
-    async def __call__(self, *args, **kwargs):
-        return await self._provider()(*args, **kwargs)
-
-
 def bind_agent_dependencies(
     *,
     center: AgentCenterRouteOwner,
@@ -90,33 +77,23 @@ def _require_agent_liveness_checker() -> AgentLivenessChecker:
 
 
 def get_agent_center() -> AgentCenterRouteOwner:
-    if agent_center is None:
-        return _LazyDependency(_require_agent_center)
-    return agent_center
+    return _require_agent_center()
 
 
 def get_agent_service() -> AgentLookup:
-    if agent_service is None:
-        return _LazyDependency(_require_agent_service)
-    return agent_service
+    return _require_agent_service()
 
 
 def get_capability_issue_service() -> AgentCapabilityIssueStore:
-    if capability_issue_service is None:
-        return _LazyDependency(_require_capability_issue_service)
-    return capability_issue_service
+    return _require_capability_issue_service()
 
 
 def get_agent_avatar_manager() -> AgentAvatarManager:
-    if agent_avatar_manager is None:
-        return _LazyDependency(_require_agent_avatar_manager)
-    return agent_avatar_manager
+    return _require_agent_avatar_manager()
 
 
 def get_agent_liveness_checker() -> AgentLivenessChecker:
-    if agent_liveness_checker is None:
-        return _LazyCallableDependency(_require_agent_liveness_checker)
-    return agent_liveness_checker
+    return _require_agent_liveness_checker()
 
 
 def _resolve_dependency(value, provider):

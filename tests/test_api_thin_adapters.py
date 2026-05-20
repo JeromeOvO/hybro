@@ -4,6 +4,7 @@ import inspect
 import json
 from pathlib import Path
 
+import pytest
 from fastapi import BackgroundTasks, Request
 from fastapi.routing import APIRoute
 
@@ -940,6 +941,27 @@ def test_agent_routes_expose_typed_dependency_providers():
     )
 
 
+def test_agent_dependency_providers_fail_when_unbound(monkeypatch):
+    from api import agent
+
+    monkeypatch.setattr(agent, "agent_center", None)
+    monkeypatch.setattr(agent, "agent_service", None)
+    monkeypatch.setattr(agent, "capability_issue_service", None)
+    monkeypatch.setattr(agent, "agent_avatar_manager", None)
+    monkeypatch.setattr(agent, "agent_liveness_checker", None)
+
+    providers = (
+        agent.get_agent_center,
+        agent.get_agent_service,
+        agent.get_capability_issue_service,
+        agent.get_agent_avatar_manager,
+        agent.get_agent_liveness_checker,
+    )
+    for provider in providers:
+        with pytest.raises(RuntimeError):
+            provider()
+
+
 def test_agent_route_inventory_records_live_protocol_owners():
     routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
     by_name = {
@@ -996,6 +1018,32 @@ def test_agent_route_inventory_records_live_protocol_owners():
             violations.append(f"{name}: missing {sorted(missing_supporting)}")
 
     assert not violations, "Agent route inventory mismatches live protocols:\n" + "\n".join(
+        violations
+    )
+
+
+def test_sse_cancel_route_inventory_records_execution_owner():
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    route = next(route for route in routes if route["name"] == "cancel_message")
+
+    assert route["module"] == "api.sse"
+    assert route["owning_protocol"] == "common.protocols.ExecutionEngine"
+    assert set(route.get("supporting_protocols") or []) == {
+        "app_shell.database_service.A2ATaskReader",
+    }
+
+
+def test_hitl_route_inventory_records_room_ownership_support():
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    violations = [
+        route["name"]
+        for route in routes
+        if route["module"] == "api.hitl"
+        and "common.protocols.RoomOwnershipReader"
+        not in set(route.get("supporting_protocols") or [])
+    ]
+
+    assert not violations, "HITL routes omit RoomOwnershipReader support:\n" + "\n".join(
         violations
     )
 

@@ -1630,7 +1630,10 @@
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.RoomOwnershipReader"
+    ]
   },
   {
     "auth_dependencies": [
@@ -1653,7 +1656,10 @@
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.RoomOwnershipReader"
+    ]
   },
   {
     "auth_dependencies": [
@@ -1676,7 +1682,10 @@
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.RoomOwnershipReader"
+    ]
   },
   {
     "auth_dependencies": [
@@ -1684,7 +1693,8 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service"
+      "get_db_service",
+      "get_execution_engine"
     ],
     "methods": [
       "POST"
@@ -1695,12 +1705,15 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.SSEManagerRouteOwner",
+    "owning_protocol": "common.protocols.ExecutionEngine",
     "path": "/api/v1/sse/message/{message_id}/cancel",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "app_shell.database_service.A2ATaskReader"
+    ]
   },
   {
     "auth_dependencies": [

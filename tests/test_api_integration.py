@@ -184,21 +184,45 @@ class TestAgentHTTPIntegration:
         assert body["success"] is True
 
     @pytest.mark.asyncio
-    async def test_register_agent_validates_missing_url(self, http_client):
+    async def test_register_agent_validates_missing_url(
+        self, http_client, integration_app
+    ):
         """POST /agent/registerAgent should 400 when agent_url missing."""
-        resp = await http_client.post(
-            "/api/v1/agent/registerAgent",
-            json={},
+        from api import agent as agent_api
+
+        integration_app.dependency_overrides[agent_api.get_agent_center] = (
+            lambda: MagicMock()
         )
+        try:
+            resp = await http_client.post(
+                "/api/v1/agent/registerAgent",
+                json={},
+            )
+        finally:
+            integration_app.dependency_overrides.pop(agent_api.get_agent_center, None)
 
         assert resp.status_code == 400
         body = resp.json()
         assert "agent_url" in body.get("detail", "").lower()
 
     @pytest.mark.asyncio
-    async def test_get_agent_validates_empty_id(self, http_client):
+    async def test_get_agent_validates_empty_id(self, http_client, integration_app):
         """GET /agent/getAgent/ with whitespace ID returns error response."""
-        resp = await http_client.get("/api/v1/agent/getAgent/%20")
+        from api import agent as agent_api
+
+        integration_app.dependency_overrides[agent_api.get_agent_center] = (
+            lambda: MagicMock()
+        )
+        integration_app.dependency_overrides[agent_api.get_agent_liveness_checker] = (
+            lambda: AsyncMock()
+        )
+        try:
+            resp = await http_client.get("/api/v1/agent/getAgent/%20")
+        finally:
+            integration_app.dependency_overrides.pop(agent_api.get_agent_center, None)
+            integration_app.dependency_overrides.pop(
+                agent_api.get_agent_liveness_checker, None
+            )
 
         # Through HTTP, whitespace is URL-decoded to " " which is truthy,
         # so the endpoint proceeds and the service returns success=False.

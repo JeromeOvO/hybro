@@ -41,6 +41,10 @@ def _require_execution_engine() -> ExecutionEngine:
     return execution_engine
 
 
+def get_execution_engine() -> ExecutionEngine:
+    return _require_execution_engine()
+
+
 def get_db_service() -> A2ATaskReader:
     if db_service is None:
         raise RuntimeError("SSE database dependency has not been bound")
@@ -150,6 +154,7 @@ async def cancel_message(
     message_id: str = Path(..., description="Message ID to cancel"),
     user: ClerkUser = Depends(get_current_user),
     db: A2ATaskReader = Depends(get_db_service),
+    engine: ExecutionEngine = Depends(get_execution_engine),
 ):
     """
     Cancel an ongoing message processing workflow.
@@ -181,7 +186,8 @@ async def cancel_message(
                 detail="You do not have permission to cancel this message",
             )
 
-        success = await _require_execution_engine().cancel(
+        engine = _resolve_dependency(engine, get_execution_engine)
+        success = await engine.cancel(
             room_id=message.room_id,
             message_id=message_id,
             requested_by_user_id=user.user_id,
