@@ -1,13 +1,14 @@
 from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
+from api.files import upload_file as upload_file_route
 from common.dto import FileInfo
 from common.errors import FileStoragePlatformError
 from platform_module import PlatformConfig, PlatformDeps
 from platform_module.files import PlatformFileStorage
-from services.file_upload_service import FileUploadService
 
 
 class FakeFileStorage:
@@ -52,16 +53,26 @@ def mime_detector():
     return PlatformFileStorage(PlatformConfig(), PlatformDeps())
 
 
-class TestFileUploadService:
-    async def test_upload_delegates_to_bound_file_storage(self, upload_file):
-        delegate = FakeFileStorage()
-        service = FileUploadService(delegate)
+class TestFileUploadRouteAdapter:
+    async def test_upload_route_delegates_to_bound_file_storage(self, upload_file):
+        storage = FakeFileStorage()
+        ownership_calls = []
 
-        result = await service.upload(upload_file, "room1", "user1")
+        async def verify_ownership(room_id, user):
+            ownership_calls.append((room_id, user.user_id))
+
+        result = await upload_file_route(
+            file=upload_file,
+            room_id="room1",
+            user=SimpleNamespace(user_id="user1"),
+            storage=storage,
+            ownership_verifier=verify_ownership,
+        )
 
         assert result.file_url == "https://s3/presigned"
         assert result.mime_type == "image/png"
-        assert delegate.calls == [
+        assert ownership_calls == [("room1", "user1")]
+        assert storage.calls == [
             {
                 "file_bytes": b"\x89PNG\r\n\x1a\n",
                 "filename": "test.png",
@@ -71,19 +82,22 @@ class TestFileUploadService:
             }
         ]
 
-    async def test_upload_fails_fast_before_bind(self, upload_file):
-        with pytest.raises(RuntimeError, match="FileUploadService.bind"):
-            await FileUploadService().upload(upload_file, "room1", "user1")
-
-    async def test_upload_maps_platform_storage_errors(self, upload_file):
-        service = FileUploadService(
-            FakeFileStorage(
-                error=FileStoragePlatformError(415, {"error": "unsupported_type"})
-            )
+    async def test_upload_route_maps_platform_storage_errors(self, upload_file):
+        storage = FakeFileStorage(
+            error=FileStoragePlatformError(415, {"error": "unsupported_type"})
         )
 
+        async def verify_ownership(room_id, user):
+            return None
+
         with pytest.raises(HTTPException) as exc_info:
-            await service.upload(upload_file, "room1", "user1")
+            await upload_file_route(
+                file=upload_file,
+                room_id="room1",
+                user=SimpleNamespace(user_id="user1"),
+                storage=storage,
+                ownership_verifier=verify_ownership,
+            )
 
         assert exc_info.value.status_code == 415
 

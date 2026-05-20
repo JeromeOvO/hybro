@@ -65,9 +65,7 @@ PATCH = {
     "orchestration.workflow_center": "api.orchestration_center.workflow_center",
     # File upload / S3
     "files.verify_room_ownership": "api.files.room_ownership_verifier",
-    "files.file_upload_service": "api.files.file_storage",
     "s3_service": "services.s3_service.s3_service",
-    "file_upload_service": "services.file_upload_service.file_upload_service",
     "room_services.mongodb": "services.room_services.mongodb",
     "room_services.s3_service": "services.room_services.s3_service",
     # Gateway endpoints
