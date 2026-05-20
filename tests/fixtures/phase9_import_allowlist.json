@@ -43,48 +43,6 @@
   },
   {
     "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
-    "import": "execution.hitl.exceptions.HITLError",
-    "owner": "phase-9-api-adapter-conversion",
-    "path": "api/hitl.py",
-    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
-  },
-  {
-    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
-    "import": "execution.hitl.exceptions.HITLConflictError",
-    "owner": "phase-9-api-adapter-conversion",
-    "path": "api/hitl.py",
-    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
-  },
-  {
-    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
-    "import": "execution.hitl.exceptions.HITLContinuationLostError",
-    "owner": "phase-9-api-adapter-conversion",
-    "path": "api/hitl.py",
-    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
-  },
-  {
-    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
-    "import": "execution.hitl.exceptions.HITLNotFoundError",
-    "owner": "phase-9-api-adapter-conversion",
-    "path": "api/hitl.py",
-    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
-  },
-  {
-    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
-    "import": "execution.hitl.exceptions.HITLRoomMismatchError",
-    "owner": "phase-9-api-adapter-conversion",
-    "path": "api/hitl.py",
-    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
-  },
-  {
-    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
-    "import": "execution.hitl.exceptions.HITLRoutingFailedError",
-    "owner": "phase-9-api-adapter-conversion",
-    "path": "api/hitl.py",
-    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
-  },
-  {
-    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
     "import": "modules.RoomMessageCenter.room_message_center",
     "owner": "phase-9-api-adapter-conversion",
     "path": "api/orchestration_center.py",
