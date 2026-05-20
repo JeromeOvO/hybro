@@ -14,10 +14,12 @@ from common.protocols import (
     AgentMatcher,
     AgentRegistry,
     AgentRegistryWriter,
+    AgentTransport,
     ContentStorageRepository,
     ContextAssembler,
     EventPublisher,
     ExecutionEngine,
+    GatewayDiscoveryProvider,
     HubAgentResponseSink,
     HubDispatchPolicy,
     HubDispatchPort,
@@ -70,6 +72,7 @@ from delivery.sse.manager import SSETransportImpl
 from delivery.types import TaskRunner
 from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
 from platform_module import PlatformConfig, PlatformDeps, PlatformFacade
+from platform_module.deps import LoggerLike
 
 
 @dataclass(frozen=True)
@@ -212,13 +215,13 @@ def create_platform_deps(
     *,
     agent_deps: AgentDeps,
     mongo: MongoDAL,
-    agent_transport: Any,
+    agent_transport: AgentTransport,
     agent_card_resolver: AgentCardResolver | None = None,
     object_storage: ObjectStorageDAL | None = None,
     content_storage_repository: ContentStorageRepository | None = None,
-    discovery_provider: Any | None = None,
+    discovery_provider: GatewayDiscoveryProvider | None = None,
     redis: RedisKV | None = None,
-    logger: Any | None = None,
+    logger: LoggerLike | None = None,
 ) -> PlatformDeps:
     return PlatformDeps(
         agent_registry=agent_deps.agent_registry,

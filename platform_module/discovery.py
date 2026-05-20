@@ -1,5 +1,3 @@
-from typing import Any
-
 from common.dto import GatewayDiscoveryAgentResult, GatewayDiscoveryResponse
 from platform_module.config import PlatformConfig
 from platform_module.deps import PlatformDeps
@@ -12,12 +10,13 @@ class PlatformDiscovery:
 
     async def discover_agents(
         self, query: str, limit: int | None = None
-    ) -> GatewayDiscoveryResponse | Any:
+    ) -> GatewayDiscoveryResponse:
         if self._deps.discovery_provider is not None:
-            return await self._deps.discovery_provider.discover_agents(
+            result = await self._deps.discovery_provider.discover_agents(
                 query=query,
                 limit=limit,
             )
+            return GatewayDiscoveryResponse.model_validate(result)
         if self._deps.agent_matcher is None:
             raise RuntimeError("PlatformDiscovery requires a discovery provider or matcher")
 

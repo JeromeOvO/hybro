@@ -65,6 +65,18 @@ def test_gateway_protocol_matches_route_facing_platform_surface():
         assert implementation_params == protocol_params
 
 
+def test_platform_discovery_returns_common_dto_without_any_escape_hatch():
+    from typing import Any, get_type_hints
+
+    from common.dto import GatewayDiscoveryResponse
+    from platform_module.discovery import PlatformDiscovery
+
+    hints = get_type_hints(PlatformDiscovery.discover_agents)
+
+    assert hints["return"] is GatewayDiscoveryResponse
+    assert hints["return"] is not Any
+
+
 def test_api_routes_call_only_api_key_rate_limiter_protocol_methods():
     from common.protocols.platform_protocols import APIKeyRateLimiter
 
@@ -149,6 +161,7 @@ def test_container_preserves_disabled_platform_rate_limits():
 def test_container_builds_platform_facade_from_protocol_dependencies():
     from container import create_platform_deps, create_platform_facade
     from platform_module import PlatformConfig
+    from common.dto import AgentTaskResult
 
     class AgentDeps:
         agent_registry = object()
@@ -159,13 +172,52 @@ def test_container_builds_platform_facade_from_protocol_dependencies():
         def collection(self, name: str):
             return {"collection": name}
 
+    class AgentTransport:
+        async def send_message(self, agent_url, message, **kwargs):
+            return AgentTaskResult(
+                task_id="task-1",
+                agent_id=message.agent_id,
+                status="completed",
+            )
+
+        async def stream_message(self, agent_url, message, **kwargs):
+            if False:
+                yield None
+
+    class CardResolver:
+        async def get_agent_card(self, agent_url):
+            return None
+
+    class ObjectStorage:
+        async def put(self, key, body, content_type):
+            return None
+
+        async def get_presigned_url(self, key, ttl):
+            return "https://files.example/file"
+
+        async def delete(self, key):
+            return None
+
+    class ContentStorageRepository:
+        async def get_by_hash(self, content_hash):
+            return None
+
+        async def upsert(self, record):
+            return record
+
+        async def get(self, reference_id):
+            return None
+
+        async def delete_expired(self, now):
+            return 0
+
     deps = create_platform_deps(
         agent_deps=AgentDeps(),
         mongo=Mongo(),
-        agent_transport=object(),
-        agent_card_resolver=object(),
-        object_storage=object(),
-        content_storage_repository=object(),
+        agent_transport=AgentTransport(),
+        agent_card_resolver=CardResolver(),
+        object_storage=ObjectStorage(),
+        content_storage_repository=ContentStorageRepository(),
     )
     facade = create_platform_facade(config=PlatformConfig(), deps=deps)
 
@@ -175,6 +227,21 @@ def test_container_builds_platform_facade_from_protocol_dependencies():
     )
     assert facade.deps.file_metadata_repository is not None
     assert isinstance(facade.gateway_service, GatewayService)
+
+
+def test_container_platform_factory_uses_protocol_annotations():
+    from typing import get_type_hints
+
+    from container import create_platform_deps
+    from common.protocols import AgentCardResolver, AgentTransport, GatewayDiscoveryProvider
+    from platform_module.deps import LoggerLike
+
+    hints = get_type_hints(create_platform_deps)
+
+    assert hints["agent_transport"] is AgentTransport
+    assert hints["agent_card_resolver"] == AgentCardResolver | None
+    assert hints["discovery_provider"] == GatewayDiscoveryProvider | None
+    assert hints["logger"] == LoggerLike | None
 
 
 def test_file_route_dependencies_can_be_rebound_without_concrete_services():
