@@ -39,6 +39,80 @@ def test_platform_facade_exposes_common_protocol_surfaces():
     assert isinstance(facade.discovery_rate_limiter, RateLimiter)
     assert isinstance(facade.agent_rate_limiter, RateLimiter)
     assert isinstance(facade.file_storage, FileStorage)
+    assert facade.content_storage is not None
+
+
+def test_container_builds_platform_config_from_scalar_settings():
+    from container import create_platform_config
+
+    class Settings:
+        gateway_base_url = "https://api.example/v1"
+        gateway_rate_limit_per_key = 7
+        gateway_rate_limit_global = 70
+        discovery_rate_limit_per_key = 8
+        discovery_rate_limit_global = 80
+        max_file_size_mb = 3
+        s3_presigned_url_ttl = 90
+        compaction_content_ttl_days = 2
+
+    config = create_platform_config(Settings())
+
+    assert config.gateway_base_url == "https://api.example/v1"
+    assert config.gateway_rate_limit_per_key == 7
+    assert config.discovery_rate_limit_global == 80
+    assert config.max_upload_size_bytes == 3 * 1024 * 1024
+    assert config.presigned_url_ttl_seconds == 90
+    assert config.content_storage_ttl_seconds == 2 * 24 * 60 * 60
+    assert "image/png" in config.allowed_mime_types
+
+
+def test_container_builds_platform_facade_from_protocol_dependencies():
+    from container import create_platform_deps, create_platform_facade
+    from platform_module import PlatformConfig
+
+    class AgentDeps:
+        agent_registry = object()
+        agent_matcher = object()
+        agent_management = object()
+
+    class Mongo:
+        def collection(self, name: str):
+            return {"collection": name}
+
+    deps = create_platform_deps(
+        agent_deps=AgentDeps(),
+        mongo=Mongo(),
+        agent_transport=object(),
+        agent_card_resolver=object(),
+        object_storage=object(),
+        content_storage_repository=object(),
+    )
+    facade = create_platform_facade(config=PlatformConfig(), deps=deps)
+
+    assert facade.deps.agent_registry is AgentDeps.agent_registry
+    assert facade.deps.gateway_rate_limit_collection.collection_name == (
+        "gateway_api_requests"
+    )
+    assert facade.deps.file_metadata_repository is not None
+    assert isinstance(facade.gateway_service, GatewayService)
+
+
+def test_file_route_dependencies_can_be_rebound_without_concrete_services():
+    from api.files import (
+        bind_file_dependencies,
+        get_file_storage,
+        get_room_ownership_verifier,
+    )
+
+    storage = object()
+
+    async def verifier(room_id, user):
+        return None
+
+    bind_file_dependencies(storage, verifier)
+
+    assert get_file_storage() is storage
+    assert get_room_ownership_verifier() is verifier
 
 
 def test_platform_config_is_scalar_only():

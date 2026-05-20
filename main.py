@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from a2a.types import TaskState
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
@@ -128,6 +128,13 @@ def _assert_startup_bindings_complete(app: FastAPI) -> None:
     if getattr(app.state, "execution_deps", None) is None:
         errors.append("app.state.execution_deps")
 
+    if getattr(app.state, "platform_facade", None) is None:
+        errors.append("app.state.platform_facade")
+    if getattr(gateway, "gateway_service", None) is None:
+        errors.append("api.gateway.gateway_service")
+    if getattr(files, "file_storage", None) is None:
+        errors.append("api.files.file_storage")
+
     if errors:
         raise RuntimeError(
             "Startup binding incomplete - missing: "
@@ -170,7 +177,7 @@ async def lifespan(app: FastAPI):
         pinecone_db.connect()
 
         if mongodb.client is not None:
-            from a2a_adapter import AgentCardResolverImpl
+            from a2a_adapter import AgentCardResolverImpl, AgentTransportImpl
             from container import (
                 create_agent_deps,
                 create_context_memory_deps,
@@ -184,6 +191,10 @@ async def lifespan(app: FastAPI):
                 create_execution_deps,
                 create_execution_facade,
                 create_mongo_dal,
+                create_object_storage_dal,
+                create_platform_config,
+                create_platform_deps,
+                create_platform_facade,
                 create_room_deps,
                 create_vector_dal,
             )
@@ -202,6 +213,7 @@ async def lifespan(app: FastAPI):
             from services.memory_service import room_memory_service
             from services.room_membership_source import LegacyRoomMembershipSeedSource
             from services.room_services import room_services
+            from services.gateway_rate_limit_service import gateway_rate_limit_service
 
             await mongodb.create_context_memory_indexes()
             mongo_dal = create_mongo_dal(database=mongodb.db)
@@ -312,11 +324,12 @@ async def lifespan(app: FastAPI):
 
             model_registry = ModelRegistryImpl()
             llm_provider = LLMGatewayImpl(model_registry=model_registry)
+            agent_card_resolver = AgentCardResolverImpl()
             _agent_deps = create_agent_deps(
                 mongo=mongo_dal,
                 vector=vector_dal,
                 llm_provider=llm_provider,
-                card_resolver=AgentCardResolverImpl(),
+                card_resolver=agent_card_resolver,
                 hub_liveness=None,
                 exclusion_reader=CapabilityIssueExclusionReader(),
                 gateway_base_url=settings.gateway_base_url,
@@ -416,6 +429,44 @@ async def lifespan(app: FastAPI):
                     summary_model="context_memory_legacy_json_model",
                 ),
             )
+            object_storage = create_object_storage_dal()
+            platform_config = create_platform_config(settings)
+            platform_deps = create_platform_deps(
+                agent_deps=_agent_deps,
+                mongo=mongo_dal,
+                agent_transport=AgentTransportImpl(),
+                agent_card_resolver=agent_card_resolver,
+                object_storage=object_storage,
+                content_storage_repository=context_memory_facade.content_repository,
+                logger=logger,
+            )
+            platform_facade = create_platform_facade(
+                config=platform_config,
+                deps=platform_deps,
+            )
+
+            async def verify_file_upload_room_ownership(room_id: str, user) -> None:
+                if not room_id:
+                    raise HTTPException(status_code=400, detail="room_id is required")
+                owner_id = await _room_deps.room_registry.get_room_owner(room_id)
+                if owner_id is None:
+                    raise HTTPException(status_code=404, detail="Room not found")
+                if owner_id != user.user_id:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="You do not have permission to access this room",
+                    )
+
+            gateway.bind_gateway_dependencies(
+                platform_facade.gateway_service,
+                gateway_rate_limit_service,
+            )
+            files.bind_file_dependencies(
+                platform_facade.file_storage,
+                verify_file_upload_room_ownership,
+            )
+            app.state.platform_facade = platform_facade
+            app.state.platform_deps = platform_deps
             # TODO(phase-6/7): Register ContextMemoryEventHandler with EventPublisher
             # once Delivery wires runtime MessageCommitted delivery. Phase 5 keeps the
             # direct compaction call path via legacy services.
