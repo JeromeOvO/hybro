@@ -35,20 +35,6 @@
       "contract": "sdk_confinement",
       "expiry_task": "Final SDK confinement migration",
       "owner": "phase-9-platform-api-cleanup",
-      "path": "common/client/card_resolver.py",
-      "reason": "Legacy Common A2A client resolver still exposes SDK AgentCard types; move this compatibility client under A2A adapter or translate to Common DTOs."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "common/client/client.py",
-      "reason": "Legacy Common A2A client still sends and receives SDK request/response types; move this compatibility client under A2A adapter."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
       "path": "common/server/server.py",
       "reason": "Legacy Common A2A server still parses SDK JSON-RPC request types; move this compatibility server under A2A adapter."
     },

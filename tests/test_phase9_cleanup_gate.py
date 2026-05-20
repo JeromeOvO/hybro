@@ -327,6 +327,13 @@ def test_main_has_no_sdk_confinement_blocker():
     assert "main.py" not in blocked_paths
 
 
+def test_common_a2a_client_has_no_sdk_confinement_blockers():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "common/client/card_resolver.py" not in blocked_paths
+    assert "common/client/client.py" not in blocked_paths
+
+
 def test_common_package_has_no_module_or_app_shell_imports():
     violations = _common_import_violations()
 

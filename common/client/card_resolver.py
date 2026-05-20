@@ -1,9 +1,8 @@
 import json
 
 import httpx
-from a2a.types import AgentCard
 
-from common.types import A2AClientJSONError
+from common.types import A2AClientJSONError, AgentCard
 
 
 class A2ACardResolver:
