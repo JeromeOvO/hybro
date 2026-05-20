@@ -135,6 +135,30 @@ async def test_get_content_by_document_and_turn_id_returns_content_only():
     assert await service.get_content_by_document_id("missing") is None
 
 
+async def test_expired_mongodb_content_is_not_hydrated_even_before_ttl_cleanup():
+    service, repo = _service(ttl_seconds=60)
+    expired = {
+        "document_id": "conversation_content:room-1:turn-1",
+        "room_id": "room-1",
+        "turn_id": "turn-1",
+        "content": "expired content",
+        "expires_at": datetime(2025, 12, 31, 23, 59, tzinfo=timezone.utc),
+    }
+    repo.by_document_id[expired["document_id"]] = expired
+    content_ref = ContentReference(
+        storage_type=StorageType.MONGODB,
+        collection="conversation_content",
+        document_id=expired["document_id"],
+        created_at=datetime.now(timezone.utc),
+    )
+
+    assert await service.get_content_by_document_id(expired["document_id"]) is None
+    assert await service.get_content_by_turn_id("room-1", "turn-1") is None
+    with pytest.raises(ContentExpiredError) as exc_info:
+        await service.expand_content_reference(content_ref, "turn-1")
+    assert exc_info.value.document_id == expired["document_id"]
+
+
 async def test_expand_mongodb_reference_uses_repository_document():
     service, _repo = _service()
     document_id = await service.upsert_full_content(

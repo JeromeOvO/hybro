@@ -290,7 +290,8 @@ class ContentStorageMongoRepository:
         expires_at: datetime | None = None,
         turn_notes: dict | None = None,
     ) -> str:
-        set_on_insert = {
+        fields = {
+            "document_id": document_id,
             "room_id": room_id,
             "turn_id": turn_id,
             "content": content,
@@ -298,15 +299,11 @@ class ContentStorageMongoRepository:
             "content_hash": content_hash,
             "stored_at": stored_at,
             "expires_at": expires_at,
+            "turn_notes": turn_notes,
         }
-        if turn_notes:
-            set_on_insert["turn_notes"] = turn_notes
         doc = await self._content.find_one_and_update(
             {"room_id": room_id, "turn_id": turn_id},
-            {
-                "$set": {"document_id": document_id},
-                "$setOnInsert": set_on_insert,
-            },
+            {"$set": fields},
             upsert=True,
             return_document=True,
         )

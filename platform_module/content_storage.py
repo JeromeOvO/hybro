@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from platform_module.config import PlatformConfig
@@ -60,7 +60,9 @@ class PlatformContentStorage:
         doc = await self._require_repository().get_content_by_document_id(
             document_id
         )
-        return doc.get("content") if doc else None
+        if not doc or self._is_expired(doc):
+            return None
+        return doc.get("content")
 
     async def get_content_by_turn_id(
         self, room_id: str, turn_id: str
@@ -68,7 +70,9 @@ class PlatformContentStorage:
         doc = await self._require_repository().get_content_by_turn_id(
             room_id, turn_id
         )
-        return doc.get("content") if doc else None
+        if not doc or self._is_expired(doc):
+            return None
+        return doc.get("content")
 
     async def expand_content_reference(self, content_ref: Any, turn_id: str) -> str:
         ref = self._to_dict(content_ref)
@@ -103,9 +107,15 @@ class PlatformContentStorage:
         doc = await self._require_repository().get_content_by_document_id(
             document_id
         )
-        if not doc:
+        if not doc or self._is_expired(doc):
             raise ContentExpiredError(turn_id, document_id)
         return doc.get("content") or ""
+
+    def _is_expired(self, doc: dict[str, Any]) -> bool:
+        expires_at = doc.get("expires_at")
+        if not isinstance(expires_at, datetime):
+            return False
+        return _as_utc_aware(expires_at) <= _as_utc_aware(self._deps.clock())
 
     async def _expand_s3_reference(
         self, content_ref: dict[str, Any], turn_id: str
@@ -146,6 +156,12 @@ class PlatformContentStorage:
         if hasattr(storage_type, "value"):
             return storage_type.value
         return str(storage_type)
+
+
+def _as_utc_aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 __all__ = [

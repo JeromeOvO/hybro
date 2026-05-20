@@ -975,6 +975,45 @@ async def test_content_upsert_and_get(content_repo):
 
 
 @pytest.mark.asyncio
+async def test_content_upsert_replaces_existing_content_and_expiry(content_repo):
+    first_expiry = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    second_expiry = datetime(2026, 1, 2, tzinfo=timezone.utc)
+
+    await content_repo.upsert_full_content(
+        document_id="doc-old",
+        room_id="r1",
+        turn_id="t1",
+        content="old",
+        content_type="text",
+        content_hash="old-hash",
+        stored_at=first_expiry,
+        expires_at=first_expiry,
+        turn_notes={"version": "old"},
+    )
+    stored = await content_repo.upsert_full_content(
+        document_id="doc-new",
+        room_id="r1",
+        turn_id="t1",
+        content="new",
+        content_type="text/markdown",
+        content_hash="new-hash",
+        stored_at=second_expiry,
+        expires_at=second_expiry,
+        turn_notes={"version": "new"},
+    )
+
+    doc = await content_repo.get_content_by_turn_id("r1", "t1")
+    assert stored == "doc-new"
+    assert doc["document_id"] == "doc-new"
+    assert doc["content"] == "new"
+    assert doc["content_type"] == "text/markdown"
+    assert doc["content_hash"] == "new-hash"
+    assert doc["stored_at"] == second_expiry
+    assert doc["expires_at"] == second_expiry
+    assert doc["turn_notes"] == {"version": "new"}
+
+
+@pytest.mark.asyncio
 async def test_content_get_by_document_id_with_legacy_fallback(content_repo, mongo):
     await mongo.collections["conversation_content"].insert_one(
         {"_id": "legacy-id", "room_id": "r1", "turn_id": "t1", "content": "legacy"}
