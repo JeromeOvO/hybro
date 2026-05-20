@@ -153,7 +153,7 @@ def test_phase9_route_inventory_owners_resolve_to_real_symbols():
     assert not missing, "Unresolved route owners:\n" + "\n".join(missing)
 
 
-def test_legacy_workflow_routes_are_parameterless_410_adapters():
+def test_legacy_workflow_routes_keep_public_shape_without_execution_dependencies():
     from main import app
 
     recorded_routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
@@ -186,13 +186,47 @@ def test_legacy_workflow_routes_are_parameterless_410_adapters():
         duplicate_dependencies = sorted(
             name for name in set(dependencies) if dependencies.count(name) > 1
         )
-        if query_params or body_params or duplicate_dependencies:
+        expected_body = (
+            ["req"]
+            if route.path.startswith("/api/v1/orchestrationCenter/")
+            and route.name != "process_room_user_message"
+            else []
+        )
+        if query_params or body_params != expected_body or duplicate_dependencies:
             violations.append(
                 f"{route.path}: query={query_params} body={body_params} "
                 f"duplicate_deps={duplicate_dependencies}"
             )
 
     assert not violations, "Legacy 410 routes leak public params:\n" + "\n".join(
+        violations
+    )
+
+
+def test_legacy_workflow_post_routes_keep_orchestration_request_body_schema():
+    from main import app
+
+    openapi = app.openapi()
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    violations: list[str] = []
+    for route in routes:
+        if route["owning_protocol"] != "legacy_workflow_decommission_manifest":
+            continue
+        if route["module"] != "api.orchestration_center":
+            continue
+        if route["name"] == "process_room_user_message":
+            continue
+        operation = openapi["paths"][route["path"]]["post"]
+        request_body = operation.get("requestBody", {})
+        schema = (
+            request_body.get("content", {})
+            .get("application/json", {})
+            .get("schema", {})
+        )
+        if "OrchestrationRequest" not in json.dumps(schema):
+            violations.append(route["path"])
+
+    assert not violations, "Legacy orchestration routes lost body schema:\n" + "\n".join(
         violations
     )
 
@@ -220,7 +254,7 @@ def test_legacy_workflow_routes_advertise_410_in_openapi():
     )
 
 
-def test_legacy_workflow_routes_do_not_keep_runtime_injection_params():
+def test_legacy_workflow_routes_keep_only_expected_runtime_injection_params():
     from main import app
 
     routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
@@ -238,10 +272,17 @@ def test_legacy_workflow_routes_do_not_keep_runtime_injection_params():
         for name, param in inspect.signature(route.endpoint).parameters.items():
             if name in route.path_format:
                 continue
+            if route.name == "process_room_user_message" and name in {
+                "request",
+                "background_tasks",
+            }:
+                continue
+            if name == "req":
+                continue
             if param.annotation in forbidden_annotations:
                 violations.append(f"{route.path}: {name}")
 
-    assert not violations, "Legacy 410 routes keep runtime params:\n" + "\n".join(
+    assert not violations, "Legacy 410 routes keep unexpected runtime params:\n" + "\n".join(
         violations
     )
 
@@ -312,10 +353,36 @@ def test_health_route_delegates_to_health_check_protocol():
     assert "settings." not in source
 
 
-def test_app_shell_protocol_surfaces_are_specific():
-    from app_shell.bound import InspectionCenter, WebhookTransport
+def test_health_check_service_uses_request_state_not_main_closures():
+    import main
+    from app_shell.health_check import AppShellHealthCheck
 
-    for protocol in (InspectionCenter, WebhookTransport):
+    main_source = inspect.getsource(main)
+    health_source = inspect.getsource(AppShellHealthCheck)
+
+    assert "_relay_streams_available" not in main_source
+    assert "relay_streams_available=" not in main_source
+    assert "request.app.state" in health_source
+    assert "_relay_streams_available" not in health_source
+
+
+def test_app_shell_protocol_surfaces_are_specific():
+    from app_shell.bound import (
+        InspectionCenter,
+        ViewSetRepository,
+        WebhookTransport,
+        WebhookTransportFactory,
+    )
+    from app_shell.database_service import A2ATaskReader, AgentGroupStore
+
+    for protocol in (
+        InspectionCenter,
+        ViewSetRepository,
+        WebhookTransport,
+        WebhookTransportFactory,
+        A2ATaskReader,
+        AgentGroupStore,
+    ):
         for name, value in protocol.__dict__.items():
             if not callable(value) or name.startswith("_"):
                 continue
@@ -327,6 +394,12 @@ def test_app_shell_protocol_surfaces_are_specific():
                 }
                 for parameter in params.values()
             ), f"{protocol.__name__}.{name} uses wildcard parameters"
+
+
+def test_app_shell_protocols_have_single_runtime_marker():
+    for path in (Path("app_shell/bound.py"), Path("app_shell/database_service.py")):
+        source = path.read_text()
+        assert "@runtime_checkable\n@runtime_checkable" not in source
 
 
 def test_inspection_protocol_uses_route_contract_types():

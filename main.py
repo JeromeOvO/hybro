@@ -809,6 +809,7 @@ async def lifespan(app: FastAPI):
             ),
             response_converter=hub_agent_response_internal_to_agent_event,
         )
+        app.state.relay_service = _relay_svc
         relay.bind_relay_dependencies(_relay_svc)
         if _delivery_deps is not None:
             router = _relay_svc.internal_response_dispatcher
@@ -1025,20 +1026,9 @@ def compute_health_status(
     }
 
 
-def _relay_streams_available() -> bool:
-    from services.relay_service import relay_service as _relay_svc_health
-
-    return bool(
-        _relay_svc_health
-        and _relay_svc_health._streams
-        and _relay_svc_health._streams.is_connected
-    )
-
-
 health_check_service: HealthCheck = AppShellHealthCheck(
     redis_url=settings.redis_url,
     compute_health_status=compute_health_status,
-    relay_streams_available=_relay_streams_available,
 )
 
 

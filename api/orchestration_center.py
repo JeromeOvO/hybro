@@ -1,6 +1,6 @@
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Request
 from fastapi.params import Depends as DependsParam
 from fastapi.responses import JSONResponse
 
@@ -64,6 +64,7 @@ async def _get_task_request(
 
 
 TaskRequestDep = Depends(_get_task_request)
+LegacyOrchestrationBody = Annotated[OrchestrationRequest | None, Body()]
 
 
 @router.post(
@@ -71,7 +72,7 @@ TaskRequestDep = Depends(_get_task_request)
     status_code=410,
     responses=LEGACY_GONE_RESPONSES,
 )
-async def decompose_task():
+async def decompose_task(req: LegacyOrchestrationBody = None):
     return _legacy_workflow_gone()
 
 
@@ -80,7 +81,9 @@ async def decompose_task():
     status_code=410,
     responses=LEGACY_GONE_RESPONSES,
 )
-async def assign_agents_to_meta_tasks_by_parent_task_id():
+async def assign_agents_to_meta_tasks_by_parent_task_id(
+    req: LegacyOrchestrationBody = None,
+):
     return _legacy_workflow_gone()
 
 
@@ -89,7 +92,7 @@ async def assign_agents_to_meta_tasks_by_parent_task_id():
     status_code=410,
     responses=LEGACY_GONE_RESPONSES,
 )
-async def assign_agent_to_meta_task():
+async def assign_agent_to_meta_task(req: LegacyOrchestrationBody = None):
     return _legacy_workflow_gone()
 
 
@@ -98,7 +101,7 @@ async def assign_agent_to_meta_task():
     status_code=410,
     responses=LEGACY_GONE_RESPONSES,
 )
-async def run_workflow():
+async def run_workflow(req: LegacyOrchestrationBody = None):
     return _legacy_workflow_gone()
 
 
@@ -107,7 +110,7 @@ async def run_workflow():
     status_code=410,
     responses=LEGACY_GONE_RESPONSES,
 )
-async def retry_meta_task():
+async def retry_meta_task(req: LegacyOrchestrationBody = None):
     return _legacy_workflow_gone()
 
 
@@ -116,7 +119,7 @@ async def retry_meta_task():
     status_code=410,
     responses=LEGACY_GONE_RESPONSES,
 )
-async def summarize_meta_task_for_base_task():
+async def summarize_meta_task_for_base_task(req: LegacyOrchestrationBody = None):
     return _legacy_workflow_gone()
 
 
@@ -127,6 +130,8 @@ async def summarize_meta_task_for_base_task():
     responses=LEGACY_GONE_RESPONSES,
 )
 async def process_room_user_message(
+    request: Request = None,
+    background_tasks: BackgroundTasks = None,
 ):
     """
     **Deprecated.** Message processing is now triggered internally by sendMessage.
