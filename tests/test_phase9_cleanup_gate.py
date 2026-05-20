@@ -349,6 +349,12 @@ def test_execution_dispatch_middleware_has_no_sdk_confinement_blocker():
     assert "execution/dispatch/dispatch_middleware.py" not in blocked_paths
 
 
+def test_execution_response_handler_has_no_sdk_confinement_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "execution/dispatch/response_handler.py" not in blocked_paths
+
+
 def test_common_package_has_no_module_or_app_shell_imports():
     violations = _common_import_violations()
 

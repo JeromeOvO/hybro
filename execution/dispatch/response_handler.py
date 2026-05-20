@@ -6,10 +6,9 @@ Streaming events (artifact_update) use ``SSEManager`` directly.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from a2a.types import TaskState
-
+from a2a_adapter.task_status import coerce_task_state
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
 from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
@@ -212,7 +211,7 @@ class AgentResponseHandler:
                 message_text=e.text,
                 artifacts=artifacts_for_db,
             )
-        await self._notify(e, TaskState.completed)
+        await self._notify(e, coerce_task_state("completed"))
         await self._terminate_slot(
             e, "completed",
             content=e.text,
@@ -232,7 +231,7 @@ class AgentResponseHandler:
                 state,
                 message_text=error,
             )
-        await self._notify(e, TaskState(state), error=error)
+        await self._notify(e, coerce_task_state(state), error=error)
         has_partial = bool(e.text and e.text.strip())
         await self._terminate_slot(
             e, "failed",
@@ -249,7 +248,7 @@ class AgentResponseHandler:
                 "canceled",
                 message_text=e.text or "Task was canceled",
             )
-        await self._notify(e, TaskState.canceled)
+        await self._notify(e, coerce_task_state("canceled"))
         await self._terminate_slot(e, "canceled")
         await self._resume_orchestration(e.message_id, "", failed=True)
 
@@ -263,7 +262,7 @@ class AgentResponseHandler:
                 task_id=e.task_id,
                 context_id=e.context_id,
             )
-        await self._notify(e, TaskState(state))
+        await self._notify(e, coerce_task_state(state))
 
         # For async transports (relay, webhook) the queue has already moved
         # to PAUSED before this callback fires, so QueueExecutor never sees
@@ -424,7 +423,7 @@ class AgentResponseHandler:
     async def notify_task_update(
         self,
         message_id: str,
-        state: TaskState,
+        state: Any,
         room_id: str,
         user_id: str,
         error: str | None = None,
@@ -453,7 +452,7 @@ class AgentResponseHandler:
     async def _notify(
         self,
         e: AgentEvent,
-        state: TaskState,
+        state: Any,
         error: str | None = None,
     ) -> None:
         await self.notify_task_update(

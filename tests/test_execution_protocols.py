@@ -205,7 +205,6 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
         "services",
     }
     expected = {
-        "execution/dispatch/response_handler.py": {"a2a.types"},
         "execution/dispatch/transports/direct.py": {
             "a2a.types",
         },
