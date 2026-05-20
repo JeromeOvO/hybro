@@ -28,13 +28,6 @@
       "contract": "sdk_confinement",
       "expiry_task": "Final SDK confinement migration",
       "owner": "phase-9-platform-api-cleanup",
-      "path": "api/a2a_tasks.py",
-      "reason": "Public A2A task route schemas still expose SDK TaskState types for compatibility; must move behind route translators before final SDK confinement is claimed."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
       "path": "common/server/server.py",
       "reason": "Legacy Common A2A server still parses SDK JSON-RPC request types; move this compatibility server under A2A adapter."
     },

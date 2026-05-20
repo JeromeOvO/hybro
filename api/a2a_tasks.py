@@ -7,11 +7,14 @@ Tasks are now stored on room_agent_messages (consolidated from separate a2a_task
 
 from typing import Any
 
-from a2a.types import TaskState
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.params import Depends as DependsParam
 
 from app_shell.database_service import A2ATaskReader
+from common.a2a_constants import (
+    NON_TERMINAL_STATES,
+    get_retry_after_seconds,
+)
 from common.auth import ClerkUser, get_current_user
 from common.utils.logger import get_logger
 
@@ -19,25 +22,6 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 db_service: A2ATaskReader | None = None
-
-PENDING_STATES = {TaskState.submitted, TaskState.working}
-INTERACTIVE_STATES = {TaskState.input_required, TaskState.auth_required}
-TERMINAL_STATES = {
-    TaskState.completed,
-    TaskState.failed,
-    TaskState.canceled,
-    TaskState.rejected,
-}
-NON_TERMINAL_STATES = PENDING_STATES | INTERACTIVE_STATES
-
-
-def get_retry_after_seconds(state: TaskState) -> int | None:
-    if state in TERMINAL_STATES:
-        return None
-    if state in INTERACTIVE_STATES:
-        return 60
-    return 30
-
 
 def bind_a2a_task_dependencies(database_service: A2ATaskReader) -> None:
     global db_service

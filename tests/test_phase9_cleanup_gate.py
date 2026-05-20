@@ -367,6 +367,12 @@ def test_execution_task_state_manager_has_no_sdk_confinement_blocker():
     assert "execution/state/task_state_manager.py" not in blocked_paths
 
 
+def test_a2a_task_api_has_no_sdk_confinement_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "api/a2a_tasks.py" not in blocked_paths
+
+
 def test_common_package_has_no_module_or_app_shell_imports():
     violations = _common_import_violations()
 
