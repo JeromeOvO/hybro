@@ -1,15 +1,19 @@
-from typing import AsyncIterator, Protocol, runtime_checkable
+from typing import Any, AsyncIterator, Protocol, runtime_checkable
 
-from common.dto import FileInfo, GatewayRequest, GatewayResponse, RateLimitResult
+from common.dto import FileInfo, RateLimitResult
 
 
 @runtime_checkable
 class GatewayService(Protocol):
+    async def discover_agents(
+        self, query: str, limit: int | None, user_id: str
+    ) -> Any: ...
+    async def get_agent_card(self, agent_id: str, user_id: str) -> dict: ...
     async def send_message(
-        self, api_key: str, request: GatewayRequest
-    ) -> GatewayResponse: ...
+        self, agent_id: str, message: Any, user_id: str
+    ) -> Any: ...
     async def stream_message(
-        self, api_key: str, request: GatewayRequest
+        self, agent_id: str, message: Any, user_id: str
     ) -> AsyncIterator[dict]: ...
 
 

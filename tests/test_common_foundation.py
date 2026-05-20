@@ -609,7 +609,12 @@ def test_protocol_methods_match_design_doc():
         protocols.HubPublishLineageReader: {"get_hub_publish_lineage"},
         protocols.MessageCancellationReader: {"is_message_cancelled"},
         protocols.RoomAgentTaskTracker: {"track_hub_task"},
-        protocols.GatewayService: {"send_message", "stream_message"},
+        protocols.GatewayService: {
+            "discover_agents",
+            "get_agent_card",
+            "send_message",
+            "stream_message",
+        },
         protocols.RateLimiter: {"check", "check_global"},
         protocols.FileStorage: {"upload", "get_url", "delete", "list_for_room"},
         protocols.AgentTransport: {"send_message", "stream_message"},

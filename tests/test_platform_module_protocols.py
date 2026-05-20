@@ -1,4 +1,5 @@
 import ast
+import inspect
 from pathlib import Path
 
 import tomllib
@@ -40,6 +41,25 @@ def test_platform_facade_exposes_common_protocol_surfaces():
     assert isinstance(facade.agent_rate_limiter, RateLimiter)
     assert isinstance(facade.file_storage, FileStorage)
     assert facade.content_storage is not None
+
+
+def test_gateway_protocol_matches_route_facing_platform_surface():
+    from common.protocols.platform_protocols import GatewayService
+    from platform_module.gateway import PlatformGateway
+
+    for method_name in (
+        "discover_agents",
+        "get_agent_card",
+        "send_message",
+        "stream_message",
+    ):
+        protocol_params = list(
+            inspect.signature(getattr(GatewayService, method_name)).parameters
+        )
+        implementation_params = list(
+            inspect.signature(getattr(PlatformGateway, method_name)).parameters
+        )
+        assert implementation_params == protocol_params
 
 
 def test_container_builds_platform_config_from_scalar_settings():

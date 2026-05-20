@@ -116,11 +116,23 @@ class PlatformGateway:
         transport = self._require_transport()
 
         try:
-            return await transport.send_message(
+            result = await transport.send_message(
                 agent.url or "",
                 self._message_to_internal(agent_id, message),
                 user_id=user_id,
             )
+            if getattr(result, "status", None) == "error":
+                raise GatewayPlatformError(
+                    502,
+                    {
+                        "error": "agent_error",
+                        "message": (
+                            "Agent communication failed: "
+                            f"{getattr(result, 'error', None) or 'unknown error'}"
+                        ),
+                    },
+                )
+            return result
         except GatewayPlatformError:
             raise
         except Exception as exc:
@@ -229,6 +241,17 @@ class PlatformGateway:
                 role=message.get("role", "user"),
                 parts=parts or [],
                 metadata=message.get("metadata", {}),
+            )
+        if hasattr(message, "model_dump"):
+            payload = message.model_dump(mode="json", exclude_none=True)
+            parts = payload.get("parts")
+            if parts is None and "text" in payload:
+                parts = [{"kind": "text", "text": payload["text"]}]
+            return InternalAgentMessage(
+                agent_id=agent_id,
+                role=str(payload.get("role", "user")),
+                parts=parts or [],
+                metadata=payload.get("metadata", {}),
             )
         return InternalAgentMessage(
             agent_id=agent_id,

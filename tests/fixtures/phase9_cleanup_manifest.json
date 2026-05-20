@@ -3,6 +3,30 @@
     {
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
       "owner": "phase-9-platform-api-cleanup",
+      "path": "modules",
+      "reason": "Package remains shipped only as compatibility import shims for legacy test and caller import paths while runtime production imports are blocked by the Phase 9 cleanup gate."
+    },
+    {
+      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "services",
+      "reason": "Package remains shipped for legacy service-level compatibility tests and blocked workflow/content-storage shims documented below; production code is not allowed to import it."
+    },
+    {
+      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "config",
+      "reason": "Package remains shipped for compatibility with legacy service modules until those shims are removed; production code must use injected config or common.config."
+    },
+    {
+      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "infrastructure",
+      "reason": "Package remains shipped for legacy infrastructure compatibility paths while DAL, Delivery, and HubRuntimeBridge migration callers finish decommission; production import gates prevent new direct coupling."
+    },
+    {
+      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
+      "owner": "phase-9-platform-api-cleanup",
       "path": "services/gateway_service.py",
       "reason": "Legacy gateway singleton retained for existing service-level tests until Platform route wiring and parity migration finish."
     },

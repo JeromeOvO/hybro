@@ -77,12 +77,20 @@ def test_no_production_imports_from_legacy_singletons():
 def test_old_implementation_packages_are_not_shipped_without_blocker():
     manifest = _manifest()
     blockers = manifest.get("blocked_cleanup", [])
+    blocked_packages = {
+        entry["path"]
+        for entry in blockers
+        if isinstance(entry.get("path"), str) and "/" not in entry["path"]
+    }
     packages = set(tomllib.loads(Path("pyproject.toml").read_text())["tool"]["setuptools"]["packages"])
     shipped_legacy = sorted(packages & LEGACY_PACKAGES)
+    unblocked_legacy = [
+        package for package in shipped_legacy if package not in blocked_packages
+    ]
 
-    assert not shipped_legacy or blockers, (
-        "Legacy packages are still shipped without cleanup blockers: "
-        + ", ".join(shipped_legacy)
+    assert not unblocked_legacy, (
+        "Legacy packages are still shipped without package-level cleanup blockers: "
+        + ", ".join(unblocked_legacy)
     )
 
 

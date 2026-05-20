@@ -1,4 +1,5 @@
 import pytest
+from a2a.types import Message, Part, Role, TextPart
 
 from common.dto import AgentCardSnapshot, AgentInfo, AgentMatchResult, AgentTaskResult
 from platform_module import PlatformConfig, PlatformDeps
@@ -42,15 +43,24 @@ class FakeMatcher:
 
 
 class FakeTransport:
-    def __init__(self, fail: Exception | None = None):
+    def __init__(
+        self,
+        fail: Exception | None = None,
+        result: AgentTaskResult | None = None,
+    ):
         self.fail = fail
+        self.result = result
         self.sent = []
 
     async def send_message(self, agent_url: str, message, **kwargs):
         if self.fail is not None:
             raise self.fail
         self.sent.append((agent_url, message, kwargs))
-        return AgentTaskResult(task_id="task-1", agent_id=message.agent_id, status="completed")
+        return self.result or AgentTaskResult(
+            task_id="task-1",
+            agent_id=message.agent_id,
+            status="completed",
+        )
 
     async def stream_message(self, agent_url: str, message, **kwargs):
         if self.fail is not None:
@@ -150,6 +160,46 @@ async def test_send_maps_upstream_failures_to_502():
 
     assert exc_info.value.status_code == 502
     assert exc_info.value.detail["error"] == "agent_error"
+
+
+@pytest.mark.asyncio
+async def test_send_preserves_public_a2a_message_parts():
+    transport = FakeTransport()
+    gateway = _gateway(transport=transport)
+    message = Message(
+        message_id="msg-1",
+        role=Role.user,
+        parts=[Part(root=TextPart(text="hello"))],
+        metadata={"trace": "abc"},
+    )
+
+    await gateway.send_message("agent-1", message, "owner-1")
+
+    _agent_url, internal_message, _kwargs = transport.sent[0]
+    assert internal_message.role == "user"
+    assert internal_message.metadata == {"trace": "abc"}
+    assert internal_message.parts == [{"kind": "text", "text": "hello"}]
+
+
+@pytest.mark.asyncio
+async def test_send_maps_transport_error_result_to_502():
+    gateway = _gateway(
+        transport=FakeTransport(
+            result=AgentTaskResult(
+                task_id="task-1",
+                agent_id="agent-1",
+                status="error",
+                error="connection refused",
+            )
+        )
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail["error"] == "agent_error"
+    assert "connection refused" in exc_info.value.detail["message"]
 
 
 @pytest.mark.asyncio
