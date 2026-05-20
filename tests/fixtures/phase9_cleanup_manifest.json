@@ -177,13 +177,6 @@
       "owner": "phase-9-platform-api-cleanup",
       "path": "models/room.py",
       "reason": "Legacy room model still exposes A2A SDK Task; route translators must replace this import before final SDK confinement is claimed."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "models/task.py",
-      "reason": "Legacy task model still exposes A2A SDK Task; route translators must replace this import before final SDK confinement is claimed."
     }
   ],
   "content_storage_callers": [

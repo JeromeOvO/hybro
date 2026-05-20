@@ -2,7 +2,6 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from a2a.types import Task
 from pydantic import BaseModel, Field
 
 
@@ -21,7 +20,7 @@ class MetaTask(BaseModel):
     parent_task_id: str
     agent_id: str = Field(default=TaskDefaultValue.NOT_ASSIGNED.value)
     task_description: str | None = Field(default="")
-    task: Task | None = None
+    task: Any | None = None
     execution_order: int = 0
     # Track dependencies and context
     depends_on_tasks: list[str] | None = None
@@ -39,7 +38,7 @@ class BaseTask(BaseModel):
     task_id: str
     session_id: str
     user_name: str
-    task: Task
+    task: Any
     extend_info: Any | None = None
 
 
