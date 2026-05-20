@@ -5,14 +5,15 @@ Provides authenticated API key management for developer portal users.
 """
 
 import secrets
+from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.params import Depends as DependsParam
 from loguru import logger
 
 from common.api_key_auth import hash_api_key
 from common.auth import ClerkUser, get_current_user
-from database.mongodb import mongodb
 from models.api_key import APIKey
 from models.request import APIKeyCreateRequest
 from models.response import (
@@ -24,6 +25,25 @@ from models.response import (
 )
 
 router = APIRouter()
+mongodb: Any | None = None
+
+
+def bind_api_key_store(store: Any) -> None:
+    global mongodb
+
+    mongodb = store
+
+
+def get_api_key_store() -> Any:
+    if mongodb is None:
+        raise RuntimeError("API key store dependency has not been bound")
+    return mongodb
+
+
+def _resolve_dependency(value: Any, provider) -> Any:
+    if isinstance(value, DependsParam):
+        return provider()
+    return value
 
 
 def generate_api_key() -> str:
@@ -43,10 +63,12 @@ def generate_api_key() -> str:
 )
 async def list_api_keys(
     current_user: ClerkUser = Depends(get_current_user),
+    store: Any = Depends(get_api_key_store),
 ) -> APIKeyListResponse:
     """List all API keys belonging to the authenticated user."""
+    store = _resolve_dependency(store, get_api_key_store)
     try:
-        keys = await mongodb.get_api_keys_by_user(current_user.user_id)
+        keys = await store.get_api_keys_by_user(current_user.user_id)
         sorted_keys = sorted(keys, key=lambda key: key.created_at, reverse=True)
         return APIKeyListResponse(
             keys=[
@@ -84,6 +106,7 @@ async def list_api_keys(
 async def create_api_key(
     request_body: APIKeyCreateRequest,
     current_user: ClerkUser = Depends(get_current_user),
+    store: Any = Depends(get_api_key_store),
 ) -> APIKeyCreateResponse:
     """Create a new API key and return its plaintext value once."""
     key_name = request_body.name.strip()
@@ -100,9 +123,10 @@ async def create_api_key(
         user_id=current_user.user_id,
         name=key_name,
     )
+    store = _resolve_dependency(store, get_api_key_store)
 
     try:
-        await mongodb.add_api_key(api_key)
+        await store.add_api_key(api_key)
         return APIKeyCreateResponse(
             key_id=api_key.key_id,
             name=api_key.name,
@@ -130,9 +154,11 @@ async def create_api_key(
 async def deactivate_api_key(
     key_id: str,
     current_user: ClerkUser = Depends(get_current_user),
+    store: Any = Depends(get_api_key_store),
 ) -> APIKeyOperationResponse:
     """Soft-delete an API key owned by the authenticated user."""
-    api_key = await mongodb.get_api_key_by_id(key_id)
+    store = _resolve_dependency(store, get_api_key_store)
+    api_key = await store.get_api_key_by_id(key_id)
     if not api_key or api_key.user_id != current_user.user_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -146,7 +172,7 @@ async def deactivate_api_key(
         )
 
     try:
-        deactivated = await mongodb.deactivate_api_key(key_id)
+        deactivated = await store.deactivate_api_key(key_id)
         if not deactivated:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

@@ -226,6 +226,7 @@ async def lifespan(app: FastAPI):
             inspection_center.bind_inspection_dependencies(InspectionCenter())
             memory_center.bind_memory_dependencies(MemoryCenter())
             task.bind_task_dependencies(TaskCenter())
+            discovery_api_keys.bind_api_key_store(mongodb)
             mongo_dal = create_mongo_dal(database=mongodb.db)
             vector_dal = create_vector_dal()
             _delivery_config = create_delivery_config(settings)
@@ -293,6 +294,7 @@ async def lifespan(app: FastAPI):
                 run_event_sse_enabled,
             )
             from services.task_notification_service import notify_task_update
+            agent_group.bind_agent_group_dependencies(_db_svc)
 
             async def notify_task_update_with_string_state(**kwargs):
                 state = kwargs.get("state")

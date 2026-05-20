@@ -4,20 +4,44 @@ Agent Group API Endpoints
 Provides CRUD operations for user-created agent groups.
 """
 
-from fastapi import APIRouter, Query, Request
+from typing import Any
+
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.params import Depends as DependsParam
 
 from models.agent_group import (
     BUILTIN_GROUP_ALL_AGENTS,
     BUILTIN_GROUP_ROOM_TEAM,
     AgentGroup,
 )
-from services.database_service import db_service
 
 router = APIRouter()
+db_service: Any | None = None
+
+
+def bind_agent_group_dependencies(database_service: Any) -> None:
+    global db_service
+
+    db_service = database_service
+
+
+def get_db_service() -> Any:
+    if db_service is None:
+        raise RuntimeError("Agent group database dependency has not been bound")
+    return db_service
+
+
+def _resolve_dependency(value: Any, provider) -> Any:
+    if isinstance(value, DependsParam):
+        return provider()
+    return value
 
 
 @router.post("/agentGroups")
-async def create_agent_group(request: Request):
+async def create_agent_group(
+    request: Request,
+    db: Any = Depends(get_db_service),
+):
     """
     Create a new agent group.
     """
@@ -32,6 +56,7 @@ async def create_agent_group(request: Request):
 
     if not owner_id:
         return {"success": False, "error": "Owner ID is required", "status_code": 400}
+    db = _resolve_dependency(db, get_db_service)
 
     agent_group = AgentGroup(
         name=name,
@@ -41,7 +66,7 @@ async def create_agent_group(request: Request):
         agents=agents,
     )
 
-    success = await db_service.add_agent_group(agent_group)
+    success = await db.add_agent_group(agent_group)
 
     if success:
         return {
@@ -58,16 +83,20 @@ async def create_agent_group(request: Request):
 
 
 @router.get("/agentGroups")
-async def list_agent_groups(owner_id: str | None = Query(default=None)):
+async def list_agent_groups(
+    owner_id: str | None = Query(default=None),
+    db: Any = Depends(get_db_service),
+):
     """
     List all agent groups for a user.
     Returns both built-in groups and user-created groups.
     """
     if not owner_id:
         return {"success": False, "error": "Owner ID is required", "status_code": 400}
+    db = _resolve_dependency(db, get_db_service)
 
     # Get user's custom groups
-    user_groups = await db_service.get_agent_groups_by_owner(owner_id)
+    user_groups = await db.get_agent_groups_by_owner(owner_id)
 
     # Add built-in groups at the beginning
     builtin_groups = [
@@ -95,7 +124,10 @@ async def list_agent_groups(owner_id: str | None = Query(default=None)):
 
 
 @router.get("/agentGroups/{group_id}")
-async def get_agent_group(group_id: str):
+async def get_agent_group(
+    group_id: str,
+    db: Any = Depends(get_db_service),
+):
     """
     Get a specific agent group by ID.
     """
@@ -131,7 +163,8 @@ async def get_agent_group(group_id: str):
             "status_code": 200,
         }
 
-    group = await db_service.get_agent_group_by_id(group_id)
+    db = _resolve_dependency(db, get_db_service)
+    group = await db.get_agent_group_by_id(group_id)
 
     if group:
         return {
@@ -144,7 +177,11 @@ async def get_agent_group(group_id: str):
 
 
 @router.put("/agentGroups/{group_id}")
-async def update_agent_group(group_id: str, request: Request):
+async def update_agent_group(
+    group_id: str,
+    request: Request,
+    db: Any = Depends(get_db_service),
+):
     """
     Update an agent group.
     """
@@ -173,11 +210,12 @@ async def update_agent_group(group_id: str, request: Request):
     if not updates:
         return {"success": False, "error": "No updates provided", "status_code": 400}
 
-    success = await db_service.update_agent_group(group_id, updates)
+    db = _resolve_dependency(db, get_db_service)
+    success = await db.update_agent_group(group_id, updates)
 
     if success:
         # Fetch updated group
-        updated_group = await db_service.get_agent_group_by_id(group_id)
+        updated_group = await db.get_agent_group_by_id(group_id)
         return {
             "success": True,
             "group": updated_group.model_dump(mode="json") if updated_group else None,
@@ -192,7 +230,10 @@ async def update_agent_group(group_id: str, request: Request):
 
 
 @router.delete("/agentGroups/{group_id}")
-async def delete_agent_group(group_id: str):
+async def delete_agent_group(
+    group_id: str,
+    db: Any = Depends(get_db_service),
+):
     """
     Delete an agent group.
     """
@@ -207,7 +248,8 @@ async def delete_agent_group(group_id: str):
             "status_code": 400,
         }
 
-    success = await db_service.delete_agent_group(group_id)
+    db = _resolve_dependency(db, get_db_service)
+    success = await db.delete_agent_group(group_id)
 
     if success:
         return {"success": True, "status_code": 200}
