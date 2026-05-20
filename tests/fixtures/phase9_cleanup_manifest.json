@@ -42,13 +42,6 @@
       "contract": "sdk_confinement",
       "expiry_task": "Final SDK confinement migration",
       "owner": "phase-9-platform-api-cleanup",
-      "path": "common/utils/remote_agent_connection.py",
-      "reason": "Legacy remote agent connection helper still streams SDK task status events; move this client transport behind A2A adapter."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
       "path": "execution/dispatch/transports/direct.py",
       "reason": "Direct transport still handles A2A SDK request, task, message, and artifact objects inline; this must be isolated in A2A adapter code."
     },

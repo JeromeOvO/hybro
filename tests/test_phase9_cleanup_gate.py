@@ -398,6 +398,12 @@ def test_common_server_has_no_sdk_confinement_blocker():
     assert "common/server/server.py" not in blocked_paths
 
 
+def test_common_remote_agent_connection_has_no_sdk_confinement_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "common/utils/remote_agent_connection.py" not in blocked_paths
+
+
 def test_common_package_has_no_module_or_app_shell_imports():
     violations = _common_import_violations()
 

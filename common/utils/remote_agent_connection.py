@@ -1,17 +1,16 @@
 import uuid
 from collections.abc import Callable
 
-from a2a.types import (
+from common.client.client import A2AClient
+from common.types import (
     AgentCard,
     Task,
     TaskArtifactUpdateEvent,
+    TaskSendParams,
     TaskState,
     TaskStatus,
     TaskStatusUpdateEvent,
 )
-
-from common.client.client import A2AClient
-from common.types import TaskSendParams
 
 TaskCallbackArg = Task | TaskStatusUpdateEvent | TaskArtifactUpdateEvent
 TaskUpdateCallback = Callable[[TaskCallbackArg, AgentCard], Task]
