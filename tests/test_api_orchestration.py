@@ -69,14 +69,7 @@ class TestProcessRoomUserMessage:
     @pytest.mark.asyncio
     async def test_returns_410_gone(self, mock_user):
         """Deprecated endpoint should return HTTP 410 Gone."""
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={
-            "room_id": "room-001",
-            "room_user_message_id": "msg-001",
-        })
-        mock_bg = MagicMock()
-
-        result = await process_room_user_message(mock_request, mock_bg)
+        result = await process_room_user_message()
 
         assert result.status_code == 410
         body = result.body

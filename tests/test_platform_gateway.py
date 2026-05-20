@@ -623,7 +623,7 @@ async def test_stream_maps_adapter_error_event_to_jsonrpc_error():
         {
             "jsonrpc": "2.0",
             "id": "",
-            "error": {"message": "boom"},
+            "error": {"code": -32000, "message": "boom"},
         }
     ]
 

@@ -1,8 +1,10 @@
 import ast
 import importlib
+import inspect
 import json
 from pathlib import Path
 
+from fastapi import BackgroundTasks, Request
 from fastapi.routing import APIRoute
 
 
@@ -218,20 +220,70 @@ def test_legacy_workflow_routes_advertise_410_in_openapi():
     )
 
 
-def test_agent_group_route_owner_protocol_matches_handler_calls():
-    from app_shell.database_service import AgentGroupStore
+def test_legacy_workflow_routes_do_not_keep_runtime_injection_params():
+    from main import app
 
-    expected_methods = {
-        "add_agent_group",
-        "delete_agent_group",
-        "get_agent_group_by_id",
-        "get_agent_groups_by_owner",
-        "update_agent_group",
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    legacy_names = {
+        route["name"]
+        for route in routes
+        if route["owning_protocol"] == "legacy_workflow_decommission_manifest"
     }
-    protocol_methods = {
-        name
-        for name, value in AgentGroupStore.__dict__.items()
-        if callable(value) and not name.startswith("_")
+    forbidden_annotations = {Request, BackgroundTasks}
+    violations: list[str] = []
+
+    for route in app.routes:
+        if not isinstance(route, APIRoute) or route.name not in legacy_names:
+            continue
+        for name, param in inspect.signature(route.endpoint).parameters.items():
+            if name in route.path_format:
+                continue
+            if param.annotation in forbidden_annotations:
+                violations.append(f"{route.path}: {name}")
+
+    assert not violations, "Legacy 410 routes keep runtime params:\n" + "\n".join(
+        violations
+    )
+
+
+def test_route_owner_protocols_match_handler_calls():
+    from app_shell.bound import ViewSetRepository
+    from app_shell.database_service import A2ATaskReader, AgentGroupStore
+
+    expected_by_protocol = {
+        AgentGroupStore: {
+            "add_agent_group",
+            "delete_agent_group",
+            "get_agent_group_by_id",
+            "get_agent_groups_by_owner",
+            "update_agent_group",
+        },
+        A2ATaskReader: {
+            "get_pending_task_messages_for_user",
+            "get_room_agent_message_by_message_id",
+            "get_task_messages_for_room",
+        },
+        ViewSetRepository: {
+            "create",
+            "delete",
+            "get",
+            "get_all",
+            "patch",
+            "update",
+        },
     }
 
-    assert expected_methods.issubset(protocol_methods)
+    missing: list[str] = []
+    for protocol, expected_methods in expected_by_protocol.items():
+        protocol_methods = {
+            name
+            for name, value in protocol.__dict__.items()
+            if callable(value) and not name.startswith("_")
+        }
+        absent = sorted(expected_methods - protocol_methods)
+        if absent:
+            missing.append(f"{protocol.__name__}: {absent}")
+
+    assert not missing, "Route owner protocol methods missing:\n" + "\n".join(
+        missing
+    )

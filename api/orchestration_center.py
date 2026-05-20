@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.params import Depends as DependsParam
 from fastapi.responses import JSONResponse
 
@@ -127,8 +127,6 @@ async def summarize_meta_task_for_base_task():
     responses=LEGACY_GONE_RESPONSES,
 )
 async def process_room_user_message(
-    request: Request,
-    background_tasks: BackgroundTasks,
 ):
     """
     **Deprecated.** Message processing is now triggered internally by sendMessage.

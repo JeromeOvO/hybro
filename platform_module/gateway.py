@@ -306,7 +306,7 @@ class PlatformGateway:
                 return {
                     "jsonrpc": "2.0",
                     "id": str(event.get("task_id") or event.get("taskId") or ""),
-                    "error": error if isinstance(error, dict) else {"message": str(error)},
+                    "error": _jsonrpc_error(error),
                 }
         raw = payload.get("raw") if isinstance(payload, dict) else None
         envelope_id = None
@@ -459,6 +459,14 @@ def _jsonrpc_response_from_raw(value: dict[str, Any]) -> dict[str, Any] | None:
         response["result"] = value["result"]
         return response
     return None
+
+
+def _jsonrpc_error(error: Any) -> dict[str, Any]:
+    if isinstance(error, dict):
+        if "code" in error:
+            return error
+        return {"code": -32000, **error}
+    return {"code": -32000, "message": str(error)}
 
 
 __all__ = ["PlatformGateway"]
