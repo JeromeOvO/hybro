@@ -417,11 +417,14 @@ class PlatformGateway:
         return [str(mode) for mode in modes if mode]
 
     async def _ensure_directly_callable(self, agent: AgentInfo) -> None:
-        directly_callable = agent.source != "hub"
-        if self._deps.agent_registry is not None:
+        if agent.source == "hub" or agent.hub_id:
+            directly_callable = False
+        elif self._deps.agent_registry is not None:
             directly_callable = await self._deps.agent_registry.is_directly_callable(
                 agent.agent_id
             )
+        else:
+            directly_callable = True
         if not directly_callable:
             raise GatewayPlatformError(
                 502,

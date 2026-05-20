@@ -12,9 +12,15 @@ from platform_module import PlatformConfig, PlatformDeps
 
 
 class FakeRegistry:
-    def __init__(self, agents: dict[str, AgentInfo], cards: dict[str, AgentCardSnapshot]):
+    def __init__(
+        self,
+        agents: dict[str, AgentInfo],
+        cards: dict[str, AgentCardSnapshot],
+        directly_callable: bool | None = None,
+    ):
         self.agents = agents
         self.cards = cards
+        self.directly_callable = directly_callable
 
     async def get_agent(self, agent_id: str) -> AgentInfo | None:
         return self.agents.get(agent_id)
@@ -36,6 +42,8 @@ class FakeRegistry:
         return self.agents.get(agent_id, AgentInfo(agent_id=agent_id)).status == "active"
 
     async def is_directly_callable(self, agent_id: str) -> bool:
+        if self.directly_callable is not None:
+            return self.directly_callable
         agent = self.agents.get(agent_id)
         return agent is not None and agent.source != "hub"
 
@@ -345,6 +353,7 @@ def _gateway(
     discovery_query_expander=None,
     agent_rate_limit_collection=None,
     agent_call_counter=None,
+    directly_callable: bool | None = None,
 ):
     agent = agent or _agent()
     cards = {
@@ -359,7 +368,11 @@ def _gateway(
     return PlatformGateway(
         config=config or PlatformConfig(gateway_base_url="https://api.hybro.ai/api/v1"),
         deps=PlatformDeps(
-            agent_registry=FakeRegistry({agent.agent_id: agent}, cards),
+            agent_registry=FakeRegistry(
+                {agent.agent_id: agent},
+                cards,
+                directly_callable=directly_callable,
+            ),
             agent_matcher=matcher or FakeMatcher([]),
             discovery_provider=discovery_provider,
             discovery_query_expander=discovery_query_expander,
@@ -413,6 +426,20 @@ async def test_missing_or_inactive_agent_returns_404():
 @pytest.mark.asyncio
 async def test_hub_agent_direct_send_returns_502():
     gateway = _gateway(agent=_agent(source="hub"))
+
+    with pytest.raises(Exception) as exc_info:
+        await gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail["error"] == "hub_agent_not_directly_callable"
+
+
+@pytest.mark.asyncio
+async def test_hub_agent_direct_send_returns_502_when_registry_marks_callable():
+    gateway = _gateway(
+        agent=_agent(source="hub", hub_id="hub-1"),
+        directly_callable=True,
+    )
 
     with pytest.raises(Exception) as exc_info:
         await gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
@@ -906,6 +933,20 @@ async def test_non_streaming_agent_stream_falls_back_to_sync_send():
 @pytest.mark.asyncio
 async def test_prepare_stream_raises_before_streaming_for_hub_agent():
     gateway = _gateway(agent=_agent(source="hub"))
+
+    with pytest.raises(Exception) as exc_info:
+        await gateway.prepare_stream("agent-1", {"text": "hi"}, "owner-1")
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail["error"] == "hub_agent_not_directly_callable"
+
+
+@pytest.mark.asyncio
+async def test_prepare_stream_rejects_hub_agent_when_registry_marks_callable():
+    gateway = _gateway(
+        agent=_agent(source="hub", hub_id="hub-1"),
+        directly_callable=True,
+    )
 
     with pytest.raises(Exception) as exc_info:
         await gateway.prepare_stream("agent-1", {"text": "hi"}, "owner-1")
