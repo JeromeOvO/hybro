@@ -307,6 +307,7 @@ async def lifespan(app: FastAPI):
                 run_event_sse_enabled,
             )
             from services.task_notification_service import notify_task_update
+            a2a_tasks.bind_a2a_task_dependencies(_db_svc)
             agent_group.bind_agent_group_dependencies(_db_svc)
             sse.bind_sse_dependencies(_db_svc, sse_manager)
 

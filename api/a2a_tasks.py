@@ -7,22 +7,60 @@ Tasks are now stored on room_agent_messages (consolidated from separate a2a_task
 
 from typing import Any
 
+from a2a.types import TaskState
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.params import Depends as DependsParam
 
 from common.auth import ClerkUser, get_current_user
 from common.utils.logger import get_logger
-from services.a2a_constants import NON_TERMINAL_STATES, get_retry_after_seconds
-from services.database_service import db_service
 
 logger = get_logger(__name__)
 
 router = APIRouter()
+db_service: Any | None = None
+
+PENDING_STATES = {TaskState.submitted, TaskState.working}
+INTERACTIVE_STATES = {TaskState.input_required, TaskState.auth_required}
+TERMINAL_STATES = {
+    TaskState.completed,
+    TaskState.failed,
+    TaskState.canceled,
+    TaskState.rejected,
+}
+NON_TERMINAL_STATES = PENDING_STATES | INTERACTIVE_STATES
+
+
+def get_retry_after_seconds(state: TaskState) -> int | None:
+    if state in TERMINAL_STATES:
+        return None
+    if state in INTERACTIVE_STATES:
+        return 60
+    return 30
+
+
+def bind_a2a_task_dependencies(database_service: Any) -> None:
+    global db_service
+
+    db_service = database_service
+
+
+def get_db_service() -> Any:
+    if db_service is None:
+        raise RuntimeError("A2A task database dependency has not been bound")
+    return db_service
+
+
+def _resolve_dependency(value: Any, provider) -> Any:
+    if isinstance(value, DependsParam):
+        return provider()
+    return value
 
 
 @router.get("/a2a-tasks/{message_id}")
 async def get_task_status(
     message_id: str,
     current_user: ClerkUser = Depends(get_current_user),
+    db: Any = Depends(get_db_service),
 ) -> dict[str, Any]:
     """
     Get the status of a long-running A2A task.
@@ -34,7 +72,8 @@ async def get_task_status(
     Returns:
         Task status with optional retry_after_seconds hint
     """
-    msg = await db_service.get_room_agent_message_by_message_id(message_id)
+    db = _resolve_dependency(db, get_db_service)
+    msg = await db.get_room_agent_message_by_message_id(message_id)
     if not msg or not msg.has_task_tracking:
         raise HTTPException(status_code=404, detail="Task not found")
 
@@ -67,6 +106,7 @@ async def list_room_tasks(
     room_id: str,
     limit: int = 50,
     current_user: ClerkUser = Depends(get_current_user),
+    db: Any = Depends(get_db_service),
 ) -> dict[str, Any]:
     """
     List all A2A tasks for a room.
@@ -80,7 +120,8 @@ async def list_room_tasks(
         List of tasks for the room
     """
     # Get task messages for room
-    messages = await db_service.get_task_messages_for_room(room_id, limit=limit)
+    db = _resolve_dependency(db, get_db_service)
+    messages = await db.get_task_messages_for_room(room_id, limit=limit)
 
     # Filter to only tasks owned by this user (or room members in future)
     user_messages = [m for m in messages if m.user_id == current_user.user_id]
@@ -119,6 +160,7 @@ async def list_room_tasks(
 @router.get("/users/me/a2a-tasks")
 async def list_user_pending_tasks(
     current_user: ClerkUser = Depends(get_current_user),
+    db: Any = Depends(get_db_service),
 ) -> dict[str, Any]:
     """
     List all pending A2A tasks for the current user.
@@ -130,7 +172,8 @@ async def list_user_pending_tasks(
         List of pending tasks for the user
     """
     non_terminal_state_values = [s.value for s in NON_TERMINAL_STATES]
-    messages = await db_service.get_pending_task_messages_for_user(
+    db = _resolve_dependency(db, get_db_service)
+    messages = await db.get_pending_task_messages_for_user(
         current_user.user_id, non_terminal_state_values
     )
 
