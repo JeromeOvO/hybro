@@ -1,4 +1,5 @@
 import ast
+import importlib
 import json
 from pathlib import Path
 
@@ -78,6 +79,12 @@ SDK_CONFINEMENT_ROOTS = (
     "platform_module",
     "common",
     "app_shell",
+)
+
+PHASE9_IMPORT_SMOKE_MODULES = (
+    "hub_runtime_bridge",
+    "hub_runtime_bridge.service.hub_publish",
+    "platform_module",
 )
 
 FORBIDDEN_SDK_IMPORT_PREFIXES = ("a2a",)
@@ -341,6 +348,29 @@ def test_a2a_sdk_imports_are_confined_or_manifest_blocked():
     violations = _sdk_import_violations()
 
     assert not violations, "Undocumented A2A SDK imports remain:\n" + "\n".join(violations)
+
+
+def test_phase9_import_smoke_modules_are_importable():
+    missing: list[str] = []
+    for module_name in PHASE9_IMPORT_SMOKE_MODULES:
+        try:
+            importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            missing.append(f"{module_name}: {exc}")
+
+    assert not missing, "Phase 9 import smoke modules are missing:\n" + "\n".join(missing)
+
+
+def test_no_numbered_duplicate_python_artifacts_are_shipped():
+    duplicates = [
+        path.as_posix()
+        for path in sorted(Path(".").rglob("* 2.py"))
+        if ".venv" not in path.parts
+    ]
+
+    assert not duplicates, "Numbered duplicate Python artifacts remain:\n" + "\n".join(
+        duplicates
+    )
 
 
 def test_a2a_sdk_blockers_are_exact_current_files():
