@@ -11,17 +11,20 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from a2a.types import (
-    Artifact,
-    Message,
-    Task,
-    TaskArtifactUpdateEvent,
-    TaskState,
-    TaskStatus,
-    TaskStatusUpdateEvent,
+from a2a_adapter.webhook_payloads import (
+    _is_proto_format,
+    _normalize_proto_payload,
+    parse_stream_response_payload,
 )
 from fastapi import HTTPException
 
+from common.a2a_constants import (
+    CommonTaskState,
+    INTERACTIVE_STATES,
+    is_failure_state,
+    is_terminal_state,
+    normalize_task_state_value,
+)
 from common.utils.a2a_helpers import (
     extract_error_message,
     extract_parts_from_artifacts,
@@ -29,7 +32,6 @@ from common.utils.a2a_helpers import (
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
 from execution.dispatch.transports.base import AgentTransport
-from common.a2a_constants import INTERACTIVE_STATES, is_failure_state, is_terminal_state
 
 if TYPE_CHECKING:
     from execution.dispatch.response_handler import AgentResponseHandler
@@ -123,7 +125,7 @@ class WebhookTransport(AgentTransport):
             if self._task_notifier is not None:
                 await self._task_notifier(
                     message_id=message_id,
-                    state=TaskState.canceled,
+                    state=CommonTaskState.CANCELED,
                     room_id=current_msg.room_id,
                     user_id=current_msg.user_id or "",
                 )
@@ -153,7 +155,7 @@ class WebhookTransport(AgentTransport):
 
         return {"status": "accepted"}
 
-    def _task_to_event(self, task: Task, msg: RoomAgentMessage) -> AgentEvent:
+    def _task_to_event(self, task: Any, msg: RoomAgentMessage) -> AgentEvent:
         """Convert A2A Task -> AgentEvent."""
         state = task.status.state
         base = dict(
@@ -179,12 +181,14 @@ class WebhookTransport(AgentTransport):
         if not text and task.status and task.status.message:
             text = extract_error_message(task) or None
 
-        if state == TaskState.canceled:
+        state_value = normalize_task_state_value(state) or str(state)
+
+        if state == CommonTaskState.CANCELED:
             return AgentEvent(
                 kind="canceled",
                 **base,
                 text=text or "",
-                state=state.value,
+                state=state_value,
             )
 
         if is_failure_state(state):
@@ -192,7 +196,7 @@ class WebhookTransport(AgentTransport):
                 kind="error",
                 **base,
                 error_text=text or "Unknown agent error",
-                state=state.value,
+                state=state_value,
             )
 
         if state in INTERACTIVE_STATES:
@@ -200,7 +204,7 @@ class WebhookTransport(AgentTransport):
                 kind="interactive",
                 **base,
                 text=text or "",
-                state=state.value,
+                state=state_value,
             )
 
         if is_terminal_state(state):
@@ -215,7 +219,7 @@ class WebhookTransport(AgentTransport):
                 kind="response",
                 **base,
                 text=text or "",
-                state=state.value,
+                state=state_value,
                 parts=parts,
                 artifacts=serialized_artifacts,
             )
@@ -224,72 +228,11 @@ class WebhookTransport(AgentTransport):
             kind="status_update",
             **base,
             text=text or "",
-            state=state.value,
+            state=state_value,
         )
 
 
-_PROTO_STATE_MAP: dict[str, str] = {
-    "TASK_STATE_SUBMITTED": "submitted",
-    "TASK_STATE_WORKING": "working",
-    "TASK_STATE_INPUT_REQUIRED": "input-required",
-    "TASK_STATE_AUTH_REQUIRED": "auth-required",
-    "TASK_STATE_COMPLETED": "completed",
-    "TASK_STATE_FAILED": "failed",
-    "TASK_STATE_CANCELED": "canceled",
-    "TASK_STATE_REJECTED": "rejected",
-}
-
-
-def _normalize_proto_payload(data: dict[str, Any]) -> dict[str, Any]:
-    """Normalize protobuf-serialized camelCase payload to Pydantic snake_case.
-
-    A2A SDK v1.x uses protobuf and serializes via MessageToDict which produces
-    camelCase keys and TASK_STATE_* enum strings. Our Pydantic models (SDK v0.3.x)
-    expect snake_case keys and short enum names like "completed".
-    """
-    import re
-
-    def _to_snake(name: str) -> str:
-        s1 = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", name)
-        return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
-
-    def _convert(obj: Any, *, parent_key: str = "") -> Any:
-        if isinstance(obj, dict):
-            result = {}
-            for k, v in obj.items():
-                new_key = _to_snake(k)
-                new_val = _convert(v, parent_key=new_key)
-                if new_key == "state" and isinstance(new_val, str) and new_val in _PROTO_STATE_MAP:
-                    new_val = _PROTO_STATE_MAP[new_val]
-                result[new_key] = new_val
-            # Proto text parts lack `kind` — add it for Pydantic discriminator
-            if "text" in result and "kind" not in result and parent_key == "parts":
-                result["kind"] = "text"
-            elif "file" in result and "kind" not in result and parent_key == "parts":
-                result["kind"] = "file"
-            elif "data" in result and "kind" not in result and parent_key == "parts":
-                result["kind"] = "data"
-            return result
-        if isinstance(obj, list):
-            return [_convert(item, parent_key=parent_key) for item in obj]
-        return obj
-
-    return _convert(data)
-
-
-def _is_proto_format(data: dict[str, Any]) -> bool:
-    """Detect if payload uses protobuf-style camelCase format."""
-    if "contextId" in data or "artifactId" in data:
-        return True
-    status = data.get("status", {})
-    if isinstance(status, dict):
-        state_val = status.get("state", "")
-        if isinstance(state_val, str) and state_val.startswith("TASK_STATE_"):
-            return True
-    return False
-
-
-def parse_stream_response(payload: dict[str, Any], message_id: str) -> Task:
+def parse_stream_response(payload: dict[str, Any], message_id: str) -> Any:
     """Parse A2A StreamResponse format into a Task object.
 
     Per A2A spec section 4.3.3, StreamResponse is a discriminated union with:
@@ -300,67 +243,7 @@ def parse_stream_response(payload: dict[str, Any], message_id: str) -> Task:
 
     Handles both SDK v0.x (Pydantic/snake_case) and v1.x (protobuf/camelCase) formats.
     """
-    if "task" in payload:
-        logger.debug("Webhook for task %s: Received full Task in StreamResponse", message_id)
-        task_data = payload["task"]
-        if _is_proto_format(task_data):
-            task_data = _normalize_proto_payload(task_data)
-        return Task.model_validate(task_data)
-
-    if "statusUpdate" in payload or "status_update" in payload:
-        logger.debug("Webhook for task %s: Received statusUpdate in StreamResponse", message_id)
-        raw = payload.get("statusUpdate") or payload.get("status_update")
-        if _is_proto_format(raw):
-            raw = _normalize_proto_payload(raw)
-        status_event = TaskStatusUpdateEvent.model_validate(raw)
-        return Task(
-            id=status_event.task_id,
-            context_id=status_event.context_id,
-            status=status_event.status,
-        )
-
-    if "message" in payload:
-        logger.debug("Webhook for task %s: Received message in StreamResponse", message_id)
-        import uuid
-
-        msg_data = payload["message"]
-        if isinstance(msg_data, dict) and "contextId" in msg_data:
-            msg_data = _normalize_proto_payload(msg_data)
-        message = Message.model_validate(msg_data)
-        return Task(
-            id=str(uuid.uuid4()),
-            context_id=message.context_id or "",
-            status=TaskStatus(state=TaskState.completed),
-            artifacts=[
-                Artifact(
-                    artifact_id=str(uuid.uuid4()),
-                    name="response",
-                    parts=message.parts,
-                )
-            ],
-        )
-
-    if "artifactUpdate" in payload or "artifact_update" in payload:
-        logger.debug("Webhook for task %s: Received artifactUpdate in StreamResponse", message_id)
-        raw = payload.get("artifactUpdate") or payload.get("artifact_update")
-        if isinstance(raw, dict) and ("artifactId" in raw or "contextId" in raw):
-            raw = _normalize_proto_payload(raw)
-        artifact_event = TaskArtifactUpdateEvent.model_validate(raw)
-        return Task(
-            id=artifact_event.task_id,
-            context_id=artifact_event.context_id,
-            status=TaskStatus(state=TaskState.working),
-            artifacts=[artifact_event.artifact],
-        )
-
-    # Fallback: raw Task (backwards compatibility)
-    if "id" in payload and "status" in payload:
-        logger.debug("Webhook for task %s: Received raw Task (not StreamResponse envelope)", message_id)
-        if _is_proto_format(payload):
-            payload = _normalize_proto_payload(payload)
-        return Task.model_validate(payload)
-
-    raise HTTPException(
-        status_code=400,
-        detail="Invalid StreamResponse: expected 'task', 'statusUpdate', 'message', or 'artifactUpdate' key",
-    )
+    try:
+        return parse_stream_response_payload(payload, message_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

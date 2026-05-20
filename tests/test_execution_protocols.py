@@ -209,7 +209,6 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
             "a2a.types",
         },
         "execution/dispatch/transports/webhook.py": {
-            "a2a.types",
             "fastapi",
         },
     }
