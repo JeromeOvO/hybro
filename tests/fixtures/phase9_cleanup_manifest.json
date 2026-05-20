@@ -42,13 +42,6 @@
       "contract": "sdk_confinement",
       "expiry_task": "Final SDK confinement migration",
       "owner": "phase-9-platform-api-cleanup",
-      "path": "common/server/utils.py",
-      "reason": "Legacy Common A2A server utilities still build SDK JSON-RPC errors; move SDK error translation behind the A2A adapter."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
       "path": "common/types.py",
       "reason": "Legacy Common type aliases still re-export SDK part and task-state types; replace with SDK-free Common DTOs."
     },

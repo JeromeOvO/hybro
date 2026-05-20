@@ -373,6 +373,12 @@ def test_a2a_task_api_has_no_sdk_confinement_blocker():
     assert "api/a2a_tasks.py" not in blocked_paths
 
 
+def test_common_server_utils_has_no_sdk_confinement_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "common/server/utils.py" not in blocked_paths
+
+
 def test_common_package_has_no_module_or_app_shell_imports():
     violations = _common_import_violations()
 
