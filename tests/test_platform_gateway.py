@@ -153,6 +153,14 @@ class FakeTransport:
         }
 
 
+class FakeCallCounter:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, bool]] = []
+
+    async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> None:
+        self.calls.append((agent_id, success))
+
+
 class JsonRpcTransport(FakeTransport):
     async def send_message(self, agent_url: str, message, **kwargs):
         self.sent.append((agent_url, message, kwargs))
@@ -304,6 +312,7 @@ def _agent(**overrides) -> AgentInfo:
             "name": "Agent",
             "url": "https://agent.example/a2a",
             "capabilities": {"streaming": True},
+            "defaultOutputModes": ["application/json"],
         },
     }
     data.update(overrides)
@@ -318,6 +327,7 @@ def _card(agent_id: str = "agent-1") -> AgentCardSnapshot:
             "name": "Agent",
             "url": "https://agent.example/a2a",
             "capabilities": {"streaming": True},
+            "defaultOutputModes": ["application/json"],
             "supportedInterfaces": [{"url": "https://agent.example/stream"}],
             "additionalInterfaces": [{"url": "https://agent.example/jsonrpc"}],
             "additional_interfaces": [{"url": "https://agent.example/snake"}],
@@ -334,6 +344,7 @@ def _gateway(
     discovery_provider=None,
     discovery_query_expander=None,
     agent_rate_limit_collection=None,
+    agent_call_counter=None,
 ):
     agent = agent or _agent()
     cards = {
@@ -354,6 +365,7 @@ def _gateway(
             discovery_query_expander=discovery_query_expander,
             agent_transport=transport or FakeTransport(),
             agent_rate_limit_collection=agent_rate_limit_collection,
+            agent_call_counter=agent_call_counter,
         ),
     )
 
@@ -437,6 +449,38 @@ async def test_send_preserves_public_a2a_message_parts():
     assert internal_message.role == "user"
     assert internal_message.metadata == {"trace": "abc"}
     assert internal_message.parts == [{"kind": "text", "text": "hello"}]
+
+
+@pytest.mark.asyncio
+async def test_send_passes_card_output_modes_to_transport():
+    transport = FakeTransport()
+    gateway = _gateway(transport=transport)
+
+    await gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+
+    _agent_url, _internal_message, kwargs = transport.sent[0]
+    assert kwargs["accepted_output_modes"] == ["application/json"]
+
+
+@pytest.mark.asyncio
+async def test_send_records_agent_call_counter_success_and_failure():
+    success_counter = FakeCallCounter()
+    success_gateway = _gateway(agent_call_counter=success_counter)
+
+    await success_gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+
+    assert success_counter.calls == [("agent-1", True)]
+
+    failure_counter = FakeCallCounter()
+    failure_gateway = _gateway(
+        transport=FakeTransport(fail=RuntimeError("boom")),
+        agent_call_counter=failure_counter,
+    )
+
+    with pytest.raises(Exception):
+        await failure_gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+
+    assert failure_counter.calls == [("agent-1", False)]
 
 
 @pytest.mark.asyncio
@@ -689,6 +733,49 @@ async def test_stream_yields_transport_events():
             "result": {"id": "event-1", "status": {"state": "working"}},
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_stream_passes_card_output_modes_to_transport_and_records_calls():
+    transport = FakeTransport()
+    call_counter = FakeCallCounter()
+    gateway = _gateway(transport=transport, agent_call_counter=call_counter)
+
+    stream = gateway.stream_message("agent-1", {"text": "hi"}, "owner-1")
+    assert [event async for event in stream]
+
+    _agent_url, _internal_message, kwargs = transport.streamed[0]
+    assert kwargs["accepted_output_modes"] == ["application/json"]
+    assert call_counter.calls == [("agent-1", True)]
+
+
+@pytest.mark.asyncio
+async def test_stream_records_agent_call_counter_failure():
+    call_counter = FakeCallCounter()
+    gateway = _gateway(
+        transport=FakeTransport(fail=RuntimeError("boom")),
+        agent_call_counter=call_counter,
+    )
+
+    stream = gateway.stream_message("agent-1", {"text": "hi"}, "owner-1")
+    with pytest.raises(Exception):
+        [event async for event in stream]
+
+    assert call_counter.calls == [("agent-1", False)]
+
+
+@pytest.mark.asyncio
+async def test_stream_records_agent_call_counter_error_event_failure():
+    call_counter = FakeCallCounter()
+    gateway = _gateway(
+        transport=AdapterErrorStreamTransport(),
+        agent_call_counter=call_counter,
+    )
+
+    stream = gateway.stream_message("agent-1", {"text": "hi"}, "owner-1")
+    assert [event async for event in stream]
+
+    assert call_counter.calls == [("agent-1", False)]
 
 
 @pytest.mark.asyncio

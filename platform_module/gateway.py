@@ -175,12 +175,16 @@ class PlatformGateway:
         await self._check_agent_rate_limit(agent, user_id)
         transport = self._require_transport()
         internal_message = self._message_to_internal(agent_id, message)
+        card = await self._card_for_agent(agent)
+        accepted_output_modes = self._accepted_output_modes(card)
 
+        success = False
         try:
             result = await transport.send_message(
                 agent.url or "",
                 internal_message,
                 user_id=user_id,
+                accepted_output_modes=accepted_output_modes,
             )
             if getattr(result, "status", None) == "error":
                 raise GatewayPlatformError(
@@ -193,10 +197,12 @@ class PlatformGateway:
                         ),
                     },
                 )
+            response_payload = self._task_result_to_a2a_response(result)
+            success = "error" not in response_payload
             await self._record_agent_request(agent, user_id)
             return GatewayResponse(
                 status_code=200,
-                payload=self._task_result_to_a2a_response(result),
+                payload=response_payload,
             )
         except GatewayPlatformError:
             raise
@@ -208,6 +214,8 @@ class PlatformGateway:
                     "message": f"Agent communication failed: {exc}",
                 },
             ) from exc
+        finally:
+            await self._record_agent_call(agent.agent_id, success=success)
 
     async def stream_message(
         self, agent_id: str, message: InternalAgentMessage, user_id: str
@@ -225,14 +233,17 @@ class PlatformGateway:
         transport = self._require_transport()
         internal_message = self._message_to_internal(agent_id, message)
         card = await self._card_for_agent(agent)
+        accepted_output_modes = self._accepted_output_modes(card)
 
         if not self._supports_streaming(agent, card):
             async def _sync_event() -> AsyncIterator[GatewayResponse]:
+                success = False
                 try:
                     result = await transport.send_message(
                         agent.url or "",
                         internal_message,
                         user_id=user_id,
+                        accepted_output_modes=accepted_output_modes,
                     )
                     if getattr(result, "status", None) == "error":
                         raise GatewayPlatformError(
@@ -245,10 +256,12 @@ class PlatformGateway:
                                 ),
                             },
                     )
+                    response_payload = self._task_result_to_a2a_response(result)
+                    success = "error" not in response_payload
                     await self._record_agent_request(agent, user_id)
                     yield GatewayResponse(
                         status_code=200,
-                        payload=self._task_result_to_a2a_response(result),
+                        payload=response_payload,
                     )
                 except GatewayPlatformError:
                     raise
@@ -260,24 +273,39 @@ class PlatformGateway:
                             "message": f"Agent communication failed: {exc}",
                         },
                     ) from exc
+                finally:
+                    await self._record_agent_call(agent.agent_id, success=success)
 
             return _sync_event()
 
         async def _events() -> AsyncIterator[GatewayResponse]:
+            success = False
+            saw_error = False
             try:
                 async for event in transport.stream_message(
                     agent.url or "",
                     internal_message,
                     user_id=user_id,
+                    accepted_output_modes=accepted_output_modes,
                 ):
+                    payload = self._stream_event_to_a2a_response(event)
+                    if "error" in payload:
+                        saw_error = True
+                    else:
+                        success = True
                     yield GatewayResponse(
                         status_code=200,
-                        payload=self._stream_event_to_a2a_response(event),
+                        payload=payload,
                     )
                 await self._record_agent_request(agent, user_id)
+                if saw_error:
+                    success = False
+                elif not success:
+                    success = True
             except GatewayPlatformError:
                 raise
             except Exception as exc:
+                success = False
                 raise GatewayPlatformError(
                     502,
                     {
@@ -285,6 +313,8 @@ class PlatformGateway:
                         "message": f"Agent communication failed: {exc}",
                     },
                 ) from exc
+            finally:
+                await self._record_agent_call(agent.agent_id, success=success)
 
         return _events()
 
@@ -379,6 +409,13 @@ class PlatformGateway:
             return dict(agent.raw_card)
         return {"name": agent.name, "url": agent.url}
 
+    @staticmethod
+    def _accepted_output_modes(card: dict) -> list[str] | None:
+        modes = card.get("defaultOutputModes") or card.get("default_output_modes")
+        if not isinstance(modes, list):
+            return None
+        return [str(mode) for mode in modes if mode]
+
     async def _ensure_directly_callable(self, agent: AgentInfo) -> None:
         directly_callable = agent.source != "hub"
         if self._deps.agent_registry is not None:
@@ -426,6 +463,20 @@ class PlatformGateway:
         ):
             return
         await self._agent_limiter.record_agent_request(agent.agent_id, user_id)
+
+    async def _record_agent_call(self, agent_id: str, *, success: bool) -> None:
+        counter = self._deps.agent_call_counter
+        if counter is None:
+            return
+        try:
+            await counter.increment_agent_call_count(agent_id, success=success)
+        except Exception as exc:
+            if self._deps.logger is not None:
+                self._deps.logger.error(
+                    "Failed to record agent call count for %s: %s",
+                    agent_id,
+                    exc,
+                )
 
     def _require_transport(self):
         if self._deps.agent_transport is None:

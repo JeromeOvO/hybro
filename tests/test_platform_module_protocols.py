@@ -179,6 +179,7 @@ def test_container_builds_platform_facade_from_protocol_dependencies():
         agent_registry = object()
         agent_matcher = object()
         agent_management = object()
+        agent_call_counter = object()
 
     class Mongo:
         def collection(self, name: str):
@@ -234,6 +235,7 @@ def test_container_builds_platform_facade_from_protocol_dependencies():
     facade = create_platform_facade(config=PlatformConfig(), deps=deps)
 
     assert facade.deps.agent_registry is AgentDeps.agent_registry
+    assert facade.deps.agent_call_counter is AgentDeps.agent_call_counter
     assert facade.deps.gateway_rate_limit_collection.collection_name == (
         "gateway_api_requests"
     )

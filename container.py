@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from agent import AgentFacade, AgentMongoRepository
 from common.protocols import (
+    AgentCallCounter,
     AgentCardResolver,
     AgentExclusionReader,
     AgentManagement,
@@ -81,6 +82,7 @@ class AgentDeps:
     agent_matcher: AgentMatcher
     agent_management: AgentManagement
     agent_registry_writer: AgentRegistryWriter
+    agent_call_counter: AgentCallCounter
 
 
 @dataclass(frozen=True)
@@ -235,6 +237,7 @@ def create_platform_deps(
         discovery_query_expander=discovery_query_expander,
         agent_transport=agent_transport,
         agent_card_resolver=agent_card_resolver,
+        agent_call_counter=agent_deps.agent_call_counter,
         redis=redis,
         gateway_rate_limit_collection=RateLimitCollectionAdapter(
             mongo.collection("gateway_api_requests"),
@@ -463,6 +466,7 @@ def create_agent_deps(
         agent_matcher=facade,
         agent_management=facade,
         agent_registry_writer=facade,
+        agent_call_counter=facade,
     )
 
 

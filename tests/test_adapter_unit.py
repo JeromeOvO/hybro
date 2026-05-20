@@ -242,6 +242,42 @@ def test_translator_a2a_card_to_snapshot_supports_dicts_and_sdk_like_objects():
     }
 
 
+def test_transport_send_request_includes_accepted_output_modes():
+    from a2a_adapter.transport import _build_send_request
+
+    request = _build_send_request(
+        InternalAgentMessage(
+            agent_id="agent-1",
+            role="user",
+            parts=[{"kind": "text", "text": "hello"}],
+        ),
+        streaming=False,
+        accepted_output_modes=["application/json"],
+    )
+
+    assert request["params"]["configuration"]["acceptedOutputModes"] == [
+        "application/json"
+    ]
+
+
+def test_transport_stream_request_includes_accepted_output_modes():
+    from a2a_adapter.transport import _build_send_request
+
+    request = _build_send_request(
+        InternalAgentMessage(
+            agent_id="agent-1",
+            role="user",
+            parts=[{"kind": "text", "text": "hello"}],
+        ),
+        streaming=True,
+        accepted_output_modes=["text/markdown"],
+    )
+
+    assert request["params"]["configuration"]["acceptedOutputModes"] == [
+        "text/markdown"
+    ]
+
+
 @pytest.mark.asyncio
 async def test_card_resolver_fetches_translates_and_caches_agent_card():
     from a2a_adapter.card_resolver import AgentCardResolverImpl

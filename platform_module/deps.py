@@ -5,6 +5,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from common.protocols import (
+    AgentCallCounter,
     AgentCardResolver,
     AgentManagement,
     AgentMatcher,
@@ -51,6 +52,7 @@ class PlatformDeps:
     discovery_query_expander: DiscoveryQueryExpander | None = None
     agent_transport: AgentTransport | None = None
     agent_card_resolver: AgentCardResolver | None = None
+    agent_call_counter: AgentCallCounter | None = None
     redis: RedisKV | None = None
     gateway_rate_limit_collection: RateLimitCollection | None = None
     discovery_rate_limit_collection: RateLimitCollection | None = None
