@@ -397,6 +397,48 @@ def test_agent_viewset_mutations_record_vector_side_effect_protocols():
     )
 
 
+def test_agent_viewset_routes_inject_repository_protocol_not_raw_database():
+    from main import app
+
+    violations: list[str] = []
+    for route in app.routes:
+        if (
+            not isinstance(route, APIRoute)
+            or route.path not in {"/api/v1/agents", "/api/v1/agents/{item_id}"}
+        ):
+            continue
+        dependencies = sorted(
+            getattr(dependency.call, "__name__", repr(dependency.call))
+            for dependency in route.dependant.dependencies
+        )
+        if "get_viewset_db" in dependencies:
+            violations.append(f"{route.path} {route.name}: raw db dependency")
+        if "get_viewset_repository" not in dependencies:
+            violations.append(
+                f"{route.path} {route.name}: missing repository protocol dependency"
+            )
+
+    assert not violations, "Agent viewset routes bypass repository protocol:\n" + "\n".join(
+        violations
+    )
+
+
+def test_viewset_route_adapter_does_not_manage_repository_construction_or_sessions():
+    source = Path("api/viewset.py").read_text() + "\n" + Path(
+        "api/agent_viewset.py"
+    ).read_text()
+    forbidden = (
+        "Depends(get_viewset_db)",
+        "db=Depends(",
+        ".client.start_session",
+    )
+    violations = [value for value in forbidden if value in source]
+
+    assert not violations, "ViewSet route adapters still manage datastore details:\n" + "\n".join(
+        violations
+    )
+
+
 def test_legacy_workflow_routes_keep_public_shape_without_execution_dependencies():
     from main import app
 
@@ -696,15 +738,15 @@ def test_route_owner_protocols_do_not_expose_any_annotations():
             if not callable(value) or name.startswith("_"):
                 continue
             signature = inspect.signature(value)
-            if signature.return_annotation is Any:
+            if signature.return_annotation in {Any, object}:
                 violations.append(f"{protocol.__name__}.{name} return")
             for parameter in signature.parameters.values():
-                if parameter.annotation is Any:
+                if parameter.annotation in {Any, object}:
                     violations.append(
                         f"{protocol.__name__}.{name}.{parameter.name}"
                     )
 
-    assert not violations, "Route owner protocols expose Any:\n" + "\n".join(
+    assert not violations, "Route owner protocols expose broad annotations:\n" + "\n".join(
         violations
     )
 

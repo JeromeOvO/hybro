@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from contextlib import AbstractAsyncContextManager
+from types import TracebackType
 from typing import Protocol, TypeAlias, runtime_checkable
 
 from pydantic import BaseModel
@@ -8,7 +10,9 @@ from models.agent import Agent, AgentCapabilityIssue, IssueStatus
 from models.request import (
     AgentCenterRequest,
     ChatMemoryRequest,
+    FilterParams,
     InspectionCenterRequest,
+    PaginationParams,
     RoomCenterRoomMessageRequest,
     RoomCenterRoomSettingRequest,
     RoomCenterUserMessageRequest,
@@ -30,6 +34,33 @@ JsonMap: TypeAlias = Mapping[str, JsonValue]
 RoutePayload: TypeAlias = BaseModel | JsonMap
 ViewSetResult: TypeAlias = BaseModel | JsonMap | None
 VectorIndexResult: TypeAlias = JsonMap | None
+ViewSetOperation: TypeAlias = Callable[[], Awaitable[ViewSetResult]]
+
+
+@runtime_checkable
+class ViewSetTransaction(Protocol):
+    def start_transaction(self) -> AbstractAsyncContextManager[None]: ...
+
+
+@runtime_checkable
+class ViewSetSessionContext(Protocol):
+    async def __aenter__(self) -> ViewSetTransaction: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None: ...
+
+
+@runtime_checkable
+class ViewSetDatabaseClient(Protocol):
+    def start_session(self) -> Awaitable[ViewSetSessionContext]: ...
+
+
+@runtime_checkable
+class ViewSetDatabase(Protocol):
+    client: ViewSetDatabaseClient
 
 
 @runtime_checkable
@@ -49,19 +80,16 @@ class ViewSetRepository(Protocol):
     async def get(self, item_id: str | int) -> ViewSetResult: ...
     async def get_all(
         self,
-        *,
-        skip: int = 0,
-        limit: int = 100,
-        filters: JsonMap | None = None,
-        sort: list[tuple[str, int]] | None = None,
-    ) -> list[ViewSetResult]: ...
+        pagination: PaginationParams | None = None,
+        filters: FilterParams | None = None,
+    ) -> ViewSetResult: ...
     async def patch(self, item_id: str | int, data: RoutePayload) -> ViewSetResult: ...
     async def update(self, item_id: str | int, data: RoutePayload) -> ViewSetResult: ...
 
 
 @runtime_checkable
 class ViewSetDatabaseProvider(Protocol):
-    def __call__(self) -> BaseModel | JsonMap: ...
+    def __call__(self) -> ViewSetDatabase: ...
 
 
 @runtime_checkable
@@ -70,10 +98,20 @@ class ViewSetRepositoryFactory(Protocol):
         self,
         *,
         collection_name: str,
-        db: BaseModel | JsonMap,
-        pinecone: BaseModel | JsonMap | None,
+        db: ViewSetDatabase,
+        pinecone: "VectorIndex | None",
         pk_field: str = "_id",
     ) -> ViewSetRepository: ...
+
+
+@runtime_checkable
+class ViewSetRepositoryProvider(Protocol):
+    def get_repository(
+        self, *, collection_name: str, pk_field: str = "_id"
+    ) -> ViewSetRepository: ...
+    async def run_in_transaction(
+        self, operation: ViewSetOperation
+    ) -> ViewSetResult: ...
 
 
 @runtime_checkable
@@ -232,6 +270,7 @@ __all__ = [
     "ViewSetDatabaseProvider",
     "ViewSetRepository",
     "ViewSetRepositoryFactory",
+    "ViewSetRepositoryProvider",
     "WebhookTransport",
     "WebhookTransportFactory",
 ]

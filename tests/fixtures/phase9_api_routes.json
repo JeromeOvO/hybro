@@ -377,7 +377,7 @@
   },
   {
     "auth_dependencies": [
-      "get_viewset_db"
+      "get_viewset_repository"
     ],
     "methods": [
       "GET"
@@ -397,7 +397,7 @@
   },
   {
     "auth_dependencies": [
-      "get_viewset_db"
+      "get_viewset_repository"
     ],
     "methods": [
       "POST"
@@ -421,7 +421,7 @@
   },
   {
     "auth_dependencies": [
-      "get_viewset_db"
+      "get_viewset_repository"
     ],
     "methods": [
       "DELETE"
@@ -445,7 +445,7 @@
   },
   {
     "auth_dependencies": [
-      "get_viewset_db"
+      "get_viewset_repository"
     ],
     "methods": [
       "GET"
@@ -465,7 +465,7 @@
   },
   {
     "auth_dependencies": [
-      "get_viewset_db"
+      "get_viewset_repository"
     ],
     "methods": [
       "PATCH"
@@ -489,7 +489,7 @@
   },
   {
     "auth_dependencies": [
-      "get_viewset_db"
+      "get_viewset_repository"
     ],
     "methods": [
       "PUT"

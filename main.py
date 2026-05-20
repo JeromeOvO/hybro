@@ -34,6 +34,7 @@ from api import (
 )
 from app_shell.api_key_auth import MongoAPIKeyAuthenticator
 from app_shell.health_check import AppShellHealthCheck, HealthCheck
+from app_shell.viewset import AppShellViewSetRepositoryProvider
 from common.api_key_auth import bind_api_key_authenticator
 from common.auth import bind_auth_config, get_current_user
 from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
@@ -260,8 +261,10 @@ async def lifespan(app: FastAPI):
                 collection=mongodb.agent_requests_collection,
             )
             viewset.bind_viewset_dependencies(
-                get_db=get_db,
-                create_repository=Repository,
+                provider=AppShellViewSetRepositoryProvider(
+                    db_provider=get_db,
+                    create_repository=Repository,
+                ),
             )
             agent_viewset.bind_agent_viewset_dependencies(
                 embedding_source=openai_service,

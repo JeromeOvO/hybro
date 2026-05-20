@@ -1,5 +1,3 @@
-from typing import Any
-
 from fastapi import HTTPException
 from pydantic import BaseModel
 
@@ -112,27 +110,26 @@ class AgentViewSet(viewset.ViewSet):
                 _require_vector_index().delete([str(primary_key)])
         return result
 
-    async def _handle_operation(self, action: str, db: object, *args):
+    async def _handle_operation(
+        self, action: str, repo: viewset.ViewSetRepository, *args
+    ):
         """Generic handler for CRUD operations."""
-        repo = viewset._create_repository(
-            collection_name=self.collection_name,
-            db=db,
-            pinecone=None,
-            pk_field=self.pk_field,
-        )
         repo_method = getattr(repo, REPO_ACTIONS_MAP.get(action, action))
         if action in [viewset.LIST, viewset.RETRIEVE]:
             # No update to Pinecone index for read operations
             return await repo_method(*args)
 
-        if self.use_transactions:
-            async with await db.client.start_session() as session:
-                async with session.start_transaction():
-                    return await self._update_db_and_pinecone(repo, action, *args)
-        return await self._update_db_and_pinecone(repo, action, *args)
+        async def operation():
+            return await self._update_db_and_pinecone(repo, action, *args)
 
-    def get_filters(self, db, filter_params):
-        base_query = super().get_filters(db, filter_params)
+        if self.use_transactions:
+            return await viewset._require_repository_provider().run_in_transaction(
+                operation
+            )
+        return await operation()
+
+    def get_filters(self, filter_params):
+        base_query = super().get_filters(filter_params)
         filters = filter_params.filters if filter_params else {}
 
         # Always exclude null agent_ids

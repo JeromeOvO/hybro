@@ -1,10 +1,9 @@
 from collections.abc import Callable, Iterable
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
-from app_shell.bound import ViewSetDatabaseProvider, ViewSetRepositoryFactory
+from app_shell.bound import ViewSetRepository, ViewSetRepositoryProvider, ViewSetResult
 from models.request import FilterParams, PaginationParams
 
 # from models.response import PaginatedResponse
@@ -26,32 +25,22 @@ REPO_ACTIONS_MAP = {
     PATCH: "patch",
 }
 
-db_provider: ViewSetDatabaseProvider | None = None
-repository_factory: ViewSetRepositoryFactory | None = None
+repository_provider: ViewSetRepositoryProvider | None = None
 
 
 def bind_viewset_dependencies(
     *,
-    get_db: ViewSetDatabaseProvider,
-    create_repository: ViewSetRepositoryFactory,
+    provider: ViewSetRepositoryProvider,
 ) -> None:
-    global db_provider, repository_factory
+    global repository_provider
 
-    db_provider = get_db
-    repository_factory = create_repository
-
-
-def get_viewset_db() -> object:
-    if db_provider is None:
-        raise RuntimeError("ViewSet database dependency has not been bound")
-    return db_provider()
+    repository_provider = provider
 
 
-def _create_repository(**kwargs):
-    if repository_factory is None:
-        raise RuntimeError("ViewSet repository dependency has not been bound")
-    return repository_factory(**kwargs)
-
+def _require_repository_provider() -> ViewSetRepositoryProvider:
+    if repository_provider is None:
+        raise RuntimeError("ViewSet repository provider has not been bound")
+    return repository_provider
 
 
 class ViewSet:
@@ -141,13 +130,19 @@ class ViewSet:
             if action in self.allow:
                 getattr(self, f"_add_{action}_route")()
 
+    def get_viewset_repository(self) -> ViewSetRepository:
+        return _require_repository_provider().get_repository(
+            collection_name=self.collection_name,
+            pk_field=self.pk_field,
+        )
+
     def _add_list_route(self):
         """Add GET / route for listing items."""
         schema_out = self.schemas[LIST]["out"]
 
         async def list_endpoint(
             request: Request,
-            db=Depends(get_viewset_db),
+            repo: ViewSetRepository = Depends(self.get_viewset_repository),
             page: int | None = Query(None, ge=1, description="Page number (1-indexed)"),
             limit: int | None = Query(
                 None, ge=1, le=100, description="Number of items per page"
@@ -173,7 +168,7 @@ class ViewSet:
                 filters=filter_dict, sort_by=sort_by, sort_order=sort_order
             )
 
-            return await self._list(db, pagination, filter_params)
+            return await self._list(repo, pagination, filter_params)
 
         # Use the configured schema for LIST operation
         response_model = schema_out
@@ -191,9 +186,9 @@ class ViewSet:
 
         async def retrieve_endpoint(
             item_id: str,
-            db=Depends(get_viewset_db),
+            repo: ViewSetRepository = Depends(self.get_viewset_repository),
         ):
-            result = await self._retrieve(db, item_id)
+            result = await self._retrieve(repo, item_id)
             if not result:
                 raise HTTPException(
                     status_code=404, detail=f"{self.resource_name} not found"
@@ -214,9 +209,9 @@ class ViewSet:
 
         async def create_endpoint(
             item: schema_in,
-            db=Depends(get_viewset_db),
+            repo: ViewSetRepository = Depends(self.get_viewset_repository),
         ):
-            return await self._create(db, item)
+            return await self._create(repo, item)
 
         self.router.add_api_route(
             "",
@@ -234,9 +229,9 @@ class ViewSet:
         async def update_endpoint(
             item_id: str,
             item: schema_in,
-            db=Depends(get_viewset_db),
+            repo: ViewSetRepository = Depends(self.get_viewset_repository),
         ):
-            return await self._update(db, item_id, item)
+            return await self._update(repo, item_id, item)
 
         self.router.add_api_route(
             "/{item_id}",
@@ -253,9 +248,9 @@ class ViewSet:
         async def patch_endpoint(
             item_id: str,
             item: schema_in,
-            db=Depends(get_viewset_db),
+            repo: ViewSetRepository = Depends(self.get_viewset_repository),
         ):
-            return await self._patch(db, item_id, item)
+            return await self._patch(repo, item_id, item)
 
         self.router.add_api_route(
             "/{item_id}",
@@ -269,9 +264,9 @@ class ViewSet:
 
         async def delete_endpoint(
             item_id: str,
-            db=Depends(get_viewset_db),
+            repo: ViewSetRepository = Depends(self.get_viewset_repository),
         ):
-            return await self._delete(db, item_id)
+            return await self._delete(repo, item_id)
 
         self.router.add_api_route(
             "/{item_id}",
@@ -283,25 +278,20 @@ class ViewSet:
     # --- Default endpoint implementations (can be overridden) ---
 
     async def _handle_operation(
-        self, action: str, db: Any, *args
-    ):
+        self, action: str, repo: ViewSetRepository, *args
+    ) -> ViewSetResult:
         """Generic handler for CRUD operations."""
-        repo = _create_repository(
-            collection_name=self.collection_name,
-            db=db,
-            pinecone=None,
-            pk_field=self.pk_field,
-        )
         method = getattr(repo, REPO_ACTIONS_MAP.get(action, action))
-        # If you need db, get it from self.repo.db or let repo handle it
+
+        async def operation() -> ViewSetResult:
+            return await method(*args)
+
         if self.use_transactions:
-            async with await db.client.start_session() as session:
-                async with session.start_transaction():
-                    return await method(*args)
-        return await method(*args)
+            return await _require_repository_provider().run_in_transaction(operation)
+        return await operation()
 
     def get_filters(
-        self, db: Any, filter_params: FilterParams | None = None
+        self, filter_params: FilterParams | None = None
     ) -> dict:
         """
         Get the base query filter for the list endpoint.
@@ -335,12 +325,12 @@ class ViewSet:
 
     async def _list(
         self,
-        db: Any,
+        repo: ViewSetRepository,
         pagination: PaginationParams | None = None,
         filters: FilterParams | None = None,
     ):
         # Use the customizable get_filters method
-        custom_filters = self.get_filters(db, filters)
+        custom_filters = self.get_filters(filters)
 
         # Create a new FilterParams with the processed query
         processed_filters = FilterParams(
@@ -350,43 +340,43 @@ class ViewSet:
         )
 
         return await self._handle_operation(
-            LIST, db, pagination, processed_filters
+            LIST, repo, pagination, processed_filters
         )
 
-    async def _retrieve(self, db, item_id):
-        result = await self._handle_operation(RETRIEVE, db, item_id)
+    async def _retrieve(self, repo: ViewSetRepository, item_id):
+        result = await self._handle_operation(RETRIEVE, repo, item_id)
         # if not result:
         #     raise HTTPException(
         #         status_code=404, detail=f"{self.resource_name} not found"
         #     )
         return result
 
-    async def _create(self, db, item):
-        result = await self._handle_operation(CREATE, db, item)
+    async def _create(self, repo: ViewSetRepository, item):
+        result = await self._handle_operation(CREATE, repo, item)
         if not result:
             raise HTTPException(
                 status_code=400, detail=f"Failed to create {self.resource_name}"
             )
         return result
 
-    async def _update(self, db, item_id, item):
-        result = await self._handle_operation(UPDATE, db, item_id, item)
+    async def _update(self, repo: ViewSetRepository, item_id, item):
+        result = await self._handle_operation(UPDATE, repo, item_id, item)
         if not result:
             raise HTTPException(
                 status_code=400, detail=f"Failed to update {self.resource_name}"
             )
         return result
 
-    async def _patch(self, db, item_id, item):
-        result = await self._handle_operation(PATCH, db, item_id, item)
+    async def _patch(self, repo: ViewSetRepository, item_id, item):
+        result = await self._handle_operation(PATCH, repo, item_id, item)
         if not result:
             raise HTTPException(
                 status_code=400, detail=f"Failed to patch {self.resource_name}"
             )
         return result
 
-    async def _delete(self, db, item_id):
-        return await self._handle_operation(DELETE, db, item_id)
+    async def _delete(self, repo: ViewSetRepository, item_id):
+        return await self._handle_operation(DELETE, repo, item_id)
 
     # --- Public methods for customization ---
 

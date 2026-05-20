@@ -32,17 +32,29 @@ def test_platform_module_packages_are_registered():
 
 
 def test_platform_facade_exposes_common_protocol_surfaces():
+    from common.protocols import GatewayDiscoveryProvider
     from platform_module import PlatformConfig, PlatformDeps, PlatformFacade
 
     facade = PlatformFacade(config=PlatformConfig(), deps=PlatformDeps())
 
     assert isinstance(facade.gateway_service, GatewayService)
-    assert facade.discovery_service is not None
+    assert isinstance(facade.discovery_service, GatewayDiscoveryProvider)
     assert isinstance(facade.gateway_rate_limiter, APIKeyRateLimiter)
     assert isinstance(facade.discovery_rate_limiter, APIKeyRateLimiter)
     assert isinstance(facade.agent_rate_limiter, RateLimiter)
     assert isinstance(facade.file_storage, FileStorage)
     assert facade.content_storage is not None
+
+
+def test_platform_facade_properties_are_annotated_as_common_protocols():
+    from typing import get_type_hints
+
+    from common.protocols import GatewayDiscoveryProvider
+    from platform_module import PlatformFacade
+
+    discovery_hints = get_type_hints(PlatformFacade.discovery_service.fget)
+
+    assert discovery_hints["return"] is GatewayDiscoveryProvider
 
 
 def test_gateway_protocol_matches_route_facing_platform_surface():

@@ -1,4 +1,10 @@
-from common.protocols import APIKeyRateLimiter, FileStorage, GatewayService, RateLimiter
+from common.protocols import (
+    APIKeyRateLimiter,
+    FileStorage,
+    GatewayDiscoveryProvider,
+    GatewayService,
+    RateLimiter,
+)
 from platform_module.config import PlatformConfig
 from platform_module.content_storage import PlatformContentStorage
 from platform_module.deps import PlatformDeps
@@ -52,7 +58,7 @@ class PlatformFacade:
         return self._gateway_service
 
     @property
-    def discovery_service(self) -> PlatformDiscovery:
+    def discovery_service(self) -> GatewayDiscoveryProvider:
         return self._discovery_service
 
     @property
