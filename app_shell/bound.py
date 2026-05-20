@@ -1,14 +1,35 @@
-from collections.abc import Mapping
-from typing import Any, Protocol, runtime_checkable
+from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Protocol, TypeAlias, runtime_checkable
+
+from pydantic import BaseModel
 from models.agent import Agent, AgentCapabilityIssue, IssueStatus
-from models.request import InspectionCenterRequest
-from models.request import AgentCenterRequest
+from models.request import (
+    AgentCenterRequest,
+    ChatMemoryRequest,
+    InspectionCenterRequest,
+    RoomCenterRoomMessageRequest,
+    RoomCenterRoomSettingRequest,
+    RoomCenterUserMessageRequest,
+)
 from models.response import (
     AgentCenterResponse,
+    ChatMemoryResponse,
     InsepectionCenterConnectionValidationResponse,
     InspectionCenterResponse,
+    RoomCenterRoomMessageResponse,
+    RoomCenterRoomSettingResponse,
+    RoomCenterUserMessageResponse,
 )
+
+
+JsonScalar: TypeAlias = str | int | float | bool | None
+JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
+JsonMap: TypeAlias = Mapping[str, JsonValue]
+RoutePayload: TypeAlias = BaseModel | JsonMap
+ViewSetResult: TypeAlias = BaseModel | JsonMap | None
+VectorIndexResult: TypeAlias = JsonMap | None
 
 
 @runtime_checkable
@@ -23,24 +44,24 @@ class InspectionCenter(Protocol):
 
 @runtime_checkable
 class ViewSetRepository(Protocol):
-    async def create(self, data: Mapping[str, object] | object) -> object: ...
-    async def delete(self, item_id: object) -> object: ...
-    async def get(self, item_id: object) -> object: ...
+    async def create(self, data: RoutePayload) -> ViewSetResult: ...
+    async def delete(self, item_id: str | int) -> bool | ViewSetResult: ...
+    async def get(self, item_id: str | int) -> ViewSetResult: ...
     async def get_all(
         self,
         *,
         skip: int = 0,
         limit: int = 100,
-        filters: Mapping[str, object] | None = None,
+        filters: JsonMap | None = None,
         sort: list[tuple[str, int]] | None = None,
-    ) -> list[object]: ...
-    async def patch(self, item_id: object, data: Mapping[str, object] | object) -> object: ...
-    async def update(self, item_id: object, data: Mapping[str, object] | object) -> object: ...
+    ) -> list[ViewSetResult]: ...
+    async def patch(self, item_id: str | int, data: RoutePayload) -> ViewSetResult: ...
+    async def update(self, item_id: str | int, data: RoutePayload) -> ViewSetResult: ...
 
 
 @runtime_checkable
 class ViewSetDatabaseProvider(Protocol):
-    def __call__(self) -> object: ...
+    def __call__(self) -> BaseModel | JsonMap: ...
 
 
 @runtime_checkable
@@ -49,8 +70,8 @@ class ViewSetRepositoryFactory(Protocol):
         self,
         *,
         collection_name: str,
-        db: object,
-        pinecone: object | None,
+        db: BaseModel | JsonMap,
+        pinecone: BaseModel | JsonMap | None,
         pk_field: str = "_id",
     ) -> ViewSetRepository: ...
 
@@ -58,8 +79,8 @@ class ViewSetRepositoryFactory(Protocol):
 @runtime_checkable
 class WebhookTransport(Protocol):
     async def handle_webhook(
-        self, message_id: str, payload: dict[str, Any], token: str
-    ) -> dict[str, Any]: ...
+        self, message_id: str, payload: dict[str, JsonValue], token: str
+    ) -> dict[str, JsonValue]: ...
 
 
 @runtime_checkable
@@ -124,7 +145,7 @@ class AgentLivenessChecker(Protocol):
 class AgentSelectionSuggester(Protocol):
     async def suggest_agents(
         self, message_text: str, top_k: int = 3
-    ) -> dict[str, object]: ...
+    ) -> dict[str, JsonValue]: ...
 
 
 @runtime_checkable
@@ -134,8 +155,8 @@ class EmbeddingProvider(Protocol):
 
 @runtime_checkable
 class VectorIndex(Protocol):
-    def upsert(self, vectors: list[dict[str, object]]) -> object: ...
-    def delete(self, ids: list[str]) -> object: ...
+    def upsert(self, vectors: list[dict[str, JsonValue]]) -> VectorIndexResult: ...
+    def delete(self, ids: list[str]) -> VectorIndexResult: ...
 
 
 @runtime_checkable
@@ -150,28 +171,48 @@ class LegacyTaskCenter(Protocol):
 
 @runtime_checkable
 class LegacyMemoryCenter(Protocol):
-    async def add_chat_context(self, request: object) -> object: ...
-    async def get_chat_context_by_session_id(self, request: object) -> object: ...
-    async def update_chat_context_by_session_id(self, request: object) -> object: ...
-    async def delete_chat_context_by_session_id(self, request: object) -> object: ...
+    async def add_chat_context(self, request: ChatMemoryRequest) -> ChatMemoryResponse: ...
+    async def get_chat_context_by_session_id(
+        self, request: ChatMemoryRequest
+    ) -> ChatMemoryResponse: ...
+    async def update_chat_context_by_session_id(
+        self, request: ChatMemoryRequest
+    ) -> ChatMemoryResponse: ...
+    async def delete_chat_context_by_session_id(
+        self, request: ChatMemoryRequest
+    ) -> ChatMemoryResponse: ...
 
 
 @runtime_checkable
 class RoomCenterRouteOwner(Protocol):
-    async def create_new_room(self, request: object) -> object: ...
-    async def inquiry_rooms_by_room_owner_id(self, request: object) -> object: ...
-    async def inquiry_room_messages_by_room_id(self, request: object) -> object: ...
-    async def inquiry_room_setting(self, request: object) -> object: ...
-    async def update_room_setting(self, request: object) -> object: ...
-    async def create_and_parse_user_message(self, request: object) -> object: ...
-    async def send_message(self, request: object) -> object: ...
+    async def create_new_room(
+        self, request: RoomCenterRoomSettingRequest
+    ) -> RoomCenterRoomSettingResponse: ...
+    async def inquiry_rooms_by_room_owner_id(
+        self, request: RoomCenterRoomSettingRequest
+    ) -> RoomCenterRoomSettingResponse: ...
+    async def inquiry_room_messages_by_room_id(
+        self, request: RoomCenterRoomMessageRequest
+    ) -> RoomCenterRoomMessageResponse: ...
+    async def inquiry_room_setting(
+        self, request: RoomCenterRoomSettingRequest
+    ) -> RoomCenterRoomSettingResponse: ...
+    async def update_room_setting(
+        self, request: RoomCenterRoomSettingRequest
+    ) -> RoomCenterRoomSettingResponse: ...
+    async def create_and_parse_user_message(
+        self, request: RoomCenterUserMessageRequest
+    ) -> RoomCenterUserMessageResponse: ...
+    async def send_message(
+        self, request: RoomCenterUserMessageRequest
+    ) -> RoomCenterUserMessageResponse: ...
 
 
 @runtime_checkable
 class SSEManagerRouteOwner(Protocol):
-    async def add_connection(self, room_id: str) -> object: ...
+    async def add_connection(self, room_id: str) -> BaseModel | JsonMap: ...
     async def remove_connection(self, room_id: str, connection_id: str) -> None: ...
-    def get_room_status(self, room_id: str) -> dict[str, object]: ...
+    def get_room_status(self, room_id: str) -> dict[str, JsonValue]: ...
 
 
 __all__ = [

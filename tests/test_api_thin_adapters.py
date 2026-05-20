@@ -188,9 +188,16 @@ def test_phase9_route_inventory_is_recorded():
 
     assert routes
     for route in routes:
-        assert {"path", "methods", "name", "auth_dependencies", "owning_protocol"}.issubset(
-            route
-        )
+        assert {
+            "path",
+            "methods",
+            "name",
+            "auth_dependencies",
+            "owning_protocol",
+            "status_code",
+            "openapi_response_codes",
+            "response_class",
+        }.issubset(route)
 
 
 def test_phase9_route_inventory_matches_live_app_routes():
@@ -198,6 +205,7 @@ def test_phase9_route_inventory_matches_live_app_routes():
 
     docs_paths = {"/docs", "/docs/oauth2-redirect", "/openapi.json", "/redoc"}
     recorded_routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    openapi = app.openapi()
     recorded = {
         (
             route["path"],
@@ -219,20 +227,73 @@ def test_phase9_route_inventory_matches_live_app_routes():
             if route.response_model is not None
             else None
         )
+        response_class = getattr(route.response_class, "__name__", None)
+        if response_class is None or response_class == "DefaultPlaceholder":
+            response_class = None
+        openapi_path = route.path_format
+        method = next(iter(methods)).lower()
+        openapi_responses = sorted(
+            openapi["paths"][openapi_path][method].get("responses", {})
+        )
         dependencies = sorted(
             getattr(dependency.call, "__name__", repr(dependency.call))
             for dependency in route.dependant.dependencies
         )
         live[(route.path, methods, route.name)] = {
             "auth_dependencies": dependencies,
+            "openapi_response_codes": openapi_responses,
             "response_model": response_model,
+            "response_class": response_class,
+            "status_code": route.status_code,
         }
 
     assert set(recorded) == set(live)
     for key, route in recorded.items():
         assert route["response_model"] == live[key]["response_model"]
         assert sorted(route["auth_dependencies"]) == live[key]["auth_dependencies"]
+        assert route["status_code"] == live[key]["status_code"]
+        assert route["openapi_response_codes"] == live[key]["openapi_response_codes"]
+        assert route["response_class"] == live[key]["response_class"]
         assert not route["owning_protocol"].startswith("blocked:")
+
+
+def test_streaming_routes_record_sse_media_type_and_headers():
+    from main import app
+
+    recorded_routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    route_by_name = {route["name"]: route for route in recorded_routes}
+    expected = {
+        "gateway_stream": {
+            "media_type": "text/event-stream",
+            "headers": ["Cache-Control", "X-Accel-Buffering"],
+        },
+        "relay_events": {
+            "media_type": "text/event-stream",
+            "headers": ["Cache-Control", "Connection", "X-Accel-Buffering"],
+        },
+        "stream_room_messages": {
+            "media_type": "text/event-stream",
+            "headers": [
+                "Cache-Control",
+                "Connection",
+                "Content-Type",
+                "X-Accel-Buffering",
+            ],
+        },
+    }
+
+    for name, streaming in expected.items():
+        assert route_by_name[name]["streaming_response"] == streaming
+        route = next(
+            route
+            for route in app.routes
+            if isinstance(route, APIRoute) and route.name == name
+        )
+        source = inspect.getsource(route.endpoint)
+        assert "StreamingResponse" in source
+        assert f'media_type="{streaming["media_type"]}"' in source
+        for header in streaming["headers"]:
+            assert f'"{header}"' in source
 
 
 def test_phase9_route_inventory_owners_resolve_to_real_symbols():
@@ -648,6 +709,46 @@ def test_route_owner_protocols_do_not_expose_any_annotations():
     )
 
 
+def test_app_shell_route_protocols_do_not_expose_broad_annotations():
+    import app_shell.bound as bound
+    import app_shell.database_service as database_service
+    import app_shell.health_check as health_check
+
+    protocols = [
+        getattr(bound, name)
+        for name in bound.__all__
+        if isinstance(getattr(bound, name, None), type)
+    ]
+    protocols.extend([database_service.A2ATaskReader, database_service.AgentGroupStore])
+    protocols.append(health_check.HealthCheck)
+    violations: list[str] = []
+
+    for protocol in protocols:
+        for name, value in protocol.__dict__.items():
+            if not callable(value) or name.startswith("_"):
+                continue
+            signature = inspect.signature(value)
+            if signature.return_annotation is inspect.Signature.empty:
+                violations.append(f"{protocol.__name__}.{name} return")
+            elif _annotation_contains_broad_object(signature.return_annotation):
+                violations.append(f"{protocol.__name__}.{name} return")
+            for parameter in signature.parameters.values():
+                if parameter.name == "self":
+                    continue
+                if parameter.annotation is inspect.Signature.empty:
+                    violations.append(
+                        f"{protocol.__name__}.{name}.{parameter.name}"
+                    )
+                elif _annotation_contains_broad_object(parameter.annotation):
+                    violations.append(
+                        f"{protocol.__name__}.{name}.{parameter.name}"
+                    )
+
+    assert not violations, "App-shell route protocols expose broad shapes:\n" + "\n".join(
+        violations
+    )
+
+
 def test_platform_route_protocols_do_not_expose_any_or_wildcard_params():
     from typing import Any
 
@@ -706,6 +807,8 @@ def test_app_shell_protocols_have_single_runtime_marker():
 
 
 def test_inspection_protocol_uses_route_contract_types():
+    from typing import get_type_hints
+
     from app_shell.bound import InspectionCenter
     from models.request import InspectionCenterRequest
     from models.response import (
@@ -713,16 +816,10 @@ def test_inspection_protocol_uses_route_contract_types():
         InspectionCenterResponse,
     )
 
-    inspect_card = inspect.signature(InspectionCenter.inspect_agent_card)
-    inspect_connection = inspect.signature(InspectionCenter.inspect_a2a_connection)
+    inspect_card = get_type_hints(InspectionCenter.inspect_agent_card)
+    inspect_connection = get_type_hints(InspectionCenter.inspect_a2a_connection)
 
-    assert inspect_card.parameters["request"].annotation is InspectionCenterRequest
-    assert inspect_card.return_annotation == InspectionCenterResponse
-    assert (
-        inspect_connection.parameters["request"].annotation
-        is InspectionCenterRequest
-    )
-    assert (
-        inspect_connection.return_annotation
-        == InsepectionCenterConnectionValidationResponse
-    )
+    assert inspect_card["request"] is InspectionCenterRequest
+    assert inspect_card["return"] is InspectionCenterResponse
+    assert inspect_connection["request"] is InspectionCenterRequest
+    assert inspect_connection["return"] is InsepectionCenterConnectionValidationResponse

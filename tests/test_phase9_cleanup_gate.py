@@ -17,6 +17,7 @@ PRODUCTION_ROOTS = (
     "llm_gateway",
     "platform_module",
     "common",
+    "app_shell",
     "jobs",
     "models",
 )
@@ -74,6 +75,7 @@ SDK_CONFINEMENT_ROOTS = (
     "models",
     "platform_module",
     "common",
+    "app_shell",
 )
 
 FORBIDDEN_SDK_IMPORT_PREFIXES = ("a2a",)
