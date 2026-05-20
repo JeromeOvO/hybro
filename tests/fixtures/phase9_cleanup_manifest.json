@@ -23,13 +23,6 @@
       "owner": "phase-9-platform-api-cleanup",
       "path": "infrastructure",
       "reason": "Package remains shipped for legacy infrastructure compatibility paths while DAL, Delivery, and HubRuntimeBridge migration callers finish decommission; production import gates prevent new direct coupling."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "common/types.py",
-      "reason": "Legacy Common type aliases still re-export SDK part and task-state types; replace with SDK-free Common DTOs."
     }
   ],
   "content_storage_callers": [

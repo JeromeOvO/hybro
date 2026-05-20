@@ -1,8 +1,8 @@
 from datetime import datetime
+from enum import Enum
 from typing import Annotated, Any, Literal, Self
 from uuid import uuid4
 
-from a2a.types import DataPart, FilePart, TaskState, TextPart
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -28,6 +28,35 @@ class FileContent(BaseModel):
                 "Only one of 'bytes' or 'uri' can be present in the file data"
             )
         return self
+
+
+class TextPart(BaseModel):
+    kind: Literal["text"] = "text"
+    text: str
+    metadata: dict[str, Any] | None = None
+
+
+class FilePart(BaseModel):
+    kind: Literal["file"] = "file"
+    file: FileContent
+    metadata: dict[str, Any] | None = None
+
+
+class DataPart(BaseModel):
+    kind: Literal["data"] = "data"
+    data: dict[str, Any]
+    metadata: dict[str, Any] | None = None
+
+
+class TaskState(str, Enum):
+    submitted = "submitted"
+    working = "working"
+    input_required = "input-required"
+    auth_required = "auth-required"
+    completed = "completed"
+    failed = "failed"
+    canceled = "canceled"
+    rejected = "rejected"
 
 
 Part = Annotated[TextPart | FilePart | DataPart, Field(discriminator="kind")]

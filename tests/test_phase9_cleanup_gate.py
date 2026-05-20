@@ -335,6 +335,12 @@ def test_common_a2a_client_has_no_sdk_confinement_blockers():
     assert "common/client/client.py" not in blocked_paths
 
 
+def test_common_types_has_no_sdk_confinement_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "common/types.py" not in blocked_paths
+
+
 def test_legacy_public_models_have_no_sdk_confinement_blockers():
     blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
 

@@ -159,6 +159,23 @@ def test_common_card_resolver_keeps_sdk_agent_card_validation(monkeypatch):
         A2ACardResolver("https://agent.example").get_agent_card()
 
 
+def test_common_types_expose_sdk_free_task_parts():
+    from common.types import DataPart, FileContent, FilePart, Part, TaskState, TextPart
+    from pydantic import TypeAdapter
+
+    assert TextPart.__module__ == "common.types"
+    assert FilePart.__module__ == "common.types"
+    assert DataPart.__module__ == "common.types"
+    assert TaskState.__module__ == "common.types"
+    assert TaskState.completed.value == "completed"
+
+    parsed = TypeAdapter(Part).validate_python(
+        {"kind": "file", "file": {"uri": "s3://bucket/key"}}
+    )
+    assert isinstance(parsed, FilePart)
+    assert isinstance(parsed.file, FileContent)
+
+
 @pytest.mark.asyncio
 async def test_auth_config_binds_authorized_parties(monkeypatch):
     import common.auth as auth
