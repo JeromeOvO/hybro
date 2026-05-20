@@ -489,6 +489,7 @@ def test_route_owner_protocols_match_handler_calls():
     from app_shell.bound import InspectionCenter, ViewSetRepository, WebhookTransport
     from app_shell.database_service import A2ATaskReader, AgentGroupStore
     from app_shell.health_check import HealthCheck
+    from common.protocols import HubManagement
 
     expected_by_protocol = {
         InspectionCenter: {
@@ -517,6 +518,14 @@ def test_route_owner_protocols_match_handler_calls():
         },
         WebhookTransport: {"handle_webhook"},
         HealthCheck: {"check"},
+        HubManagement: {
+            "connect_hub",
+            "get_hub_status",
+            "process_publish",
+            "record_hub_heartbeat",
+            "register_hub",
+            "sync_agents",
+        },
     }
 
     missing: list[str] = []
@@ -533,6 +542,23 @@ def test_route_owner_protocols_match_handler_calls():
     assert not missing, "Route owner protocol methods missing:\n" + "\n".join(
         missing
     )
+
+
+def test_hub_route_dependencies_are_typed_with_hub_management():
+    import inspect
+    from typing import get_type_hints
+
+    from api import hub
+    from common.protocols import HubManagement
+
+    bind_hints = get_type_hints(hub.bind_hub_dependencies)
+    provider_hints = get_type_hints(hub.get_hub_relay_service)
+    route_hints = get_type_hints(hub.hub_status_for_user)
+
+    assert bind_hints["service"] is HubManagement
+    assert provider_hints["return"] is HubManagement
+    assert route_hints["svc"] is HubManagement
+    assert "svc" in inspect.signature(hub.hub_status_for_user).parameters
 
 
 def test_health_route_delegates_to_health_check_protocol():
