@@ -35,13 +35,6 @@
       "contract": "sdk_confinement",
       "expiry_task": "Final SDK confinement migration",
       "owner": "phase-9-platform-api-cleanup",
-      "path": "common/server/task_manager.py",
-      "reason": "Legacy Common A2A task manager still exposes SDK task and notification types; migrate to Common task DTOs or A2A adapter types."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
       "path": "common/types.py",
       "reason": "Legacy Common type aliases still re-export SDK part and task-state types; replace with SDK-free Common DTOs."
     },
