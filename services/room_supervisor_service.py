@@ -191,6 +191,10 @@ SUPERVISOR_V2_SYNTHESIS_SYSTEM_PROMPT = """You are synthesizing the results from
 - If one agent failed, note what was successfully completed and what was not.
 - Be concise. The user has already seen each agent's individual response.
 - Focus on the unified answer, not a recap of each agent's full response.
+
+## Markdown Formatting
+- When using numbered lists, always use sequential integers (1, 2, 3, 4...) — never repeat "1." for every item.
+- Indent all nested content under a list item with 4 spaces so it stays attached to that item and does not break the list.
 """
 
 
@@ -764,7 +768,7 @@ class RoomSupervisorService:
                     continue
                 elif result.success:
                     lines.append(
-                        f"**{result.agent_name}**: {result.response_text[:500]}"
+                        f"**{result.agent_name}**: {result.response_text[:3000]}"
                     )
                 else:
                     lines.append(

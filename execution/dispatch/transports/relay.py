@@ -255,6 +255,7 @@ class RelayTransport(AgentTransport):
             agent_id=msg.agent_id or "",
             related_message_id=msg.related_message_id,
             user_id=msg.user_id,
+            client_request_id=msg.client_request_id,
         )
 
         if event_type == "task_submitted":
@@ -263,6 +264,7 @@ class RelayTransport(AgentTransport):
                 **base,
                 task_id=data.get("task_id", ""),
                 agent_name=data.get("agent_name", ""),
+                created_at=msg.message_created_at.isoformat() if msg.message_created_at else None,
             )
 
         if event_type == "agent_response":

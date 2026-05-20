@@ -1389,7 +1389,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
         response = await self.client.chat.completions.create(
             model=llm_model,
             messages=messages,
-            timeout=30.0,
+            timeout=90.0,
         )
 
         content = response.choices[0].message.content

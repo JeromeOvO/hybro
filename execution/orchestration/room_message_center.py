@@ -1844,6 +1844,7 @@ class RoomMessageCenter:
                         synthesis_text=result.synthesis_text,
                         trajectory_responses=trajectory_responses,
                         is_debate=is_debate,
+                        working_already_emitted=True,
                     )
                 # Emit turn_completed event
                 if getattr(self, '_turn_event_appender', None):
@@ -2289,6 +2290,7 @@ class RoomMessageCenter:
         synthesis_text: str | None = None,
         trajectory_responses: list[dict[str, str]] | None = None,
         is_debate: bool = False,
+        working_already_emitted: bool = False,
     ) -> None:
         """Emit a single unified summary message for a user message turn.
 
@@ -2319,10 +2321,11 @@ class RoomMessageCenter:
                 if trajectory_responses is not None and len(trajectory_responses) < 2:
                     return
 
-                await self._emit_summary_working(
-                    room_id, user_message_id, summary_message_id,
-                    summary_client_request_id,
-                )
+                if not working_already_emitted:
+                    await self._emit_summary_working(
+                        room_id, user_message_id, summary_message_id,
+                        summary_client_request_id,
+                    )
                 content = synthesis_text
                 origin = "supervisor"
             else:
