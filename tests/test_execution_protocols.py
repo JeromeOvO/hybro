@@ -215,7 +215,6 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
         "execution/orchestration/room_message_center.py": {
             "a2a.types",
         },
-        "execution/state/task_state_manager.py": {"a2a.types"},
     }
     actual: dict[str, set[str]] = {}
     for path in sorted((ROOT / "execution").rglob("*.py")):

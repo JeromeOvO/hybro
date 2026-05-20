@@ -13,17 +13,15 @@ Non-terminal streaming progress notifications still use ``notify_task``.
 from __future__ import annotations
 
 from collections import deque
-from typing import TYPE_CHECKING
-from uuid import uuid4
+from typing import TYPE_CHECKING, Any
 
-from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
-
+from a2a_adapter.task_status import build_task_status, coerce_task_state
+from common.a2a_constants import is_terminal_state
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from models.processing import ProcessingContext
 from models.request import RoomCenterAgentMessageRequest
 from models.room import RoomAgentMessage
-from common.a2a_constants import is_terminal_state
 
 logger = get_logger(__name__)
 
@@ -33,7 +31,7 @@ logger = get_logger(__name__)
 # ------------------------------------------------------------------
 
 
-def get_task(msg: RoomAgentMessage) -> Task | None:
+def get_task(msg: RoomAgentMessage) -> Any | None:
     """Safely access ``msg.message_content.message_task``, returning None on any miss."""
     if msg.message_content and msg.message_content.message_task:
         return msg.message_content.message_task
@@ -106,7 +104,7 @@ class TaskStateManager:
     async def transition_task(
         self,
         message: RoomAgentMessage,
-        new_state: TaskState,
+        new_state: Any,
         *,
         error: str | None = None,
         persist: bool = True,
@@ -137,14 +135,7 @@ class TaskStateManager:
             )
             return
 
-        # Update state
-        task.status = TaskStatus(state=new_state)
-        if error:
-            task.status.message = Message(
-                message_id=uuid4().hex,
-                role=Role.agent,
-                parts=[TextPart(text=error)],
-            )
+        task.status = build_task_status(new_state, error_text=error)
         message.task_updated_at = utcnow()
 
         if persist:
@@ -171,5 +162,5 @@ class TaskStateManager:
 
         for msg in messages_to_cancel:
             await self.transition_task(
-                msg, TaskState.canceled, persist=True
+                msg, coerce_task_state("canceled"), persist=True
             )
