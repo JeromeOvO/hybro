@@ -741,19 +741,31 @@ async def test_room_memory_service_agent_response_duplicate_message_is_success()
 
 @pytest.mark.asyncio
 async def test_content_storage_service_delegates_upsert():
-    facade = FakeFacade()
+    class Delegate:
+        def __init__(self):
+            self.calls = []
+
+        async def upsert_full_content(self, room_id, turn_id, content, content_type, turn_notes=None):
+            self.calls.append(("upsert_full_content", room_id, turn_id))
+            return "doc1"
+
+    delegate = Delegate()
     service = ContentStorageService()
-    service.bind_facade(facade)
+    service.bind(delegate)
 
     document_id = await service.upsert_full_content("r1", "t1", "hello", "text")
 
     assert document_id == "doc1"
-    assert facade.calls == [("content_upsert_full_content", "r1", "t1")]
+    assert delegate.calls == [("upsert_full_content", "r1", "t1")]
 
 
 @pytest.mark.asyncio
 async def test_content_storage_service_expands_s3_before_bind():
-    service = ContentStorageService()
+    class Delegate:
+        async def expand_content_reference(self, content_ref, turn_id):
+            return "s3 content"
+
+    service = ContentStorageService(Delegate())
     content_ref = ContentReference(
         storage_type=StorageType.S3,
         s3_bucket="bucket",
@@ -761,14 +773,16 @@ async def test_content_storage_service_expands_s3_before_bind():
         created_at=NOW,
     )
 
-    with patch("services.content_storage_service.s3_service") as mock_s3:
-        mock_s3.download_text = AsyncMock(return_value="s3 content")
-        assert await service.expand_content_reference(content_ref, "t1") == "s3 content"
+    assert await service.expand_content_reference(content_ref, "t1") == "s3 content"
 
 
 @pytest.mark.asyncio
 async def test_content_storage_service_url_before_bind_stays_not_implemented():
-    service = ContentStorageService()
+    class Delegate:
+        async def expand_content_reference(self, content_ref, turn_id):
+            raise NotImplementedError
+
+    service = ContentStorageService(Delegate())
     content_ref = ContentReference(
         storage_type=StorageType.URL,
         url="https://example.test/content",

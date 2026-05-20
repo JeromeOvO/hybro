@@ -37,6 +37,9 @@ FORBIDDEN_LEGACY_SHIM_IMPORT_PREFIXES = (
     "services",
 )
 
+FORBIDDEN_LEGACY_SHIM_GLOBALS = {"mongodb", "settings", "s3_service"}
+FORBIDDEN_LEGACY_SHIM_CLASS_PREFIXES = ("_Legacy", "_Mongo")
+
 FORBIDDEN_COMMON_IMPORT_PREFIXES = (
     "database",
     "services",
@@ -239,6 +242,33 @@ def _legacy_service_shim_violations() -> list[str]:
         source = path.read_text()
         if "_require_delegate" not in source:
             violations.append(f"{path}: missing fail-fast delegate boundary")
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if (
+                        isinstance(target, ast.Name)
+                        and target.id in FORBIDDEN_LEGACY_SHIM_GLOBALS
+                    ):
+                        violations.append(f"{path}:{node.lineno}: {target.id}")
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                if node.target.id in FORBIDDEN_LEGACY_SHIM_GLOBALS:
+                    violations.append(f"{path}:{node.lineno}: {node.target.id}")
+            if isinstance(node, ast.ClassDef) and node.name.startswith(
+                FORBIDDEN_LEGACY_SHIM_CLASS_PREFIXES
+            ):
+                violations.append(f"{path}:{node.lineno}: {node.name}")
+            if isinstance(node, ast.ClassDef):
+                for item in node.body:
+                    if (
+                        isinstance(item, ast.FunctionDef)
+                        and item.name == "collection"
+                        and any(
+                            isinstance(decorator, ast.Name)
+                            and decorator.id == "property"
+                            for decorator in item.decorator_list
+                        )
+                    ):
+                        violations.append(f"{path}:{item.lineno}: collection")
     return violations
 
 
