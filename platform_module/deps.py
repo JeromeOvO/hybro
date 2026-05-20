@@ -28,6 +28,14 @@ class FileMetadataRepository(Protocol):
     async def list_for_room(self, room_id: str) -> list[dict]: ...
 
 
+class RateLimitCollection(Protocol):
+    async def count_documents(self, query: dict) -> int: ...
+    async def find_one(
+        self, query: dict, sort: list[tuple[str, int]] | None = None
+    ) -> dict | None: ...
+    async def insert_one(self, doc: dict): ...
+
+
 @dataclass(frozen=True)
 class PlatformDeps:
     agent_registry: AgentRegistry | None = None
@@ -36,6 +44,9 @@ class PlatformDeps:
     agent_transport: AgentTransport | None = None
     agent_card_resolver: AgentCardResolver | None = None
     redis: RedisKV | None = None
+    gateway_rate_limit_collection: RateLimitCollection | None = None
+    discovery_rate_limit_collection: RateLimitCollection | None = None
+    agent_rate_limit_collection: RateLimitCollection | None = None
     object_storage: ObjectStorageDAL | None = None
     file_metadata_repository: FileMetadataRepository | None = None
     content_storage_repository: ContentStorageRepository | None = None
@@ -43,4 +54,9 @@ class PlatformDeps:
     logger: LoggerLike | None = None
 
 
-__all__ = ["FileMetadataRepository", "LoggerLike", "PlatformDeps"]
+__all__ = [
+    "FileMetadataRepository",
+    "LoggerLike",
+    "PlatformDeps",
+    "RateLimitCollection",
+]

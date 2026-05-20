@@ -4,6 +4,7 @@ from common.dto import FileInfo, GatewayRequest, GatewayResponse, RateLimitResul
 from common.protocols import FileStorage, GatewayService, RateLimiter
 from platform_module.config import PlatformConfig
 from platform_module.deps import PlatformDeps
+from platform_module.rate_limit import PlatformProtocolRateLimiter
 
 
 class PlatformGatewayService:
@@ -21,19 +22,6 @@ class PlatformGatewayService:
     ) -> AsyncIterator[dict]:
         raise NotImplementedError("Platform gateway stream is not migrated yet")
         yield {}
-
-
-class PlatformRateLimiter:
-    def __init__(self, config: PlatformConfig, deps: PlatformDeps, scope: str) -> None:
-        self._config = config
-        self._deps = deps
-        self._scope = scope
-
-    async def check(self, key: str, limit: int, window: int) -> RateLimitResult:
-        raise NotImplementedError(f"{self._scope} rate limiting is not migrated yet")
-
-    async def check_global(self, limit: int, window: int) -> RateLimitResult:
-        raise NotImplementedError(f"{self._scope} rate limiting is not migrated yet")
 
 
 class PlatformFileStorage:
@@ -66,9 +54,21 @@ class PlatformFacade:
         self.config = config
         self.deps = deps
         self._gateway_service = PlatformGatewayService(config, deps)
-        self._gateway_rate_limiter = PlatformRateLimiter(config, deps, "gateway")
-        self._discovery_rate_limiter = PlatformRateLimiter(config, deps, "discovery")
-        self._agent_rate_limiter = PlatformRateLimiter(config, deps, "agent")
+        self._gateway_rate_limiter = PlatformProtocolRateLimiter(
+            deps.gateway_rate_limit_collection,
+            scope="gateway",
+            clock=deps.clock,
+        )
+        self._discovery_rate_limiter = PlatformProtocolRateLimiter(
+            deps.discovery_rate_limit_collection,
+            scope="discovery",
+            clock=deps.clock,
+        )
+        self._agent_rate_limiter = PlatformProtocolRateLimiter(
+            deps.agent_rate_limit_collection,
+            scope="agent",
+            clock=deps.clock,
+        )
         self._file_storage = PlatformFileStorage(config, deps)
 
     @property
