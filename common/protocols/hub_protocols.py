@@ -109,6 +109,11 @@ class HubRelayManagement(Protocol):
 
 
 @runtime_checkable
+class HubStatusReader(Protocol):
+    async def get_hub_status(self, owner_id: str) -> Sequence[HubStatusPayload]: ...
+
+
+@runtime_checkable
 class HubLivenessReader(Protocol):
     async def is_hub_online(self, hub_id: str) -> bool: ...
     async def get_hub_owner_id(self, hub_id: str) -> str | None: ...
@@ -155,5 +160,6 @@ __all__ = [
     "HubManagement",
     "HubRegistrationResult",
     "HubRelayManagement",
+    "HubStatusReader",
     "OfflineHubFailurePort",
 ]

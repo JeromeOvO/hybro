@@ -10,25 +10,25 @@ from fastapi import APIRouter, Depends
 from fastapi.params import Depends as DependsParam
 
 from common.auth import ClerkUser, get_current_user
-from common.protocols import HubManagement
+from common.protocols import HubStatusReader
 from models.hub import HubStatusResponse
 
 router = APIRouter(prefix="/hub")
-hub_relay_service: HubManagement | None = None
+hub_relay_service: HubStatusReader | None = None
 
 
-def bind_hub_dependencies(service: HubManagement) -> None:
+def bind_hub_dependencies(service: HubStatusReader) -> None:
     global hub_relay_service
     hub_relay_service = service
 
 
-def get_hub_relay_service() -> HubManagement:
+def get_hub_relay_service() -> HubStatusReader:
     if hub_relay_service is None:
         raise RuntimeError("Hub relay dependency has not been bound")
     return hub_relay_service
 
 
-def _resolve_dependency(value, provider) -> HubManagement:
+def _resolve_dependency(value, provider) -> HubStatusReader:
     if isinstance(value, DependsParam):
         return provider()
     return value
@@ -37,7 +37,7 @@ def _resolve_dependency(value, provider) -> HubManagement:
 @router.get("/my-status", response_model=HubStatusResponse)
 async def hub_status_for_user(
     user: ClerkUser = Depends(get_current_user),
-    svc: HubManagement = Depends(get_hub_relay_service),
+    svc: HubStatusReader = Depends(get_hub_relay_service),
 ):
     svc = _resolve_dependency(svc, get_hub_relay_service)
     hubs = await svc.get_hub_status(user.user_id)

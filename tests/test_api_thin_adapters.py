@@ -750,12 +750,47 @@ def test_legacy_410_routes_are_not_bound_to_legacy_execution_centers_at_startup(
 
 
 def test_route_owner_protocols_match_handler_calls():
-    from app_shell.bound import InspectionCenter, ViewSetRepository, WebhookTransport
+    from app_shell.bound import (
+        AgentCapabilityIssueStore,
+        AgentCenterRouteOwner,
+        AgentLivenessChecker,
+        AgentLookup,
+        InspectionCenter,
+        ViewSetRepository,
+        WebhookTransport,
+    )
     from app_shell.database_service import A2ATaskReader, AgentGroupStore
     from app_shell.health_check import HealthCheck
-    from common.protocols import HubManagement, HubRelayManagement
+    from common.protocols import AgentAvatarManager, HubRelayManagement, HubStatusReader
 
     expected_by_protocol = {
+        AgentAvatarManager: {
+            "store_avatar",
+        },
+        AgentCapabilityIssueStore: {
+            "get_issue_by_id",
+            "get_issues_for_agent",
+            "resolve_all_for_agent",
+            "resolve_issue",
+        },
+        AgentCenterRouteOwner: {
+            "_mask_sensitive_information",
+            "get_agent_card_from_url",
+            "get_agents_by_provider_id",
+            "get_agents_with_conditions",
+            "get_all_active_agents",
+            "get_all_agents",
+            "query_agent_by_agent_id",
+            "register_agent",
+            "remove_agent",
+            "update_agent",
+        },
+        AgentLivenessChecker: {
+            "__call__",
+        },
+        AgentLookup: {
+            "get_agent_by_agent_id",
+        },
         InspectionCenter: {
             "inspect_a2a_connection",
             "inspect_agent_card",
@@ -782,7 +817,7 @@ def test_route_owner_protocols_match_handler_calls():
         },
         WebhookTransport: {"handle_webhook"},
         HealthCheck: {"check"},
-        HubManagement: {
+        HubStatusReader: {
             "get_hub_status",
         },
         HubRelayManagement: {
@@ -800,7 +835,8 @@ def test_route_owner_protocols_match_handler_calls():
         protocol_methods = {
             name
             for name, value in protocol.__dict__.items()
-            if callable(value) and not name.startswith("_")
+            if callable(value)
+            and (not name.startswith("_") or name in {"__call__", "_mask_sensitive_information"})
         }
         absent = sorted(expected_methods - protocol_methods)
         if absent:
@@ -811,21 +847,195 @@ def test_route_owner_protocols_match_handler_calls():
     )
 
 
-def test_hub_route_dependencies_are_typed_with_hub_management():
+def test_hub_route_dependencies_are_typed_with_route_facing_protocol():
     import inspect
     from typing import get_type_hints
 
     from api import hub
-    from common.protocols import HubManagement
+    from common.protocols import HubStatusReader
 
     bind_hints = get_type_hints(hub.bind_hub_dependencies)
     provider_hints = get_type_hints(hub.get_hub_relay_service)
     route_hints = get_type_hints(hub.hub_status_for_user)
 
-    assert bind_hints["service"] is HubManagement
-    assert provider_hints["return"] is HubManagement
-    assert route_hints["svc"] is HubManagement
+    assert bind_hints["service"] is HubStatusReader
+    assert provider_hints["return"] is HubStatusReader
+    assert route_hints["svc"] is HubStatusReader
     assert "svc" in inspect.signature(hub.hub_status_for_user).parameters
+
+
+def test_agent_routes_expose_typed_dependency_providers():
+    import inspect
+    from typing import get_type_hints
+
+    from api import agent
+    from app_shell.bound import (
+        AgentCapabilityIssueStore,
+        AgentCenterRouteOwner,
+        AgentLivenessChecker,
+        AgentLookup,
+    )
+    from common.protocols import AgentAvatarManager
+
+    provider_expectations = {
+        agent.get_agent_center: AgentCenterRouteOwner,
+        agent.get_agent_service: AgentLookup,
+        agent.get_capability_issue_service: AgentCapabilityIssueStore,
+        agent.get_agent_avatar_manager: AgentAvatarManager,
+        agent.get_agent_liveness_checker: AgentLivenessChecker,
+    }
+    for provider, expected_type in provider_expectations.items():
+        assert get_type_hints(provider)["return"] is expected_type
+
+    route_expectations = {
+        agent.register_agent: {"center": AgentCenterRouteOwner},
+        agent.get_agent_by_provider: {"center": AgentCenterRouteOwner},
+        agent.delete_agent: {
+            "center": AgentCenterRouteOwner,
+            "agent_lookup": AgentLookup,
+        },
+        agent.update_agent: {
+            "center": AgentCenterRouteOwner,
+            "agent_lookup": AgentLookup,
+        },
+        agent.upload_agent_avatar: {
+            "agent_lookup": AgentLookup,
+            "avatar_manager": AgentAvatarManager,
+        },
+        agent.get_capability_issues: {
+            "agent_lookup": AgentLookup,
+            "issue_store": AgentCapabilityIssueStore,
+        },
+        agent.resolve_all_capability_issues: {
+            "agent_lookup": AgentLookup,
+            "issue_store": AgentCapabilityIssueStore,
+        },
+        agent.resolve_capability_issue: {
+            "agent_lookup": AgentLookup,
+            "issue_store": AgentCapabilityIssueStore,
+        },
+        agent.get_agent_card_from_url: {"center": AgentCenterRouteOwner},
+        agent.get_agent: {
+            "center": AgentCenterRouteOwner,
+            "liveness_checker": AgentLivenessChecker,
+        },
+        agent.get_agent_list: {"center": AgentCenterRouteOwner},
+        agent.get_all_active_agents: {"center": AgentCenterRouteOwner},
+        agent.get_agent_list_with_conditions: {"center": AgentCenterRouteOwner},
+    }
+    missing: list[str] = []
+    for handler, expected_params in route_expectations.items():
+        hints = get_type_hints(handler)
+        signature = inspect.signature(handler)
+        for param_name, expected_type in expected_params.items():
+            if param_name not in signature.parameters:
+                missing.append(f"{handler.__name__}.{param_name}")
+            elif hints.get(param_name) is not expected_type:
+                missing.append(
+                    f"{handler.__name__}.{param_name}: {hints.get(param_name)}"
+                )
+
+    assert not missing, "Agent routes hide route owner dependencies:\n" + "\n".join(
+        missing
+    )
+
+
+def test_agent_route_inventory_records_live_protocol_owners():
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    by_name = {
+        route["name"]: route
+        for route in routes
+        if route["module"] == "api.agent"
+    }
+    expectations = {
+        "delete_agent": (
+            "app_shell.bound.AgentCenterRouteOwner",
+            {"app_shell.bound.AgentLookup"},
+        ),
+        "get_agent_by_provider": ("app_shell.bound.AgentCenterRouteOwner", set()),
+        "get_agent": (
+            "app_shell.bound.AgentCenterRouteOwner",
+            {"app_shell.bound.AgentLivenessChecker"},
+        ),
+        "get_agent_card_from_url": ("app_shell.bound.AgentCenterRouteOwner", set()),
+        "get_agent_list_with_conditions": (
+            "app_shell.bound.AgentCenterRouteOwner",
+            set(),
+        ),
+        "get_all_active_agents": ("app_shell.bound.AgentCenterRouteOwner", set()),
+        "get_agent_list": ("app_shell.bound.AgentCenterRouteOwner", set()),
+        "register_agent": ("app_shell.bound.AgentCenterRouteOwner", set()),
+        "update_agent": (
+            "app_shell.bound.AgentCenterRouteOwner",
+            {"app_shell.bound.AgentLookup"},
+        ),
+        "upload_agent_avatar": (
+            "common.protocols.AgentAvatarManager",
+            {"app_shell.bound.AgentLookup"},
+        ),
+        "get_capability_issues": (
+            "app_shell.bound.AgentCapabilityIssueStore",
+            {"app_shell.bound.AgentLookup"},
+        ),
+        "resolve_all_capability_issues": (
+            "app_shell.bound.AgentCapabilityIssueStore",
+            {"app_shell.bound.AgentLookup"},
+        ),
+        "resolve_capability_issue": (
+            "app_shell.bound.AgentCapabilityIssueStore",
+            {"app_shell.bound.AgentLookup"},
+        ),
+    }
+    violations: list[str] = []
+    for name, (owner, supporting) in expectations.items():
+        route = by_name[name]
+        if route["owning_protocol"] != owner:
+            violations.append(f"{name}: owner={route['owning_protocol']}")
+        missing_supporting = supporting - set(route.get("supporting_protocols") or [])
+        if missing_supporting:
+            violations.append(f"{name}: missing {sorted(missing_supporting)}")
+
+    assert not violations, "Agent route inventory mismatches live protocols:\n" + "\n".join(
+        violations
+    )
+
+
+def test_route_inventory_protocols_do_not_expose_broad_or_wildcard_shapes():
+    from typing import Any
+
+    symbolic_owners = {
+        "fastapi.documentation",
+        "legacy_workflow_decommission_manifest",
+    }
+    route_symbols = set()
+    for route in json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text()):
+        route_symbols.add(route["owning_protocol"])
+        route_symbols.update(route.get("supporting_protocols") or [])
+
+    violations: list[str] = []
+    for owner in sorted(route_symbols - symbolic_owners):
+        module_name, _, symbol_name = owner.rpartition(".")
+        protocol = getattr(importlib.import_module(module_name), symbol_name)
+        for name, member in protocol.__dict__.items():
+            if name.startswith("_") or not callable(member):
+                continue
+            signature = inspect.signature(member)
+            if signature.return_annotation in {Any, object, inspect.Signature.empty}:
+                violations.append(f"{owner}.{name}.return")
+            for parameter in signature.parameters.values():
+                if parameter.name == "self":
+                    continue
+                if parameter.kind in {
+                    inspect.Parameter.VAR_POSITIONAL,
+                    inspect.Parameter.VAR_KEYWORD,
+                }:
+                    violations.append(f"{owner}.{name}.{parameter.name}")
+                elif parameter.annotation in {Any, object, inspect.Signature.empty}:
+                    violations.append(f"{owner}.{name}.{parameter.name}")
+
+    assert not violations, "Route inventory protocols expose broad shapes:\n" + "\n".join(
+        violations
+    )
 
 
 def test_relay_route_dependencies_are_typed_with_route_facing_protocol():
