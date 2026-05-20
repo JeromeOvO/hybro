@@ -35,6 +35,28 @@ def test_translator_internal_message_to_a2a_preserves_message_fields():
     }
 
 
+def test_completed_text_task_factory_builds_sdk_task_payload():
+    from a2a.types import TaskState
+    from a2a_adapter.task_status import build_completed_text_task
+
+    task = build_completed_text_task(
+        task_id="summary-1",
+        text="summary text",
+        context_id="ctx-1",
+    )
+
+    assert task.id == "summary-1"
+    assert task.context_id == "ctx-1"
+    assert task.status.state == TaskState.completed
+    assert task.status.message.message_id == "summary-1"
+    assert task.status.message.parts[0].model_dump(mode="json") == {
+        "kind": "text",
+        "metadata": None,
+        "text": "summary text",
+    }
+    assert task.history == [task.status.message]
+
+
 def test_translator_a2a_task_to_result_normalizes_task_status_result_and_error_text():
     from a2a_adapter.translators import a2a_task_to_result
 

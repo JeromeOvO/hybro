@@ -368,6 +368,12 @@ def test_execution_task_state_manager_has_no_sdk_confinement_blocker():
     assert "execution/state/task_state_manager.py" not in blocked_paths
 
 
+def test_execution_room_message_center_has_no_sdk_confinement_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "execution/orchestration/room_message_center.py" not in blocked_paths
+
+
 def test_a2a_task_api_has_no_sdk_confinement_blocker():
     blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
 

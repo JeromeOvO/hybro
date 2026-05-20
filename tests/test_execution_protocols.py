@@ -212,9 +212,6 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
             "a2a.types",
             "fastapi",
         },
-        "execution/orchestration/room_message_center.py": {
-            "a2a.types",
-        },
     }
     actual: dict[str, set[str]] = {}
     for path in sorted((ROOT / "execution").rglob("*.py")):

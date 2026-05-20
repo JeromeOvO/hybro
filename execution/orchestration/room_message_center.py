@@ -7,8 +7,8 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from a2a.types import TaskState
-
+from a2a_adapter.task_status import build_completed_text_task
+from common.a2a_constants import CommonTaskState, SSEProcessingStatus, is_terminal_state
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -32,7 +32,6 @@ from execution.orchestration.queue_executor import QueueExecutor, QueueResult
 from execution.dispatch.transports.direct import DirectTransport
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from execution.state.task_state_manager import TaskStateManager
-from common.a2a_constants import SSEProcessingStatus, is_terminal_state
 
 a2a_service = None
 agent_resolver_service = None
@@ -922,7 +921,7 @@ class RoomMessageCenter:
             # notification remains best-effort below.
             try:
                 await self.tsm.transition_task(
-                    msg, TaskState.failed, error="Processing failed"
+                    msg, CommonTaskState.FAILED, error="Processing failed"
                 )
             except Exception:
                 logger.exception(
@@ -933,7 +932,7 @@ class RoomMessageCenter:
             try:
                 await self.task_notifications.notify_task_update(
                     message_id=msg.message_id,
-                    state=TaskState.failed,
+                    state=CommonTaskState.FAILED,
                     room_id=room_id,
                     user_id=msg.user_id or "",
                 )
@@ -2343,7 +2342,11 @@ class RoomMessageCenter:
                         ):
                             continue
                         task = msg.message_content and msg.message_content.message_task
-                        if task and task.status and task.status.state != TaskState.completed:
+                        if (
+                            task
+                            and task.status
+                            and task.status.state != CommonTaskState.COMPLETED
+                        ):
                             continue
                         from common.utils.a2a_helpers import extract_agent_text_from_room_message
                         text = extract_agent_text_from_room_message(msg)
@@ -2383,27 +2386,12 @@ class RoomMessageCenter:
             )
 
             # 3. Build and persist
-            from a2a.types import Message, Role, Task, TaskState as A2ATaskState, TaskStatus, TextPart
-            from common.utils.time import utcnow
             from models.room import MessageContent, RoomAgentMessage
 
-            summary_a2a_message = Message(
-                message_id=summary_message_id,
-                role=Role.agent,
-                parts=[TextPart(text=content)],
+            summary_task = build_completed_text_task(
+                task_id=summary_message_id,
+                text=content,
                 context_id=summary_message_id,
-                metadata={},
-            )
-            task_status = TaskStatus(
-                state=A2ATaskState.completed,
-                timestamp=utcnow().isoformat(),
-                message=summary_a2a_message,
-            )
-            summary_task = Task(
-                id=summary_message_id,
-                context_id=summary_message_id,
-                status=task_status,
-                history=[summary_a2a_message],
             )
 
             summary_agent_message = RoomAgentMessage(

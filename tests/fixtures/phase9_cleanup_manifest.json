@@ -63,13 +63,6 @@
       "contract": "sdk_confinement",
       "expiry_task": "Final SDK confinement migration",
       "owner": "phase-9-platform-api-cleanup",
-      "path": "execution/orchestration/room_message_center.py",
-      "reason": "Phase 7b temporary Execution A2A SDK allowlist remains; migrate summary/task construction and state checks behind adapter translators."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
       "path": "jobs/stale_task_checker.py",
       "reason": "Stale task checker still polls and constructs A2A SDK task payloads directly; migrate polling through A2A adapter protocols."
     }
