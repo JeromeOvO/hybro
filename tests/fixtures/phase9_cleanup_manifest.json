@@ -32,13 +32,6 @@
       "reason": "Common A2A helper still performs artifact upload and URL signing through an app-shell-bound storage service; move this behavior behind Platform/ObjectStorage protocols before final Common leaf-module cleanup."
     },
     {
-      "contract": "common_import_boundary",
-      "expiry_task": "Final Common leaf-module cleanup",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "common/utils/context_utils.py",
-      "reason": "Common context utilities still reference legacy memory models; migrate to Common DTOs before final leaf-module cleanup."
-    },
-    {
       "contract": "legacy_import_boundary",
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
       "owner": "phase-9-platform-api-cleanup",

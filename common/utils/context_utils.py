@@ -7,30 +7,37 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md for design details.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any
+from typing import Any, Protocol, TypeVar
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 
-if TYPE_CHECKING:
-    from models.memory import (
-        ContentType,
-        ConversationTurn,
-        MemoryContent,
-        TurnRepresentation,
-        TurnRole,
-        TurnType,
-    )
-
 logger = get_logger(__name__)
 
+
+class MemoryContentLike(Protocol):
+    summary: str | None
+    conversation_history: list[Any]
+    memory_text: str | None
+
+
+TMemoryContent = TypeVar("TMemoryContent", bound=MemoryContentLike)
+
 turn_notes_llm_provider: Any | None = None
+context_turn_factory: Any | None = None
 
 
 def bind_context_llm_provider(provider: Any) -> None:
     global turn_notes_llm_provider
 
     turn_notes_llm_provider = provider
+
+
+def bind_context_turn_factory(factory: Any) -> None:
+    global context_turn_factory
+
+    context_turn_factory = factory
+
 
 # Configuration
 MAX_HISTORY_TURNS = 20  # Keep last N turns in full detail
@@ -269,16 +276,16 @@ def extract_mentioned_agent_ids(text: str) -> list[str]:
 
 
 def add_turn_to_history(
-    memory_content: "MemoryContent",
-    role: str | "TurnRole",
+    memory_content: TMemoryContent,
+    role: str | Any,
     content: str,
     agent_id: str | None = None,
     agent_name: str | None = None,
     user_id: str | None = None,
-    content_type: str | "ContentType" = "text",
-    turn_type: str | "TurnType" = "message",
+    content_type: str | Any = "text",
+    turn_type: str | Any = "message",
     was_successful: bool | None = None,
-) -> "MemoryContent":
+) -> TMemoryContent:
     """
     Add a conversation turn to history and manage window size.
 
@@ -303,32 +310,22 @@ def add_turn_to_history(
     Returns:
         Updated MemoryContent
     """
-    # Import here to avoid circular imports
-    from models.memory import ContentType, ConversationTurn, TurnRole, TurnType
-
-    # Convert string to enum if needed
-    if isinstance(role, str):
-        role = TurnRole(role)
-    if isinstance(content_type, str):
-        content_type = ContentType(content_type)
-    if isinstance(turn_type, str):
-        turn_type = TurnType(turn_type)
-
     # Estimate tokens for the content (REQUIRED - never leave at 0)
     tokens_full = estimate_tokens(content)
 
     # Extract turn notes for richer retrieval (heuristic for now)
     notes = extract_turn_notes(content)
 
-    turn = ConversationTurn(
-        role=role,
+    turn_cls = _require_context_turn_factory()
+    turn = turn_cls(
+        role=_value(role),
         content=content,
         agent_id=agent_id,
         agent_name=agent_name,
         user_id=user_id,
         timestamp=utcnow(),
-        content_type=content_type,
-        turn_type=turn_type,
+        content_type=_value(content_type),
+        turn_type=_value(turn_type),
         estimated_tokens_full=tokens_full,
         turn_notes=notes,
         was_successful=was_successful,
@@ -370,7 +367,36 @@ def add_turn_to_history(
     return memory_content
 
 
-def _format_turns_for_summary(turns: list["ConversationTurn"]) -> str:
+def _require_context_turn_factory() -> Any:
+    if context_turn_factory is None:
+        raise RuntimeError("Context turn factory has not been bound")
+    return context_turn_factory
+
+
+def _value(value: Any) -> Any:
+    return getattr(value, "value", value)
+
+
+def _role_value(value: Any) -> str:
+    return str(_value(value))
+
+
+def _representation_value(value: Any) -> str:
+    return str(_value(value))
+
+
+def _render_turn_for_context(turn: Any) -> str:
+    if hasattr(turn, "to_context_string"):
+        return turn.to_context_string()
+    if _role_value(getattr(turn, "role", "")) == "user":
+        content = getattr(turn, "content", None) or "[content unavailable]"
+        return f"User: {content}"
+    speaker = getattr(turn, "agent_name", None) or "Agent"
+    content = getattr(turn, "content", None) or "[content unavailable]"
+    return f"{speaker}: {content}"
+
+
+def _format_turns_for_summary(turns: list[Any]) -> str:
     """Format conversation turns for summary storage.
 
     Uses to_context_string() so that compact turns render their
@@ -378,7 +404,7 @@ def _format_turns_for_summary(turns: list["ConversationTurn"]) -> str:
     """
     parts = []
     for turn in turns:
-        rendered = turn.to_context_string()
+        rendered = _render_turn_for_context(turn)
         preview = (
             rendered[:SUMMARY_PREVIEW_LENGTH] + "..."
             if len(rendered) > SUMMARY_PREVIEW_LENGTH
@@ -389,7 +415,7 @@ def _format_turns_for_summary(turns: list["ConversationTurn"]) -> str:
 
 
 def build_context_for_agent(
-    memory_content: "MemoryContent",
+    memory_content: MemoryContentLike,
     current_task: str,
     agent_name: str | None = None,
     include_system_instruction: bool = True,
@@ -446,24 +472,13 @@ def build_context_for_agent(
 
     # 2. Include recent conversation history (with truncation if needed)
     if memory_content.conversation_history:
-        from models.memory import TurnRole
-
         history_parts = ["[Recent conversation]"]
         history_tokens = estimate_tokens("[Recent conversation]\n")
 
         # Process turns from oldest to newest, but we'll reverse selection
         turns_to_include = []
         for turn in reversed(memory_content.conversation_history):
-            turn_str = ""
-            if hasattr(turn, "to_context_string"):
-                turn_str = turn.to_context_string()
-            elif turn.role == TurnRole.USER or turn.role == "user":
-                content = turn.content or "[content unavailable]"
-                turn_str = f"User: {content}"
-            else:
-                speaker = turn.agent_name or "Agent"
-                content = turn.content or "[content unavailable]"
-                turn_str = f"{speaker}: {content}"
+            turn_str = _render_turn_for_context(turn)
 
             turn_tokens = estimate_tokens(turn_str)
 
@@ -557,7 +572,7 @@ def build_context_for_agent(
 
 
 def build_minimal_context(
-    memory_content: "MemoryContent",
+    memory_content: MemoryContentLike,
     current_task: str,
     max_turns: int = 5,
 ) -> str:
@@ -573,31 +588,20 @@ def build_minimal_context(
     Returns:
         Minimal context string
     """
-    from models.memory import TurnRole
-
     parts = []
 
     # Only include recent turns
     recent_turns = memory_content.conversation_history[-max_turns:]
     if recent_turns:
         for turn in recent_turns:
-            # Use to_context_string() if available (new ConversationTurn)
-            if hasattr(turn, "to_context_string"):
-                parts.append(turn.to_context_string())
-            elif turn.role == TurnRole.USER or turn.role == "user":
-                content = turn.content or "[content unavailable]"
-                parts.append(f"User: {content}")
-            else:
-                speaker = turn.agent_name or "Agent"
-                content = turn.content or "[content unavailable]"
-                parts.append(f"{speaker}: {content}")
+            parts.append(_render_turn_for_context(turn))
         parts.append("")
 
     parts.append(f"User: {current_task}")
     return "\n".join(parts)
 
 
-def get_context_stats(memory_content: "MemoryContent") -> dict:
+def get_context_stats(memory_content: MemoryContentLike) -> dict:
     """
     Get statistics about the current context state.
     Useful for debugging and monitoring.
@@ -605,8 +609,6 @@ def get_context_stats(memory_content: "MemoryContent") -> dict:
     Returns:
         Dict with context statistics
     """
-    from models.memory import TurnRepresentation
-
     total_chars = 0
     total_tokens = 0
     full_turns = 0
@@ -618,7 +620,7 @@ def get_context_stats(memory_content: "MemoryContent") -> dict:
     for turn in memory_content.conversation_history:
         # Check representation if available (new ConversationTurn)
         if hasattr(turn, "representation"):
-            if turn.representation == TurnRepresentation.FULL or turn.representation == "full":
+            if _representation_value(turn.representation) == "full":
                 full_turns += 1
                 if turn.content:
                     total_chars += len(turn.content)
@@ -646,7 +648,7 @@ def get_context_stats(memory_content: "MemoryContent") -> dict:
     }
 
 
-def migrate_legacy_memory(memory_content: "MemoryContent") -> "MemoryContent":
+def migrate_legacy_memory(memory_content: TMemoryContent) -> TMemoryContent:
     """
     Migrate old memory_text format to new conversation history structure.
     Call this when loading rooms with legacy data.
