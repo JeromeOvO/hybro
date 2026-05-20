@@ -1,11 +1,9 @@
 from collections.abc import Callable, Iterable
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 
-from database.mongodb import get_db
-from database.repository import Repository
 from models.request import FilterParams, PaginationParams
 
 # from models.response import PaginatedResponse
@@ -26,6 +24,32 @@ REPO_ACTIONS_MAP = {
     DELETE: "delete",
     PATCH: "patch",
 }
+
+db_provider: Callable[[], Any] | None = None
+repository_factory: Callable[..., Any] | None = None
+
+
+def bind_viewset_dependencies(
+    *,
+    get_db: Callable[[], Any],
+    create_repository: Callable[..., Any],
+) -> None:
+    global db_provider, repository_factory
+
+    db_provider = get_db
+    repository_factory = create_repository
+
+
+def get_viewset_db() -> Any:
+    if db_provider is None:
+        raise RuntimeError("ViewSet database dependency has not been bound")
+    return db_provider()
+
+
+def _create_repository(**kwargs):
+    if repository_factory is None:
+        raise RuntimeError("ViewSet repository dependency has not been bound")
+    return repository_factory(**kwargs)
 
 
 
@@ -122,7 +146,7 @@ class ViewSet:
 
         async def list_endpoint(
             request: Request,
-            db=Depends(get_db),
+            db=Depends(get_viewset_db),
             page: int | None = Query(None, ge=1, description="Page number (1-indexed)"),
             limit: int | None = Query(
                 None, ge=1, le=100, description="Number of items per page"
@@ -166,7 +190,7 @@ class ViewSet:
 
         async def retrieve_endpoint(
             item_id: str,
-            db=Depends(get_db),
+            db=Depends(get_viewset_db),
         ):
             result = await self._retrieve(db, item_id)
             if not result:
@@ -189,7 +213,7 @@ class ViewSet:
 
         async def create_endpoint(
             item: schema_in,
-            db=Depends(get_db),
+            db=Depends(get_viewset_db),
         ):
             return await self._create(db, item)
 
@@ -209,7 +233,7 @@ class ViewSet:
         async def update_endpoint(
             item_id: str,
             item: schema_in,
-            db=Depends(get_db),
+            db=Depends(get_viewset_db),
         ):
             return await self._update(db, item_id, item)
 
@@ -228,7 +252,7 @@ class ViewSet:
         async def patch_endpoint(
             item_id: str,
             item: schema_in,
-            db=Depends(get_db),
+            db=Depends(get_viewset_db),
         ):
             return await self._patch(db, item_id, item)
 
@@ -244,7 +268,7 @@ class ViewSet:
 
         async def delete_endpoint(
             item_id: str,
-            db=Depends(get_db),
+            db=Depends(get_viewset_db),
         ):
             return await self._delete(db, item_id)
 
@@ -258,10 +282,10 @@ class ViewSet:
     # --- Default endpoint implementations (can be overridden) ---
 
     async def _handle_operation(
-        self, action: str, db: AsyncIOMotorDatabase, *args
+        self, action: str, db: Any, *args
     ):
         """Generic handler for CRUD operations."""
-        repo = Repository(
+        repo = _create_repository(
             collection_name=self.collection_name,
             db=db,
             pinecone=None,
@@ -276,7 +300,7 @@ class ViewSet:
         return await method(*args)
 
     def get_filters(
-        self, db: AsyncIOMotorDatabase, filter_params: FilterParams | None = None
+        self, db: Any, filter_params: FilterParams | None = None
     ) -> dict:
         """
         Get the base query filter for the list endpoint.
@@ -310,7 +334,7 @@ class ViewSet:
 
     async def _list(
         self,
-        db: AsyncIOMotorDatabase,
+        db: Any,
         pagination: PaginationParams | None = None,
         filters: FilterParams | None = None,
     ):

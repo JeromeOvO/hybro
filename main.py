@@ -30,6 +30,7 @@ from api import (
     room_center,
     sse,
     task,
+    viewset,
     webhooks,
 )
 from common.auth import get_current_user
@@ -221,8 +222,14 @@ async def lifespan(app: FastAPI):
             from modules.InspectionCenter import InspectionCenter
             from modules.MemoryCenter import MemoryCenter
             from modules.TaskCenter import TaskCenter
+            from database.mongodb import get_db
+            from database.repository import Repository
 
             await mongodb.create_context_memory_indexes()
+            viewset.bind_viewset_dependencies(
+                get_db=get_db,
+                create_repository=Repository,
+            )
             inspection_center.bind_inspection_dependencies(InspectionCenter())
             memory_center.bind_memory_dependencies(MemoryCenter())
             task.bind_task_dependencies(TaskCenter())

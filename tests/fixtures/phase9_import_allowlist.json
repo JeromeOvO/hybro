@@ -169,20 +169,6 @@
   },
   {
     "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
-    "import": "database.mongodb.get_db",
-    "owner": "phase-9-api-adapter-conversion",
-    "path": "api/viewset.py",
-    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
-  },
-  {
-    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
-    "import": "database.repository.Repository",
-    "owner": "phase-9-api-adapter-conversion",
-    "path": "api/viewset.py",
-    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
-  },
-  {
-    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
     "import": "modules.agent_response_handler.AgentResponseHandler",
     "owner": "phase-9-api-adapter-conversion",
     "path": "api/webhooks.py",
