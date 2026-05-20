@@ -309,6 +309,12 @@ def test_gateway_models_have_no_sdk_confinement_blocker():
     assert "models/gateway.py" not in blocked_paths
 
 
+def test_processing_models_have_no_sdk_confinement_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "models/processing.py" not in blocked_paths
+
+
 def test_common_package_has_no_module_or_app_shell_imports():
     violations = _common_import_violations()
 
