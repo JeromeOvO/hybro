@@ -1833,13 +1833,19 @@ class RoomMessageCenter:
                     room and isinstance(room.extend_info, dict)
                     and room.extend_info.get("debateMode", False)
                 ) if room else False
-                await self._emit_unified_summary(
-                    room_id,
-                    user_message_id,
-                    synthesis_text=result.synthesis_text,
-                    trajectory_responses=trajectory_responses,
-                    is_debate=is_debate,
-                )
+
+                # Only emit a summary when the supervisor explicitly chose
+                # SYNTHESIZE (synthesis_text is set).  When the supervisor chose
+                # DONE it means individual agent responses are sufficient.
+                if result.synthesis_text is not None:
+                    await self._emit_unified_summary(
+                        room_id,
+                        user_message_id,
+                        synthesis_text=result.synthesis_text,
+                        trajectory_responses=trajectory_responses,
+                        is_debate=is_debate,
+                        working_already_emitted=True,
+                    )
                 # Emit turn_completed event
                 if getattr(self, '_turn_event_appender', None):
                     try:
@@ -2245,6 +2251,37 @@ class RoomMessageCenter:
     # Unified summary emission
     # ------------------------------------------------------------------
 
+    async def _emit_summary_working(
+        self,
+        room_id: str,
+        user_message_id: str,
+        summary_message_id: str,
+        summary_client_request_id: str | None,
+    ) -> None:
+        """Show the HYBRO AI / Summary Agent card in 'working' state."""
+        try:
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.PROCESSING,
+                message_id=user_message_id,
+                lifecycle_message_id=user_message_id,
+                record_lifecycle=False,
+                details="Compiling summary\u2026",
+            )
+        except Exception:
+            logger.debug("SSE stage notification failed (summary)", exc_info=True)
+        await self.sse_manager.send_task_submitted(
+            room_id=room_id,
+            message_id=summary_message_id,
+            task_id=summary_message_id,
+            agent_name="HYBRO AI",
+            agent_id=CoordinatorAgentId.SUMMARY,
+            status="working",
+            related_message_id=user_message_id,
+            task_content="Summarizing agent responses\u2026",
+            client_request_id=summary_client_request_id,
+        )
+
     async def _emit_unified_summary(
         self,
         room_id: str,
@@ -2253,6 +2290,7 @@ class RoomMessageCenter:
         synthesis_text: str | None = None,
         trajectory_responses: list[dict[str, str]] | None = None,
         is_debate: bool = False,
+        working_already_emitted: bool = False,
     ) -> None:
         """Emit a single unified summary message for a user message turn.
 
@@ -2282,6 +2320,12 @@ class RoomMessageCenter:
                 # on the non-synthesis (coordinator) path below.
                 if trajectory_responses is not None and len(trajectory_responses) < 2:
                     return
+
+                if not working_already_emitted:
+                    await self._emit_summary_working(
+                        room_id, user_message_id, summary_message_id,
+                        summary_client_request_id,
+                    )
                 content = synthesis_text
                 origin = "supervisor"
             else:
@@ -2322,6 +2366,11 @@ class RoomMessageCenter:
                 if len(agent_responses) < 2:
                     return
 
+                await self._emit_summary_working(
+                    room_id, user_message_id, summary_message_id,
+                    summary_client_request_id,
+                )
+
                 mode = "debate" if is_debate else "non_debate"
                 content = await self.openai_service.summarize_agent_responses(
                     agent_responses, mode=mode
@@ -2329,22 +2378,15 @@ class RoomMessageCenter:
                 origin = "coordinator"
 
                 if not content:
+                    await self.sse_manager.send_task_update(
+                        room_id, summary_message_id, "failed",
+                        agent_id=CoordinatorAgentId.SUMMARY,
+                        error="Summary generation returned empty",
+                        client_request_id=summary_client_request_id,
+                    )
                     return
 
-            # 2. Placeholder SSE — only emitted when we actually have content to summarize
-            await self.sse_manager.send_task_submitted(
-                room_id=room_id,
-                message_id=summary_message_id,
-                task_id=summary_message_id,
-                agent_name="Summary Agent",
-                agent_id=CoordinatorAgentId.SUMMARY,
-                status="working",
-                related_message_id=user_message_id,
-                task_content="Summarizing agent responses…",
-                client_request_id=summary_client_request_id,
-            )
-
-            # 3. Build and persist
+            # 2. Build and persist
             from a2a.types import Message, Role, Task, TaskState as A2ATaskState, TaskStatus, TextPart
             from common.utils.time import utcnow
             from models.room import MessageContent, RoomAgentMessage

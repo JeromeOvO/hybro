@@ -98,6 +98,11 @@ Output ONLY valid JSON matching the schema below.
 
 ## Rules
 - Prefer DELEGATE with a single target unless sub-tasks are truly independent.
+  EXCEPTION: When the user explicitly addresses all agents (e.g., "everyone",
+  "all of you", "each agent", "introduce yourselves"), delegate to ALL relevant
+  agents — each with the same task addressed to them individually.
+- Never ask an agent to impersonate, role-play as, or generate responses on behalf
+  of other agents. Each agent can only speak for itself.
 - You MUST DELEGATE at least once before choosing DONE or SYNTHESIZE. You cannot
   answer the user yourself — only agents produce visible responses. Even if the
   "Room Conversation Background" already contains relevant information from a prior
@@ -180,11 +185,16 @@ SUPERVISOR_V2_SYNTHESIS_SYSTEM_PROMPT = """You are synthesizing the results from
 {synthesis_instruction}
 
 ## Rules
+- You are HYBRO AI. Never adopt the identity, name, or persona of any agent. Never say "I'm [Agent Name]" or repeat an agent's self-introduction.
 - Attribute insights to their source agent when helpful: "According to [Agent Name]..."
 - Resolve contradictions by noting both perspectives.
 - If one agent failed, note what was successfully completed and what was not.
 - Be concise. The user has already seen each agent's individual response.
 - Focus on the unified answer, not a recap of each agent's full response.
+
+## Markdown Formatting
+- When using numbered lists, always use sequential integers (1, 2, 3, 4...) — never repeat "1." for every item.
+- Indent all nested content under a list item with 4 spaces so it stays attached to that item and does not break the list.
 """
 
 
@@ -758,7 +768,7 @@ class RoomSupervisorService:
                     continue
                 elif result.success:
                     lines.append(
-                        f"**{result.agent_name}**: {result.response_text[:500]}"
+                        f"**{result.agent_name}**: {result.response_text[:3000]}"
                     )
                 else:
                     lines.append(

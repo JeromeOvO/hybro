@@ -348,6 +348,7 @@ class AgentResponseHandler:
             agent_id=e.agent_id,
             status="working",
             related_message_id=e.related_message_id,
+            created_at=e.created_at,
             step_number=e.step_number,
             total_steps=e.total_steps,
             **kw,
@@ -375,6 +376,48 @@ class AgentResponseHandler:
                 e.message_id,
             )
             return
+
+        # Hub relay streaming path: when the hub suppresses `agent_response`
+        # (content was already streamed via artifact_update), it only emits
+        # processing_status(completed/failed/canceled).  In that case neither
+        # _on_response nor _on_error ever runs, so the DB task state is never
+        # closed and no task_update SSE is emitted — leaving the agent card
+        # spinner indefinitely.  Detect terminal statuses here and close them
+        # out exactly as _on_response/_on_error would.
+        # The idempotency check in notify_task_update (update_last_notified_state)
+        # prevents duplicate SSE on paths where agent_response was already sent.
+        if e.state:
+            try:
+                from common.a2a_constants import TERMINAL_STATES
+                _state_enum = TaskState(e.state)
+                if _state_enum in TERMINAL_STATES:
+                    try:
+                        await self._db.update_task_state_on_message(
+                            e.message_id, e.state
+                        )
+                    except Exception:
+                        logger.warning(
+                            "_on_processing_status: update_task_state_on_message "
+                            "failed for %s",
+                            e.message_id,
+                            exc_info=True,
+                        )
+                    await self.notify_task_update(
+                        message_id=e.message_id,
+                        state=_state_enum,
+                        room_id=e.room_id,
+                        user_id=e.user_id or "",
+                    )
+            except (ValueError, KeyError):
+                # e.state is not a valid TaskState value — skip
+                pass
+            except Exception:
+                logger.warning(
+                    "_on_processing_status: terminal close-out failed for %s",
+                    e.message_id,
+                    exc_info=True,
+                )
+
         await self._emit_processing_status(
             room_id=e.room_id,
             status=e.state,

@@ -555,66 +555,6 @@ class RoomServices:
             return self._room_error_response(error=str(exc))
         return self._room_setting_response_from_info(info)
 
-        # Resolve membership input (canonical or legacy)
-        result = await self._resolve_membership_input(room_create_request)
-        if isinstance(result, RoomCenterRoomSettingResponse):
-            return result
-        agent_set, origin, origin_status, source_group_id, source_group_name = result
-
-        # Validate access to agents
-        requesting_user = room_create_request.requesting_user_id or room_create_request.room_owner_id
-        if agent_set and requesting_user:
-            inaccessible = await self._validate_agents_access(
-                list(agent_set.keys()), requesting_user
-            )
-            if inaccessible:
-                return RoomCenterRoomSettingResponse(
-                    room_id=None, room=None, success=False,
-                    error=f"Access denied to private agents: {', '.join(inaccessible)}",
-                    status_code=403,
-                )
-
-        if room_create_request.room is not None:
-            room = room_create_request.room
-        else:
-            room = Room(
-                room_id=str(uuid4()),
-                room_name=room_create_request.room_name,
-                room_owner_id=room_create_request.room_owner_id,
-                room_owner_name=room_create_request.room_owner_name,
-                room_agent_set=agent_set,
-                room_created_at=utcnow(),
-                applied_from_group=room_create_request.applied_from_group,
-                membership_origin=origin,
-                membership_origin_status=origin_status,
-                source_group_id=source_group_id,
-                source_group_name=source_group_name,
-                extend_info=room_create_request.extend_info or None,
-            )
-
-        success = await self.database_service.add_room(room)
-        if success:
-            resolved_agents, room_default_status = await self._resolve_room_agent_refs(
-                room.room_agent_set, viewer_user_id=requesting_user
-            )
-            return RoomCenterRoomSettingResponse(
-                room_id=room.room_id,
-                room=room,
-                resolved_agents=resolved_agents,
-                room_default_status=room_default_status,
-                success=True,
-                error=None,
-                status_code=200,
-            )
-        else:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Failed to create room",
-                status_code=500,
-            )
-
     async def inquiry_room_setting(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:

@@ -165,6 +165,7 @@ class RoomCoordinatorService:
             # Pre-generate message_id and emit a "working" indicator so the
             # frontend shows a spinner while the LLM summarisation runs.
             summary_message_id = str(uuid4())
+            summary_dispatched_at = utcnow().isoformat()
             root_user_message = await self.database_service.get_room_user_message_by_message_id(
                 room_user_message_id
             )
@@ -182,6 +183,7 @@ class RoomCoordinatorService:
                 agent_id=coordinator_agent_id,
                 status="working",
                 related_message_id=room_user_message_id,
+                created_at=summary_dispatched_at,
                 task_content="Summarizing agent responses…",
                 client_request_id=summary_client_request_id,
             )

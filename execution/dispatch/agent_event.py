@@ -61,3 +61,4 @@ class AgentEvent:
     skip_persist: bool = False
     s3_converted: bool = False
     details: str | None = None
+    created_at: str | None = None
