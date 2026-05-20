@@ -4,7 +4,7 @@ from pathlib import Path
 
 import tomllib
 
-from common.protocols import FileStorage, GatewayService, RateLimiter
+from common.protocols import APIKeyRateLimiter, FileStorage, GatewayService, RateLimiter
 
 
 FORBIDDEN_PLATFORM_IMPORT_PREFIXES = (
@@ -38,8 +38,8 @@ def test_platform_facade_exposes_common_protocol_surfaces():
 
     assert isinstance(facade.gateway_service, GatewayService)
     assert facade.discovery_service is not None
-    assert isinstance(facade.gateway_rate_limiter, RateLimiter)
-    assert isinstance(facade.discovery_rate_limiter, RateLimiter)
+    assert isinstance(facade.gateway_rate_limiter, APIKeyRateLimiter)
+    assert isinstance(facade.discovery_rate_limiter, APIKeyRateLimiter)
     assert isinstance(facade.agent_rate_limiter, RateLimiter)
     assert isinstance(facade.file_storage, FileStorage)
     assert facade.content_storage is not None
@@ -63,6 +63,39 @@ def test_gateway_protocol_matches_route_facing_platform_surface():
             inspect.signature(getattr(PlatformGateway, method_name)).parameters
         )
         assert implementation_params == protocol_params
+
+
+def test_api_routes_call_only_api_key_rate_limiter_protocol_methods():
+    from common.protocols.platform_protocols import APIKeyRateLimiter
+
+    protocol_methods = {
+        name
+        for name, value in APIKeyRateLimiter.__dict__.items()
+        if callable(value) and not name.startswith("_")
+    }
+    violations: list[str] = []
+
+    for path in (Path("api/gateway.py"), Path("api/discovery.py")):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute):
+                continue
+            if not isinstance(node.value, ast.Name):
+                continue
+            if node.value.id == "rate_limiter" and node.attr not in protocol_methods:
+                violations.append(f"{path}:{node.lineno}: rate_limiter.{node.attr}")
+
+    assert not violations, "Route rate limiter calls are outside the protocol:\n" + "\n".join(
+        violations
+    )
+
+
+def test_main_binds_gateway_and_discovery_rate_limiters_from_platform_facade():
+    source = Path("main.py").read_text()
+
+    assert "PlatformRouteAPIKeyRateLimiter" not in source
+    assert "gateway.bind_gateway_dependencies(\n                platform_facade.gateway_service,\n                platform_facade.gateway_rate_limiter" in source
+    assert "discovery.bind_discovery_dependencies(\n                platform_facade.discovery_service,\n                platform_facade.discovery_rate_limiter" in source
 
 
 def test_container_builds_platform_config_from_scalar_settings():

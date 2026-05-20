@@ -241,8 +241,6 @@ async def lifespan(app: FastAPI):
             from modules.InspectionCenter import InspectionCenter
             from modules.MemoryCenter import MemoryCenter
             from modules.RoomCenter import RoomCenter
-            from modules.TaskCenter import TaskCenter
-            from modules.WorkflowCenter import workflow_center
             from database.mongodb import get_db
             from database.repository import Repository
 
@@ -270,8 +268,6 @@ async def lifespan(app: FastAPI):
             )
             inspection_center.bind_inspection_dependencies(InspectionCenter())
             memory_center.bind_memory_dependencies(MemoryCenter())
-            orchestration_center.bind_orchestration_dependencies(workflow_center)
-            task.bind_task_dependencies(TaskCenter())
             discovery_api_keys.bind_api_key_store(mongodb)
             mongo_dal = create_mongo_dal(database=mongodb.db)
             vector_dal = create_vector_dal()
@@ -558,30 +554,6 @@ async def lifespan(app: FastAPI):
                 config=platform_config,
                 deps=platform_deps,
             )
-            from platform_module.rate_limit import PlatformRouteAPIKeyRateLimiter
-
-            gateway_rate_limit_service = PlatformRouteAPIKeyRateLimiter(
-                collection=platform_deps.gateway_rate_limit_collection,
-                per_key_limit=platform_config.gateway_rate_limit_per_key,
-                global_limit=platform_config.gateway_rate_limit_global,
-                per_key_limit_message=lambda limit: (
-                    f"Rate limit exceeded: {limit} requests per hour"
-                ),
-                global_limit_message=(
-                    "Service temporarily unavailable due to high traffic"
-                ),
-            )
-            discovery_rate_limit_service = PlatformRouteAPIKeyRateLimiter(
-                collection=platform_deps.discovery_rate_limit_collection,
-                per_key_limit=platform_config.discovery_rate_limit_per_key,
-                global_limit=platform_config.discovery_rate_limit_global,
-                per_key_limit_message=lambda limit: (
-                    f"Rate limit exceeded: {limit} requests per hour"
-                ),
-                global_limit_message=(
-                    "Service temporarily unavailable due to high traffic"
-                ),
-            )
 
             async def verify_file_upload_room_ownership(room_id: str, user) -> None:
                 if not room_id:
@@ -597,11 +569,11 @@ async def lifespan(app: FastAPI):
 
             gateway.bind_gateway_dependencies(
                 platform_facade.gateway_service,
-                gateway_rate_limit_service,
+                platform_facade.gateway_rate_limiter,
             )
             discovery.bind_discovery_dependencies(
                 platform_facade.discovery_service,
-                discovery_rate_limit_service,
+                platform_facade.discovery_rate_limiter,
                 default_limit=settings.discovery_default_limit,
             )
             files.bind_file_dependencies(

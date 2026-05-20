@@ -314,9 +314,10 @@ class PlatformRouteAPIKeyRateLimiter:
         self,
         collection: RateLimitCollection | None = None,
         *,
+        scope: str = "api_key",
         clock: Callable[[], datetime] = _utcnow,
-        per_key_limit: int,
-        global_limit: int,
+        per_key_limit: int | None,
+        global_limit: int | None,
         per_key_limit_message: Callable[[int], str] | None = None,
         global_limit_message: str = "Service temporarily unavailable due to high traffic",
     ) -> None:
@@ -326,8 +327,22 @@ class PlatformRouteAPIKeyRateLimiter:
             per_key_limit_message=per_key_limit_message,
             global_limit_message=global_limit_message,
         )
+        self._protocol_limiter = PlatformProtocolRateLimiter(
+            collection=collection,
+            scope=scope,
+            clock=clock,
+        )
         self._per_key_limit = per_key_limit
         self._global_limit = global_limit
+
+    async def check(self, key: str, limit: int, window: int) -> RateLimitResult:
+        return await self._protocol_limiter.check(key, limit, window)
+
+    async def check_global(self, limit: int, window: int) -> RateLimitResult:
+        return await self._protocol_limiter.check_global(limit, window)
+
+    async def record(self, key: str, **extra: Any) -> None:
+        await self._protocol_limiter.record(key, **extra)
 
     async def check_rate_limit(self, api_key) -> None:
         result = await self._api_key_limiter.check_api_key_limit(

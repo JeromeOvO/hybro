@@ -14,13 +14,14 @@ from pydantic import BaseModel, Field
 
 from common.api_key_auth import get_api_key
 from common.errors import PlatformRouteError
+from common.protocols import APIKeyRateLimiter, GatewayDiscoveryProvider
 from models.api_key import APIKey
 from models.response import DiscoveryErrorResponse, DiscoveryResponse
 
 router = APIRouter()
 
-discovery_service: Any | None = None
-discovery_rate_limit_service: Any | None = None
+discovery_service: GatewayDiscoveryProvider | None = None
+discovery_rate_limit_service: APIKeyRateLimiter | None = None
 discovery_default_limit: int = 10
 
 
@@ -36,8 +37,8 @@ class DiscoveryRequest(BaseModel):
 
 
 def bind_discovery_dependencies(
-    service: Any,
-    rate_limiter: Any,
+    service: GatewayDiscoveryProvider,
+    rate_limiter: APIKeyRateLimiter,
     *,
     default_limit: int = 10,
 ) -> None:
@@ -48,13 +49,13 @@ def bind_discovery_dependencies(
     discovery_default_limit = default_limit
 
 
-def get_discovery_service() -> Any:
+def get_discovery_service() -> GatewayDiscoveryProvider:
     if discovery_service is None:
         raise RuntimeError("Discovery service dependency has not been bound")
     return discovery_service
 
 
-def get_discovery_rate_limiter() -> Any:
+def get_discovery_rate_limiter() -> APIKeyRateLimiter:
     if discovery_rate_limit_service is None:
         raise RuntimeError("Discovery rate limiter dependency has not been bound")
     return discovery_rate_limit_service
@@ -127,8 +128,8 @@ with a similarity score above the confidence threshold.
 async def discover_agents(
     request_body: DiscoveryRequest,
     api_key: APIKey = Depends(get_api_key),
-    svc: Any = Depends(get_discovery_service),
-    rate_limiter: Any = Depends(get_discovery_rate_limiter),
+    svc: GatewayDiscoveryProvider = Depends(get_discovery_service),
+    rate_limiter: APIKeyRateLimiter = Depends(get_discovery_rate_limiter),
     default_limit: int = Depends(get_discovery_default_limit),
 ) -> DiscoveryResponse:
     """

@@ -45,6 +45,7 @@ from common.protocols.llm_protocols import LLMProvider, ModelRegistry
 from common.protocols.platform_protocols import (
     APIKeyAuthenticator,
     APIKeyPrincipal,
+    APIKeyRateLimiter,
     FileStorage,
     GatewayDiscoveryProvider,
     GatewayService,
@@ -89,6 +90,7 @@ __all__ = [
     "AgentTransport",
     "APIKeyAuthenticator",
     "APIKeyPrincipal",
+    "APIKeyRateLimiter",
     "ContextAssembler",
     "ContentStorageRepository",
     "DistributedLock",

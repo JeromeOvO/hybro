@@ -47,6 +47,13 @@ class RateLimiter(Protocol):
 
 
 @runtime_checkable
+class APIKeyRateLimiter(RateLimiter, Protocol):
+    async def record(self, key: str, **extra: Any) -> None: ...
+    async def check_rate_limit(self, api_key: APIKeyPrincipal) -> None: ...
+    async def record_request(self, api_key: APIKeyPrincipal) -> None: ...
+
+
+@runtime_checkable
 class FileStorage(Protocol):
     async def upload(
         self,
@@ -63,6 +70,7 @@ class FileStorage(Protocol):
 
 __all__ = [
     "APIKeyAuthenticator",
+    "APIKeyRateLimiter",
     "APIKeyPrincipal",
     "FileStorage",
     "GatewayDiscoveryProvider",

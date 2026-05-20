@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 
 from common.api_key_auth import get_api_key
 from common.errors import GatewayPlatformError, PlatformRouteError
+from common.protocols import APIKeyRateLimiter, GatewayService
 from common.utils.logger import get_logger
 from models.api_key import APIKey
 from models.gateway import (
@@ -29,28 +30,31 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 
-gateway_service: Any | None = None
-gateway_rate_limit_service: Any | None = None
+gateway_service: GatewayService | None = None
+gateway_rate_limit_service: APIKeyRateLimiter | None = None
 
 
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
 
-def bind_gateway_dependencies(service: Any, rate_limiter: Any) -> None:
+def bind_gateway_dependencies(
+    service: GatewayService,
+    rate_limiter: APIKeyRateLimiter,
+) -> None:
     global gateway_service, gateway_rate_limit_service
 
     gateway_service = service
     gateway_rate_limit_service = rate_limiter
 
 
-def get_gateway_service() -> Any:
+def get_gateway_service() -> GatewayService:
     if gateway_service is None:
         raise RuntimeError("Gateway service dependency has not been bound")
     return gateway_service
 
 
-def get_gateway_rate_limiter() -> Any:
+def get_gateway_rate_limiter() -> APIKeyRateLimiter:
     if gateway_rate_limit_service is None:
         raise RuntimeError("Gateway rate limiter dependency has not been bound")
     return gateway_rate_limit_service
@@ -62,14 +66,14 @@ def _resolve_dependency(value: Any, provider) -> Any:
     return value
 
 
-async def _check_rate_limit(rate_limiter: Any, api_key: APIKey) -> None:
+async def _check_rate_limit(rate_limiter: APIKeyRateLimiter, api_key: APIKey) -> None:
     try:
         await rate_limiter.check_rate_limit(api_key)
     except PlatformRouteError as exc:
         _raise_http_error(exc)
 
 
-async def _record_request(rate_limiter: Any, api_key: APIKey) -> None:
+async def _record_request(rate_limiter: APIKeyRateLimiter, api_key: APIKey) -> None:
     await rate_limiter.record_request(api_key)
 
 
@@ -99,8 +103,8 @@ def _raise_http_error(error: PlatformRouteError) -> None:
 async def gateway_discover(
     body: GatewayDiscoverRequest,
     api_key: APIKey = Depends(get_api_key),
-    svc: Any = Depends(get_gateway_service),
-    rate_limiter: Any = Depends(get_gateway_rate_limiter),
+    svc: GatewayService = Depends(get_gateway_service),
+    rate_limiter: APIKeyRateLimiter = Depends(get_gateway_rate_limiter),
 ):
     rate_limiter = _resolve_dependency(rate_limiter, get_gateway_rate_limiter)
     await _check_rate_limit(rate_limiter, api_key)
@@ -132,8 +136,8 @@ async def gateway_send(
     agent_id: str,
     body: GatewaySendRequest,
     api_key: APIKey = Depends(get_api_key),
-    svc: Any = Depends(get_gateway_service),
-    rate_limiter: Any = Depends(get_gateway_rate_limiter),
+    svc: GatewayService = Depends(get_gateway_service),
+    rate_limiter: APIKeyRateLimiter = Depends(get_gateway_rate_limiter),
 ):
     rate_limiter = _resolve_dependency(rate_limiter, get_gateway_rate_limiter)
     await _check_rate_limit(rate_limiter, api_key)
@@ -157,8 +161,8 @@ async def gateway_stream(
     agent_id: str,
     body: GatewaySendRequest,
     api_key: APIKey = Depends(get_api_key),
-    svc: Any = Depends(get_gateway_service),
-    rate_limiter: Any = Depends(get_gateway_rate_limiter),
+    svc: GatewayService = Depends(get_gateway_service),
+    rate_limiter: APIKeyRateLimiter = Depends(get_gateway_rate_limiter),
 ):
     rate_limiter = _resolve_dependency(rate_limiter, get_gateway_rate_limiter)
     await _check_rate_limit(rate_limiter, api_key)
@@ -223,8 +227,8 @@ async def gateway_stream(
 async def gateway_get_card(
     agent_id: str,
     api_key: APIKey = Depends(get_api_key),
-    svc: Any = Depends(get_gateway_service),
-    rate_limiter: Any = Depends(get_gateway_rate_limiter),
+    svc: GatewayService = Depends(get_gateway_service),
+    rate_limiter: APIKeyRateLimiter = Depends(get_gateway_rate_limiter),
 ):
     rate_limiter = _resolve_dependency(rate_limiter, get_gateway_rate_limiter)
     await _check_rate_limit(rate_limiter, api_key)

@@ -153,6 +153,19 @@ def test_phase9_route_inventory_owners_resolve_to_real_symbols():
     assert not missing, "Unresolved route owners:\n" + "\n".join(missing)
 
 
+def test_phase9_route_inventory_does_not_use_platform_implementation_owners():
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    violations = [
+        f"{route['path']}: {route['owning_protocol']}"
+        for route in routes
+        if route["owning_protocol"].startswith("platform_module.")
+    ]
+
+    assert not violations, "Routes must use common protocols, not platform implementations:\n" + "\n".join(
+        violations
+    )
+
+
 def test_legacy_workflow_routes_keep_public_shape_without_execution_dependencies():
     from main import app
 
@@ -283,6 +296,21 @@ def test_legacy_workflow_routes_keep_only_expected_runtime_injection_params():
                 violations.append(f"{route.path}: {name}")
 
     assert not violations, "Legacy 410 routes keep unexpected runtime params:\n" + "\n".join(
+        violations
+    )
+
+
+def test_legacy_410_routes_are_not_bound_to_legacy_execution_centers_at_startup():
+    source = Path("main.py").read_text()
+    forbidden = (
+        "from modules.TaskCenter import TaskCenter",
+        "from modules.WorkflowCenter import workflow_center",
+        "task.bind_task_dependencies(",
+        "orchestration_center.bind_orchestration_dependencies(",
+    )
+    violations = [value for value in forbidden if value in source]
+
+    assert not violations, "Legacy 410 routes still bind execution centers:\n" + "\n".join(
         violations
     )
 

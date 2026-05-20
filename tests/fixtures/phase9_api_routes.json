@@ -382,7 +382,7 @@
     ],
     "module": "api.discovery",
     "name": "discover_agents",
-    "owning_protocol": "platform_module.discovery.PlatformDiscovery",
+    "owning_protocol": "common.protocols.GatewayDiscoveryProvider",
     "path": "/api/v1/discovery/agents",
     "response_model": "DiscoveryResponse"
   },
