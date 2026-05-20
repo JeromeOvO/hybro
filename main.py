@@ -295,6 +295,7 @@ async def lifespan(app: FastAPI):
             )
             from services.task_notification_service import notify_task_update
             agent_group.bind_agent_group_dependencies(_db_svc)
+            sse.bind_sse_dependencies(_db_svc, sse_manager)
 
             async def notify_task_update_with_string_state(**kwargs):
                 state = kwargs.get("state")

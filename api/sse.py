@@ -1,19 +1,28 @@
 # api/sse.py
 import json
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi.params import Depends as DependsParam
 from fastapi.responses import StreamingResponse
 
 from common.auth import ClerkUser, get_current_user, get_current_user_with_query_token
 from common.protocols import ExecutionEngine
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from services.database_service import db_service
-from services.sse_services import sse_manager
 
 logger = get_logger(__name__)
 router = APIRouter()
 execution_engine: ExecutionEngine | None = None
+db_service: Any | None = None
+sse_manager: Any | None = None
+
+
+def bind_sse_dependencies(database_service: Any, manager: Any) -> None:
+    global db_service, sse_manager
+
+    db_service = database_service
+    sse_manager = manager
 
 
 def bind_execution_deps(deps) -> None:
@@ -27,10 +36,29 @@ def _require_execution_engine() -> ExecutionEngine:
     return execution_engine
 
 
+def get_db_service() -> Any:
+    if db_service is None:
+        raise RuntimeError("SSE database dependency has not been bound")
+    return db_service
+
+
+def get_sse_manager() -> Any:
+    if sse_manager is None:
+        raise RuntimeError("SSE manager dependency has not been bound")
+    return sse_manager
+
+
+def _resolve_dependency(value: Any, provider) -> Any:
+    if isinstance(value, DependsParam):
+        return provider()
+    return value
+
+
 @router.get("/sse/room/{room_id}/stream")
 async def stream_room_messages(
     room_id: str = Path(..., description="room ID"),
     user: ClerkUser = Depends(get_current_user_with_query_token),
+    manager: Any = Depends(get_sse_manager),
 ):
     """
     create SSE message stream for specified room
@@ -42,12 +70,13 @@ async def stream_room_messages(
     Returns:
         StreamingResponse: SSE stream response
     """
+    manager = _resolve_dependency(manager, get_sse_manager)
 
     async def event_generator():
         connection = None
         try:
             # create SSE connection
-            connection = await sse_manager.add_connection(room_id)
+            connection = await manager.add_connection(room_id)
             logger.info(f"SSE stream started for room {room_id}")
 
             # send connected message
@@ -76,7 +105,7 @@ async def stream_room_messages(
         finally:
             # clean up connection
             if connection:
-                await sse_manager.remove_connection(room_id, connection.connection_id)
+                await manager.remove_connection(room_id, connection.connection_id)
                 logger.info(f"SSE stream closed for room {room_id}")
 
     return StreamingResponse(
@@ -95,6 +124,7 @@ async def stream_room_messages(
 async def get_room_sse_status(
     room_id: str = Path(..., description="room ID"),
     user: ClerkUser = Depends(get_current_user_with_query_token),
+    manager: Any = Depends(get_sse_manager),
 ):
     """
     get SSE connection status for specified room
@@ -106,13 +136,15 @@ async def get_room_sse_status(
     Returns:
         dict: room connection status information
     """
-    return sse_manager.get_room_status(room_id)
+    manager = _resolve_dependency(manager, get_sse_manager)
+    return manager.get_room_status(room_id)
 
 
 @router.post("/sse/message/{message_id}/cancel")
 async def cancel_message(
     message_id: str = Path(..., description="Message ID to cancel"),
     user: ClerkUser = Depends(get_current_user),
+    db: Any = Depends(get_db_service),
 ):
     """
     Cancel an ongoing message processing workflow.
@@ -128,12 +160,13 @@ async def cancel_message(
         dict: Success status and message
     """
     try:
+        db = _resolve_dependency(db, get_db_service)
         # Verify the message exists and the user owns the room it belongs to
-        message = await db_service.get_room_user_message_by_message_id(message_id)
+        message = await db.get_room_user_message_by_message_id(message_id)
         if not message:
             raise HTTPException(status_code=404, detail="Message not found")
 
-        room = await db_service.get_room_by_room_id(message.room_id)
+        room = await db.get_room_by_room_id(message.room_id)
         if not room:
             raise HTTPException(status_code=404, detail="Room not found")
 
