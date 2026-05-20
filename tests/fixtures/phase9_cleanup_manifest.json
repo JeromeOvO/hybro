@@ -25,13 +25,6 @@
       "reason": "Package remains shipped for legacy infrastructure compatibility paths while DAL, Delivery, and HubRuntimeBridge migration callers finish decommission; production import gates prevent new direct coupling."
     },
     {
-      "contract": "legacy_import_boundary",
-      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "jobs/stale_task_checker.py",
-      "reason": "Stale task checker still uses legacy task polling, notification, metrics, database, and settings singletons; recovery behavior is preserved until a protocol-bound job migration lands."
-    },
-    {
       "contract": "sdk_confinement",
       "expiry_task": "Final SDK confinement migration",
       "owner": "phase-9-platform-api-cleanup",

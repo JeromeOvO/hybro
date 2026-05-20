@@ -47,7 +47,7 @@ from jobs.cleanup_orphaned_uploads import (
 )
 from jobs.compaction_sweep import CompactionSweepDeps, compaction_sweep
 from jobs.constants import ALL_JOB_NAMES
-from jobs.stale_task_checker import stale_task_checker
+from jobs.stale_task_checker import StaleTaskCheckerDeps, stale_task_checker
 from services.agent_health_service import agent_health_service
 from services.sse_services import sse_manager
 
@@ -373,6 +373,7 @@ async def lifespan(app: FastAPI):
                 run_command_handler,
                 run_event_sse_enabled,
             )
+            from services.run_metrics import increment_counter
             from services.task_notification_service import (
                 _notify_task_update_impl,
                 notify_task_update,
@@ -705,6 +706,22 @@ async def lifespan(app: FastAPI):
 
         agent_health_service.set_leader_election(_leader)
         stale_task_checker.set_leader_election(_leader)
+        stale_task_checker.configure_timing(
+            stale_check_minutes=settings.stale_check_minutes,
+            task_expiry_hours=settings.task_expiry_hours,
+            pending_task_warning_hours=settings.pending_task_warning_hours,
+            orphan_threshold_minutes=settings.orphan_threshold_minutes,
+            processing_status_expiry_minutes=settings.processing_status_expiry_minutes,
+        )
+        stale_task_checker.set_runtime_deps(
+            StaleTaskCheckerDeps(
+                db_service=_db_svc,
+                rooms_collection=mongodb.rooms_collection,
+                notify_task_update=notify_task_update,
+                increment_counter=increment_counter,
+                a2a_service=a2a_service,
+            )
+        )
         if _execution_deps is not None:
             from jobs.stale_task_checker import (
                 StaleHITLDeps,
