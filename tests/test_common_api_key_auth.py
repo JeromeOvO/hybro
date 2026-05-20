@@ -9,20 +9,48 @@ Tests cover:
 - get_api_key_no_track: header extraction and delegation without usage tracking
 """
 
+import ast
 import hashlib
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 
+from app_shell.api_key_auth import MongoAPIKeyAuthenticator
 from common.api_key_auth import (
     bind_api_key_authenticator,
-    bind_api_key_store,
     hash_api_key,
     validate_api_key,
     get_api_key,
     get_api_key_no_track,
 )
+
+
+@pytest.fixture(autouse=True)
+def reset_api_key_authenticator(monkeypatch):
+    monkeypatch.setattr("common.api_key_auth.api_key_authenticator", None)
+
+
+def test_common_auth_delegates_without_persistence_store_logic():
+    tree = ast.parse(open("common/api_key_auth.py").read())
+    forbidden_names = {
+        "api_key_store",
+        "bind_api_key_store",
+        "get_api_key_by_hash",
+        "update_api_key_usage",
+    }
+    found = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and node.id in forbidden_names
+    }
+    found.update(
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and node.attr in forbidden_names
+    )
+
+    assert found == set()
 
 
 # =============================================================================
@@ -66,14 +94,14 @@ class TestValidateApiKey:
         )
 
     @pytest.mark.asyncio
-    async def test_uses_bound_api_key_store(self):
+    async def test_mongo_authenticator_validates_and_tracks_usage(self):
         mock_key = MagicMock()
         mock_key.is_active = True
         store = MagicMock()
         store.get_api_key_by_hash = AsyncMock(return_value=mock_key)
         store.update_api_key_usage = AsyncMock()
 
-        bind_api_key_store(store)
+        bind_api_key_authenticator(MongoAPIKeyAuthenticator(store))
 
         result = await validate_api_key("raw-key")
 
@@ -85,22 +113,23 @@ class TestValidateApiKey:
         mock_key = MagicMock()
         mock_key.is_active = True
         mock_key.key_id = "k-001"
+        store = MagicMock()
+        store.get_api_key_by_hash = AsyncMock(return_value=mock_key)
+        store.update_api_key_usage = AsyncMock()
 
-        with patch("common.api_key_auth.api_key_store") as mock_store:
-            mock_store.get_api_key_by_hash = AsyncMock(return_value=mock_key)
-            mock_store.update_api_key_usage = AsyncMock()
-
-            result = await validate_api_key("raw-key")
+        bind_api_key_authenticator(MongoAPIKeyAuthenticator(store))
+        result = await validate_api_key("raw-key")
 
         assert result is mock_key
 
     @pytest.mark.asyncio
     async def test_raises_401_for_unknown_key(self):
-        with patch("common.api_key_auth.api_key_store") as mock_store:
-            mock_store.get_api_key_by_hash = AsyncMock(return_value=None)
+        store = MagicMock()
+        store.get_api_key_by_hash = AsyncMock(return_value=None)
+        bind_api_key_authenticator(MongoAPIKeyAuthenticator(store))
 
-            with pytest.raises(HTTPException) as exc:
-                await validate_api_key("bad-key")
+        with pytest.raises(HTTPException) as exc:
+            await validate_api_key("bad-key")
 
         assert exc.value.status_code == 401
         assert exc.value.detail["error"] == "invalid_key"
@@ -110,12 +139,12 @@ class TestValidateApiKey:
         mock_key = MagicMock()
         mock_key.is_active = False
         mock_key.key_id = "k-disabled"
+        store = MagicMock()
+        store.get_api_key_by_hash = AsyncMock(return_value=mock_key)
+        bind_api_key_authenticator(MongoAPIKeyAuthenticator(store))
 
-        with patch("common.api_key_auth.api_key_store") as mock_store:
-            mock_store.get_api_key_by_hash = AsyncMock(return_value=mock_key)
-
-            with pytest.raises(HTTPException) as exc:
-                await validate_api_key("inactive-key")
+        with pytest.raises(HTTPException) as exc:
+            await validate_api_key("inactive-key")
 
         assert exc.value.status_code == 401
         assert exc.value.detail["error"] == "key_inactive"
@@ -124,29 +153,30 @@ class TestValidateApiKey:
     async def test_tolerates_usage_update_failure(self):
         mock_key = MagicMock()
         mock_key.is_active = True
+        store = MagicMock()
+        store.get_api_key_by_hash = AsyncMock(return_value=mock_key)
+        store.update_api_key_usage = AsyncMock(
+            side_effect=RuntimeError("stats DB down")
+        )
 
-        with patch("common.api_key_auth.api_key_store") as mock_store:
-            mock_store.get_api_key_by_hash = AsyncMock(return_value=mock_key)
-            mock_store.update_api_key_usage = AsyncMock(
-                side_effect=RuntimeError("stats DB down")
-            )
+        bind_api_key_authenticator(MongoAPIKeyAuthenticator(store))
 
-            result = await validate_api_key("valid-key")
-            assert result is mock_key
+        result = await validate_api_key("valid-key")
+        assert result is mock_key
 
     @pytest.mark.asyncio
     async def test_skips_usage_update_when_track_usage_false(self):
         mock_key = MagicMock()
         mock_key.is_active = True
+        store = MagicMock()
+        store.get_api_key_by_hash = AsyncMock(return_value=mock_key)
+        store.update_api_key_usage = AsyncMock()
 
-        with patch("common.api_key_auth.api_key_store") as mock_store:
-            mock_store.get_api_key_by_hash = AsyncMock(return_value=mock_key)
-            mock_store.update_api_key_usage = AsyncMock()
-
-            result = await validate_api_key("raw-key", track_usage=False)
+        bind_api_key_authenticator(MongoAPIKeyAuthenticator(store))
+        result = await validate_api_key("raw-key", track_usage=False)
 
         assert result is mock_key
-        mock_store.update_api_key_usage.assert_not_called()
+        store.update_api_key_usage.assert_not_called()
 
 
 # =============================================================================
@@ -221,11 +251,12 @@ class TestGetApiKeyNoTrack:
 
         request = MagicMock()
         request.headers = {"X-API-Key": "infra-key"}
+        store = MagicMock()
+        store.get_api_key_by_hash = AsyncMock(return_value=mock_key)
+        store.update_api_key_usage = AsyncMock()
 
-        with patch("common.api_key_auth.api_key_store") as mock_store:
-            mock_store.get_api_key_by_hash = AsyncMock(return_value=mock_key)
-            mock_store.update_api_key_usage = AsyncMock()
+        bind_api_key_authenticator(MongoAPIKeyAuthenticator(store))
 
-            await get_api_key_no_track(request)
+        await get_api_key_no_track(request)
 
-        mock_store.update_api_key_usage.assert_not_called()
+        store.update_api_key_usage.assert_not_called()

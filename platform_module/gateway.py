@@ -272,6 +272,9 @@ class PlatformGateway:
         raw = payload.get("raw")
         response_id = result.task_id or ""
         if isinstance(raw, dict):
+            jsonrpc_response = _jsonrpc_response_from_raw(raw)
+            if jsonrpc_response is not None:
+                return jsonrpc_response
             envelope_id, envelope_result = _jsonrpc_envelope_parts(raw)
             response_result = envelope_result or raw
             response_id = str(
@@ -300,6 +303,9 @@ class PlatformGateway:
         raw = payload.get("raw") if isinstance(payload, dict) else None
         envelope_id = None
         if isinstance(raw, dict):
+            jsonrpc_response = _jsonrpc_response_from_raw(raw)
+            if jsonrpc_response is not None:
+                return jsonrpc_response
             envelope_id, envelope_result = _jsonrpc_envelope_parts(raw)
             response_result = envelope_result or raw
         else:
@@ -429,6 +435,22 @@ def _jsonrpc_envelope_parts(value: dict[str, Any]) -> tuple[Any | None, dict[str
     if not isinstance(result, dict):
         return value.get("id"), None
     return value.get("id"), result
+
+
+def _jsonrpc_response_from_raw(value: dict[str, Any]) -> dict[str, Any] | None:
+    if "jsonrpc" not in value:
+        return None
+    response = {
+        "jsonrpc": value.get("jsonrpc") or "2.0",
+        "id": value.get("id", ""),
+    }
+    if "error" in value:
+        response["error"] = value["error"]
+        return response
+    if "result" in value:
+        response["result"] = value["result"]
+        return response
+    return None
 
 
 __all__ = ["PlatformGateway"]

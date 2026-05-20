@@ -2,11 +2,7 @@
 Unit tests for api/task.py endpoints.
 
 Tests cover:
-- query_task: validation and delegation
-- query_base_task: delegation
-- get_all_sessions: delegation
-- get_base_task_by_session_id: delegation
-- get_meta_tasks_by_parent_task_id: delegation
+- legacy workflow task endpoints return HTTP 410
 """
 
 import pytest
@@ -20,71 +16,31 @@ from api.task import (
     get_meta_tasks_by_parent_task_id,
 )
 
-class TestQueryTask:
+
+class TestLegacyTaskRoutes:
     @pytest.mark.asyncio
-    async def test_delegates_to_task_center(self):
-        expected = {"task_id": "t-1", "status": "completed"}
+    @pytest.mark.parametrize(
+        ("handler", "argument"),
+        [
+            (query_task, "t-1"),
+            (query_base_task, "t-1"),
+            (get_all_sessions, "alice"),
+            (get_base_task_by_session_id, "sess-1"),
+            (get_meta_tasks_by_parent_task_id, "parent-1"),
+        ],
+    )
+    async def test_returns_410_without_invoking_task_center(self, handler, argument):
+        center = MagicMock()
+        for method_name in (
+            "query_all_sessions",
+            "query_base_task_by_task_id",
+            "query_base_tasks_by_session_id",
+            "query_meta_task_by_task_id",
+            "query_meta_tasks_by_parent_task_id",
+        ):
+            setattr(center, method_name, AsyncMock(return_value={"unexpected": True}))
 
-        mock_tc = MagicMock()
-        mock_tc.query_meta_task_by_task_id = AsyncMock(return_value=expected)
-        result = await query_task("t-1", center=mock_tc)
+        result = await handler(argument, center=center)
 
-        assert result == expected
-        call_arg = mock_tc.query_meta_task_by_task_id.call_args[0][0]
-        assert call_arg.task_id == "t-1"
-
-
-class TestQueryBaseTask:
-    @pytest.mark.asyncio
-    async def test_delegates_to_task_center(self):
-        expected = {"task_id": "t-1", "type": "base"}
-
-        mock_tc = MagicMock()
-        mock_tc.query_base_task_by_task_id = AsyncMock(return_value=expected)
-        result = await query_base_task("t-1", center=mock_tc)
-
-        assert result == expected
-        call_arg = mock_tc.query_base_task_by_task_id.call_args[0][0]
-        assert call_arg.task_id == "t-1"
-
-
-class TestGetAllSessions:
-    @pytest.mark.asyncio
-    async def test_delegates_to_task_center(self):
-        expected = [{"session_id": "s-1"}]
-
-        mock_tc = MagicMock()
-        mock_tc.query_all_sessions = AsyncMock(return_value=expected)
-        result = await get_all_sessions("alice", center=mock_tc)
-
-        assert result == expected
-        call_arg = mock_tc.query_all_sessions.call_args[0][0]
-        assert call_arg.user_name == "alice"
-
-
-class TestGetBaseTaskBySessionId:
-    @pytest.mark.asyncio
-    async def test_delegates_to_task_center(self):
-        expected = [{"task_id": "t-1"}]
-
-        mock_tc = MagicMock()
-        mock_tc.query_base_tasks_by_session_id = AsyncMock(return_value=expected)
-        result = await get_base_task_by_session_id("sess-1", center=mock_tc)
-
-        assert result == expected
-        call_arg = mock_tc.query_base_tasks_by_session_id.call_args[0][0]
-        assert call_arg.session_id == "sess-1"
-
-
-class TestGetMetaTasksByParentTaskId:
-    @pytest.mark.asyncio
-    async def test_delegates_to_task_center(self):
-        expected = [{"task_id": "meta-1"}]
-
-        mock_tc = MagicMock()
-        mock_tc.query_meta_tasks_by_parent_task_id = AsyncMock(return_value=expected)
-        result = await get_meta_tasks_by_parent_task_id("parent-1", center=mock_tc)
-
-        assert result == expected
-        call_arg = mock_tc.query_meta_tasks_by_parent_task_id.call_args[0][0]
-        assert call_arg.parent_task_id == "parent-1"
+        assert result.status_code == 410
+        assert center.mock_calls == []

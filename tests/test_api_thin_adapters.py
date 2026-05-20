@@ -1,4 +1,5 @@
 import ast
+import importlib
 import json
 from pathlib import Path
 
@@ -121,3 +122,30 @@ def test_phase9_route_inventory_matches_live_app_routes():
         assert route["response_model"] == live[key]["response_model"]
         assert sorted(route["auth_dependencies"]) == live[key]["auth_dependencies"]
         assert not route["owning_protocol"].startswith("blocked:")
+
+
+def test_phase9_route_inventory_owners_resolve_to_real_symbols():
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    symbolic_owners = {
+        "fastapi.documentation",
+        "legacy_workflow_decommission_manifest",
+    }
+    missing: list[str] = []
+
+    for route in routes:
+        owner = route["owning_protocol"]
+        if owner in symbolic_owners or owner.startswith("blocked:"):
+            continue
+        module_name, _, symbol_name = owner.rpartition(".")
+        if not module_name or not symbol_name:
+            missing.append(f"{route['path']}: {owner}")
+            continue
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            missing.append(f"{route['path']}: {owner} ({exc})")
+            continue
+        if not hasattr(module, symbol_name):
+            missing.append(f"{route['path']}: {owner}")
+
+    assert not missing, "Unresolved route owners:\n" + "\n".join(missing)

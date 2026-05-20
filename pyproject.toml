@@ -129,6 +129,7 @@ packages = [
     "hub_runtime_bridge.adapters",
     "platform_module",
     "platform_module.adapters",
+    "app_shell",
     "models",
     "common",
     "common.config",

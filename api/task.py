@@ -1,9 +1,8 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter
 from fastapi.params import Depends as DependsParam
-
-from models.request import TaskCenterRequest
+from fastapi.responses import JSONResponse
 
 router = APIRouter()
 task_center: Any | None = None
@@ -27,71 +26,54 @@ def _resolve_dependency(value: Any, provider) -> Any:
     return value
 
 
+def _legacy_task_gone() -> JSONResponse:
+    return JSONResponse(
+        status_code=410,
+        content={
+            "success": False,
+            "error": (
+                "This legacy task endpoint is deprecated. "
+                "Use room and run APIs for active workflow state."
+            ),
+        },
+    )
+
+
 @router.get("/task/queryTask/{task_id}")
 async def query_task(
     task_id: str,
-    center: Any = Depends(get_task_center),
+    center: Any = None,
 ):
-    center = _resolve_dependency(center, get_task_center)
-    if not task_id:
-        raise HTTPException(status_code=400, detail="task_id is required")
-
-    task_center_request = TaskCenterRequest(task_id=task_id)
-    task_center_response = await center.query_meta_task_by_task_id(
-        task_center_request
-    )
-
-    return task_center_response
+    return _legacy_task_gone()
 
 
 @router.get("/task/queryBaseTask/{task_id}")
 async def query_base_task(
     task_id: str,
-    center: Any = Depends(get_task_center),
+    center: Any = None,
 ):
-    center = _resolve_dependency(center, get_task_center)
-    if not task_id:
-        raise HTTPException(status_code=400, detail="task_id is required")
-
-    task_center_request = TaskCenterRequest(task_id=task_id)
-    task_center_response = await center.query_base_task_by_task_id(
-        task_center_request
-    )
-    return task_center_response
+    return _legacy_task_gone()
 
 
 @router.get("/task/getAllSessions/{user_name}")
 async def get_all_sessions(
     user_name: str,
-    center: Any = Depends(get_task_center),
+    center: Any = None,
 ):
-    center = _resolve_dependency(center, get_task_center)
-    task_center_request = TaskCenterRequest(user_name=user_name)
-    task_center_response = await center.query_all_sessions(task_center_request)
-    return task_center_response
+    return _legacy_task_gone()
 
 
 @router.get("/task/getBaseTasksBySessionId/{session_id}")
 async def get_base_task_by_session_id(
     session_id: str,
-    center: Any = Depends(get_task_center),
+    center: Any = None,
 ):
-    center = _resolve_dependency(center, get_task_center)
-    task_center_request = TaskCenterRequest(session_id=session_id)
-    task_center_response = await center.query_base_tasks_by_session_id(
-        task_center_request
-    )
-    return task_center_response
+    return _legacy_task_gone()
 
 
 @router.get("/task/getMetaTasksByParentTaskId/{parent_task_id}")
 async def get_meta_tasks_by_parent_task_id(
     parent_task_id: str,
-    center: Any = Depends(get_task_center),
+    center: Any = None,
 ):
-    center = _resolve_dependency(center, get_task_center)
-    task_center_request = TaskCenterRequest(parent_task_id=parent_task_id)
-    task_center_response = await center.query_meta_tasks_by_parent_task_id(
-        task_center_request
-    )
-    return task_center_response
+    return _legacy_task_gone()

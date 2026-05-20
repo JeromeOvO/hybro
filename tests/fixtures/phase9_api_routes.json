@@ -563,9 +563,7 @@
   },
   {
     "auth_dependencies": [
-      "_get_task_request",
-      "get_current_user",
-      "get_workflow_center"
+      "get_current_user"
     ],
     "methods": [
       "POST"
@@ -578,9 +576,7 @@
   },
   {
     "auth_dependencies": [
-      "_get_task_request",
-      "get_current_user",
-      "get_workflow_center"
+      "get_current_user"
     ],
     "methods": [
       "POST"
@@ -593,9 +589,7 @@
   },
   {
     "auth_dependencies": [
-      "_get_task_request",
-      "get_current_user",
-      "get_workflow_center"
+      "get_current_user"
     ],
     "methods": [
       "POST"
@@ -622,9 +616,7 @@
   },
   {
     "auth_dependencies": [
-      "_get_task_request",
-      "get_current_user",
-      "get_workflow_center"
+      "get_current_user"
     ],
     "methods": [
       "POST"
@@ -637,9 +629,7 @@
   },
   {
     "auth_dependencies": [
-      "_get_task_request",
-      "get_current_user",
-      "get_workflow_center"
+      "get_current_user"
     ],
     "methods": [
       "POST"
@@ -652,9 +642,7 @@
   },
   {
     "auth_dependencies": [
-      "_get_task_request",
-      "get_current_user",
-      "get_workflow_center"
+      "get_current_user"
     ],
     "methods": [
       "POST"
@@ -1003,8 +991,7 @@
   },
   {
     "auth_dependencies": [
-      "get_current_user",
-      "get_task_center"
+      "get_current_user"
     ],
     "methods": [
       "GET"
@@ -1017,8 +1004,7 @@
   },
   {
     "auth_dependencies": [
-      "get_current_user",
-      "get_task_center"
+      "get_current_user"
     ],
     "methods": [
       "GET"
@@ -1031,8 +1017,7 @@
   },
   {
     "auth_dependencies": [
-      "get_current_user",
-      "get_task_center"
+      "get_current_user"
     ],
     "methods": [
       "GET"
@@ -1045,8 +1030,7 @@
   },
   {
     "auth_dependencies": [
-      "get_current_user",
-      "get_task_center"
+      "get_current_user"
     ],
     "methods": [
       "GET"
@@ -1059,8 +1043,7 @@
   },
   {
     "auth_dependencies": [
-      "get_current_user",
-      "get_task_center"
+      "get_current_user"
     ],
     "methods": [
       "GET"
@@ -1094,7 +1077,7 @@
     ],
     "module": "api.webhooks",
     "name": "handle_a2a_webhook",
-    "owning_protocol": "a2a_adapter.WebhookTransport",
+    "owning_protocol": "app_shell.bound.WebhookTransportFactory",
     "path": "/api/v1/webhooks/a2a/{message_id}",
     "response_model": "dict"
   },
@@ -1129,7 +1112,7 @@
     ],
     "module": "main",
     "name": "health_check",
-    "owning_protocol": "app_shell.health_check",
+    "owning_protocol": "app_shell.health_check.HealthCheck",
     "path": "/health",
     "response_model": null
   },

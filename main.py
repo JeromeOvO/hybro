@@ -34,7 +34,8 @@ from api import (
     viewset,
     webhooks,
 )
-from common.api_key_auth import bind_api_key_store
+from app_shell.api_key_auth import MongoAPIKeyAuthenticator
+from common.api_key_auth import bind_api_key_authenticator
 from common.auth import bind_auth_config, get_current_user
 from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
 from config.settings import settings
@@ -49,7 +50,7 @@ from services.sse_services import sse_manager
 
 load_dotenv()
 bind_auth_config(clerk_secret_key_value=settings.clerk_secret_key)
-bind_api_key_store(mongodb)
+bind_api_key_authenticator(MongoAPIKeyAuthenticator(mongodb))
 
 
 class InterceptHandler(logging.Handler):

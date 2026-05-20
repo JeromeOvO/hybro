@@ -29,6 +29,19 @@ def _resolve_dependency(value: Any, provider) -> Any:
     return value
 
 
+def _legacy_workflow_gone() -> JSONResponse:
+    return JSONResponse(
+        status_code=410,
+        content={
+            "success": False,
+            "error": (
+                "This legacy workflow endpoint is deprecated. "
+                "Use room message APIs for active workflows."
+            ),
+        },
+    )
+
+
 async def _get_task_request(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
@@ -50,56 +63,50 @@ TaskRequestDep = Depends(_get_task_request)
 
 @router.post("/orchestrationCenter/decomposeTask")
 async def decompose_task(
-    req: OrchestrationRequest = TaskRequestDep,
-    workflow: Any = Depends(get_workflow_center),
+    req: Any = None,
+    workflow: Any = None,
 ):
-    workflow = _resolve_dependency(workflow, get_workflow_center)
-    return await workflow.decompose_task(req)
+    return _legacy_workflow_gone()
 
 
 @router.post("/orchestrationCenter/assignAgentsToMetaTasks")
 async def assign_agents_to_meta_tasks_by_parent_task_id(
-    req: OrchestrationRequest = TaskRequestDep,
-    workflow: Any = Depends(get_workflow_center),
+    req: Any = None,
+    workflow: Any = None,
 ):
-    workflow = _resolve_dependency(workflow, get_workflow_center)
-    return await workflow.assign_agents_metatasks_by_parent_task_id(req)
+    return _legacy_workflow_gone()
 
 
 @router.post("/orchestrationCenter/assignAgentToMetaTask")
 async def assign_agent_to_meta_task(
-    req: OrchestrationRequest = TaskRequestDep,
-    workflow: Any = Depends(get_workflow_center),
+    req: Any = None,
+    workflow: Any = None,
 ):
-    workflow = _resolve_dependency(workflow, get_workflow_center)
-    return await workflow.assign_agent_to_meta_task(req)
+    return _legacy_workflow_gone()
 
 
 @router.post("/orchestrationCenter/runWorkflow")
 async def run_workflow(
-    req: OrchestrationRequest = TaskRequestDep,
-    workflow: Any = Depends(get_workflow_center),
+    req: Any = None,
+    workflow: Any = None,
 ):
-    workflow = _resolve_dependency(workflow, get_workflow_center)
-    return await workflow.run_workflow(req)
+    return _legacy_workflow_gone()
 
 
 @router.post("/orchestrationCenter/retryMetaTask")
 async def retry_meta_task(
-    req: OrchestrationRequest = TaskRequestDep,
-    workflow: Any = Depends(get_workflow_center),
+    req: Any = None,
+    workflow: Any = None,
 ):
-    workflow = _resolve_dependency(workflow, get_workflow_center)
-    return await workflow.process_meta_task(req)
+    return _legacy_workflow_gone()
 
 
 @router.post("/orchestrationCenter/summarizeMetaTaskForBaseTask")
 async def summarize_meta_task_for_base_task(
-    req: OrchestrationRequest = TaskRequestDep,
-    workflow: Any = Depends(get_workflow_center),
+    req: Any = None,
+    workflow: Any = None,
 ):
-    workflow = _resolve_dependency(workflow, get_workflow_center)
-    return await workflow.summarize_meta_task_for_base_task(req)
+    return _legacy_workflow_gone()
 
 
 @router.post(
@@ -115,10 +122,4 @@ async def process_room_user_message(
     **Deprecated.** Message processing is now triggered internally by sendMessage.
     This endpoint returns HTTP 410 Gone.
     """
-    return JSONResponse(
-        status_code=410,
-        content={
-            "success": False,
-            "error": "This endpoint is deprecated. Message processing is triggered by sendMessage.",
-        },
-    )
+    return _legacy_workflow_gone()
