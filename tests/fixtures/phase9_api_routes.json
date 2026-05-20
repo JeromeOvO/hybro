@@ -1,6 +1,9 @@
 [
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user",
       "get_db_service"
     ],
@@ -24,6 +27,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "POST"
     ],
@@ -42,6 +48,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user"
     ],
     "methods": [
@@ -63,6 +72,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "GET"
     ],
@@ -80,6 +92,9 @@
   },
   {
     "auth_dependencies": [
+      "get_optional_user"
+    ],
+    "dependencies": [
       "get_optional_user"
     ],
     "methods": [
@@ -100,6 +115,7 @@
   },
   {
     "auth_dependencies": [],
+    "dependencies": [],
     "methods": [
       "POST"
     ],
@@ -117,6 +133,9 @@
   },
   {
     "auth_dependencies": [
+      "get_optional_user"
+    ],
+    "dependencies": [
       "get_optional_user"
     ],
     "methods": [
@@ -138,6 +157,9 @@
     "auth_dependencies": [
       "get_optional_user"
     ],
+    "dependencies": [
+      "get_optional_user"
+    ],
     "methods": [
       "GET"
     ],
@@ -155,6 +177,9 @@
   },
   {
     "auth_dependencies": [
+      "get_optional_user"
+    ],
+    "dependencies": [
       "get_optional_user"
     ],
     "methods": [
@@ -176,6 +201,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "POST"
     ],
@@ -193,6 +221,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user"
     ],
     "methods": [
@@ -215,6 +246,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "POST"
     ],
@@ -233,6 +267,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user"
     ],
     "methods": [
@@ -255,6 +292,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "POST"
     ],
@@ -273,6 +313,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user",
       "get_db_service"
     ],
@@ -294,6 +337,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user",
       "get_db_service"
     ],
@@ -314,6 +360,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user",
       "get_db_service"
     ],
@@ -335,6 +384,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user",
       "get_db_service"
     ],
@@ -356,6 +408,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user",
       "get_db_service"
     ],
@@ -376,7 +431,8 @@
     "streaming_response": null
   },
   {
-    "auth_dependencies": [
+    "auth_dependencies": [],
+    "dependencies": [
       "get_viewset_repository"
     ],
     "methods": [
@@ -397,6 +453,10 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
+      "get_current_user",
       "get_viewset_repository"
     ],
     "methods": [
@@ -421,6 +481,10 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
+      "get_current_user",
       "get_viewset_repository"
     ],
     "methods": [
@@ -444,7 +508,8 @@
     ]
   },
   {
-    "auth_dependencies": [
+    "auth_dependencies": [],
+    "dependencies": [
       "get_viewset_repository"
     ],
     "methods": [
@@ -465,6 +530,10 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
+      "get_current_user",
       "get_viewset_repository"
     ],
     "methods": [
@@ -489,6 +558,10 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
+      "get_current_user",
       "get_viewset_repository"
     ],
     "methods": [
@@ -513,6 +586,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_api_key_store",
       "get_current_user"
     ],
@@ -535,6 +611,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_api_key_store",
       "get_current_user"
     ],
@@ -559,6 +638,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_api_key_store",
       "get_current_user"
     ],
@@ -583,6 +665,9 @@
   },
   {
     "auth_dependencies": [
+      "get_api_key"
+    ],
+    "dependencies": [
       "get_api_key",
       "get_discovery_default_limit",
       "get_discovery_rate_limiter",
@@ -609,6 +694,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user",
       "get_file_storage",
       "get_room_ownership_verifier"
@@ -631,6 +719,9 @@
   },
   {
     "auth_dependencies": [
+      "get_api_key"
+    ],
+    "dependencies": [
       "get_api_key",
       "get_gateway_rate_limiter",
       "get_gateway_service"
@@ -653,6 +744,9 @@
   },
   {
     "auth_dependencies": [
+      "get_api_key"
+    ],
+    "dependencies": [
       "get_api_key",
       "get_gateway_rate_limiter",
       "get_gateway_service"
@@ -675,6 +769,9 @@
   },
   {
     "auth_dependencies": [
+      "get_api_key"
+    ],
+    "dependencies": [
       "get_api_key",
       "get_gateway_rate_limiter",
       "get_gateway_service"
@@ -697,6 +794,9 @@
   },
   {
     "auth_dependencies": [
+      "get_api_key"
+    ],
+    "dependencies": [
       "get_api_key",
       "get_gateway_rate_limiter",
       "get_gateway_service"
@@ -725,6 +825,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user",
       "get_hub_relay_service"
     ],
@@ -745,6 +848,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user",
       "get_inspection_center"
     ],
@@ -765,6 +871,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user",
       "get_inspection_center"
     ],
@@ -785,6 +894,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user",
       "get_memory_center"
     ],
@@ -805,6 +917,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user",
       "get_memory_center"
     ],
@@ -825,6 +940,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user",
       "get_memory_center"
     ],
@@ -845,6 +963,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user",
       "get_memory_center"
     ],
@@ -867,6 +988,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "POST"
     ],
@@ -885,6 +1009,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user"
     ],
     "methods": [
@@ -907,6 +1034,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "POST"
     ],
@@ -927,6 +1057,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "POST"
     ],
@@ -944,6 +1077,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user"
     ],
     "methods": [
@@ -966,6 +1102,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "POST"
     ],
@@ -986,6 +1125,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "POST"
     ],
@@ -1004,6 +1146,9 @@
   },
   {
     "auth_dependencies": [
+      "get_api_key_no_track"
+    ],
+    "dependencies": [
       "get_api_key_no_track",
       "get_relay_service"
     ],
@@ -1025,6 +1170,9 @@
   },
   {
     "auth_dependencies": [
+      "get_api_key"
+    ],
+    "dependencies": [
       "get_api_key",
       "get_relay_service"
     ],
@@ -1045,6 +1193,9 @@
   },
   {
     "auth_dependencies": [
+      "get_api_key_no_track"
+    ],
+    "dependencies": [
       "get_api_key_no_track",
       "get_relay_service"
     ],
@@ -1066,6 +1217,9 @@
   },
   {
     "auth_dependencies": [
+      "get_api_key_no_track"
+    ],
+    "dependencies": [
       "get_api_key_no_track",
       "get_relay_service"
     ],
@@ -1094,6 +1248,9 @@
   },
   {
     "auth_dependencies": [
+      "get_api_key_no_track"
+    ],
+    "dependencies": [
       "get_api_key_no_track",
       "get_relay_service"
     ],
@@ -1115,6 +1272,9 @@
   },
   {
     "auth_dependencies": [
+      "get_api_key"
+    ],
+    "dependencies": [
       "get_api_key",
       "get_relay_service"
     ],
@@ -1138,6 +1298,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "POST"
     ],
@@ -1157,6 +1320,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "POST"
     ],
@@ -1174,6 +1340,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user"
     ],
     "methods": [
@@ -1198,6 +1367,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "POST"
     ],
@@ -1215,6 +1387,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user"
     ],
     "methods": [
@@ -1236,6 +1411,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "POST"
     ],
@@ -1253,6 +1431,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user"
     ],
     "methods": [
@@ -1275,6 +1456,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_agent_selection_service",
       "get_current_user"
     ],
@@ -1297,6 +1481,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "POST"
     ],
@@ -1314,6 +1501,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user"
     ],
     "methods": [
@@ -1335,6 +1525,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "POST"
     ],
@@ -1352,6 +1545,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user",
       "get_db_service"
     ],
@@ -1375,6 +1571,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "GET"
     ],
@@ -1393,6 +1592,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user"
     ],
     "methods": [
@@ -1415,6 +1617,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "POST"
     ],
@@ -1433,6 +1638,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user",
       "get_db_service"
     ],
@@ -1454,6 +1662,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user_with_query_token"
+    ],
+    "dependencies": [
       "get_current_user_with_query_token",
       "get_sse_manager"
     ],
@@ -1475,6 +1686,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user_with_query_token"
+    ],
+    "dependencies": [
       "get_current_user_with_query_token",
       "get_sse_manager"
     ],
@@ -1506,6 +1720,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "GET"
     ],
@@ -1524,6 +1741,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user"
     ],
     "methods": [
@@ -1546,6 +1766,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "GET"
     ],
@@ -1564,6 +1787,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user"
     ],
     "methods": [
@@ -1586,6 +1812,9 @@
     "auth_dependencies": [
       "get_current_user"
     ],
+    "dependencies": [
+      "get_current_user"
+    ],
     "methods": [
       "GET"
     ],
@@ -1604,6 +1833,9 @@
   },
   {
     "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
       "get_current_user",
       "get_db_service"
     ],
@@ -1623,7 +1855,8 @@
     "streaming_response": null
   },
   {
-    "auth_dependencies": [
+    "auth_dependencies": [],
+    "dependencies": [
       "get_webhook_transport"
     ],
     "methods": [
@@ -1656,7 +1889,8 @@
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "dependencies": []
   },
   {
     "auth_dependencies": [],
@@ -1672,10 +1906,12 @@
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "dependencies": []
   },
   {
-    "auth_dependencies": [
+    "auth_dependencies": [],
+    "dependencies": [
       "get_health_check"
     ],
     "methods": [
@@ -1707,7 +1943,8 @@
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "dependencies": []
   },
   {
     "auth_dependencies": [],
@@ -1723,6 +1960,7 @@
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "dependencies": []
   }
 ]

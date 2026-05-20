@@ -195,6 +195,7 @@ def test_phase9_route_inventory_is_recorded():
             "methods",
             "name",
             "auth_dependencies",
+            "dependencies",
             "owning_protocol",
             "status_code",
             "openapi_response_codes",
@@ -241,8 +242,21 @@ def test_phase9_route_inventory_matches_live_app_routes():
             getattr(dependency.call, "__name__", repr(dependency.call))
             for dependency in route.dependant.dependencies
         )
+        auth_dependencies = [
+            dependency
+            for dependency in dependencies
+            if dependency
+            in {
+                "get_api_key",
+                "get_api_key_no_track",
+                "get_current_user",
+                "get_current_user_with_query_token",
+                "get_optional_user",
+            }
+        ]
         live[(route.path, methods, route.name)] = {
-            "auth_dependencies": dependencies,
+            "dependencies": dependencies,
+            "auth_dependencies": auth_dependencies,
             "openapi_response_codes": openapi_responses,
             "response_model": response_model,
             "response_class": response_class,
@@ -252,11 +266,55 @@ def test_phase9_route_inventory_matches_live_app_routes():
     assert set(recorded) == set(live)
     for key, route in recorded.items():
         assert route["response_model"] == live[key]["response_model"]
+        assert sorted(route["dependencies"]) == live[key]["dependencies"]
         assert sorted(route["auth_dependencies"]) == live[key]["auth_dependencies"]
         assert route["status_code"] == live[key]["status_code"]
         assert route["openapi_response_codes"] == live[key]["openapi_response_codes"]
         assert route["response_class"] == live[key]["response_class"]
         assert not route["owning_protocol"].startswith("blocked:")
+
+
+def test_route_inventory_auth_dependencies_are_only_auth_dependencies():
+    auth_dependency_names = {
+        "get_api_key",
+        "get_api_key_no_track",
+        "get_current_user",
+        "get_current_user_with_query_token",
+        "get_optional_user",
+    }
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    violations = [
+        f"{route['path']} {route['name']}: {dependency}"
+        for route in routes
+        for dependency in route["auth_dependencies"]
+        if dependency not in auth_dependency_names
+    ]
+
+    assert not violations, "Route inventory auth_dependencies include non-auth dependencies:\n" + "\n".join(
+        violations
+    )
+
+
+def test_agent_viewset_mutations_require_clerk_auth():
+    from common.auth import get_current_user
+    from main import app
+
+    mutation_methods = {"POST", "PUT", "PATCH", "DELETE"}
+    violations: list[str] = []
+    for route in app.routes:
+        if (
+            not isinstance(route, APIRoute)
+            or route.path not in {"/api/v1/agents", "/api/v1/agents/{item_id}"}
+            or not mutation_methods.intersection(route.methods)
+        ):
+            continue
+        if all(dependency.call is not get_current_user for dependency in route.dependant.dependencies):
+            methods = ",".join(sorted(mutation_methods.intersection(route.methods)))
+            violations.append(f"{methods} {route.path} {route.name}")
+
+    assert not violations, "Agent ViewSet mutation routes lack Clerk auth:\n" + "\n".join(
+        violations
+    )
 
 
 def test_live_routes_do_not_duplicate_clerk_auth_dependency():

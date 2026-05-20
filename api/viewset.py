@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from app_shell.bound import ViewSetRepository, ViewSetRepositoryProvider, ViewSetResult
+from common.auth import get_current_user
 from models.request import FilterParams, PaginationParams
 
 # from models.response import PaginatedResponse
@@ -219,6 +220,7 @@ class ViewSet:
             methods=["POST"],
             response_model=schema_out,
             status_code=status.HTTP_201_CREATED,
+            dependencies=[Depends(get_current_user)],
         )
 
     def _add_update_route(self):
@@ -238,6 +240,7 @@ class ViewSet:
             update_endpoint,
             methods=["PUT"],
             response_model=schema_out,
+            dependencies=[Depends(get_current_user)],
         )
 
     def _add_patch_route(self):
@@ -257,6 +260,7 @@ class ViewSet:
             patch_endpoint,
             methods=["PATCH"],
             response_model=schema_out,
+            dependencies=[Depends(get_current_user)],
         )
 
     def _add_delete_route(self):
@@ -273,6 +277,7 @@ class ViewSet:
             delete_endpoint,
             methods=["DELETE"],
             status_code=status.HTTP_204_NO_CONTENT,
+            dependencies=[Depends(get_current_user)],
         )
 
     # --- Default endpoint implementations (can be overridden) ---
