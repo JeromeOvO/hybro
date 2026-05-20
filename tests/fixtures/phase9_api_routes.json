@@ -1,0 +1,1094 @@
+[
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.a2a_tasks",
+    "name": "get_task_status",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/a2a-tasks/{message_id}",
+    "response_model": "dict"
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.agent",
+    "name": "resolve_capability_issue",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agent/capability-issues/{issue_id}/resolve",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.agent",
+    "name": "delete_agent",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agent/deleteAgent",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.agent",
+    "name": "get_agent_by_provider",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agent/getAgent/me",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_optional_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.agent",
+    "name": "get_agent",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agent/getAgent/{agent_id}",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.agent",
+    "name": "get_agent_card_from_url",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agent/getAgentCardFromUrl",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_optional_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.agent",
+    "name": "get_agent_list_with_conditions",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agent/getAgentListWithConditions",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_optional_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.agent",
+    "name": "get_all_active_agents",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agent/getAllActiveAgents",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_optional_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.agent",
+    "name": "get_agent_list",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agent/getAllAgents",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.agent",
+    "name": "register_agent",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agent/registerAgent",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "PUT"
+    ],
+    "module": "api.agent",
+    "name": "update_agent",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agent/updateAgent/{agent_id}",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.agent",
+    "name": "upload_agent_avatar",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agent/{agent_id}/avatar",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.agent",
+    "name": "get_capability_issues",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agent/{agent_id}/capability-issues",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.agent",
+    "name": "resolve_all_capability_issues",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agent/{agent_id}/capability-issues/resolve-all",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.agent_group",
+    "name": "list_agent_groups",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agentGroups",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.agent_group",
+    "name": "create_agent_group",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agentGroups",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "DELETE"
+    ],
+    "module": "api.agent_group",
+    "name": "delete_agent_group",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agentGroups/{group_id}",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.agent_group",
+    "name": "get_agent_group",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agentGroups/{group_id}",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "PUT"
+    ],
+    "module": "api.agent_group",
+    "name": "update_agent_group",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agentGroups/{group_id}",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_db"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.viewset",
+    "name": "list_endpoint",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agents",
+    "response_model": "PaginatedResponse[AgentResponse]"
+  },
+  {
+    "auth_dependencies": [
+      "get_db"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.viewset",
+    "name": "create_endpoint",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agents",
+    "response_model": "AgentResponse"
+  },
+  {
+    "auth_dependencies": [
+      "get_db"
+    ],
+    "methods": [
+      "DELETE"
+    ],
+    "module": "api.viewset",
+    "name": "delete_endpoint",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agents/{item_id}",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_db"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.viewset",
+    "name": "retrieve_endpoint",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agents/{item_id}",
+    "response_model": "AgentResponse"
+  },
+  {
+    "auth_dependencies": [
+      "get_db"
+    ],
+    "methods": [
+      "PATCH"
+    ],
+    "module": "api.viewset",
+    "name": "patch_endpoint",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agents/{item_id}",
+    "response_model": "AgentResponse"
+  },
+  {
+    "auth_dependencies": [
+      "get_db"
+    ],
+    "methods": [
+      "PUT"
+    ],
+    "module": "api.viewset",
+    "name": "update_endpoint",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/agents/{item_id}",
+    "response_model": "AgentResponse"
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.discovery_api_keys",
+    "name": "list_api_keys",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/api-keys",
+    "response_model": "APIKeyListResponse"
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.discovery_api_keys",
+    "name": "create_api_key",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/api-keys",
+    "response_model": "APIKeyCreateResponse"
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "DELETE"
+    ],
+    "module": "api.discovery_api_keys",
+    "name": "deactivate_api_key",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/api-keys/{key_id}",
+    "response_model": "APIKeyOperationResponse"
+  },
+  {
+    "auth_dependencies": [
+      "get_api_key"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.discovery",
+    "name": "discover_agents",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/discovery/agents",
+    "response_model": "DiscoveryResponse"
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.files",
+    "name": "upload_file",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/files/upload",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "_get_svc",
+      "get_api_key"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.gateway",
+    "name": "gateway_discover",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/gateway/agents/discover",
+    "response_model": "GatewayDiscoveryResponse"
+  },
+  {
+    "auth_dependencies": [
+      "_get_svc",
+      "get_api_key"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.gateway",
+    "name": "gateway_get_card",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/gateway/agents/{agent_id}/card",
+    "response_model": "GatewayCardResponse"
+  },
+  {
+    "auth_dependencies": [
+      "_get_svc",
+      "get_api_key"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.gateway",
+    "name": "gateway_send",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/gateway/agents/{agent_id}/message/send",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "_get_svc",
+      "get_api_key"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.gateway",
+    "name": "gateway_stream",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/gateway/agents/{agent_id}/message/stream",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.hub",
+    "name": "hub_status_for_user",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/hub/my-status",
+    "response_model": "HubStatusResponse"
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.inspection_center",
+    "name": "inspect_a2a_connection",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/inspectionCenter/inspectA2AConnection",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.inspection_center",
+    "name": "inspect_agent",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/inspectionCenter/inspectAgentCard",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.memory_center",
+    "name": "add_chat_context",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/memoryCenter/addChatContext",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.memory_center",
+    "name": "delete_chat_context_by_session_id",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/memoryCenter/deleteChatContextBySessionId",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.memory_center",
+    "name": "get_chat_context_by_session_id",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/memoryCenter/getChatContextBySessionId",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.memory_center",
+    "name": "update_chat_context_by_session_id",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/memoryCenter/updateChatContextBySessionId",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "_get_task_request",
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.orchestration_center",
+    "name": "assign_agent_to_meta_task",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/orchestrationCenter/assignAgentToMetaTask",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "_get_task_request",
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.orchestration_center",
+    "name": "assign_agents_to_meta_tasks_by_parent_task_id",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/orchestrationCenter/assignAgentsToMetaTasks",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "_get_task_request",
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.orchestration_center",
+    "name": "decompose_task",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/orchestrationCenter/decomposeTask",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.orchestration_center",
+    "name": "process_room_user_message",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/orchestrationCenter/processRoomUserMessage",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "_get_task_request",
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.orchestration_center",
+    "name": "retry_meta_task",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/orchestrationCenter/retryMetaTask",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "_get_task_request",
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.orchestration_center",
+    "name": "run_workflow",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/orchestrationCenter/runWorkflow",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "_get_task_request",
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.orchestration_center",
+    "name": "summarize_meta_task_for_base_task",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/orchestrationCenter/summarizeMetaTaskForBaseTask",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_api_key_no_track"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.relay",
+    "name": "relay_register",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/relay/hub/register",
+    "response_model": "RegisterHubResponse"
+  },
+  {
+    "auth_dependencies": [
+      "get_api_key"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.relay",
+    "name": "relay_status",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/relay/hub/status",
+    "response_model": "HubStatusResponse"
+  },
+  {
+    "auth_dependencies": [
+      "get_api_key_no_track"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.relay",
+    "name": "relay_sync_agents",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/relay/hub/{hub_id}/agents/sync",
+    "response_model": "HubAgentSyncResponse"
+  },
+  {
+    "auth_dependencies": [
+      "get_api_key_no_track"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.relay",
+    "name": "relay_events",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/relay/hub/{hub_id}/events",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_api_key_no_track"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.relay",
+    "name": "relay_heartbeat",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/relay/hub/{hub_id}/heartbeat",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_api_key"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.relay",
+    "name": "relay_publish",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/relay/hub/{hub_id}/publish",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.room_center",
+    "name": "create_and_parse_user_message",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/roomCenter/createAndParseUserMessage",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.room_center",
+    "name": "create_new_room",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/roomCenter/createNewRoom",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.room_center",
+    "name": "inquiry_active_runs",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/roomCenter/inquiryActiveRuns",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.room_center",
+    "name": "inquiry_room_messages",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/roomCenter/inquiryRoomMessagesByRoomId",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.room_center",
+    "name": "inquiry_room_setting",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/roomCenter/inquiryRoomSetting",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.room_center",
+    "name": "inquiry_rooms_by_room_owner_id",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/roomCenter/inquiryRoomsByRoomOwnerId",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.room_center",
+    "name": "send_message",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/roomCenter/sendMessage",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.room_center",
+    "name": "suggest_agents",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/roomCenter/suggestAgents",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.room_center",
+    "name": "update_room_agent_set",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/roomCenter/updateRoomAgentSet",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.room_center",
+    "name": "update_room_extend_info",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/roomCenter/updateRoomExtendInfo",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.room_center",
+    "name": "update_room_name",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/roomCenter/updateRoomName",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.a2a_tasks",
+    "name": "list_room_tasks",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/rooms/{room_id}/a2a-tasks",
+    "response_model": "dict"
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.hitl",
+    "name": "get_pending_hitl_requests",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/rooms/{room_id}/hitl/pending",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.hitl",
+    "name": "respond_to_hitl_request",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/rooms/{room_id}/hitl/respond",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.hitl",
+    "name": "cancel_hitl_request",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/rooms/{room_id}/hitl/{request_id}/cancel",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.sse",
+    "name": "cancel_message",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/sse/message/{message_id}/cancel",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user_with_query_token"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.sse",
+    "name": "get_room_sse_status",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/sse/room/{room_id}/status",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user_with_query_token"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.sse",
+    "name": "stream_room_messages",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/sse/room/{room_id}/stream",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.task",
+    "name": "get_all_sessions",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/task/getAllSessions/{user_name}",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.task",
+    "name": "get_base_task_by_session_id",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/task/getBaseTasksBySessionId/{session_id}",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.task",
+    "name": "get_meta_tasks_by_parent_task_id",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/task/getMetaTasksByParentTaskId/{parent_task_id}",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.task",
+    "name": "query_base_task",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/task/queryBaseTask/{task_id}",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.task",
+    "name": "query_task",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/task/queryTask/{task_id}",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api.a2a_tasks",
+    "name": "list_user_pending_tasks",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/users/me/a2a-tasks",
+    "response_model": "dict"
+  },
+  {
+    "auth_dependencies": [],
+    "methods": [
+      "POST"
+    ],
+    "module": "api.webhooks",
+    "name": "handle_a2a_webhook",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/api/v1/webhooks/a2a/{message_id}",
+    "response_model": "dict"
+  },
+  {
+    "auth_dependencies": [],
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "module": "fastapi.applications",
+    "name": "swagger_ui_html",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/docs",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [],
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "module": "fastapi.applications",
+    "name": "swagger_ui_redirect",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/docs/oauth2-redirect",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [],
+    "methods": [
+      "GET"
+    ],
+    "module": "main",
+    "name": "health_check",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/health",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [],
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "module": "fastapi.applications",
+    "name": "openapi",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/openapi.json",
+    "response_model": null
+  },
+  {
+    "auth_dependencies": [],
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "module": "fastapi.applications",
+    "name": "redoc_html",
+    "owning_protocol": "blocked: classify during Phase 9 adapter conversion",
+    "path": "/redoc",
+    "response_model": null
+  }
+]

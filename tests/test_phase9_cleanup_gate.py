@@ -1,0 +1,94 @@
+import ast
+import json
+from pathlib import Path
+
+import tomllib
+
+
+PRODUCTION_ROOTS = (
+    "api",
+    "agent",
+    "room",
+    "context_memory",
+    "delivery",
+    "execution",
+    "hub_runtime_bridge",
+    "a2a_adapter",
+    "llm_gateway",
+    "platform_module",
+    "common",
+)
+
+FORBIDDEN_PRODUCTION_IMPORT_PREFIXES = (
+    "services",
+    "modules",
+    "database.mongodb",
+    "config.settings",
+)
+
+LEGACY_PACKAGES = {"modules", "services", "config", "infrastructure"}
+
+
+def _manifest() -> dict:
+    return json.loads(Path("tests/fixtures/phase9_cleanup_manifest.json").read_text())
+
+
+def _is_forbidden(module: str) -> bool:
+    return any(
+        module == prefix or module.startswith(f"{prefix}.")
+        for prefix in FORBIDDEN_PRODUCTION_IMPORT_PREFIXES
+    )
+
+
+def _production_python_files() -> list[Path]:
+    files: list[Path] = []
+    for root in PRODUCTION_ROOTS:
+        root_path = Path(root)
+        if root_path.exists():
+            files.extend(root_path.rglob("*.py"))
+    return sorted(files)
+
+
+def _import_violations() -> list[str]:
+    violations: list[str] = []
+    for path in _production_python_files():
+        if path == Path("common/config/settings.py"):
+            continue
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [(alias.name, alias.name) for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                names = [(f"{node.module}.{alias.name}", node.module) for alias in node.names]
+            else:
+                continue
+            for imported_name, module in names:
+                if _is_forbidden(module):
+                    violations.append(f"{path}:{node.lineno}: {imported_name}")
+    return violations
+
+
+def test_no_production_imports_from_legacy_singletons():
+    violations = _import_violations()
+
+    assert not violations, "Legacy production imports remain:\n" + "\n".join(violations)
+
+
+def test_old_implementation_packages_are_not_shipped_without_blocker():
+    manifest = _manifest()
+    blockers = manifest.get("blocked_cleanup", [])
+    packages = set(tomllib.loads(Path("pyproject.toml").read_text())["tool"]["setuptools"]["packages"])
+    shipped_legacy = sorted(packages & LEGACY_PACKAGES)
+
+    assert not shipped_legacy or blockers, (
+        "Legacy packages are still shipped without cleanup blockers: "
+        + ", ".join(shipped_legacy)
+    )
+
+
+def test_legacy_workflow_cleanup_readiness_is_explicit():
+    readiness = _manifest().get("legacy_workflow_decommission", {})
+
+    assert readiness.get("ready") is True or readiness.get("evidence"), (
+        "Legacy workflow cleanup is not proven; add readiness evidence or a blocker"
+    )

@@ -1,0 +1,9 @@
+{
+  "blocked_cleanup": [],
+  "legacy_workflow_decommission": {
+    "evidence": [],
+    "ready": false
+  },
+  "package_removal_checklist": [],
+  "safe_to_delete": []
+}
