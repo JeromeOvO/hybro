@@ -31,11 +31,43 @@ from models.memory import (
     ContentType,
 )
 from models.hitl import HITLRequest, HITLStatus, HITLPromptType
+from models.request import AgentTaskRequest, TaskRequest
 
 
 # =============================================================================
 # Room Model Tests
 # =============================================================================
+
+
+class TestLegacyTaskRequestModels:
+    """Tests for legacy request helpers that build A2A SDK messages."""
+
+    def test_task_request_to_message_builds_valid_sdk_message(self):
+        message = TaskRequest(query="hello", context={"room_id": "room-1"}).to_message()
+
+        assert message.message_id
+        assert message.role == "user"
+        assert message.metadata == {"room_id": "room-1"}
+        assert message.model_dump(mode="json", by_alias=True)["messageId"]
+
+    def test_agent_task_request_to_message_builds_valid_sdk_message(self):
+        message = AgentTaskRequest(
+            task_id="task-1",
+            agent_id="agent-1",
+            step_id="step-1",
+            input_data={"text": "hello"},
+            context={"room_id": "room-1"},
+        ).to_message()
+
+        assert message.message_id
+        assert message.role == "user"
+        assert message.metadata == {
+            "task_id": "task-1",
+            "agent_id": "agent-1",
+            "step_id": "step-1",
+            "room_id": "room-1",
+        }
+        assert message.model_dump(mode="json", by_alias=True)["messageId"]
 
 
 class TestRoomModel:

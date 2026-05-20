@@ -2,6 +2,7 @@ import json
 
 import httpx
 
+from a2a_adapter.card_validation import validate_agent_card
 from common.types import A2AClientJSONError, AgentCard
 
 
@@ -15,6 +16,8 @@ class A2ACardResolver:
             response = client.get(self.base_url + "/" + self.agent_card_path)
             response.raise_for_status()
             try:
-                return AgentCard(**response.json())
+                payload = response.json()
+                validate_agent_card(payload)
+                return AgentCard(**payload)
             except json.JSONDecodeError as e:
                 raise A2AClientJSONError(str(e)) from e

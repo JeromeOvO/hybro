@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 
 from common.errors import AppError, NotFoundError, ValidationError
 from common.dto import (
@@ -124,6 +125,38 @@ def test_common_a2a_helpers_do_not_perform_storage_signing():
     ]
 
     assert not blockers
+
+
+def test_common_card_resolver_keeps_sdk_agent_card_validation(monkeypatch):
+    from common.client.card_resolver import A2ACardResolver
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "name": "Incomplete",
+                "url": "https://agent.example",
+                "version": "1.0.0",
+                "capabilities": {},
+                "skills": [],
+            }
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def get(self, url):
+            return Response()
+
+    monkeypatch.setattr("httpx.Client", Client)
+
+    with pytest.raises(PydanticValidationError):
+        A2ACardResolver("https://agent.example").get_agent_card()
 
 
 @pytest.mark.asyncio
