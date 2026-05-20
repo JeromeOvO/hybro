@@ -113,13 +113,6 @@
   },
   {
     "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
-    "import": "services.file_upload_service.file_upload_service",
-    "owner": "phase-9-api-adapter-conversion",
-    "path": "api/files.py",
-    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
-  },
-  {
-    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
     "import": "execution.hitl.exceptions.HITLError",
     "owner": "phase-9-api-adapter-conversion",
     "path": "api/hitl.py",

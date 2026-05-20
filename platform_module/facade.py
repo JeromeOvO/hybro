@@ -1,34 +1,9 @@
-from common.dto import FileInfo, GatewayRequest, GatewayResponse, RateLimitResult
 from common.protocols import FileStorage, GatewayService, RateLimiter
 from platform_module.config import PlatformConfig
 from platform_module.deps import PlatformDeps
+from platform_module.files import PlatformFileStorage
 from platform_module.gateway import PlatformGateway
 from platform_module.rate_limit import PlatformProtocolRateLimiter
-
-
-class PlatformFileStorage:
-    def __init__(self, config: PlatformConfig, deps: PlatformDeps) -> None:
-        self._config = config
-        self._deps = deps
-
-    async def upload(
-        self,
-        file_bytes: bytes,
-        filename: str,
-        owner_id: str,
-        room_id: str,
-        **kwargs,
-    ) -> FileInfo:
-        raise NotImplementedError("Platform file upload is not migrated yet")
-
-    async def get_url(self, file_id: str, ttl: int = 3600) -> str | None:
-        raise NotImplementedError("Platform file URL lookup is not migrated yet")
-
-    async def delete(self, file_id: str) -> bool:
-        raise NotImplementedError("Platform file delete is not migrated yet")
-
-    async def list_for_room(self, room_id: str) -> list[FileInfo]:
-        raise NotImplementedError("Platform room file listing is not migrated yet")
 
 
 class PlatformFacade:

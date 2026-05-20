@@ -2,6 +2,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol
+from uuid import uuid4
 
 from common.protocols import (
     AgentCardResolver,
@@ -50,6 +51,7 @@ class PlatformDeps:
     object_storage: ObjectStorageDAL | None = None
     file_metadata_repository: FileMetadataRepository | None = None
     content_storage_repository: ContentStorageRepository | None = None
+    file_id_factory: Callable[[], str] = lambda: uuid4().hex
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
     logger: LoggerLike | None = None
 
