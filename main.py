@@ -218,8 +218,14 @@ async def lifespan(app: FastAPI):
             from services.room_membership_source import LegacyRoomMembershipSeedSource
             from services.room_services import room_services
             from services.gateway_rate_limit_service import gateway_rate_limit_service
+            from modules.InspectionCenter import InspectionCenter
+            from modules.MemoryCenter import MemoryCenter
+            from modules.TaskCenter import TaskCenter
 
             await mongodb.create_context_memory_indexes()
+            inspection_center.bind_inspection_dependencies(InspectionCenter())
+            memory_center.bind_memory_dependencies(MemoryCenter())
+            task.bind_task_dependencies(TaskCenter())
             mongo_dal = create_mongo_dal(database=mongodb.db)
             vector_dal = create_vector_dal()
             _delivery_config = create_delivery_config(settings)

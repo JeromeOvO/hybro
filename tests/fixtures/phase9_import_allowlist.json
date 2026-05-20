@@ -141,20 +141,6 @@
   },
   {
     "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
-    "import": "modules.InspectionCenter.InspectionCenter",
-    "owner": "phase-9-api-adapter-conversion",
-    "path": "api/inspection_center.py",
-    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
-  },
-  {
-    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
-    "import": "modules.MemoryCenter.MemoryCenter",
-    "owner": "phase-9-api-adapter-conversion",
-    "path": "api/memory_center.py",
-    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
-  },
-  {
-    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
     "import": "modules.RoomMessageCenter.room_message_center",
     "owner": "phase-9-api-adapter-conversion",
     "path": "api/orchestration_center.py",
@@ -207,13 +193,6 @@
     "import": "services.sse_services.sse_manager",
     "owner": "phase-9-api-adapter-conversion",
     "path": "api/sse.py",
-    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
-  },
-  {
-    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
-    "import": "modules.TaskCenter.TaskCenter",
-    "owner": "phase-9-api-adapter-conversion",
-    "path": "api/task.py",
     "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
   },
   {
