@@ -1119,19 +1119,16 @@ app.include_router(
     room_center.router,
     prefix=api_prefix,
     tags=["room"],
-    dependencies=[Depends(get_current_user)],
 )
 app.include_router(
     hitl.router,
     prefix=api_prefix,
     tags=["hitl"],
-    dependencies=[Depends(get_current_user)],
 )
 app.include_router(
     hub.router,
     prefix=api_prefix,
     tags=["hub"],
-    dependencies=[Depends(get_current_user)],
 )
 app.include_router(
     task.router,
@@ -1156,7 +1153,6 @@ app.include_router(
     files.router,
     prefix=api_prefix,
     tags=["files"],
-    dependencies=[Depends(get_current_user)],
 )
 
 # Discovery API - External public API with API key auth 

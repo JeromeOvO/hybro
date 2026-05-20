@@ -4,7 +4,7 @@
       "blocked_by": "legacy_workflow_decommission",
       "deletion_blockers": [
         "29 test files still exercise legacy module compatibility paths.",
-        "main.py still binds legacy workflow compatibility objects during startup.",
+        "2 runtime files still bind or import legacy module compatibility paths.",
         "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
       ],
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
@@ -16,7 +16,7 @@
       "blocked_by": "legacy_workflow_decommission",
       "deletion_blockers": [
         "49 test files still exercise legacy service compatibility paths.",
-        "3 runtime files still bind or import legacy services.",
+        "9 runtime files still bind or import legacy services.",
         "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
       ],
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
@@ -28,7 +28,7 @@
       "blocked_by": "legacy_workflow_decommission",
       "deletion_blockers": [
         "3 test files still verify legacy config compatibility.",
-        "7 runtime files still import config.settings compatibility paths.",
+        "18 runtime files still import config.settings compatibility paths.",
         "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
       ],
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
@@ -40,7 +40,7 @@
       "blocked_by": "legacy_workflow_decommission",
       "deletion_blockers": [
         "5 test files still verify legacy infrastructure compatibility.",
-        "main.py still imports legacy infrastructure compatibility paths.",
+        "3 runtime files still import legacy infrastructure compatibility paths.",
         "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
       ],
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",

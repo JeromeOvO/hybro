@@ -653,6 +653,37 @@ def test_shipped_legacy_packages_have_package_removal_checklist_entries():
     )
 
 
+def test_legacy_package_blocker_counts_match_package_removal_checklist():
+    manifest = _manifest()
+    checklist = {
+        entry["package"]: entry
+        for entry in manifest.get("package_removal_checklist", [])
+        if isinstance(entry.get("package"), str)
+    }
+    blockers = {
+        entry["path"]: entry
+        for entry in manifest.get("blocked_cleanup", [])
+        if isinstance(entry.get("path"), str) and entry["path"] in LEGACY_PACKAGES
+    }
+    violations: list[str] = []
+
+    for package, entry in sorted(checklist.items()):
+        blocker = blockers.get(package)
+        if blocker is None:
+            continue
+        blockers_text = "\n".join(blocker.get("deletion_blockers") or [])
+        runtime_count = len(entry.get("runtime_import_files") or [])
+        test_count = len(entry.get("test_import_files") or [])
+        if f"{runtime_count} runtime files" not in blockers_text:
+            violations.append(f"{package}: missing {runtime_count} runtime files blocker")
+        if f"{test_count} test files" not in blockers_text:
+            violations.append(f"{package}: missing {test_count} test files blocker")
+
+    assert not violations, "Legacy package blocker counts are stale:\n" + "\n".join(
+        violations
+    )
+
+
 def test_package_removal_runtime_scan_includes_shipped_legacy_roots():
     roots = set(PACKAGE_REMOVAL_RUNTIME_ROOTS)
     packages = set(tomllib.loads(Path("pyproject.toml").read_text())["tool"]["setuptools"]["packages"])

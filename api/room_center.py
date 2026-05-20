@@ -427,6 +427,7 @@ async def send_message(
 @router.post("/roomCenter/suggestAgents")
 async def suggest_agents(
     request: Request,
+    user: ClerkUser = Depends(get_current_user),
     selection_service: AgentSelectionSuggester = Depends(get_agent_selection_service),
 ):
     """

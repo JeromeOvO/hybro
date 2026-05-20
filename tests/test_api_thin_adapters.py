@@ -259,6 +259,30 @@ def test_phase9_route_inventory_matches_live_app_routes():
         assert not route["owning_protocol"].startswith("blocked:")
 
 
+def test_live_routes_do_not_duplicate_clerk_auth_dependency():
+    from common.auth import get_current_user
+    from main import app
+
+    violations: list[str] = []
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        auth_dependencies = [
+            dependency.call
+            for dependency in route.dependant.dependencies
+            if dependency.call is get_current_user
+        ]
+        if len(auth_dependencies) > 1:
+            methods = ",".join(
+                sorted(method for method in route.methods if method not in {"HEAD", "OPTIONS"})
+            )
+            violations.append(f"{methods} {route.path} {route.name}")
+
+    assert not violations, "Routes duplicate Clerk auth dependency:\n" + "\n".join(
+        violations
+    )
+
+
 def test_streaming_routes_record_sse_media_type_and_headers():
     from main import app
 
