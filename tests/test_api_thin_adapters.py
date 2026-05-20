@@ -753,7 +753,7 @@ def test_route_owner_protocols_match_handler_calls():
     from app_shell.bound import InspectionCenter, ViewSetRepository, WebhookTransport
     from app_shell.database_service import A2ATaskReader, AgentGroupStore
     from app_shell.health_check import HealthCheck
-    from common.protocols import HubManagement
+    from common.protocols import HubManagement, HubRelayManagement
 
     expected_by_protocol = {
         InspectionCenter: {
@@ -783,6 +783,9 @@ def test_route_owner_protocols_match_handler_calls():
         WebhookTransport: {"handle_webhook"},
         HealthCheck: {"check"},
         HubManagement: {
+            "get_hub_status",
+        },
+        HubRelayManagement: {
             "connect_hub",
             "get_hub_status",
             "process_publish",
@@ -823,6 +826,66 @@ def test_hub_route_dependencies_are_typed_with_hub_management():
     assert provider_hints["return"] is HubManagement
     assert route_hints["svc"] is HubManagement
     assert "svc" in inspect.signature(hub.hub_status_for_user).parameters
+
+
+def test_relay_route_dependencies_are_typed_with_route_facing_protocol():
+    import inspect
+    from typing import get_type_hints
+
+    from api import relay
+    from common.protocols import APIKeyPrincipal, HubRelayManagement
+
+    bind_hints = get_type_hints(relay.bind_relay_dependencies)
+    provider_hints = get_type_hints(relay.get_relay_service)
+    route_hints = get_type_hints(relay.relay_register)
+    register_sig = inspect.signature(HubRelayManagement.register_hub)
+
+    assert bind_hints["service"] is HubRelayManagement
+    assert provider_hints["return"] is HubRelayManagement
+    assert route_hints["svc"] is HubRelayManagement
+    assert register_sig.parameters["api_key"].annotation is APIKeyPrincipal
+
+
+def test_relay_routes_are_owned_by_route_facing_protocol():
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    violations = [
+        f"{route['path']} {route['name']}: {route['owning_protocol']}"
+        for route in routes
+        if route["module"] == "api.relay"
+        and route["owning_protocol"] != "common.protocols.HubRelayManagement"
+    ]
+
+    assert not violations, "Relay routes must use the route-facing HubRelayManagement protocol:\n" + "\n".join(
+        violations
+    )
+
+
+def test_relay_route_protocol_does_not_expose_broad_or_wildcard_shapes():
+    from typing import Any
+
+    from common.protocols import HubRelayManagement
+
+    violations: list[str] = []
+    for name, member in HubRelayManagement.__dict__.items():
+        if name.startswith("_") or not callable(member):
+            continue
+        signature = inspect.signature(member)
+        if signature.return_annotation in {Any, object, inspect.Signature.empty}:
+            violations.append(f"{name}.return")
+        for parameter in signature.parameters.values():
+            if parameter.name == "self":
+                continue
+            if parameter.kind in {
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            }:
+                violations.append(f"{name}.{parameter.name}")
+            elif parameter.annotation in {Any, object, inspect.Signature.empty}:
+                violations.append(f"{name}.{parameter.name}")
+
+    assert not violations, "Relay route protocol exposes broad shapes:\n" + "\n".join(
+        violations
+    )
 
 
 def test_health_route_delegates_to_health_check_protocol():

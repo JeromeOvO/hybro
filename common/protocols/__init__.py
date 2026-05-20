@@ -41,6 +41,7 @@ from common.protocols.hub_protocols import (
     HubInternalResponseDispatcher,
     HubLivenessReader,
     HubManagement,
+    HubRelayManagement,
     OfflineHubFailurePort,
 )
 from common.protocols.llm_protocols import LLMProvider, ModelRegistry
@@ -115,6 +116,7 @@ __all__ = [
     "HubInternalResponseDispatcher",
     "HubLivenessReader",
     "HubManagement",
+    "HubRelayManagement",
     "HubRepository",
     "HubResponseJournal",
     "HubTaskOwnershipStore",
