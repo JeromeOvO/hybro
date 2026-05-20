@@ -39,6 +39,7 @@ from models.gateway import (
     GatewaySendRequest,
 )
 from common.errors import GatewayPlatformError
+from common.errors import PlatformRouteError
 from services.gateway_service import GatewayService
 from tests.conftest import FROZEN_TIME, PATCH
 
@@ -166,6 +167,32 @@ class TestGatewayDiscover:
                 await gateway_discover(body, sample_api_key, mock_svc)
         assert exc.value.status_code == 502
 
+    @pytest.mark.asyncio
+    async def test_rate_limit_retry_after_stays_in_header(self, sample_api_key):
+        mock_svc = _mock_gateway_service()
+        mock_rl = _mock_rate_limit()
+        mock_rl.check_rate_limit = AsyncMock(
+            side_effect=PlatformRouteError(
+                429,
+                {
+                    "error": "rate_limit_exceeded",
+                    "message": "Rate limit exceeded",
+                    "retry_after": 60,
+                },
+            )
+        )
+        body = GatewayDiscoverRequest(query="test")
+
+        with pytest.raises(HTTPException) as exc:
+            await gateway_discover(body, sample_api_key, mock_svc, mock_rl)
+
+        assert exc.value.status_code == 429
+        assert exc.value.headers == {"Retry-After": "60"}
+        assert exc.value.detail == {
+            "error": "rate_limit_exceeded",
+            "message": "Rate limit exceeded",
+        }
+
 
 class TestGatewaySend:
     @pytest.mark.asyncio
@@ -200,6 +227,34 @@ class TestGatewaySend:
             with pytest.raises(HTTPException) as exc:
                 await gateway_send("bad-agent", body, sample_api_key, mock_svc)
         assert exc.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_agent_rate_limit_retry_after_stays_in_header(
+        self, sample_api_key, sample_message
+    ):
+        mock_svc = _mock_gateway_service()
+        mock_svc.send_message = AsyncMock(
+            side_effect=GatewayPlatformError(
+                429,
+                {
+                    "error": "rate_limit_exceeded",
+                    "message": "Rate limit exceeded",
+                    "retry_after": 60,
+                },
+            )
+        )
+        mock_rl = _mock_rate_limit()
+        body = GatewaySendRequest(message=sample_message)
+
+        with pytest.raises(HTTPException) as exc:
+            await gateway_send("agent-001", body, sample_api_key, mock_svc, mock_rl)
+
+        assert exc.value.status_code == 429
+        assert exc.value.headers == {"Retry-After": "60"}
+        assert exc.value.detail == {
+            "error": "rate_limit_exceeded",
+            "message": "Rate limit exceeded",
+        }
 
 
 class TestGatewayGetCard:

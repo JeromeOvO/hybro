@@ -25,6 +25,34 @@
       "reason": "Package remains shipped for legacy infrastructure compatibility paths while DAL, Delivery, and HubRuntimeBridge migration callers finish decommission; production import gates prevent new direct coupling."
     },
     {
+      "contract": "common_import_boundary",
+      "expiry_task": "Final Common leaf-module cleanup",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "common/api_key_auth.py",
+      "reason": "Common API-key auth still references the legacy APIKey model schema; migrate to a Common DTO or protocol-owned auth model."
+    },
+    {
+      "contract": "common_import_boundary",
+      "expiry_task": "Final Common leaf-module cleanup",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "common/utils/a2a_helpers.py",
+      "reason": "Common A2A helper still references legacy file upload model constants; move constants to Common before final leaf-module cleanup."
+    },
+    {
+      "contract": "common_import_boundary",
+      "expiry_task": "Final Common leaf-module cleanup",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "common/utils/context_utils.py",
+      "reason": "Common context utilities still reference legacy memory models; migrate to Common DTOs before final leaf-module cleanup."
+    },
+    {
+      "contract": "common_import_boundary",
+      "expiry_task": "Final Common leaf-module cleanup",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "common/utils/turn_id.py",
+      "reason": "Common turn-id helper still references the legacy room model; migrate to a Common DTO/protocol shape before final leaf-module cleanup."
+    },
+    {
       "contract": "legacy_import_boundary",
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
       "owner": "phase-9-platform-api-cleanup",

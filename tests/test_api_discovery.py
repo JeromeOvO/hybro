@@ -165,3 +165,7 @@ class TestDiscoverAgents:
 
         assert exc.value.status_code == 429
         assert exc.value.headers == {"Retry-After": "60"}
+        assert exc.value.detail == {
+            "error": "rate_limit_exceeded",
+            "message": "Rate limit exceeded",
+        }

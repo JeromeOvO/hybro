@@ -38,6 +38,7 @@ FORBIDDEN_COMMON_IMPORT_PREFIXES = (
     "delivery",
     "execution",
     "hub_runtime_bridge",
+    "models",
     "platform_module",
 )
 
@@ -172,8 +173,11 @@ def _sdk_import_files() -> set[str]:
 
 def _common_import_violations() -> list[str]:
     violations: list[str] = []
+    blocked_paths = _blocked_cleanup_paths(contract="common_import_boundary")
     for path in sorted(Path("common").rglob("*.py")):
         if path == Path("common/config/settings.py"):
+            continue
+        if _is_blocked(path, blocked_paths):
             continue
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):

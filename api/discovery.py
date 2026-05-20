@@ -72,11 +72,14 @@ def _resolve_dependency(value: Any, provider) -> Any:
 
 def _raise_http_error(error: PlatformRouteError) -> None:
     headers = None
+    detail = error.detail
     if isinstance(error.detail, dict) and "retry_after" in error.detail:
         headers = {"Retry-After": str(error.detail["retry_after"])}
+        detail = dict(error.detail)
+        detail.pop("retry_after", None)
     raise HTTPException(
         status_code=error.status_code,
-        detail=error.detail,
+        detail=detail,
         headers=headers,
     ) from error
 

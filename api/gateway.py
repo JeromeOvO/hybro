@@ -75,11 +75,14 @@ async def _record_request(rate_limiter: Any, api_key: APIKey) -> None:
 
 def _raise_http_error(error: PlatformRouteError) -> None:
     headers = None
+    detail = error.detail
     if "retry_after" in error.detail:
         headers = {"Retry-After": str(error.detail["retry_after"])}
+        detail = dict(error.detail)
+        detail.pop("retry_after", None)
     raise HTTPException(
         status_code=error.status_code,
-        detail=error.detail,
+        detail=detail,
         headers=headers,
     ) from error
 

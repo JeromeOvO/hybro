@@ -120,10 +120,4 @@ def test_phase9_route_inventory_matches_live_app_routes():
     for key, route in recorded.items():
         assert route["response_model"] == live[key]["response_model"]
         assert sorted(route["auth_dependencies"]) == live[key]["auth_dependencies"]
-        if route["module"] in {
-            "api.discovery",
-            "api.files",
-            "api.gateway",
-            "api.discovery_api_keys",
-        }:
-            assert not route["owning_protocol"].startswith("blocked:")
+        assert not route["owning_protocol"].startswith("blocked:")
