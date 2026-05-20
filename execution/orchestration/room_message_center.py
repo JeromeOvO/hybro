@@ -47,11 +47,23 @@ room_services = None
 room_supervisor_service = None
 sse_manager = None
 task_service = None
+context_assembly_service = None
+memory_search_service = None
+compaction_service = None
+build_turn_content = None
+SupervisorPlanningError = RuntimeError
 
 if TYPE_CHECKING:
     from infrastructure.redis_service import RedisService
 
 logger = get_logger(__name__)
+
+
+class _RoomMessageCenterSettings:
+    orphan_threshold_minutes = 2
+
+
+settings = _RoomMessageCenterSettings()
 
 # Maximum time (seconds) to wait for a per-room lock before giving up.
 # MUST be shorter than orphan_threshold_minutes (default 2 min = 120s) to
@@ -98,7 +110,7 @@ class RoomMessageCenter:
         compaction_service=None,
         build_turn_content_func=None,
         supervisor_planning_error_cls=RuntimeError,
-        orphan_threshold_minutes: int = 2,
+        orphan_threshold_minutes: int | None = None,
         debate_rounds: int = 1,
         cloud_health_cache_ttl: float = 30.0,
         cloud_health_check_timeout: float = 5.0,
@@ -109,12 +121,17 @@ class RoomMessageCenter:
         self.room_coordinator_service = room_coordinator_service
         self.openai_service = openai_service
         self.task_notifications = task_notifications
+        self.room_memory_service = room_memory_service
         self.context_assembly_service = context_assembly_service
         self.memory_search_service = memory_search_service
         self.compaction_service = compaction_service
         self.build_turn_content = build_turn_content_func
         self.supervisor_planning_error_cls = supervisor_planning_error_cls
-        self.orphan_threshold_minutes = orphan_threshold_minutes
+        self.orphan_threshold_minutes = (
+            settings.orphan_threshold_minutes
+            if orphan_threshold_minutes is None
+            else orphan_threshold_minutes
+        )
         self.debate_rounds = debate_rounds
         self.tsm = TaskStateManager(self.room_services, notification_service)
         self.agent_dispatcher = AgentDispatcher(
@@ -472,7 +489,11 @@ class RoomMessageCenter:
         # Idempotency guard (SDR 2.5)
         if request.is_recovery:
             stale_threshold = utcnow() - timedelta(
-                minutes=self.orphan_threshold_minutes
+                minutes=getattr(
+                    self,
+                    "orphan_threshold_minutes",
+                    settings.orphan_threshold_minutes,
+                )
             )
             claimed = await self.database_service.claim_or_reclaim_user_message(
                 request.room_user_message_id, stale_threshold
