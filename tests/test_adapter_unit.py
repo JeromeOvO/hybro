@@ -340,6 +340,34 @@ async def test_transport_send_message_posts_a2a_request_and_returns_task_result(
 
 
 @pytest.mark.asyncio
+async def test_transport_send_message_preserves_jsonrpc_envelope_id():
+    from a2a_adapter.transport import AgentTransportImpl
+
+    client = _FakePostClient(
+        {
+            "jsonrpc": "2.0",
+            "id": "rpc-123",
+            "result": {
+                "id": "task-1",
+                "status": {"state": "completed"},
+            },
+        }
+    )
+    transport = AgentTransportImpl(timeout=1, client=client)
+    message = InternalAgentMessage(
+        agent_id="agent-1",
+        role="user",
+        parts=[{"kind": "text", "text": "hello"}],
+    )
+
+    result = await transport.send_message("https://agent.example/a2a/", message)
+
+    assert result.task_id == "task-1"
+    assert result.result["raw"]["id"] == "rpc-123"
+    assert result.result["raw"]["result"]["id"] == "task-1"
+
+
+@pytest.mark.asyncio
 async def test_transport_send_message_returns_error_result_on_http_error():
     from a2a_adapter.transport import AgentTransportImpl
 
@@ -462,6 +490,8 @@ async def test_transport_stream_message_unwraps_jsonrpc_sse_results(monkeypatch)
     assert events[0].task_id == "task-1"
     assert events[0].event_type == "status-update"
     assert events[0].final is True
+    assert events[0].payload["raw"]["id"] == "rpc-1"
+    assert events[0].payload["raw"]["result"]["taskId"] == "task-1"
 
 
 @pytest.mark.asyncio

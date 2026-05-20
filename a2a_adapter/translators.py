@@ -21,23 +21,24 @@ def internal_message_to_a2a(msg: InternalAgentMessage) -> dict[str, Any]:
 
 
 def a2a_task_to_result(task_data: dict[str, Any], agent_id: str) -> AgentTaskResult:
-    status_data = _read(task_data, "status")
+    task_source = _jsonrpc_result(task_data) or task_data
+    status_data = _read(task_source, "status")
     status = _normalize_status(status_data)
-    error = _extract_error_text(_read(task_data, "error"))
+    error = _extract_error_text(_read(task_source, "error") or _read(task_data, "error"))
     if error is None and status in {"failed", "canceled", "cancelled"}:
         error = _stringify_message(_read(status_data, "message"))
 
     result: dict[str, Any] = {"raw": task_data}
     for key in ("artifacts", "message", "result"):
-        value = _read(task_data, key)
+        value = _read(task_source, key)
         if value is not None:
             result[key] = value
 
     return AgentTaskResult(
         task_id=_first_non_empty(
-            _read(task_data, "id"),
-            _read(task_data, "taskId"),
-            _read(task_data, "task_id"),
+            _read(task_source, "id"),
+            _read(task_source, "taskId"),
+            _read(task_source, "task_id"),
             "",
         ),
         agent_id=agent_id,
@@ -51,30 +52,31 @@ def a2a_event_to_stream_event(
     event_data: dict[str, Any],
     agent_id: str,
 ) -> AgentStreamEvent:
-    nested_task = _read(event_data, "task") or {}
-    status_data = _read(event_data, "status")
+    event_source = _jsonrpc_result(event_data) or event_data
+    nested_task = _read(event_source, "task") or {}
+    status_data = _read(event_source, "status")
     status = _normalize_status(status_data)
     payload: dict[str, Any] = {"raw": event_data}
     for key in ("status", "artifact", "message"):
-        value = _read(event_data, key)
+        value = _read(event_source, key)
         if value is not None:
             payload[key] = value
 
-    final = bool(_read(event_data, "final")) or status in TERMINAL_STATES
+    final = bool(_read(event_source, "final")) or status in TERMINAL_STATES
 
     return AgentStreamEvent(
         task_id=_first_non_empty(
-            _read(event_data, "task_id"),
-            _read(event_data, "taskId"),
-            _read(event_data, "id"),
+            _read(event_source, "task_id"),
+            _read(event_source, "taskId"),
+            _read(event_source, "id"),
             _read(nested_task, "id"),
             "",
         ),
         agent_id=agent_id,
         event_type=_first_non_empty(
-            _read(event_data, "event_type"),
-            _read(event_data, "type"),
-            _read(event_data, "kind"),
+            _read(event_source, "event_type"),
+            _read(event_source, "type"),
+            _read(event_source, "kind"),
             "message",
         ),
         payload=payload,
@@ -217,6 +219,15 @@ def _read(value: Any, *names: str) -> Any:
         if hasattr(value, name):
             return getattr(value, name)
     return None
+
+
+def _jsonrpc_result(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    if "jsonrpc" not in value:
+        return None
+    result = value.get("result")
+    return result if isinstance(result, dict) else None
 
 
 def _first_non_empty(*values: Any) -> str:

@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 
 from common.api_key_auth import (
+    bind_api_key_authenticator,
     bind_api_key_store,
     hash_api_key,
     validate_api_key,
@@ -49,6 +50,21 @@ class TestHashApiKey:
 
 
 class TestValidateApiKey:
+    @pytest.mark.asyncio
+    async def test_delegates_to_bound_authenticator_protocol(self):
+        mock_key = MagicMock()
+        authenticator = MagicMock()
+        authenticator.validate_api_key = AsyncMock(return_value=mock_key)
+
+        bind_api_key_authenticator(authenticator)
+
+        result = await validate_api_key("raw-key", track_usage=False)
+
+        assert result is mock_key
+        authenticator.validate_api_key.assert_awaited_once_with(
+            "raw-key", track_usage=False
+        )
+
     @pytest.mark.asyncio
     async def test_uses_bound_api_key_store(self):
         mock_key = MagicMock()

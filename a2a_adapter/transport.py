@@ -52,7 +52,9 @@ class AgentTransportImpl:
             )
             response.raise_for_status()
             payload = response.json()
-            task_payload = payload.get("result", payload)
+            task_payload = payload
+            if "jsonrpc" not in payload and isinstance(payload.get("result"), dict):
+                task_payload = payload["result"]
             return a2a_task_to_result(task_payload, message.agent_id)
         except Exception as exc:
             return AgentTaskResult(
@@ -124,6 +126,8 @@ def _to_part(part: dict[str, Any]) -> Part:
 
 def _stream_event_payload(event_data: dict[str, Any]) -> dict[str, Any]:
     result = event_data.get("result")
+    if "jsonrpc" in event_data and isinstance(result, dict):
+        return event_data
     if isinstance(result, dict):
         return result
 

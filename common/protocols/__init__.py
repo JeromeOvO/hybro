@@ -43,6 +43,7 @@ from common.protocols.hub_protocols import (
 )
 from common.protocols.llm_protocols import LLMProvider, ModelRegistry
 from common.protocols.platform_protocols import (
+    APIKeyAuthenticator,
     FileStorage,
     GatewayDiscoveryProvider,
     GatewayService,
@@ -85,6 +86,7 @@ __all__ = [
     "AgentRegistryWriter",
     "AgentRepository",
     "AgentTransport",
+    "APIKeyAuthenticator",
     "ContextAssembler",
     "ContentStorageRepository",
     "DistributedLock",

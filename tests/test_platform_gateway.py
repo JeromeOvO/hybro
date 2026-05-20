@@ -127,6 +127,44 @@ class FakeTransport:
         }
 
 
+class JsonRpcTransport(FakeTransport):
+    async def send_message(self, agent_url: str, message, **kwargs):
+        self.sent.append((agent_url, message, kwargs))
+        return AgentTaskResult(
+            task_id="task-1",
+            agent_id=message.agent_id,
+            status="completed",
+            result={
+                "raw": {
+                    "jsonrpc": "2.0",
+                    "id": "rpc-123",
+                    "result": {
+                        "id": "task-1",
+                        "status": {"state": "completed"},
+                    },
+                }
+            },
+        )
+
+    async def stream_message(self, agent_url: str, message, **kwargs):
+        self.streamed.append((agent_url, message, kwargs))
+        yield {
+            "task_id": "task-1",
+            "event_type": "status-update",
+            "payload": {
+                "raw": {
+                    "jsonrpc": "2.0",
+                    "id": "rpc-stream-1",
+                    "result": {
+                        "taskId": "task-1",
+                        "status": {"state": "completed"},
+                    },
+                }
+            },
+            "final": True,
+        }
+
+
 def _agent(**overrides) -> AgentInfo:
     data = {
         "agent_id": "agent-1",
@@ -288,6 +326,19 @@ async def test_send_returns_public_a2a_response_envelope():
 
 
 @pytest.mark.asyncio
+async def test_send_preserves_upstream_jsonrpc_id():
+    gateway = _gateway(transport=JsonRpcTransport())
+
+    result = await gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+
+    assert result == {
+        "jsonrpc": "2.0",
+        "id": "rpc-123",
+        "result": {"id": "task-1", "status": {"state": "completed"}},
+    }
+
+
+@pytest.mark.asyncio
 async def test_send_maps_transport_error_result_to_502():
     gateway = _gateway(
         transport=FakeTransport(
@@ -401,6 +452,22 @@ async def test_stream_yields_transport_events():
             "jsonrpc": "2.0",
             "id": "event-1",
             "result": {"id": "event-1", "status": {"state": "working"}},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_preserves_upstream_jsonrpc_id():
+    gateway = _gateway(transport=JsonRpcTransport())
+
+    stream = gateway.stream_message("agent-1", {"text": "hi"}, "owner-1")
+    events = [event async for event in stream]
+
+    assert events == [
+        {
+            "jsonrpc": "2.0",
+            "id": "rpc-stream-1",
+            "result": {"taskId": "task-1", "status": {"state": "completed"}},
         }
     ]
 

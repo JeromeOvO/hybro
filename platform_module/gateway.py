@@ -272,13 +272,15 @@ class PlatformGateway:
         raw = payload.get("raw")
         response_id = result.task_id or ""
         if isinstance(raw, dict):
+            envelope_id, envelope_result = _jsonrpc_envelope_parts(raw)
+            response_result = envelope_result or raw
             response_id = str(
-                raw.get("id")
-                or raw.get("taskId")
-                or raw.get("task_id")
+                envelope_id
+                or response_result.get("id")
+                or response_result.get("taskId")
+                or response_result.get("task_id")
                 or response_id
             )
-            response_result = raw
         else:
             response_result = payload or {
                 "id": result.task_id,
@@ -296,9 +298,15 @@ class PlatformGateway:
             return event
         payload = event.get("payload")
         raw = payload.get("raw") if isinstance(payload, dict) else None
-        response_result = raw if isinstance(raw, dict) else event
+        envelope_id = None
+        if isinstance(raw, dict):
+            envelope_id, envelope_result = _jsonrpc_envelope_parts(raw)
+            response_result = envelope_result or raw
+        else:
+            response_result = event
         response_id = str(
-            response_result.get("id")
+            envelope_id
+            or response_result.get("id")
             or response_result.get("taskId")
             or event.get("task_id")
             or event.get("taskId")
@@ -412,6 +420,15 @@ class PlatformGateway:
             role=getattr(message, "role", "user"),
             parts=[{"value": message}],
         )
+
+
+def _jsonrpc_envelope_parts(value: dict[str, Any]) -> tuple[Any | None, dict[str, Any] | None]:
+    if "jsonrpc" not in value:
+        return None, None
+    result = value.get("result")
+    if not isinstance(result, dict):
+        return value.get("id"), None
+    return value.get("id"), result
 
 
 __all__ = ["PlatformGateway"]

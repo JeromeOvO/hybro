@@ -338,7 +338,7 @@
     ],
     "module": "api.discovery_api_keys",
     "name": "list_api_keys",
-    "owning_protocol": "common.api_key_auth.APIKeyStore",
+    "owning_protocol": "common.protocols.APIKeyAuthenticator",
     "path": "/api/v1/api-keys",
     "response_model": "APIKeyListResponse"
   },
@@ -352,7 +352,7 @@
     ],
     "module": "api.discovery_api_keys",
     "name": "create_api_key",
-    "owning_protocol": "common.api_key_auth.APIKeyStore",
+    "owning_protocol": "common.protocols.APIKeyAuthenticator",
     "path": "/api/v1/api-keys",
     "response_model": "APIKeyCreateResponse"
   },
@@ -366,7 +366,7 @@
     ],
     "module": "api.discovery_api_keys",
     "name": "deactivate_api_key",
-    "owning_protocol": "common.api_key_auth.APIKeyStore",
+    "owning_protocol": "common.protocols.APIKeyAuthenticator",
     "path": "/api/v1/api-keys/{key_id}",
     "response_model": "APIKeyOperationResponse"
   },

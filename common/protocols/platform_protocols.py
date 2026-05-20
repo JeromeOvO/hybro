@@ -4,6 +4,13 @@ from common.dto import FileInfo, RateLimitResult
 
 
 @runtime_checkable
+class APIKeyAuthenticator(Protocol):
+    async def validate_api_key(
+        self, api_key: str, *, track_usage: bool = True
+    ) -> Any: ...
+
+
+@runtime_checkable
 class GatewayDiscoveryProvider(Protocol):
     async def discover_agents(self, query: str, limit: int | None = None): ...
 
@@ -47,6 +54,7 @@ class FileStorage(Protocol):
 
 
 __all__ = [
+    "APIKeyAuthenticator",
     "FileStorage",
     "GatewayDiscoveryProvider",
     "GatewayService",
