@@ -258,6 +258,18 @@ class TranslatedRawErrorStreamTransport(FakeTransport):
         )
 
 
+class MalformedDictErrorStreamTransport(FakeTransport):
+    async def stream_message(self, agent_url: str, message, **kwargs):
+        self.streamed.append((agent_url, message, kwargs))
+        yield AgentStreamEvent(
+            task_id="",
+            agent_id=message.agent_id,
+            event_type="error",
+            payload={"error": {"code": None, "message": None, "detail": "boom"}},
+            final=True,
+        )
+
+
 def _agent(**overrides) -> AgentInfo:
     data = {
         "agent_id": "agent-1",
@@ -651,6 +663,22 @@ async def test_stream_maps_translated_raw_error_event_to_jsonrpc_error():
             "jsonrpc": "2.0",
             "id": "",
             "error": {"code": -32000, "message": "boom"},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_sanitizes_malformed_dict_error_payloads():
+    gateway = _gateway(transport=MalformedDictErrorStreamTransport())
+
+    stream = gateway.stream_message("agent-1", {"text": "hi"}, "owner-1")
+    events = [event async for event in stream]
+
+    assert events == [
+        {
+            "jsonrpc": "2.0",
+            "id": "",
+            "error": {"code": -32000, "message": "boom", "detail": "boom"},
         }
     ]
 

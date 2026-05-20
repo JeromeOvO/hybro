@@ -296,6 +296,22 @@ def test_route_owner_protocols_match_handler_calls():
     )
 
 
+def test_health_route_delegates_to_health_check_protocol():
+    from main import app
+
+    route = next(
+        route
+        for route in app.routes
+        if isinstance(route, APIRoute) and route.path == "/health"
+    )
+    source = inspect.getsource(route.endpoint)
+
+    assert "get_health_check" in source
+    assert ".check(" in source
+    assert "services." not in source
+    assert "settings." not in source
+
+
 def test_app_shell_protocol_surfaces_are_specific():
     from app_shell.bound import InspectionCenter, WebhookTransport
 
@@ -311,3 +327,26 @@ def test_app_shell_protocol_surfaces_are_specific():
                 }
                 for parameter in params.values()
             ), f"{protocol.__name__}.{name} uses wildcard parameters"
+
+
+def test_inspection_protocol_uses_route_contract_types():
+    from app_shell.bound import InspectionCenter
+    from models.request import InspectionCenterRequest
+    from models.response import (
+        InsepectionCenterConnectionValidationResponse,
+        InspectionCenterResponse,
+    )
+
+    inspect_card = inspect.signature(InspectionCenter.inspect_agent_card)
+    inspect_connection = inspect.signature(InspectionCenter.inspect_a2a_connection)
+
+    assert inspect_card.parameters["request"].annotation is InspectionCenterRequest
+    assert inspect_card.return_annotation == InspectionCenterResponse
+    assert (
+        inspect_connection.parameters["request"].annotation
+        is InspectionCenterRequest
+    )
+    assert (
+        inspect_connection.return_annotation
+        == InsepectionCenterConnectionValidationResponse
+    )

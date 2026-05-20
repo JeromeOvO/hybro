@@ -1105,7 +1105,9 @@
     "response_model": null
   },
   {
-    "auth_dependencies": [],
+    "auth_dependencies": [
+      "get_health_check"
+    ],
     "methods": [
       "GET"
     ],

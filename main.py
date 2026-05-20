@@ -8,7 +8,6 @@ from contextlib import asynccontextmanager
 from a2a.types import TaskState
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from uvicorn.config import LOGGING_CONFIG
@@ -35,6 +34,7 @@ from api import (
     webhooks,
 )
 from app_shell.api_key_auth import MongoAPIKeyAuthenticator
+from app_shell.health_check import AppShellHealthCheck, HealthCheck
 from common.api_key_auth import bind_api_key_authenticator
 from common.auth import bind_auth_config, get_current_user
 from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
@@ -1025,35 +1025,34 @@ def compute_health_status(
     }
 
 
+def _relay_streams_available() -> bool:
+    from services.relay_service import relay_service as _relay_svc_health
+
+    return bool(
+        _relay_svc_health
+        and _relay_svc_health._streams
+        and _relay_svc_health._streams.is_connected
+    )
+
+
+health_check_service: HealthCheck = AppShellHealthCheck(
+    redis_url=settings.redis_url,
+    compute_health_status=compute_health_status,
+    relay_streams_available=_relay_streams_available,
+)
+
+
+def get_health_check() -> HealthCheck:
+    return health_check_service
+
+
 # Health check endpoint (no prefix, no dependencies)
 @app.get("/health")
-async def health_check(request: Request):
-    from services.relay_service import relay_service as _relay_svc_health
-    delivery_facade = getattr(request.app.state, "delivery_facade", None)
-    if delivery_facade is not None:
-        await delivery_facade.refresh_health()
-    legacy_redis_service = getattr(request.app.state, "legacy_redis_service", None)
-    result = compute_health_status(
-        delivery_pubsub_connected=bool(
-            delivery_facade and delivery_facade.delivery_pubsub_connected
-        ),
-        delivery_kv_connected=bool(
-            delivery_facade and delivery_facade.delivery_kv_connected
-        ),
-        legacy_redis_service_connected=bool(
-            legacy_redis_service and legacy_redis_service.is_connected
-        ),
-        relay_streams_available=bool(
-            _relay_svc_health
-            and _relay_svc_health._streams
-            and _relay_svc_health._streams.is_connected
-        ),
-        redis_url=settings.redis_url,
-        change_stream_connected=bool(
-            delivery_facade and delivery_facade.change_stream_connected
-        ),
-    )
-    return JSONResponse(content=result["body"], status_code=result["status_code"])
+async def health_check(
+    request: Request,
+    health: HealthCheck = Depends(get_health_check),
+):
+    return await health.check(request)
 
 
 # Include API routers with /api/v1 prefix and global authentication

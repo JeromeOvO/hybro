@@ -1,10 +1,20 @@
 from typing import Any, Protocol, runtime_checkable
 
+from models.request import InspectionCenterRequest
+from models.response import (
+    InsepectionCenterConnectionValidationResponse,
+    InspectionCenterResponse,
+)
+
 
 @runtime_checkable
 class InspectionCenter(Protocol):
-    async def inspect_a2a_connection(self, request: Any) -> Any: ...
-    async def inspect_agent_card(self, request: Any) -> Any: ...
+    async def inspect_a2a_connection(
+        self, request: InspectionCenterRequest
+    ) -> InsepectionCenterConnectionValidationResponse: ...
+    async def inspect_agent_card(
+        self, request: InspectionCenterRequest
+    ) -> InspectionCenterResponse: ...
 
 
 @runtime_checkable

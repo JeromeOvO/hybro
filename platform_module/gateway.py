@@ -469,10 +469,10 @@ def _jsonrpc_response_from_raw(value: dict[str, Any]) -> dict[str, Any] | None:
 
 def _jsonrpc_error(error: Any) -> dict[str, Any]:
     if isinstance(error, dict):
-        message = error.get("message") or error.get("error") or "Agent error"
-        if "code" in error:
-            return {"message": message, **error}
-        return {"code": -32000, "message": message, **error}
+        data = {key: value for key, value in error.items() if value is not None}
+        message = data.get("message") or data.get("error") or data.get("detail") or "Agent error"
+        code = data.get("code") if isinstance(data.get("code"), int) else -32000
+        return {**data, "code": code, "message": message}
     return {"code": -32000, "message": str(error)}
 
 
