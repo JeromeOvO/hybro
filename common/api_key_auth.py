@@ -6,12 +6,26 @@ Keys are hashed with SHA-256 and validated against MongoDB.
 """
 
 import hashlib
+from typing import Any
 
 from fastapi import HTTPException, Request, status
 from loguru import logger
 
-from database.mongodb import mongodb
 from models.api_key import APIKey
+
+api_key_store: Any | None = None
+
+
+def bind_api_key_store(store: Any) -> None:
+    global api_key_store
+
+    api_key_store = store
+
+
+def _require_api_key_store() -> Any:
+    if api_key_store is None:
+        raise RuntimeError("API key store dependency has not been bound")
+    return api_key_store
 
 
 def hash_api_key(api_key: str) -> str:
@@ -47,7 +61,8 @@ async def validate_api_key(api_key: str, *, track_usage: bool = True) -> APIKey:
     key_hash = hash_api_key(api_key)
     
     # Look up in MongoDB
-    api_key_doc = await mongodb.get_api_key_by_hash(key_hash)
+    store = _require_api_key_store()
+    api_key_doc = await store.get_api_key_by_hash(key_hash)
     
     if not api_key_doc:
         logger.warning("API key validation failed: key not found")
@@ -71,7 +86,7 @@ async def validate_api_key(api_key: str, *, track_usage: bool = True) -> APIKey:
     
     if track_usage:
         try:
-            await mongodb.update_api_key_usage(key_hash)
+            await store.update_api_key_usage(key_hash)
         except Exception as e:
             # Log but don't fail the request
             logger.warning(f"Failed to update API key usage: {e}")
@@ -153,4 +168,3 @@ async def get_api_key_no_track(request: Request) -> APIKey:
         )
 
     return await validate_api_key(api_key, track_usage=False)
-

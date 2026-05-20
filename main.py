@@ -34,7 +34,8 @@ from api import (
     viewset,
     webhooks,
 )
-from common.auth import get_current_user
+from common.api_key_auth import bind_api_key_store
+from common.auth import bind_auth_config, get_current_user
 from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
 from config.settings import settings
 from database.mongodb import mongodb
@@ -47,6 +48,8 @@ from services.agent_health_service import agent_health_service
 from services.sse_services import sse_manager
 
 load_dotenv()
+bind_auth_config(clerk_secret_key_value=settings.clerk_secret_key)
+bind_api_key_store(mongodb)
 
 
 class InterceptHandler(logging.Handler):
@@ -202,6 +205,8 @@ async def lifespan(app: FastAPI):
                 create_room_deps,
                 create_vector_dal,
             )
+            from common.utils.a2a_helpers import bind_a2a_storage_dependencies
+            from common.utils.context_utils import bind_context_llm_provider
             from context_memory.config import ContextMemoryLLMConfig
             from llm_gateway import LLMGatewayImpl, ModelRegistryImpl
             from services.agent_capability_issue_service import (
@@ -232,6 +237,12 @@ async def lifespan(app: FastAPI):
             from database.mongodb import get_db
             from database.repository import Repository
 
+            bind_a2a_storage_dependencies(
+                storage_service=s3_service,
+                s3_bucket_name=settings.s3_bucket_name,
+                max_file_size_mb=settings.max_file_size_mb,
+            )
+            bind_context_llm_provider(openai_service)
             await mongodb.create_context_memory_indexes()
             viewset.bind_viewset_dependencies(
                 get_db=get_db,
@@ -851,7 +862,7 @@ app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")
 # Add Discovery, Gateway & Relay API CORS middleware
 # This applies permissive CORS to /api/v1/discovery/*, /api/v1/gateway/*, and /api/v1/relay/* paths
 # Note: Middleware runs in reverse order, so adding first means it runs last
-app.add_middleware(DiscoveryCORSMiddleware)
+app.add_middleware(DiscoveryCORSMiddleware, api_prefix=settings.api_prefix)
 
 # Add CORS middleware
 app.add_middleware(

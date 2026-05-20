@@ -6,12 +6,36 @@ and RoomMessageCenter.
 
 import uuid
 from dataclasses import dataclass, field
+from typing import Any
 
 from a2a.types import FileWithUri, Message, Role, Task
 
 from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+s3_service: Any | None = None
+own_s3_bucket_name: str = ""
+max_download_bytes: int = 50 * 1024 * 1024
+
+
+def bind_a2a_storage_dependencies(
+    *,
+    storage_service: Any,
+    s3_bucket_name: str = "",
+    max_file_size_mb: int = 50,
+) -> None:
+    global s3_service, own_s3_bucket_name, max_download_bytes
+
+    s3_service = storage_service
+    own_s3_bucket_name = s3_bucket_name
+    max_download_bytes = max_file_size_mb * 1024 * 1024
+
+
+def _require_s3_service() -> Any:
+    if s3_service is None:
+        raise RuntimeError("A2A artifact storage dependency has not been bound")
+    return s3_service
 
 
 @dataclass
@@ -316,13 +340,11 @@ def _is_own_s3_url(uri: str) -> bool:
     """Return True if *uri* already points to our own S3 bucket."""
     from urllib.parse import urlparse
 
-    from config.settings import settings
-
-    if not settings.s3_bucket_name:
+    if not own_s3_bucket_name:
         return False
     parsed = urlparse(uri)
     host = parsed.hostname or ""
-    return settings.s3_bucket_name in host
+    return own_s3_bucket_name in host
 
 
 def _validate_external_uri(uri: str) -> str | None:
@@ -353,15 +375,8 @@ def _validate_external_uri(uri: str) -> str | None:
     return None
 
 
-_MAX_DOWNLOAD_BYTES: int | None = None
-
-
 def _get_max_download_bytes() -> int:
-    global _MAX_DOWNLOAD_BYTES
-    if _MAX_DOWNLOAD_BYTES is None:
-        from config.settings import settings
-        _MAX_DOWNLOAD_BYTES = settings.max_file_size_mb * 1024 * 1024
-    return _MAX_DOWNLOAD_BYTES
+    return max_download_bytes
 
 
 async def convert_inline_bytes_to_s3(
@@ -385,7 +400,6 @@ async def convert_inline_bytes_to_s3(
     import logging
 
     from models.file_upload import MAX_INLINE_CONVERSIONS_PER_MESSAGE
-    from services.s3_service import s3_service
 
     logger = logging.getLogger(__name__)
     converted = converted_so_far
@@ -422,14 +436,15 @@ async def convert_inline_bytes_to_s3(
         s3_key = f"artifacts/{room_id}/{message_id}/notify-{converted}.{ext}"
 
         try:
-            await s3_service.upload_file(
+            storage = _require_s3_service()
+            await storage.upload_file(
                 file_data=io.BytesIO(decoded),
                 s3_key=s3_key,
                 content_type=mime,
                 content_length=len(decoded),
             )
             orig_name = file_info.get("name")
-            presigned_url = await s3_service.generate_presigned_url(
+            presigned_url = await storage.generate_presigned_url(
                 s3_key, filename=orig_name,
             )
             file_info["bytes"] = None
@@ -469,7 +484,6 @@ async def _download_external_uris_to_s3(
     import aiohttp
 
     from models.file_upload import MAX_INLINE_CONVERSIONS_PER_MESSAGE
-    from services.s3_service import s3_service
 
     logger = logging.getLogger(__name__)
     converted = converted_so_far
@@ -550,14 +564,15 @@ async def _download_external_uris_to_s3(
             s3_key = f"artifacts/{room_id}/{message_id}/ext-{converted}.{ext}"
 
             try:
-                await s3_service.upload_file(
+                storage = _require_s3_service()
+                await storage.upload_file(
                     file_data=io.BytesIO(data),
                     s3_key=s3_key,
                     content_type=mime,
                     content_length=len(data),
                 )
                 orig_name = file_info.get("name")
-                presigned_url = await s3_service.generate_presigned_url(
+                presigned_url = await storage.generate_presigned_url(
                     s3_key, filename=orig_name,
                 )
                 file_info["uri"] = presigned_url
@@ -598,7 +613,6 @@ async def convert_pydantic_artifacts_to_s3(
     import aiohttp
 
     from models.file_upload import MAX_INLINE_CONVERSIONS_PER_MESSAGE
-    from services.s3_service import s3_service
 
     log = logging.getLogger(__name__)
     converted = converted_so_far
@@ -631,12 +645,13 @@ async def convert_pydantic_artifacts_to_s3(
             s3_key = f"artifacts/{room_id}/{message_id}/inline-{converted}.{ext}"
 
             try:
-                await s3_service.upload_file(
+                storage = _require_s3_service()
+                await storage.upload_file(
                     file_data=io.BytesIO(decoded), s3_key=s3_key,
                     content_type=mime, content_length=len(decoded),
                 )
                 orig_name = getattr(fc, "name", None)
-                presigned_url = await s3_service.generate_presigned_url(
+                presigned_url = await storage.generate_presigned_url(
                     s3_key, filename=orig_name,
                 )
                 root.file = FileWithUri(
@@ -699,12 +714,13 @@ async def convert_pydantic_artifacts_to_s3(
                 s3_key = f"artifacts/{room_id}/{message_id}/ext-{converted}.{ext}"
 
                 try:
-                    await s3_service.upload_file(
+                    storage = _require_s3_service()
+                    await storage.upload_file(
                         file_data=io.BytesIO(data), s3_key=s3_key,
                         content_type=mime, content_length=len(data),
                     )
                     orig_name = getattr(fc, "name", None)
-                    presigned_url = await s3_service.generate_presigned_url(
+                    presigned_url = await storage.generate_presigned_url(
                         s3_key, filename=orig_name,
                     )
                     fc.uri = presigned_url

@@ -10,11 +10,23 @@ from clerk_backend_api.security.types import AuthenticateRequestOptions
 from fastapi import HTTPException, Request, status
 from loguru import logger
 
-from config.settings import settings
+clerk_secret_key: str | None = None
+
+
+def bind_auth_config(*, clerk_secret_key_value: str) -> None:
+    global clerk_secret_key
+
+    clerk_secret_key = clerk_secret_key_value
+
+
+def _require_clerk_secret_key() -> str:
+    if clerk_secret_key is None:
+        raise RuntimeError("Auth configuration has not been bound")
+    return clerk_secret_key
 
 
 def _get_clerk_client() -> Clerk:
-    return Clerk(bearer_auth=settings.clerk_secret_key)
+    return Clerk(bearer_auth=_require_clerk_secret_key())
 
 
 @lru_cache(maxsize=256)
@@ -81,7 +93,7 @@ async def verify_clerk_token_from_request(request: Request) -> ClerkUser:
         # The SDK handles JWKS fetching, caching, and JWT verification automatically
         # Create authentication options with secret key and authorized parties
         options = AuthenticateRequestOptions(
-            secret_key=settings.clerk_secret_key,
+            secret_key=_require_clerk_secret_key(),
             authorized_parties=AUTHORIZED_PARTIES,
         )
         request_state = authenticate_request(request, options)

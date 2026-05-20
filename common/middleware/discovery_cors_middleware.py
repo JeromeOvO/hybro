@@ -9,8 +9,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from config.settings import settings
-
 
 class DiscoveryCORSMiddleware(BaseHTTPMiddleware):
     """
@@ -21,14 +19,17 @@ class DiscoveryCORSMiddleware(BaseHTTPMiddleware):
     Allows all origins, methods, and headers for external API access.
     """
 
+    def __init__(self, app, *, api_prefix: str = "/api/v1") -> None:
+        super().__init__(app)
+        self._discovery_path_prefix = f"{api_prefix}/discovery"
+        self._gateway_path_prefix = f"{api_prefix}/gateway"
+        self._relay_path_prefix = f"{api_prefix}/relay"
+
     async def dispatch(self, request: Request, call_next):
-        discovery_path_prefix = f"{settings.api_prefix}/discovery"
-        gateway_path_prefix = f"{settings.api_prefix}/gateway"
-        relay_path_prefix = f"{settings.api_prefix}/relay"
         is_external_api = (
-            request.url.path.startswith(discovery_path_prefix)
-            or request.url.path.startswith(gateway_path_prefix)
-            or request.url.path.startswith(relay_path_prefix)
+            request.url.path.startswith(self._discovery_path_prefix)
+            or request.url.path.startswith(self._gateway_path_prefix)
+            or request.url.path.startswith(self._relay_path_prefix)
         )
         
         if is_external_api and request.method == "OPTIONS":
@@ -47,4 +48,3 @@ class DiscoveryCORSMiddleware(BaseHTTPMiddleware):
             response.headers["Access-Control-Allow-Headers"] = "*"
         
         return response
-

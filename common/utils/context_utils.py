@@ -7,7 +7,7 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md for design details.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -23,6 +23,14 @@ if TYPE_CHECKING:
     )
 
 logger = get_logger(__name__)
+
+turn_notes_llm_provider: Any | None = None
+
+
+def bind_context_llm_provider(provider: Any) -> None:
+    global turn_notes_llm_provider
+
+    turn_notes_llm_provider = provider
 
 # Configuration
 MAX_HISTORY_TURNS = 20  # Keep last N turns in full detail
@@ -185,8 +193,8 @@ async def extract_turn_notes_llm(content: str) -> dict | None:
         return None
 
     try:
-        from services.openai_service import openai_service
-
+        if turn_notes_llm_provider is None:
+            return extract_turn_notes(content)
         prompt = (
             "Extract structured notes from the following conversation turn. "
             "Return ONLY valid JSON with these keys:\n"
@@ -196,7 +204,7 @@ async def extract_turn_notes_llm(content: str) -> dict | None:
             '- "one_liner": a single sentence summary (max 100 chars)\n\n'
             f"Turn content:\n{content[:3000]}"
         )
-        result = await openai_service.call_supervisor_llm_json(
+        result = await turn_notes_llm_provider.call_supervisor_llm_json(
             system_prompt="Extract structured notes. Respond with valid JSON only.",
             user_prompt=prompt,
             model="gpt-4o-mini",

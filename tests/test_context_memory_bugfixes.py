@@ -187,7 +187,7 @@ class TestExtractTurnNotesLLM:
 
     @pytest.mark.asyncio
     async def test_calls_llm_and_parses_result(self):
-        from common.utils.context_utils import extract_turn_notes_llm
+        from common.utils import context_utils
 
         long_content = "Discuss the deployment of React application " * 50
         mock_response = {
@@ -200,13 +200,8 @@ class TestExtractTurnNotesLLM:
         mock_openai = MagicMock()
         mock_openai.call_supervisor_llm_json = AsyncMock(return_value=mock_response)
 
-        with patch(
-            "common.utils.context_utils.openai_service",
-            mock_openai,
-            create=True,
-        ):
-            with patch.dict("sys.modules", {"services.openai_service": MagicMock(openai_service=mock_openai)}):
-                result = await extract_turn_notes_llm(long_content)
+        with patch.object(context_utils, "turn_notes_llm_provider", mock_openai):
+            result = await context_utils.extract_turn_notes_llm(long_content)
 
         assert result is not None
         assert "keywords" in result
@@ -214,15 +209,15 @@ class TestExtractTurnNotesLLM:
 
     @pytest.mark.asyncio
     async def test_falls_back_to_heuristic_on_llm_failure(self):
-        from common.utils.context_utils import extract_turn_notes_llm
+        from common.utils import context_utils
 
         long_content = "Discuss deployment of the application system " * 50
 
         mock_openai = MagicMock()
         mock_openai.call_supervisor_llm_json = AsyncMock(side_effect=Exception("LLM error"))
 
-        with patch.dict("sys.modules", {"services.openai_service": MagicMock(openai_service=mock_openai)}):
-            result = await extract_turn_notes_llm(long_content)
+        with patch.object(context_utils, "turn_notes_llm_provider", mock_openai):
+            result = await context_utils.extract_turn_notes_llm(long_content)
 
         assert result is not None
         assert "keywords" in result
