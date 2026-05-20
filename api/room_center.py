@@ -1,4 +1,7 @@
+from typing import Any
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.params import Depends as DependsParam
 from fastapi.responses import JSONResponse
 
 from common.auth import ClerkUser, get_current_user
@@ -12,13 +15,28 @@ from models.request import (
     RoomCenterUserMessageRequest,
 )
 from models.response import ActiveRunRef, RoomCenterActiveRunsResponse, RoomCenterUserMessageResponse
-from modules.RoomMessageCenter import room_message_center
-from modules.RoomCenter import RoomCenter
-from services.database_service import db_service
 
 router = APIRouter()
-room_center = RoomCenter()  # Singleton instance
+room_center: Any | None = None
+room_message_center: Any | None = None
+db_service: Any | None = None
+agent_selection_service: Any | None = None
 execution_engine: ExecutionEngine | None = None
+
+
+def bind_room_dependencies(
+    *,
+    center: Any,
+    message_center: Any,
+    database_service: Any,
+    selection_service: Any,
+) -> None:
+    global room_center, room_message_center, db_service, agent_selection_service
+
+    room_center = center
+    room_message_center = message_center
+    db_service = database_service
+    agent_selection_service = selection_service
 
 
 def bind_execution_deps(deps) -> None:
@@ -26,10 +44,40 @@ def bind_execution_deps(deps) -> None:
     execution_engine = deps.execution_engine
 
 
+def _require_room_center() -> Any:
+    if room_center is None:
+        raise RuntimeError("Room center dependency has not been bound")
+    return room_center
+
+
+def _require_room_message_center() -> Any:
+    if room_message_center is None:
+        raise RuntimeError("Room message center dependency has not been bound")
+    return room_message_center
+
+
+def _require_db_service() -> Any:
+    if db_service is None:
+        raise RuntimeError("Room database dependency has not been bound")
+    return db_service
+
+
+def get_agent_selection_service() -> Any:
+    if agent_selection_service is None:
+        raise RuntimeError("Agent selection dependency has not been bound")
+    return agent_selection_service
+
+
 def _require_execution_engine() -> ExecutionEngine:
     if execution_engine is None:
         raise RuntimeError("ExecutionDeps have not been bound")
     return execution_engine
+
+
+def _resolve_dependency(value: Any, provider) -> Any:
+    if isinstance(value, DependsParam):
+        return provider()
+    return value
 
 
 def _run_info_to_active_run_ref(run: RunInfo) -> ActiveRunRef:
@@ -93,7 +141,7 @@ async def verify_room_ownership(room_id: str, user: ClerkUser) -> None:
     if not room_id:
         raise HTTPException(status_code=400, detail="room_id is required")
 
-    room = await db_service.get_room_by_room_id(room_id)
+    room = await _require_db_service().get_room_by_room_id(room_id)
 
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
@@ -384,13 +432,14 @@ async def send_message(
 
 
 @router.post("/roomCenter/suggestAgents")
-async def suggest_agents(request: Request):
+async def suggest_agents(
+    request: Request,
+    selection_service: Any = Depends(get_agent_selection_service),
+):
     """
     Suggest agents for a message based on content analysis.
     Used for Auto mode to preview which agents will be selected.
     """
-    from services.agent_selection_service import agent_selection_service
-
     request_data = await request.json()
     message_text = request_data.get("message_text", "")
     top_k = request_data.get("top_k", 3)
@@ -402,8 +451,12 @@ async def suggest_agents(request: Request):
             "status_code": 400,
         }
 
+    selection_service = _resolve_dependency(
+        selection_service,
+        get_agent_selection_service,
+    )
     try:
-        suggestion_result = await agent_selection_service.suggest_agents(
+        suggestion_result = await selection_service.suggest_agents(
             message_text, top_k
         )
         return {"success": True, **suggestion_result, "status_code": 200}

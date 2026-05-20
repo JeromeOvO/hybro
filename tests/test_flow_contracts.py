@@ -280,7 +280,7 @@ class TestAgentLifecycleFlow:
         with patch(PATCH["agent.agent_center"], mock_ac):
             with patch(PATCH["agent.agent_service"], mock_as):
                 with patch(
-                    "services.agent_liveness_service.check_and_sync_liveness",
+                    "api.agent.agent_liveness_checker",
                     new=AsyncMock(return_value=mock_agent),
                 ):
                     # Step 1: Register (real endpoint extracts agent_url,

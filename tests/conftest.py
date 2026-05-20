@@ -50,7 +50,7 @@ PATCH = {
     "sse.sse_manager": "api.sse.sse_manager",
     "sse.mongodb": "api.sse.mongodb",
     "a2a_tasks.db_service": "api.a2a_tasks.db_service",
-    "agent_selection_service": "services.agent_selection_service.agent_selection_service",
+    "agent_selection_service": "api.room_center.agent_selection_service",
     "hitl_service_singleton": "services.hitl_service.hitl_service",
     # Webhook endpoints
     "webhooks.db_service": "api.webhooks.db_service",
@@ -619,7 +619,7 @@ def patch_agent_deps(mock_agent_center):
     )
     with patch(PATCH["agent.agent_center"], mock_agent_center):
         with patch(
-            "services.agent_liveness_service.check_and_sync_liveness",
+            "api.agent.agent_liveness_checker",
             new=AsyncMock(side_effect=lambda agent: agent),
         ):
             yield mock_agent_center

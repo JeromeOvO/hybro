@@ -1,21 +1,81 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
+from typing import Any
 from uuid import uuid4
 
 from api.agent_viewset import AgentViewSet
 from common.auth import ClerkUser, get_current_user, get_optional_user, resolve_provider_name
-from database.mongodb import mongodb
 from models.agent import IssueStatus
 from models.request import AgentCenterRequest, AgentSettingsUpdateRequest
 from models.response import AgentCenterResponse
-from modules.AgentCenter import AgentCenter
-from services.agent_capability_issue_service import capability_issue_service
-from services.agent_service import agent_service
-from services.s3_service import s3_service
 
 router = APIRouter()
 agent_viewset = AgentViewSet()
 router.include_router(agent_viewset.get_router())
-agent_center = AgentCenter()
+agent_center: Any | None = None
+agent_service: Any | None = None
+capability_issue_service: Any | None = None
+s3_service: Any | None = None
+mongodb: Any | None = None
+agent_liveness_checker: Any | None = None
+
+
+def bind_agent_dependencies(
+    *,
+    center: Any,
+    service: Any,
+    issue_service: Any,
+    storage_service: Any,
+    mongo: Any,
+) -> None:
+    global agent_center, agent_service, capability_issue_service, s3_service, mongodb
+
+    agent_center = center
+    agent_service = service
+    capability_issue_service = issue_service
+    s3_service = storage_service
+    mongodb = mongo
+
+
+def bind_agent_liveness_checker(checker: Any) -> None:
+    global agent_liveness_checker
+
+    agent_liveness_checker = checker
+
+
+def _require_agent_center() -> Any:
+    if agent_center is None:
+        raise RuntimeError("Agent center dependency has not been bound")
+    return agent_center
+
+
+def _require_agent_service() -> Any:
+    if agent_service is None:
+        raise RuntimeError("Agent service dependency has not been bound")
+    return agent_service
+
+
+def _require_capability_issue_service() -> Any:
+    if capability_issue_service is None:
+        raise RuntimeError("Capability issue dependency has not been bound")
+    return capability_issue_service
+
+
+def _require_s3_service() -> Any:
+    if s3_service is None:
+        raise RuntimeError("S3 service dependency has not been bound")
+    return s3_service
+
+
+def _require_mongodb() -> Any:
+    if mongodb is None:
+        raise RuntimeError("MongoDB dependency has not been bound")
+    return mongodb
+
+
+def _require_agent_liveness_checker() -> Any:
+    if agent_liveness_checker is None:
+        raise RuntimeError("Agent liveness dependency has not been bound")
+    return agent_liveness_checker
 
 
 # ============= PROTECTED ENDPOINTS (Auth Required) =============
@@ -91,7 +151,7 @@ async def delete_agent(
         raise HTTPException(status_code=400, detail="agent_id is required")
 
     # Verify the agent exists and user owns it
-    existing_agent = await agent_service.get_agent_by_agent_id(agent_id)
+    existing_agent = await _require_agent_service().get_agent_by_agent_id(agent_id)
     if not existing_agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -126,7 +186,7 @@ async def update_agent(
         raise HTTPException(status_code=400, detail="agent_id is required")
 
     # Verify the agent exists and user owns it
-    existing_agent = await agent_service.get_agent_by_agent_id(agent_id)
+    existing_agent = await _require_agent_service().get_agent_by_agent_id(agent_id)
     if not existing_agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -200,7 +260,7 @@ async def upload_agent_avatar(
 
     Returns: { "iconUrl": "<permanent public URL>" }
     """
-    existing_agent = await agent_service.get_agent_by_agent_id(agent_id)
+    existing_agent = await _require_agent_service().get_agent_by_agent_id(agent_id)
     if not existing_agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if existing_agent.provider_id != user.user_id:
@@ -221,16 +281,17 @@ async def upload_agent_avatar(
     ext = _AVATAR_EXT_MAP[file.content_type]
     s3_key = f"agent-avatars/{agent_id}/{uuid4().hex}.{ext}"
 
-    await s3_service.upload_file(
+    storage = _require_s3_service()
+    await storage.upload_file(
         file_data=content,
         s3_key=s3_key,
         content_type=file.content_type,
         content_length=len(content),
     )
 
-    icon_url = s3_service.get_public_url(s3_key)
+    icon_url = storage.get_public_url(s3_key)
 
-    await mongodb.agents_collection.update_one(
+    await _require_mongodb().agents_collection.update_one(
         {"agent_id": agent_id},
         {"$set": {"agent_card.iconUrl": icon_url}},
     )
@@ -250,7 +311,7 @@ async def get_capability_issues(
     user: ClerkUser = Depends(get_current_user),
 ):
     """Get capability issues for an agent - PROTECTED (requires ownership)"""
-    existing_agent = await agent_service.get_agent_by_agent_id(agent_id)
+    existing_agent = await _require_agent_service().get_agent_by_agent_id(agent_id)
     if not existing_agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if existing_agent.provider_id != user.user_id:
@@ -268,7 +329,7 @@ async def get_capability_issues(
                 status_code=400, detail="Invalid status. Use 'open' or 'resolved'."
             ) from None
 
-    issues = await capability_issue_service.get_issues_for_agent(
+    issues = await _require_capability_issue_service().get_issues_for_agent(
         agent_id, status=issue_status, limit=limit, offset=offset
     )
     return {"issues": [issue.model_dump(mode="json") for issue in issues]}
@@ -280,7 +341,7 @@ async def resolve_all_capability_issues(
     user: ClerkUser = Depends(get_current_user),
 ):
     """Bulk resolve all open capability issues for an agent - PROTECTED"""
-    existing_agent = await agent_service.get_agent_by_agent_id(agent_id)
+    existing_agent = await _require_agent_service().get_agent_by_agent_id(agent_id)
     if not existing_agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if existing_agent.provider_id != user.user_id:
@@ -289,7 +350,7 @@ async def resolve_all_capability_issues(
             detail="You do not have permission to resolve issues for this agent",
         )
 
-    count = await capability_issue_service.resolve_all_for_agent(
+    count = await _require_capability_issue_service().resolve_all_for_agent(
         agent_id, user.user_id
     )
     return {"resolved_count": count}
@@ -301,18 +362,21 @@ async def resolve_capability_issue(
     user: ClerkUser = Depends(get_current_user),
 ):
     """Resolve a single capability issue - PROTECTED (requires ownership)"""
-    issue = await capability_issue_service.get_issue_by_id(issue_id)
+    issue = await _require_capability_issue_service().get_issue_by_id(issue_id)
     if not issue:
         raise HTTPException(status_code=404, detail="Issue not found")
 
-    agent = await agent_service.get_agent_by_agent_id(issue.agent_id)
+    agent = await _require_agent_service().get_agent_by_agent_id(issue.agent_id)
     if not agent or agent.provider_id != user.user_id:
         raise HTTPException(
             status_code=403,
             detail="You do not have permission to resolve this issue",
         )
 
-    result = await capability_issue_service.resolve_issue(issue_id, user.user_id)
+    result = await _require_capability_issue_service().resolve_issue(
+        issue_id,
+        user.user_id,
+    )
     if not result:
         raise HTTPException(
             status_code=400, detail="Issue is already resolved or not found"
@@ -365,9 +429,7 @@ async def get_agent(
     )
 
     if agent_center_response.success and agent_center_response.agent:
-        from services.agent_liveness_service import check_and_sync_liveness
-
-        agent_center_response.agent = await check_and_sync_liveness(
+        agent_center_response.agent = await _require_agent_liveness_checker()(
             agent_center_response.agent
         )
         # Resolve provider display name from Clerk if agent_card has no provider

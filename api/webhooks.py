@@ -3,30 +3,37 @@
 Delegates all business logic to ``WebhookTransport.handle_webhook()``.
 """
 
+from collections.abc import Callable
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.params import Depends as DependsParam
 
 from common.utils.logger import get_logger
-from modules.agent_response_handler import AgentResponseHandler
-from modules.transports.webhook import WebhookTransport, parse_stream_response  # noqa: F401
-from services.database_service import db_service
-from services.sse_services import sse_manager
 
 logger = get_logger(__name__)
 
 router = APIRouter()
 
+webhook_transport_factory: Callable[[], Any] | None = None
 
-def _get_webhook_transport() -> WebhookTransport:
-    from modules.RoomMessageCenter import room_message_center
 
-    handler = AgentResponseHandler(
-        db=db_service,
-        sse=sse_manager,
-        room_message_center=room_message_center,
-    )
-    return WebhookTransport(response_handler=handler, db=db_service)
+def bind_webhook_dependencies(factory: Callable[[], Any]) -> None:
+    global webhook_transport_factory
+
+    webhook_transport_factory = factory
+
+
+def get_webhook_transport() -> Any:
+    if webhook_transport_factory is None:
+        raise RuntimeError("Webhook transport dependency has not been bound")
+    return webhook_transport_factory()
+
+
+def _resolve_dependency(value: Any, provider) -> Any:
+    if isinstance(value, DependsParam):
+        return provider()
+    return value
 
 
 @router.post("/webhooks/a2a/{message_id}")
@@ -35,6 +42,7 @@ async def handle_a2a_webhook(
     message_id: str,
     authorization: str = Header(default=""),
     x_a2a_notification_token: str = Header(default="", alias="X-A2A-Notification-Token"),
+    transport: Any = Depends(get_webhook_transport),
 ) -> dict[str, Any]:
     """Receive task updates from A2A agents.
 
@@ -51,5 +59,5 @@ async def handle_a2a_webhook(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid payload: {e}") from e
 
-    transport = _get_webhook_transport()
+    transport = _resolve_dependency(transport, get_webhook_transport)
     return await transport.handle_webhook(message_id, payload, token)

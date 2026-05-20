@@ -206,6 +206,7 @@ async def lifespan(app: FastAPI):
             from llm_gateway import LLMGatewayImpl, ModelRegistryImpl
             from services.agent_capability_issue_service import (
                 CapabilityIssueExclusionReader,
+                capability_issue_service,
             )
             from services.agent_matcher import agent_matcher
             from services.agent_selection_service import agent_selection_service
@@ -221,8 +222,11 @@ async def lifespan(app: FastAPI):
             from services.room_services import room_services
             from services.gateway_rate_limit_service import gateway_rate_limit_service
             from services.openai_service import openai_service
+            from services.s3_service import s3_service
+            from modules.AgentCenter import AgentCenter
             from modules.InspectionCenter import InspectionCenter
             from modules.MemoryCenter import MemoryCenter
+            from modules.RoomCenter import RoomCenter
             from modules.TaskCenter import TaskCenter
             from modules.WorkflowCenter import workflow_center
             from database.mongodb import get_db
@@ -236,6 +240,13 @@ async def lifespan(app: FastAPI):
             agent_viewset.bind_agent_viewset_dependencies(
                 openai_service=openai_service,
                 pinecone_db=pinecone_db,
+            )
+            agent.bind_agent_dependencies(
+                center=AgentCenter(),
+                service=agent_service,
+                issue_service=capability_issue_service,
+                storage_service=s3_service,
+                mongo=mongodb,
             )
             inspection_center.bind_inspection_dependencies(InspectionCenter())
             memory_center.bind_memory_dependencies(MemoryCenter())
@@ -281,6 +292,8 @@ async def lifespan(app: FastAPI):
                 run_event_notification_from_payload,
             )
             from execution.dispatch.task_notifications import TaskNotificationAdapter
+            from execution.dispatch.response_handler import AgentResponseHandler
+            from execution.dispatch.transports.webhook import WebhookTransport
             from execution.hitl.adapters import (
                 A2AHITLContinuationAdapter,
                 HITLTaskNotificationAdapter,
@@ -309,6 +322,12 @@ async def lifespan(app: FastAPI):
                 run_event_sse_enabled,
             )
             from services.task_notification_service import notify_task_update
+            room_center.bind_room_dependencies(
+                center=RoomCenter(),
+                message_center=execution_room_message_center,
+                database_service=_db_svc,
+                selection_service=agent_selection_service,
+            )
             a2a_tasks.bind_a2a_task_dependencies(_db_svc)
             agent_group.bind_agent_group_dependencies(_db_svc)
             sse.bind_sse_dependencies(_db_svc, sse_manager)
@@ -386,6 +405,16 @@ async def lifespan(app: FastAPI):
                 )
             )
             room_center.room_message_center.bind_facade(_room_facade)
+
+            def create_webhook_transport():
+                handler = AgentResponseHandler(
+                    db=_db_svc,
+                    sse=sse_manager,
+                    room_message_center=room_center.room_message_center,
+                )
+                return WebhookTransport(response_handler=handler, db=_db_svc)
+
+            webhooks.bind_webhook_dependencies(create_webhook_transport)
 
             execution_facade = create_execution_facade(
                 room_center=room_center.room_center,
@@ -676,7 +705,10 @@ async def lifespan(app: FastAPI):
         await orphaned_upload_cleaner.start()
 
         # Initialize relay service
-        from services.agent_liveness_service import bind_agent_liveness_deps
+        from services.agent_liveness_service import (
+            bind_agent_liveness_deps,
+            check_and_sync_liveness,
+        )
         from services.database_service import db_service as _db_svc
         from services.relay_service import (
             RelayHubLivenessReader,
@@ -716,6 +748,7 @@ async def lifespan(app: FastAPI):
                 hub_liveness_reader=hub_liveness_reader,
                 agent_registry_writer=_agent_deps.agent_registry_writer,
             )
+            agent.bind_agent_liveness_checker(check_and_sync_liveness)
         await _relay_svc.start()
         logger.info("Relay service initialized and heartbeat checker started")
 
