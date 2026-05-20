@@ -4,10 +4,18 @@ from common.dto import FileInfo, RateLimitResult
 
 
 @runtime_checkable
+class APIKeyPrincipal(Protocol):
+    key_id: str
+    user_id: str
+    name: str
+    is_active: bool
+
+
+@runtime_checkable
 class APIKeyAuthenticator(Protocol):
     async def validate_api_key(
         self, api_key: str, *, track_usage: bool = True
-    ) -> Any: ...
+    ) -> APIKeyPrincipal: ...
 
 
 @runtime_checkable
@@ -55,6 +63,7 @@ class FileStorage(Protocol):
 
 __all__ = [
     "APIKeyAuthenticator",
+    "APIKeyPrincipal",
     "FileStorage",
     "GatewayDiscoveryProvider",
     "GatewayService",

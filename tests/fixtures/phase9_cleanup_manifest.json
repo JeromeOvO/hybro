@@ -28,13 +28,6 @@
       "contract": "common_import_boundary",
       "expiry_task": "Final Common leaf-module cleanup",
       "owner": "phase-9-platform-api-cleanup",
-      "path": "common/api_key_auth.py",
-      "reason": "Common API-key auth still references the legacy APIKey model schema; migrate to a Common DTO or protocol-owned auth model."
-    },
-    {
-      "contract": "common_import_boundary",
-      "expiry_task": "Final Common leaf-module cleanup",
-      "owner": "phase-9-platform-api-cleanup",
       "path": "common/utils/a2a_helpers.py",
       "reason": "Common A2A helper still references legacy file upload model constants; move constants to Common before final leaf-module cleanup."
     },

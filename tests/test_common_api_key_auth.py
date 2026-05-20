@@ -53,6 +53,17 @@ def test_common_auth_delegates_without_persistence_store_logic():
     assert found == set()
 
 
+def test_common_auth_does_not_import_legacy_api_key_model():
+    tree = ast.parse(open("common/api_key_auth.py").read())
+    imports = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert "models.api_key" not in imports
+
+
 # =============================================================================
 # hash_api_key Tests
 # =============================================================================

@@ -10,8 +10,7 @@ import hashlib
 from fastapi import HTTPException, Request, status
 from loguru import logger
 
-from common.protocols import APIKeyAuthenticator
-from models.api_key import APIKey
+from common.protocols import APIKeyAuthenticator, APIKeyPrincipal
 
 api_key_authenticator: APIKeyAuthenticator | None = None
 
@@ -41,7 +40,9 @@ def hash_api_key(api_key: str) -> str:
     return hashlib.sha256(api_key.encode()).hexdigest()
 
 
-async def validate_api_key(api_key: str, *, track_usage: bool = True) -> APIKey:
+async def validate_api_key(
+    api_key: str, *, track_usage: bool = True
+) -> APIKeyPrincipal:
     """
     Validate an API key through the bound app-shell authenticator.
 
@@ -52,7 +53,7 @@ async def validate_api_key(api_key: str, *, track_usage: bool = True) -> APIKey:
             inflate the user-visible usage counter.
 
     Returns:
-        APIKey: The validated API key model
+        APIKeyPrincipal: The validated API key principal
 
     Raises:
         HTTPException: If the key is invalid, inactive, or not found
@@ -61,7 +62,7 @@ async def validate_api_key(api_key: str, *, track_usage: bool = True) -> APIKey:
     return await authenticator.validate_api_key(api_key, track_usage=track_usage)
 
 
-async def get_api_key(request: Request) -> APIKey:
+async def get_api_key(request: Request) -> APIKeyPrincipal:
     """
     FastAPI dependency to extract and validate API key from request headers.
 
@@ -81,7 +82,7 @@ async def get_api_key(request: Request) -> APIKey:
         request: The FastAPI Request object
 
     Returns:
-        APIKey: The validated API key model
+        APIKeyPrincipal: The validated API key principal
 
     Raises:
         HTTPException: If the key is missing, invalid, or inactive
@@ -103,7 +104,7 @@ async def get_api_key(request: Request) -> APIKey:
     return await validate_api_key(api_key)
 
 
-async def get_api_key_no_track(request: Request) -> APIKey:
+async def get_api_key_no_track(request: Request) -> APIKeyPrincipal:
     """
     FastAPI dependency that authenticates the API key without tracking usage.
 
@@ -117,7 +118,7 @@ async def get_api_key_no_track(request: Request) -> APIKey:
         request: The FastAPI Request object
 
     Returns:
-        APIKey: The validated API key model
+        APIKeyPrincipal: The validated API key principal
 
     Raises:
         HTTPException: If the key is missing, invalid, or inactive

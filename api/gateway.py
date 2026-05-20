@@ -183,7 +183,7 @@ async def gateway_stream(
         except GatewayPlatformError as e:
             logger.error(f"Gateway SSE stream error for agent {agent_id}: {e}")
             detail = e.detail if isinstance(e.detail, dict) else {"message": str(e)}
-            message = detail.get("message") or str(e)
+            message = detail.get("message") or detail.get("error") or str(e)
             payload = {
                 "jsonrpc": "2.0",
                 "id": "",

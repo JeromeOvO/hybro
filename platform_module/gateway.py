@@ -314,6 +314,12 @@ class PlatformGateway:
             jsonrpc_response = _jsonrpc_response_from_raw(raw)
             if jsonrpc_response is not None:
                 return jsonrpc_response
+            if event.get("event_type") == "error" and raw.get("error") is not None:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": str(event.get("task_id") or event.get("taskId") or ""),
+                    "error": _jsonrpc_error(raw["error"]),
+                }
             envelope_id, envelope_result = _jsonrpc_envelope_parts(raw)
             response_result = envelope_result or raw
         else:
@@ -463,9 +469,10 @@ def _jsonrpc_response_from_raw(value: dict[str, Any]) -> dict[str, Any] | None:
 
 def _jsonrpc_error(error: Any) -> dict[str, Any]:
     if isinstance(error, dict):
+        message = error.get("message") or error.get("error") or "Agent error"
         if "code" in error:
-            return error
-        return {"code": -32000, **error}
+            return {"message": message, **error}
+        return {"code": -32000, "message": message, **error}
     return {"code": -32000, "message": str(error)}
 
 

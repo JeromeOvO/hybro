@@ -621,6 +621,7 @@ def test_protocol_methods_match_design_doc():
         protocols.RateLimiter: {"check", "check_global"},
         protocols.FileStorage: {"upload", "get_url", "delete", "list_for_room"},
         protocols.AgentTransport: {"send_message", "stream_message"},
+        protocols.APIKeyPrincipal: set(),
         protocols.APIKeyAuthenticator: {"validate_api_key"},
         protocols.AgentCardResolver: {
             "resolve_card",

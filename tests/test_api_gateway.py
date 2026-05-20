@@ -398,6 +398,25 @@ class TestGatewayStream:
         ]
         mock_rl.record_request.assert_awaited_once_with(sample_api_key)
 
+    @pytest.mark.asyncio
+    async def test_stream_late_gateway_error_uses_error_fallback_message(
+        self, sample_api_key, sample_message
+    ):
+        async def _failing_stream():
+            raise GatewayPlatformError(502, {"error": "agent_error"})
+            yield
+
+        mock_svc = _mock_gateway_service()
+        mock_svc.prepare_stream = AsyncMock(return_value=_failing_stream())
+        mock_rl = _mock_rate_limit()
+        body = GatewaySendRequest(message=sample_message)
+
+        result = await gateway_stream("agent-001", body, sample_api_key, mock_svc, mock_rl)
+        chunks = [chunk async for chunk in result.body_iterator]
+
+        assert '"message": "agent_error"' in chunks[0]
+        assert '"message": "None"' not in chunks[0]
+
 
 # =============================================================================
 # GatewayService Tests

@@ -247,6 +247,17 @@ class AdapterErrorStreamTransport(FakeTransport):
         )
 
 
+class TranslatedRawErrorStreamTransport(FakeTransport):
+    async def stream_message(self, agent_url: str, message, **kwargs):
+        from a2a_adapter.translators import a2a_event_to_stream_event
+
+        self.streamed.append((agent_url, message, kwargs))
+        yield a2a_event_to_stream_event(
+            {"type": "error", "error": {"message": "boom"}, "final": True},
+            message.agent_id,
+        )
+
+
 def _agent(**overrides) -> AgentInfo:
     data = {
         "agent_id": "agent-1",
@@ -615,6 +626,22 @@ async def test_stream_preserves_upstream_jsonrpc_list_result():
 @pytest.mark.asyncio
 async def test_stream_maps_adapter_error_event_to_jsonrpc_error():
     gateway = _gateway(transport=AdapterErrorStreamTransport())
+
+    stream = gateway.stream_message("agent-1", {"text": "hi"}, "owner-1")
+    events = [event async for event in stream]
+
+    assert events == [
+        {
+            "jsonrpc": "2.0",
+            "id": "",
+            "error": {"code": -32000, "message": "boom"},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_maps_translated_raw_error_event_to_jsonrpc_error():
+    gateway = _gateway(transport=TranslatedRawErrorStreamTransport())
 
     stream = gateway.stream_message("agent-1", {"text": "hi"}, "owner-1")
     events = [event async for event in stream]

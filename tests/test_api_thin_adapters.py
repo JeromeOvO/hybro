@@ -247,10 +247,15 @@ def test_legacy_workflow_routes_do_not_keep_runtime_injection_params():
 
 
 def test_route_owner_protocols_match_handler_calls():
-    from app_shell.bound import ViewSetRepository
+    from app_shell.bound import InspectionCenter, ViewSetRepository, WebhookTransport
     from app_shell.database_service import A2ATaskReader, AgentGroupStore
+    from app_shell.health_check import HealthCheck
 
     expected_by_protocol = {
+        InspectionCenter: {
+            "inspect_a2a_connection",
+            "inspect_agent_card",
+        },
         AgentGroupStore: {
             "add_agent_group",
             "delete_agent_group",
@@ -271,6 +276,8 @@ def test_route_owner_protocols_match_handler_calls():
             "patch",
             "update",
         },
+        WebhookTransport: {"handle_webhook"},
+        HealthCheck: {"check"},
     }
 
     missing: list[str] = []
@@ -287,3 +294,20 @@ def test_route_owner_protocols_match_handler_calls():
     assert not missing, "Route owner protocol methods missing:\n" + "\n".join(
         missing
     )
+
+
+def test_app_shell_protocol_surfaces_are_specific():
+    from app_shell.bound import InspectionCenter, WebhookTransport
+
+    for protocol in (InspectionCenter, WebhookTransport):
+        for name, value in protocol.__dict__.items():
+            if not callable(value) or name.startswith("_"):
+                continue
+            params = inspect.signature(value).parameters
+            assert not any(
+                parameter.kind in {
+                    inspect.Parameter.VAR_POSITIONAL,
+                    inspect.Parameter.VAR_KEYWORD,
+                }
+                for parameter in params.values()
+            ), f"{protocol.__name__}.{name} uses wildcard parameters"
