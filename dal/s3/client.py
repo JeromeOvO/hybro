@@ -47,6 +47,15 @@ class ObjectStorageDALImpl:
                 ExpiresIn=ttl,
             )
 
+    async def get_text(self, key: str) -> str | None:
+        async with self._session.client("s3", region_name=self._region) as client:
+            response = await client.get_object(Bucket=self._bucket, Key=key)
+            body = response.get("Body")
+            if body is None:
+                return None
+            data = await body.read()
+        return data.decode("utf-8")
+
     async def delete(self, key: str) -> bool:
         async with self._session.client("s3", region_name=self._region) as client:
             await client.delete_object(Bucket=self._bucket, Key=key)

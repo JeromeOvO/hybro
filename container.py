@@ -191,6 +191,7 @@ def create_platform_config(app_settings: Any = settings) -> PlatformConfig:
         discovery_rate_limit_global=getattr(
             app_settings, "discovery_rate_limit_global", 1000
         ),
+        discovery_default_limit=getattr(app_settings, "discovery_default_limit", 5),
         max_upload_size_bytes=getattr(app_settings, "max_file_size_mb", 25)
         * 1024
         * 1024,
@@ -215,6 +216,7 @@ def create_platform_deps(
     agent_card_resolver: AgentCardResolver | None = None,
     object_storage: ObjectStorageDAL | None = None,
     content_storage_repository: ContentStorageRepository | None = None,
+    discovery_provider: Any | None = None,
     redis: RedisKV | None = None,
     logger: Any | None = None,
 ) -> PlatformDeps:
@@ -222,6 +224,7 @@ def create_platform_deps(
         agent_registry=agent_deps.agent_registry,
         agent_matcher=agent_deps.agent_matcher,
         agent_management=agent_deps.agent_management,
+        discovery_provider=discovery_provider,
         agent_transport=agent_transport,
         agent_card_resolver=agent_card_resolver,
         redis=redis,

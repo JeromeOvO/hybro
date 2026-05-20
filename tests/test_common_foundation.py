@@ -504,6 +504,7 @@ def test_protocol_methods_match_design_doc():
         protocols.AgentRegistry: {
             "get_agent",
             "get_agent_card",
+            "get_agent_by_url",
             "get_agents_by_ids",
             "is_agent_healthy",
             "is_directly_callable",
@@ -665,7 +666,7 @@ def test_protocol_methods_match_design_doc():
         protocols.RedisPubSub: {"publish", "subscribe", "ping", "close"},
         protocols.RedisStreams: {"xadd", "xread", "ping", "close"},
         protocols.VectorDAL: {"search", "upsert", "delete", "delete_by_filter", "ping"},
-        protocols.ObjectStorageDAL: {"put", "get_presigned_url", "delete"},
+        protocols.ObjectStorageDAL: {"put", "get_text", "get_presigned_url", "delete"},
         protocols.DistributedLock: {"acquire", "release", "renew"},
         protocols.LeaderElector: {"try_acquire", "renew", "release", "release_all"},
         protocols.IndexRegistry: {"register", "ensure_all"},

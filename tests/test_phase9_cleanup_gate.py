@@ -28,6 +28,17 @@ FORBIDDEN_PRODUCTION_IMPORT_PREFIXES = (
 
 LEGACY_PACKAGES = {"modules", "services", "config", "infrastructure"}
 
+FORBIDDEN_COMMON_IMPORT_PREFIXES = (
+    "database",
+    "services",
+    "modules",
+    "config",
+    "delivery",
+    "execution",
+    "hub_runtime_bridge",
+    "platform_module",
+)
+
 
 def _manifest() -> dict:
     return json.loads(Path("tests/fixtures/phase9_cleanup_manifest.json").read_text())
@@ -68,10 +79,38 @@ def _import_violations() -> list[str]:
     return violations
 
 
+def _common_import_violations() -> list[str]:
+    violations: list[str] = []
+    for path in sorted(Path("common").rglob("*.py")):
+        if path == Path("common/config/settings.py"):
+            continue
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [(alias.name, alias.name) for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                names = [(f"{node.module}.{alias.name}", node.module) for alias in node.names]
+            else:
+                continue
+            for imported_name, module in names:
+                if any(
+                    module == prefix or module.startswith(f"{prefix}.")
+                    for prefix in FORBIDDEN_COMMON_IMPORT_PREFIXES
+                ):
+                    violations.append(f"{path}:{node.lineno}: {imported_name}")
+    return violations
+
+
 def test_no_production_imports_from_legacy_singletons():
     violations = _import_violations()
 
     assert not violations, "Legacy production imports remain:\n" + "\n".join(violations)
+
+
+def test_common_package_has_no_module_or_app_shell_imports():
+    violations = _common_import_violations()
+
+    assert not violations, "Forbidden Common imports remain:\n" + "\n".join(violations)
 
 
 def test_old_implementation_packages_are_not_shipped_without_blocker():

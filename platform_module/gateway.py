@@ -1,9 +1,14 @@
 from collections.abc import AsyncIterator
 from typing import Any
 
-from common.dto import AgentInfo, AgentTaskResult, InternalAgentMessage
+from common.dto import (
+    AgentInfo,
+    AgentTaskResult,
+    GatewayDiscoveryAgentResult,
+    GatewayDiscoveryResponse,
+    InternalAgentMessage,
+)
 from common.errors import GatewayPlatformError
-from models.gateway import GatewayDiscoveryAgentResult, GatewayDiscoveryResponse
 from platform_module.config import PlatformConfig
 from platform_module.deps import PlatformDeps
 from platform_module.rate_limit import PlatformAgentRateLimiter
@@ -71,12 +76,14 @@ class PlatformGateway:
     async def discover_agents(
         self, query: str, limit: int | None, user_id: str
     ) -> GatewayDiscoveryResponse:
+        if self._deps.discovery_provider is not None:
+            return await self._discover_with_provider(query, limit)
         if self._deps.agent_matcher is None:
             raise RuntimeError("PlatformGateway requires an agent matcher")
 
         matches = await self._deps.agent_matcher.match_agents(
             query,
-            limit=limit or 5,
+            limit=limit or self._config.discovery_default_limit,
             respect_visibility=True,
             requesting_user_id=user_id,
         )
@@ -96,6 +103,47 @@ class PlatformGateway:
                 )
             )
         return GatewayDiscoveryResponse(query=query, agents=results, count=len(results))
+
+    async def _discover_with_provider(
+        self, query: str, limit: int | None
+    ) -> GatewayDiscoveryResponse:
+        discovery = await self._deps.discovery_provider.discover_agents(
+            query=query,
+            limit=limit,
+        )
+        results: list[GatewayDiscoveryAgentResult] = []
+        for result in getattr(discovery, "agents", []):
+            card = self._read_value(result, "agent_card") or {}
+            agent_id = await self._agent_id_for_discovered_card(card)
+            if not agent_id:
+                continue
+            results.append(
+                GatewayDiscoveryAgentResult(
+                    agent_id=agent_id,
+                    agent_card=self.mask_agent_card_dict(card, agent_id),
+                    match_score=float(self._read_value(result, "match_score") or 0.0),
+                )
+            )
+        return GatewayDiscoveryResponse(
+            query=getattr(discovery, "query", query),
+            agents=results,
+            count=len(results),
+        )
+
+    async def _agent_id_for_discovered_card(self, card: dict) -> str | None:
+        if self._deps.agent_registry is None:
+            return None
+        url = card.get("url")
+        if not url:
+            return None
+        agent = await self._deps.agent_registry.get_agent_by_url(str(url))
+        return agent.agent_id if agent else None
+
+    @staticmethod
+    def _read_value(value: Any, name: str) -> Any:
+        if isinstance(value, dict):
+            return value.get(name)
+        return getattr(value, name, None)
 
     async def get_agent_card(self, agent_id: str, user_id: str) -> dict:
         agent = await self.get_agent_for_gateway(agent_id, user_id)

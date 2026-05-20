@@ -550,6 +550,7 @@ async def lifespan(app: FastAPI):
                 agent_card_resolver=agent_card_resolver,
                 object_storage=object_storage,
                 content_storage_repository=context_memory_facade.content_repository,
+                discovery_provider=discovery_service,
                 logger=logger,
             )
             platform_facade = create_platform_facade(

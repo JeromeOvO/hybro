@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import uuid4
 
 from common.protocols import (
@@ -42,6 +42,7 @@ class PlatformDeps:
     agent_registry: AgentRegistry | None = None
     agent_matcher: AgentMatcher | None = None
     agent_management: AgentManagement | None = None
+    discovery_provider: Any | None = None
     agent_transport: AgentTransport | None = None
     agent_card_resolver: AgentCardResolver | None = None
     redis: RedisKV | None = None

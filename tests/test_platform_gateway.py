@@ -19,6 +19,13 @@ class FakeRegistry:
     async def get_agents_by_ids(self, agent_ids: list[str]) -> list[AgentInfo]:
         return [self.agents[agent_id] for agent_id in agent_ids if agent_id in self.agents]
 
+    async def get_agent_by_url(self, url: str) -> AgentInfo | None:
+        for agent in self.agents.values():
+            raw_url = agent.raw_card.get("url") if agent.raw_card else None
+            if agent.url == url or raw_url == url:
+                return agent
+        return None
+
     async def is_agent_healthy(self, agent_id: str) -> bool:
         return self.agents.get(agent_id, AgentInfo(agent_id=agent_id)).status == "active"
 
@@ -40,6 +47,16 @@ class FakeMatcher:
         requesting_user_id: str | None = None,
     ) -> list[AgentMatchResult]:
         return self.matches[:limit]
+
+
+class FakeDiscoveryProvider:
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+
+    async def discover_agents(self, query: str, limit: int | None = None):
+        self.calls.append((query, limit))
+        return self.response
 
 
 class FakeTransport:
@@ -119,6 +136,7 @@ def _gateway(
     transport=None,
     matcher=None,
     config: PlatformConfig | None = None,
+    discovery_provider=None,
 ):
     agent = agent or _agent()
     cards = {
@@ -135,6 +153,7 @@ def _gateway(
         deps=PlatformDeps(
             agent_registry=FakeRegistry({agent.agent_id: agent}, cards),
             agent_matcher=matcher or FakeMatcher([]),
+            discovery_provider=discovery_provider,
             agent_transport=transport or FakeTransport(),
         ),
     )
@@ -260,6 +279,38 @@ async def test_discovery_returns_gateway_masked_cards():
 
     result = await gateway.discover_agents("data", 5, "user-1")
 
+    assert result.count == 1
+    assert result.agents[0].agent_id == "agent-1"
+    assert result.agents[0].agent_card["url"].endswith(
+        "/gateway/agents/agent-1/message/send"
+    )
+
+
+@pytest.mark.asyncio
+async def test_discovery_provider_preserves_limit_and_masks_by_card_url():
+    from common.dto import GatewayDiscoveryAgentResult, GatewayDiscoveryResponse
+
+    provider = FakeDiscoveryProvider(
+        GatewayDiscoveryResponse(
+            query="data",
+            agents=[
+                GatewayDiscoveryAgentResult(
+                    agent_id="",
+                    agent_card={
+                        "name": "Agent",
+                        "url": "https://agent.example/a2a",
+                    },
+                    match_score=0.91,
+                )
+            ],
+            count=1,
+        )
+    )
+    gateway = _gateway(discovery_provider=provider)
+
+    result = await gateway.discover_agents("data", None, "user-1")
+
+    assert provider.calls == [("data", None)]
     assert result.count == 1
     assert result.agents[0].agent_id == "agent-1"
     assert result.agents[0].agent_card["url"].endswith(

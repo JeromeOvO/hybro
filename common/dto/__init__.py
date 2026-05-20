@@ -81,6 +81,8 @@ from common.dto.llm import (
 from common.dto.platform import (
     FileInfo,
     FileMetadata,
+    GatewayDiscoveryAgentResult,
+    GatewayDiscoveryResponse,
     GatewayRequest,
     GatewayResponse,
     GatewayRoute,
@@ -130,6 +132,8 @@ __all__ = [
     "ExecutionResult",
     "FileInfo",
     "FileMetadata",
+    "GatewayDiscoveryAgentResult",
+    "GatewayDiscoveryResponse",
     "FrozenDTO",
     "GatewayRequest",
     "GatewayResponse",

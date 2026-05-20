@@ -9,6 +9,7 @@ class PlatformConfig:
     gateway_rate_limit_global: int | None = 1000
     discovery_rate_limit_per_key: int | None = 100
     discovery_rate_limit_global: int | None = 1000
+    discovery_default_limit: int = 5
     per_agent_rate_limit_window_seconds: int = 3600
     max_upload_size_bytes: int = 25 * 1024 * 1024
     allowed_mime_types: tuple[str, ...] = field(

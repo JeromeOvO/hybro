@@ -60,6 +60,16 @@ class FakeObjectTextStorage:
         return self.objects.get(key)
 
 
+class FakeObjectProtocolStorage:
+    def __init__(self, objects: dict[str, str | None]) -> None:
+        self.objects = objects
+        self.reads: list[str] = []
+
+    async def get_text(self, key: str) -> str | None:
+        self.reads.append(key)
+        return self.objects.get(key)
+
+
 def _service(
     *,
     repository: FakeContentStorageRepository | None = None,
@@ -164,6 +174,20 @@ async def test_expand_mongodb_reference_missing_document_raises_expired():
 
 async def test_expand_s3_reference_uses_injected_object_storage():
     objects = FakeObjectTextStorage({"objects/content.txt": "s3 content"})
+    service, _repo = _service(object_storage=objects)
+    content_ref = ContentReference(
+        storage_type=StorageType.S3,
+        s3_bucket="bucket",
+        s3_key="objects/content.txt",
+        created_at=datetime.now(timezone.utc),
+    )
+
+    assert await service.expand_content_reference(content_ref, "turn-1") == "s3 content"
+    assert objects.reads == ["objects/content.txt"]
+
+
+async def test_expand_s3_reference_supports_object_storage_protocol_get_text():
+    objects = FakeObjectProtocolStorage({"objects/content.txt": "s3 content"})
     service, _repo = _service(object_storage=objects)
     content_ref = ContentReference(
         storage_type=StorageType.S3,

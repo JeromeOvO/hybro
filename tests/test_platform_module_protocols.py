@@ -9,6 +9,7 @@ from common.protocols import FileStorage, GatewayService, RateLimiter
 
 FORBIDDEN_PLATFORM_IMPORT_PREFIXES = (
     "api",
+    "models",
     "services",
     "modules",
     "database.mongodb",
