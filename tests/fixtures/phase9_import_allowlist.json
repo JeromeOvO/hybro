@@ -45,20 +45,6 @@
     "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
     "import": "modules.RoomMessageCenter.room_message_center",
     "owner": "phase-9-api-adapter-conversion",
-    "path": "api/orchestration_center.py",
-    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
-  },
-  {
-    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
-    "import": "modules.WorkflowCenter.workflow_center",
-    "owner": "phase-9-api-adapter-conversion",
-    "path": "api/orchestration_center.py",
-    "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
-  },
-  {
-    "expiry_task": "Task 7: Convert Remaining API Modules To Thin Adapters",
-    "import": "modules.RoomMessageCenter.room_message_center",
-    "owner": "phase-9-api-adapter-conversion",
     "path": "api/room_center.py",
     "reason": "Temporary Phase 9 blocker for route module migration after gateway extraction."
   },

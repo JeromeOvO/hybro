@@ -224,6 +224,7 @@ async def lifespan(app: FastAPI):
             from modules.InspectionCenter import InspectionCenter
             from modules.MemoryCenter import MemoryCenter
             from modules.TaskCenter import TaskCenter
+            from modules.WorkflowCenter import workflow_center
             from database.mongodb import get_db
             from database.repository import Repository
 
@@ -238,6 +239,7 @@ async def lifespan(app: FastAPI):
             )
             inspection_center.bind_inspection_dependencies(InspectionCenter())
             memory_center.bind_memory_dependencies(MemoryCenter())
+            orchestration_center.bind_orchestration_dependencies(workflow_center)
             task.bind_task_dependencies(TaskCenter())
             discovery_api_keys.bind_api_key_store(mongodb)
             mongo_dal = create_mongo_dal(database=mongodb.db)
