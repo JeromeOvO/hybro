@@ -71,7 +71,7 @@ export function applyUpsert(
     source,
     sourceVersion: (existing?.sourceVersion ?? 0) + 1,
     updatedAt: Date.now(),
-    createdAt: existing?.createdAt ?? Date.now(),
+    createdAt: existing?.createdAt ?? new Date(incoming.timestamp).getTime(),
     isEphemeral: resolvedEphemeral,
   }
 
@@ -247,13 +247,14 @@ export function isNoOpUpdate(
 
 /**
  * Build a sorted array of message IDs from the entities map.
- * Sort order: createdAt (primary, immutable store-insertion time),
- * stepNumber within the same workflow (same relatedMessageId and
+ * Sort order: createdAt (primary, server-assigned creation time, immutable
+ * once set), stepNumber within the same workflow (same relatedMessageId and
  * createdAt within 60s), then message ID for stability.
  *
- * Using `createdAt` instead of the mutable `timestamp` field prevents
- * parallel agent blocks from reordering when SSE updates overwrite
- * `timestamp` on existing entities.
+ * Using `createdAt` (derived from the server's message_created_at) instead
+ * of the mutable `timestamp` field ensures consistent ordering across
+ * sessions — parallel agent bubbles assigned close server timestamps sort
+ * identically whether first seen via SSE or loaded from DB after a refresh.
  */
 export function buildSortedIds(entities: Record<string, MessageEntity>): string[] {
   return Object.values(entities)
