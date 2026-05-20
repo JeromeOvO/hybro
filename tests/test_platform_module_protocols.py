@@ -288,18 +288,16 @@ def test_file_route_dependencies_can_be_rebound_without_concrete_services():
     from api.files import (
         bind_file_dependencies,
         get_file_storage,
-        get_room_ownership_verifier,
+        get_room_ownership_reader,
     )
 
     storage = object()
+    room_ownership = object()
 
-    async def verifier(room_id, user):
-        return None
-
-    bind_file_dependencies(storage, verifier)
+    bind_file_dependencies(storage, room_ownership)
 
     assert get_file_storage() is storage
-    assert get_room_ownership_verifier() is verifier
+    assert get_room_ownership_reader() is room_ownership
 
 
 def test_platform_config_is_scalar_only():

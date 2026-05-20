@@ -39,6 +39,22 @@ class FakeFileStorage:
         return [self.result]
 
 
+class FakeRoomOwnershipReader:
+    def __init__(self, owner_id: str | None = "user1") -> None:
+        self.owner_id = owner_id
+        self.calls: list[str] = []
+
+    async def get_room_owner(self, room_id: str) -> str | None:
+        self.calls.append(room_id)
+        return self.owner_id
+
+    async def verify_room_agent_membership(self, room_id: str, agent_id: str) -> bool:
+        return True
+
+    async def verify_room_hub_ownership(self, room_id: str, hub_id: str) -> bool:
+        return True
+
+
 @pytest.fixture
 def upload_file():
     f = MagicMock()
@@ -56,22 +72,19 @@ def mime_detector():
 class TestFileUploadRouteAdapter:
     async def test_upload_route_delegates_to_bound_file_storage(self, upload_file):
         storage = FakeFileStorage()
-        ownership_calls = []
-
-        async def verify_ownership(room_id, user):
-            ownership_calls.append((room_id, user.user_id))
+        room_ownership = FakeRoomOwnershipReader()
 
         result = await upload_file_route(
             file=upload_file,
             room_id="room1",
             user=SimpleNamespace(user_id="user1"),
             storage=storage,
-            ownership_verifier=verify_ownership,
+            room_ownership=room_ownership,
         )
 
         assert result.file_url == "https://s3/presigned"
         assert result.mime_type == "image/png"
-        assert ownership_calls == [("room1", "user1")]
+        assert room_ownership.calls == ["room1"]
         assert storage.calls == [
             {
                 "file_bytes": b"\x89PNG\r\n\x1a\n",
@@ -86,9 +99,7 @@ class TestFileUploadRouteAdapter:
         storage = FakeFileStorage(
             error=FileStoragePlatformError(415, {"error": "unsupported_type"})
         )
-
-        async def verify_ownership(room_id, user):
-            return None
+        room_ownership = FakeRoomOwnershipReader()
 
         with pytest.raises(HTTPException) as exc_info:
             await upload_file_route(
@@ -96,7 +107,7 @@ class TestFileUploadRouteAdapter:
                 room_id="room1",
                 user=SimpleNamespace(user_id="user1"),
                 storage=storage,
-                ownership_verifier=verify_ownership,
+                room_ownership=room_ownership,
             )
 
         assert exc_info.value.status_code == 415

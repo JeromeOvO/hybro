@@ -732,7 +732,10 @@
     "response_class": null,
     "response_model": "DiscoveryResponse",
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.APIKeyRateLimiter"
+    ]
   },
   {
     "auth_dependencies": [
@@ -741,7 +744,7 @@
     "dependencies": [
       "get_current_user",
       "get_file_storage",
-      "get_room_ownership_verifier"
+      "get_room_ownership_reader"
     ],
     "methods": [
       "POST"
@@ -757,7 +760,10 @@
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.RoomOwnershipReader"
+    ]
   },
   {
     "auth_dependencies": [
@@ -782,7 +788,10 @@
     "response_class": null,
     "response_model": "GatewayDiscoveryResponse",
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.APIKeyRateLimiter"
+    ]
   },
   {
     "auth_dependencies": [
@@ -807,7 +816,10 @@
     "response_class": null,
     "response_model": "GatewayCardResponse",
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.APIKeyRateLimiter"
+    ]
   },
   {
     "auth_dependencies": [
@@ -832,7 +844,10 @@
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.APIKeyRateLimiter"
+    ]
   },
   {
     "auth_dependencies": [
@@ -863,7 +878,10 @@
         "X-Accel-Buffering"
       ],
       "media_type": "text/event-stream"
-    }
+    },
+    "supporting_protocols": [
+      "common.protocols.APIKeyRateLimiter"
+    ]
   },
   {
     "auth_dependencies": [

@@ -591,18 +591,6 @@ async def lifespan(app: FastAPI):
                 deps=platform_deps,
             )
 
-            async def verify_file_upload_room_ownership(room_id: str, user) -> None:
-                if not room_id:
-                    raise HTTPException(status_code=400, detail="room_id is required")
-                owner_id = await _room_deps.room_registry.get_room_owner(room_id)
-                if owner_id is None:
-                    raise HTTPException(status_code=404, detail="Room not found")
-                if owner_id != user.user_id:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="You do not have permission to access this room",
-                    )
-
             gateway.bind_gateway_dependencies(
                 platform_facade.gateway_service,
                 platform_facade.gateway_rate_limiter,
@@ -614,7 +602,7 @@ async def lifespan(app: FastAPI):
             )
             files.bind_file_dependencies(
                 platform_facade.file_storage,
-                verify_file_upload_room_ownership,
+                _room_deps.room_registry,
             )
             app.state.platform_facade = platform_facade
             app.state.platform_deps = platform_deps

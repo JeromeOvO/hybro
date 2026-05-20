@@ -63,7 +63,7 @@ PATCH = {
     "orchestration.room_message_center": "api.orchestration_center.room_message_center",
     "orchestration.workflow_center": "api.orchestration_center.workflow_center",
     # File upload / S3
-    "files.verify_room_ownership": "api.files.room_ownership_verifier",
+    "files.room_ownership_reader": "api.files.room_ownership_reader",
     "s3_service": "services.s3_service.s3_service",
     "room_services.mongodb": "services.room_services.mongodb",
     "room_services.s3_service": "services.room_services.s3_service",

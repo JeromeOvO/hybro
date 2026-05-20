@@ -1,4 +1,3 @@
-from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
@@ -6,25 +5,23 @@ from fastapi.params import Depends as DependsParam
 
 from common.auth import ClerkUser, get_current_user
 from common.errors import FileStoragePlatformError
-from common.protocols import FileStorage
+from common.protocols import FileStorage, RoomOwnershipReader
 from models.file_upload import FileUploadResponse
 
 router = APIRouter(prefix="/files", tags=["files"])
 
-RoomOwnershipVerifier = Callable[[str, ClerkUser], Awaitable[None]]
-
 file_storage: FileStorage | None = None
-room_ownership_verifier: RoomOwnershipVerifier | None = None
+room_ownership_reader: RoomOwnershipReader | None = None
 
 
 def bind_file_dependencies(
     storage: FileStorage,
-    ownership_verifier: RoomOwnershipVerifier,
+    room_ownership: RoomOwnershipReader,
 ) -> None:
-    global file_storage, room_ownership_verifier
+    global file_storage, room_ownership_reader
 
     file_storage = storage
-    room_ownership_verifier = ownership_verifier
+    room_ownership_reader = room_ownership
 
 
 def get_file_storage() -> FileStorage:
@@ -33,10 +30,10 @@ def get_file_storage() -> FileStorage:
     return file_storage
 
 
-def get_room_ownership_verifier() -> RoomOwnershipVerifier:
-    if room_ownership_verifier is None:
+def get_room_ownership_reader() -> RoomOwnershipReader:
+    if room_ownership_reader is None:
         raise RuntimeError("Room ownership dependency has not been bound")
-    return room_ownership_verifier
+    return room_ownership_reader
 
 
 def _resolve_dependency(value: Any, provider) -> Any:
@@ -51,7 +48,7 @@ async def upload_file(
     room_id: str = Form(...),
     user: ClerkUser = Depends(get_current_user),
     storage: FileStorage = Depends(get_file_storage),
-    ownership_verifier: RoomOwnershipVerifier = Depends(get_room_ownership_verifier),
+    room_ownership: RoomOwnershipReader = Depends(get_room_ownership_reader),
 ):
     """Upload a file to S3 for attachment to a room message.
 
@@ -62,11 +59,18 @@ async def upload_file(
     Returns FileUploadResponse with file_id and presigned URL.
     """
     storage = _resolve_dependency(storage, get_file_storage)
-    ownership_verifier = _resolve_dependency(
-        ownership_verifier, get_room_ownership_verifier
-    )
+    room_ownership = _resolve_dependency(room_ownership, get_room_ownership_reader)
 
-    await ownership_verifier(room_id, user)
+    if not room_id:
+        raise HTTPException(status_code=400, detail="room_id is required")
+    owner_id = await room_ownership.get_room_owner(room_id)
+    if owner_id is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if owner_id != user.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to access this room",
+        )
 
     try:
         uploaded = await storage.upload(

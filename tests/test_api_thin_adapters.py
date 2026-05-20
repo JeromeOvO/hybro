@@ -1048,6 +1048,49 @@ def test_hitl_route_inventory_records_room_ownership_support():
     )
 
 
+def test_file_upload_route_inventory_records_room_ownership_support():
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    route = next(route for route in routes if route["name"] == "upload_file")
+
+    assert route["module"] == "api.files"
+    assert route["owning_protocol"] == "common.protocols.FileStorage"
+    assert "common.protocols.RoomOwnershipReader" in set(
+        route.get("supporting_protocols") or []
+    )
+
+
+def test_gateway_and_discovery_routes_record_rate_limit_support():
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    violations = [
+        f"{route['module']}.{route['name']}"
+        for route in routes
+        if route["module"] in {"api.gateway", "api.discovery"}
+        and "common.protocols.APIKeyRateLimiter"
+        not in set(route.get("supporting_protocols") or [])
+    ]
+
+    assert not violations, "Gateway/discovery routes omit rate limiter support:\n" + "\n".join(
+        violations
+    )
+
+
+def test_file_upload_route_uses_room_ownership_reader_protocol():
+    import inspect
+    from typing import get_type_hints
+
+    from api import files
+    from common.protocols import RoomOwnershipReader
+
+    bind_hints = get_type_hints(files.bind_file_dependencies)
+    provider_hints = get_type_hints(files.get_room_ownership_reader)
+    route_hints = get_type_hints(files.upload_file)
+
+    assert bind_hints["room_ownership"] is RoomOwnershipReader
+    assert provider_hints["return"] is RoomOwnershipReader
+    assert route_hints["room_ownership"] is RoomOwnershipReader
+    assert "room_ownership" in inspect.signature(files.upload_file).parameters
+
+
 def test_route_inventory_protocols_do_not_expose_broad_or_wildcard_shapes():
     from typing import Any
 
