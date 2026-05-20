@@ -303,6 +303,12 @@ def test_hub_legacy_failure_adapter_has_no_sdk_confinement_blocker():
     assert "hub_runtime_bridge/adapters/legacy_failure.py" not in blocked_paths
 
 
+def test_gateway_models_have_no_sdk_confinement_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "models/gateway.py" not in blocked_paths
+
+
 def test_common_package_has_no_module_or_app_shell_imports():
     violations = _common_import_violations()
 

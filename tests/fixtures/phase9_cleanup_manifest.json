@@ -161,13 +161,6 @@
       "contract": "sdk_confinement",
       "expiry_task": "Final SDK confinement migration",
       "owner": "phase-9-platform-api-cleanup",
-      "path": "models/gateway.py",
-      "reason": "Legacy public gateway route schema still exposes A2A SDK Message; route translators must replace this import before final SDK confinement is claimed."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
       "path": "models/processing.py",
       "reason": "Legacy processing model still exposes A2A SDK AgentCard; route translators must replace this import before final SDK confinement is claimed."
     },
