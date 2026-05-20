@@ -17,6 +17,7 @@ from api import (
     a2a_tasks,
     agent,
     agent_group,
+    agent_viewset,
     discovery,
     discovery_api_keys,
     files,
@@ -219,6 +220,7 @@ async def lifespan(app: FastAPI):
             from services.room_membership_source import LegacyRoomMembershipSeedSource
             from services.room_services import room_services
             from services.gateway_rate_limit_service import gateway_rate_limit_service
+            from services.openai_service import openai_service
             from modules.InspectionCenter import InspectionCenter
             from modules.MemoryCenter import MemoryCenter
             from modules.TaskCenter import TaskCenter
@@ -229,6 +231,10 @@ async def lifespan(app: FastAPI):
             viewset.bind_viewset_dependencies(
                 get_db=get_db,
                 create_repository=Repository,
+            )
+            agent_viewset.bind_agent_viewset_dependencies(
+                openai_service=openai_service,
+                pinecone_db=pinecone_db,
             )
             inspection_center.bind_inspection_dependencies(InspectionCenter())
             memory_center.bind_memory_dependencies(MemoryCenter())

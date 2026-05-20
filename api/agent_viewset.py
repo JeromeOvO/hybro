@@ -1,14 +1,39 @@
+from typing import Any
+
 from fastapi import HTTPException
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 
 from api import viewset
 from api.viewset import REPO_ACTIONS_MAP
-from database.pinecone_db import pinecone_db
-from database.repository import Repository
 from models.request import AgentCreate, AgentPatch, AgentUpdate
 from models.response import AgentResponse, PaginatedResponse, PaginationMeta
-from services.openai_service import openai_service
+
+embedding_provider: Any | None = None
+vector_index: Any | None = None
+
+
+def bind_agent_viewset_dependencies(
+    *,
+    openai_service: Any,
+    pinecone_db: Any,
+) -> None:
+    global embedding_provider, vector_index
+
+    embedding_provider = openai_service
+    vector_index = pinecone_db
+
+
+def _require_embedding_provider() -> Any:
+    if embedding_provider is None:
+        raise RuntimeError("AgentViewSet embedding dependency has not been bound")
+    return embedding_provider
+
+
+def _require_vector_index() -> Any:
+    if vector_index is None:
+        raise RuntimeError("AgentViewSet vector dependency has not been bound")
+    return vector_index
 
 
 class AgentViewSet(viewset.ViewSet):
@@ -40,13 +65,13 @@ class AgentViewSet(viewset.ViewSet):
     async def update_pinecone_index(self, agent_id: str, description: str):
         """Update Pinecone index when an agent is created or updated."""
         # get embedding of agent description
-        embedding_data = await openai_service.get_embedding(description)
+        embedding_data = await _require_embedding_provider().get_embedding(description)
         vector_data = {
             "id": str(agent_id),
             "values": embedding_data,
             "metadata": {"type": "a2a_agent", "agent_id": str(agent_id)},
         }
-        pinecone_db.upsert([vector_data])
+        _require_vector_index().upsert([vector_data])
 
     async def _update_db_and_pinecone(self, repo, action, *args):
         repo_method = getattr(repo, REPO_ACTIONS_MAP.get(action, action), None)
@@ -84,12 +109,12 @@ class AgentViewSet(viewset.ViewSet):
             elif existing_description:
                 # No new description but had existing one,
                 # this will also cover delete case
-                pinecone_db.delete([str(primary_key)])
+                _require_vector_index().delete([str(primary_key)])
         return result
 
     async def _handle_operation(self, action: str, db: AsyncIOMotorDatabase, *args):
         """Generic handler for CRUD operations."""
-        repo = Repository(
+        repo = viewset._create_repository(
             collection_name=self.collection_name,
             db=db,
             pinecone=None,
