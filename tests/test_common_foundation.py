@@ -1,3 +1,4 @@
+import ast
 import inspect
 import json
 import tomllib
@@ -124,6 +125,41 @@ def test_common_a2a_helpers_do_not_perform_storage_signing():
     ]
 
     assert not blockers
+
+
+def test_common_utils_dependency_seams_are_protocol_typed_not_any_globals():
+    seams = {
+        Path("common/utils/a2a_helpers.py"): {
+            "a2a_artifact_storage": "A2AArtifactStorage | None"
+        },
+        Path("common/utils/context_utils.py"): {
+            "context_turn_factory": "ContextTurnFactory | None"
+        },
+    }
+    violations: list[str] = []
+
+    for path, expected in seams.items():
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in tree.body:
+            if not isinstance(node, ast.AnnAssign) or not isinstance(
+                node.target, ast.Name
+            ):
+                continue
+            if node.target.id not in expected:
+                continue
+            annotation = ast.unparse(node.annotation)
+            if annotation != expected[node.target.id] or "Any" in annotation:
+                violations.append(f"{path}:{node.lineno}: {node.target.id}: {annotation}")
+
+    context_source = Path("common/utils/context_utils.py").read_text()
+    if "turn_notes_llm_provider" in context_source:
+        violations.append("common/utils/context_utils.py: turn_notes_llm_provider")
+    if "def bind_context_llm_provider" in context_source:
+        violations.append("common/utils/context_utils.py: bind_context_llm_provider")
+
+    assert not violations, "Common utility dependency seams are broad globals:\n" + "\n".join(
+        violations
+    )
 
 
 def test_common_card_resolver_keeps_sdk_agent_card_validation(monkeypatch):

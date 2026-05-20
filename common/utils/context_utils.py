@@ -23,17 +23,43 @@ class MemoryContentLike(Protocol):
 
 TMemoryContent = TypeVar("TMemoryContent", bound=MemoryContentLike)
 
-turn_notes_llm_provider: Any | None = None
-context_turn_factory: Any | None = None
+
+class TurnNotesLLMProvider(Protocol):
+    async def call_supervisor_llm_json(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+    ) -> dict | None: ...
 
 
-def bind_context_llm_provider(provider: Any) -> None:
-    global turn_notes_llm_provider
-
-    turn_notes_llm_provider = provider
+class ContextTurn(Protocol):
+    def to_context_string(self) -> str: ...
 
 
-def bind_context_turn_factory(factory: Any) -> None:
+class ContextTurnFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        role: str,
+        content: str,
+        agent_id: str | None = None,
+        agent_name: str | None = None,
+        user_id: str | None = None,
+        timestamp: Any,
+        content_type: str,
+        turn_type: str,
+        estimated_tokens_full: int,
+        turn_notes: dict | None,
+        was_successful: bool | None = None,
+    ) -> ContextTurn: ...
+
+
+context_turn_factory: ContextTurnFactory | None = None
+
+
+def bind_context_turn_factory(factory: ContextTurnFactory) -> None:
     global context_turn_factory
 
     context_turn_factory = factory
@@ -188,7 +214,9 @@ def extract_turn_notes(content: str | None) -> dict | None:
 LLM_TURN_NOTES_THRESHOLD = 100
 
 
-async def extract_turn_notes_llm(content: str) -> dict | None:
+async def extract_turn_notes_llm(
+    content: str, *, provider: TurnNotesLLMProvider | None = None
+) -> dict | None:
     """Extract structured turn notes using a fast LLM for long content.
 
     Callers should check content length before calling. This function always
@@ -200,7 +228,7 @@ async def extract_turn_notes_llm(content: str) -> dict | None:
         return None
 
     try:
-        if turn_notes_llm_provider is None:
+        if provider is None:
             return extract_turn_notes(content)
         prompt = (
             "Extract structured notes from the following conversation turn. "
@@ -211,7 +239,7 @@ async def extract_turn_notes_llm(content: str) -> dict | None:
             '- "one_liner": a single sentence summary (max 100 chars)\n\n'
             f"Turn content:\n{content[:3000]}"
         )
-        result = await turn_notes_llm_provider.call_supervisor_llm_json(
+        result = await provider.call_supervisor_llm_json(
             system_prompt="Extract structured notes. Respond with valid JSON only.",
             user_prompt=prompt,
             model="gpt-4o-mini",
@@ -367,7 +395,7 @@ def add_turn_to_history(
     return memory_content
 
 
-def _require_context_turn_factory() -> Any:
+def _require_context_turn_factory() -> ContextTurnFactory:
     if context_turn_factory is None:
         raise RuntimeError("Context turn factory has not been bound")
     return context_turn_factory

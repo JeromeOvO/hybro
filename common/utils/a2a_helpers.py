@@ -7,22 +7,43 @@ and RoomMessageCenter.
 import uuid
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Protocol
 
 from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-a2a_artifact_storage: Any | None = None
+
+class A2AArtifactStorage(Protocol):
+    async def convert_inline_bytes_to_s3(
+        self,
+        parts: list[dict],
+        room_id: str,
+        message_id: str,
+        *,
+        converted_so_far: int = 0,
+    ) -> int: ...
+
+    async def convert_pydantic_artifacts_to_s3(
+        self,
+        artifacts: list,
+        room_id: str,
+        message_id: str,
+        *,
+        converted_so_far: int = 0,
+    ) -> int: ...
 
 
-def bind_a2a_artifact_storage(storage: Any) -> None:
+a2a_artifact_storage: A2AArtifactStorage | None = None
+
+
+def bind_a2a_artifact_storage(storage: A2AArtifactStorage) -> None:
     global a2a_artifact_storage
 
     a2a_artifact_storage = storage
 
 
-def _require_a2a_artifact_storage() -> Any:
+def _require_a2a_artifact_storage() -> A2AArtifactStorage:
     if a2a_artifact_storage is None:
         raise RuntimeError("A2A artifact storage dependency has not been bound")
     return a2a_artifact_storage

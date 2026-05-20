@@ -6,7 +6,7 @@ import pytest
 
 from context_memory import compaction
 from context_memory.config import CompactionConfig
-from context_memory.content_storage import make_document_id
+from context_memory.content_storage import ContentExpiredError, make_document_id
 
 
 NOW = datetime(2026, 5, 13, tzinfo=timezone.utc)
@@ -306,6 +306,28 @@ async def test_expand_turn_content_compact_turn():
         content_repo,
         compact_turn("t1", "doc1"),
     ) == "stored"
+
+
+@pytest.mark.asyncio
+async def test_expand_turn_content_compact_turn_rejects_expired_document():
+    content_repo = StateContentRepository()
+    await content_repo.upsert_full_content(
+        document_id="doc1",
+        room_id="r1",
+        turn_id="t1",
+        content="expired",
+        content_type="text",
+        content_hash="hash",
+        stored_at=NOW,
+        expires_at=datetime(2026, 5, 12, tzinfo=timezone.utc),
+    )
+
+    with pytest.raises(ContentExpiredError):
+        await compaction.expand_turn_content_from_turn(
+            content_repo,
+            compact_turn("t1", "doc1"),
+            now=NOW,
+        )
 
 
 @pytest.mark.asyncio

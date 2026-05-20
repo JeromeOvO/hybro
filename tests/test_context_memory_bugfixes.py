@@ -200,8 +200,9 @@ class TestExtractTurnNotesLLM:
         mock_openai = MagicMock()
         mock_openai.call_supervisor_llm_json = AsyncMock(return_value=mock_response)
 
-        with patch.object(context_utils, "turn_notes_llm_provider", mock_openai):
-            result = await context_utils.extract_turn_notes_llm(long_content)
+        result = await context_utils.extract_turn_notes_llm(
+            long_content, provider=mock_openai
+        )
 
         assert result is not None
         assert "keywords" in result
@@ -216,8 +217,9 @@ class TestExtractTurnNotesLLM:
         mock_openai = MagicMock()
         mock_openai.call_supervisor_llm_json = AsyncMock(side_effect=Exception("LLM error"))
 
-        with patch.object(context_utils, "turn_notes_llm_provider", mock_openai):
-            result = await context_utils.extract_turn_notes_llm(long_content)
+        result = await context_utils.extract_turn_notes_llm(
+            long_content, provider=mock_openai
+        )
 
         assert result is not None
         assert "keywords" in result

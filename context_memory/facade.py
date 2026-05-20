@@ -24,6 +24,7 @@ from context_memory.config import (
     TokenBudgetConfig,
 )
 from context_memory.content_storage import (
+    content_from_document,
     expand_mongodb_reference,
     store_full_content,
 )
@@ -407,12 +408,14 @@ class ContextMemoryFacade:
             self.content_repository,
             room_id,
             turn_id,
+            now=self.now(),
         )
 
     async def expand_turn_content_from_turn(self, turn_doc: dict) -> str:
         return await compaction.expand_turn_content_from_turn(
             self.content_repository,
             turn_doc,
+            now=self.now(),
         )
 
     async def fetch_turn_content(self, turn_id: str, room_id: str) -> str:
@@ -469,19 +472,19 @@ class ContextMemoryFacade:
         self, document_id: str
     ) -> str | None:
         doc = await self.content_repository.get_content_by_document_id(document_id)
-        return doc.get("content") if doc else None
+        return content_from_document(doc, now=self.now())
 
     async def content_get_content_by_turn_id(
         self, room_id: str, turn_id: str
     ) -> str | None:
         doc = await self.content_repository.get_content_by_turn_id(room_id, turn_id)
-        return doc.get("content") if doc else None
+        return content_from_document(doc, now=self.now())
 
     async def content_expand_mongodb_reference(
         self, content_ref: dict, turn_id: str
     ) -> str:
         return await expand_mongodb_reference(
-            self.content_repository, content_ref, turn_id
+            self.content_repository, content_ref, turn_id, now=self.now()
         )
 
     async def content_delete_content_by_turn_id(

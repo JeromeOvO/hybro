@@ -214,7 +214,6 @@ async def lifespan(app: FastAPI):
             )
             from a2a_adapter import artifact_storage as a2a_artifact_storage
             from common.utils.a2a_helpers import bind_a2a_artifact_storage
-            from common.utils.context_utils import bind_context_llm_provider
             from context_memory.config import ContextMemoryLLMConfig
             from llm_gateway import LLMGatewayImpl, ModelRegistryImpl
             from services.agent_capability_issue_service import (
@@ -255,7 +254,6 @@ async def lifespan(app: FastAPI):
                 max_file_size_mb=settings.max_file_size_mb,
             )
             bind_a2a_artifact_storage(a2a_artifact_storage)
-            bind_context_llm_provider(openai_service)
             await mongodb.create_context_memory_indexes()
             agent_rate_limiter = PlatformAgentRateLimiter(
                 collection=mongodb.agent_requests_collection,

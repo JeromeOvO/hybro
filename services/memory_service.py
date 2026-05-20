@@ -456,7 +456,9 @@ class RoomMemoryService:
         try:
             from common.utils.context_utils import extract_turn_notes_llm
 
-            enriched_notes = await extract_turn_notes_llm(content)
+            enriched_notes = await extract_turn_notes_llm(
+                content, provider=self.openai_service
+            )
             if enriched_notes and enriched_notes != heuristic_notes:
                 await self.database_service.update_turn_notes(
                     room_id, turn_id, enriched_notes,
