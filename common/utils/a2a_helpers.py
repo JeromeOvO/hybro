@@ -10,6 +10,7 @@ from typing import Any
 
 from a2a.types import FileWithUri, Message, Role, Task
 
+from common.file_upload_constants import MAX_INLINE_CONVERSIONS_PER_MESSAGE
 from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -399,8 +400,6 @@ async def convert_inline_bytes_to_s3(
     import io
     import logging
 
-    from models.file_upload import MAX_INLINE_CONVERSIONS_PER_MESSAGE
-
     logger = logging.getLogger(__name__)
     converted = converted_so_far
 
@@ -482,8 +481,6 @@ async def _download_external_uris_to_s3(
     import logging
 
     import aiohttp
-
-    from models.file_upload import MAX_INLINE_CONVERSIONS_PER_MESSAGE
 
     logger = logging.getLogger(__name__)
     converted = converted_so_far
@@ -611,8 +608,6 @@ async def convert_pydantic_artifacts_to_s3(
     import logging
 
     import aiohttp
-
-    from models.file_upload import MAX_INLINE_CONVERSIONS_PER_MESSAGE
 
     log = logging.getLogger(__name__)
     converted = converted_so_far

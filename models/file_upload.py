@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from common.file_upload_constants import MAX_INLINE_CONVERSIONS_PER_MESSAGE
 from common.utils.time import utcnow
 
 IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
@@ -24,7 +25,6 @@ ALLOWED_MIME_TYPES = IMAGE_MIME_TYPES | AUDIO_MIME_TYPES | VIDEO_MIME_TYPES | DO
 MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # Deprecated: runtime limit is settings.max_file_size_mb
 MAX_ATTACHMENTS_PER_MESSAGE = 10
 MAX_ATTACHMENT_REFS_PER_REQUEST = 50  # DoS guard on raw (pre-dedup) ref count
-MAX_INLINE_CONVERSIONS_PER_MESSAGE = 20
 
 
 class FileUploadMetadata(BaseModel):

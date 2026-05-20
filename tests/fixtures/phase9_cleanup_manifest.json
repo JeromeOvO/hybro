@@ -25,13 +25,6 @@
       "reason": "Package remains shipped for legacy infrastructure compatibility paths while DAL, Delivery, and HubRuntimeBridge migration callers finish decommission; production import gates prevent new direct coupling."
     },
     {
-      "contract": "common_import_boundary",
-      "expiry_task": "Final Common leaf-module cleanup",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "common/utils/a2a_helpers.py",
-      "reason": "Common A2A helper still references legacy file upload model constants; move constants to Common before final leaf-module cleanup."
-    },
-    {
       "contract": "a2a_storage_signing",
       "expiry_task": "Final Common leaf-module cleanup",
       "owner": "phase-9-platform-api-cleanup",
