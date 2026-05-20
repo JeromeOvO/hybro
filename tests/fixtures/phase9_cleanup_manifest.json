@@ -147,13 +147,6 @@
       "contract": "sdk_confinement",
       "expiry_task": "Final SDK confinement migration",
       "owner": "phase-9-platform-api-cleanup",
-      "path": "hub_runtime_bridge/adapters/legacy_failure.py",
-      "reason": "HubRuntimeBridge legacy failure adapter still constructs A2A SDK failure payloads for compatibility."
-    },
-    {
-      "contract": "sdk_confinement",
-      "expiry_task": "Final SDK confinement migration",
-      "owner": "phase-9-platform-api-cleanup",
       "path": "jobs/stale_task_checker.py",
       "reason": "Stale task checker still polls and constructs A2A SDK task payloads directly; migrate polling through A2A adapter protocols."
     },

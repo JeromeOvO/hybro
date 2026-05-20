@@ -297,6 +297,12 @@ def test_hub_a2a_card_adapter_has_no_sdk_confinement_blocker():
     assert "hub_runtime_bridge/adapters/a2a_card.py" not in blocked_paths
 
 
+def test_hub_legacy_failure_adapter_has_no_sdk_confinement_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "hub_runtime_bridge/adapters/legacy_failure.py" not in blocked_paths
+
+
 def test_common_package_has_no_module_or_app_shell_imports():
     violations = _common_import_violations()
 
