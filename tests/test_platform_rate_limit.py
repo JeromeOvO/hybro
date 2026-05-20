@@ -32,11 +32,23 @@ class InMemoryRateLimitCollection:
         for key, expected in query.items():
             actual = doc.get(key)
             if isinstance(expected, dict):
-                if "$gt" in expected and not actual > expected["$gt"]:
+                if (
+                    "$gt" in expected
+                    and not InMemoryRateLimitCollection._comparable_datetime(actual)
+                    > InMemoryRateLimitCollection._comparable_datetime(expected["$gt"])
+                ):
                     return False
             elif actual != expected:
                 return False
         return True
+
+    @staticmethod
+    def _comparable_datetime(value):
+        if not isinstance(value, datetime):
+            return value
+        if value.tzinfo is None:
+            return value
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 @pytest.mark.asyncio
@@ -99,6 +111,27 @@ async def test_agent_rate_limiter_blocks_system_limit():
 
 
 @pytest.mark.asyncio
+async def test_agent_rate_limiter_handles_naive_mongo_timestamps():
+    from platform_module.rate_limit import PlatformAgentRateLimiter
+
+    collection = InMemoryRateLimitCollection(
+        [
+            {
+                "agent_id": "agent-1",
+                "user_id": "user-1",
+                "timestamp": datetime(2026, 5, 19, 11, 30),
+            }
+        ]
+    )
+    limiter = PlatformAgentRateLimiter(collection=collection, clock=lambda: NOW)
+
+    result = await limiter.check_agent_limit("agent-1", "user-1", 1, None)
+
+    assert result.allowed is False
+    assert result.retry_after_seconds == 1800
+
+
+@pytest.mark.asyncio
 async def test_agent_rate_limiter_records_requests():
     from platform_module.rate_limit import PlatformAgentRateLimiter
 
@@ -108,7 +141,11 @@ async def test_agent_rate_limiter_records_requests():
     await limiter.record_agent_request("agent-1", "user-1")
 
     assert collection.docs == [
-        {"agent_id": "agent-1", "user_id": "user-1", "timestamp": NOW}
+        {
+            "agent_id": "agent-1",
+            "user_id": "user-1",
+            "timestamp": NOW.replace(tzinfo=None),
+        }
     ]
 
 
@@ -139,6 +176,21 @@ async def test_api_key_rate_limiter_blocks_per_key_and_global_limits():
     assert global_limit.allowed is False
     assert global_limit.message == "Service temporarily unavailable due to high traffic"
     assert global_limit.retry_after_seconds == 900
+
+
+@pytest.mark.asyncio
+async def test_api_key_rate_limiter_handles_naive_mongo_timestamps():
+    from platform_module.rate_limit import PlatformAPIKeyRateLimiter
+
+    collection = InMemoryRateLimitCollection(
+        [{"key_id": "key-1", "timestamp": datetime(2026, 5, 19, 11, 30)}]
+    )
+    limiter = PlatformAPIKeyRateLimiter(collection=collection, clock=lambda: NOW)
+
+    result = await limiter.check_api_key_limit("key-1", 1, 10)
+
+    assert result.allowed is False
+    assert result.retry_after_seconds == 1800
 
 
 @pytest.mark.asyncio
@@ -200,3 +252,28 @@ async def test_route_api_key_rate_limiter_preserves_legacy_route_contract():
     assert exc_info.value.status_code == 429
     assert exc_info.value.detail["error"] == "rate_limit_exceeded"
     assert exc_info.value.detail["retry_after"] > 0
+
+
+@pytest.mark.asyncio
+async def test_route_api_key_rate_limiter_maps_naive_timestamp_retry_after():
+    from common.errors import PlatformRouteError
+    from platform_module.rate_limit import PlatformRouteAPIKeyRateLimiter
+
+    collection = InMemoryRateLimitCollection(
+        [{"key_id": "key-1", "timestamp": datetime(2026, 5, 19, 11, 30)}]
+    )
+    limiter = PlatformRouteAPIKeyRateLimiter(
+        collection=collection,
+        clock=lambda: NOW,
+        per_key_limit=1,
+        global_limit=10,
+    )
+
+    class APIKey:
+        key_id = "key-1"
+
+    with pytest.raises(PlatformRouteError) as exc_info:
+        await limiter.check_rate_limit(APIKey())
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.detail["retry_after"] == 1800

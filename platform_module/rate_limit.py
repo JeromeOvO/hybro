@@ -54,14 +54,28 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _as_utc_naive(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _as_utc_aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _cutoff(now: datetime, window_seconds: int) -> datetime:
-    return now - timedelta(seconds=window_seconds)
+    return _as_utc_naive(now) - timedelta(seconds=window_seconds)
 
 
 def _retry_after(now: datetime, oldest: dict | None, window_seconds: int) -> int:
     if oldest and "timestamp" in oldest:
-        expires_at = oldest["timestamp"] + timedelta(seconds=window_seconds)
-        return max(1, int((expires_at - now).total_seconds()))
+        expires_at = _as_utc_aware(oldest["timestamp"]) + timedelta(
+            seconds=window_seconds
+        )
+        return max(1, int((expires_at - _as_utc_aware(now)).total_seconds()))
     return window_seconds
 
 
@@ -151,7 +165,11 @@ class PlatformAgentRateLimiter:
         if not user_id:
             raise ValueError("user_id is required to record a request")
         await self._collection.insert_one(
-            {"agent_id": agent_id, "user_id": user_id, "timestamp": self._clock()}
+            {
+                "agent_id": agent_id,
+                "user_id": user_id,
+                "timestamp": _as_utc_naive(self._clock()),
+            }
         )
 
 
@@ -235,7 +253,9 @@ class PlatformAPIKeyRateLimiter:
         )
 
     async def record_api_key_request(self, key_id: str) -> None:
-        await self._collection.insert_one({"key_id": key_id, "timestamp": self._clock()})
+        await self._collection.insert_one(
+            {"key_id": key_id, "timestamp": _as_utc_naive(self._clock())}
+        )
 
 
 class PlatformProtocolRateLimiter:
@@ -258,9 +278,9 @@ class PlatformProtocolRateLimiter:
         remaining = max(0, limit - count)
         oldest = await self._collection.find_one(query, sort=[("timestamp", 1)])
         reset_at = (
-            oldest["timestamp"] + timedelta(seconds=window)
+            _as_utc_aware(oldest["timestamp"]) + timedelta(seconds=window)
             if oldest and "timestamp" in oldest
-            else now + timedelta(seconds=window)
+            else _as_utc_aware(now) + timedelta(seconds=window)
         )
         allowed = count < limit
 
@@ -283,7 +303,7 @@ class PlatformProtocolRateLimiter:
             {
                 "scope": self._scope,
                 "key": key,
-                "timestamp": self._clock(),
+                "timestamp": _as_utc_naive(self._clock()),
                 **extra,
             }
         )
