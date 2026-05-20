@@ -43,11 +43,16 @@ class PlatformGateway:
         masked = _mutable_copy(agent_card_dict)
         if "url" in masked:
             masked["url"] = self._gateway_url_for_agent(agent_id)
-        interfaces = masked.get("supportedInterfaces")
-        if isinstance(interfaces, list):
-            for iface in interfaces:
-                if isinstance(iface, dict) and "url" in iface:
-                    iface["url"] = self._gateway_url_for_agent(agent_id)
+        for field in (
+            "supportedInterfaces",
+            "additionalInterfaces",
+            "additional_interfaces",
+        ):
+            interfaces = masked.get(field)
+            if isinstance(interfaces, list):
+                for iface in interfaces:
+                    if isinstance(iface, dict) and "url" in iface:
+                        iface["url"] = self._gateway_url_for_agent(agent_id)
         return masked
 
     async def get_agent_for_gateway(self, agent_id: str, user_id: str) -> AgentInfo:

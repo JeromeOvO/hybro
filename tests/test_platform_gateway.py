@@ -156,6 +156,8 @@ def _card(agent_id: str = "agent-1") -> AgentCardSnapshot:
             "url": "https://agent.example/a2a",
             "capabilities": {"streaming": True},
             "supportedInterfaces": [{"url": "https://agent.example/stream"}],
+            "additionalInterfaces": [{"url": "https://agent.example/jsonrpc"}],
+            "additional_interfaces": [{"url": "https://agent.example/snake"}],
         },
     )
 
@@ -199,6 +201,8 @@ def test_masks_all_supported_agent_card_urls():
     expected = "https://api.hybro.ai/api/v1/gateway/agents/agent-1/message/send"
     assert masked["url"] == expected
     assert masked["supportedInterfaces"][0]["url"] == expected
+    assert masked["additionalInterfaces"][0]["url"] == expected
+    assert masked["additional_interfaces"][0]["url"] == expected
 
 
 def test_masks_agent_card_with_configured_api_prefix_when_base_url_empty():
