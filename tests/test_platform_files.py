@@ -151,6 +151,23 @@ async def test_upload_rejects_magic_byte_mismatch():
     assert metadata.created == []
 
 
+async def test_upload_rejects_same_family_magic_byte_mismatch():
+    service, objects, metadata = _storage()
+
+    with pytest.raises(FileStoragePlatformError) as exc_info:
+        await service.upload(
+            b"\x89PNG\r\n\x1a\n",
+            "image.jpg",
+            owner_id="user-1",
+            room_id="room-1",
+            content_type="image/jpeg",
+        )
+
+    assert exc_info.value.status_code == 422
+    assert objects.puts == []
+    assert metadata.created == []
+
+
 @pytest.mark.parametrize(
     ("declared", "content"),
     [

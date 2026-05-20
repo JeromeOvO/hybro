@@ -7,7 +7,7 @@ and provide typed, property-based access.
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §14.3 for specification.
 """
 
-from config.settings import get_memory_search_index_name, settings
+from common.config import get_memory_search_index_name, settings
 
 
 class TokenBudget:

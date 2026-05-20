@@ -17,6 +17,8 @@ PRODUCTION_ROOTS = (
     "llm_gateway",
     "platform_module",
     "common",
+    "jobs",
+    "models",
 )
 
 FORBIDDEN_PRODUCTION_IMPORT_PREFIXES = (
@@ -39,9 +41,43 @@ FORBIDDEN_COMMON_IMPORT_PREFIXES = (
     "platform_module",
 )
 
+SDK_CONFINEMENT_ROOTS = (
+    "api",
+    "agent",
+    "room",
+    "context_memory",
+    "delivery",
+    "execution",
+    "hub_runtime_bridge",
+    "jobs",
+    "models",
+    "platform_module",
+)
+
+FORBIDDEN_SDK_IMPORT_PREFIXES = ("a2a",)
+
 
 def _manifest() -> dict:
     return json.loads(Path("tests/fixtures/phase9_cleanup_manifest.json").read_text())
+
+
+def _blocked_cleanup_paths(*, contract: str | None = None) -> set[str]:
+    paths: set[str] = set()
+    for entry in _manifest().get("blocked_cleanup", []):
+        if contract is not None and entry.get("contract") != contract:
+            continue
+        path = entry.get("path")
+        if isinstance(path, str):
+            paths.add(path)
+    return paths
+
+
+def _is_blocked(path: Path, blocked_paths: set[str]) -> bool:
+    rel = path.as_posix()
+    return any(
+        rel == blocked or rel.startswith(f"{blocked.rstrip('/')}/")
+        for blocked in blocked_paths
+    )
 
 
 def _is_forbidden(module: str) -> bool:
@@ -62,8 +98,11 @@ def _production_python_files() -> list[Path]:
 
 def _import_violations() -> list[str]:
     violations: list[str] = []
+    blocked_paths = _blocked_cleanup_paths(contract="legacy_import_boundary")
     for path in _production_python_files():
         if path == Path("common/config/settings.py"):
+            continue
+        if _is_blocked(path, blocked_paths):
             continue
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
@@ -76,6 +115,33 @@ def _import_violations() -> list[str]:
             for imported_name, module in names:
                 if _is_forbidden(module):
                     violations.append(f"{path}:{node.lineno}: {imported_name}")
+    return violations
+
+
+def _sdk_import_violations() -> list[str]:
+    violations: list[str] = []
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+    for root in SDK_CONFINEMENT_ROOTS:
+        root_path = Path(root)
+        if not root_path.exists():
+            continue
+        for path in sorted(root_path.rglob("*.py")):
+            if _is_blocked(path, blocked_paths):
+                continue
+            tree = ast.parse(path.read_text(), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    names = [(alias.name, alias.name) for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                    names = [(f"{node.module}.{alias.name}", node.module) for alias in node.names]
+                else:
+                    continue
+                for imported_name, module in names:
+                    if any(
+                        module == prefix or module.startswith(f"{prefix}.")
+                        for prefix in FORBIDDEN_SDK_IMPORT_PREFIXES
+                    ):
+                        violations.append(f"{path}:{node.lineno}: {imported_name}")
     return violations
 
 
@@ -105,6 +171,12 @@ def test_no_production_imports_from_legacy_singletons():
     violations = _import_violations()
 
     assert not violations, "Legacy production imports remain:\n" + "\n".join(violations)
+
+
+def test_a2a_sdk_imports_are_confined_or_manifest_blocked():
+    violations = _sdk_import_violations()
+
+    assert not violations, "Undocumented A2A SDK imports remain:\n" + "\n".join(violations)
 
 
 def test_common_package_has_no_module_or_app_shell_imports():

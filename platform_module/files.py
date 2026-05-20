@@ -140,7 +140,7 @@ class PlatformFileStorage:
             "application/vnd.openxmlformats"
         ):
             return True
-        return declared.split("/")[0] == detected.split("/")[0]
+        return False
 
     def _require_object_storage(self):
         if self._deps.object_storage is None:

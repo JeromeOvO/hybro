@@ -25,6 +25,111 @@
       "reason": "Package remains shipped for legacy infrastructure compatibility paths while DAL, Delivery, and HubRuntimeBridge migration callers finish decommission; production import gates prevent new direct coupling."
     },
     {
+      "contract": "legacy_import_boundary",
+      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "jobs/cleanup_orphaned_uploads.py",
+      "reason": "Background orphan upload cleanup still calls legacy MongoDB and S3 singletons; deletion or app-shell dependency binding requires a dedicated job migration."
+    },
+    {
+      "contract": "legacy_import_boundary",
+      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "jobs/compaction_sweep.py",
+      "reason": "Background compaction sweep still calls legacy MongoDB and compaction service singletons; deletion or app-shell dependency binding requires compaction job migration readiness."
+    },
+    {
+      "contract": "legacy_import_boundary",
+      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "jobs/stale_task_checker.py",
+      "reason": "Stale task checker still uses legacy task polling, notification, metrics, database, and settings singletons; recovery behavior is preserved until a protocol-bound job migration lands."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "api/a2a_tasks.py",
+      "reason": "Public A2A task route schemas still expose SDK TaskState types for compatibility; must move behind route translators before final SDK confinement is claimed."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "execution/dispatch/dispatch_middleware.py",
+      "reason": "Phase 7b temporary Execution A2A SDK allowlist remains; migrate to Common DTOs or A2A adapter protocol types."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "execution/dispatch/response_handler.py",
+      "reason": "Phase 7b temporary Execution A2A SDK allowlist remains; migrate task-state handling to SDK-free Common constants."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "execution/dispatch/transports/direct.py",
+      "reason": "Direct transport still handles A2A SDK request, task, message, and artifact objects inline; this must be isolated in A2A adapter code."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "execution/dispatch/transports/webhook.py",
+      "reason": "Webhook transport still parses A2A SDK events inline; this must be isolated in A2A adapter code."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "execution/orchestration/queue_executor.py",
+      "reason": "Phase 7b temporary Execution A2A SDK allowlist remains; migrate task-state handling to SDK-free Common constants."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "execution/orchestration/room_message_center.py",
+      "reason": "Phase 7b temporary Execution A2A SDK allowlist remains; migrate summary/task construction and state checks behind adapter translators."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "execution/state/task_state_manager.py",
+      "reason": "Task state persistence still constructs A2A SDK TaskStatus and Message objects directly; move creation behind adapter translators."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "hub_runtime_bridge/adapters/a2a_card.py",
+      "reason": "HubRuntimeBridge adapter still accepts A2A AgentCard objects for legacy compatibility; keep documented until adapter boundary is split out or reclassified."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "hub_runtime_bridge/adapters/legacy_failure.py",
+      "reason": "HubRuntimeBridge legacy failure adapter still constructs A2A SDK failure payloads for compatibility."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "jobs/stale_task_checker.py",
+      "reason": "Stale task checker still polls and constructs A2A SDK task payloads directly; migrate polling through A2A adapter protocols."
+    },
+    {
+      "contract": "sdk_confinement",
+      "expiry_task": "Final SDK confinement migration",
+      "owner": "phase-9-platform-api-cleanup",
+      "path": "models",
+      "reason": "Legacy public Pydantic route/domain models still expose A2A SDK schemas; route translators must replace these imports before final SDK confinement is claimed."
+    },
+    {
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
       "owner": "phase-9-platform-api-cleanup",
       "path": "services/gateway_service.py",
