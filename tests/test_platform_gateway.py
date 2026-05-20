@@ -51,6 +51,7 @@ class FakeTransport:
         self.fail = fail
         self.result = result
         self.sent = []
+        self.streamed = []
 
     async def send_message(self, agent_url: str, message, **kwargs):
         if self.fail is not None:
@@ -60,12 +61,23 @@ class FakeTransport:
             task_id="task-1",
             agent_id=message.agent_id,
             status="completed",
+            result={"raw": {"id": "task-1", "status": {"state": "completed"}}},
         )
 
     async def stream_message(self, agent_url: str, message, **kwargs):
         if self.fail is not None:
             raise self.fail
-        yield {"task_id": "task-1", "event_type": "partial"}
+        self.streamed.append((agent_url, message, kwargs))
+        yield {
+            "task_id": "task-1",
+            "event_type": "partial",
+            "payload": {
+                "raw": {
+                    "id": "event-1",
+                    "status": {"state": "working"},
+                }
+            },
+        }
 
 
 def _agent(**overrides) -> AgentInfo:
@@ -77,7 +89,12 @@ def _agent(**overrides) -> AgentInfo:
         "status": "active",
         "is_public": True,
         "source": "cloud",
-        "raw_card": {"name": "Agent", "url": "https://agent.example/a2a"},
+        "capabilities": ["streaming"],
+        "raw_card": {
+            "name": "Agent",
+            "url": "https://agent.example/a2a",
+            "capabilities": {"streaming": True},
+        },
     }
     data.update(overrides)
     return AgentInfo(**data)
@@ -90,6 +107,7 @@ def _card(agent_id: str = "agent-1") -> AgentCardSnapshot:
         raw_card={
             "name": "Agent",
             "url": "https://agent.example/a2a",
+            "capabilities": {"streaming": True},
             "supportedInterfaces": [{"url": "https://agent.example/stream"}],
         },
     )
@@ -103,7 +121,13 @@ def _gateway(
     config: PlatformConfig | None = None,
 ):
     agent = agent or _agent()
-    cards = {agent.agent_id: _card(agent.agent_id)}
+    cards = {
+        agent.agent_id: AgentCardSnapshot(
+            agent_id=agent.agent_id,
+            url=agent.url or "https://agent.example/a2a",
+            raw_card=agent.raw_card or _card(agent.agent_id).raw_card,
+        )
+    }
     from platform_module.gateway import PlatformGateway
 
     return PlatformGateway(
@@ -196,6 +220,19 @@ async def test_send_preserves_public_a2a_message_parts():
 
 
 @pytest.mark.asyncio
+async def test_send_returns_public_a2a_response_envelope():
+    gateway = _gateway()
+
+    result = await gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
+
+    assert result == {
+        "jsonrpc": "2.0",
+        "id": "task-1",
+        "result": {"id": "task-1", "status": {"state": "completed"}},
+    }
+
+
+@pytest.mark.asyncio
 async def test_send_maps_transport_error_result_to_502():
     gateway = _gateway(
         transport=FakeTransport(
@@ -237,7 +274,42 @@ async def test_stream_yields_transport_events():
     stream = gateway.stream_message("agent-1", {"text": "hi"}, "owner-1")
     events = [event async for event in stream]
 
-    assert events == [{"task_id": "task-1", "event_type": "partial"}]
+    assert events == [
+        {
+            "jsonrpc": "2.0",
+            "id": "event-1",
+            "result": {"id": "event-1", "status": {"state": "working"}},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_agent_stream_falls_back_to_sync_send():
+    transport = FakeTransport()
+    gateway = _gateway(
+        agent=_agent(
+            capabilities=[],
+            raw_card={
+                "name": "Agent",
+                "url": "https://agent.example/a2a",
+                "capabilities": {"streaming": False},
+            },
+        ),
+        transport=transport,
+    )
+
+    stream = await gateway.prepare_stream("agent-1", {"text": "hi"}, "owner-1")
+    events = [event async for event in stream]
+
+    assert transport.sent
+    assert not transport.streamed
+    assert events == [
+        {
+            "jsonrpc": "2.0",
+            "id": "task-1",
+            "result": {"id": "task-1", "status": {"state": "completed"}},
+        }
+    ]
 
 
 @pytest.mark.asyncio

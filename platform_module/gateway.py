@@ -104,7 +104,7 @@ class PlatformGateway:
 
     async def send_message(
         self, agent_id: str, message: Any, user_id: str
-    ) -> AgentTaskResult:
+    ) -> dict:
         agent = await self.get_agent_for_gateway(agent_id, user_id)
         await self._ensure_directly_callable(agent)
         await self._check_agent_rate_limit(agent, user_id)
@@ -127,7 +127,7 @@ class PlatformGateway:
                         ),
                     },
                 )
-            return result
+            return self._task_result_to_a2a_response(result)
         except GatewayPlatformError:
             raise
         except Exception as exc:
@@ -154,6 +154,40 @@ class PlatformGateway:
         await self._check_agent_rate_limit(agent, user_id)
         transport = self._require_transport()
         internal_message = self._message_to_internal(agent_id, message)
+        card = await self._card_for_agent(agent)
+
+        if not self._supports_streaming(agent, card):
+            async def _sync_event() -> AsyncIterator[dict]:
+                try:
+                    result = await transport.send_message(
+                        agent.url or "",
+                        internal_message,
+                        user_id=user_id,
+                    )
+                    if getattr(result, "status", None) == "error":
+                        raise GatewayPlatformError(
+                            502,
+                            {
+                                "error": "agent_error",
+                                "message": (
+                                    "Agent communication failed: "
+                                    f"{getattr(result, 'error', None) or 'unknown error'}"
+                                ),
+                            },
+                        )
+                    yield self._task_result_to_a2a_response(result)
+                except GatewayPlatformError:
+                    raise
+                except Exception as exc:
+                    raise GatewayPlatformError(
+                        502,
+                        {
+                            "error": "agent_error",
+                            "message": f"Agent communication failed: {exc}",
+                        },
+                    ) from exc
+
+            return _sync_event()
 
         async def _events() -> AsyncIterator[dict]:
             try:
@@ -162,11 +196,7 @@ class PlatformGateway:
                     internal_message,
                     user_id=user_id,
                 ):
-                    yield (
-                        event.model_dump(mode="python")
-                        if hasattr(event, "model_dump")
-                        else event
-                    )
+                    yield self._stream_event_to_a2a_response(event)
             except GatewayPlatformError:
                 raise
             except Exception as exc:
@@ -179,6 +209,60 @@ class PlatformGateway:
                 ) from exc
 
         return _events()
+
+    @staticmethod
+    def _task_result_to_a2a_response(result: AgentTaskResult) -> dict:
+        payload = result.result if isinstance(result.result, dict) else {}
+        raw = payload.get("raw")
+        response_id = result.task_id or ""
+        if isinstance(raw, dict):
+            response_id = str(
+                raw.get("id")
+                or raw.get("taskId")
+                or raw.get("task_id")
+                or response_id
+            )
+            response_result = raw
+        else:
+            response_result = payload or {
+                "id": result.task_id,
+                "status": {"state": result.status},
+            }
+        return {"jsonrpc": "2.0", "id": response_id, "result": response_result}
+
+    @staticmethod
+    def _stream_event_to_a2a_response(event: Any) -> dict:
+        if hasattr(event, "model_dump"):
+            event = event.model_dump(mode="python")
+        if not isinstance(event, dict):
+            return {"jsonrpc": "2.0", "id": "", "result": event}
+        if "jsonrpc" in event and ("result" in event or "error" in event):
+            return event
+        payload = event.get("payload")
+        raw = payload.get("raw") if isinstance(payload, dict) else None
+        response_result = raw if isinstance(raw, dict) else event
+        response_id = str(
+            response_result.get("id")
+            or response_result.get("taskId")
+            or event.get("task_id")
+            or event.get("taskId")
+            or ""
+        )
+        return {"jsonrpc": "2.0", "id": response_id, "result": response_result}
+
+    @staticmethod
+    def _supports_streaming(agent: AgentInfo, card: dict) -> bool:
+        if "streaming" in set(agent.capabilities):
+            return True
+        capabilities = card.get("capabilities")
+        if isinstance(capabilities, dict):
+            return bool(capabilities.get("streaming") or capabilities.get("stream"))
+        if isinstance(capabilities, list):
+            return any(
+                str(capability) in {"streaming", "stream"}
+                for capability in capabilities
+            )
+        return False
 
     async def _card_for_agent(self, agent: AgentInfo) -> dict:
         if self._deps.agent_registry is not None:
