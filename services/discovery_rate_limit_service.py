@@ -1,30 +1,44 @@
-"""
-Compatibility shim for Discovery API rate limiting.
-
-Counter/window behavior is owned by ``platform_module.rate_limit``. This file
-keeps the legacy singleton import path until API routes are protocol-bound.
-"""
+"""Compatibility shim for legacy discovery API rate limiting imports."""
 
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
-from motor.motor_asyncio import AsyncIOMotorCollection
 
-from config.settings import settings
-from database.mongodb import mongodb
 from models.api_key import APIKey
 from platform_module.rate_limit import PlatformAPIKeyRateLimiter
 
 
 class DiscoveryRateLimitService:
-    @property
-    def _collection(self) -> AsyncIOMotorCollection:
-        return mongodb.discovery_api_requests_collection
+    def __init__(self) -> None:
+        self._collection = None
+        self._per_key_limit: int | None = None
+        self._global_limit: int | None = None
 
-    @property
-    def _limiter(self) -> PlatformAPIKeyRateLimiter:
+    def bind(
+        self,
+        *,
+        collection: object,
+        per_key_limit: int,
+        global_limit: int,
+    ) -> None:
+        self._collection = collection
+        self._per_key_limit = per_key_limit
+        self._global_limit = global_limit
+
+    def _require_delegate(self) -> tuple[object, int, int]:
+        if (
+            self._collection is None
+            or self._per_key_limit is None
+            or self._global_limit is None
+        ):
+            raise RuntimeError(
+                "DiscoveryRateLimitService.bind() not called - startup incomplete"
+            )
+        return self._collection, self._per_key_limit, self._global_limit
+
+    def _limiter(self, collection: object) -> PlatformAPIKeyRateLimiter:
         return PlatformAPIKeyRateLimiter(
-            collection=self._collection,
+            collection=collection,
             clock=lambda: datetime.now(timezone.utc),
             per_key_limit_message=lambda limit: (
                 f"Rate limit exceeded: {limit} requests per hour"
@@ -33,10 +47,11 @@ class DiscoveryRateLimitService:
         )
 
     async def check_rate_limit(self, api_key: APIKey) -> None:
-        result = await self._limiter.check_api_key_limit(
+        collection, per_key_limit, global_limit = self._require_delegate()
+        result = await self._limiter(collection).check_api_key_limit(
             api_key.key_id,
-            settings.discovery_rate_limit_per_key,
-            settings.discovery_rate_limit_global,
+            per_key_limit,
+            global_limit,
         )
         if result.allowed:
             return
@@ -50,23 +65,23 @@ class DiscoveryRateLimitService:
         )
 
     async def record_request(self, api_key: APIKey) -> None:
-        await self._limiter.record_api_key_request(api_key.key_id)
+        collection, _per_key_limit, _global_limit = self._require_delegate()
+        await self._limiter(collection).record_api_key_request(api_key.key_id)
 
-    async def get_usage_stats(self, key_id: str | None = None) -> dict:
+    async def get_usage_stats(self, key_id: str | None = None) -> dict[str, object]:
+        collection, per_key_limit, global_limit = self._require_delegate()
         cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
-        global_count = await self._collection.count_documents(
-            {"timestamp": {"$gt": cutoff}}
-        )
-        stats: dict = {
+        global_count = await collection.count_documents({"timestamp": {"$gt": cutoff}})
+        stats: dict[str, object] = {
             "global_requests_this_hour": global_count,
-            "global_limit": settings.discovery_rate_limit_global,
+            "global_limit": global_limit,
         }
         if key_id:
-            key_count = await self._collection.count_documents(
+            key_count = await collection.count_documents(
                 {"key_id": key_id, "timestamp": {"$gt": cutoff}}
             )
             stats["key_requests_this_hour"] = key_count
-            stats["key_limit"] = settings.discovery_rate_limit_per_key
+            stats["key_limit"] = per_key_limit
         return stats
 
 

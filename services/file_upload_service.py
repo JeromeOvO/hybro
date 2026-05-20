@@ -9,21 +9,22 @@ Validation pipeline:
 from __future__ import annotations
 
 import io
+from types import SimpleNamespace
 
 from fastapi import HTTPException, UploadFile
 
+from common.errors import FileStoragePlatformError
 from common.utils.logger import get_logger
-from database.mongodb import mongodb
 from models.file_upload import (
     ALLOWED_MIME_TYPES,
     FileUploadResponse,
 )
-from config.settings import settings
 from platform_module import PlatformConfig, PlatformDeps
-from common.errors import FileStoragePlatformError
 from platform_module.files import PlatformFileStorage
 
 logger = get_logger(__name__)
+mongodb = None
+settings = SimpleNamespace(max_file_size_mb=50, s3_presigned_url_ttl=3600)
 
 
 class _LegacyS3ObjectStorage:
@@ -46,19 +47,26 @@ class _LegacyS3ObjectStorage:
 
 
 class _MongoFileMetadataRepository:
+    def _require_delegate(self):
+        if mongodb is None:
+            raise RuntimeError(
+                "FileUploadService metadata repository has not been bound"
+            )
+        return mongodb.file_uploads_collection
+
     async def create(self, data: dict) -> str:
-        await mongodb.file_uploads_collection.insert_one(data)
+        await self._require_delegate().insert_one(data)
         return data["file_id"]
 
     async def get(self, file_id: str) -> dict | None:
-        return await mongodb.file_uploads_collection.find_one({"file_id": file_id})
+        return await self._require_delegate().find_one({"file_id": file_id})
 
     async def delete(self, file_id: str) -> bool:
-        result = await mongodb.file_uploads_collection.delete_one({"file_id": file_id})
+        result = await self._require_delegate().delete_one({"file_id": file_id})
         return bool(getattr(result, "deleted_count", result))
 
     async def list_for_room(self, room_id: str) -> list[dict]:
-        cursor = mongodb.file_uploads_collection.find({"room_id": room_id})
+        cursor = self._require_delegate().find({"room_id": room_id})
         if hasattr(cursor, "to_list"):
             return await cursor.to_list(length=None)
         return list(cursor)
@@ -72,10 +80,12 @@ class FileUploadService:
     @property
     def s3(self):
         if self._s3 is None:
-            from services.s3_service import s3_service
-
-            self._s3 = s3_service
+            raise RuntimeError("FileUploadService S3 dependency has not been bound")
         return self._s3
+
+    def _require_delegate(self) -> None:
+        if self._s3 is None or mongodb is None:
+            raise RuntimeError("FileUploadService dependencies have not been bound")
 
     @property
     def max_file_size_bytes(self) -> int:

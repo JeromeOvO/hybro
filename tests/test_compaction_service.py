@@ -585,7 +585,7 @@ class TestContentStorageService:
             created_at=datetime.now(),
         )
 
-        with patch("services.s3_service.s3_service") as mock_s3:
+        with patch("services.content_storage_service.s3_service") as mock_s3:
             mock_s3.download_text = AsyncMock(return_value="S3 content here")
             result = await service.expand_content_reference(content_ref, "turn-123")
 
@@ -601,7 +601,7 @@ class TestContentStorageService:
             created_at=datetime.now(),
         )
 
-        with patch("services.s3_service.s3_service") as mock_s3:
+        with patch("services.content_storage_service.s3_service") as mock_s3:
             mock_s3.download_text = AsyncMock(return_value=None)
             with pytest.raises(ContentExpiredError) as exc_info:
                 await service.expand_content_reference(content_ref, "turn-123")

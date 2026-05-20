@@ -761,7 +761,7 @@ async def test_content_storage_service_expands_s3_before_bind():
         created_at=NOW,
     )
 
-    with patch("services.s3_service.s3_service") as mock_s3:
+    with patch("services.content_storage_service.s3_service") as mock_s3:
         mock_s3.download_text = AsyncMock(return_value="s3 content")
         assert await service.expand_content_reference(content_ref, "t1") == "s3 content"
 

@@ -30,17 +30,11 @@ FORBIDDEN_PRODUCTION_IMPORT_PREFIXES = (
 
 LEGACY_PACKAGES = {"modules", "services", "config", "infrastructure"}
 
-LEGACY_SERVICE_SHIMS = (
-    Path("services/gateway_service.py"),
-)
-
 FORBIDDEN_LEGACY_SHIM_IMPORT_PREFIXES = (
     "a2a",
     "database.mongodb",
     "config.settings",
-    "services.a2a_service",
-    "services.discovery_service",
-    "services.rate_limit_service",
+    "services",
 )
 
 FORBIDDEN_COMMON_IMPORT_PREFIXES = (
@@ -214,9 +208,19 @@ def _common_import_violations() -> list[str]:
     return violations
 
 
+def _legacy_service_shim_paths() -> list[Path]:
+    return sorted(
+        Path(entry["path"])
+        for entry in _manifest().get("blocked_cleanup", [])
+        if isinstance(entry.get("path"), str)
+        and entry["path"].startswith("services/")
+        and entry["path"].endswith(".py")
+    )
+
+
 def _legacy_service_shim_violations() -> list[str]:
     violations: list[str] = []
-    for path in LEGACY_SERVICE_SHIMS:
+    for path in _legacy_service_shim_paths():
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

@@ -7,7 +7,6 @@ Content is stored in MongoDB's conversation_content collection.
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.3, §6.4, §6.6 for design details.
 """
 
-from database.mongodb import mongodb
 from common.utils.logger import get_logger
 from models.compaction import ContentReference, StorageType
 from platform_module import PlatformConfig, PlatformDeps
@@ -18,6 +17,8 @@ from platform_module.content_storage import (
 )
 
 logger = get_logger(__name__)
+mongodb = None
+s3_service = None
 
 
 class _FacadeContentStorageRepository:
@@ -63,8 +64,10 @@ class _FacadeContentStorageRepository:
 
 class _LegacyS3TextObjectStorage:
     async def download_text(self, key: str) -> str | None:
-        from services.s3_service import s3_service
-
+        if s3_service is None:
+            raise RuntimeError(
+                "ContentStorageService S3 dependency has not been bound"
+            )
         return await s3_service.download_text(key)
 
 
@@ -98,6 +101,12 @@ class ContentStorageService:
             )
         return self._facade
 
+    def _require_delegate(self) -> None:
+        if not self._bound:
+            raise RuntimeError(
+                "ContentStorageService.bind_facade() not called - startup incomplete"
+            )
+
     def _platform_storage(self, *, require_facade: bool) -> PlatformContentStorage:
         if self._platform_storage_override is not None:
             return self._platform_storage_override
@@ -119,6 +128,10 @@ class ContentStorageService:
     @property
     def collection(self):
         """Get the conversation_content collection."""
+        if mongodb is None:
+            raise RuntimeError(
+                "ContentStorageService collection dependency has not been bound"
+            )
         return mongodb.conversation_content_collection
 
     async def upsert_full_content(

@@ -254,6 +254,7 @@ async def lifespan(app: FastAPI):
             )
             bind_context_llm_provider(openai_service)
             await mongodb.create_context_memory_indexes()
+            rate_limit_service.bind(collection=mongodb.agent_requests_collection)
             viewset.bind_viewset_dependencies(
                 get_db=get_db,
                 create_repository=Repository,
