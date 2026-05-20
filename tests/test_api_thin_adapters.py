@@ -193,3 +193,45 @@ def test_legacy_workflow_routes_are_parameterless_410_adapters():
     assert not violations, "Legacy 410 routes leak public params:\n" + "\n".join(
         violations
     )
+
+
+def test_legacy_workflow_routes_advertise_410_in_openapi():
+    from main import app
+
+    openapi = app.openapi()
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    legacy_routes = [
+        route
+        for route in routes
+        if route["owning_protocol"] == "legacy_workflow_decommission_manifest"
+    ]
+    violations: list[str] = []
+
+    for route in legacy_routes:
+        for method in route["methods"]:
+            responses = openapi["paths"][route["path"]][method.lower()]["responses"]
+            if "410" not in responses or set(responses) == {"200"}:
+                violations.append(f"{method} {route['path']}: {sorted(responses)}")
+
+    assert not violations, "Legacy routes do not advertise 410:\n" + "\n".join(
+        violations
+    )
+
+
+def test_agent_group_route_owner_protocol_matches_handler_calls():
+    from app_shell.database_service import AgentGroupStore
+
+    expected_methods = {
+        "add_agent_group",
+        "delete_agent_group",
+        "get_agent_group_by_id",
+        "get_agent_groups_by_owner",
+        "update_agent_group",
+    }
+    protocol_methods = {
+        name
+        for name, value in AgentGroupStore.__dict__.items()
+        if callable(value) and not name.startswith("_")
+    }
+
+    assert expected_methods.issubset(protocol_methods)

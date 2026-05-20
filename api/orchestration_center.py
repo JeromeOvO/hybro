@@ -9,6 +9,11 @@ from models.request import OrchestrationRequest
 
 router = APIRouter()
 workflow_center: Any | None = None
+LEGACY_GONE_RESPONSES = {
+    410: {
+        "description": "Legacy workflow endpoint deprecated",
+    }
+}
 
 
 def bind_orchestration_dependencies(workflow: Any) -> None:
@@ -61,32 +66,56 @@ async def _get_task_request(
 TaskRequestDep = Depends(_get_task_request)
 
 
-@router.post("/orchestrationCenter/decomposeTask")
+@router.post(
+    "/orchestrationCenter/decomposeTask",
+    status_code=410,
+    responses=LEGACY_GONE_RESPONSES,
+)
 async def decompose_task():
     return _legacy_workflow_gone()
 
 
-@router.post("/orchestrationCenter/assignAgentsToMetaTasks")
+@router.post(
+    "/orchestrationCenter/assignAgentsToMetaTasks",
+    status_code=410,
+    responses=LEGACY_GONE_RESPONSES,
+)
 async def assign_agents_to_meta_tasks_by_parent_task_id():
     return _legacy_workflow_gone()
 
 
-@router.post("/orchestrationCenter/assignAgentToMetaTask")
+@router.post(
+    "/orchestrationCenter/assignAgentToMetaTask",
+    status_code=410,
+    responses=LEGACY_GONE_RESPONSES,
+)
 async def assign_agent_to_meta_task():
     return _legacy_workflow_gone()
 
 
-@router.post("/orchestrationCenter/runWorkflow")
+@router.post(
+    "/orchestrationCenter/runWorkflow",
+    status_code=410,
+    responses=LEGACY_GONE_RESPONSES,
+)
 async def run_workflow():
     return _legacy_workflow_gone()
 
 
-@router.post("/orchestrationCenter/retryMetaTask")
+@router.post(
+    "/orchestrationCenter/retryMetaTask",
+    status_code=410,
+    responses=LEGACY_GONE_RESPONSES,
+)
 async def retry_meta_task():
     return _legacy_workflow_gone()
 
 
-@router.post("/orchestrationCenter/summarizeMetaTaskForBaseTask")
+@router.post(
+    "/orchestrationCenter/summarizeMetaTaskForBaseTask",
+    status_code=410,
+    responses=LEGACY_GONE_RESPONSES,
+)
 async def summarize_meta_task_for_base_task():
     return _legacy_workflow_gone()
 
@@ -94,6 +123,8 @@ async def summarize_meta_task_for_base_task():
 @router.post(
     "/orchestrationCenter/processRoomUserMessage",
     deprecated=True,
+    status_code=410,
+    responses=LEGACY_GONE_RESPONSES,
 )
 async def process_room_user_message(
     request: Request,

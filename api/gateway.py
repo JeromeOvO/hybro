@@ -180,9 +180,28 @@ async def gateway_stream(
                 else:
                     payload = json.dumps(event)
                 yield f"data: {payload}\n\n"
+        except GatewayPlatformError as e:
+            logger.error(f"Gateway SSE stream error for agent {agent_id}: {e}")
+            detail = e.detail if isinstance(e.detail, dict) else {"message": str(e)}
+            message = detail.get("message") or str(e)
+            payload = {
+                "jsonrpc": "2.0",
+                "id": "",
+                "error": {
+                    "code": e.status_code,
+                    "message": message,
+                    "data": detail,
+                },
+            }
+            yield f"data: {json.dumps(payload)}\n\n"
         except Exception as e:
             logger.error(f"Gateway SSE stream error for agent {agent_id}: {e}")
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            payload = {
+                "jsonrpc": "2.0",
+                "id": "",
+                "error": {"code": 500, "message": str(e)},
+            }
+            yield f"data: {json.dumps(payload)}\n\n"
         finally:
             await _record_request(rate_limiter, api_key)
 

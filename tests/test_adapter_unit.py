@@ -495,6 +495,46 @@ async def test_transport_stream_message_unwraps_jsonrpc_sse_results(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_transport_stream_message_preserves_jsonrpc_sse_errors(monkeypatch):
+    from a2a_adapter import transport as transport_module
+    from platform_module.gateway import PlatformGateway
+
+    @asynccontextmanager
+    async def fake_aconnect_sse(client, method, url, **kwargs):
+        yield _FakeEventSource(
+            [
+                {
+                    "jsonrpc": "2.0",
+                    "id": "rpc-error-1",
+                    "error": {"code": -32000, "message": "failed"},
+                }
+            ]
+        )
+
+    monkeypatch.setattr(transport_module, "aconnect_sse", fake_aconnect_sse)
+    transport = transport_module.AgentTransportImpl(timeout=1, client=MagicMock())
+    message = InternalAgentMessage(
+        agent_id="agent-1",
+        role="user",
+        parts=[{"kind": "text", "text": "hello"}],
+    )
+
+    events = [
+        event
+        async for event in transport.stream_message("https://agent.example/a2a", message)
+    ]
+
+    assert len(events) == 1
+    assert events[0].event_type == "error"
+    assert events[0].payload["raw"]["id"] == "rpc-error-1"
+    assert PlatformGateway._stream_event_to_a2a_response(events[0]) == {
+        "jsonrpc": "2.0",
+        "id": "rpc-error-1",
+        "error": {"code": -32000, "message": "failed"},
+    }
+
+
+@pytest.mark.asyncio
 async def test_transport_stream_message_yields_error_event_before_first_frame(monkeypatch):
     from a2a_adapter import transport as transport_module
 

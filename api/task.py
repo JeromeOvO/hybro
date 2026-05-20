@@ -6,6 +6,11 @@ from fastapi.responses import JSONResponse
 
 router = APIRouter()
 task_center: Any | None = None
+LEGACY_GONE_RESPONSES = {
+    410: {
+        "description": "Legacy task endpoint deprecated",
+    }
+}
 
 
 def bind_task_dependencies(center: Any) -> None:
@@ -39,35 +44,55 @@ def _legacy_task_gone() -> JSONResponse:
     )
 
 
-@router.get("/task/queryTask/{task_id}")
+@router.get(
+    "/task/queryTask/{task_id}",
+    status_code=410,
+    responses=LEGACY_GONE_RESPONSES,
+)
 async def query_task(
     task_id: str,
 ):
     return _legacy_task_gone()
 
 
-@router.get("/task/queryBaseTask/{task_id}")
+@router.get(
+    "/task/queryBaseTask/{task_id}",
+    status_code=410,
+    responses=LEGACY_GONE_RESPONSES,
+)
 async def query_base_task(
     task_id: str,
 ):
     return _legacy_task_gone()
 
 
-@router.get("/task/getAllSessions/{user_name}")
+@router.get(
+    "/task/getAllSessions/{user_name}",
+    status_code=410,
+    responses=LEGACY_GONE_RESPONSES,
+)
 async def get_all_sessions(
     user_name: str,
 ):
     return _legacy_task_gone()
 
 
-@router.get("/task/getBaseTasksBySessionId/{session_id}")
+@router.get(
+    "/task/getBaseTasksBySessionId/{session_id}",
+    status_code=410,
+    responses=LEGACY_GONE_RESPONSES,
+)
 async def get_base_task_by_session_id(
     session_id: str,
 ):
     return _legacy_task_gone()
 
 
-@router.get("/task/getMetaTasksByParentTaskId/{parent_task_id}")
+@router.get(
+    "/task/getMetaTasksByParentTaskId/{parent_task_id}",
+    status_code=410,
+    responses=LEGACY_GONE_RESPONSES,
+)
 async def get_meta_tasks_by_parent_task_id(
     parent_task_id: str,
 ):

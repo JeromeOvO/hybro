@@ -370,6 +370,34 @@ class TestGatewayStream:
         assert chunks == ['data: {"ok": true}\n\n']
         mock_rl.record_request.assert_awaited_once_with(sample_api_key)
 
+    @pytest.mark.asyncio
+    async def test_stream_late_gateway_error_yields_jsonrpc_error(
+        self, sample_api_key, sample_message
+    ):
+        async def _failing_stream():
+            raise GatewayPlatformError(
+                502,
+                {
+                    "error": "agent_error",
+                    "message": "boom",
+                },
+            )
+            yield
+
+        mock_svc = _mock_gateway_service()
+        mock_svc.prepare_stream = AsyncMock(return_value=_failing_stream())
+        mock_rl = _mock_rate_limit()
+        body = GatewaySendRequest(message=sample_message)
+
+        result = await gateway_stream("agent-001", body, sample_api_key, mock_svc, mock_rl)
+        chunks = [chunk async for chunk in result.body_iterator]
+
+        assert chunks == [
+            'data: {"jsonrpc": "2.0", "id": "", "error": {"code": 502, '
+            '"message": "boom", "data": {"error": "agent_error", "message": "boom"}}}\n\n'
+        ]
+        mock_rl.record_request.assert_awaited_once_with(sample_api_key)
+
 
 # =============================================================================
 # GatewayService Tests

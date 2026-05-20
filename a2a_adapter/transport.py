@@ -128,6 +128,8 @@ def _stream_event_payload(event_data: dict[str, Any]) -> dict[str, Any]:
     result = event_data.get("result")
     if "jsonrpc" in event_data and isinstance(result, dict):
         return event_data
+    if "jsonrpc" in event_data and event_data.get("error") is not None:
+        return event_data
     if isinstance(result, dict):
         return result
 

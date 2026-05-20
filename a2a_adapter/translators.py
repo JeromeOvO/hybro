@@ -62,7 +62,8 @@ def a2a_event_to_stream_event(
         if value is not None:
             payload[key] = value
 
-    final = bool(_read(event_source, "final")) or status in TERMINAL_STATES
+    is_error = _read(event_source, "error") is not None
+    final = bool(_read(event_source, "final")) or status in TERMINAL_STATES or is_error
 
     return AgentStreamEvent(
         task_id=_first_non_empty(
@@ -77,6 +78,7 @@ def a2a_event_to_stream_event(
             _read(event_source, "event_type"),
             _read(event_source, "type"),
             _read(event_source, "kind"),
+            "error" if is_error else "",
             "message",
         ),
         payload=payload,
