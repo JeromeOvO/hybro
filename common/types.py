@@ -1,3 +1,9 @@
+"""SDK-free internal task and agent card schemas.
+
+A2A SDK models are intentionally converted at adapter boundaries so common
+modules can remain stable even when the external SDK surface changes.
+"""
+
 from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Literal, Self
