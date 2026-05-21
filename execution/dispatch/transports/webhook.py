@@ -164,6 +164,7 @@ class WebhookTransport(AgentTransport):
             agent_id=msg.agent_id or "",
             related_message_id=msg.related_message_id,
             user_id=msg.user_id,
+            client_request_id=msg.client_request_id,
             task_id=task.id if hasattr(task, "id") else None,
             context_id=task.context_id if hasattr(task, "context_id") else None,
         )

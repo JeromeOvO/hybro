@@ -440,7 +440,11 @@ class DirectTransport(AgentTransport):
                 total_steps=total_steps,
             )
 
-            created_at = task_info.get("created_at")
+            created_at = (
+                current_message.message_created_at.isoformat()
+                if current_message.message_created_at
+                else task_info.get("created_at")
+            )
 
             task_content = current_message.task_content
 
@@ -512,7 +516,11 @@ class DirectTransport(AgentTransport):
             user_message_id=user_message_id,
             token=token,
             task_info=task_info,
-            created_at=task_info.get("created_at") if task_info else None,
+            created_at=(
+                current_message.message_created_at.isoformat()
+                if current_message.message_created_at
+                else (task_info.get("created_at") if task_info else None)
+            ),
             step_number=step_number,
             total_steps=total_steps,
             send_sse=send_sse,
@@ -1258,6 +1266,12 @@ class DirectTransport(AgentTransport):
                 agent_name=agent_card.name,
                 agent_id=current_message.agent_id,
                 status=CommonTaskState.WORKING,
+                related_message_id=current_message.related_message_id,
+                created_at=(
+                    current_message.message_created_at.isoformat()
+                    if current_message.message_created_at
+                    else None
+                ),
                 step_number=step_number,
                 total_steps=total_steps,
                 client_request_id=current_message.client_request_id,

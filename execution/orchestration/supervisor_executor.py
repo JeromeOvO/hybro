@@ -41,6 +41,7 @@ from models.supervisor_v2 import (
     V2StepResult,
 )
 from models.processing import ProcessingStatus
+from models.room import CoordinatorAgentId
 from common.a2a_constants import SSEProcessingStatus
 from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
 
@@ -375,6 +376,64 @@ class SupervisorExecutor:
                     ],
                 )
             else:
+                # --- Guard: still-PAUSED concurrent agents from a prior DELEGATE ---
+                # When multiple hub relay agents are dispatched concurrently and
+                # one returns before the others, the trajectory has a mix of
+                # SUCCESS and PAUSED results for the same step.  The resume
+                # continuation is saved on every paused agent, so each return
+                # triggers a separate resume call.  Without this guard the LLM
+                # would be called with a partially-complete trajectory and might
+                # choose SYNTHESIZE / DONE before the remaining agents finish.
+                #
+                # Fix: if any result across all entries is still PAUSED, update
+                # the continuation for each remaining PAUSED agent (so it
+                # carries the now-partially-resolved trajectory) and pause again.
+                all_still_paused: list[V2StepResult] = [
+                    r
+                    for entry in trajectory.entries
+                    for r in entry.results
+                    if r.status == StepStatus.PAUSED
+                    and r.paused_message_id
+                ]
+                if all_still_paused:
+                    logger.info(
+                        "supervisor_resume_still_paused",
+                        extra={
+                            "room_id": room_id,
+                            "trajectory_id": trajectory.trajectory_id,
+                            "still_paused_count": len(all_still_paused),
+                            "still_paused_agents": [r.agent_name for r in all_still_paused],
+                        },
+                    )
+                    trajectory.status = TrajectoryStatus.RUNNING
+                    saved = await self._save_interrupted_state(
+                        kind=InterruptKind.PUSH_NOTIFICATION,
+                        trajectory=trajectory,
+                        paused_results=all_still_paused,
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        request_user_id=request_user_id,
+                        message_text=message_text,
+                        agent_registry=agent_registry,
+                        room_config=room_config,
+                        conversation_context=conversation_context,
+                        quoted_text=quoted_text,
+                    )
+                    if not saved:
+                        trajectory.status = TrajectoryStatus.FAILED
+                        return self._log_and_return(
+                            room_id, trajectory,
+                            SupervisorRunResult(
+                                status=RunStatus.FAILED, trajectory=trajectory
+                            ),
+                        )
+                    return self._log_and_return(
+                        room_id, trajectory,
+                        SupervisorRunResult(
+                            status=RunStatus.PAUSED, trajectory=trajectory
+                        ),
+                    )
+
                 # --- Ask supervisor for next action ---
                 decide_coro = self.supervisor_service.decide_next(
                     message_text=message_text,
@@ -821,6 +880,25 @@ class SupervisorExecutor:
                             )
                         except Exception:
                             logger.debug("SSE stage notification failed (synthesizing)", exc_info=True)
+                        try:
+                            summary_message_id = f"summary-{user_message_id}"
+                            client_req_id = await self.database_service.resolve_client_request_id_for_message_id(
+                                user_message_id
+                            )
+                            await self.sse_manager.send_task_submitted(
+                                room_id=room_id,
+                                message_id=summary_message_id,
+                                task_id=summary_message_id,
+                                agent_name="HYBRO AI",
+                                agent_id=CoordinatorAgentId.SUMMARY,
+                                status="working",
+                                related_message_id=user_message_id,
+                                created_at=utcnow().isoformat(),
+                                task_content="Summarizing agent responses\u2026",
+                                client_request_id=client_req_id,
+                            )
+                        except Exception:
+                            logger.debug("SSE summary working card failed", exc_info=True)
 
                     synth_coro = self.supervisor_service.synthesize_v2(
                         trajectory=trajectory,
@@ -1057,6 +1135,25 @@ class SupervisorExecutor:
                     )
                 except Exception:
                     logger.debug("SSE stage notification failed (budget synthesis)", exc_info=True)
+                try:
+                    summary_message_id = f"summary-{user_message_id}"
+                    client_req_id = await self.database_service.resolve_client_request_id_for_message_id(
+                        user_message_id
+                    )
+                    await self.sse_manager.send_task_submitted(
+                        room_id=room_id,
+                        message_id=summary_message_id,
+                        task_id=summary_message_id,
+                        agent_name="HYBRO AI",
+                        agent_id=CoordinatorAgentId.SUMMARY,
+                        status="working",
+                        related_message_id=user_message_id,
+                        created_at=utcnow().isoformat(),
+                        task_content="Summarizing agent responses\u2026",
+                        client_request_id=client_req_id,
+                    )
+                except Exception:
+                    logger.debug("SSE summary working card failed (budget)", exc_info=True)
 
             budget_synth_coro = self.supervisor_service.synthesize_v2(
                 trajectory=trajectory,
