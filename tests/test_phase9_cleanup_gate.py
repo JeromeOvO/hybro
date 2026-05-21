@@ -373,6 +373,26 @@ def test_no_numbered_duplicate_python_artifacts_are_shipped():
     )
 
 
+def test_container_does_not_define_platform_adapter_classes_inline():
+    tree = ast.parse(Path("container.py").read_text(), filename="container.py")
+    inline_adapters = {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+        and node.name in {"RateLimitCollectionAdapter", "MongoFileMetadataRepository"}
+    }
+
+    assert inline_adapters == set()
+
+    from platform_module.adapters import (
+        MongoFileMetadataRepository,
+        RateLimitCollectionAdapter,
+    )
+
+    assert RateLimitCollectionAdapter.__module__.startswith("platform_module.adapters.")
+    assert MongoFileMetadataRepository.__module__.startswith("platform_module.adapters.")
+
+
 def test_a2a_sdk_blockers_are_exact_current_files():
     blocked = _blocked_cleanup_paths(contract="sdk_confinement")
     imported = _sdk_import_files()
