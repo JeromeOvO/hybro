@@ -90,6 +90,25 @@ class TestCreateAgentGroup:
         assert result["success"] is False
         assert result["status_code"] == 500
 
+    @pytest.mark.asyncio
+    async def test_rejects_mismatched_owner_id(self, mock_db_service, mock_user):
+        """Should not allow creating a group for another owner."""
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "name": "Other User Group",
+            "owner_id": "someone-else",
+        })
+
+        result = await create_agent_group(
+            mock_request,
+            user=mock_user,
+            db=mock_db_service,
+        )
+
+        assert result["success"] is False
+        assert result["status_code"] == 403
+        mock_db_service.add_agent_group.assert_not_called()
+
 
 # =============================================================================
 # List Agent Groups Tests
@@ -121,6 +140,19 @@ class TestListAgentGroups:
         result = await list_agent_groups(owner_id=None)
         assert result["success"] is False
         assert result["status_code"] == 400
+
+    @pytest.mark.asyncio
+    async def test_rejects_mismatched_owner_filter(self, mock_db_service, mock_user):
+        """Should not allow listing another user's groups."""
+        result = await list_agent_groups(
+            owner_id="someone-else",
+            user=mock_user,
+            db=mock_db_service,
+        )
+
+        assert result["success"] is False
+        assert result["status_code"] == 403
+        mock_db_service.get_agent_groups_by_owner.assert_not_called()
 
 
 # =============================================================================
@@ -159,6 +191,19 @@ class TestGetAgentGroup:
 
         assert result["success"] is True
         assert result["group"]["group_id"] == "grp-001"
+
+    @pytest.mark.asyncio
+    async def test_rejects_group_owned_by_another_user(self, mock_db_service, mock_user):
+        """Should not return a user group owned by another user."""
+        group = AgentGroup(
+            group_id="grp-001", name="Other Group", type="user", owner_id="other-user"
+        )
+        mock_db_service.get_agent_group_by_id = AsyncMock(return_value=group)
+
+        result = await get_agent_group("grp-001", user=mock_user, db=mock_db_service)
+
+        assert result["success"] is False
+        assert result["status_code"] == 403
 
     @pytest.mark.asyncio
     async def test_returns_404_when_not_found(self, mock_db_service):
@@ -232,6 +277,11 @@ class TestDeleteAgentGroup:
     @pytest.mark.asyncio
     async def test_deletes_user_group(self, mock_db_service):
         """Should delete a user-created group."""
+        mock_db_service.get_agent_group_by_id = AsyncMock(
+            return_value=AgentGroup(
+                group_id="grp-001", name="My Group", type="user", owner_id="user-001"
+            )
+        )
         mock_db_service.delete_agent_group = AsyncMock(return_value=True)
 
         with patch(PATCH["agent_group.db_service"], mock_db_service):
@@ -252,6 +302,11 @@ class TestDeleteAgentGroup:
     @pytest.mark.asyncio
     async def test_handles_db_failure(self, mock_db_service):
         """Should return 500 when database delete fails."""
+        mock_db_service.get_agent_group_by_id = AsyncMock(
+            return_value=AgentGroup(
+                group_id="grp-001", name="My Group", type="user", owner_id="user-001"
+            )
+        )
         mock_db_service.delete_agent_group = AsyncMock(return_value=False)
 
         with patch(PATCH["agent_group.db_service"], mock_db_service):

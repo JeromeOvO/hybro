@@ -608,11 +608,10 @@ class TestSuggestAgents:
             ]
         })
         
-        with patch(
-            PATCH["agent_selection_service"], 
-            mock_selection_service
-        ):
-            response = await suggest_agents(mock_request)
+        response = await suggest_agents(
+            mock_request,
+            selection_service=mock_selection_service,
+        )
         
         assert response["success"] is True
         assert "agents" in response

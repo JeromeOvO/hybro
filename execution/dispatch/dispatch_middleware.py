@@ -10,8 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from a2a.types import Message
-
 from models.agent import Agent
 from models.processing import ProcessingResult
 from models.room import RoomAgentMessage
@@ -26,7 +24,7 @@ class DispatchContext:
     room_agent_message: RoomAgentMessage
     room_id: str
     user_message_id: str
-    prepared_message: Message
+    prepared_message: Any
     transport: str = "direct"  # "direct" | "relay"
     denied: bool = False
     deny_reason: str | None = None

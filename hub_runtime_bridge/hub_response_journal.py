@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import inspect
 from uuid import uuid4
 
-from common.utils.time import utcnow
+from common.utils.time import ensure_utc, utcnow
 
 
 class InMemoryHubResponseJournal:
@@ -44,7 +44,7 @@ class InMemoryHubResponseJournal:
             return None
         now = utcnow()
         expires_at = record.get("claim_expires_at")
-        if expires_at and expires_at > now:
+        if _claim_is_active(expires_at, now):
             return None
         token = str(uuid4())
         record.update(
@@ -85,10 +85,7 @@ class InMemoryHubResponseJournal:
             for record in self._records.values()
             if not record.get("processed")
             and not record.get("dead_lettered")
-            and (
-                record.get("claim_expires_at") is None
-                or record.get("claim_expires_at") <= now
-            )
+            and _claim_is_replayable(record.get("claim_expires_at"), now)
         ]
         return replayable[:limit]
 
@@ -254,6 +251,14 @@ async def _maybe_await(value):
     if inspect.isawaitable(value):
         return await value
     return value
+
+
+def _claim_is_active(value, comparison) -> bool:
+    return bool(value and ensure_utc(value) > ensure_utc(comparison))
+
+
+def _claim_is_replayable(value, comparison) -> bool:
+    return value is None or ensure_utc(value) <= ensure_utc(comparison)
 
 __all__ = [
     "HubResponseJournal",

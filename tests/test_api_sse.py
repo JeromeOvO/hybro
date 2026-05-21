@@ -67,6 +67,25 @@ class TestStreamRoomMessages:
         assert response.headers["Cache-Control"] == "no-cache"
         assert response.headers["Connection"] == "keep-alive"
 
+    @pytest.mark.asyncio
+    async def test_raises_403_when_stream_user_does_not_own_room(
+        self, mock_user_2, sample_room, patch_sse_deps
+    ):
+        """Should not open an SSE stream for a room owned by another user."""
+        deps = patch_sse_deps
+        deps["db_service"].get_room_by_room_id.return_value = sample_room
+
+        with pytest.raises(HTTPException) as exc_info:
+            await stream_room_messages(
+                room_id=sample_room.room_id,
+                user=mock_user_2,
+                manager=deps["sse_manager"],
+                db=deps["db_service"],
+            )
+
+        assert exc_info.value.status_code == 403
+        deps["sse_manager"].add_connection.assert_not_called()
+
 
 # =============================================================================
 # Room SSE Status Tests
@@ -92,6 +111,25 @@ class TestGetRoomSseStatus:
 
         assert result["connections"] == 2
         mock_sse_manager.get_room_status.assert_called_once_with(sample_room.room_id)
+
+    @pytest.mark.asyncio
+    async def test_raises_403_when_status_user_does_not_own_room(
+        self, mock_user_2, sample_room, patch_sse_deps
+    ):
+        """Should not disclose SSE status for a room owned by another user."""
+        deps = patch_sse_deps
+        deps["db_service"].get_room_by_room_id.return_value = sample_room
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_room_sse_status(
+                room_id=sample_room.room_id,
+                user=mock_user_2,
+                manager=deps["sse_manager"],
+                db=deps["db_service"],
+            )
+
+        assert exc_info.value.status_code == 403
+        deps["sse_manager"].get_room_status.assert_not_called()
 
 
 # =============================================================================

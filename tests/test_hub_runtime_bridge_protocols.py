@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 import inspect
 from pathlib import Path
 
@@ -110,6 +110,26 @@ async def test_journal_active_claim_blocks_same_worker_duplicate() -> None:
 
 
 @pytest.mark.asyncio
+async def test_journal_accepts_naive_claim_datetimes() -> None:
+    journal = InMemoryHubResponseJournal()
+    active = await journal.create_or_get({"task_id": "active"})
+    replayable = await journal.create_or_get({"task_id": "replayable"})
+
+    journal._records[active["journal_id"]]["claim_expires_at"] = datetime(
+        2999, 1, 1
+    )
+    journal._records[replayable["journal_id"]]["claim_expires_at"] = datetime(
+        2000, 1, 1
+    )
+
+    assert await journal.claim_for_processing(active["journal_id"], "worker-1") is None
+    replayable_records = await journal.find_replayable()
+    assert [record["journal_id"] for record in replayable_records] == [
+        replayable["journal_id"]
+    ]
+
+
+@pytest.mark.asyncio
 async def test_ownership_store_accepts_missing_hub_task_then_rejects_conflicting_aliases() -> None:
     store = InMemoryHubTaskOwnershipStore()
     first = await store.claim_or_refresh(
@@ -171,6 +191,38 @@ async def test_mongo_ownership_takeover_requires_atomic_expiry_match() -> None:
 
     with pytest.raises(ValueError, match="held by another worker"):
         await store.claim_or_refresh({"agent_message_id": "m1"}, "worker-2", "lease-2")
+
+
+@pytest.mark.asyncio
+async def test_mongo_ownership_accepts_naive_mongo_lease_datetimes() -> None:
+    class Collection:
+        async def find_one(self, query):
+            return {
+                "ownership_id": "own-1",
+                "owner_id": "worker-1",
+                "lease_expires_at": datetime(2026, 5, 21, 11, 0),
+                "aliases": {"agent_message_id": "m1"},
+            }
+
+    class Mongo:
+        def collection(self, name):
+            assert name == "hub_task_ownership"
+            return Collection()
+
+    store = MongoHubTaskOwnershipStore(Mongo())
+
+    assert await store.resolve_owner("m1") is None
+
+
+@pytest.mark.asyncio
+async def test_in_memory_ownership_accepts_naive_lease_datetimes() -> None:
+    store = InMemoryHubTaskOwnershipStore()
+    record = await store.claim_or_refresh({"agent_message_id": "m1"}, "worker-1")
+    store._records[record["ownership_id"]]["lease_expires_at"] = datetime(
+        2026, 5, 21, 11, 0
+    )
+
+    assert await store.resolve_owner("m1") is None
 
 
 @pytest.mark.asyncio

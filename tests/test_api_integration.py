@@ -184,21 +184,45 @@ class TestAgentHTTPIntegration:
         assert body["success"] is True
 
     @pytest.mark.asyncio
-    async def test_register_agent_validates_missing_url(self, http_client):
+    async def test_register_agent_validates_missing_url(
+        self, http_client, integration_app
+    ):
         """POST /agent/registerAgent should 400 when agent_url missing."""
-        resp = await http_client.post(
-            "/api/v1/agent/registerAgent",
-            json={},
+        from api import agent as agent_api
+
+        integration_app.dependency_overrides[agent_api.get_agent_center] = (
+            lambda: MagicMock()
         )
+        try:
+            resp = await http_client.post(
+                "/api/v1/agent/registerAgent",
+                json={},
+            )
+        finally:
+            integration_app.dependency_overrides.pop(agent_api.get_agent_center, None)
 
         assert resp.status_code == 400
         body = resp.json()
         assert "agent_url" in body.get("detail", "").lower()
 
     @pytest.mark.asyncio
-    async def test_get_agent_validates_empty_id(self, http_client):
+    async def test_get_agent_validates_empty_id(self, http_client, integration_app):
         """GET /agent/getAgent/ with whitespace ID returns error response."""
-        resp = await http_client.get("/api/v1/agent/getAgent/%20")
+        from api import agent as agent_api
+
+        integration_app.dependency_overrides[agent_api.get_agent_center] = (
+            lambda: MagicMock()
+        )
+        integration_app.dependency_overrides[agent_api.get_agent_liveness_checker] = (
+            lambda: AsyncMock()
+        )
+        try:
+            resp = await http_client.get("/api/v1/agent/getAgent/%20")
+        finally:
+            integration_app.dependency_overrides.pop(agent_api.get_agent_center, None)
+            integration_app.dependency_overrides.pop(
+                agent_api.get_agent_liveness_checker, None
+            )
 
         # Through HTTP, whitespace is URL-decoded to " " which is truthy,
         # so the endpoint proceeds and the service returns success=False.
@@ -218,23 +242,15 @@ class TestHITLHTTPIntegration:
     @pytest.mark.asyncio
     async def test_get_pending_through_http(self, http_client, integration_user):
         """GET /rooms/{room_id}/hitl/pending should return JSON array."""
-        from models.room import Room
-
-        mock_room = Room(
-            room_id="room-hitl-http",
-            room_name="HITL Room",
-            room_owner_id=integration_user.user_id,
-            room_owner_name="Tester",
-            room_agent_set={},
+        room_ownership_reader = MagicMock()
+        room_ownership_reader.get_room_owner = AsyncMock(
+            return_value=integration_user.user_id
         )
-
-        mock_db = MagicMock()
-        mock_db.get_room_by_room_id = AsyncMock(return_value=mock_room)
 
         mock_hitl = MagicMock()
         mock_hitl.get_pending_hitl = AsyncMock(return_value=[])
 
-        with patch(PATCH["room_center.db_service"], mock_db):
+        with patch("api.hitl.room_ownership_reader", room_ownership_reader):
             with patch("api.hitl.hitl_manager", mock_hitl):
                 resp = await http_client.get(
                     "/api/v1/rooms/room-hitl-http/hitl/pending"

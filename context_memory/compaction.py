@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 
 from common.protocols import ContentStorageRepository, MemoryRepository
 from common.utils.context_utils import estimate_tokens
@@ -248,6 +249,8 @@ async def _compaction_write_was_stale_noop(
 async def expand_turn_content_from_turn(
     content_repository: ContentStorageRepository,
     turn_doc: dict,
+    *,
+    now: datetime | None = None,
 ) -> str:
     turn = turn_from_dict(turn_doc)
     if turn.representation == "full":
@@ -260,6 +263,7 @@ async def expand_turn_content_from_turn(
         content_repository,
         turn.content_ref.to_dict(),
         turn.turn_id,
+        now=now,
     )
 
 
@@ -268,6 +272,8 @@ async def expand_turn_content(
     content_repository: ContentStorageRepository,
     room_id: str,
     turn_id: str,
+    *,
+    now: datetime | None = None,
 ) -> str | None:
     doc = await repository.get_room_memory(room_id)
     if not doc:
@@ -278,6 +284,7 @@ async def expand_turn_content(
             return await expand_turn_content_from_turn(
                 content_repository,
                 turn.to_dict(),
+                now=now,
             )
     return None
 
@@ -297,7 +304,9 @@ async def fetch_turn_content(
     if turn is None:
         return f"[Error: Turn {turn_id} not found in room history]"
     try:
-        return await expand_turn_content_from_turn(content_repository, turn.to_dict())
+        return await expand_turn_content_from_turn(
+            content_repository, turn.to_dict(), now=now
+        )
     except ContentExpiredError:
         return f"[Error: Content for turn {turn_id} is no longer available (expired)]"
     except NotImplementedError as exc:

@@ -1,9 +1,9 @@
 from datetime import datetime
 from enum import Enum
-from typing import ClassVar
+from typing import Any, ClassVar
 
-from a2a.types import AgentCard
-from pydantic import BaseModel, field_serializer
+from common.types import AgentCard
+from pydantic import BaseModel, field_serializer, field_validator
 
 # ---------------------------------------------------------------------------
 # Agent-card field protection constants
@@ -30,6 +30,15 @@ AGENT_CARD_HUB_NO_OVERWRITE: frozenset[str] = frozenset({"iconUrl"})
 AGENT_CARD_HEALTH_NO_SYNC: frozenset[str] = frozenset({"url", "iconUrl"})
 
 
+def coerce_legacy_agent_card(value: Any) -> Any:
+    if value is None or isinstance(value, AgentCard) or isinstance(value, dict):
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return model_dump(mode="json")
+    return value
+
+
 class AgentStatus(Enum):
     active = "active"
     inactive = "inactive"
@@ -50,6 +59,11 @@ class Agent(BaseModel):
 
     # Agent card
     agent_card: AgentCard
+
+    @field_validator("agent_card", mode="before")
+    @classmethod
+    def _coerce_agent_card(cls, value: Any) -> Any:
+        return coerce_legacy_agent_card(value)
 
     # Normalized URL for duplicate detection (derived from agent_card.url)
     normalized_url: str | None = None

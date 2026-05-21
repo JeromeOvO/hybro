@@ -5,46 +5,64 @@ import sys
 import time
 from contextlib import asynccontextmanager
 
-from a2a.types import TaskState
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from uvicorn.config import LOGGING_CONFIG
 
-from api import (
-    a2a_tasks,
-    agent,
-    agent_group,
-    discovery,
-    discovery_api_keys,
-    files,
-    gateway,
-    hitl,
-    hub,
-    inspection_center,
-    memory_center,
-    orchestration_center,
-    relay,
-    room_center,
-    sse,
-    task,
-    webhooks,
+import api_gateway
+from app_shell.api_key_auth import MongoAPIKeyAuthenticator
+from app_shell.health_check import AppShellHealthCheck, HealthCheck
+from api_gateway.dependencies import (
+    APIGatewayDeps,
+    bind_api_gateway_deps,
+    missing_required_deps,
 )
-from common.auth import get_current_user
+from api_gateway.routes import (
+    a2a_task_routes as a2a_tasks,
+    agent_group_routes as agent_group,
+    agent_routes as agent,
+    discovery_api_key_routes as discovery_api_keys,
+    discovery_routes as discovery,
+    files_routes as files,
+    hitl_routes as hitl,
+    hub_routes as hub,
+    inspection_routes as inspection_center,
+    memory_routes as memory_center,
+    orchestration_routes as orchestration_center,
+    platform_gateway_routes as gateway,
+    relay_routes as relay,
+    room_routes as room_center,
+    sse_routes as sse,
+    task_routes as task,
+    webhook_routes as webhooks,
+)
+from api_gateway.viewsets import agent as agent_viewset
+from api_gateway.viewsets import base as viewset
+from app_shell.viewset import AppShellViewSetRepositoryProvider
+from common.api_key_auth import bind_api_key_authenticator
+from common.auth import bind_auth_config
 from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
 from config.settings import settings
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
-from jobs.cleanup_orphaned_uploads import orphaned_upload_cleaner
-from jobs.compaction_sweep import compaction_sweep
+from jobs.cleanup_orphaned_uploads import (
+    OrphanedUploadCleanerDeps,
+    orphaned_upload_cleaner,
+)
+from jobs.compaction_sweep import CompactionSweepDeps, compaction_sweep
 from jobs.constants import ALL_JOB_NAMES
-from jobs.stale_task_checker import stale_task_checker
+from jobs.stale_task_checker import StaleTaskCheckerDeps, stale_task_checker
 from services.agent_health_service import agent_health_service
 from services.sse_services import sse_manager
 
 load_dotenv()
+bind_auth_config(
+    clerk_secret_key_value=settings.clerk_secret_key,
+    authorized_parties=tuple(settings.frontend_origins),
+)
+bind_api_key_authenticator(MongoAPIKeyAuthenticator(mongodb))
 
 
 class InterceptHandler(logging.Handler):
@@ -128,6 +146,11 @@ def _assert_startup_bindings_complete(app: FastAPI) -> None:
     if getattr(app.state, "execution_deps", None) is None:
         errors.append("app.state.execution_deps")
 
+    if getattr(app.state, "platform_facade", None) is None:
+        errors.append("app.state.platform_facade")
+    for missing in missing_required_deps():
+        errors.append(f"api_gateway.{missing}")
+
     if errors:
         raise RuntimeError(
             "Startup binding incomplete - missing: "
@@ -170,7 +193,7 @@ async def lifespan(app: FastAPI):
         pinecone_db.connect()
 
         if mongodb.client is not None:
-            from a2a_adapter import AgentCardResolverImpl
+            from a2a_adapter import AgentCardResolverImpl, AgentTransportImpl
             from container import (
                 create_agent_deps,
                 create_context_memory_deps,
@@ -184,26 +207,105 @@ async def lifespan(app: FastAPI):
                 create_execution_deps,
                 create_execution_facade,
                 create_mongo_dal,
+                create_object_storage_dal,
+                create_platform_config,
+                create_platform_deps,
+                create_platform_facade,
                 create_room_deps,
                 create_vector_dal,
             )
+            from a2a_adapter import artifact_storage as a2a_artifact_storage
+            from common.utils.a2a_helpers import bind_a2a_artifact_storage
             from context_memory.config import ContextMemoryLLMConfig
             from llm_gateway import LLMGatewayImpl, ModelRegistryImpl
             from services.agent_capability_issue_service import (
                 CapabilityIssueExclusionReader,
+                capability_issue_service,
             )
             from services.agent_matcher import agent_matcher
+            from services.agent_resolver_service import agent_resolver_service
             from services.agent_selection_service import agent_selection_service
             from services.agent_service import agent_service
             from services.compaction_service import compaction_service
-            from services.content_storage_service import content_storage_service
             from services.context_assembly_service import context_assembly_service
             from services.memory_search_service import memory_search_service
             from services.memory_service import room_memory_service
+            from services.notification_service import notification_service
+            from services.debate_service import debate_service
+            from services.room_coordinator_service import room_coordinator_service
             from services.room_membership_source import LegacyRoomMembershipSeedSource
-            from services.room_services import room_services
+            from services.room_services import build_turn_content, room_services
+            from services.room_supervisor_service import (
+                SupervisorPlanningError,
+                room_supervisor_service,
+            )
+            from services.task_service import task_service
+            from services.openai_service import openai_service
+            from services.s3_service import s3_service
+            from modules.AgentCenter import AgentCenter
+            from modules.InspectionCenter import InspectionCenter
+            from modules.MemoryCenter import MemoryCenter
+            from modules.RoomCenter import RoomCenter
+            from database.mongodb import get_db
+            from database.repository import Repository
+            from platform_module.rate_limit import PlatformAgentRateLimiter
 
+            a2a_artifact_storage.bind_a2a_storage_dependencies(
+                storage_service=s3_service,
+                s3_bucket_name=settings.s3_bucket_name,
+                max_file_size_mb=settings.max_file_size_mb,
+            )
+            bind_a2a_artifact_storage(a2a_artifact_storage)
             await mongodb.create_context_memory_indexes()
+            agent_rate_limiter = PlatformAgentRateLimiter(
+                collection=mongodb.agent_requests_collection,
+            )
+            viewset.bind_viewset_dependencies(
+                provider=AppShellViewSetRepositoryProvider(
+                    db_provider=get_db,
+                    create_repository=Repository,
+                ),
+            )
+            agent_viewset.bind_agent_viewset_dependencies(
+                embedding_source=openai_service,
+                vector_index_service=pinecone_db,
+            )
+
+            class AppShellAgentAvatarManager:
+                def __init__(self, storage, agent_store) -> None:
+                    self._storage = storage
+                    self._agent_store = agent_store
+
+                async def store_avatar(
+                    self,
+                    *,
+                    agent_id: str,
+                    s3_key: str,
+                    content: bytes,
+                    content_type: str,
+                ) -> str:
+                    await self._storage.upload_file(
+                        file_data=content,
+                        s3_key=s3_key,
+                        content_type=content_type,
+                        content_length=len(content),
+                    )
+                    icon_url = self._storage.get_public_url(s3_key)
+                    await self._agent_store.agents_collection.update_one(
+                        {"agent_id": agent_id},
+                        {"$set": {"agent_card.iconUrl": icon_url}},
+                    )
+                    return icon_url
+
+            agent.bind_agent_dependencies(
+                center=AgentCenter(),
+                service=agent_service,
+                issue_service=capability_issue_service,
+                avatar_manager=AppShellAgentAvatarManager(s3_service, mongodb),
+            )
+            inspection_center.bind_inspection_dependencies(InspectionCenter())
+            memory_center.bind_memory_dependencies(MemoryCenter())
+            discovery_api_keys.bind_api_key_store(mongodb)
             mongo_dal = create_mongo_dal(database=mongodb.db)
             vector_dal = create_vector_dal()
             _delivery_config = create_delivery_config(settings)
@@ -243,6 +345,8 @@ async def lifespan(app: FastAPI):
                 run_event_notification_from_payload,
             )
             from execution.dispatch.task_notifications import TaskNotificationAdapter
+            from execution.dispatch.response_handler import AgentResponseHandler
+            from execution.dispatch.transports.webhook import WebhookTransport
             from execution.hitl.adapters import (
                 A2AHITLContinuationAdapter,
                 HITLTaskNotificationAdapter,
@@ -270,12 +374,24 @@ async def lifespan(app: FastAPI):
                 run_command_handler,
                 run_event_sse_enabled,
             )
-            from services.task_notification_service import notify_task_update
+            from services.run_metrics import increment_counter
+            from services.task_notification_service import (
+                _notify_task_update_impl,
+                notify_task_update,
+            )
+            from a2a_adapter.task_status import coerce_task_state
+            room_center.bind_room_dependencies(
+                center=RoomCenter(),
+                database_service=_db_svc,
+                selection_service=agent_selection_service,
+            )
+            a2a_tasks.bind_a2a_task_dependencies(_db_svc)
+            agent_group.bind_agent_group_dependencies(_db_svc)
+            sse.bind_sse_dependencies(_db_svc, sse_manager)
 
             async def notify_task_update_with_string_state(**kwargs):
                 state = kwargs.get("state")
-                if isinstance(state, str):
-                    kwargs["state"] = TaskState(state)
+                kwargs["state"] = coerce_task_state(state)
                 return await notify_task_update(**kwargs)
 
             bind_hitl_service(
@@ -312,11 +428,12 @@ async def lifespan(app: FastAPI):
 
             model_registry = ModelRegistryImpl()
             llm_provider = LLMGatewayImpl(model_registry=model_registry)
+            agent_card_resolver = AgentCardResolverImpl()
             _agent_deps = create_agent_deps(
                 mongo=mongo_dal,
                 vector=vector_dal,
                 llm_provider=llm_provider,
-                card_resolver=AgentCardResolverImpl(),
+                card_resolver=agent_card_resolver,
                 hub_liveness=None,
                 exclusion_reader=CapabilityIssueExclusionReader(),
                 gateway_base_url=settings.gateway_base_url,
@@ -335,19 +452,62 @@ async def lifespan(app: FastAPI):
             _room_facade = _room_deps.room_registry
             room_services.bind_facade(_room_facade)
             room_center.room_center.bind_facade(_room_facade)
+            hitl.bind_room_ownership_reader(_room_facade)
             execution_room_message_center.bind(
                 create_room_message_center(
+                    room_services=room_services,
+                    database_service=_db_svc,
+                    sse_manager=sse_manager,
+                    room_coordinator_service=room_coordinator_service,
+                    openai_service=openai_service,
+                    notification_service=notification_service,
+                    agent_resolver_service=agent_resolver_service,
+                    a2a_service=a2a_service,
+                    task_service=task_service,
+                    room_memory_service=room_memory_service,
+                    debate_service=debate_service,
+                    rate_limit_service=agent_rate_limiter,
+                    room_supervisor_service=room_supervisor_service,
                     hitl_coordinator=hitl_service,
                     task_notifications=TaskNotificationAdapter(
                         notify_task_update_with_string_state
                     ),
+                    task_notification_impl=_notify_task_update_impl,
+                    agent_health_service=agent_health_service,
+                    s3_service=s3_service,
+                    capability_issue_service=capability_issue_service,
+                    context_assembly_service=context_assembly_service,
+                    memory_search_service=memory_search_service,
+                    compaction_service=compaction_service,
+                    build_turn_content_func=build_turn_content,
+                    supervisor_planning_error_cls=SupervisorPlanningError,
+                    orphan_threshold_minutes=settings.orphan_threshold_minutes,
+                    debate_rounds=settings.debate_rounds,
+                    cloud_health_cache_ttl=settings.cloud_health_cache_ttl,
+                    cloud_health_check_timeout=settings.cloud_health_check_timeout,
                 )
             )
-            room_center.room_message_center.bind_facade(_room_facade)
+            execution_room_message_center.bind_facade(_room_facade)
+
+            def create_webhook_transport():
+                handler = AgentResponseHandler(
+                    db=_db_svc,
+                    sse=sse_manager,
+                    room_message_center=execution_room_message_center,
+                    notification_service=notification_service,
+                    task_notification_impl=_notify_task_update_impl,
+                )
+                return WebhookTransport(
+                    response_handler=handler,
+                    db=_db_svc,
+                    task_notifier=notify_task_update_with_string_state,
+                )
+
+            webhooks.bind_webhook_dependencies(create_webhook_transport)
 
             execution_facade = create_execution_facade(
                 room_center=room_center.room_center,
-                room_message_center=room_center.room_message_center,
+                room_message_center=execution_room_message_center,
                 hitl_service=hitl_service,
                 run_lifecycle=run_lifecycle,
                 run_reader=RunQueryAdapter(mongodb.runs_collection),
@@ -360,7 +520,7 @@ async def lifespan(app: FastAPI):
                     cancel_remote_task=a2a_service.cancel_remote_task,
                     notify_task_update=notify_task_update_with_string_state,
                 ),
-                agent_response_handler=room_center.room_message_center.agent_response_handler,
+                agent_response_handler=execution_room_message_center.agent_response_handler,
                 event_publisher=_delivery_deps.event_publisher,
                 legacy_processing_status_publisher=legacy_processing_status_publisher,
                 run_event_enabled=run_event_sse_enabled,
@@ -397,7 +557,7 @@ async def lifespan(app: FastAPI):
             room_services.bind_execution_event_deps(
                 processing_status_emitter=emit_room_processing_status,
             )
-            room_center.room_message_center.bind_execution_event_deps(
+            execution_room_message_center.bind_execution_event_deps(
                 emit_room_processing_status
             )
             room_center.bind_execution_deps(_execution_deps)
@@ -416,13 +576,45 @@ async def lifespan(app: FastAPI):
                     summary_model="context_memory_legacy_json_model",
                 ),
             )
+            object_storage = create_object_storage_dal()
+            platform_config = create_platform_config(settings)
+            platform_deps = create_platform_deps(
+                agent_deps=_agent_deps,
+                mongo=mongo_dal,
+                agent_transport=AgentTransportImpl(),
+                agent_card_resolver=agent_card_resolver,
+                object_storage=object_storage,
+                content_storage_repository=context_memory_facade.content_repository,
+                discovery_query_expander=openai_service,
+                logger=logger,
+            )
+            platform_facade = create_platform_facade(
+                config=platform_config,
+                deps=platform_deps,
+            )
+
+            gateway.bind_gateway_dependencies(
+                platform_facade.gateway_service,
+                platform_facade.gateway_rate_limiter,
+            )
+            discovery.bind_discovery_dependencies(
+                platform_facade.discovery_service,
+                platform_facade.discovery_rate_limiter,
+                default_limit=settings.discovery_default_limit,
+            )
+            files.bind_file_dependencies(
+                platform_facade.file_storage,
+                _room_deps.room_registry,
+            )
+            app.state.platform_facade = platform_facade
+            app.state.platform_deps = platform_deps
             # TODO(phase-6/7): Register ContextMemoryEventHandler with EventPublisher
             # once Delivery wires runtime MessageCommitted delivery. Phase 5 keeps the
             # direct compaction call path via legacy services.
             _context_memory_deps = create_context_memory_deps(context_memory_facade)
             context_assembly_service.bind_facade(context_memory_facade)
             memory_search_service.bind_facade(context_memory_facade)
-            content_storage_service.bind_facade(context_memory_facade)
+            compaction_service.bind_content_storage(platform_facade.content_storage)
             compaction_service.bind_facade(context_memory_facade)
             room_memory_service.bind_facade(context_memory_facade)
             room_services.bind_context_memory(_context_memory_deps.memory_manager)
@@ -502,6 +694,22 @@ async def lifespan(app: FastAPI):
 
         agent_health_service.set_leader_election(_leader)
         stale_task_checker.set_leader_election(_leader)
+        stale_task_checker.configure_timing(
+            stale_check_minutes=settings.stale_check_minutes,
+            task_expiry_hours=settings.task_expiry_hours,
+            pending_task_warning_hours=settings.pending_task_warning_hours,
+            orphan_threshold_minutes=settings.orphan_threshold_minutes,
+            processing_status_expiry_minutes=settings.processing_status_expiry_minutes,
+        )
+        stale_task_checker.set_runtime_deps(
+            StaleTaskCheckerDeps(
+                db_service=_db_svc,
+                rooms_collection=mongodb.rooms_collection,
+                notify_task_update=notify_task_update,
+                increment_counter=increment_counter,
+                a2a_service=a2a_service,
+            )
+        )
         if _execution_deps is not None:
             from jobs.stale_task_checker import (
                 StaleHITLDeps,
@@ -573,7 +781,21 @@ async def lifespan(app: FastAPI):
                 )
             )
         compaction_sweep.set_leader_election(_leader)
+        compaction_sweep.set_sweep_deps(
+            CompactionSweepDeps(
+                room_memories_collection=mongodb.room_memories_collection,
+                get_room_ids_with_non_terminal_runs=mongodb.get_room_ids_with_non_terminal_runs,
+                compaction_service=compaction_service,
+            )
+        )
         orphaned_upload_cleaner.set_leader_election(_leader)
+        orphaned_upload_cleaner.set_cleanup_deps(
+            OrphanedUploadCleanerDeps(
+                file_uploads_collection=mongodb.file_uploads_collection,
+                room_user_messages_collection=mongodb.room_user_messages_collection,
+                object_storage=s3_service,
+            )
+        )
 
         _bg_started = True
         await agent_health_service.start()
@@ -591,15 +813,19 @@ async def lifespan(app: FastAPI):
         await orphaned_upload_cleaner.start()
 
         # Initialize relay service
-        from services.agent_liveness_service import bind_agent_liveness_deps
+        from services.agent_liveness_service import (
+            bind_agent_liveness_deps,
+            check_and_sync_liveness,
+        )
         from services.database_service import db_service as _db_svc
         from services.relay_service import (
             RelayHubLivenessReader,
             init_relay_service,
         )
+        from app_shell.room_lock import RedisRoomDistributedLock
         from execution.facade import hub_agent_response_internal_to_agent_event
         from modules.RoomMessageCenter import room_message_center as _rmc
-        _rmc.set_redis_service(_redis_service)
+        _rmc.set_room_distributed_lock(RedisRoomDistributedLock(_redis_service))
         _relay_svc = init_relay_service(
             mongo=mongodb, database_service=_db_svc, sse_manager=sse_manager,
             room_message_center=_rmc,
@@ -612,6 +838,9 @@ async def lifespan(app: FastAPI):
             ),
             response_converter=hub_agent_response_internal_to_agent_event,
         )
+        app.state.relay_service = _relay_svc
+        relay.bind_relay_dependencies(_relay_svc)
+        hub.bind_hub_dependencies(_relay_svc)
         if _delivery_deps is not None:
             router = _relay_svc.internal_response_dispatcher
             if router is None:
@@ -630,6 +859,7 @@ async def lifespan(app: FastAPI):
                 hub_liveness_reader=hub_liveness_reader,
                 agent_registry_writer=_agent_deps.agent_registry_writer,
             )
+            agent.bind_agent_liveness_checker(check_and_sync_liveness)
         await _relay_svc.start()
         logger.info("Relay service initialized and heartbeat checker started")
 
@@ -643,6 +873,16 @@ async def lifespan(app: FastAPI):
             )
             _relay_svc.set_stream_service(_relay_streams)
             logger.info("Redis Streams relay enabled (separate pool for blocking XREAD)")
+
+        bind_api_gateway_deps(
+            APIGatewayDeps(
+                gateway_service=getattr(gateway, "gateway_service", None),
+                file_storage=getattr(files, "file_storage", None),
+                relay_service=getattr(relay, "relay_service", None),
+                execution_deps=getattr(app.state, "execution_deps", None),
+                platform_facade=getattr(app.state, "platform_facade", None),
+            )
+        )
 
     except BaseException:
         # ── Startup failure: tear down only what was opened ──
@@ -729,11 +969,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")
 
-# Add Discovery, Gateway & Relay API CORS middleware
-# This applies permissive CORS to /api/v1/discovery/*, /api/v1/gateway/*, and /api/v1/relay/* paths
-# Note: Middleware runs in reverse order, so adding first means it runs last
-app.add_middleware(DiscoveryCORSMiddleware)
-
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -742,6 +977,11 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-API-Key", "Cache-Control", "sentry-trace", "baggage"]
 )
+
+# Add Discovery, Gateway & Relay API CORS middleware
+# This applies permissive CORS to /api/v1/discovery/*, /api/v1/gateway/*, and /api/v1/relay/* paths
+# Note: Middleware runs in reverse order, so adding after global CORS makes it run first.
+app.add_middleware(DiscoveryCORSMiddleware, api_prefix=settings.api_prefix)
 
 
 # Pure function — trivially testable without lifespan/DB
@@ -826,160 +1066,32 @@ def compute_health_status(
     }
 
 
+health_check_service: HealthCheck = AppShellHealthCheck(
+    redis_url=settings.redis_url,
+    compute_health_status=compute_health_status,
+)
+
+
+def get_health_check() -> HealthCheck:
+    return health_check_service
+
+
 # Health check endpoint (no prefix, no dependencies)
 @app.get("/health")
-async def health_check(request: Request):
-    from services.relay_service import relay_service as _relay_svc_health
-    delivery_facade = getattr(request.app.state, "delivery_facade", None)
-    if delivery_facade is not None:
-        await delivery_facade.refresh_health()
-    legacy_redis_service = getattr(request.app.state, "legacy_redis_service", None)
-    result = compute_health_status(
-        delivery_pubsub_connected=bool(
-            delivery_facade and delivery_facade.delivery_pubsub_connected
-        ),
-        delivery_kv_connected=bool(
-            delivery_facade and delivery_facade.delivery_kv_connected
-        ),
-        legacy_redis_service_connected=bool(
-            legacy_redis_service and legacy_redis_service.is_connected
-        ),
-        relay_streams_available=bool(
-            _relay_svc_health
-            and _relay_svc_health._streams
-            and _relay_svc_health._streams.is_connected
-        ),
-        redis_url=settings.redis_url,
-        change_stream_connected=bool(
-            delivery_facade and delivery_facade.change_stream_connected
-        ),
-    )
-    return JSONResponse(content=result["body"], status_code=result["status_code"])
+async def health_check(
+    request: Request,
+    health: HealthCheck = Depends(get_health_check),
+):
+    return await health.check(request)
 
 
 # Include API routers with /api/v1 prefix and global authentication
 api_prefix = os.getenv("API_PREFIX", "/api/v1")
 
-# Add global authentication dependency to all routers
-# This requires authentication for ALL API endpoints under /api/v1
-# Agent router has mixed auth - some endpoints are public (GET), some require auth (POST/DELETE)
-app.include_router(
-    agent.router,
-    prefix=api_prefix,
-    tags=["agent"],
-    # No global auth - handled per-route in agent.py
-)
-app.include_router(
-    inspection_center.router,
-    prefix=api_prefix,
-    tags=["inspection"],
-    dependencies=[Depends(get_current_user)],
-)
-app.include_router(
-    memory_center.router,
-    prefix=api_prefix,
-    tags=["memory"],
-    dependencies=[Depends(get_current_user)],
-)
-app.include_router(
-    orchestration_center.router,
-    prefix=api_prefix,
-    tags=["orchestration"],
-    dependencies=[Depends(get_current_user)],
-)
-app.include_router(
-    room_center.router,
-    prefix=api_prefix,
-    tags=["room"],
-    dependencies=[Depends(get_current_user)],
-)
-app.include_router(
-    hitl.router,
-    prefix=api_prefix,
-    tags=["hitl"],
-    dependencies=[Depends(get_current_user)],
-)
-app.include_router(
-    hub.router,
-    prefix=api_prefix,
-    tags=["hub"],
-    dependencies=[Depends(get_current_user)],
-)
-app.include_router(
-    task.router,
-    prefix=api_prefix,
-    tags=["task"],
-    dependencies=[Depends(get_current_user)],
-)
-app.include_router(
-    sse.router,
-    prefix=api_prefix,
-    tags=["sse"],
-    # SSE endpoints handle auth via get_current_user_with_query_token (supports ?token= for EventSource)
-)
-app.include_router(
-    agent_group.router,
-    prefix=api_prefix,
-    tags=["agent_group"],
-    dependencies=[Depends(get_current_user)],
-)
+app.include_router(api_gateway.router, prefix=api_prefix)
 
-app.include_router(
-    files.router,
-    prefix=api_prefix,
-    tags=["files"],
-    dependencies=[Depends(get_current_user)],
-)
 
-# Discovery API - External public API with API key auth 
-# Uses open CORS to allow external access from any origin
-app.include_router(
-    discovery.router,
-    prefix=api_prefix,
-    tags=["discovery"],
-    # Auth handled per-route via X-API-Key header in discovery.py
-)
+def main() -> None:
+    import uvicorn
 
-app.include_router(
-    discovery_api_keys.router,
-    prefix=api_prefix,
-    tags=["api_keys"],
-)
-
-app.include_router(
-    a2a_tasks.router,
-    prefix=api_prefix,
-    tags=["a2a_tasks"],
-    # Auth handled per-route in a2a_tasks.py
-)
-
-# Gateway API - External public API with API key auth
-# Uses open CORS to allow external SDK/hub access from any origin
-app.include_router(
-    gateway.router,
-    prefix=api_prefix,
-    tags=["gateway"],
-    # Auth handled per-route via X-API-Key header in gateway.py
-)
-# Relay API - Hub communication endpoints with API key / JWT auth
-# Uses open CORS to allow hub daemon access from any origin
-app.include_router(
-    relay.router,
-    prefix=api_prefix,
-    tags=["relay"],
-    # Auth handled per-route via X-API-Key or Bearer token in relay.py
-)
-# Webhook endpoint - no auth prefix, no authentication (uses token validation)
-app.include_router(
-    webhooks.router,
-    prefix=api_prefix,
-    tags=["webhooks"],
-    # No auth - webhook uses Bearer token validation
-)
-# For APIs that do not require authentication (user is optional)
-# app.include_router(
-#     router,
-#     prefix=api_prefix,
-#     tags=["public-apis"],
-#     dependencies=[Depends(get_optional_user)]
-# )
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

@@ -72,4 +72,15 @@ class HubAgentResponseSink(Protocol):
     ) -> None: ...
 
 
-__all__ = ["ExecutionEngine", "HITLManager", "HubAgentResponseSink"]
+@runtime_checkable
+class RoomDistributedLock(Protocol):
+    async def acquire(self, room_id: str, owner: str, ttl: int) -> bool | None: ...
+    async def release(self, room_id: str, owner: str) -> None: ...
+
+
+__all__ = [
+    "ExecutionEngine",
+    "HITLManager",
+    "HubAgentResponseSink",
+    "RoomDistributedLock",
+]

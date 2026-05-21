@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -975,6 +975,45 @@ async def test_content_upsert_and_get(content_repo):
 
 
 @pytest.mark.asyncio
+async def test_content_upsert_replaces_existing_content_and_expiry(content_repo):
+    first_expiry = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    second_expiry = datetime(2026, 1, 2, tzinfo=timezone.utc)
+
+    await content_repo.upsert_full_content(
+        document_id="doc-old",
+        room_id="r1",
+        turn_id="t1",
+        content="old",
+        content_type="text",
+        content_hash="old-hash",
+        stored_at=first_expiry,
+        expires_at=first_expiry,
+        turn_notes={"version": "old"},
+    )
+    stored = await content_repo.upsert_full_content(
+        document_id="doc-new",
+        room_id="r1",
+        turn_id="t1",
+        content="new",
+        content_type="text/markdown",
+        content_hash="new-hash",
+        stored_at=second_expiry,
+        expires_at=second_expiry,
+        turn_notes={"version": "new"},
+    )
+
+    doc = await content_repo.get_content_by_turn_id("r1", "t1")
+    assert stored == "doc-new"
+    assert doc["document_id"] == "doc-new"
+    assert doc["content"] == "new"
+    assert doc["content_type"] == "text/markdown"
+    assert doc["content_hash"] == "new-hash"
+    assert doc["stored_at"] == second_expiry
+    assert doc["expires_at"] == second_expiry
+    assert doc["turn_notes"] == {"version": "new"}
+
+
+@pytest.mark.asyncio
 async def test_content_get_by_document_id_with_legacy_fallback(content_repo, mongo):
     await mongo.collections["conversation_content"].insert_one(
         {"_id": "legacy-id", "room_id": "r1", "turn_id": "t1", "content": "legacy"}
@@ -1018,6 +1057,46 @@ async def test_content_text_search_projection_excludes_full_content(content_repo
     assert projection["stored_at"] == 1
 
 
+@pytest.mark.asyncio
+async def test_content_text_search_filters_expired_documents(content_repo, mongo):
+    await content_repo.text_search("r1", "query", limit=10)
+
+    query, _kwargs = mongo.collections["conversation_content"].find_calls[-1]
+    expiry_filter = query["$or"]
+
+    assert {"expires_at": {"$exists": False}} in expiry_filter
+    assert {"expires_at": None} in expiry_filter
+    assert any(
+        isinstance(item.get("expires_at"), dict) and "$gt" in item["expires_at"]
+        for item in expiry_filter
+    )
+
+
+@pytest.mark.asyncio
+async def test_content_hydrate_turn_notes_filters_expired_documents(content_repo, mongo):
+    coll = mongo.collections["conversation_content"]
+    await coll.insert_one(
+        {
+            "room_id": "r1",
+            "turn_id": "expired",
+            "turn_notes": {"one_liner": "expired"},
+            "expires_at": datetime.now(timezone.utc) - timedelta(days=1),
+        }
+    )
+    await coll.insert_one(
+        {
+            "room_id": "r1",
+            "turn_id": "active",
+            "turn_notes": {"one_liner": "active"},
+            "expires_at": datetime.now(timezone.utc) + timedelta(days=1),
+        }
+    )
+
+    docs = await content_repo.hydrate_turn_notes("r1", ["expired", "active"])
+
+    assert [doc["turn_id"] for doc in docs] == ["active"]
+
+
 def _matches(doc: dict, query: dict) -> bool:
     for key, expected in query.items():
         if key == "$and":
@@ -1044,6 +1123,13 @@ def _matches(doc: dict, query: dict) -> bool:
                     return False
             elif "$in" in expected:
                 if actual not in expected["$in"]:
+                    return False
+            elif "$gt" in expected:
+                if actual is None or actual <= expected["$gt"]:
+                    return False
+            elif "$exists" in expected:
+                exists = actual is not None
+                if exists is not bool(expected["$exists"]):
                     return False
             else:
                 return False

@@ -8,16 +8,19 @@ from uuid import uuid4
 
 from agent import AgentFacade, AgentMongoRepository
 from common.protocols import (
+    AgentCallCounter,
     AgentCardResolver,
     AgentExclusionReader,
     AgentManagement,
     AgentMatcher,
     AgentRegistry,
     AgentRegistryWriter,
+    AgentTransport,
     ContentStorageRepository,
     ContextAssembler,
     EventPublisher,
     ExecutionEngine,
+    GatewayDiscoveryProvider,
     HubAgentResponseSink,
     HubDispatchPolicy,
     HubDispatchPort,
@@ -30,6 +33,7 @@ from common.protocols import (
     MongoCollection,
     MemoryRepository,
     MongoDAL,
+    ObjectStorageDAL,
     RedisKV,
     RedisPubSub,
     RoomHistoryReader,
@@ -68,6 +72,8 @@ from delivery.sse.deduplication import TerminalStatusDeduplicator
 from delivery.sse.manager import SSETransportImpl
 from delivery.types import TaskRunner
 from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
+from platform_module import PlatformConfig, PlatformDeps, PlatformFacade
+from platform_module.deps import DiscoveryQueryExpander, LoggerLike
 
 
 @dataclass(frozen=True)
@@ -76,6 +82,7 @@ class AgentDeps:
     agent_matcher: AgentMatcher
     agent_management: AgentManagement
     agent_registry_writer: AgentRegistryWriter
+    agent_call_counter: AgentCallCounter
 
 
 @dataclass(frozen=True)
@@ -116,6 +123,43 @@ class HubDeps:
     hub_facade: Any
 
 
+class RateLimitCollectionAdapter:
+    def __init__(self, collection: Any, collection_name: str) -> None:
+        self._collection = collection
+        self.collection_name = collection_name
+
+    async def count_documents(self, query: dict) -> int:
+        if hasattr(self._collection, "count_documents"):
+            return await self._collection.count_documents(query)
+        return await self._collection.count(query)
+
+    async def find_one(
+        self, query: dict, sort: list[tuple[str, int]] | None = None
+    ) -> dict | None:
+        return await self._collection.find_one(query, sort=sort)
+
+    async def insert_one(self, doc: dict):
+        return await self._collection.insert_one(doc)
+
+
+class MongoFileMetadataRepository:
+    def __init__(self, collection: Any) -> None:
+        self._collection = collection
+
+    async def create(self, data: dict) -> str:
+        await self._collection.insert_one(data)
+        return data["file_id"]
+
+    async def get(self, file_id: str) -> dict | None:
+        return await self._collection.find_one({"file_id": file_id})
+
+    async def delete(self, file_id: str) -> bool:
+        return await self._collection.delete_one({"file_id": file_id})
+
+    async def list_for_room(self, room_id: str) -> list[dict]:
+        return await self._collection.find({"room_id": room_id})
+
+
 def create_mongo_dal(*, database: Any) -> MongoDAL:
     from dal.mongo import MongoDALImpl
 
@@ -126,6 +170,101 @@ def create_vector_dal() -> VectorDAL:
     from dal.pinecone import VectorDALImpl
 
     return VectorDALImpl()
+
+
+def create_object_storage_dal() -> ObjectStorageDAL:
+    from dal.s3 import ObjectStorageDALImpl
+
+    return ObjectStorageDALImpl()
+
+
+def create_platform_config(app_settings: Any = settings) -> PlatformConfig:
+    from models.file_upload import ALLOWED_MIME_TYPES
+
+    return PlatformConfig(
+        gateway_base_url=getattr(app_settings, "gateway_base_url", ""),
+        api_prefix=getattr(app_settings, "api_prefix", "/api/v1"),
+        gateway_rate_limit_per_key=getattr(
+            app_settings, "gateway_rate_limit_per_key", 100
+        ),
+        gateway_rate_limit_global=getattr(
+            app_settings, "gateway_rate_limit_global", 1000
+        ),
+        discovery_rate_limit_per_key=getattr(
+            app_settings, "discovery_rate_limit_per_key", 100
+        ),
+        discovery_rate_limit_global=getattr(
+            app_settings, "discovery_rate_limit_global", 1000
+        ),
+        discovery_default_limit=getattr(app_settings, "discovery_default_limit", 5),
+        discovery_confidence_threshold=getattr(
+            app_settings, "discovery_confidence_threshold", 0.0
+        ),
+        max_upload_size_bytes=getattr(app_settings, "max_file_size_mb", 25)
+        * 1024
+        * 1024,
+        allowed_mime_types=tuple(sorted(ALLOWED_MIME_TYPES)),
+        presigned_url_ttl_seconds=getattr(
+            app_settings, "s3_presigned_url_ttl", 3600
+        ),
+        content_storage_ttl_seconds=getattr(
+            app_settings, "compaction_content_ttl_days", 0
+        )
+        * 24
+        * 60
+        * 60,
+    )
+
+
+def create_platform_deps(
+    *,
+    agent_deps: AgentDeps,
+    mongo: MongoDAL,
+    agent_transport: AgentTransport,
+    agent_card_resolver: AgentCardResolver | None = None,
+    object_storage: ObjectStorageDAL | None = None,
+    content_storage_repository: ContentStorageRepository | None = None,
+    discovery_provider: GatewayDiscoveryProvider | None = None,
+    discovery_query_expander: DiscoveryQueryExpander | None = None,
+    redis: RedisKV | None = None,
+    logger: LoggerLike | None = None,
+) -> PlatformDeps:
+    return PlatformDeps(
+        agent_registry=agent_deps.agent_registry,
+        agent_matcher=agent_deps.agent_matcher,
+        agent_management=agent_deps.agent_management,
+        discovery_provider=discovery_provider,
+        discovery_query_expander=discovery_query_expander,
+        agent_transport=agent_transport,
+        agent_card_resolver=agent_card_resolver,
+        agent_call_counter=agent_deps.agent_call_counter,
+        redis=redis,
+        gateway_rate_limit_collection=RateLimitCollectionAdapter(
+            mongo.collection("gateway_api_requests"),
+            "gateway_api_requests",
+        ),
+        discovery_rate_limit_collection=RateLimitCollectionAdapter(
+            mongo.collection("discovery_api_requests"),
+            "discovery_api_requests",
+        ),
+        agent_rate_limit_collection=RateLimitCollectionAdapter(
+            mongo.collection("agent_requests"),
+            "agent_requests",
+        ),
+        object_storage=object_storage,
+        file_metadata_repository=MongoFileMetadataRepository(
+            mongo.collection("file_uploads")
+        ),
+        content_storage_repository=content_storage_repository,
+        clock=utcnow,
+        logger=logger,
+    )
+
+
+def create_platform_facade(
+    *, config: PlatformConfig, deps: PlatformDeps
+) -> PlatformFacade:
+    return PlatformFacade(config=config, deps=deps)
 
 
 def create_delivery_config(app_settings: Any = settings) -> DeliveryConfig:
@@ -327,6 +466,7 @@ def create_agent_deps(
         agent_matcher=facade,
         agent_management=facade,
         agent_registry_writer=facade,
+        agent_call_counter=facade,
     )
 
 

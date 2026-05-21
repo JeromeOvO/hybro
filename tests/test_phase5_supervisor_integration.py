@@ -695,17 +695,14 @@ class TestCompactionTrigger:
 
         mock_memory_service = AsyncMock()
         mock_memory_service.add_synthesis_to_history.return_value = "turn_synth_123"
+        rmc.room_memory_service = mock_memory_service
 
-        with patch(
-            "services.memory_service.room_memory_service",
-            mock_memory_service,
-        ):
-            await rmc._handle_v2_run_result(
-                result=result,
-                room_id="test_room",
-                user_message_id="msg-1",
-                user_message=user_message,
-            )
+        await rmc._handle_v2_run_result(
+            result=result,
+            room_id="test_room",
+            user_message_id="msg-1",
+            user_message=user_message,
+        )
 
         # Compaction is now awaited inline (not fire-and-forget) per §6.9
         rmc._trigger_compaction_safe.assert_awaited_once_with("test_room")

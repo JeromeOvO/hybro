@@ -247,6 +247,19 @@ class HubFacade:
 
         return stream()
 
+    def connect_hub(
+        self, hub_id: str, api_key: Any, last_event_id: str | None = None
+    ) -> AsyncIterator[dict]:
+        return self.connect_hub_stream(hub_id, last_event_id=last_event_id)
+
+    async def process_publish(self, hub_id: str, request: Any, api_key: Any) -> None:
+        payload = (
+            request.model_dump(mode="json")
+            if hasattr(request, "model_dump")
+            else dict(request)
+        )
+        await self.publish_from_hub(hub_id, payload)
+
     async def publish_from_hub(self, hub_id: str, payload: dict) -> None:
         if "owner_id" not in payload and self.deps.hub_repository:
             hub = await self.deps.hub_repository.get_by_id(hub_id)

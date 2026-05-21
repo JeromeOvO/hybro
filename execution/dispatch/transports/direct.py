@@ -11,18 +11,23 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
-from a2a.types import (
-    AgentCard,
-    GetTaskRequest,
-    JSONRPCErrorResponse,
-    Message,
-    Part,
-    Task,
-    TaskQueryParams,
-    TaskState,
-    TaskStatus,
+from a2a_adapter.message_factory import build_message_from_parts
+from a2a_adapter.task_artifacts import materialize_non_text_parts_as_artifact
+from a2a_adapter.task_requests import (
+    build_get_task_request,
+    get_response_result,
+    is_jsonrpc_error_response,
 )
+from a2a_adapter.task_status import build_task_status
 
+from common.a2a_constants import (
+    CommonTaskState,
+    INTERACTIVE_STATES,
+    TERMINAL_STATES,
+    SyntheticTaskId,
+    is_failure_state,
+    is_terminal_state,
+)
 from common.utils.a2a_helpers import (
     extract_error_message,
     extract_text_from_artifacts,
@@ -34,6 +39,7 @@ from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from models.processing import ProcessingContext, ProcessingResult, ProcessingStatus
 from models.room import RoomAgentMessage
+from models.error import A2AServiceError
 from execution.dispatch.agent_event import AgentEvent
 from execution.dispatch.dispatch_middleware import DispatchContext
 from execution.state.task_state_manager import (
@@ -42,13 +48,6 @@ from execution.state.task_state_manager import (
     state_str,
 )
 from execution.dispatch.transports.base import AgentTransport
-from common.a2a_constants import (
-    INTERACTIVE_STATES,
-    TERMINAL_STATES,
-    SyntheticTaskId,
-    is_failure_state,
-    is_terminal_state,
-)
 
 logger = get_logger(__name__)
 
@@ -58,13 +57,13 @@ class MessageStreamingState:
     """Tracks mutable streaming state across sub-handlers during a single streaming session."""
 
     full_response_text: str = ""
-    accumulated_parts: list[Part] = field(default_factory=list)
+    accumulated_parts: list[Any] = field(default_factory=list)
     non_text_parts: list[dict] = field(default_factory=list)
     inline_conversion_count: int = 0
     agent_message_id: str | None = None
     message_added_to_history: bool = False
     stream_finalized: bool = False
-    final_state: TaskState | None = None
+    final_state: Any | None = None
 
 
 class DirectTransport(AgentTransport):
@@ -83,6 +82,8 @@ class DirectTransport(AgentTransport):
         task_service,
         sse_manager,
         database_service,
+        s3_service=None,
+        capability_issue_service=None,
     ) -> None:
         super().__init__(response_handler)
         self.tsm = tsm
@@ -90,14 +91,13 @@ class DirectTransport(AgentTransport):
         self.a2a_service = a2a_service
         self.task_service = task_service
         self.database_service = database_service
-        self._s3_service = None
+        self._s3_service = s3_service
+        self.capability_issue_service = capability_issue_service
 
     @property
     def s3_service(self):
         if self._s3_service is None:
-            from services.s3_service import s3_service
-
-            self._s3_service = s3_service
+            raise RuntimeError("Direct transport S3 dependency has not been bound")
         return self._s3_service
 
     # ------------------------------------------------------------------
@@ -107,7 +107,7 @@ class DirectTransport(AgentTransport):
     async def _emit_terminal(
         self,
         ctx: ProcessingContext,
-        state: TaskState,
+        state: Any,
         *,
         error: str | None = None,
         parts: list[dict] | None = None,
@@ -121,7 +121,7 @@ class DirectTransport(AgentTransport):
         """
         msg = ctx.current_message
         kind: str
-        if state == TaskState.canceled:
+        if state == CommonTaskState.CANCELED:
             kind = "canceled"
         elif is_failure_state(state):
             kind = "error"
@@ -198,7 +198,7 @@ class DirectTransport(AgentTransport):
                     exc_info=True,
                 )
                 await self.tsm.transition_task(
-                    message, TaskState.failed,
+                    message, CommonTaskState.FAILED,
                     error=f"Agent streaming failed: {exc}",
                     persist=True,
                 )
@@ -209,31 +209,28 @@ class DirectTransport(AgentTransport):
                     user_message_id=user_message_id,
                 )
                 await self._emit_terminal(
-                    fallback_ctx, TaskState.failed,
+                    fallback_ctx, CommonTaskState.FAILED,
                     error=f"Agent streaming failed: {exc}",
                 )
 
                 # Record capability issue for the agent
-                try:
-                    from services.agent_capability_issue_service import (
-                        capability_issue_service,
-                    )
-
-                    await capability_issue_service.record_issue(
-                        agent_id=message.agent_id,
-                        error_message=f"Agent streaming failed: {exc}",
-                        query_text=(
-                            message.task_content
-                            or (message.message_content.message_text or "")
-                        ),
-                        room_id=room_id,
-                        message_id=message.message_id,
-                    )
-                except Exception as rec_exc:  # noqa: BLE001
-                    logger.warning(
-                        "DirectTransport: Failed to record capability issue: %s",
-                        rec_exc,
-                    )
+                if self.capability_issue_service is not None:
+                    try:
+                        await self.capability_issue_service.record_issue(
+                            agent_id=message.agent_id,
+                            error_message=f"Agent streaming failed: {exc}",
+                            query_text=(
+                                message.task_content
+                                or (message.message_content.message_text or "")
+                            ),
+                            room_id=room_id,
+                            message_id=message.message_id,
+                        )
+                    except Exception as rec_exc:  # noqa: BLE001
+                        logger.warning(
+                            "DirectTransport: Failed to record capability issue: %s",
+                            rec_exc,
+                        )
 
                 return ProcessingResult(ProcessingStatus.FAILED, "")
             if status != ProcessingStatus.SUCCESS:
@@ -259,7 +256,7 @@ class DirectTransport(AgentTransport):
                 task = get_task(message)
                 was_canceled = (
                     (token and token.is_cancelled)
-                    or (task and task.status and task.status.state == TaskState.canceled)
+                    or (task and task.status and task.status.state == CommonTaskState.CANCELED)
                 )
                 if was_canceled:
                     return ProcessingResult(ProcessingStatus.CANCELED)
@@ -267,7 +264,7 @@ class DirectTransport(AgentTransport):
 
         if full_response_text is None and paused_message_id:
             task = get_task(message)
-            if task and task.status and task.status.state == TaskState.input_required:
+            if task and task.status and task.status.state == CommonTaskState.INPUT_REQUIRED:
                 logger.info(
                     "DirectTransport.dispatch: Agent returned interactive state %s for message %s",
                     task.status.state,
@@ -333,7 +330,11 @@ class DirectTransport(AgentTransport):
         is a single-element list ``[count]`` shared across calls for the same
         message so the per-message cap is enforced.
         """
-        from common.utils.a2a_helpers import convert_pydantic_artifacts_to_s3
+        from a2a_adapter import artifact_storage as a2a_artifact_storage
+        from common.utils.a2a_helpers import (
+            bind_a2a_artifact_storage,
+            convert_pydantic_artifacts_to_s3,
+        )
 
         if not artifact.parts:
             return
@@ -341,6 +342,10 @@ class DirectTransport(AgentTransport):
         if conversion_counter is None:
             conversion_counter = [0]
 
+        a2a_artifact_storage.bind_a2a_storage_dependencies(
+            storage_service=self.s3_service,
+        )
+        bind_a2a_artifact_storage(a2a_artifact_storage)
         new_total = await convert_pydantic_artifacts_to_s3(
             [artifact], room_id, message_id,
             converted_so_far=conversion_counter[0],
@@ -360,8 +365,16 @@ class DirectTransport(AgentTransport):
         Delegates to the shared helper in a2a_helpers.  Returns the updated
         running total so callers can keep the per-message cap accurate.
         """
-        from common.utils.a2a_helpers import convert_inline_bytes_to_s3
+        from a2a_adapter import artifact_storage as a2a_artifact_storage
+        from common.utils.a2a_helpers import (
+            bind_a2a_artifact_storage,
+            convert_inline_bytes_to_s3,
+        )
 
+        a2a_artifact_storage.bind_a2a_storage_dependencies(
+            storage_service=self.s3_service,
+        )
+        bind_a2a_artifact_storage(a2a_artifact_storage)
         return await convert_inline_bytes_to_s3(
             non_text_parts, room_id, message_id,
             converted_so_far=converted_so_far,
@@ -371,48 +384,8 @@ class DirectTransport(AgentTransport):
     def _materialize_non_text_parts_as_artifact(
         task, non_text_parts: list[dict]
     ) -> None:
-        """Wrap accumulated non-text streaming parts into an A2A artifact.
-
-        This ensures the multimodal data is persisted in the DB alongside
-        any artifacts produced by ``artifact_update`` events, so that
-        ``notify_task_update`` / hydration can recover them after reconnect.
-
-        Uses ``a2a.types.Artifact`` / ``a2a.types.Part`` (RootModel wrapper)
-        to stay compatible with the task serializer.
-        """
-        from uuid import uuid4
-
-        from a2a.types import Artifact as A2AArtifact
-        from a2a.types import DataPart, FilePart
-        from a2a.types import Part as A2APart
-
-        if not non_text_parts:
-            return
-
-        wrapped_parts: list[A2APart] = []
-        for p in non_text_parts:
-            kind = p.get("kind")
-            try:
-                if kind == "file":
-                    wrapped_parts.append(A2APart(root=FilePart(**p)))
-                elif kind == "data":
-                    wrapped_parts.append(A2APart(root=DataPart(**p)))
-            except Exception:
-                logger.warning("Skipping invalid non-text part during materialization: %s", kind)
-
-        if not wrapped_parts:
-            return
-
-        if task.artifacts is None:
-            task.artifacts = []
-
-        artifact = A2AArtifact(
-            artifact_id=uuid4().hex,
-            parts=wrapped_parts,
-            name="streaming-multimodal",
-            metadata={"source": "streaming_non_text"},
-        )
-        task.artifacts.append(artifact)
+        """Wrap accumulated non-text streaming parts into a task artifact."""
+        materialize_non_text_parts_as_artifact(task, non_text_parts)
 
     # ------------------------------------------------------------------
     # Shared helpers
@@ -421,7 +394,7 @@ class DirectTransport(AgentTransport):
     async def _try_cancel_remote_task(
         self,
         current_message: RoomAgentMessage,
-        agent_card: AgentCard,
+        agent_card: Any,
     ) -> None:
         """Best-effort, fire-and-forget cancellation of the remote A2A agent task."""
         task = get_task(current_message)
@@ -445,8 +418,8 @@ class DirectTransport(AgentTransport):
     async def _setup_task_tracking(
         self,
         current_message: RoomAgentMessage,
-        agent_card: AgentCard,
-        prepared_message: Message,
+        agent_card: Any,
+        prepared_message: Any,
         room_id: str,
         step_number: int | None = None,
         total_steps: int | None = None,
@@ -484,7 +457,7 @@ class DirectTransport(AgentTransport):
                 task_id=SyntheticTaskId.PENDING,
                 agent_name=agent_card.name,
                 agent_id=current_message.agent_id,
-                status=TaskState.working,
+                status=CommonTaskState.WORKING,
                 related_message_id=current_message.related_message_id,
                 created_at=created_at,
                 step_number=step_number,
@@ -513,8 +486,8 @@ class DirectTransport(AgentTransport):
     async def _setup_tracking_context(
         self,
         current_message: RoomAgentMessage,
-        agent_card: AgentCard,
-        prepared_message: Message,
+        agent_card: Any,
+        prepared_message: Any,
         room_id: str,
         user_message_id: str,
         *,
@@ -552,18 +525,18 @@ class DirectTransport(AgentTransport):
 
     async def _poll_task_until_complete(
         self,
-        agent_card: AgentCard,
+        agent_card: Any,
         task_id: str,
         message_id: str,
         timeout_seconds: int = 120,
         initial_delay: float = 0.5,
         max_delay: float = 5.0,
         token: CancellationToken | None = None,
-    ) -> Task | None:
+    ) -> Any | None:
         """Poll an agent for task completion with exponential backoff.
 
         Returns:
-            The completed Task if found, None if timeout, error, or cancelled
+            The completed task if found, None if timeout, error, or cancelled
         """
         start_time = asyncio.get_event_loop().time()
         delay = initial_delay
@@ -613,11 +586,9 @@ class DirectTransport(AgentTransport):
 
             try:
                 async with self.a2a_service.create_a2a_client(agent_card) as a2a_client:
-                    response = await a2a_client.get_task(
-                        GetTaskRequest(id=task_id, params=TaskQueryParams(id=task_id))
-                    )
+                    response = await a2a_client.get_task(build_get_task_request(task_id))
 
-                if not response or isinstance(response.root, JSONRPCErrorResponse):
+                if not response or is_jsonrpc_error_response(response):
                     logger.warning(
                         "DirectTransport: Poll %d for task %s returned error/empty",
                         poll_count,
@@ -625,7 +596,7 @@ class DirectTransport(AgentTransport):
                     )
                     continue
 
-                task = response.root.result
+                task = get_response_result(response)
                 if task is None:
                     logger.warning(
                         "DirectTransport: Poll %d for task %s returned no result",
@@ -670,8 +641,8 @@ class DirectTransport(AgentTransport):
     async def handle_streaming_response(
         self,
         current_message: RoomAgentMessage,
-        agent_card: AgentCard,
-        prepared_message: Message,
+        agent_card: Any,
+        prepared_message: Any,
         room_id: str,
         user_message_id: str,
         *,
@@ -700,7 +671,7 @@ class DirectTransport(AgentTransport):
             if token and token.is_cancelled:
                 return await self._handle_streaming_cancellation(ctx, streaming_state)
 
-            if isinstance(a2a_response.root, JSONRPCErrorResponse):
+            if is_jsonrpc_error_response(a2a_response):
                 return await self._handle_streaming_error(
                     a2a_response, ctx, streaming_state
                 )
@@ -746,10 +717,10 @@ class DirectTransport(AgentTransport):
             "DirectTransport: Streaming cancelled for message %s", ctx.user_message_id
         )
         await self.tsm.transition_task(
-            ctx.current_message, TaskState.canceled, persist=True
+            ctx.current_message, CommonTaskState.CANCELED, persist=True
         )
         if ctx.task_info:
-            await self._emit_terminal(ctx, TaskState.canceled)
+            await self._emit_terminal(ctx, CommonTaskState.CANCELED)
         # NOTE: Do NOT send processing_status here — QueueExecutor handles
         # workflow-level SSE after all siblings are persisted.
         await self._try_cancel_remote_task(ctx.current_message, ctx.agent_card)
@@ -765,35 +736,32 @@ class DirectTransport(AgentTransport):
         error_message = a2a_response.root.error.model_dump_json()
         logger.error("DirectTransport: Agent error: %s", error_message)
         await self.tsm.transition_task(
-            ctx.current_message, TaskState.failed, error=error_message,
+            ctx.current_message, CommonTaskState.FAILED, error=error_message,
             persist=True,
         )
         if ctx.task_info:
-            await self._emit_terminal(ctx, TaskState.failed, error=error_message)
+            await self._emit_terminal(ctx, CommonTaskState.FAILED, error=error_message)
         if ctx.send_sse:
             await self.sse_manager.send_error(ctx.room_id, error_message)
 
         # Record capability issue for the agent
-        try:
-            from services.agent_capability_issue_service import (
-                capability_issue_service,
-            )
-
-            await capability_issue_service.record_issue(
-                agent_id=ctx.current_message.agent_id,
-                error_message=error_message,
-                query_text=(
-                    ctx.current_message.task_content
-                    or (ctx.current_message.message_content.message_text or "")
-                ),
-                room_id=ctx.room_id,
-                message_id=ctx.current_message.message_id,
-            )
-        except Exception as rec_exc:  # noqa: BLE001
-            logger.warning(
-                "DirectTransport: Failed to record capability issue: %s",
-                rec_exc,
-            )
+        if self.capability_issue_service is not None:
+            try:
+                await self.capability_issue_service.record_issue(
+                    agent_id=ctx.current_message.agent_id,
+                    error_message=error_message,
+                    query_text=(
+                        ctx.current_message.task_content
+                        or (ctx.current_message.message_content.message_text or "")
+                    ),
+                    room_id=ctx.room_id,
+                    message_id=ctx.current_message.message_id,
+                )
+            except Exception as rec_exc:  # noqa: BLE001
+                logger.warning(
+                    "DirectTransport: Failed to record capability issue: %s",
+                    rec_exc,
+                )
 
         return ProcessingStatus.FAILED, streaming_state.full_response_text
 
@@ -825,7 +793,7 @@ class DirectTransport(AgentTransport):
             if task.history is None:
                 task.history = []
 
-            updated_message = Message(
+            updated_message = build_message_from_parts(
                 kind="message",
                 role=result.role,
                 message_id=streaming_state.agent_message_id,
@@ -900,7 +868,7 @@ class DirectTransport(AgentTransport):
                     ctx.current_message, state, persist=True
                 )
             else:
-                task.status = TaskStatus(state=state)
+                task.status = build_task_status(state)
                 await self.tsm.persist_message(ctx.current_message)
 
         if state in TERMINAL_STATES:
@@ -1063,7 +1031,7 @@ class DirectTransport(AgentTransport):
 
         if task and not already_terminal:
             if streaming_state.stream_finalized:
-                final_st = streaming_state.final_state or TaskState.completed
+                final_st = streaming_state.final_state or CommonTaskState.COMPLETED
                 if is_failure_state(final_st):
                     if streaming_state.full_response_text:
                         ctx.current_message.message_content.message_text = (
@@ -1086,19 +1054,19 @@ class DirectTransport(AgentTransport):
                             streaming_state.full_response_text
                         )
                     await self.tsm.transition_task(
-                        ctx.current_message, TaskState.completed, persist=True
+                        ctx.current_message, CommonTaskState.COMPLETED, persist=True
                     )
-                    await self._emit_terminal(ctx, TaskState.completed)
+                    await self._emit_terminal(ctx, CommonTaskState.COMPLETED)
             elif streaming_state.full_response_text:
                 ctx.current_message.message_content.message_text = (
                     streaming_state.full_response_text
                 )
                 await self.tsm.transition_task(
                     ctx.current_message,
-                    TaskState.completed,
+                    CommonTaskState.COMPLETED,
                     persist=True,
                 )
-                await self._emit_terminal(ctx, TaskState.completed)
+                await self._emit_terminal(ctx, CommonTaskState.COMPLETED)
             else:
                 logger.warning(
                     "DirectTransport: Stream ended without terminal status or content for %s",
@@ -1106,10 +1074,10 @@ class DirectTransport(AgentTransport):
                 )
                 await self.tsm.transition_task(
                     ctx.current_message,
-                    TaskState.failed,
+                    CommonTaskState.FAILED,
                     persist=True,
                 )
-                await self._emit_terminal(ctx, TaskState.failed)
+                await self._emit_terminal(ctx, CommonTaskState.FAILED)
                 return ProcessingStatus.FAILED, streaming_state.full_response_text
 
         if already_terminal:
@@ -1144,7 +1112,7 @@ class DirectTransport(AgentTransport):
         return ProcessingStatus.SUCCESS, streaming_state.full_response_text
 
     async def _handle_a2a_response_for_room(
-        self, room_agent_message: RoomAgentMessage, message_data: None | Task | Message
+        self, room_agent_message: RoomAgentMessage, message_data: Any | None
     ) -> bool:
         if message_data is None:
             logger.error("DirectTransport: process_a2a_response returned None")
@@ -1209,12 +1177,11 @@ class DirectTransport(AgentTransport):
         if raw_response is None:
             return {"type": "message", "message_id": message_id, "content": ""}
 
-        if isinstance(raw_response.root, JSONRPCErrorResponse):
-            from services.a2a_service import A2AServiceError
+        if is_jsonrpc_error_response(raw_response):
+            root = getattr(raw_response, "root", raw_response)
+            raise A2AServiceError(str(root.error.message))
 
-            raise A2AServiceError(str(raw_response.root.error.message))
-
-        result = raw_response.root.result
+        result = get_response_result(raw_response)
 
         if result.kind == "message":
             from common.utils.a2a_helpers import extract_parts
@@ -1254,8 +1221,8 @@ class DirectTransport(AgentTransport):
     async def handle_sync_response(
         self,
         current_message: RoomAgentMessage,
-        agent_card: AgentCard,
-        prepared_message: Message,
+        agent_card: Any,
+        prepared_message: Any,
         room_id: str,
         _user_id: str | None,
         *,
@@ -1290,7 +1257,7 @@ class DirectTransport(AgentTransport):
                 task_id=SyntheticTaskId.DEGRADED,
                 agent_name=agent_card.name,
                 agent_id=current_message.agent_id,
-                status=TaskState.working,
+                status=CommonTaskState.WORKING,
                 step_number=step_number,
                 total_steps=total_steps,
                 client_request_id=current_message.client_request_id,
@@ -1305,11 +1272,11 @@ class DirectTransport(AgentTransport):
                 message_id,
             )
             await self.tsm.transition_task(
-                current_message, TaskState.canceled,
+                current_message, CommonTaskState.CANCELED,
                 persist=True,
             )
             if task_info:
-                await self._emit_terminal(ctx, TaskState.canceled)
+                await self._emit_terminal(ctx, CommonTaskState.CANCELED)
             return False, "", None, None
 
         # Call the agent
@@ -1345,47 +1312,44 @@ class DirectTransport(AgentTransport):
                 message_id,
             )
             await self.tsm.transition_task(
-                current_message, TaskState.canceled,
+                current_message, CommonTaskState.CANCELED,
                 persist=True,
             )
             if task_info:
-                await self._emit_terminal(ctx, TaskState.canceled)
+                await self._emit_terminal(ctx, CommonTaskState.CANCELED)
             await self._try_cancel_remote_task(current_message, agent_card)
             return False, "", None, None
         except Exception as exc:
             logger.error("Agent error: %s", exc, exc_info=True)
             await self.tsm.transition_task(
                 current_message,
-                TaskState.failed,
+                CommonTaskState.FAILED,
                 error=str(exc),
                 persist=True,
             )
             if task_info:
-                await self._emit_terminal(ctx, TaskState.failed, error=str(exc),
+                await self._emit_terminal(ctx, CommonTaskState.FAILED, error=str(exc),
                 )
             await self.sse_manager.send_error(room_id, str(exc))
 
             # Record capability issue for the agent
-            try:
-                from services.agent_capability_issue_service import (
-                    capability_issue_service,
-                )
-
-                await capability_issue_service.record_issue(
-                    agent_id=current_message.agent_id,
-                    error_message=str(exc),
-                    query_text=(
-                        current_message.task_content
-                        or (current_message.message_content.message_text or "")
-                    ),
-                    room_id=room_id,
-                    message_id=current_message.message_id,
-                )
-            except Exception as rec_exc:  # noqa: BLE001
-                logger.warning(
-                    "DirectTransport: Failed to record capability issue: %s",
-                    rec_exc,
-                )
+            if self.capability_issue_service is not None:
+                try:
+                    await self.capability_issue_service.record_issue(
+                        agent_id=current_message.agent_id,
+                        error_message=str(exc),
+                        query_text=(
+                            current_message.task_content
+                            or (current_message.message_content.message_text or "")
+                        ),
+                        room_id=room_id,
+                        message_id=current_message.message_id,
+                    )
+                except Exception as rec_exc:  # noqa: BLE001
+                    logger.warning(
+                        "DirectTransport: Failed to record capability issue: %s",
+                        rec_exc,
+                    )
 
             return False, "", None, None
 
@@ -1396,11 +1360,11 @@ class DirectTransport(AgentTransport):
                 message_id,
             )
             await self.tsm.transition_task(
-                current_message, TaskState.canceled,
+                current_message, CommonTaskState.CANCELED,
                 persist=True,
             )
             if task_info:
-                await self._emit_terminal(ctx, TaskState.canceled)
+                await self._emit_terminal(ctx, CommonTaskState.CANCELED)
             await self._try_cancel_remote_task(current_message, agent_card)
             return False, "", None, None
 
@@ -1421,7 +1385,7 @@ class DirectTransport(AgentTransport):
         self,
         response: dict[str, Any],
         current_message: RoomAgentMessage,
-        agent_card: AgentCard,
+        agent_card: Any,
         room_id: str,
         message_id: str,
         task_info: dict[str, Any] | None,
@@ -1446,9 +1410,9 @@ class DirectTransport(AgentTransport):
             # (completed, failed, canceled, rejected), not just completed.
             actual_state_str = response.get("status")
             if actual_state_str:
-                actual_state = TaskState(actual_state_str)
+                actual_state = CommonTaskState(actual_state_str)
             else:
-                actual_state = TaskState.completed
+                actual_state = CommonTaskState.COMPLETED
 
             if full_response_text:
                 current_message.message_content.message_text = full_response_text
@@ -1519,12 +1483,12 @@ class DirectTransport(AgentTransport):
 
             # P1: Non-completed terminal states are dispatch failures so
             # QueueExecutor / SupervisorExecutor treat them correctly.
-            is_success = actual_state == TaskState.completed
+            is_success = actual_state == CommonTaskState.COMPLETED
             return is_success, full_response_text or error_text, None, None
 
         # Handle "task" response (async path)
         if response.get("type") == "task":
-            status = response.get("status") or TaskState.working
+            status = response.get("status") or CommonTaskState.WORKING
             if task_info:
                 await self.tsm.notify_task(
                     ctx,
@@ -1540,7 +1504,7 @@ class DirectTransport(AgentTransport):
             if response.get("requires_input") or response.get("requires_auth"):
                 task_obj = get_task(current_message)
                 if task_obj and task_obj.status:
-                    task_obj.status.state = TaskState(status) if isinstance(status, str) else status
+                    task_obj.status.state = CommonTaskState(status) if isinstance(status, str) else status
                 return True, None, message_id, response.get("task_id")
 
             if self.a2a_service.has_push_notification_capability(agent_card):
@@ -1571,11 +1535,11 @@ class DirectTransport(AgentTransport):
                     message_id,
                 )
                 await self.tsm.transition_task(
-                    current_message, TaskState.canceled,
+                    current_message, CommonTaskState.CANCELED,
                     persist=True,
                 )
                 if task_info:
-                    await self._emit_terminal(ctx, TaskState.canceled)
+                    await self._emit_terminal(ctx, CommonTaskState.CANCELED)
                 await self._try_cancel_remote_task(current_message, agent_card)
                 return False, "", None, None
 
@@ -1597,11 +1561,11 @@ class DirectTransport(AgentTransport):
                     message_id,
                 )
                 await self.tsm.transition_task(
-                    current_message, TaskState.failed,
+                    current_message, CommonTaskState.FAILED,
                     error="Task polling timed out",
                     persist=True,
                 )
-                await self._emit_terminal(ctx, TaskState.failed, error="Task polling timed out")
+                await self._emit_terminal(ctx, CommonTaskState.FAILED, error="Task polling timed out")
                 return True, None, None, None
 
         logger.error("Unexpected response type from task tracking: %s", response)
@@ -1609,9 +1573,9 @@ class DirectTransport(AgentTransport):
 
     async def _finalize_polled_task(
         self,
-        completed_task: Task,
+        completed_task: Any,
         current_message: RoomAgentMessage,
-        agent_card: AgentCard,
+        agent_card: Any,
         room_id: str,
         message_id: str,
         task_info: dict[str, Any] | None,
@@ -1655,7 +1619,7 @@ class DirectTransport(AgentTransport):
 
         final_content = None
         final_error = None
-        if state == TaskState.completed and completed_task.artifacts:
+        if state == CommonTaskState.COMPLETED and completed_task.artifacts:
             final_content = extract_text_from_artifacts(completed_task.artifacts)
         elif is_failure_state(state):
             final_error = extract_error_message(completed_task) or f"Task {state_value}"

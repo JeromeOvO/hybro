@@ -32,6 +32,12 @@ SUPPORTED_HUB_PUBLISH_EVENT_TYPES = set(LEGACY_RELAY_EVENT_KIND_MAP) | {
     "status_update",
     "task_submitted",
 }
+LEGACY_PROCESSING_STATUS_VALUE_MAP = {
+    "input_required": "awaiting_input",
+    "input-required": "awaiting_input",
+    "auth_required": "awaiting_input",
+    "auth-required": "awaiting_input",
+}
 
 
 class HubPublishService:
@@ -235,8 +241,9 @@ def normalize_hub_publish_payload(
         )
     elif event_type == "processing_status":
         status = payload.get("state") or payload.get("status") or "completed"
-        payload["state"] = str(status)
-        payload["status"] = str(status)
+        normalized = LEGACY_PROCESSING_STATUS_VALUE_MAP.get(str(status), str(status))
+        payload["state"] = normalized
+        payload["status"] = normalized
 
     return payload
 

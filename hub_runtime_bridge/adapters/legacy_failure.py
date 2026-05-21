@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from uuid import uuid4
-
-from a2a.types import Message as A2AMessage
-from a2a.types import Role, TaskState, TaskStatus, TextPart
-
+from a2a_adapter.task_status import build_failed_task_status
 from common.dto import OfflineHubFailureCommand
 
 
@@ -27,13 +23,8 @@ class LegacyOfflineFailureAdapter:
             msg.message_content.message_text = command.error_text
             try:
                 if msg.message_content.message_task:
-                    msg.message_content.message_task.status = TaskStatus(
-                        state=TaskState.failed,
-                        message=A2AMessage(
-                            role=Role.agent,
-                            parts=[TextPart(text=command.error_text)],
-                            message_id=str(uuid4()),
-                        ),
+                    msg.message_content.message_task.status = build_failed_task_status(
+                        command.error_text
                     )
             except Exception:
                 pass

@@ -22,8 +22,8 @@ from a2a.types import (
 from common.utils.cancellation import CancellationToken
 from models.processing import ProcessingContext, ProcessingStatus
 from models.room import MessageContent, RoomAgentMessage
+from models.error import A2AServiceError
 from modules.transports.direct import DirectTransport, MessageStreamingState
-from services.a2a_service import A2AServiceError
 
 
 # =============================================================================

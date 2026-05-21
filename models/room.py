@@ -3,8 +3,8 @@ from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
-from a2a.types import Task
-from pydantic import BaseModel, Field
+from common.types import Task
+from pydantic import BaseModel, Field, SerializeAsAny, SkipValidation
 
 from common.utils.time import utcnow
 
@@ -87,7 +87,7 @@ class UserAttachment(BaseModel):
 class MessageContent(BaseModel):
     # markdown
     message_text: str | None = None
-    message_task: Task | None = None
+    message_task: SerializeAsAny[SkipValidation[Task]] | None = None
     attachments: list[UserAttachment] | None = None
     content_summary: dict | None = None
 

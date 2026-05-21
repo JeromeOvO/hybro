@@ -217,6 +217,18 @@ def test_normalized_processing_status_defaults_to_completed() -> None:
     assert payload["status"] == "completed"
 
 
+def test_normalized_processing_status_maps_legacy_input_required_to_awaiting_input() -> None:
+    payload = normalize_hub_publish_payload(
+        "processing_status",
+        "msg-1",
+        {"task_id": "task-1", "state": "input_required"},
+        task_id="task-1",
+    )
+
+    assert payload["state"] == "awaiting_input"
+    assert payload["status"] == "awaiting_input"
+
+
 @pytest.mark.asyncio
 async def test_publish_journals_before_internal_dispatch_and_preserves_legacy_repeats() -> None:
     journal = InMemoryHubResponseJournal()

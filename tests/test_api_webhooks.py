@@ -21,6 +21,7 @@ from a2a.types import (
 from modules.agent_event import AgentEvent
 from modules.agent_response_handler import AgentResponseHandler
 from modules.transports.webhook import WebhookTransport, parse_stream_response
+from api import webhooks
 
 
 # =============================================================================
@@ -126,6 +127,34 @@ class TestParseStreamResponse:
 # =============================================================================
 # WebhookTransport Tests
 # =============================================================================
+
+
+class TestWebhookRouteAdapter:
+    """Tests for the thin FastAPI webhook route wrapper."""
+
+    @pytest.mark.asyncio
+    async def test_route_uses_injected_transport_and_notification_token(self):
+        class FakeRequest:
+            async def json(self):
+                return {"task": {"id": "task-001"}}
+
+        transport = MagicMock()
+        transport.handle_webhook = AsyncMock(return_value={"status": "accepted"})
+
+        result = await webhooks.handle_a2a_webhook(
+            request=FakeRequest(),
+            message_id="msg-001",
+            authorization="Bearer bearer-token",
+            x_a2a_notification_token="header-token",
+            transport=transport,
+        )
+
+        assert result == {"status": "accepted"}
+        transport.handle_webhook.assert_awaited_once_with(
+            "msg-001",
+            {"task": {"id": "task-001"}},
+            "header-token",
+        )
 
 
 def _make_webhook_transport(*, db=None, handler=None):

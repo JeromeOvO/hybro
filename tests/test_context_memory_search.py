@@ -215,6 +215,38 @@ async def test_keyword_search_basic():
 
 
 @pytest.mark.asyncio
+async def test_keyword_search_does_not_render_expired_content_rows():
+    results = await search.keyword_search(
+        room_id="r1",
+        query="hello",
+        content_repository=FakeContentRepository(
+            text_results=[
+                {
+                    "turn_id": "expired",
+                    "score": 4.0,
+                    "turn_notes": {"one_liner": "expired snippet"},
+                    "content_type": "text",
+                    "stored_at": NOW,
+                    "expires_at": NOW - timedelta(days=1),
+                },
+                {
+                    "turn_id": "active",
+                    "score": 3.0,
+                    "turn_notes": {"one_liner": "active snippet"},
+                    "content_type": "text",
+                    "stored_at": NOW,
+                    "expires_at": NOW + timedelta(days=1),
+                },
+            ]
+        ),
+        config=config(),
+    )
+
+    assert [result.turn_id for result in results] == ["active"]
+    assert results[0].content == "active snippet"
+
+
+@pytest.mark.asyncio
 async def test_keyword_search_uses_type_placeholder_without_one_liner():
     results = await search.keyword_search(
         room_id="r1",
@@ -290,6 +322,36 @@ async def test_hydrate_empty_results():
 
     assert results[0].content == "hydrated"
     assert results[0].metadata["content_preview"] == "hydrated"
+
+
+@pytest.mark.asyncio
+async def test_hydrate_empty_results_does_not_render_expired_content_rows():
+    results = [record("expired"), record("active")]
+    for result in results:
+        result.content = ""
+
+    await search.hydrate_empty_results(
+        results,
+        "r1",
+        FakeContentRepository(
+            hydrate_results=[
+                {
+                    "turn_id": "expired",
+                    "turn_notes": {"one_liner": "expired hydrated"},
+                    "expires_at": NOW - timedelta(days=1),
+                },
+                {
+                    "turn_id": "active",
+                    "turn_notes": {"one_liner": "active hydrated"},
+                    "expires_at": NOW + timedelta(days=1),
+                },
+            ]
+        ),
+        config=config(max_snippet_chars=20),
+    )
+
+    assert results[0].content == ""
+    assert results[1].content == "active hydrated"
 
 
 @pytest.mark.asyncio

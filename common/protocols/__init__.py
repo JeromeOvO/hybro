@@ -1,5 +1,6 @@
 from common.protocols.a2a_protocols import AgentCardResolver, AgentTransport
 from common.protocols.agent_protocols import (
+    AgentAvatarManager,
     AgentExclusionReader,
     AgentManagement,
     AgentMatcher,
@@ -32,6 +33,7 @@ from common.protocols.execution_protocols import (
     ExecutionEngine,
     HITLManager,
     HubAgentResponseSink,
+    RoomDistributedLock,
 )
 from common.protocols.hub_protocols import (
     HubDispatchPort,
@@ -39,10 +41,22 @@ from common.protocols.hub_protocols import (
     HubInternalResponseDispatcher,
     HubLivenessReader,
     HubManagement,
+    HubRelayManagement,
+    HubStatusReader,
     OfflineHubFailurePort,
 )
 from common.protocols.llm_protocols import LLMProvider, ModelRegistry
-from common.protocols.platform_protocols import FileStorage, GatewayService, RateLimiter
+from common.protocols.platform_protocols import (
+    APIKeyAuthenticator,
+    APIKeyPrincipal,
+    APIKeyRateLimiter,
+    APIKeyRecord,
+    APIKeyStore,
+    FileStorage,
+    GatewayDiscoveryProvider,
+    GatewayService,
+    RateLimiter,
+)
 from common.protocols.repository_protocols import (
     AgentRepository,
     ContentStorageRepository,
@@ -71,6 +85,7 @@ from common.protocols.room_protocols import (
 
 __all__ = [
     "AgentCallCounter",
+    "AgentAvatarManager",
     "AgentCardResolver",
     "AgentExclusionReader",
     "AgentManagement",
@@ -80,12 +95,18 @@ __all__ = [
     "AgentRegistryWriter",
     "AgentRepository",
     "AgentTransport",
+    "APIKeyAuthenticator",
+    "APIKeyPrincipal",
+    "APIKeyRateLimiter",
+    "APIKeyRecord",
+    "APIKeyStore",
     "ContextAssembler",
     "ContentStorageRepository",
     "DistributedLock",
     "EventPublisher",
     "ExecutionEngine",
     "FileStorage",
+    "GatewayDiscoveryProvider",
     "GatewayService",
     "HITLManager",
     "HITLRepository",
@@ -96,6 +117,8 @@ __all__ = [
     "HubInternalResponseDispatcher",
     "HubLivenessReader",
     "HubManagement",
+    "HubRelayManagement",
+    "HubStatusReader",
     "HubRepository",
     "HubResponseJournal",
     "HubTaskOwnershipStore",
@@ -120,6 +143,7 @@ __all__ = [
     "RedisPubSub",
     "RedisStreams",
     "RoomHistoryReader",
+    "RoomDistributedLock",
     "RoomAgentTaskTracker",
     "RoomManagement",
     "RoomMembershipSeedSource",

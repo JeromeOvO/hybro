@@ -21,7 +21,7 @@ def _make_rmc(redis=None):
     """Build a RoomMessageCenter without triggering real service wiring."""
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
     rmc._room_locks = {}
-    rmc._redis = redis
+    rmc._room_distributed_lock = redis
     return rmc
 
 
@@ -38,6 +38,30 @@ def _make_redis(*, set_nx_return=True, connected=True):
     redis._client = client
     redis.eval_script = AsyncMock(return_value=1)
     redis.delete = AsyncMock(return_value=True)
+
+    async def acquire(room_id: str, owner: str, ttl: int):
+        if not redis.is_connected:
+            return None
+        try:
+            result = await redis._client.set(
+                f"room:lock:{room_id}", owner, nx=True, ex=ttl
+            )
+            return result is not None
+        except Exception:
+            return None
+
+    async def release(room_id: str, owner: str):
+        if not redis.is_connected:
+            return None
+        return await redis.eval_script(
+            RoomMessageCenter._RELEASE_LOCK_LUA,
+            1,
+            f"room:lock:{room_id}",
+            owner,
+        )
+
+    redis.acquire = AsyncMock(side_effect=acquire)
+    redis.release = AsyncMock(side_effect=release)
     return redis
 
 

@@ -19,9 +19,8 @@ from models.compaction import (
     StorageType,
 )
 from models.memory import ConversationTurn, RoomMemory, TurnRepresentation
-from services.content_storage_service import (
+from platform_module.content_storage import (
     ContentExpiredError,
-    content_storage_service,
     hash_content,
 )
 from services.database_service import db_service
@@ -55,6 +54,19 @@ def _is_unsupported_storage_response(content: str) -> bool:
     )
 
 
+class _UnboundContentStorage:
+    def _raise_unbound(self):
+        raise RuntimeError(
+            "CompactionService.bind_content_storage() not called - startup incomplete"
+        )
+
+    async def upsert_full_content(self, *args, **kwargs):
+        self._raise_unbound()
+
+    async def expand_content_reference(self, *args, **kwargs):
+        self._raise_unbound()
+
+
 class CompactionService:
     """
     Service for lossless compaction of conversation turns.
@@ -72,10 +84,13 @@ class CompactionService:
     """
 
     def __init__(self):
-        self.content_storage = content_storage_service
+        self.content_storage = _UnboundContentStorage()
         self.db_service = db_service
         self._facade = None
         self._bound = False
+
+    def bind_content_storage(self, content_storage) -> None:
+        self.content_storage = content_storage
 
     def bind_facade(self, facade) -> None:
         self._facade = facade
