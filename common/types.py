@@ -328,7 +328,7 @@ class AgentProvider(BaseModel):
 
 
 class AgentCapabilities(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
     streaming: bool | None = False
     pushNotifications: bool | None = False

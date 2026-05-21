@@ -212,6 +212,20 @@ def test_common_types_expose_sdk_free_task_parts():
     assert isinstance(parsed.file, FileContent)
 
 
+def test_agent_capabilities_ignore_unknown_fields():
+    from common.types import AgentCapabilities
+
+    capabilities = AgentCapabilities(
+        streaming=True,
+        pushNotifications=False,
+        stateTransitionHistory=True,
+        stremaing=True,
+    )
+
+    assert "stremaing" not in capabilities.model_dump()
+    assert not capabilities.model_extra or "stremaing" not in capabilities.model_extra
+
+
 @pytest.mark.asyncio
 async def test_auth_config_binds_authorized_parties(monkeypatch):
     import common.auth as auth
