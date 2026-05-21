@@ -41,45 +41,50 @@ def resolve_declared_owner(route: Any) -> str:
 def route_group_for_path(path: str) -> str:
     normalized = path.removeprefix("/api/v1")
 
-    if normalized.startswith("/a2a-tasks/") or "/a2a-tasks" in normalized:
+    def matches(prefix: str) -> bool:
+        return normalized == prefix or normalized.startswith(f"{prefix}/")
+
+    if (
+        matches("/a2a-tasks")
+        or matches("/users/me/a2a-tasks")
+        or (matches("/rooms") and normalized.endswith("/a2a-tasks"))
+    ):
         return "a2a_task"
-    if normalized.startswith("/agents"):
+    if matches("/agents"):
         return "agent"
-    if normalized.startswith("/api-keys"):
+    if matches("/api-keys"):
         return "discovery_api_key"
-    if normalized.startswith("/agentGroups"):
+    if matches("/agentGroups"):
         return "agent_group"
-    if normalized.startswith("/agent/"):
+    if matches("/agent"):
         return "agent"
-    if normalized.startswith("/discovery/api-keys"):
+    if matches("/discovery/api-keys"):
         return "discovery_api_key"
-    if normalized.startswith("/discovery"):
+    if matches("/discovery"):
         return "discovery"
-    if normalized.startswith("/files/"):
+    if matches("/files"):
         return "files"
-    if normalized.startswith("/gateway/"):
+    if matches("/gateway"):
         return "platform_gateway"
-    if normalized.startswith("/hub/"):
+    if matches("/hub"):
         return "hub"
-    if normalized.startswith("/inspectionCenter/"):
+    if matches("/inspectionCenter"):
         return "inspection"
-    if normalized.startswith("/memoryCenter/"):
+    if matches("/memoryCenter"):
         return "memory"
-    if normalized.startswith("/orchestrationCenter/"):
+    if matches("/orchestrationCenter"):
         return "orchestration"
-    if normalized.startswith("/relay/"):
+    if matches("/relay"):
         return "relay"
-    if normalized.startswith("/roomCenter/"):
+    if matches("/roomCenter"):
         return "room"
-    if normalized.startswith("/rooms/") and "/hitl" in normalized:
+    if matches("/rooms") and "/hitl" in normalized:
         return "hitl"
-    if normalized.startswith("/sse/"):
+    if matches("/sse"):
         return "sse"
-    if normalized.startswith("/task/") or normalized.startswith("/tasks/"):
+    if matches("/task") or matches("/tasks"):
         return "task"
-    if normalized.startswith("/users/me/a2a-tasks"):
-        return "a2a_task"
-    if normalized.startswith("/webhooks/"):
+    if matches("/webhooks"):
         return "webhook"
     return "unknown"
 
