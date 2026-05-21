@@ -6,6 +6,7 @@ Streaming events (artifact_update) use ``SSEManager`` directly.
 
 from __future__ import annotations
 
+import inspect
 from typing import TYPE_CHECKING, Any
 
 from a2a_adapter.task_status import coerce_task_state
@@ -297,6 +298,14 @@ class AgentResponseHandler:
                 e.message_id,
             )
             return
+        if await self._has_pending_hitl_for_continuation(
+            user_message_id, e.message_id
+        ):
+            logger.info(
+                "Skipping duplicate HITL request for async interactive event on %s",
+                e.message_id,
+            )
+            return
 
         msg = await self._db.get_room_agent_message_by_message_id(e.message_id)
         agent_name = e.agent_name
@@ -332,6 +341,25 @@ class AgentResponseHandler:
                 hitl_req.request_id,
                 e.message_id,
             )
+
+    async def _has_pending_hitl_for_continuation(
+        self, user_message_id: str, continuation_message_id: str
+    ) -> bool:
+        get_pending = getattr(
+            self._db, "get_pending_hitl_requests_for_message", None
+        )
+        if not callable(get_pending):
+            return False
+        result = get_pending(user_message_id)
+        pending = await result if inspect.isawaitable(result) else result
+        if not isinstance(pending, list):
+            return False
+        return any(
+            item.get("continuation_message_id") == continuation_message_id
+            and item.get("status") == "pending"
+            for item in pending
+            if isinstance(item, dict)
+        )
 
     # --- Non-terminal events ---
 

@@ -11,32 +11,38 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from uvicorn.config import LOGGING_CONFIG
 
-from api import (
-    a2a_tasks,
-    agent,
-    agent_group,
-    agent_viewset,
-    discovery,
-    discovery_api_keys,
-    files,
-    gateway,
-    hitl,
-    hub,
-    inspection_center,
-    memory_center,
-    orchestration_center,
-    relay,
-    room_center,
-    sse,
-    task,
-    viewset,
-    webhooks,
-)
+import api_gateway
 from app_shell.api_key_auth import MongoAPIKeyAuthenticator
 from app_shell.health_check import AppShellHealthCheck, HealthCheck
+from api_gateway.dependencies import (
+    APIGatewayDeps,
+    bind_api_gateway_deps,
+    missing_required_deps,
+)
+from api_gateway.routes import (
+    a2a_task_routes as a2a_tasks,
+    agent_group_routes as agent_group,
+    agent_routes as agent,
+    discovery_api_key_routes as discovery_api_keys,
+    discovery_routes as discovery,
+    files_routes as files,
+    hitl_routes as hitl,
+    hub_routes as hub,
+    inspection_routes as inspection_center,
+    memory_routes as memory_center,
+    orchestration_routes as orchestration_center,
+    platform_gateway_routes as gateway,
+    relay_routes as relay,
+    room_routes as room_center,
+    sse_routes as sse,
+    task_routes as task,
+    webhook_routes as webhooks,
+)
+from api_gateway.viewsets import agent as agent_viewset
+from api_gateway.viewsets import base as viewset
 from app_shell.viewset import AppShellViewSetRepositoryProvider
 from common.api_key_auth import bind_api_key_authenticator
-from common.auth import bind_auth_config, get_current_user
+from common.auth import bind_auth_config
 from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
 from config.settings import settings
 from database.mongodb import mongodb
@@ -142,12 +148,8 @@ def _assert_startup_bindings_complete(app: FastAPI) -> None:
 
     if getattr(app.state, "platform_facade", None) is None:
         errors.append("app.state.platform_facade")
-    if getattr(gateway, "gateway_service", None) is None:
-        errors.append("api.gateway.gateway_service")
-    if getattr(files, "file_storage", None) is None:
-        errors.append("api.files.file_storage")
-    if getattr(relay, "relay_service", None) is None:
-        errors.append("api.relay.relay_service")
+    for missing in missing_required_deps():
+        errors.append(f"api_gateway.{missing}")
 
     if errors:
         raise RuntimeError(
@@ -485,13 +487,13 @@ async def lifespan(app: FastAPI):
                     cloud_health_check_timeout=settings.cloud_health_check_timeout,
                 )
             )
-            room_center.room_message_center.bind_facade(_room_facade)
+            execution_room_message_center.bind_facade(_room_facade)
 
             def create_webhook_transport():
                 handler = AgentResponseHandler(
                     db=_db_svc,
                     sse=sse_manager,
-                    room_message_center=room_center.room_message_center,
+                    room_message_center=execution_room_message_center,
                     notification_service=notification_service,
                     task_notification_impl=_notify_task_update_impl,
                 )
@@ -505,7 +507,7 @@ async def lifespan(app: FastAPI):
 
             execution_facade = create_execution_facade(
                 room_center=room_center.room_center,
-                room_message_center=room_center.room_message_center,
+                room_message_center=execution_room_message_center,
                 hitl_service=hitl_service,
                 run_lifecycle=run_lifecycle,
                 run_reader=RunQueryAdapter(mongodb.runs_collection),
@@ -518,7 +520,7 @@ async def lifespan(app: FastAPI):
                     cancel_remote_task=a2a_service.cancel_remote_task,
                     notify_task_update=notify_task_update_with_string_state,
                 ),
-                agent_response_handler=room_center.room_message_center.agent_response_handler,
+                agent_response_handler=execution_room_message_center.agent_response_handler,
                 event_publisher=_delivery_deps.event_publisher,
                 legacy_processing_status_publisher=legacy_processing_status_publisher,
                 run_event_enabled=run_event_sse_enabled,
@@ -555,7 +557,7 @@ async def lifespan(app: FastAPI):
             room_services.bind_execution_event_deps(
                 processing_status_emitter=emit_room_processing_status,
             )
-            room_center.room_message_center.bind_execution_event_deps(
+            execution_room_message_center.bind_execution_event_deps(
                 emit_room_processing_status
             )
             room_center.bind_execution_deps(_execution_deps)
@@ -872,6 +874,16 @@ async def lifespan(app: FastAPI):
             _relay_svc.set_stream_service(_relay_streams)
             logger.info("Redis Streams relay enabled (separate pool for blocking XREAD)")
 
+        bind_api_gateway_deps(
+            APIGatewayDeps(
+                gateway_service=getattr(gateway, "gateway_service", None),
+                file_storage=getattr(files, "file_storage", None),
+                relay_service=getattr(relay, "relay_service", None),
+                execution_deps=getattr(app.state, "execution_deps", None),
+                platform_facade=getattr(app.state, "platform_facade", None),
+            )
+        )
+
     except BaseException:
         # ── Startup failure: tear down only what was opened ──
         # Do not call set_draining() on startup failure; normal shutdown owns
@@ -957,11 +969,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")
 
-# Add Discovery, Gateway & Relay API CORS middleware
-# This applies permissive CORS to /api/v1/discovery/*, /api/v1/gateway/*, and /api/v1/relay/* paths
-# Note: Middleware runs in reverse order, so adding first means it runs last
-app.add_middleware(DiscoveryCORSMiddleware, api_prefix=settings.api_prefix)
-
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -970,6 +977,11 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-API-Key", "Cache-Control", "sentry-trace", "baggage"]
 )
+
+# Add Discovery, Gateway & Relay API CORS middleware
+# This applies permissive CORS to /api/v1/discovery/*, /api/v1/gateway/*, and /api/v1/relay/* paths
+# Note: Middleware runs in reverse order, so adding after global CORS makes it run first.
+app.add_middleware(DiscoveryCORSMiddleware, api_prefix=settings.api_prefix)
 
 
 # Pure function — trivially testable without lifespan/DB
@@ -1076,122 +1088,10 @@ async def health_check(
 # Include API routers with /api/v1 prefix and global authentication
 api_prefix = os.getenv("API_PREFIX", "/api/v1")
 
-# Add global authentication dependency to all routers
-# This requires authentication for ALL API endpoints under /api/v1
-# Agent router has mixed auth - some endpoints are public (GET), some require auth (POST/DELETE)
-app.include_router(
-    agent.router,
-    prefix=api_prefix,
-    tags=["agent"],
-    # No global auth - handled per-route in agent.py
-)
-app.include_router(
-    inspection_center.router,
-    prefix=api_prefix,
-    tags=["inspection"],
-    dependencies=[Depends(get_current_user)],
-)
-app.include_router(
-    memory_center.router,
-    prefix=api_prefix,
-    tags=["memory"],
-    dependencies=[Depends(get_current_user)],
-)
-app.include_router(
-    orchestration_center.router,
-    prefix=api_prefix,
-    tags=["orchestration"],
-    dependencies=[Depends(get_current_user)],
-)
-app.include_router(
-    room_center.router,
-    prefix=api_prefix,
-    tags=["room"],
-)
-app.include_router(
-    hitl.router,
-    prefix=api_prefix,
-    tags=["hitl"],
-)
-app.include_router(
-    hub.router,
-    prefix=api_prefix,
-    tags=["hub"],
-)
-app.include_router(
-    task.router,
-    prefix=api_prefix,
-    tags=["task"],
-    dependencies=[Depends(get_current_user)],
-)
-app.include_router(
-    sse.router,
-    prefix=api_prefix,
-    tags=["sse"],
-    # SSE endpoints handle auth via get_current_user_with_query_token (supports ?token= for EventSource)
-)
-app.include_router(
-    agent_group.router,
-    prefix=api_prefix,
-    tags=["agent_group"],
-    dependencies=[Depends(get_current_user)],
-)
+app.include_router(api_gateway.router, prefix=api_prefix)
 
-app.include_router(
-    files.router,
-    prefix=api_prefix,
-    tags=["files"],
-)
 
-# Discovery API - External public API with API key auth 
-# Uses open CORS to allow external access from any origin
-app.include_router(
-    discovery.router,
-    prefix=api_prefix,
-    tags=["discovery"],
-    # Auth handled per-route via X-API-Key header in discovery.py
-)
+def main() -> None:
+    import uvicorn
 
-app.include_router(
-    discovery_api_keys.router,
-    prefix=api_prefix,
-    tags=["api_keys"],
-)
-
-app.include_router(
-    a2a_tasks.router,
-    prefix=api_prefix,
-    tags=["a2a_tasks"],
-    # Auth handled per-route in a2a_tasks.py
-)
-
-# Gateway API - External public API with API key auth
-# Uses open CORS to allow external SDK/hub access from any origin
-app.include_router(
-    gateway.router,
-    prefix=api_prefix,
-    tags=["gateway"],
-    # Auth handled per-route via X-API-Key header in gateway.py
-)
-# Relay API - Hub communication endpoints with API key / JWT auth
-# Uses open CORS to allow hub daemon access from any origin
-app.include_router(
-    relay.router,
-    prefix=api_prefix,
-    tags=["relay"],
-    # Auth handled per-route via X-API-Key or Bearer token in relay.py
-)
-# Webhook endpoint - no auth prefix, no authentication (uses token validation)
-app.include_router(
-    webhooks.router,
-    prefix=api_prefix,
-    tags=["webhooks"],
-    # No auth - webhook uses Bearer token validation
-)
-# For APIs that do not require authentication (user is optional)
-# app.include_router(
-#     router,
-#     prefix=api_prefix,
-#     tags=["public-apis"],
-#     dependencies=[Depends(get_optional_user)]
-# )
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

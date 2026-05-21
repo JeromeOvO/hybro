@@ -3,6 +3,7 @@ import importlib
 import inspect
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import BackgroundTasks, Request
@@ -107,7 +108,7 @@ def test_api_modules_are_thin_route_adapters():
 
 
 def test_api_modules_do_not_import_other_route_modules_for_helpers():
-    allowed_modules = {"api.agent_viewset"}
+    allowed_modules = {"api.agent_viewset", "api_gateway.viewsets.agent"}
     violations: list[str] = []
     for path in sorted(Path("api").glob("*.py")):
         tree = ast.parse(path.read_text(), filename=str(path))
@@ -116,7 +117,7 @@ def test_api_modules_do_not_import_other_route_modules_for_helpers():
                 continue
             if (
                 node.module.startswith("api.")
-                and node.module != "api.viewset"
+                and node.module not in {"api.viewset", "api_gateway.viewsets.base"}
                 and node.module not in allowed_modules
             ):
                 violations.append(f"{path}:{node.lineno}: {node.module}")
@@ -256,6 +257,7 @@ def test_phase9_route_inventory_matches_live_app_routes():
             }
         ]
         live[(route.path, methods, route.name)] = {
+            "module": getattr(route.endpoint, "__module__", ""),
             "dependencies": dependencies,
             "auth_dependencies": auth_dependencies,
             "openapi_response_codes": openapi_responses,
@@ -266,6 +268,7 @@ def test_phase9_route_inventory_matches_live_app_routes():
 
     assert set(recorded) == set(live)
     for key, route in recorded.items():
+        assert route["module"] == live[key]["module"]
         assert route["response_model"] == live[key]["response_model"]
         assert sorted(route["dependencies"]) == live[key]["dependencies"]
         assert sorted(route["auth_dependencies"]) == live[key]["auth_dependencies"]
@@ -316,6 +319,51 @@ def test_agent_viewset_mutations_require_clerk_auth():
     assert not violations, "Agent ViewSet mutation routes lack Clerk auth:\n" + "\n".join(
         violations
     )
+
+
+def test_agent_viewset_read_routes_use_optional_user_visibility_dependency():
+    from common.auth import get_optional_user
+    from main import app
+
+    violations = []
+    for route in app.routes:
+        if (
+            getattr(route, "path", "") not in {"/api/v1/agents", "/api/v1/agents/{item_id}"}
+            or "GET" not in getattr(route, "methods", set())
+        ):
+            continue
+        dependency_calls = {dep.call for dep in route.dependant.dependencies}
+        if get_optional_user not in dependency_calls:
+            violations.append(route.path)
+
+    assert not violations, "Agent ViewSet read routes lack optional-user visibility dependency:\n" + "\n".join(
+        violations
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_viewset_mutations_reject_non_owner(mock_user_2, sample_agent):
+    from fastapi import HTTPException
+
+    from api_gateway.viewsets import base as viewset
+    from api_gateway.viewsets.agent import AgentViewSet
+
+    repo = MagicMock()
+    repo.pk_field = "agent_id"
+    repo.get = AsyncMock(return_value=sample_agent.model_dump(mode="json"))
+    repo.update = AsyncMock()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await AgentViewSet()._handle_operation(
+            viewset.UPDATE,
+            repo,
+            sample_agent.agent_id,
+            sample_agent,
+            user=mock_user_2,
+        )
+
+    assert exc_info.value.status_code == 403
+    repo.update.assert_not_called()
 
 
 def test_live_routes_do_not_duplicate_clerk_auth_dependency():
@@ -448,7 +496,7 @@ def test_api_key_management_routes_are_owned_by_store_protocol():
     violations = [
         f"{route['path']} {route['name']}: {route['owning_protocol']}"
         for route in routes
-        if route["module"] == "api.discovery_api_keys"
+        if route["module"] == "api_gateway.routes.discovery_api_key_routes"
         and route["owning_protocol"] != "common.protocols.APIKeyStore"
     ]
 
@@ -487,7 +535,7 @@ def test_room_center_route_inventory_records_live_protocol_owners():
     by_name = {
         route["name"]: route
         for route in routes
-        if route["module"] == "api.room_center"
+        if route["module"] == "api_gateway.routes.room_routes"
     }
     expected = {
         "inquiry_active_runs": {
@@ -542,7 +590,7 @@ def test_room_center_protocol_inventory_matches_handler_calls():
     by_name = {
         route["name"]: route
         for route in routes
-        if route["module"] == "api.room_center"
+        if route["module"] == "api_gateway.routes.room_routes"
     }
     violations: list[str] = []
 
@@ -660,7 +708,7 @@ def test_legacy_workflow_post_routes_keep_orchestration_request_body_schema():
     for route in routes:
         if route["owning_protocol"] != "legacy_workflow_decommission_manifest":
             continue
-        if route["module"] != "api.orchestration_center":
+        if route["module"] != "api_gateway.routes.orchestration_routes":
             continue
         if route["name"] == "process_room_user_message":
             continue
@@ -967,7 +1015,7 @@ def test_agent_route_inventory_records_live_protocol_owners():
     by_name = {
         route["name"]: route
         for route in routes
-        if route["module"] == "api.agent"
+        if route["module"] == "api_gateway.routes.agent_routes"
     }
     expectations = {
         "delete_agent": (
@@ -1026,7 +1074,7 @@ def test_sse_cancel_route_inventory_records_execution_owner():
     routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
     route = next(route for route in routes if route["name"] == "cancel_message")
 
-    assert route["module"] == "api.sse"
+    assert route["module"] == "api_gateway.routes.sse_routes"
     assert route["owning_protocol"] == "common.protocols.ExecutionEngine"
     assert set(route.get("supporting_protocols") or []) == {
         "app_shell.database_service.A2ATaskReader",
@@ -1038,7 +1086,7 @@ def test_hitl_route_inventory_records_room_ownership_support():
     violations = [
         route["name"]
         for route in routes
-        if route["module"] == "api.hitl"
+            if route["module"] == "api_gateway.routes.hitl_routes"
         and "common.protocols.RoomOwnershipReader"
         not in set(route.get("supporting_protocols") or [])
     ]
@@ -1052,7 +1100,7 @@ def test_file_upload_route_inventory_records_room_ownership_support():
     routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
     route = next(route for route in routes if route["name"] == "upload_file")
 
-    assert route["module"] == "api.files"
+    assert route["module"] == "api_gateway.routes.files_routes"
     assert route["owning_protocol"] == "common.protocols.FileStorage"
     assert "common.protocols.RoomOwnershipReader" in set(
         route.get("supporting_protocols") or []
@@ -1064,7 +1112,10 @@ def test_gateway_and_discovery_routes_record_rate_limit_support():
     violations = [
         f"{route['module']}.{route['name']}"
         for route in routes
-        if route["module"] in {"api.gateway", "api.discovery"}
+        if route["module"] in {
+            "api_gateway.routes.platform_gateway_routes",
+            "api_gateway.routes.discovery_routes",
+        }
         and "common.protocols.APIKeyRateLimiter"
         not in set(route.get("supporting_protocols") or [])
     ]
@@ -1152,7 +1203,7 @@ def test_relay_routes_are_owned_by_route_facing_protocol():
     violations = [
         f"{route['path']} {route['name']}: {route['owning_protocol']}"
         for route in routes
-        if route["module"] == "api.relay"
+        if route["module"] == "api_gateway.routes.relay_routes"
         and route["owning_protocol"] != "common.protocols.HubRelayManagement"
     ]
 

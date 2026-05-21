@@ -122,6 +122,14 @@ def test_main_binds_gateway_and_discovery_rate_limiters_from_platform_facade():
     assert "discovery.bind_discovery_dependencies(\n                platform_facade.discovery_service,\n                platform_facade.discovery_rate_limiter" in source
 
 
+def test_main_uses_execution_room_message_center_runtime_for_startup_wiring():
+    source = Path("main.py").read_text()
+
+    assert "room_center.room_message_center" not in source
+    assert "execution_room_message_center.bind(" in source
+    assert "room_message_center=execution_room_message_center" in source
+
+
 def test_container_builds_platform_config_from_scalar_settings():
     from container import create_platform_config
 

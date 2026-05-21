@@ -87,7 +87,9 @@ class PlatformAgentRateLimiter:
         clock: Callable[[], datetime] = _utcnow,
         window_seconds: int = 3600,
     ) -> None:
-        self._collection = collection or NoopRateLimitCollection()
+        self._collection = (
+            collection if collection is not None else NoopRateLimitCollection()
+        )
         self._clock = clock
         self._window_seconds = window_seconds
 
@@ -200,7 +202,9 @@ class PlatformAPIKeyRateLimiter:
         per_key_limit_message: Callable[[int], str] | None = None,
         global_limit_message: str = "Service temporarily unavailable due to high traffic",
     ) -> None:
-        self._collection = collection or NoopRateLimitCollection()
+        self._collection = (
+            collection if collection is not None else NoopRateLimitCollection()
+        )
         self._clock = clock
         self._window_seconds = window_seconds
         self._per_key_limit_message = per_key_limit_message or (
@@ -283,7 +287,9 @@ class PlatformProtocolRateLimiter:
         scope: str,
         clock: Callable[[], datetime] = _utcnow,
     ) -> None:
-        self._collection = collection or NoopRateLimitCollection()
+        self._collection = (
+            collection if collection is not None else NoopRateLimitCollection()
+        )
         self._scope = scope
         self._clock = clock
 

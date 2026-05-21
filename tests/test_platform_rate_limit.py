@@ -51,6 +51,46 @@ class InMemoryRateLimitCollection:
         return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+class BoolRaisingRateLimitCollection(InMemoryRateLimitCollection):
+    def __bool__(self):
+        raise NotImplementedError("collection truth value is not supported")
+
+
+@pytest.mark.asyncio
+async def test_rate_limiters_accept_collections_without_truth_value_testing():
+    from platform_module.rate_limit import (
+        PlatformAPIKeyRateLimiter,
+        PlatformAgentRateLimiter,
+        PlatformProtocolRateLimiter,
+    )
+
+    agent_collection = BoolRaisingRateLimitCollection()
+    agent_limiter = PlatformAgentRateLimiter(
+        collection=agent_collection,
+        clock=lambda: NOW,
+    )
+    await agent_limiter.record_agent_request("agent-1", "user-1")
+
+    api_key_collection = BoolRaisingRateLimitCollection()
+    api_key_limiter = PlatformAPIKeyRateLimiter(
+        collection=api_key_collection,
+        clock=lambda: NOW,
+    )
+    await api_key_limiter.record_api_key_request("key-1")
+
+    protocol_collection = BoolRaisingRateLimitCollection()
+    protocol_limiter = PlatformProtocolRateLimiter(
+        collection=protocol_collection,
+        scope="gateway",
+        clock=lambda: NOW,
+    )
+    await protocol_limiter.record("key-1")
+
+    assert agent_collection.docs
+    assert api_key_collection.docs
+    assert protocol_collection.docs
+
+
 @pytest.mark.asyncio
 async def test_agent_rate_limiter_allows_disabled_limits():
     from platform_module.rate_limit import PlatformAgentRateLimiter

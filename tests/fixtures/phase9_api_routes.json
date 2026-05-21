@@ -10,7 +10,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.a2a_tasks",
+    "module": "api_gateway.routes.a2a_task_routes",
     "name": "get_task_status",
     "openapi_response_codes": [
       "200",
@@ -35,7 +35,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.agent",
+    "module": "api_gateway.routes.agent_routes",
     "name": "resolve_capability_issue",
     "openapi_response_codes": [
       "200",
@@ -63,7 +63,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.agent",
+    "module": "api_gateway.routes.agent_routes",
     "name": "delete_agent",
     "openapi_response_codes": [
       "200"
@@ -89,7 +89,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.agent",
+    "module": "api_gateway.routes.agent_routes",
     "name": "get_agent_by_provider",
     "openapi_response_codes": [
       "200"
@@ -113,7 +113,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.agent",
+    "module": "api_gateway.routes.agent_routes",
     "name": "get_agent",
     "openapi_response_codes": [
       "200",
@@ -137,7 +137,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.agent",
+    "module": "api_gateway.routes.agent_routes",
     "name": "get_agent_card_from_url",
     "openapi_response_codes": [
       "200"
@@ -160,7 +160,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.agent",
+    "module": "api_gateway.routes.agent_routes",
     "name": "get_agent_list_with_conditions",
     "openapi_response_codes": [
       "200"
@@ -183,7 +183,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.agent",
+    "module": "api_gateway.routes.agent_routes",
     "name": "get_all_active_agents",
     "openapi_response_codes": [
       "200"
@@ -206,7 +206,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.agent",
+    "module": "api_gateway.routes.agent_routes",
     "name": "get_agent_list",
     "openapi_response_codes": [
       "200"
@@ -229,7 +229,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.agent",
+    "module": "api_gateway.routes.agent_routes",
     "name": "register_agent",
     "openapi_response_codes": [
       "200"
@@ -253,7 +253,7 @@
     "methods": [
       "PUT"
     ],
-    "module": "api.agent",
+    "module": "api_gateway.routes.agent_routes",
     "name": "update_agent",
     "openapi_response_codes": [
       "200",
@@ -281,7 +281,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.agent",
+    "module": "api_gateway.routes.agent_routes",
     "name": "upload_agent_avatar",
     "openapi_response_codes": [
       "200",
@@ -309,7 +309,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.agent",
+    "module": "api_gateway.routes.agent_routes",
     "name": "get_capability_issues",
     "openapi_response_codes": [
       "200",
@@ -337,7 +337,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.agent",
+    "module": "api_gateway.routes.agent_routes",
     "name": "resolve_all_capability_issues",
     "openapi_response_codes": [
       "200",
@@ -364,7 +364,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.agent_group",
+    "module": "api_gateway.routes.agent_group_routes",
     "name": "list_agent_groups",
     "openapi_response_codes": [
       "200",
@@ -388,7 +388,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.agent_group",
+    "module": "api_gateway.routes.agent_group_routes",
     "name": "create_agent_group",
     "openapi_response_codes": [
       "200"
@@ -411,7 +411,7 @@
     "methods": [
       "DELETE"
     ],
-    "module": "api.agent_group",
+    "module": "api_gateway.routes.agent_group_routes",
     "name": "delete_agent_group",
     "openapi_response_codes": [
       "200",
@@ -435,7 +435,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.agent_group",
+    "module": "api_gateway.routes.agent_group_routes",
     "name": "get_agent_group",
     "openapi_response_codes": [
       "200",
@@ -459,7 +459,7 @@
     "methods": [
       "PUT"
     ],
-    "module": "api.agent_group",
+    "module": "api_gateway.routes.agent_group_routes",
     "name": "update_agent_group",
     "openapi_response_codes": [
       "200",
@@ -473,14 +473,17 @@
     "streaming_response": null
   },
   {
-    "auth_dependencies": [],
+    "auth_dependencies": [
+      "get_optional_user"
+    ],
     "dependencies": [
+      "get_optional_user",
       "get_viewset_repository"
     ],
     "methods": [
       "GET"
     ],
-    "module": "api.viewset",
+    "module": "api_gateway.viewsets.agent",
     "name": "list_endpoint",
     "openapi_response_codes": [
       "200",
@@ -504,7 +507,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.viewset",
+    "module": "api_gateway.viewsets.base",
     "name": "create_endpoint",
     "openapi_response_codes": [
       "201",
@@ -532,7 +535,7 @@
     "methods": [
       "DELETE"
     ],
-    "module": "api.viewset",
+    "module": "api_gateway.viewsets.agent",
     "name": "delete_endpoint",
     "openapi_response_codes": [
       "204",
@@ -550,14 +553,17 @@
     ]
   },
   {
-    "auth_dependencies": [],
+    "auth_dependencies": [
+      "get_optional_user"
+    ],
     "dependencies": [
+      "get_optional_user",
       "get_viewset_repository"
     ],
     "methods": [
       "GET"
     ],
-    "module": "api.viewset",
+    "module": "api_gateway.viewsets.agent",
     "name": "retrieve_endpoint",
     "openapi_response_codes": [
       "200",
@@ -581,7 +587,7 @@
     "methods": [
       "PATCH"
     ],
-    "module": "api.viewset",
+    "module": "api_gateway.viewsets.agent",
     "name": "patch_endpoint",
     "openapi_response_codes": [
       "200",
@@ -609,7 +615,7 @@
     "methods": [
       "PUT"
     ],
-    "module": "api.viewset",
+    "module": "api_gateway.viewsets.agent",
     "name": "update_endpoint",
     "openapi_response_codes": [
       "200",
@@ -637,7 +643,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.discovery_api_keys",
+    "module": "api_gateway.routes.discovery_api_key_routes",
     "name": "list_api_keys",
     "openapi_response_codes": [
       "200",
@@ -662,7 +668,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.discovery_api_keys",
+    "module": "api_gateway.routes.discovery_api_key_routes",
     "name": "create_api_key",
     "openapi_response_codes": [
       "201",
@@ -689,7 +695,7 @@
     "methods": [
       "DELETE"
     ],
-    "module": "api.discovery_api_keys",
+    "module": "api_gateway.routes.discovery_api_key_routes",
     "name": "deactivate_api_key",
     "openapi_response_codes": [
       "200",
@@ -718,7 +724,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.discovery",
+    "module": "api_gateway.routes.discovery_routes",
     "name": "discover_agents",
     "openapi_response_codes": [
       "200",
@@ -749,7 +755,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.files",
+    "module": "api_gateway.routes.files_routes",
     "name": "upload_file",
     "openapi_response_codes": [
       "200",
@@ -777,7 +783,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.gateway",
+    "module": "api_gateway.routes.platform_gateway_routes",
     "name": "gateway_discover",
     "openapi_response_codes": [
       "200",
@@ -805,7 +811,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.gateway",
+    "module": "api_gateway.routes.platform_gateway_routes",
     "name": "gateway_get_card",
     "openapi_response_codes": [
       "200",
@@ -833,7 +839,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.gateway",
+    "module": "api_gateway.routes.platform_gateway_routes",
     "name": "gateway_send",
     "openapi_response_codes": [
       "200",
@@ -861,7 +867,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.gateway",
+    "module": "api_gateway.routes.platform_gateway_routes",
     "name": "gateway_stream",
     "openapi_response_codes": [
       "200",
@@ -894,7 +900,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.hub",
+    "module": "api_gateway.routes.hub_routes",
     "name": "hub_status_for_user",
     "openapi_response_codes": [
       "200"
@@ -917,7 +923,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.inspection_center",
+    "module": "api_gateway.routes.inspection_routes",
     "name": "inspect_a2a_connection",
     "openapi_response_codes": [
       "200"
@@ -940,7 +946,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.inspection_center",
+    "module": "api_gateway.routes.inspection_routes",
     "name": "inspect_agent",
     "openapi_response_codes": [
       "200"
@@ -963,7 +969,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.memory_center",
+    "module": "api_gateway.routes.memory_routes",
     "name": "add_chat_context",
     "openapi_response_codes": [
       "200"
@@ -986,7 +992,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.memory_center",
+    "module": "api_gateway.routes.memory_routes",
     "name": "delete_chat_context_by_session_id",
     "openapi_response_codes": [
       "200"
@@ -1009,7 +1015,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.memory_center",
+    "module": "api_gateway.routes.memory_routes",
     "name": "get_chat_context_by_session_id",
     "openapi_response_codes": [
       "200"
@@ -1032,7 +1038,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.memory_center",
+    "module": "api_gateway.routes.memory_routes",
     "name": "update_chat_context_by_session_id",
     "openapi_response_codes": [
       "200"
@@ -1054,7 +1060,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.orchestration_center",
+    "module": "api_gateway.routes.orchestration_routes",
     "name": "assign_agent_to_meta_task",
     "openapi_response_codes": [
       "410",
@@ -1077,7 +1083,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.orchestration_center",
+    "module": "api_gateway.routes.orchestration_routes",
     "name": "assign_agents_to_meta_tasks_by_parent_task_id",
     "openapi_response_codes": [
       "410",
@@ -1100,7 +1106,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.orchestration_center",
+    "module": "api_gateway.routes.orchestration_routes",
     "name": "decompose_task",
     "openapi_response_codes": [
       "410",
@@ -1123,7 +1129,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.orchestration_center",
+    "module": "api_gateway.routes.orchestration_routes",
     "name": "process_room_user_message",
     "openapi_response_codes": [
       "410"
@@ -1145,7 +1151,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.orchestration_center",
+    "module": "api_gateway.routes.orchestration_routes",
     "name": "retry_meta_task",
     "openapi_response_codes": [
       "410",
@@ -1168,7 +1174,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.orchestration_center",
+    "module": "api_gateway.routes.orchestration_routes",
     "name": "run_workflow",
     "openapi_response_codes": [
       "410",
@@ -1191,7 +1197,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.orchestration_center",
+    "module": "api_gateway.routes.orchestration_routes",
     "name": "summarize_meta_task_for_base_task",
     "openapi_response_codes": [
       "410",
@@ -1215,7 +1221,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.relay",
+    "module": "api_gateway.routes.relay_routes",
     "name": "relay_register",
     "openapi_response_codes": [
       "200",
@@ -1239,7 +1245,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.relay",
+    "module": "api_gateway.routes.relay_routes",
     "name": "relay_status",
     "openapi_response_codes": [
       "200"
@@ -1262,7 +1268,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.relay",
+    "module": "api_gateway.routes.relay_routes",
     "name": "relay_sync_agents",
     "openapi_response_codes": [
       "200",
@@ -1286,7 +1292,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.relay",
+    "module": "api_gateway.routes.relay_routes",
     "name": "relay_events",
     "openapi_response_codes": [
       "200",
@@ -1317,7 +1323,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.relay",
+    "module": "api_gateway.routes.relay_routes",
     "name": "relay_heartbeat",
     "openapi_response_codes": [
       "204",
@@ -1341,7 +1347,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.relay",
+    "module": "api_gateway.routes.relay_routes",
     "name": "relay_publish",
     "openapi_response_codes": [
       "204",
@@ -1364,7 +1370,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.room_center",
+    "module": "api_gateway.routes.room_routes",
     "name": "create_and_parse_user_message",
     "openapi_response_codes": [
       "200"
@@ -1386,7 +1392,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.room_center",
+    "module": "api_gateway.routes.room_routes",
     "name": "create_new_room",
     "openapi_response_codes": [
       "200"
@@ -1408,7 +1414,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.room_center",
+    "module": "api_gateway.routes.room_routes",
     "name": "inquiry_active_runs",
     "openapi_response_codes": [
       "200"
@@ -1418,10 +1424,10 @@
     "response_class": null,
     "response_model": null,
     "status_code": null,
+    "streaming_response": null,
     "supporting_protocols": [
       "app_shell.database_service.A2ATaskReader"
-    ],
-    "streaming_response": null
+    ]
   },
   {
     "auth_dependencies": [
@@ -1433,7 +1439,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.room_center",
+    "module": "api_gateway.routes.room_routes",
     "name": "inquiry_room_messages",
     "openapi_response_codes": [
       "200"
@@ -1455,7 +1461,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.room_center",
+    "module": "api_gateway.routes.room_routes",
     "name": "inquiry_room_setting",
     "openapi_response_codes": [
       "200"
@@ -1477,7 +1483,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.room_center",
+    "module": "api_gateway.routes.room_routes",
     "name": "inquiry_rooms_by_room_owner_id",
     "openapi_response_codes": [
       "200"
@@ -1499,7 +1505,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.room_center",
+    "module": "api_gateway.routes.room_routes",
     "name": "send_message",
     "openapi_response_codes": [
       "200"
@@ -1509,10 +1515,10 @@
     "response_class": null,
     "response_model": null,
     "status_code": null,
+    "streaming_response": null,
     "supporting_protocols": [
       "app_shell.database_service.A2ATaskReader"
-    ],
-    "streaming_response": null
+    ]
   },
   {
     "auth_dependencies": [
@@ -1525,7 +1531,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.room_center",
+    "module": "api_gateway.routes.room_routes",
     "name": "suggest_agents",
     "openapi_response_codes": [
       "200"
@@ -1547,7 +1553,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.room_center",
+    "module": "api_gateway.routes.room_routes",
     "name": "update_room_agent_set",
     "openapi_response_codes": [
       "200"
@@ -1569,7 +1575,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.room_center",
+    "module": "api_gateway.routes.room_routes",
     "name": "update_room_extend_info",
     "openapi_response_codes": [
       "200"
@@ -1591,7 +1597,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.room_center",
+    "module": "api_gateway.routes.room_routes",
     "name": "update_room_name",
     "openapi_response_codes": [
       "200"
@@ -1614,7 +1620,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.a2a_tasks",
+    "module": "api_gateway.routes.a2a_task_routes",
     "name": "list_room_tasks",
     "openapi_response_codes": [
       "200",
@@ -1637,7 +1643,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.hitl",
+    "module": "api_gateway.routes.hitl_routes",
     "name": "get_pending_hitl_requests",
     "openapi_response_codes": [
       "200",
@@ -1663,7 +1669,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.hitl",
+    "module": "api_gateway.routes.hitl_routes",
     "name": "respond_to_hitl_request",
     "openapi_response_codes": [
       "200",
@@ -1689,7 +1695,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.hitl",
+    "module": "api_gateway.routes.hitl_routes",
     "name": "cancel_hitl_request",
     "openapi_response_codes": [
       "200",
@@ -1717,7 +1723,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.sse",
+    "module": "api_gateway.routes.sse_routes",
     "name": "cancel_message",
     "openapi_response_codes": [
       "200",
@@ -1739,12 +1745,13 @@
     ],
     "dependencies": [
       "get_current_user_with_query_token",
+      "get_db_service",
       "get_sse_manager"
     ],
     "methods": [
       "GET"
     ],
-    "module": "api.sse",
+    "module": "api_gateway.routes.sse_routes",
     "name": "get_room_sse_status",
     "openapi_response_codes": [
       "200",
@@ -1755,7 +1762,10 @@
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "app_shell.database_service.A2ATaskReader"
+    ]
   },
   {
     "auth_dependencies": [
@@ -1763,12 +1773,13 @@
     ],
     "dependencies": [
       "get_current_user_with_query_token",
+      "get_db_service",
       "get_sse_manager"
     ],
     "methods": [
       "GET"
     ],
-    "module": "api.sse",
+    "module": "api_gateway.routes.sse_routes",
     "name": "stream_room_messages",
     "openapi_response_codes": [
       "200",
@@ -1787,7 +1798,10 @@
         "X-Accel-Buffering"
       ],
       "media_type": "text/event-stream"
-    }
+    },
+    "supporting_protocols": [
+      "app_shell.database_service.A2ATaskReader"
+    ]
   },
   {
     "auth_dependencies": [
@@ -1799,7 +1813,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.task",
+    "module": "api_gateway.routes.task_routes",
     "name": "get_all_sessions",
     "openapi_response_codes": [
       "410",
@@ -1822,7 +1836,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.task",
+    "module": "api_gateway.routes.task_routes",
     "name": "get_base_task_by_session_id",
     "openapi_response_codes": [
       "410",
@@ -1845,7 +1859,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.task",
+    "module": "api_gateway.routes.task_routes",
     "name": "get_meta_tasks_by_parent_task_id",
     "openapi_response_codes": [
       "410",
@@ -1868,7 +1882,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.task",
+    "module": "api_gateway.routes.task_routes",
     "name": "query_base_task",
     "openapi_response_codes": [
       "410",
@@ -1891,7 +1905,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.task",
+    "module": "api_gateway.routes.task_routes",
     "name": "query_task",
     "openapi_response_codes": [
       "410",
@@ -1915,7 +1929,7 @@
     "methods": [
       "GET"
     ],
-    "module": "api.a2a_tasks",
+    "module": "api_gateway.routes.a2a_task_routes",
     "name": "list_user_pending_tasks",
     "openapi_response_codes": [
       "200"
@@ -1935,7 +1949,7 @@
     "methods": [
       "POST"
     ],
-    "module": "api.webhooks",
+    "module": "api_gateway.routes.webhook_routes",
     "name": "handle_a2a_webhook",
     "openapi_response_codes": [
       "200",
@@ -1950,6 +1964,7 @@
   },
   {
     "auth_dependencies": [],
+    "dependencies": [],
     "methods": [
       "GET",
       "HEAD"
@@ -1962,11 +1977,11 @@
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null,
-    "dependencies": []
+    "streaming_response": null
   },
   {
     "auth_dependencies": [],
+    "dependencies": [],
     "methods": [
       "GET",
       "HEAD"
@@ -1979,8 +1994,7 @@
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null,
-    "dependencies": []
+    "streaming_response": null
   },
   {
     "auth_dependencies": [],
@@ -2004,6 +2018,7 @@
   },
   {
     "auth_dependencies": [],
+    "dependencies": [],
     "methods": [
       "GET",
       "HEAD"
@@ -2016,11 +2031,11 @@
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null,
-    "dependencies": []
+    "streaming_response": null
   },
   {
     "auth_dependencies": [],
+    "dependencies": [],
     "methods": [
       "GET",
       "HEAD"
@@ -2033,7 +2048,6 @@
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null,
-    "dependencies": []
+    "streaming_response": null
   }
 ]

@@ -4,7 +4,7 @@ from datetime import timedelta
 import inspect
 from uuid import uuid4
 
-from common.utils.time import utcnow
+from common.utils.time import ensure_utc, utcnow
 
 
 class InMemoryHubTaskOwnershipStore:
@@ -37,8 +37,7 @@ class InMemoryHubTaskOwnershipStore:
         if (
             current_owner
             and current_owner != owner_id
-            and lease_expires_at
-            and lease_expires_at > now
+            and _lease_is_after(lease_expires_at, now)
         ):
             raise ValueError("ownership lease is held by another worker")
         record.update(owner_id=owner_id, lease_token=lease_token or str(uuid4()))
@@ -55,7 +54,7 @@ class InMemoryHubTaskOwnershipStore:
             return None
         record = self._records[record_id]
         lease_expires_at = record.get("lease_expires_at")
-        if lease_expires_at and lease_expires_at <= utcnow():
+        if _lease_is_expired(lease_expires_at):
             return None
         return dict(record)
 
@@ -115,8 +114,7 @@ class MongoHubTaskOwnershipStore:
             if (
                 current_owner
                 and current_owner != owner_id
-                and lease_expires_at
-                and lease_expires_at > now
+                and _lease_is_after(lease_expires_at, now)
             ):
                 raise ValueError("ownership lease is held by another worker")
             ownership_id = record["ownership_id"]
@@ -172,7 +170,7 @@ class MongoHubTaskOwnershipStore:
         if not isinstance(record, dict):
             return None
         lease_expires_at = record.get("lease_expires_at")
-        if lease_expires_at and lease_expires_at <= utcnow():
+        if _lease_is_expired(lease_expires_at):
             return None
         return dict(record)
 
@@ -208,6 +206,14 @@ def _alias_query(alias: str) -> dict:
             {"aliases.hub_task_id": alias},
         ]
     }
+
+
+def _lease_is_after(value, comparison) -> bool:
+    return bool(value and ensure_utc(value) > ensure_utc(comparison))
+
+
+def _lease_is_expired(value) -> bool:
+    return bool(value and ensure_utc(value) <= utcnow())
 
 
 async def _maybe_await(value):
