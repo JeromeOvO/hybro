@@ -226,6 +226,23 @@ def test_agent_capabilities_ignore_unknown_fields():
     assert not capabilities.model_extra or "stremaing" not in capabilities.model_extra
 
 
+def test_agent_card_ignores_unknown_fields():
+    from common.types import AgentCapabilities, AgentCard, AgentSkill
+
+    card = AgentCard(
+        name="agent",
+        description="desc",
+        url="https://agent.example",
+        version="1.0.0",
+        capabilities=AgentCapabilities(),
+        skills=[AgentSkill(id="skill", name="Skill")],
+        versoin="typo",
+    )
+
+    assert "versoin" not in card.model_dump()
+    assert not card.model_extra or "versoin" not in card.model_extra
+
+
 @pytest.mark.asyncio
 async def test_auth_config_binds_authorized_parties(monkeypatch):
     import common.auth as auth

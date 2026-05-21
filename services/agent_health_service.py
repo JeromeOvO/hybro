@@ -12,10 +12,16 @@ from a2a.utils.constants import (
 )
 from loguru import logger
 
+from common.types import AgentCard as CommonAgentCard
 from config.settings import settings
 from database.mongodb import mongodb
 from jobs.constants import AGENT_HEALTH_CHECKER
-from models.agent import AGENT_CARD_HEALTH_NO_SYNC, Agent, AgentStatus
+from models.agent import (
+    AGENT_CARD_HEALTH_NO_SYNC,
+    Agent,
+    AgentStatus,
+    coerce_legacy_agent_card,
+)
 
 if TYPE_CHECKING:
     from infrastructure.leader_election import LeaderElection
@@ -173,7 +179,9 @@ class AgentHealthService:
         # for the rationale on why url and iconUrl are both protected here.
 
         try:
-            card_dict = fetched_card.model_dump(mode="json")
+            card_dict = CommonAgentCard.model_validate(
+                coerce_legacy_agent_card(fetched_card)
+            ).model_dump(mode="json")
             stored_dict = agent.agent_card.model_dump(mode="json")
             partial_set = {
                 f"agent_card.{field}": card_dict[field]

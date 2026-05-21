@@ -367,7 +367,7 @@ class AgentSkill(BaseModel):
 
 
 class AgentCard(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
     name: str
     description: str | None = None
