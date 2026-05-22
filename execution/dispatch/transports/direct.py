@@ -79,13 +79,13 @@ class DirectTransport(AgentTransport):
     """
 
     def __init__(
-            self,
-            response_handler,
-            tsm: TaskStateManager,
-            a2a_service,
-            task_service,
-            sse_manager,
-            database_service,
+        self,
+        response_handler,
+        tsm: TaskStateManager,
+        a2a_service,
+        task_service,
+        sse_manager,
+        database_service,
     ) -> None:
         super().__init__(response_handler)
         self.tsm = tsm
@@ -108,12 +108,12 @@ class DirectTransport(AgentTransport):
     # ------------------------------------------------------------------
 
     async def _emit_terminal(
-            self,
-            ctx: ProcessingContext,
-            state: TaskState,
-            *,
-            error: str | None = None,
-            parts: list[dict] | None = None,
+        self,
+        ctx: ProcessingContext,
+        state: TaskState,
+        *,
+        error: str | None = None,
+        parts: list[dict] | None = None,
     ) -> None:
         """Emit a terminal AgentEvent through the shared response handler.
 
@@ -138,8 +138,7 @@ class DirectTransport(AgentTransport):
             message_id=msg.message_id,
             room_id=ctx.room_id,
             agent_id=msg.agent_id or "",
-            text=(error or (
-                msg.message_content.message_text if hasattr(msg, 'message_content') and msg.message_content else "")),
+            text=(error or (msg.message_content.message_text if hasattr(msg, 'message_content') and msg.message_content else "")),
             error_text=error if kind == "error" else None,
             state=state.value if hasattr(state, 'value') else str(state),
             related_message_id=msg.related_message_id,
@@ -154,9 +153,9 @@ class DirectTransport(AgentTransport):
     # ------------------------------------------------------------------
 
     async def dispatch(
-            self,
-            ctx: DispatchContext,
-            message: RoomAgentMessage,
+        self,
+        ctx: DispatchContext,
+        message: RoomAgentMessage,
     ) -> ProcessingResult:
         """Execute direct (cloud) dispatch: streaming or sync based on agent capabilities.
 
@@ -227,8 +226,8 @@ class DirectTransport(AgentTransport):
                         agent_id=message.agent_id,
                         error_message=f"Agent streaming failed: {exc}",
                         query_text=(
-                                message.task_content
-                                or (message.message_content.message_text or "")
+                            message.task_content
+                            or (message.message_content.message_text or "")
                         ),
                         room_id=room_id,
                         message_id=message.message_id,
@@ -262,8 +261,8 @@ class DirectTransport(AgentTransport):
             if not success:
                 task = get_task(message)
                 was_canceled = (
-                        (token and token.is_cancelled)
-                        or (task and task.status and task.status.state == TaskState.canceled)
+                    (token and token.is_cancelled)
+                    or (task and task.status and task.status.state == TaskState.canceled)
                 )
                 if was_canceled:
                     return ProcessingResult(ProcessingStatus.CANCELED)
@@ -293,8 +292,7 @@ class DirectTransport(AgentTransport):
                     response_text="",
                     message_id=paused_message_id,
                     a2a_task_id=agent_task_id or task_data.get("id") or (task.id if hasattr(task, "id") else None),
-                    a2a_context_id=task_data.get("context_id") or (
-                        task.context_id if hasattr(task, "context_id") else None),
+                    a2a_context_id=task_data.get("context_id") or (task.context_id if hasattr(task, "context_id") else None),
                     status_message=status_msg,
                 )
 
@@ -329,8 +327,8 @@ class DirectTransport(AgentTransport):
         return ProcessingResult(ProcessingStatus.SUCCESS, full_response_text)
 
     async def _convert_inline_bytes_to_s3(
-            self, artifact, room_id: str, message_id: str,
-            conversion_counter: list[int] | None = None,
+        self, artifact, room_id: str, message_id: str,
+        conversion_counter: list[int] | None = None,
     ) -> None:
         """Convert inline base64 bytes and external URIs in artifact parts to S3 URIs.
 
@@ -353,12 +351,12 @@ class DirectTransport(AgentTransport):
         conversion_counter[0] = new_total
 
     async def _convert_streaming_parts_to_s3(
-            self,
-            non_text_parts: list[dict],
-            room_id: str,
-            message_id: str,
-            *,
-            converted_so_far: int = 0,
+        self,
+        non_text_parts: list[dict],
+        room_id: str,
+        message_id: str,
+        *,
+        converted_so_far: int = 0,
     ) -> int:
         """Convert inline base64 bytes in accumulated streaming file parts to S3 URIs.
 
@@ -374,7 +372,7 @@ class DirectTransport(AgentTransport):
 
     @staticmethod
     def _materialize_non_text_parts_as_artifact(
-            task, non_text_parts: list[dict]
+        task, non_text_parts: list[dict]
     ) -> None:
         """Wrap accumulated non-text streaming parts into an A2A artifact.
 
@@ -424,9 +422,9 @@ class DirectTransport(AgentTransport):
     # ------------------------------------------------------------------
 
     async def _try_cancel_remote_task(
-            self,
-            current_message: RoomAgentMessage,
-            agent_card: AgentCard,
+        self,
+        current_message: RoomAgentMessage,
+        agent_card: AgentCard,
     ) -> None:
         """Best-effort, fire-and-forget cancellation of the remote A2A agent task."""
         task = get_task(current_message)
@@ -448,13 +446,13 @@ class DirectTransport(AgentTransport):
         await self.a2a_service.cancel_remote_task(agent_card, remote_task_id)
 
     async def _setup_task_tracking(
-            self,
-            current_message: RoomAgentMessage,
-            agent_card: AgentCard,
-            prepared_message: Message,
-            room_id: str,
-            step_number: int | None = None,
-            total_steps: int | None = None,
+        self,
+        current_message: RoomAgentMessage,
+        agent_card: AgentCard,
+        prepared_message: Message,
+        room_id: str,
+        step_number: int | None = None,
+        total_steps: int | None = None,
     ) -> dict[str, Any] | None:
         try:
             logger.info(
@@ -520,17 +518,17 @@ class DirectTransport(AgentTransport):
             return None
 
     async def _setup_tracking_context(
-            self,
-            current_message: RoomAgentMessage,
-            agent_card: AgentCard,
-            prepared_message: Message,
-            room_id: str,
-            user_message_id: str,
-            *,
-            token: CancellationToken | None = None,
-            send_sse: bool = False,
-            step_number: int | None = None,
-            total_steps: int | None = None,
+        self,
+        current_message: RoomAgentMessage,
+        agent_card: AgentCard,
+        prepared_message: Message,
+        room_id: str,
+        user_message_id: str,
+        *,
+        token: CancellationToken | None = None,
+        send_sse: bool = False,
+        step_number: int | None = None,
+        total_steps: int | None = None,
     ) -> tuple[dict[str, Any] | None, ProcessingContext]:
         """Set up task tracking and build a ProcessingContext in one step."""
         task_info = await self._setup_task_tracking(
@@ -564,14 +562,14 @@ class DirectTransport(AgentTransport):
     # ------------------------------------------------------------------
 
     async def _poll_task_until_complete(
-            self,
-            agent_card: AgentCard,
-            task_id: str,
-            message_id: str,
-            timeout_seconds: int = 120,
-            initial_delay: float = 0.5,
-            max_delay: float = 5.0,
-            token: CancellationToken | None = None,
+        self,
+        agent_card: AgentCard,
+        task_id: str,
+        message_id: str,
+        timeout_seconds: int = 120,
+        initial_delay: float = 0.5,
+        max_delay: float = 5.0,
+        token: CancellationToken | None = None,
     ) -> Task | None:
         """Poll an agent for task completion with exponential backoff.
 
@@ -681,17 +679,17 @@ class DirectTransport(AgentTransport):
     # ------------------------------------------------------------------
 
     async def handle_streaming_response(
-            self,
-            current_message: RoomAgentMessage,
-            agent_card: AgentCard,
-            prepared_message: Message,
-            room_id: str,
-            user_message_id: str,
-            *,
-            token: CancellationToken | None = None,
-            send_sse: bool = False,
-            step_number: int | None = None,
-            total_steps: int | None = None,
+        self,
+        current_message: RoomAgentMessage,
+        agent_card: AgentCard,
+        prepared_message: Message,
+        room_id: str,
+        user_message_id: str,
+        *,
+        token: CancellationToken | None = None,
+        send_sse: bool = False,
+        step_number: int | None = None,
+        total_steps: int | None = None,
     ) -> tuple[ProcessingStatus, str]:
         """Handle streaming responses from an agent for a room message."""
         _task_info, ctx = await self._setup_tracking_context(
@@ -708,7 +706,7 @@ class DirectTransport(AgentTransport):
         streaming_state = MessageStreamingState()
 
         async for a2a_response in self.a2a_service.send_message_streaming(
-                agent_card, prepared_message, agent_id=current_message.agent_id,
+            agent_card, prepared_message, agent_id=current_message.agent_id,
         ):
             if token and token.is_cancelled:
                 return await self._handle_streaming_cancellation(ctx, streaming_state)
@@ -743,9 +741,9 @@ class DirectTransport(AgentTransport):
         return await self._finalize_streaming(ctx, streaming_state)
 
     async def _handle_streaming_cancellation(
-            self,
-            ctx: ProcessingContext,
-            streaming_state: MessageStreamingState,
+        self,
+        ctx: ProcessingContext,
+        streaming_state: MessageStreamingState,
     ) -> tuple[ProcessingStatus, str]:
         """Handle cancellation during streaming — per-message cleanup only.
 
@@ -769,10 +767,10 @@ class DirectTransport(AgentTransport):
         return ProcessingStatus.CANCELED, streaming_state.full_response_text
 
     async def _handle_streaming_error(
-            self,
-            a2a_response,
-            ctx: ProcessingContext,
-            streaming_state: MessageStreamingState,
+        self,
+        a2a_response,
+        ctx: ProcessingContext,
+        streaming_state: MessageStreamingState,
     ) -> tuple[ProcessingStatus, str]:
         """Handle JSON-RPC error during streaming."""
         error_message = a2a_response.root.error.model_dump_json()
@@ -796,8 +794,8 @@ class DirectTransport(AgentTransport):
                 agent_id=ctx.current_message.agent_id,
                 error_message=error_message,
                 query_text=(
-                        ctx.current_message.task_content
-                        or (ctx.current_message.message_content.message_text or "")
+                    ctx.current_message.task_content
+                    or (ctx.current_message.message_content.message_text or "")
                 ),
                 room_id=ctx.room_id,
                 message_id=ctx.current_message.message_id,
@@ -811,10 +809,10 @@ class DirectTransport(AgentTransport):
         return ProcessingStatus.FAILED, streaming_state.full_response_text
 
     async def _handle_stream_message_chunk(
-            self,
-            result,
-            ctx: ProcessingContext,
-            streaming_state: MessageStreamingState,
+        self,
+        result,
+        ctx: ProcessingContext,
+        streaming_state: MessageStreamingState,
     ) -> None:
         """Handle a 'message' event during streaming."""
         from common.utils.a2a_helpers import extract_parts
@@ -851,8 +849,8 @@ class DirectTransport(AgentTransport):
             else:
                 for i, msg in enumerate(task.history):
                     if (
-                            hasattr(msg, "message_id")
-                            and msg.message_id == streaming_state.agent_message_id
+                        hasattr(msg, "message_id")
+                        and msg.message_id == streaming_state.agent_message_id
                     ):
                         task.history[i] = updated_message
                         break
@@ -883,10 +881,10 @@ class DirectTransport(AgentTransport):
         )
 
     async def _handle_stream_status_update(
-            self,
-            result,
-            ctx: ProcessingContext,
-            streaming_state: MessageStreamingState,
+        self,
+        result,
+        ctx: ProcessingContext,
+        streaming_state: MessageStreamingState,
     ) -> None:
         """Handle a 'status-update' event during streaming."""
         state = result.status.state
@@ -931,8 +929,8 @@ class DirectTransport(AgentTransport):
                 fetched_text = get_text_from_a2a_response(message)
                 if fetched_text:
                     if (
-                            streaming_state.full_response_text
-                            and fetched_text != streaming_state.full_response_text
+                        streaming_state.full_response_text
+                        and fetched_text != streaming_state.full_response_text
                     ):
                         logger.warning(
                             "DirectTransport: Fetched final text differs from streaming text for %s",
@@ -959,10 +957,10 @@ class DirectTransport(AgentTransport):
                 )
 
     async def _handle_stream_artifact_update(
-            self,
-            result,
-            ctx: ProcessingContext,
-            streaming_state: MessageStreamingState,
+        self,
+        result,
+        ctx: ProcessingContext,
+        streaming_state: MessageStreamingState,
     ) -> None:
         """Handle an 'artifact-update' event during streaming."""
         artifact_result = getattr(result, "artifact", None)
@@ -1026,9 +1024,9 @@ class DirectTransport(AgentTransport):
             )
 
     async def _finalize_streaming(
-            self,
-            ctx: ProcessingContext,
-            streaming_state: MessageStreamingState,
+        self,
+        ctx: ProcessingContext,
+        streaming_state: MessageStreamingState,
     ) -> tuple[ProcessingStatus, str]:
         """Finalize streaming: persist final state, send task_update SSE."""
         if ctx.send_sse:
@@ -1157,7 +1155,7 @@ class DirectTransport(AgentTransport):
         return ProcessingStatus.SUCCESS, streaming_state.full_response_text
 
     async def _handle_a2a_response_for_room(
-            self, room_agent_message: RoomAgentMessage, message_data: None | Task | Message
+        self, room_agent_message: RoomAgentMessage, message_data: None | Task | Message
     ) -> bool:
         if message_data is None:
             logger.error("DirectTransport: process_a2a_response returned None")
@@ -1166,9 +1164,9 @@ class DirectTransport(AgentTransport):
         if message_data.kind == "task":
             existing_task = get_task(room_agent_message)
             if (
-                    existing_task
-                    and existing_task.status
-                    and is_terminal_state(existing_task.status.state)
+                existing_task
+                and existing_task.status
+                and is_terminal_state(existing_task.status.state)
             ):
                 # The in-memory task already has a terminal status (e.g. completed).
                 # The re-fetched task may carry stale non-terminal data — merge
@@ -1214,8 +1212,8 @@ class DirectTransport(AgentTransport):
 
     @staticmethod
     def _parse_sync_fallback_response(
-            raw_response,
-            message_id: str,
+        raw_response,
+        message_id: str,
     ) -> dict[str, Any]:
         """Parse a raw ``send_message_sync`` response into the dict format
         expected by ``handle_sync_response``."""
@@ -1265,17 +1263,17 @@ class DirectTransport(AgentTransport):
         return {"type": "message", "message_id": message_id, "content": ""}
 
     async def handle_sync_response(
-            self,
-            current_message: RoomAgentMessage,
-            agent_card: AgentCard,
-            prepared_message: Message,
-            room_id: str,
-            _user_id: str | None,
-            *,
-            user_message_id: str | None = None,
-            token: CancellationToken | None = None,
-            step_number: int | None = None,
-            total_steps: int | None = None,
+        self,
+        current_message: RoomAgentMessage,
+        agent_card: AgentCard,
+        prepared_message: Message,
+        room_id: str,
+        _user_id: str | None,
+        *,
+        user_message_id: str | None = None,
+        token: CancellationToken | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
     ) -> tuple[bool, str | None, str | None, str | None]:
         """Handle synchronous (non-streaming) response from an agent.
 
@@ -1381,7 +1379,7 @@ class DirectTransport(AgentTransport):
             )
             if task_info:
                 await self._emit_terminal(ctx, TaskState.failed, error=str(exc),
-                                          )
+                )
             await self.sse_manager.send_error(room_id, str(exc))
 
             # Record capability issue for the agent
@@ -1394,8 +1392,8 @@ class DirectTransport(AgentTransport):
                     agent_id=current_message.agent_id,
                     error_message=str(exc),
                     query_text=(
-                            current_message.task_content
-                            or (current_message.message_content.message_text or "")
+                        current_message.task_content
+                        or (current_message.message_content.message_text or "")
                     ),
                     room_id=room_id,
                     message_id=current_message.message_id,
@@ -1437,18 +1435,18 @@ class DirectTransport(AgentTransport):
         )
 
     async def _process_sync_response(
-            self,
-            response: dict[str, Any],
-            current_message: RoomAgentMessage,
-            agent_card: AgentCard,
-            room_id: str,
-            message_id: str,
-            task_info: dict[str, Any] | None,
-            ctx: ProcessingContext,
-            token: CancellationToken | None,
-            *,
-            step_number: int | None = None,
-            total_steps: int | None = None,
+        self,
+        response: dict[str, Any],
+        current_message: RoomAgentMessage,
+        agent_card: AgentCard,
+        room_id: str,
+        message_id: str,
+        task_info: dict[str, Any] | None,
+        ctx: ProcessingContext,
+        token: CancellationToken | None,
+        *,
+        step_number: int | None = None,
+        total_steps: int | None = None,
     ) -> tuple[bool, str | None, str | None, str | None]:
         """
             Process the parsed sync response (message or task type).
@@ -1633,17 +1631,17 @@ class DirectTransport(AgentTransport):
         return False, "", None, None
 
     async def _finalize_polled_task(
-            self,
-            completed_task: Task,
-            current_message: RoomAgentMessage,
-            agent_card: AgentCard,
-            room_id: str,
-            message_id: str,
-            task_info: dict[str, Any] | None,
-            ctx: ProcessingContext,
-            *,
-            step_number: int | None = None,
-            total_steps: int | None = None,
+        self,
+        completed_task: Task,
+        current_message: RoomAgentMessage,
+        agent_card: AgentCard,
+        room_id: str,
+        message_id: str,
+        task_info: dict[str, Any] | None,
+        ctx: ProcessingContext,
+        *,
+        step_number: int | None = None,
+        total_steps: int | None = None,
     ) -> tuple[bool, str | None, str | None, str | None]:
         """Finalize a polled task that reached a terminal state."""
         state = completed_task.status.state
