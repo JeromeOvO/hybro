@@ -9,7 +9,7 @@ Tests cover:
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from api.memory_center import (
     add_chat_context,
@@ -17,9 +17,6 @@ from api.memory_center import (
     update_chat_context_by_session_id,
     delete_chat_context_by_session_id,
 )
-
-PATCH_MC = "api.memory_center.memory_center"
-
 
 class TestAddChatContext:
     @pytest.mark.asyncio
@@ -32,9 +29,9 @@ class TestAddChatContext:
         })
         expected = {"success": True}
 
-        with patch(PATCH_MC) as mock_mc:
-            mock_mc.add_chat_context = AsyncMock(return_value=expected)
-            result = await add_chat_context(request)
+        mock_mc = MagicMock()
+        mock_mc.add_chat_context = AsyncMock(return_value=expected)
+        result = await add_chat_context(request, center=mock_mc)
 
         assert result == expected
         mock_mc.add_chat_context.assert_called_once()
@@ -54,9 +51,9 @@ class TestGetChatContextBySessionId:
         })
         expected = {"context": [{"role": "user", "content": "Hello"}]}
 
-        with patch(PATCH_MC) as mock_mc:
-            mock_mc.get_chat_context_by_session_id = AsyncMock(return_value=expected)
-            result = await get_chat_context_by_session_id(request)
+        mock_mc = MagicMock()
+        mock_mc.get_chat_context_by_session_id = AsyncMock(return_value=expected)
+        result = await get_chat_context_by_session_id(request, center=mock_mc)
 
         assert result == expected
         mock_mc.get_chat_context_by_session_id.assert_called_once()
@@ -82,9 +79,9 @@ class TestUpdateChatContextBySessionId:
         })
         expected = {"success": True}
 
-        with patch(PATCH_MC) as mock_mc:
-            mock_mc.update_chat_context_by_session_id = AsyncMock(return_value=expected)
-            result = await update_chat_context_by_session_id(request)
+        mock_mc = MagicMock()
+        mock_mc.update_chat_context_by_session_id = AsyncMock(return_value=expected)
+        result = await update_chat_context_by_session_id(request, center=mock_mc)
 
         assert result == expected
         call_arg = mock_mc.update_chat_context_by_session_id.call_args[0][0]
@@ -101,9 +98,9 @@ class TestDeleteChatContextBySessionId:
         })
         expected = {"success": True}
 
-        with patch(PATCH_MC) as mock_mc:
-            mock_mc.delete_chat_context_by_session_id = AsyncMock(return_value=expected)
-            result = await delete_chat_context_by_session_id(request)
+        mock_mc = MagicMock()
+        mock_mc.delete_chat_context_by_session_id = AsyncMock(return_value=expected)
+        result = await delete_chat_context_by_session_id(request, center=mock_mc)
 
         assert result == expected
         mock_mc.delete_chat_context_by_session_id.assert_called_once()

@@ -1,4 +1,4 @@
-from a2a.types import (
+from common.types import (
     ContentTypeNotSupportedError,
     JSONRPCResponse,
     UnsupportedOperationError,

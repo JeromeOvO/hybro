@@ -182,6 +182,26 @@ class TestHubTransportMiddleware:
         assert not ctx.denied
 
     @pytest.mark.asyncio
+    async def test_hub_dispatch_port_cached_liveness_sets_relay(self):
+        class CachedRelay:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def is_hub_online(self, hub_id):
+                self.calls.append(hub_id)
+                return True
+
+        relay = CachedRelay()
+        mw = HubTransportMiddleware(relay)
+        ctx = _make_ctx(agent=_make_agent(source="hub", hub_id="hub-001"))
+
+        ctx = await mw.pre_dispatch(ctx)
+
+        assert ctx.transport == "relay"
+        assert not ctx.denied
+        assert relay.calls == ["hub-001"]
+
+    @pytest.mark.asyncio
     async def test_hub_agent_offline_sets_relay_and_queued(self):
         relay = MagicMock()
         relay.is_hub_alive = AsyncMock(return_value=False)
@@ -213,6 +233,32 @@ class TestHubTransportMiddleware:
 
 
 class TestAMPRelayDispatch:
+    def test_bind_relay_service_builds_execution_owned_relay_transport(self):
+        from modules.AgentMessageProcessor import AgentMessageProcessor
+
+        response_handler = MagicMock()
+        direct_transport = MagicMock()
+        direct_transport.response_handler = response_handler
+        relay_svc = MagicMock()
+        relay_svc.relay_transport = None
+        relay_svc.agent_call_counter = MagicMock()
+        relay_svc.ownership_lease_maintainer = MagicMock()
+
+        amp = AgentMessageProcessor(
+            sse_manager=MagicMock(),
+            room_services=MagicMock(),
+            database_service=MagicMock(),
+            transports={"direct": direct_transport},
+        )
+
+        amp.bind_relay_service(relay_svc)
+
+        relay_transport = amp.transports["relay"]
+        assert relay_transport.response_handler is response_handler
+        assert relay_transport.relay_service is relay_svc
+        assert relay_transport._call_counter is relay_svc.agent_call_counter
+        assert relay_transport._ownership_lease_maintainer is relay_svc.ownership_lease_maintainer
+
     @pytest.mark.asyncio
     async def test_relay_transport_returns_relay_dispatched(self):
         from modules.AgentMessageProcessor import AgentMessageProcessor

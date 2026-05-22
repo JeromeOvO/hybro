@@ -203,6 +203,11 @@ class ConversationTurn(BaseModel):
         return "Unknown"
 
 
+from common.utils.context_utils import bind_context_turn_factory
+
+bind_context_turn_factory(ConversationTurn)
+
+
 class RoomSummary(BaseModel):
     """
     Rolling structured summary of the room's current state — the "Knowledge Block"

@@ -100,6 +100,12 @@ class TestSharedInlineConversionCap:
         async def fake_upload(*, file_data, s3_key, content_type, content_length):
             upload_calls.append(s3_key)
 
+        mock_s3 = AsyncMock()
+        mock_s3.upload_file = AsyncMock(side_effect=fake_upload)
+        mock_s3.generate_presigned_url = AsyncMock(
+            return_value="https://s3.example.com/presigned"
+        )
+
         processor = DirectTransport(
             response_handler=MagicMock(),
             tsm=MagicMock(),
@@ -107,11 +113,7 @@ class TestSharedInlineConversionCap:
             a2a_service=MagicMock(),
             task_service=MagicMock(),
             database_service=MagicMock(),
-        )
-        mock_s3 = AsyncMock()
-        mock_s3.upload_file = AsyncMock(side_effect=fake_upload)
-        mock_s3.generate_presigned_url = AsyncMock(
-            return_value="https://s3.example.com/presigned"
+            s3_service=mock_s3,
         )
 
         cap = MAX_INLINE_CONVERSIONS_PER_MESSAGE

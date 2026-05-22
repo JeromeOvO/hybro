@@ -44,6 +44,18 @@ class GatewayResponse(FrozenDTO):
     headers: dict[str, str] = Field(default_factory=dict)
 
 
+class GatewayDiscoveryAgentResult(FrozenDTO):
+    agent_id: str
+    agent_card: dict[str, Any] = Field(default_factory=dict)
+    match_score: float
+
+
+class GatewayDiscoveryResponse(FrozenDTO):
+    query: str
+    agents: list[GatewayDiscoveryAgentResult] = Field(default_factory=list)
+    count: int = 0
+
+
 class RateLimitResult(FrozenDTO):
     allowed: bool
     info: RateLimitInfo | None = None
@@ -61,6 +73,8 @@ class FileInfo(FrozenDTO):
 __all__ = [
     "FileInfo",
     "FileMetadata",
+    "GatewayDiscoveryAgentResult",
+    "GatewayDiscoveryResponse",
     "GatewayRequest",
     "GatewayResponse",
     "GatewayRoute",

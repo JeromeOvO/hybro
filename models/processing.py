@@ -4,8 +4,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from a2a.types import AgentCard
-
 from common.utils.cancellation import CancellationToken
 from models.room import RoomAgentMessage
 
@@ -39,7 +37,7 @@ class ProcessingContext:
 
     room_id: str
     current_message: RoomAgentMessage
-    agent_card: AgentCard
+    agent_card: Any
     user_message_id: str
     token: CancellationToken | None = None
     task_info: dict[str, Any] | None = None

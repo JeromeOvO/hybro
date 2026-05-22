@@ -24,7 +24,7 @@ from models.response import (
 )
 from tests.conftest import FROZEN_TIME
 
-PATCH_MONGODB = "api.discovery_api_keys.mongodb"
+PATCH_MONGODB = "api.discovery_api_keys.api_key_store"
 PATCH_GENERATE = "api.discovery_api_keys.generate_api_key"
 PATCH_HASH = "api.discovery_api_keys.hash_api_key"
 

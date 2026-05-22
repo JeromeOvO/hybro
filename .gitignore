@@ -25,6 +25,7 @@ venv/
 .worktrees/
 
 config.py
+!hub_runtime_bridge/config.py
 
 # logs
 logs/

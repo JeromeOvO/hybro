@@ -114,6 +114,19 @@ class AgentMongoRepository:
             {"$set": {"agent_status": "inactive"}},
         )
 
+    async def count_hub_agents(self, hub_id: str) -> tuple[int, int]:
+        active = await self._agents.count({"hub_id": hub_id, "agent_status": "active"})
+        inactive = await self._agents.count(
+            {"hub_id": hub_id, "agent_status": {"$ne": "active"}}
+        )
+        return active, inactive
+
+    async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> None:
+        update = {"$inc": {"call_count": 1}}
+        if success:
+            update["$inc"]["call_success_count"] = 1
+        await self._agents.update_one({"agent_id": agent_id}, update)
+
     async def upsert_hub_agent(
         self, hub_id: str, local_agent_id: str, data: dict
     ) -> str:

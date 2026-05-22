@@ -205,92 +205,8 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
         "services",
     }
     expected = {
-        "execution/dispatch/agent_dispatcher.py": {
-            "services.agent_resolver_service",
-            "services.database_service",
-        },
-        "execution/dispatch/agent_message_processor.py": {
-            "services.agent_health_service",
-            "services.database_service",
-            "services.relay_service",
-            "services.room_services",
-            "services.sse_services",
-        },
-        "execution/dispatch/dispatch_middleware.py": {"a2a.types"},
-        "execution/dispatch/middleware/cloud_health.py": {
-            "services.agent_health_service",
-        },
-        "execution/dispatch/middleware/hub_transport.py": {
-            "services.relay_service",
-        },
-        "execution/dispatch/response_handler.py": {
-            "a2a.types",
-            "services.database_service",
-            "services.notification_service",
-            "services.sse_services",
-            "services.task_notification_service",
-        },
-        "execution/dispatch/transports/direct.py": {
-            "a2a.types",
-            "services.a2a_service",
-            "services.agent_capability_issue_service",
-            "services.s3_service",
-        },
-        "execution/dispatch/transports/relay.py": {
-            "a2a.types",
-            "database.mongodb",
-            "services.database_service",
-            "services.relay_service",
-            "services.sse_services",
-        },
         "execution/dispatch/transports/webhook.py": {
-            "a2a.types",
             "fastapi",
-            "services.database_service",
-            "services.task_notification_service",
-        },
-        "execution/orchestration/queue_executor.py": {
-            "a2a.types",
-            "services.a2a_service",
-            "services.database_service",
-            "services.debate_service",
-            "services.memory_service",
-            "services.rate_limit_service",
-            "services.room_services",
-            "services.sse_services",
-        },
-        "execution/orchestration/room_message_center.py": {
-            "a2a.types",
-            "services.a2a_service",
-            "services.agent_resolver_service",
-            "services.compaction_service",
-            "services.context_assembly_service",
-            "services.database_service",
-            "services.debate_service",
-            "services.memory_search_service",
-            "services.memory_service",
-            "services.notification_service",
-            "services.openai_service",
-            "services.rate_limit_service",
-            "services.room_coordinator_service",
-            "services.room_services",
-            "services.room_supervisor_service",
-            "services.sse_services",
-            "services.task_service",
-        },
-        "execution/orchestration/supervisor_executor.py": {
-            "services.database_service",
-            "services.memory_service",
-            "services.rate_limit_service",
-            "services.room_coordinator_service",
-            "services.room_services",
-            "services.room_supervisor_service",
-            "services.sse_services",
-        },
-        "execution/state/task_state_manager.py": {
-            "a2a.types",
-            "services.notification_service",
-            "services.room_services",
         },
     }
     actual: dict[str, set[str]] = {}
@@ -388,17 +304,33 @@ def test_room_message_center_factory_propagates_overrides_to_children():
 
 def test_room_message_center_factory_owns_default_dependency_wiring():
     import inspect
+    from unittest.mock import MagicMock
 
     from execution.orchestration.factory import create_room_message_center
     from execution.orchestration.room_message_center import RoomMessageCenter
 
     assert "globals()" not in inspect.getsource(RoomMessageCenter.__init__)
 
-    runtime = create_room_message_center()
+    deps = {
+        "room_services": MagicMock(),
+        "database_service": MagicMock(),
+        "sse_manager": MagicMock(),
+        "room_coordinator_service": MagicMock(),
+        "openai_service": MagicMock(),
+        "notification_service": MagicMock(),
+        "agent_resolver_service": MagicMock(),
+        "a2a_service": MagicMock(),
+        "task_service": MagicMock(),
+        "room_memory_service": MagicMock(),
+        "debate_service": MagicMock(),
+        "rate_limit_service": MagicMock(),
+        "room_supervisor_service": MagicMock(),
+    }
+    runtime = create_room_message_center(**deps)
 
-    assert runtime.database_service is not None
-    assert runtime.sse_manager is not None
-    assert runtime.room_services is not None
+    assert runtime.database_service is deps["database_service"]
+    assert runtime.sse_manager is deps["sse_manager"]
+    assert runtime.room_services is deps["room_services"]
 
 
 def test_room_message_center_constructor_requires_explicit_dependencies():
@@ -406,6 +338,45 @@ def test_room_message_center_constructor_requires_explicit_dependencies():
 
     with pytest.raises(TypeError):
         RoomMessageCenter()
+
+
+def test_room_message_center_uses_common_room_lock_protocol():
+    import inspect
+    from pathlib import Path
+    from typing import get_type_hints
+
+    from common.protocols import RoomDistributedLock
+    from execution.orchestration.room_message_center import RoomMessageCenter
+
+    source = Path("execution/orchestration/room_message_center.py").read_text()
+    hints = get_type_hints(RoomMessageCenter.set_room_distributed_lock)
+
+    assert "infrastructure.redis_service" not in source
+    assert "._client" not in source
+    assert hints["room_lock"] == RoomDistributedLock | None
+    assert (
+        get_type_hints(RoomMessageCenter.set_redis_service)["redis_service"]
+        == RoomDistributedLock | None
+    )
+
+
+def test_app_shell_room_lock_uses_public_redis_protocol_surface():
+    import inspect
+    from pathlib import Path
+    from typing import get_type_hints
+
+    from app_shell.room_lock import RedisLockStore, RedisRoomDistributedLock
+
+    source = Path("app_shell/room_lock.py").read_text()
+    init_hints = get_type_hints(RedisRoomDistributedLock.__init__)
+
+    assert "Any" not in source
+    assert "._client" not in source
+    assert "_client" not in source
+    assert ".set_nx(" in source
+    assert init_hints["redis_service"] == RedisLockStore | None
+    acquire_hints = get_type_hints(RedisRoomDistributedLock.acquire)
+    assert acquire_hints["ttl"] is int
 
 
 class _FakeCursor:

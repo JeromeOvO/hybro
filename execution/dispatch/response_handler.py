@@ -6,17 +6,13 @@ Streaming events (artifact_update) use ``SSEManager`` directly.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import inspect
+from typing import TYPE_CHECKING, Any
 
-from a2a.types import TaskState
-
+from a2a_adapter.task_status import coerce_task_state
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
 from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
-
-if TYPE_CHECKING:
-    from services.database_service import DatabaseService
-    from services.sse_services import SSEManager
 
 logger = get_logger(__name__)
 
@@ -35,12 +31,16 @@ class AgentResponseHandler:
         room_message_center: object,
         slot_lifecycle=None,
         hitl_coordinator=None,
+        notification_service=None,
+        task_notification_impl=None,
     ) -> None:
         self._db = db
         self._sse = sse
         self._rmc = room_message_center
         self._slot_lifecycle = slot_lifecycle
         self.hitl_coordinator = hitl_coordinator
+        self._notification_service = notification_service
+        self._task_notification_impl = task_notification_impl
         self._processing_status_emitter = None
 
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
@@ -212,7 +212,7 @@ class AgentResponseHandler:
                 message_text=e.text,
                 artifacts=artifacts_for_db,
             )
-        await self._notify(e, TaskState.completed)
+        await self._notify(e, coerce_task_state("completed"))
         await self._terminate_slot(
             e, "completed",
             content=e.text,
@@ -232,7 +232,7 @@ class AgentResponseHandler:
                 state,
                 message_text=error,
             )
-        await self._notify(e, TaskState(state), error=error)
+        await self._notify(e, coerce_task_state(state), error=error)
         has_partial = bool(e.text and e.text.strip())
         await self._terminate_slot(
             e, "failed",
@@ -249,7 +249,7 @@ class AgentResponseHandler:
                 "canceled",
                 message_text=e.text or "Task was canceled",
             )
-        await self._notify(e, TaskState.canceled)
+        await self._notify(e, coerce_task_state("canceled"))
         await self._terminate_slot(e, "canceled")
         await self._resume_orchestration(e.message_id, "", failed=True)
 
@@ -263,7 +263,7 @@ class AgentResponseHandler:
                 task_id=e.task_id,
                 context_id=e.context_id,
             )
-        await self._notify(e, TaskState(state))
+        await self._notify(e, coerce_task_state(state))
 
         # For async transports (relay, webhook) the queue has already moved
         # to PAUSED before this callback fires, so QueueExecutor never sees
@@ -295,6 +295,14 @@ class AgentResponseHandler:
             logger.warning(
                 "_maybe_create_hitl_for_async_interactive: no user_message_id "
                 "in continuation for %s",
+                e.message_id,
+            )
+            return
+        if await self._has_pending_hitl_for_continuation(
+            user_message_id, e.message_id
+        ):
+            logger.info(
+                "Skipping duplicate HITL request for async interactive event on %s",
                 e.message_id,
             )
             return
@@ -333,6 +341,25 @@ class AgentResponseHandler:
                 hitl_req.request_id,
                 e.message_id,
             )
+
+    async def _has_pending_hitl_for_continuation(
+        self, user_message_id: str, continuation_message_id: str
+    ) -> bool:
+        get_pending = getattr(
+            self._db, "get_pending_hitl_requests_for_message", None
+        )
+        if not callable(get_pending):
+            return False
+        result = get_pending(user_message_id)
+        pending = await result if inspect.isawaitable(result) else result
+        if not isinstance(pending, list):
+            return False
+        return any(
+            item.get("continuation_message_id") == continuation_message_id
+            and item.get("status") == "pending"
+            for item in pending
+            if isinstance(item, dict)
+        )
 
     # --- Non-terminal events ---
 
@@ -467,7 +494,7 @@ class AgentResponseHandler:
     async def notify_task_update(
         self,
         message_id: str,
-        state: TaskState,
+        state: Any,
         room_id: str,
         user_id: str,
         error: str | None = None,
@@ -478,12 +505,12 @@ class AgentResponseHandler:
         Preferred over the standalone ``notify_task_update`` function
         because it uses injected services instead of global singletons.
         """
-        from services.notification_service import notification_service
-        from services.task_notification_service import _notify_task_update_impl
+        if self._notification_service is None or self._task_notification_impl is None:
+            raise RuntimeError("Task notification dependencies have not been bound")
 
-        return await _notify_task_update_impl(
+        return await self._task_notification_impl(
             self._db,
-            notification_service,
+            self._notification_service,
             self._sse,
             message_id=message_id,
             state=state,
@@ -496,7 +523,7 @@ class AgentResponseHandler:
     async def _notify(
         self,
         e: AgentEvent,
-        state: TaskState,
+        state: Any,
         error: str | None = None,
     ) -> None:
         await self.notify_task_update(

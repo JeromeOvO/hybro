@@ -1,36 +1,7 @@
-from fastapi import APIRouter, HTTPException, Request
-from loguru import logger
+"""Compatibility shim for route declarations moved to api_gateway.routes.inspection_routes."""
 
-from models.request import InspectionCenterRequest
-from modules.InspectionCenter import InspectionCenter
+import sys as _sys
 
-router = APIRouter()
-inspection_center = InspectionCenter()  # Singleton instance
+from api_gateway.routes import inspection_routes as _routes
 
-
-@router.post("/inspectionCenter/inspectAgentCard")
-async def inspect_agent(request: Request):
-    request_data = await request.json()
-    agent_url = request_data.get("agent_url")
-    if not agent_url:
-        raise HTTPException(status_code=400, detail="agent_url is required")
-    logger.info("inspectionCenter/inspect request: {}", agent_url)
-    inspection_center_request = InspectionCenterRequest(agent_url=agent_url)
-    inspection_center_response = await inspection_center.inspect_agent_card(
-        inspection_center_request
-    )
-    return inspection_center_response
-
-
-@router.post("/inspectionCenter/inspectA2AConnection")
-async def inspect_a2a_connection(request: Request):
-    request_data = await request.json()
-    agent_url = request_data.get("agent_url")
-    if not agent_url:
-        raise HTTPException(status_code=400, detail="agent_url is required")
-    logger.info("inspectionCenter/inspectA2AConnection request: {}", agent_url)
-    inspection_center_request = InspectionCenterRequest(agent_url=agent_url)
-    inspection_center_response = await inspection_center.inspect_a2a_connection(
-        inspection_center_request
-    )
-    return inspection_center_response
+_sys.modules[__name__] = _routes

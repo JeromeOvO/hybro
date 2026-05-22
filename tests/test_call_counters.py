@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from models.processing import ProcessingStatus
+from hub_runtime_bridge.task_ownership import InMemoryHubTaskOwnershipStore
 from modules.agent_response_handler import AgentResponseHandler
 from modules.transports.relay import RelayTransport
 from services.a2a_service import A2AService
@@ -20,7 +21,14 @@ from services.a2a_service import A2AService
 # ===========================================================================
 
 
-def _make_relay_transport(*, relay_service=None, db_service=None, sse_manager=None):
+def _make_relay_transport(
+    *,
+    relay_service=None,
+    db_service=None,
+    sse_manager=None,
+    ownership_store=None,
+    ownership_lease_maintainer=None,
+):
     handler = MagicMock(spec=AgentResponseHandler)
     handler.handle = AsyncMock()
     if relay_service is None:
@@ -37,6 +45,9 @@ def _make_relay_transport(*, relay_service=None, db_service=None, sse_manager=No
         relay_service=relay_service,
         db=db_service,
         sse_manager=sse_manager,
+        ownership_store=ownership_store,
+        ownership_lease_maintainer=ownership_lease_maintainer,
+        worker_id="worker-1",
     )
 
 
@@ -132,6 +143,28 @@ class TestA2AServiceRecordCall:
 
 
 class TestRelayTransportDispatchCallCounter:
+    @pytest.mark.asyncio
+    async def test_claims_hub_task_ownership_before_dispatch(self):
+        relay_svc = MagicMock()
+        relay_svc.push_to_hub = AsyncMock(return_value=True)
+        ownership = InMemoryHubTaskOwnershipStore()
+        maintainer = MagicMock()
+        rt = _make_relay_transport(
+            relay_service=relay_svc,
+            ownership_store=ownership,
+            ownership_lease_maintainer=maintainer,
+        )
+        ctx = _make_dispatch_ctx()
+        msg = _make_room_agent_message()
+
+        await rt.dispatch(ctx, msg)
+
+        owner = await ownership.resolve_owner("amsg-001")
+        assert owner is not None
+        assert owner["owner_id"] == "worker-1"
+        assert owner["aliases"]["local_task_id"] == "relay-pending-amsg-001"
+        maintainer.track.assert_called_once()
+
     @pytest.mark.asyncio
     async def test_records_success_on_delivered(self):
         relay_svc = MagicMock()

@@ -35,6 +35,115 @@ def test_translator_internal_message_to_a2a_preserves_message_fields():
     }
 
 
+def test_completed_text_task_factory_builds_sdk_task_payload():
+    from a2a.types import TaskState
+    from a2a_adapter.task_status import build_completed_text_task
+
+    task = build_completed_text_task(
+        task_id="summary-1",
+        text="summary text",
+        context_id="ctx-1",
+    )
+
+    assert task.id == "summary-1"
+    assert task.context_id == "ctx-1"
+    assert task.status.state == TaskState.completed
+    assert task.status.message.message_id == "summary-1"
+    assert task.status.message.parts[0].model_dump(mode="json") == {
+        "kind": "text",
+        "metadata": None,
+        "text": "summary text",
+    }
+    assert task.history == [task.status.message]
+
+
+def test_failed_text_task_factory_builds_sdk_task_payload():
+    from a2a.types import TaskState
+    from a2a_adapter.task_status import build_failed_text_task
+
+    task = build_failed_text_task(
+        task_id="task-1",
+        context_id="ctx-1",
+        error_text="failed",
+    )
+
+    assert task.id == "task-1"
+    assert task.context_id == "ctx-1"
+    assert task.status.state == TaskState.failed
+    assert task.status.message.parts[0].model_dump(mode="json") == {
+        "kind": "text",
+        "metadata": None,
+        "text": "failed",
+    }
+
+
+def test_get_task_request_helpers_keep_sdk_details_in_adapter():
+    from a2a.types import GetTaskRequest
+    from a2a_adapter.task_requests import build_get_task_request
+
+    request = build_get_task_request("task-1")
+
+    assert isinstance(request, GetTaskRequest)
+    assert request.id == "task-1"
+    assert request.params.id == "task-1"
+
+
+def test_get_task_response_helper_returns_none_for_jsonrpc_errors():
+    from types import SimpleNamespace
+
+    from a2a.types import JSONRPCErrorResponse, JSONRPCError
+    from a2a_adapter.task_requests import (
+        extract_get_task_result,
+        is_jsonrpc_error_response,
+    )
+
+    response = SimpleNamespace(
+        root=JSONRPCErrorResponse(
+            id="task-1",
+            error=JSONRPCError(code=-32001, message="missing"),
+        )
+    )
+
+    assert extract_get_task_result(response) is None
+    assert is_jsonrpc_error_response(response)
+
+
+def test_message_factory_builds_sdk_message_from_parts():
+    from a2a.types import TextPart
+    from a2a_adapter.message_factory import build_message_from_parts
+
+    message = build_message_from_parts(
+        role="agent",
+        message_id="msg-1",
+        parts=[TextPart(text="hello")],
+    )
+
+    assert message.role == "agent"
+    assert message.message_id == "msg-1"
+    assert message.parts[0].model_dump(mode="json")["text"] == "hello"
+
+
+def test_artifact_factory_materializes_non_text_parts_on_task():
+    from types import SimpleNamespace
+
+    from a2a_adapter.task_artifacts import materialize_non_text_parts_as_artifact
+
+    task = SimpleNamespace(artifacts=None)
+
+    materialize_non_text_parts_as_artifact(
+        task,
+        [{"kind": "data", "data": {"value": 1}}],
+    )
+
+    assert task.artifacts is not None
+    assert len(task.artifacts) == 1
+    assert task.artifacts[0].parts[0].model_dump(mode="json") == {
+        "kind": "data",
+        "metadata": None,
+        "data": {"value": 1},
+    }
+
+
 def test_translator_a2a_task_to_result_normalizes_task_status_result_and_error_text():
     from a2a_adapter.translators import a2a_task_to_result
 
@@ -131,6 +240,42 @@ def test_translator_a2a_card_to_snapshot_supports_dicts_and_sdk_like_objects():
         "input:text/plain",
         "output:text/markdown",
     }
+
+
+def test_transport_send_request_includes_accepted_output_modes():
+    from a2a_adapter.transport import _build_send_request
+
+    request = _build_send_request(
+        InternalAgentMessage(
+            agent_id="agent-1",
+            role="user",
+            parts=[{"kind": "text", "text": "hello"}],
+        ),
+        streaming=False,
+        accepted_output_modes=["application/json"],
+    )
+
+    assert request["params"]["configuration"]["acceptedOutputModes"] == [
+        "application/json"
+    ]
+
+
+def test_transport_stream_request_includes_accepted_output_modes():
+    from a2a_adapter.transport import _build_send_request
+
+    request = _build_send_request(
+        InternalAgentMessage(
+            agent_id="agent-1",
+            role="user",
+            parts=[{"kind": "text", "text": "hello"}],
+        ),
+        streaming=True,
+        accepted_output_modes=["text/markdown"],
+    )
+
+    assert request["params"]["configuration"]["acceptedOutputModes"] == [
+        "text/markdown"
+    ]
 
 
 @pytest.mark.asyncio
@@ -340,6 +485,34 @@ async def test_transport_send_message_posts_a2a_request_and_returns_task_result(
 
 
 @pytest.mark.asyncio
+async def test_transport_send_message_preserves_jsonrpc_envelope_id():
+    from a2a_adapter.transport import AgentTransportImpl
+
+    client = _FakePostClient(
+        {
+            "jsonrpc": "2.0",
+            "id": "rpc-123",
+            "result": {
+                "id": "task-1",
+                "status": {"state": "completed"},
+            },
+        }
+    )
+    transport = AgentTransportImpl(timeout=1, client=client)
+    message = InternalAgentMessage(
+        agent_id="agent-1",
+        role="user",
+        parts=[{"kind": "text", "text": "hello"}],
+    )
+
+    result = await transport.send_message("https://agent.example/a2a/", message)
+
+    assert result.task_id == "task-1"
+    assert result.result["raw"]["id"] == "rpc-123"
+    assert result.result["raw"]["result"]["id"] == "task-1"
+
+
+@pytest.mark.asyncio
 async def test_transport_send_message_returns_error_result_on_http_error():
     from a2a_adapter.transport import AgentTransportImpl
 
@@ -462,6 +635,48 @@ async def test_transport_stream_message_unwraps_jsonrpc_sse_results(monkeypatch)
     assert events[0].task_id == "task-1"
     assert events[0].event_type == "status-update"
     assert events[0].final is True
+    assert events[0].payload["raw"]["id"] == "rpc-1"
+    assert events[0].payload["raw"]["result"]["taskId"] == "task-1"
+
+
+@pytest.mark.asyncio
+async def test_transport_stream_message_preserves_jsonrpc_sse_errors(monkeypatch):
+    from a2a_adapter import transport as transport_module
+    from platform_module.gateway import PlatformGateway
+
+    @asynccontextmanager
+    async def fake_aconnect_sse(client, method, url, **kwargs):
+        yield _FakeEventSource(
+            [
+                {
+                    "jsonrpc": "2.0",
+                    "id": "rpc-error-1",
+                    "error": {"code": -32000, "message": "failed"},
+                }
+            ]
+        )
+
+    monkeypatch.setattr(transport_module, "aconnect_sse", fake_aconnect_sse)
+    transport = transport_module.AgentTransportImpl(timeout=1, client=MagicMock())
+    message = InternalAgentMessage(
+        agent_id="agent-1",
+        role="user",
+        parts=[{"kind": "text", "text": "hello"}],
+    )
+
+    events = [
+        event
+        async for event in transport.stream_message("https://agent.example/a2a", message)
+    ]
+
+    assert len(events) == 1
+    assert events[0].event_type == "error"
+    assert events[0].payload["raw"]["id"] == "rpc-error-1"
+    assert PlatformGateway._stream_event_to_a2a_response(events[0]) == {
+        "jsonrpc": "2.0",
+        "id": "rpc-error-1",
+        "error": {"code": -32000, "message": "failed"},
+    }
 
 
 @pytest.mark.asyncio

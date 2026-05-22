@@ -18,10 +18,6 @@ from models.dispatcher import AssignResult
 from models.room import RoomAgentMessage
 from execution.state.task_state_manager import get_task
 
-if TYPE_CHECKING:
-    from services.agent_resolver_service import AgentResolverService
-    from services.database_service import DatabaseService
-
 logger = get_logger(__name__)
 
 

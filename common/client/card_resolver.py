@@ -1,9 +1,28 @@
 import json
 
 import httpx
-from a2a.types import AgentCard
 
-from common.types import A2AClientJSONError
+from common.types import A2AClientJSONError, AgentCard
+
+
+_REQUIRED_AGENT_CARD_FIELDS = (
+    "name",
+    "description",
+    "url",
+    "version",
+    "capabilities",
+    "defaultInputModes",
+    "defaultOutputModes",
+    "skills",
+)
+
+
+def _validate_agent_card_payload(payload: dict) -> None:
+    missing = [field for field in _REQUIRED_AGENT_CARD_FIELDS if field not in payload]
+    if missing:
+        raise A2AClientJSONError(
+            "Agent card missing required field(s): " + ", ".join(missing)
+        )
 
 
 class A2ACardResolver:
@@ -16,6 +35,8 @@ class A2ACardResolver:
             response = client.get(self.base_url + "/" + self.agent_card_path)
             response.raise_for_status()
             try:
-                return AgentCard(**response.json())
+                payload = response.json()
+                _validate_agent_card_payload(payload)
+                return AgentCard(**payload)
             except json.JSONDecodeError as e:
                 raise A2AClientJSONError(str(e)) from e

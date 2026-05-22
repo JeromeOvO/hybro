@@ -1,4 +1,5 @@
-from typing import AsyncIterator, Protocol, runtime_checkable
+from collections.abc import AsyncIterator, Sequence
+from typing import Protocol, runtime_checkable
 
 from common.dto import (
     AgentCardSnapshot,
@@ -11,11 +12,21 @@ from common.dto import (
 @runtime_checkable
 class AgentTransport(Protocol):
     async def send_message(
-        self, agent_url: str, message: InternalAgentMessage, **kwargs
+        self,
+        agent_url: str,
+        message: InternalAgentMessage,
+        *,
+        user_id: str | None = None,
+        accepted_output_modes: Sequence[str] | None = None,
     ) -> AgentTaskResult: ...
 
     async def stream_message(
-        self, agent_url: str, message: InternalAgentMessage, **kwargs
+        self,
+        agent_url: str,
+        message: InternalAgentMessage,
+        *,
+        user_id: str | None = None,
+        accepted_output_modes: Sequence[str] | None = None,
     ) -> AsyncIterator[AgentStreamEvent]: ...
 
 

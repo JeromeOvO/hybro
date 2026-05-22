@@ -993,7 +993,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "a2a-sdk", specifier = ">=0.3.25" },
+    { name = "a2a-sdk", specifier = ">=0.3.25,<1" },
     { name = "aioboto3", specifier = ">=13.0.0" },
     { name = "aiohttp", specifier = ">=3.12.13" },
     { name = "botocore", specifier = ">=1.38.36" },

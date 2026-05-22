@@ -21,7 +21,15 @@ from execution.dispatch.response_handler import AgentResponseHandler
 # =============================================================================
 
 
-def _make_handler(*, db=None, sse=None, rmc=None, hitl_coordinator=None):
+def _make_handler(
+    *,
+    db=None,
+    sse=None,
+    rmc=None,
+    hitl_coordinator=None,
+    notification_service=None,
+    task_notification_impl=None,
+):
     if db is None:
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=True)
@@ -38,11 +46,15 @@ def _make_handler(*, db=None, sse=None, rmc=None, hitl_coordinator=None):
     if rmc is None:
         rmc = MagicMock()
         rmc.resume_queue_from_continuation = AsyncMock(return_value=True)
+    if notification_service is None:
+        notification_service = MagicMock()
     return AgentResponseHandler(
         db=db,
         sse=sse,
         room_message_center=rmc,
         hitl_coordinator=hitl_coordinator,
+        notification_service=notification_service,
+        task_notification_impl=task_notification_impl,
     )
 
 
@@ -435,6 +447,7 @@ class TestInteractiveEvent:
         db.get_pending_continuation_on_message = AsyncMock(
             return_value={"user_message_id": "user-msg-001"}
         )
+        db.get_pending_hitl_requests_for_message = AsyncMock(return_value=[])
         db.get_room_agent_message_by_message_id = AsyncMock(
             return_value=SimpleNamespace(message_id="display-msg-001")
         )
@@ -486,6 +499,46 @@ class TestInteractiveEvent:
         h._sse.send_processing_status.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_skips_duplicate_hitl_request_for_existing_async_pending(self):
+        db = MagicMock()
+        db.update_task_state_on_message = AsyncMock(return_value=True)
+        db.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        db.get_pending_continuation_on_message = AsyncMock(
+            return_value={"user_message_id": "user-msg-001"}
+        )
+        db.get_pending_hitl_requests_for_message = AsyncMock(
+            return_value=[
+                {
+                    "request_id": "hitl-existing",
+                    "status": "pending",
+                    "continuation_message_id": "msg-001",
+                }
+            ]
+        )
+        db.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=SimpleNamespace(message_id="display-msg-001")
+        )
+        hitl = SimpleNamespace(request_input=AsyncMock())
+        h = _make_handler(db=db, hitl_coordinator=hitl)
+        emitter = AsyncMock()
+        h.bind_execution_event_deps(emitter)
+        event = AgentEvent(
+            kind="interactive", **_base_event(),
+            text="need input", state="input-required",
+            task_id="t-1", context_id="c-1",
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(event)
+
+        hitl.request_input.assert_not_awaited()
+        emitter.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_logs_agent_name_lookup_failure_without_blocking_hitl(self):
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=True)
@@ -493,6 +546,7 @@ class TestInteractiveEvent:
         db.get_pending_continuation_on_message = AsyncMock(
             return_value={"user_message_id": "user-msg-001"}
         )
+        db.get_pending_hitl_requests_for_message = AsyncMock(return_value=[])
         db.get_room_agent_message_by_message_id = AsyncMock(
             return_value=SimpleNamespace(message_id="display-msg-001")
         )
@@ -703,22 +757,17 @@ class TestHandlerNotifyTaskUpdate:
 
     @pytest.mark.asyncio
     async def test_delegates_to_shared_impl(self):
-        h = _make_handler()
+        mock_impl = AsyncMock(return_value=True)
+        h = _make_handler(task_notification_impl=mock_impl)
 
-        with pytest.MonkeyPatch.context() as mp:
-            mock_impl = AsyncMock(return_value=True)
-            mp.setattr(
-                "services.task_notification_service._notify_task_update_impl",
-                mock_impl,
-            )
-            result = await h.notify_task_update(
-                message_id="msg-001",
-                state=MagicMock(value="completed"),
-                room_id="room-001",
-                user_id="user-001",
-                error=None,
-                parts=None,
-            )
+        result = await h.notify_task_update(
+            message_id="msg-001",
+            state=MagicMock(value="completed"),
+            room_id="room-001",
+            user_id="user-001",
+            error=None,
+            parts=None,
+        )
 
         assert result is True
         mock_impl.assert_awaited_once()
@@ -731,22 +780,16 @@ class TestHandlerNotifyTaskUpdate:
     @pytest.mark.asyncio
     async def test_notify_helper_delegates_to_method(self):
         """_notify helper calls self.notify_task_update with event fields."""
-        h = _make_handler()
+        mock_impl = AsyncMock(return_value=True)
+        h = _make_handler(task_notification_impl=mock_impl)
+        from a2a.types import TaskState
 
-        with pytest.MonkeyPatch.context() as mp:
-            mock_impl = AsyncMock(return_value=True)
-            mp.setattr(
-                "services.task_notification_service._notify_task_update_impl",
-                mock_impl,
-            )
-            from a2a.types import TaskState
-
-            event = AgentEvent(
-                kind="response", **_base_event(),
-                text="Done!",
-                parts=[{"kind": "text"}],
-            )
-            await h._notify(event, TaskState.completed)
+        event = AgentEvent(
+            kind="response", **_base_event(),
+            text="Done!",
+            parts=[{"kind": "text"}],
+        )
+        await h._notify(event, TaskState.completed)
 
         mock_impl.assert_awaited_once()
         call_kw = mock_impl.call_args.kwargs

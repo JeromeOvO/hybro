@@ -2,7 +2,7 @@
 API Key Authentication for Discovery API
 
 Validates X-API-Key header for external API access.
-Keys are hashed with SHA-256 and validated against MongoDB.
+Validation is delegated to an app-shell-bound authenticator.
 """
 
 import hashlib
@@ -10,8 +10,21 @@ import hashlib
 from fastapi import HTTPException, Request, status
 from loguru import logger
 
-from database.mongodb import mongodb
-from models.api_key import APIKey
+from common.protocols import APIKeyAuthenticator, APIKeyPrincipal
+
+api_key_authenticator: APIKeyAuthenticator | None = None
+
+
+def bind_api_key_authenticator(authenticator: APIKeyAuthenticator) -> None:
+    global api_key_authenticator
+
+    api_key_authenticator = authenticator
+
+
+def _require_api_key_authenticator() -> APIKeyAuthenticator:
+    if api_key_authenticator is None:
+        raise RuntimeError("API key authenticator dependency has not been bound")
+    return api_key_authenticator
 
 
 def hash_api_key(api_key: str) -> str:
@@ -27,9 +40,11 @@ def hash_api_key(api_key: str) -> str:
     return hashlib.sha256(api_key.encode()).hexdigest()
 
 
-async def validate_api_key(api_key: str, *, track_usage: bool = True) -> APIKey:
+async def validate_api_key(
+    api_key: str, *, track_usage: bool = True
+) -> APIKeyPrincipal:
     """
-    Validate an API key against MongoDB.
+    Validate an API key through the bound app-shell authenticator.
 
     Args:
         api_key: The plaintext API key from the request
@@ -38,48 +53,16 @@ async def validate_api_key(api_key: str, *, track_usage: bool = True) -> APIKey:
             inflate the user-visible usage counter.
 
     Returns:
-        APIKey: The validated API key model
+        APIKeyPrincipal: The validated API key principal
 
     Raises:
         HTTPException: If the key is invalid, inactive, or not found
     """
-    # Hash the provided key
-    key_hash = hash_api_key(api_key)
-    
-    # Look up in MongoDB
-    api_key_doc = await mongodb.get_api_key_by_hash(key_hash)
-    
-    if not api_key_doc:
-        logger.warning("API key validation failed: key not found")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "error": "invalid_key",
-                "message": "Invalid API key",
-            },
-        )
-    
-    if not api_key_doc.is_active:
-        logger.warning(f"API key validation failed: key {api_key_doc.key_id} is inactive")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "error": "key_inactive",
-                "message": "API key is inactive",
-            },
-        )
-    
-    if track_usage:
-        try:
-            await mongodb.update_api_key_usage(key_hash)
-        except Exception as e:
-            # Log but don't fail the request
-            logger.warning(f"Failed to update API key usage: {e}")
-    
-    return api_key_doc
+    authenticator = _require_api_key_authenticator()
+    return await authenticator.validate_api_key(api_key, track_usage=track_usage)
 
 
-async def get_api_key(request: Request) -> APIKey:
+async def get_api_key(request: Request) -> APIKeyPrincipal:
     """
     FastAPI dependency to extract and validate API key from request headers.
 
@@ -99,7 +82,7 @@ async def get_api_key(request: Request) -> APIKey:
         request: The FastAPI Request object
 
     Returns:
-        APIKey: The validated API key model
+        APIKeyPrincipal: The validated API key principal
 
     Raises:
         HTTPException: If the key is missing, invalid, or inactive
@@ -121,7 +104,7 @@ async def get_api_key(request: Request) -> APIKey:
     return await validate_api_key(api_key)
 
 
-async def get_api_key_no_track(request: Request) -> APIKey:
+async def get_api_key_no_track(request: Request) -> APIKeyPrincipal:
     """
     FastAPI dependency that authenticates the API key without tracking usage.
 
@@ -135,7 +118,7 @@ async def get_api_key_no_track(request: Request) -> APIKey:
         request: The FastAPI Request object
 
     Returns:
-        APIKey: The validated API key model
+        APIKeyPrincipal: The validated API key principal
 
     Raises:
         HTTPException: If the key is missing, invalid, or inactive
@@ -153,4 +136,3 @@ async def get_api_key_no_track(request: Request) -> APIKey:
         )
 
     return await validate_api_key(api_key, track_usage=False)
-

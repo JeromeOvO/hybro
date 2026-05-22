@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from common.protocols import ContentStorageRepository
@@ -57,14 +57,36 @@ async def expand_mongodb_reference(
     repository: ContentStorageRepository,
     content_ref: dict[str, Any],
     turn_id: str,
+    *,
+    now: datetime | None = None,
 ) -> str:
     document_id = content_ref.get("document_id")
     if not document_id:
         raise ValueError(f"ContentReference for turn {turn_id} has no document_id")
     doc = await repository.get_content_by_document_id(document_id)
-    if not doc:
+    if not doc or is_content_expired(doc, now=now):
         raise ContentExpiredError(turn_id, document_id)
     return doc.get("content") or ""
+
+
+def content_from_document(doc: dict | None, *, now: datetime | None = None) -> str | None:
+    if not doc or is_content_expired(doc, now=now):
+        return None
+    return doc.get("content")
+
+
+def is_content_expired(doc: dict[str, Any], *, now: datetime | None = None) -> bool:
+    expires_at = doc.get("expires_at")
+    if not isinstance(expires_at, datetime):
+        return False
+    reference = now or datetime.now(timezone.utc)
+    return _as_utc_aware(expires_at) <= _as_utc_aware(reference)
+
+
+def _as_utc_aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def compact_pointer(content_ref: dict[str, Any]) -> str:

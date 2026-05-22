@@ -41,7 +41,6 @@ FROZEN_TIME = datetime(2026, 1, 15, 12, 0, 0)
 PATCH = {
     "room_center.db_service": "api.room_center.db_service",
     "room_center.room_center": "api.room_center.room_center",
-    "room_center.room_message_center": "api.room_center.room_message_center",
     "agent.agent_center": "api.agent.agent_center",
     "agent.agent_service": "api.agent.agent_service",
     "hitl.verify_room_ownership": "api.hitl.verify_room_ownership",
@@ -50,7 +49,7 @@ PATCH = {
     "sse.sse_manager": "api.sse.sse_manager",
     "sse.mongodb": "api.sse.mongodb",
     "a2a_tasks.db_service": "api.a2a_tasks.db_service",
-    "agent_selection_service": "services.agent_selection_service.agent_selection_service",
+    "agent_selection_service": "api.room_center.agent_selection_service",
     "hitl_service_singleton": "services.hitl_service.hitl_service",
     # Webhook endpoints
     "webhooks.db_service": "api.webhooks.db_service",
@@ -64,10 +63,8 @@ PATCH = {
     "orchestration.room_message_center": "api.orchestration_center.room_message_center",
     "orchestration.workflow_center": "api.orchestration_center.workflow_center",
     # File upload / S3
-    "files.verify_room_ownership": "api.files.verify_room_ownership",
-    "files.file_upload_service": "api.files.file_upload_service",
+    "files.room_ownership_reader": "api.files.room_ownership_reader",
     "s3_service": "services.s3_service.s3_service",
-    "file_upload_service": "services.file_upload_service.file_upload_service",
     "room_services.mongodb": "services.room_services.mongodb",
     "room_services.s3_service": "services.room_services.s3_service",
     # Gateway endpoints
@@ -588,14 +585,13 @@ def patch_sse_deps(mock_db_service, mock_sse_manager, mock_mongodb, mock_hitl_se
 
 
 @pytest.fixture
-def patch_room_center_deps(mock_db_service, mock_room_center, mock_room_message_center):
+def patch_room_center_deps(mock_db_service, mock_room_center):
     """Patch all room center endpoint dependencies at once."""
     from contextlib import ExitStack
     from common.dto import ExecutionAck
     with ExitStack() as stack:
         stack.enter_context(patch(PATCH["room_center.db_service"], mock_db_service))
         stack.enter_context(patch(PATCH["room_center.room_center"], mock_room_center))
-        stack.enter_context(patch(PATCH["room_center.room_message_center"], mock_room_message_center))
         execution_engine = MagicMock()
         execution_engine.execute = AsyncMock(
             return_value=ExecutionAck(success=True, message_id="new-message-id")
@@ -606,7 +602,6 @@ def patch_room_center_deps(mock_db_service, mock_room_center, mock_room_message_
         yield {
             "db_service": mock_db_service,
             "room_center": mock_room_center,
-            "room_message_center": mock_room_message_center,
             "execution_engine": execution_engine,
         }
 
@@ -619,7 +614,7 @@ def patch_agent_deps(mock_agent_center):
     )
     with patch(PATCH["agent.agent_center"], mock_agent_center):
         with patch(
-            "services.agent_liveness_service.check_and_sync_liveness",
+            "api.agent.agent_liveness_checker",
             new=AsyncMock(side_effect=lambda agent: agent),
         ):
             yield mock_agent_center

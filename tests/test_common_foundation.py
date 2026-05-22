@@ -1,8 +1,12 @@
+import ast
 import inspect
+import json
 import tomllib
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -99,6 +103,172 @@ def test_common_foundation_subpackages_are_packaged():
         "common.observability",
         "common.protocols",
     }.issubset(packages)
+
+
+def test_common_a2a_helpers_do_not_perform_storage_signing():
+    source = Path("common/utils/a2a_helpers.py").read_text()
+    storage_markers = (
+        "bind_a2a_storage_dependencies",
+        "_require_s3_service",
+        ".upload_file(",
+        ".generate_presigned_url(",
+    )
+
+    assert not any(marker in source for marker in storage_markers)
+
+    manifest = json.loads(Path("tests/fixtures/phase9_cleanup_manifest.json").read_text())
+    blockers = [
+        entry
+        for entry in manifest["blocked_cleanup"]
+        if entry.get("path") == "common/utils/a2a_helpers.py"
+        and entry.get("contract") == "a2a_storage_signing"
+    ]
+
+    assert not blockers
+
+
+def test_common_utils_dependency_seams_are_protocol_typed_not_any_globals():
+    seams = {
+        Path("common/utils/a2a_helpers.py"): {
+            "a2a_artifact_storage": "A2AArtifactStorage | None"
+        },
+        Path("common/utils/context_utils.py"): {
+            "context_turn_factory": "ContextTurnFactory | None"
+        },
+    }
+    violations: list[str] = []
+
+    for path, expected in seams.items():
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in tree.body:
+            if not isinstance(node, ast.AnnAssign) or not isinstance(
+                node.target, ast.Name
+            ):
+                continue
+            if node.target.id not in expected:
+                continue
+            annotation = ast.unparse(node.annotation)
+            if annotation != expected[node.target.id] or "Any" in annotation:
+                violations.append(f"{path}:{node.lineno}: {node.target.id}: {annotation}")
+
+    context_source = Path("common/utils/context_utils.py").read_text()
+    if "turn_notes_llm_provider" in context_source:
+        violations.append("common/utils/context_utils.py: turn_notes_llm_provider")
+    if "def bind_context_llm_provider" in context_source:
+        violations.append("common/utils/context_utils.py: bind_context_llm_provider")
+
+    assert not violations, "Common utility dependency seams are broad globals:\n" + "\n".join(
+        violations
+    )
+
+
+def test_common_card_resolver_keeps_sdk_agent_card_validation(monkeypatch):
+    from common.client.card_resolver import A2ACardResolver
+    from common.types import A2AClientJSONError
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "name": "Incomplete",
+                "url": "https://agent.example",
+                "version": "1.0.0",
+                "capabilities": {},
+                "skills": [],
+            }
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def get(self, url):
+            return Response()
+
+    monkeypatch.setattr("httpx.Client", Client)
+
+    with pytest.raises(A2AClientJSONError, match="description"):
+        A2ACardResolver("https://agent.example").get_agent_card()
+
+
+def test_common_types_expose_sdk_free_task_parts():
+    from common.types import DataPart, FileContent, FilePart, Part, TaskState, TextPart
+    from pydantic import TypeAdapter
+
+    assert TextPart.__module__ == "common.types"
+    assert FilePart.__module__ == "common.types"
+    assert DataPart.__module__ == "common.types"
+    assert TaskState.__module__ == "common.types"
+    assert TaskState.completed.value == "completed"
+
+    parsed = TypeAdapter(Part).validate_python(
+        {"kind": "file", "file": {"uri": "s3://bucket/key"}}
+    )
+    assert isinstance(parsed, FilePart)
+    assert isinstance(parsed.file, FileContent)
+
+
+def test_agent_capabilities_ignore_unknown_fields():
+    from common.types import AgentCapabilities
+
+    capabilities = AgentCapabilities(
+        streaming=True,
+        pushNotifications=False,
+        stateTransitionHistory=True,
+        stremaing=True,
+    )
+
+    assert "stremaing" not in capabilities.model_dump()
+    assert not capabilities.model_extra or "stremaing" not in capabilities.model_extra
+
+
+def test_agent_card_ignores_unknown_fields():
+    from common.types import AgentCapabilities, AgentCard, AgentSkill
+
+    card = AgentCard(
+        name="agent",
+        description="desc",
+        url="https://agent.example",
+        version="1.0.0",
+        capabilities=AgentCapabilities(),
+        skills=[AgentSkill(id="skill", name="Skill")],
+        versoin="typo",
+    )
+
+    assert "versoin" not in card.model_dump()
+    assert not card.model_extra or "versoin" not in card.model_extra
+
+
+@pytest.mark.asyncio
+async def test_auth_config_binds_authorized_parties(monkeypatch):
+    import common.auth as auth
+
+    captured = {}
+
+    def fake_authenticate_request(request, options):
+        captured["authorized_parties"] = options.authorized_parties
+        captured["secret_key"] = options.secret_key
+        return SimpleNamespace(
+            is_signed_in=True,
+            payload={"sub": "user-1", "sid": "session-1"},
+        )
+
+    monkeypatch.setattr(auth, "authenticate_request", fake_authenticate_request)
+
+    auth.bind_auth_config(
+        clerk_secret_key_value="secret",
+        authorized_parties=("https://test.example",),
+    )
+    user = await auth.verify_clerk_token_from_request(MagicMock())
+
+    assert user.user_id == "user-1"
+    assert captured["secret_key"] == "secret"
+    assert captured["authorized_parties"] == ("https://test.example",)
+    assert "AUTHORIZED_PARTIES" not in Path("common/auth.py").read_text()
 
 
 def test_common_foundation_dtos_can_be_instantiated():
@@ -504,6 +674,7 @@ def test_protocol_methods_match_design_doc():
         protocols.AgentRegistry: {
             "get_agent",
             "get_agent_card",
+            "get_agent_by_url",
             "get_agents_by_ids",
             "is_agent_healthy",
             "is_directly_callable",
@@ -538,6 +709,7 @@ def test_protocol_methods_match_design_doc():
             "get_message_thread",
         },
         protocols.RoomOwnershipReader: {
+            "get_room_owner",
             "verify_room_agent_membership",
             "verify_room_hub_ownership",
         },
@@ -584,8 +756,14 @@ def test_protocol_methods_match_design_doc():
             "register_hub",
             "get_hub",
             "list_hubs",
+            "connect_hub",
             "connect_hub_stream",
+            "process_publish",
             "publish_from_hub",
+            "sync_agents",
+            "get_hub_status",
+            "record_hub_heartbeat",
+            "hub_status_for_user",
             "start_heartbeat_monitor",
             "stop",
         },
@@ -596,10 +774,28 @@ def test_protocol_methods_match_design_doc():
             "reply_to_hub_task",
             "is_hub_online",
         },
-        protocols.GatewayService: {"send_message", "stream_message"},
+        protocols.HubDispatchPolicy: {"can_dispatch_to_hub"},
+        protocols.HubInternalResponseDispatcher: {"dispatch_hub_internal_response"},
+        protocols.OfflineHubFailurePort: {"mark_hub_message_failed"},
+        protocols.HubAgentStatusReader: {"count_hub_agents"},
+        protocols.AgentCallCounter: {"increment_agent_call_count"},
+        protocols.HubPublishAuthorizationReader: {"authorize_hub_publish"},
+        protocols.HubPublishLineageReader: {"get_hub_publish_lineage"},
+        protocols.MessageCancellationReader: {"is_message_cancelled"},
+        protocols.RoomAgentTaskTracker: {"track_hub_task"},
+        protocols.GatewayService: {
+            "discover_agents",
+            "get_agent_card",
+            "prepare_stream",
+            "send_message",
+            "stream_message",
+        },
+        protocols.GatewayDiscoveryProvider: {"discover_agents"},
         protocols.RateLimiter: {"check", "check_global"},
         protocols.FileStorage: {"upload", "get_url", "delete", "list_for_room"},
         protocols.AgentTransport: {"send_message", "stream_message"},
+        protocols.APIKeyPrincipal: set(),
+        protocols.APIKeyAuthenticator: {"validate_api_key"},
         protocols.AgentCardResolver: {
             "resolve_card",
             "supports_push_notifications",
@@ -646,7 +842,7 @@ def test_protocol_methods_match_design_doc():
         protocols.RedisPubSub: {"publish", "subscribe", "ping", "close"},
         protocols.RedisStreams: {"xadd", "xread", "ping", "close"},
         protocols.VectorDAL: {"search", "upsert", "delete", "delete_by_filter", "ping"},
-        protocols.ObjectStorageDAL: {"put", "get_presigned_url", "delete"},
+        protocols.ObjectStorageDAL: {"put", "get_text", "get_presigned_url", "delete"},
         protocols.DistributedLock: {"acquire", "release", "renew"},
         protocols.LeaderElector: {"try_acquire", "renew", "release", "release_all"},
         protocols.IndexRegistry: {"register", "ensure_all"},
@@ -659,6 +855,8 @@ def test_protocol_methods_match_design_doc():
             "delete",
             "update_health",
             "mark_hub_agents_offline",
+            "count_hub_agents",
+            "increment_agent_call_count",
             "find_by_normalized_url",
             "list_visible",
             "update",
@@ -739,6 +937,24 @@ def test_protocol_methods_match_design_doc():
             "upsert",
             "update_heartbeat",
             "get_stale",
+            "list_online_hubs_for_liveness",
+            "list_offline_hubs_for_recovery",
+            "update_hub_status",
+            "update_hub_status_if_current",
+        },
+        protocols.HubResponseJournal: {
+            "ensure_indexes",
+            "create_or_get",
+            "claim_for_processing",
+            "mark_processed",
+            "mark_dead_letter",
+            "find_replayable",
+        },
+        protocols.HubTaskOwnershipStore: {
+            "ensure_indexes",
+            "claim_or_refresh",
+            "resolve_owner",
+            "release",
         },
     }
 

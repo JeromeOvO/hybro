@@ -1,30 +1,7 @@
-from fastapi import APIRouter, Depends, Form, UploadFile
+"""Compatibility shim for route declarations moved to api_gateway.routes.files_routes."""
 
-from api.room_center import verify_room_ownership
-from common.auth import ClerkUser, get_current_user
-from services.file_upload_service import file_upload_service
+import sys as _sys
 
-router = APIRouter(prefix="/files", tags=["files"])
+from api_gateway.routes import files_routes as _routes
 
-
-@router.post("/upload")
-async def upload_file(
-    file: UploadFile,
-    room_id: str = Form(...),
-    user: ClerkUser = Depends(get_current_user),
-):
-    """Upload a file to S3 for attachment to a room message.
-
-    Accepts multipart/form-data with:
-    - file: The file to upload
-    - room_id: The room this file belongs to
-
-    Returns FileUploadResponse with file_id and presigned URL.
-    """
-    await verify_room_ownership(room_id, user)
-
-    return await file_upload_service.upload(
-        file=file,
-        room_id=room_id,
-        user_id=user.user_id,
-    )
+_sys.modules[__name__] = _routes

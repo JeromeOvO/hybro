@@ -36,9 +36,8 @@ from models.memory import (
 from services.compaction_service import (
     CompactionService,
 )
-from services.content_storage_service import (
+from platform_module.content_storage import (
     ContentExpiredError,
-    ContentStorageService,
     hash_content,
 )
 
@@ -49,7 +48,7 @@ from services.content_storage_service import (
 
 
 class BoundContentStorageFacade:
-    def __init__(self, service: ContentStorageService):
+    def __init__(self, service):
         self.service = service
 
     async def content_upsert_full_content(
@@ -162,7 +161,7 @@ class BoundContentStorageFacade:
         return stats
 
 
-def bind_content_storage_facade(service: ContentStorageService) -> ContentStorageService:
+def bind_content_storage_facade(service):
     service.bind_facade(BoundContentStorageFacade(service))
     return service
 
@@ -451,188 +450,6 @@ class TestHashContent:
         assert hash1 != hash2
 
 
-class TestContentStorageService:
-    """Tests for ContentStorageService."""
-
-    @pytest.fixture
-    def service(self):
-        """Create a ContentStorageService instance."""
-        return bind_content_storage_facade(ContentStorageService())
-
-    @pytest.fixture
-    def mock_mongodb(self):
-        """Mock the mongodb singleton to prevent real DB connections."""
-        mock_coll = AsyncMock()
-        with patch("services.content_storage_service.mongodb") as mock_db:
-            mock_db.conversation_content_collection = mock_coll
-            yield mock_coll
-
-    @pytest.mark.asyncio
-    async def test_upsert_full_content_new_document(
-        self, service, mock_content_settings, mock_mongodb
-    ):
-        """Upsert should create new document and return ID."""
-        mock_mongodb.update_one = AsyncMock(
-            return_value=MagicMock(upserted_id="new-doc-id-123")
-        )
-
-        doc_id = await service.upsert_full_content(
-            room_id="room-123",
-            turn_id="turn-456",
-            content="Test content",
-            content_type="text",
-        )
-
-        assert doc_id == "new-doc-id-123"
-        mock_mongodb.update_one.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_upsert_full_content_existing_document(
-        self, service, mock_content_settings, mock_mongodb
-    ):
-        """Upsert should return existing document ID if already exists."""
-        from bson import ObjectId
-
-        existing_id = ObjectId()
-        mock_mongodb.update_one = AsyncMock(
-            return_value=MagicMock(upserted_id=None)
-        )
-        mock_mongodb.find_one = AsyncMock(return_value={"_id": existing_id})
-
-        doc_id = await service.upsert_full_content(
-            room_id="room-123",
-            turn_id="turn-456",
-            content="Test content",
-            content_type="text",
-        )
-
-        assert doc_id == str(existing_id)
-
-    @pytest.mark.asyncio
-    async def test_get_content_by_document_id(self, service, mock_mongodb):
-        """Should retrieve content by document ID."""
-        from bson import ObjectId
-
-        doc_id = str(ObjectId())
-        mock_mongodb.find_one = AsyncMock(
-            return_value={"_id": ObjectId(doc_id), "content": "Retrieved content"}
-        )
-
-        content = await service.get_content_by_document_id(doc_id)
-
-        assert content == "Retrieved content"
-
-    @pytest.mark.asyncio
-    async def test_get_content_by_document_id_not_found(self, service, mock_mongodb):
-        """Should return None if document not found."""
-        from bson import ObjectId
-
-        mock_mongodb.find_one = AsyncMock(return_value=None)
-
-        content = await service.get_content_by_document_id(str(ObjectId()))
-
-        assert content is None
-
-    @pytest.mark.asyncio
-    async def test_expand_content_reference_mongodb(self, service, mock_mongodb):
-        """Should expand MongoDB content reference."""
-        from bson import ObjectId
-
-        doc_id = str(ObjectId())
-        content_ref = ContentReference(
-            storage_type=StorageType.MONGODB,
-            collection="conversation_content",
-            document_id=doc_id,
-            created_at=datetime.now(),
-        )
-
-        mock_mongodb.find_one = AsyncMock(
-            return_value={"_id": ObjectId(doc_id), "content": "Expanded content"}
-        )
-
-        content = await service.expand_content_reference(content_ref, "turn-123")
-
-        assert content == "Expanded content"
-
-    @pytest.mark.asyncio
-    async def test_expand_content_reference_not_found_raises_error(self, service, mock_mongodb):
-        """Should raise ContentExpiredError if content not found."""
-        from bson import ObjectId
-
-        doc_id = str(ObjectId())
-        content_ref = ContentReference(
-            storage_type=StorageType.MONGODB,
-            collection="conversation_content",
-            document_id=doc_id,
-            created_at=datetime.now(),
-        )
-
-        mock_mongodb.find_one = AsyncMock(return_value=None)
-
-        with pytest.raises(ContentExpiredError) as exc_info:
-            await service.expand_content_reference(content_ref, "turn-123")
-
-        assert exc_info.value.turn_id == "turn-123"
-        assert exc_info.value.document_id == doc_id
-
-    @pytest.mark.asyncio
-    async def test_expand_content_reference_s3_success(self, service):
-        """Should download text from S3 when storage type is S3."""
-        content_ref = ContentReference(
-            storage_type=StorageType.S3,
-            s3_bucket="test-bucket",
-            s3_key="test-key",
-            created_at=datetime.now(),
-        )
-
-        with patch("services.s3_service.s3_service") as mock_s3:
-            mock_s3.download_text = AsyncMock(return_value="S3 content here")
-            result = await service.expand_content_reference(content_ref, "turn-123")
-
-        assert result == "S3 content here"
-
-    @pytest.mark.asyncio
-    async def test_expand_content_reference_s3_not_found(self, service):
-        """Should raise ContentExpiredError when S3 object is missing."""
-        content_ref = ContentReference(
-            storage_type=StorageType.S3,
-            s3_bucket="test-bucket",
-            s3_key="missing-key",
-            created_at=datetime.now(),
-        )
-
-        with patch("services.s3_service.s3_service") as mock_s3:
-            mock_s3.download_text = AsyncMock(return_value=None)
-            with pytest.raises(ContentExpiredError) as exc_info:
-                await service.expand_content_reference(content_ref, "turn-123")
-
-        assert exc_info.value.turn_id == "turn-123"
-
-    @pytest.mark.asyncio
-    async def test_expand_content_reference_s3_missing_key(self, service):
-        """Should raise ValueError when S3 content ref has no s3_key."""
-        content_ref = ContentReference(
-            storage_type=StorageType.S3,
-            s3_bucket="test-bucket",
-            created_at=datetime.now(),
-        )
-
-        with pytest.raises(ValueError, match="no s3_key"):
-            await service.expand_content_reference(content_ref, "turn-123")
-
-    @pytest.mark.asyncio
-    async def test_expand_content_reference_url_not_implemented(self, service):
-        """Should raise NotImplementedError for URL storage (SSRF-blocked)."""
-        content_ref = ContentReference(
-            storage_type=StorageType.URL,
-            url="https://example.com/content.txt",
-            created_at=datetime.now(),
-        )
-
-        with pytest.raises(NotImplementedError):
-            await service.expand_content_reference(content_ref, "turn-456")
-
-
 # =============================================================================
 # Compaction Service Tests
 # =============================================================================
@@ -773,7 +590,7 @@ class TestCompactionService:
         self, service, mock_settings
     ):
         """Should populate content_hash in data sent to compact_turns_bulk (§6.3)."""
-        from services.content_storage_service import hash_content
+        from platform_module.content_storage import hash_content
 
         turn = ConversationTurn(
             turn_id="turn-hash-test",
@@ -1027,7 +844,12 @@ class TestCompactionService:
             "get_room_memory_by_room_id",
             return_value=sample_room_memory,
         ):
-            content = await service.fetch_turn_content(turn.turn_id, "test-room-123")
+            with patch.object(
+                service.content_storage,
+                "expand_content_reference",
+                AsyncMock(side_effect=NotImplementedError("url")),
+            ):
+                content = await service.fetch_turn_content(turn.turn_id, "test-room-123")
 
         assert "[Error:" in content
         assert "unsupported storage" in content.lower()

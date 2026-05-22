@@ -48,6 +48,10 @@ class HubAgentResponseInternal(InternalDomainEvent):
     task_id: str
     room_id: str
     is_terminal: bool
+    journal_id: str | None = None
+    idempotency_key: str | None = None
+    run_id: str | None = None
+    claim_token: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
