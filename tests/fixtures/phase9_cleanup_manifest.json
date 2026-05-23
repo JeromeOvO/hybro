@@ -40,7 +40,7 @@
       "blocked_by": "legacy_workflow_decommission",
       "deletion_blockers": [
         "5 test files still verify legacy infrastructure compatibility.",
-        "3 runtime files still import legacy infrastructure compatibility paths.",
+        "1 runtime files still import legacy infrastructure compatibility paths.",
         "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
       ],
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
@@ -250,9 +250,7 @@
       "package": "infrastructure",
       "py_files": 7,
       "runtime_import_files": [
-        "main.py",
-        "services/agent_health_service.py",
-        "services/relay_service.py"
+        "main.py"
       ],
       "runtime_blockers": [
         "Legacy infrastructure broker compatibility paths still import config.settings."

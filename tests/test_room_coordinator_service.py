@@ -84,6 +84,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
                 {"agent_name": "Agent Beta", "message": "Beta says no."},
             ],
             mode="debate",
+            user_question=None,
         )
         coordinator._create_and_emit_summary_message.assert_awaited_once()
 
@@ -112,6 +113,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
                 {"agent_name": "Agent B", "message": "Response from B."},
             ],
             mode="non_debate",
+            user_question=None,
         )
         coordinator._create_and_emit_summary_message.assert_awaited_once()
 

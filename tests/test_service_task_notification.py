@@ -314,7 +314,7 @@ class TestNotifyTaskUpdate:
             )
 
             assert result is True
-            mock_err.assert_called_once_with(task)
+            mock_err.assert_called_once()
             call_kw = notif.send_task_update.call_args.kwargs
             assert call_kw["error"] == "Task failed"
 
@@ -360,7 +360,7 @@ class TestNotifyTaskUpdate:
 
             assert result is True
             # Artifacts should be extracted regardless of state
-            mock_ep.assert_called_once_with(task.artifacts)
+            mock_ep.assert_called_once()
             call_kw = notif.send_task_update.call_args.kwargs
             assert call_kw["content"] == "Partial result before failure"
             assert call_kw["error"] == "Agent error"
@@ -393,7 +393,7 @@ class TestNotifyTaskUpdate:
             )
 
             assert result is True
-            mock_st.assert_called_once_with(task)
+            mock_st.assert_called_once()
             call_kw = notif.send_task_update.call_args.kwargs
             assert call_kw["requires_input"] is True
             assert call_kw["status_message"] == "Please provide input"

@@ -213,8 +213,20 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
     for path in sorted((ROOT / "execution").rglob("*.py")):
         rel = path.relative_to(ROOT).as_posix()
         tree = ast.parse(path.read_text(), filename=rel)
+        type_checking_lines: set[int] = set()
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.If)
+                and isinstance(node.test, ast.Name)
+                and node.test.id == "TYPE_CHECKING"
+            ):
+                for child in ast.walk(node):
+                    if hasattr(child, "lineno"):
+                        type_checking_lines.add(child.lineno)
         modules: set[str] = set()
         for node in ast.walk(tree):
+            if hasattr(node, "lineno") and node.lineno in type_checking_lines:
+                continue
             if isinstance(node, ast.ImportFrom) and node.module:
                 if node.module.split(".")[0] in legacy_prefixes:
                     modules.add(node.module)

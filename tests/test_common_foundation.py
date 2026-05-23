@@ -208,8 +208,9 @@ def test_common_types_expose_sdk_free_task_parts():
     parsed = TypeAdapter(Part).validate_python(
         {"kind": "file", "file": {"uri": "s3://bucket/key"}}
     )
-    assert isinstance(parsed, FilePart)
-    assert isinstance(parsed.file, FileContent)
+    assert isinstance(parsed, Part)
+    assert isinstance(parsed.root, FilePart)
+    assert isinstance(parsed.root.file, FileContent)
 
 
 def test_agent_capabilities_ignore_unknown_fields():

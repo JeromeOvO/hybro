@@ -138,7 +138,19 @@ def _import_violations() -> list[str]:
         if _is_blocked(path, blocked_paths):
             continue
         tree = ast.parse(path.read_text(), filename=str(path))
+        type_checking_lines: set[int] = set()
         for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.If)
+                and isinstance(node.test, ast.Name)
+                and node.test.id == "TYPE_CHECKING"
+            ):
+                for child in ast.walk(node):
+                    if hasattr(child, "lineno"):
+                        type_checking_lines.add(child.lineno)
+        for node in ast.walk(tree):
+            if hasattr(node, "lineno") and node.lineno in type_checking_lines:
+                continue
             if isinstance(node, ast.Import):
                 names = [(alias.name, alias.name) for alias in node.names]
             elif isinstance(node, ast.ImportFrom) and node.module is not None:
@@ -293,7 +305,19 @@ def _legacy_service_shim_violations() -> list[str]:
 
 def _imports_package(path: Path, package: str) -> bool:
     tree = ast.parse(path.read_text(), filename=str(path))
+    type_checking_lines: set[int] = set()
     for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.If)
+            and isinstance(node.test, ast.Name)
+            and node.test.id == "TYPE_CHECKING"
+        ):
+            for child in ast.walk(node):
+                if hasattr(child, "lineno"):
+                    type_checking_lines.add(child.lineno)
+    for node in ast.walk(tree):
+        if hasattr(node, "lineno") and node.lineno in type_checking_lines:
+            continue
         if isinstance(node, ast.Import):
             modules = [alias.name for alias in node.names]
         elif isinstance(node, ast.ImportFrom) and node.module is not None:
