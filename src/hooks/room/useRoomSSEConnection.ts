@@ -6,6 +6,7 @@ import { inquiryActiveRuns } from '@/lib/api/room'
 import { useRoomSSE } from '../useRoomSSE'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 import { overlayPendingHitlRequests } from './overlay-pending-hitl'
+import { useRoomUiStore } from '@/stores/room-ui-store'
 
 export function useRoomSSEConnection(
   roomId: string,
@@ -97,7 +98,8 @@ export function useRoomSSEConnection(
       // if the user starts a new turn before the response comes back (race guard).
       const messageIdAtReconnect = lifecycle.getMessageId()
       backendHasActiveLifecycle().then(hasActive => {
-        if (hasActive === false && lifecycle.getMessageId() === messageIdAtReconnect) {
+        const { sending } = useRoomUiStore.getState().rooms[roomId] ?? {}
+        if (hasActive === false && lifecycle.getMessageId() === messageIdAtReconnect && !sending) {
           console.log('🔄 Reconnect: backend confirms no active runs — clearing stuck spinner')
           lifecycle.stopProcessing()
           lifecycle.clearSseDisconnection()
