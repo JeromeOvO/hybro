@@ -244,12 +244,16 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
         break
 
       case 'processing_status':
-        console.log('⚙️ Processing status update:', sseMessage.data?.status)
+        console.log('⚙️ Processing status update:', sseMessage.data?.status, { client_request_id: sseMessage.data?.client_request_id })
         if (sseMessage.data?.status) {
           const status = sseMessage.data.status
           const correlation = resolveCorrelation()
-          if (correlation.shouldDrop) break
+          if (correlation.shouldDrop) {
+            console.warn('🚫 [SSE] processing_status DROPPED (no client_request_id)', { status, data: sseMessage.data })
+            break
+          }
           if (correlation.shouldBuffer && correlation.clientReqId) {
+            console.log('📦 [SSE] processing_status BUFFERED', { status, clientReqId: correlation.clientReqId })
             enqueuePendingSseEvent(correlation.clientReqId, sseMessage)
             break
           }
@@ -306,7 +310,14 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             // lifecycle.getMessageId() is nulled in this block so we must save it first.
             const terminalUserMsgId = lifecycle.getMessageId() ?? (sseMessage.data.message_id as string | undefined)
 
+            console.log('✅ [SSE] Terminal processing_status received — clearing send guard', {
+              status,
+              messageId: sseMessage.data.message_id,
+              clientRequestId: sseMessage.data.client_request_id,
+              sendGuardBefore: lifecycle.isSendGuardActive(),
+            })
             lifecycle.stopProcessing({ clearMessageId: false })
+            console.log('✅ [SSE] Send guard after stopProcessing:', lifecycle.isSendGuardActive())
             setCancelling(false)
             lifecycle.disarmCancelTimeout()
             store.removeMessage(lifecycle.placeholderId(roomId))

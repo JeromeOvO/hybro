@@ -47,6 +47,7 @@ export function createProcessingLifecycle(
 
     startProcessing(messageId) {
       if (disposed) return
+      console.log('🔒 [lifecycle] startProcessing called', { messageId, stack: new Error().stack?.split('\n').slice(1, 4).join(' <- ') })
       if (messageId !== undefined) {
         currentProcessingMessageId = messageId
       }
@@ -58,6 +59,7 @@ export function createProcessingLifecycle(
       if (disposed) return
       const clearMessageId = options?.clearMessageId ?? true
       const clearSendGuard = options?.clearSendGuard ?? true
+      console.log('🔓 [lifecycle] stopProcessing called', { clearMessageId, clearSendGuard, stack: new Error().stack?.split('\n').slice(1, 4).join(' <- ') })
       setZustandProcessing(false)
       if (clearSendGuard) {
         isProcessingGuard = false
