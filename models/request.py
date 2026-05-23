@@ -2,13 +2,11 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from common.types import AgentCard, Message, Task
+from common.types import AgentCard, Task
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    SerializeAsAny,
-    SkipValidation,
     field_validator,
 )
 
@@ -55,7 +53,7 @@ class TaskRequest(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid4()))
     query: str
     context: dict[str, Any] | None = Field(default_factory=dict)
-    message: SerializeAsAny[SkipValidation[Message]] | None = None
+    message: Any | None = None
 
     def to_message(self) -> Any:
         """Convert request to A2A protocol Message"""
@@ -73,7 +71,7 @@ class AgentTaskRequest(BaseModel):
     step_id: str
     input_data: Any
     context: dict[str, Any] | None = Field(default_factory=dict)
-    message: SerializeAsAny[SkipValidation[Message]] | None = None
+    message: Any | None = None
 
     def to_message(self) -> Any:
         """Convert agent task request to A2A protocol Message"""
@@ -223,8 +221,8 @@ class TaskCenterRequest(BaseModel):
     meta_task: MetaTask | None = None
     base_task: BaseTask | None = None
     task_session: TaskSession | None = None
-    task: SerializeAsAny[SkipValidation[Task]] | None = None
-    message: SerializeAsAny[SkipValidation[Message]] | None = None
+    task: Task | None = None
+    message: Any | None = None
     user_input: str | None = None
     execution_order: int = 0
     depends_on_tasks: list[str] | None = None
@@ -296,7 +294,7 @@ class RoomCenterAgentMessageRequest(BaseModel):
     related_message_id: str | None = None
     agent_id: str | None = None
     agent_name: str | None = None
-    agent_message_content: SerializeAsAny[SkipValidation[Task]] | None = None
+    agent_message_content: Task | None = None
     message_created_at: datetime | None = None
     extend_info: dict[str, Any] | None = None
     message: RoomAgentMessage | None = None

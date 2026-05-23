@@ -1,10 +1,10 @@
 from datetime import datetime
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, Field, SerializeAsAny, SkipValidation, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from common.a2a_constants import CommonTaskState
-from common.types import AgentCard, Message, Task
+from common.types import AgentCard, Task
 from models.agent import Agent, AgentStatus, coerce_legacy_agent_card
 from models.memory import ChatContext, RoomMemory
 from models.room import Room, RoomAgentMessage, RoomMessage, RoomUserMessage
@@ -153,7 +153,7 @@ class TaskCenterResponse(BaseModel):
     user_name: str | None = None
     parent_task_id: str | None = None
     session_id: str | None = None
-    task: SerializeAsAny[SkipValidation[Task]] | None = None
+    task: Task | None = None
     meta_task: MetaTask | None = None
     base_task: BaseTask | None = None
     task_session: TaskSession | None = None
@@ -247,7 +247,7 @@ class RoomCenterAgentMessageResponse(BaseModel):
     agent_name: str | None = None
     message: RoomAgentMessage | None = None
     a2a_response: Any | None = None
-    a2a_message: SerializeAsAny[SkipValidation[Message]] | None = None  # The prepared A2A message ready to send
+    a2a_message: Any | None = None
     message_list: list[RoomAgentMessage] | None = None
     success: bool
     error: str | None = None
