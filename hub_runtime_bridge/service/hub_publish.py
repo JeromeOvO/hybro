@@ -216,6 +216,9 @@ def normalize_hub_publish_payload(
         payload["lifecycle_message_id_verified"] = bool(
             getattr(lineage, "lifecycle_message_id", None)
         )
+        payload.setdefault(
+            "client_request_id", getattr(lineage, "client_request_id", None)
+        )
 
     if event_type == "agent_response":
         payload.setdefault("text", str(payload.get("content") or ""))
