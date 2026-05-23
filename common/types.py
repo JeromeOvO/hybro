@@ -13,6 +13,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    RootModel,
     TypeAdapter,
     field_serializer,
     model_validator,
@@ -65,27 +66,37 @@ class TaskState(str, Enum):
     rejected = "rejected"
 
 
-Part = Annotated[TextPart | FilePart | DataPart, Field(discriminator="kind")]
+PartUnion = Annotated[TextPart | FilePart | DataPart, Field(discriminator="kind")]
+
+
+class Part(RootModel[PartUnion]):
+    """Wrapper that preserves .root access pattern used throughout the codebase."""
+    pass
 
 
 class Message(BaseModel):
     role: Literal["user", "agent"]
-    kind: str = "message"  # Add kind attribute for proper processing
+    kind: str = "message"
+    message_id: str | None = Field(default=None, alias="messageId")
+    context_id: str | None = Field(default=None, alias="contextId")
     parts: list[Part]
     metadata: dict[str, Any] | None = None
+
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
 
 
 class TaskStatus(BaseModel):
     state: TaskState
     message: Message | None = None
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime | None = Field(default_factory=datetime.now)
 
     @field_serializer("timestamp")
-    def serialize_dt(self, dt: datetime, _info):
-        return dt.isoformat()
+    def serialize_dt(self, dt: datetime | None, _info):
+        return dt.isoformat() if dt else None
 
 
 class Artifact(BaseModel):
+    artifact_id: str | None = Field(default=None, alias="artifactId")
     name: str | None = None
     description: str | None = None
     parts: list[Part]
@@ -94,30 +105,53 @@ class Artifact(BaseModel):
     append: bool | None = None
     lastChunk: bool | None = None
 
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
 
 class Task(BaseModel):
     id: str
-    kind: str = "task"  # Add kind attribute to match TypeScript definition
+    kind: str = "task"
     sessionId: str | None = None
+    context_id: str | None = Field(default=None, alias="contextId")
     status: TaskStatus
     artifacts: list[Artifact] | None = None
     history: list[Message] | None = None
     metadata: dict[str, Any] | None = None
 
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_from_sdk(cls, data):
+        """Accept SDK Task objects or dicts transparently."""
+        if isinstance(data, dict):
+            return data
+        if type(data).__module__.startswith("common.types"):
+            return data
+        if hasattr(data, "model_dump"):
+            return data.model_dump(mode="json")
+        return data
+
 
 class TaskStatusUpdateEvent(BaseModel):
     id: str
-    kind: str = "status-update"  # Add kind attribute for proper processing
+    kind: str = "status-update"
+    context_id: str | None = Field(default=None, alias="contextId")
     status: TaskStatus
     final: bool = False
     metadata: dict[str, Any] | None = None
 
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
 
 class TaskArtifactUpdateEvent(BaseModel):
     id: str
-    kind: str = "artifact-update"  # Add kind attribute for proper processing
+    kind: str = "artifact-update"
+    context_id: str | None = Field(default=None, alias="contextId")
     artifact: Artifact
     metadata: dict[str, Any] | None = None
+
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
 
 
 class AuthenticationInfo(BaseModel):
@@ -381,11 +415,13 @@ class AgentCard(BaseModel):
     provider: AgentProvider | None = None
     version: str
     documentationUrl: str | None = None
+    iconUrl: str | None = None
     capabilities: AgentCapabilities
     authentication: AgentAuthentication | None = None
     defaultInputModes: list[str] = ["text"]
     defaultOutputModes: list[str] = ["text"]
     skills: list[AgentSkill]
+    supports_authenticated_extended_card: bool | None = None
 
     @property
     def documentation_url(self) -> str | None:

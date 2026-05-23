@@ -143,6 +143,7 @@ class HubPublishLineageSnapshot(FrozenDTO):
     root_user_message_id: str | None = None
     tracked_task_id: str | None = None
     lifecycle_message_id: str | None = None
+    client_request_id: str | None = None
     cancellation_message_ids: list[str] = Field(default_factory=list)
 
 

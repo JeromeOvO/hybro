@@ -32,9 +32,20 @@ logger = get_logger(__name__)
 
 
 def get_task(msg: RoomAgentMessage) -> Any | None:
-    """Safely access ``msg.message_content.message_task``, returning None on any miss."""
+    """Safely access ``msg.message_content.message_task``, returning None on any miss.
+
+    If the stored value is a raw dict (e.g. from a legacy round-trip
+    through continuation serialization), it is coerced into a proper Task model
+    and written back so downstream code can rely on attribute access.
+    """
     if msg.message_content and msg.message_content.message_task:
-        return msg.message_content.message_task
+        task = msg.message_content.message_task
+        if isinstance(task, dict):
+            from common.types import Task
+
+            task = Task.model_validate(task)
+            msg.message_content.message_task = task
+        return task
     return None
 
 

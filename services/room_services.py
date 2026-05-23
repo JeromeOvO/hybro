@@ -3270,12 +3270,18 @@ class RoomServices:
             )
 
         agent_msg = request.message
-        if (
-            agent_msg.message_content
-            and agent_msg.message_content.message_task
-            and agent_msg.message_content.message_task.history
-        ):
-            agent_message = agent_msg.message_content.message_task.history[0]
+        task = (
+            agent_msg.message_content.message_task
+            if agent_msg.message_content
+            else None
+        )
+        if task and isinstance(task, dict):
+            from common.types import Task as TaskModel
+
+            task = TaskModel.model_validate(task)
+            agent_msg.message_content.message_task = task
+        if task and task.history:
+            agent_message = task.history[0]
         else:
             return RoomCenterAgentMessageResponse(
                 message_id=None,
@@ -3709,7 +3715,8 @@ class RoomServices:
                             current_state,
                             real_state,
                         )
-                        msg.message_content.message_task = real_task
+                        from a2a_adapter.message_factory import from_sdk_task as _from_sdk_task
+                        msg.message_content.message_task = _from_sdk_task(real_task)
                         msg.task_updated_at = utcnow()
                         await self.database_service.update_room_agent_message_by_message_id(
                             msg.message_id, msg
@@ -3999,7 +4006,8 @@ class RoomServices:
             return False
 
         if message_data.kind == "task":
-            room_agent_message.message_content.message_task = message_data
+            from a2a_adapter.message_factory import from_sdk_task as _from_sdk_task
+            room_agent_message.message_content.message_task = _from_sdk_task(message_data)
             update_response = await self.update_agent_message_by_message_id(
                 RoomCenterAgentMessageRequest(
                     message_id=room_agent_message.message_id,

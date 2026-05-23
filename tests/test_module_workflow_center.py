@@ -136,10 +136,13 @@ class TestDecomposeTask:
         )
         wc.openai_service.decompose_task = AsyncMock(return_value=decompose_response)
 
+        from a2a.types import Message as SdkMessage, TextPart as SdkTextPart
+
         new_task = _a2a_task(task_id="new-t")
         wc.task_service.create_a2a_task = AsyncMock(return_value=new_task)
 
-        wc.task_service.create_a2a_message = AsyncMock(return_value=MagicMock())
+        fake_msg = SdkMessage(role="user", parts=[SdkTextPart(text="step")], message_id="fake-id")
+        wc.task_service.create_a2a_message = AsyncMock(return_value=fake_msg)
 
         create_resp = MagicMock()
         create_resp.success = True

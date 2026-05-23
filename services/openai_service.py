@@ -585,6 +585,7 @@ Your response should be an complete answer with all the specific details the use
         self,
         agent_responses: list[dict[str, str]],
         mode: str = "non_debate",
+        user_question: str | None = None,
     ) -> str:
         """
         Summarize the answers from multiple AI agents into a single summary using Lead_ai.
@@ -595,6 +596,8 @@ Your response should be an complete answer with all the specific details the use
             mode: Summary mode - "debate" or "non_debate"
                 - "debate": Compares viewpoints, highlights agreements/disagreements
                 - "non_debate": Combines contributions into a unified response
+            user_question: The original user question/request, used to calibrate
+                the summary style (e.g. introductions vs. task responses)
 
         Returns:
             Summary text string
@@ -626,40 +629,41 @@ QUALITY STANDARDS:
 - Ensure balanced representation of all agent contributions"""
 
             user_prompt_template = (
+                "The user asked: {question}\n\n"
                 "Here are responses from multiple agents with potentially different opinions:\n\n{answers}\n\n"
                 "Summarize the key points from all agents in a structured format. "
                 "Use the actual agent names when referencing their opinions."
             )
         else:
             # Default: non_debate mode
-            system_prompt = """You are an expert synthesizer for multi-agent collaboration systems. Your task is to combine responses from multiple AI agents into a unified, coherent summary that presents the complete answer to the user's question.
+            system_prompt = """You are an expert synthesizer for multi-agent collaboration systems. Your task is to present the responses from multiple AI agents in the most useful way for the user, based on what they originally asked.
 
 CORE OBJECTIVES:
-1. Synthesize all agent contributions into a unified response
-2. Combine complementary information without redundancy
-3. Present a clear, actionable final answer
-4. Highlight the most important insights and recommendations
-5. Create a seamless narrative that flows naturally
+1. Read the user's original question carefully to determine the right presentation style
+2. For introductions, identity, or capability questions: present each agent individually by name — do NOT merge them into a single persona
+3. For task/factual questions: synthesize contributions into a unified response, removing redundancy
+4. Preserve unique insights and distinct agent identities when they are the substance of the answer
+5. Present information clearly and concisely
 
-Synthesis APPROACH:
-- Identify how each agent's contribution adds to the complete answer
-- Merge overlapping information, keeping the most detailed version
-- Organize information in a logical flow (context → analysis → recommendations)
-- Ensure all key points from each agent are represented
-- Remove redundancy while preserving unique insights
+PRESENTATION GUIDELINES:
+- If agents are describing themselves, their names, or their capabilities: give each agent a short dedicated section. Never invent a merged identity.
+- If agents are answering a factual or task-oriented question: merge complementary information, keeping the most detailed version of overlapping points
+- Organize information in a logical flow appropriate to the question type
+- Remove redundancy while preserving what is unique to each agent
 
 QUALITY STANDARDS:
-- You are HYBRO AI. Never adopt the identity, name, or persona of any agent. Never say "I'm [Agent Name]" or repeat an agent's self-introduction.
-- Create a unified voice (not a list of "Agent X said...")
-- Focus on delivering value to the user
-- Prioritize actionable insights and clear conclusions
+- You are HYBRO AI, the presenter. Do not adopt any agent's persona or pretend to be one of the agents.
+- For introductions: use headings or clear separation per agent (e.g. "**Agent Name** — ...")
+- For task responses: create a unified voice; attribute to specific agents only when their unique expertise is relevant
 - Keep the summary concise but complete
-- Only attribute to specific agents when their unique expertise is relevant"""
+- Focus on delivering value to the user"""
 
             user_prompt_template = (
-                "Here are responses from multiple agents working together on the user's request:\n\n{answers}\n\n"
-                "Synthesize these into a single, unified response that combines all their contributions. "
-                "Present it as a cohesive answer, not as a comparison of opinions."
+                "The user asked: {question}\n\n"
+                "Here are responses from multiple agents:\n\n{answers}\n\n"
+                "Based on what the user asked, present these responses in the most useful way. "
+                "If the agents are introducing themselves or describing their capabilities, give each agent a distinct section. "
+                "If they are answering a task or factual question, synthesize into a unified response."
             )
 
         # Format agent responses
@@ -670,8 +674,10 @@ QUALITY STANDARDS:
             ]
         )
 
+        question_text = user_question or "Not provided"
         user_prompt = user_prompt_template.format(
             answers=answers_text,
+            question=question_text,
         )
 
         chat_messages = [

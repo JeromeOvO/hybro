@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
-from a2a.types import AgentCard, Task, TaskState
+from a2a.types import AgentCard, TaskState
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
@@ -51,19 +51,20 @@ def _sanitize_task_dict(task: dict) -> dict:
 
 
 def _ensure_task_validation(msg: RoomAgentMessage) -> RoomAgentMessage:
-    """
-    Ensure the Task object in message_content is properly validated as a Pydantic model.
+    """Safety-net for legacy code paths.
 
-    When retrieving from MongoDB, nested RootModel objects (like Part) may not be
-    properly reconstructed. This function explicitly validates the Task to ensure
-    all nested models are properly instantiated.
+    MessageContent._coerce_task now handles dict→Task coercion at construction
+    time, so this should be a no-op.  Kept as a fallback in case attribute
+    assignment bypasses the validator.
     """
     if (
         msg.message_content
         and msg.message_content.message_task
         and isinstance(msg.message_content.message_task, dict)
     ):
-        msg.message_content.message_task = Task.model_validate(
+        from common.types import Task as InternalTask
+
+        msg.message_content.message_task = InternalTask.model_validate(
             msg.message_content.message_task
         )
     return msg

@@ -137,6 +137,7 @@ class TestEmitUnifiedSummary:
                 {"agent_name": "B", "message": "text B"},
             ],
             mode="debate",
+            user_question=None,
         )
         saved_msg = rmc.database_service.upsert_room_agent_message.call_args[0][0]
         assert saved_msg.extend_info["summary_origin"] == "coordinator"

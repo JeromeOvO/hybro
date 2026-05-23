@@ -85,6 +85,7 @@ class _RelayPublishAuthorizationReader:
             run_id=_get_field(msg, "run_id"),
             root_user_message_id=root_user_message_id,
             lifecycle_message_id=lifecycle_message_id,
+            client_request_id=_get_field(msg, "client_request_id"),
             cancellation_message_ids=[
                 item
                 for item in [agent_message_id, related_message_id, root_user_message_id]
