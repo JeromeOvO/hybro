@@ -32,6 +32,14 @@ export function useSendMessage(
     dispatch?: MessageDispatchInput,
   ) => {
     if (!userId || !userName || !room || sending || lifecycle.isSendGuardActive()) {
+      console.warn('🚫 sendUserMessage blocked:', {
+        userId: !userId,
+        userName: !userName,
+        room: !room,
+        sending,
+        sendGuardActive: lifecycle.isSendGuardActive(),
+        messageId: lifecycle.getMessageId(),
+      })
       return false
     }
 

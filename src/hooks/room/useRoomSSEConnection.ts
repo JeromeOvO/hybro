@@ -87,9 +87,22 @@ export function useRoomSSEConnection(
 
     // Any reconnection after a gap may have missed messages. Reconcile
     // unconditionally so the UI is fresh, regardless of processing state.
+    // Also check whether the backend is still active: if it isn't, clear any
+    // stuck spinner even when processing=false (e.g. page refresh during a turn,
+    // or terminal SSE events were sent before this reconnect was established).
     if (isReconnection) {
       console.log('🔄 SSE reconnected after gap — reconciling with DB')
       reconcileWithDb(roomId)
+      // Capture the current message ID before the async check so we can detect
+      // if the user starts a new turn before the response comes back (race guard).
+      const messageIdAtReconnect = lifecycle.getMessageId()
+      backendHasActiveLifecycle().then(hasActive => {
+        if (hasActive === false && lifecycle.getMessageId() === messageIdAtReconnect) {
+          console.log('🔄 Reconnect: backend confirms no active runs — clearing stuck spinner')
+          lifecycle.stopProcessing()
+          lifecycle.clearSseDisconnection()
+        }
+      }).catch(() => { /* ignore — safety-net, not critical */ })
     }
 
     // Safety-net: while processing is active, periodically verify backend truth.
