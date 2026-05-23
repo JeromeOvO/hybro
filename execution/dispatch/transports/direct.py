@@ -11,7 +11,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
-from a2a_adapter.message_factory import build_message_from_parts
+from a2a_adapter.message_factory import build_message_from_parts, from_sdk_task
 from a2a_adapter.task_artifacts import materialize_non_text_parts_as_artifact
 from a2a_adapter.task_requests import (
     build_get_task_request,
@@ -286,7 +286,7 @@ class DirectTransport(AgentTransport):
                     response_text="",
                     message_id=paused_message_id,
                     a2a_task_id=agent_task_id or task_data.get("id") or (task.id if hasattr(task, "id") else None),
-                    a2a_context_id=task_data.get("context_id") or (task.context_id if hasattr(task, "context_id") else None),
+                    a2a_context_id=task.context_id if hasattr(task, "context_id") else task_data.get("contextId"),
                     status_message=status_msg,
                 )
 
@@ -1147,14 +1147,15 @@ class DirectTransport(AgentTransport):
                         state_str(incoming_state),
                         room_agent_message.message_id,
                     )
-                    if message_data.artifacts:
-                        existing_task.artifacts = message_data.artifacts
-                    if message_data.history:
-                        existing_task.history = message_data.history
+                    converted = from_sdk_task(message_data)
+                    if converted.artifacts:
+                        existing_task.artifacts = converted.artifacts
+                    if converted.history:
+                        existing_task.history = converted.history
                 else:
-                    room_agent_message.message_content.message_task = message_data
+                    room_agent_message.message_content.message_task = from_sdk_task(message_data)
             else:
-                room_agent_message.message_content.message_task = message_data
+                room_agent_message.message_content.message_task = from_sdk_task(message_data)
             return await self.tsm.persist_message(room_agent_message)
 
         if message_data.kind == "message":
@@ -1617,7 +1618,7 @@ class DirectTransport(AgentTransport):
         if state in INTERACTIVE_STATES:
             # Update in-memory task so get_task(message) sees the new state.
             if current_message.message_content:
-                current_message.message_content.message_task = completed_task
+                current_message.message_content.message_task = from_sdk_task(completed_task)
             if task_info:
                 await self.database_service.update_task_on_message(
                     message_id,
