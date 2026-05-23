@@ -2324,6 +2324,13 @@ class RoomMessageCenter:
             summary_client_request_id = (
                 user_message.client_request_id if user_message else None
             )
+            user_question_text: str | None = (
+                user_message.message_content.message_text
+                if user_message
+                and user_message.message_content
+                and isinstance(user_message.message_content.message_text, str)
+                else None
+            )
 
             # 1. Determine content — check agent count BEFORE emitting placeholder
             if synthesis_text is not None and synthesis_text.strip():
@@ -2391,7 +2398,7 @@ class RoomMessageCenter:
 
                 mode = "debate" if is_debate else "non_debate"
                 content = await self.openai_service.summarize_agent_responses(
-                    agent_responses, mode=mode
+                    agent_responses, mode=mode, user_question=user_question_text
                 )
                 origin = "coordinator"
 

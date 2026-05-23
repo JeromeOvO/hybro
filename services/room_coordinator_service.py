@@ -172,6 +172,13 @@ class RoomCoordinatorService:
             summary_client_request_id = (
                 root_user_message.client_request_id if root_user_message else None
             )
+            user_question_text: str | None = (
+                root_user_message.message_content.message_text
+                if root_user_message
+                and root_user_message.message_content
+                and isinstance(root_user_message.message_content.message_text, str)
+                else None
+            )
             agent_name = (
                 "Debate Coordinator" if is_debate_mode else "Summary Agent"
             )
@@ -189,7 +196,7 @@ class RoomCoordinatorService:
             )
 
             summary_text = await self.openai_service.summarize_agent_responses(
-                agent_responses, mode=summary_mode
+                agent_responses, mode=summary_mode, user_question=user_question_text
             )
 
             if not summary_text:
