@@ -306,6 +306,7 @@ class RoomFacade:
             root_user_message_id=root_user_message_id,
             tracked_task_id=tracked_task_id,
             lifecycle_message_id=root_user_message_id,
+            client_request_id=message_doc.get("client_request_id"),
             cancellation_message_ids=[
                 item
                 for item in [agent_message_id, related_message_id, root_user_message_id]
