@@ -50,13 +50,18 @@ describe('getActivityStripListMaxHeight', () => {
     expect(getActivityStripListMaxHeight(0)).toBe(0)
   })
 
-  it('fits four compact rows without using the scroll cap', () => {
-    const four = 4 * STRIP_COMPACT_ROW_HEIGHT_PX + 3 * STRIP_ROW_GAP_PX
-    expect(getActivityStripListMaxHeight(4)).toBe(four)
+  it('does not cap when estimated height is under the scroll limit', () => {
+    const four =
+      4 * STRIP_COMPACT_ROW_HEIGHT_PX + 3 * STRIP_ROW_GAP_PX
     expect(four).toBeLessThan(STRIP_LIST_MAX_HEIGHT_CAP_PX)
+    expect(getActivityStripListMaxHeight(4)).toBe(0)
   })
 
-  it('caps height when many agents', () => {
+  it('caps height when estimated height exceeds the scroll limit', () => {
+    const six =
+      6 * STRIP_COMPACT_ROW_HEIGHT_PX + 5 * STRIP_ROW_GAP_PX
+    expect(six).toBeGreaterThan(STRIP_LIST_MAX_HEIGHT_CAP_PX)
+    expect(getActivityStripListMaxHeight(6)).toBe(STRIP_LIST_MAX_HEIGHT_CAP_PX)
     expect(getActivityStripListMaxHeight(12)).toBe(STRIP_LIST_MAX_HEIGHT_CAP_PX)
   })
 })

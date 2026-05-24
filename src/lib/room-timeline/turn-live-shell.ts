@@ -6,13 +6,13 @@ export const STRIP_ROW_GAP_PX = 8
 /** Max strip list height before scrolling (≈6 compact rows). */
 export const STRIP_LIST_MAX_HEIGHT_CAP_PX = 280
 
-/** Fit all rows when few agents; cap and scroll when many. */
+/** Return 0 when all strips fit naturally; return cap px when many agents need inner scroll. */
 export function getActivityStripListMaxHeight(agentCount: number): number {
   if (agentCount <= 0) return 0
-  const content =
+  const estimated =
     agentCount * STRIP_COMPACT_ROW_HEIGHT_PX +
     Math.max(0, agentCount - 1) * STRIP_ROW_GAP_PX
-  return Math.min(STRIP_LIST_MAX_HEIGHT_CAP_PX, content)
+  return estimated > STRIP_LIST_MAX_HEIGHT_CAP_PX ? STRIP_LIST_MAX_HEIGHT_CAP_PX : 0
 }
 
 export function getStripSourceResults(turn: TurnViewModel): AgentResultViewModel[] {

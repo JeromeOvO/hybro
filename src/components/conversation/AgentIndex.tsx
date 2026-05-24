@@ -78,15 +78,15 @@ export function AgentIndex({
   const summary = getAgentIndexSummary(turn, sourceResults, finalAnswer.kind)
   const forceExpand = sourceResults.some(r => r.messageId === selectedAgentMessageId)
   const expanded = open || forceExpand
-  const showFullBodies = finalAnswer.kind === 'deterministic_done'
-  const listMaxHeight = showFullBodies ? 0 : getActivityStripListMaxHeight(sourceResults.length)
-
   const stripResults =
     finalAnswer.kind === 'hitl'
       ? sourceResults.filter(r => r.status === 'completed')
       : sourceResults
 
   if (stripResults.length === 0) return null
+
+  const showFullBodies = finalAnswer.kind === 'deterministic_done'
+  const listMaxHeight = showFullBodies ? 0 : getActivityStripListMaxHeight(stripResults.length)
 
   return (
     <Collapsible
@@ -107,7 +107,7 @@ export function AgentIndex({
         <div
           className={cn(
             'turn-activity-strip-list mt-2 flex flex-col',
-            !showFullBodies && 'overflow-y-auto overscroll-y-contain',
+            listMaxHeight > 0 && 'overflow-y-auto overscroll-y-contain',
           )}
           style={{
             gap: 'var(--conversation-gap-block)',
