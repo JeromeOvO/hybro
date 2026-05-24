@@ -21,6 +21,10 @@ interface AgentCardProps {
   onOpen?: (messageId: string) => void
   rightAction?: ReactNode
   agentSource?: 'cloud' | 'hub'
+  /** Single-line strip row: tighter padding, no task row, no card shimmer. */
+  compact?: boolean
+  /** Appended to status label in compact mode (e.g. artifact count). */
+  statusSuffix?: string
 }
 
 function useAgentFromCatalog(agentId: string): Agent | undefined {
@@ -29,12 +33,22 @@ function useAgentFromCatalog(agentId: string): Agent | undefined {
   return agents?.find(a => a.agent_id === agentId)
 }
 
-function AgentAvatar({ agentId, theme, isAnimated }: { agentId: string; theme: AgentTheme; isAnimated?: boolean }) {
+function AgentAvatar({
+  agentId,
+  theme,
+  isAnimated,
+  compact,
+}: {
+  agentId: string
+  theme: AgentTheme
+  isAnimated?: boolean
+  compact?: boolean
+}) {
   const catalogAgent = useAgentFromCatalog(agentId)
   const iconUrl = catalogAgent?.agent_card?.iconUrl || undefined
 
   return (
-    <div className={cn("w-8 h-8 shrink-0 relative", isAnimated && "conversation-avatar-working")}>
+    <div className={cn('shrink-0 relative', compact ? 'w-6 h-6' : 'w-8 h-8', isAnimated && 'conversation-avatar-working')}>
       <div
         className="w-full h-full overflow-hidden"
         style={{ backgroundColor: theme.avatarLightBg, borderRadius: 'var(--chat-input-radius)' }}
@@ -74,6 +88,8 @@ export function AgentCard({
   onOpen,
   rightAction,
   agentSource,
+  compact = false,
+  statusSuffix,
 }: AgentCardProps) {
   const catalogAgent = useAgentFromCatalog(agentId)
   const isHubOnline = catalogAgent?.is_hub_online
@@ -88,8 +104,9 @@ export function AgentCard({
   const canOpen = interactive && !!messageId && !!onOpen
   const className = cn(
     'conversation-agent-card relative border overflow-hidden',
+    compact && 'conversation-agent-card-compact shrink-0',
     canOpen && 'w-full text-left cursor-pointer transition-colors hover:border-cyan-300/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/35',
-    display.isAnimated && 'conversation-card-shimmer',
+    !compact && display.isAnimated && 'conversation-card-shimmer',
   )
   const style = {
     backgroundColor: theme.cardBg,
@@ -103,8 +120,8 @@ export function AgentCard({
   }
   const content = (
     <>
-      <div className="flex items-center gap-2.5" style={{ position: 'relative', zIndex: 1 }}>
-        <AgentAvatar agentId={agentId} theme={theme} isAnimated={display.isAnimated} />
+      <div className={cn('flex items-center gap-2.5', compact && 'gap-2')} style={{ position: 'relative', zIndex: 1 }}>
+        <AgentAvatar agentId={agentId} theme={theme} isAnimated={display.isAnimated} compact={compact} />
         <Link
           href={`/c/agents/${agentId}`}
           className="text-[13px] font-medium hover:underline focus-visible:outline-none"
@@ -127,6 +144,7 @@ export function AgentCard({
           style={{ color: toneColors[display.tone], position: 'relative', zIndex: 1 }}
         >
           {display.label}
+          {compact && statusSuffix ? ` · ${statusSuffix}` : null}
         </span>
         {rightAction && (
           <span className="conversation-agent-card-action">
@@ -134,7 +152,7 @@ export function AgentCard({
           </span>
         )}
       </div>
-      {taskDescription && (
+      {!compact && taskDescription && (
         <div className="conversation-agent-task-row flex items-start gap-1.5 pl-[42px]" style={{ position: 'relative', zIndex: 1 }}>
           <span className="text-sm leading-none mt-px shrink-0" style={{ color: 'var(--conversation-text-dim)' }}>&#x2514;</span>
           <span className="conversation-agent-task-text text-[13px] font-medium truncate" style={{ color: 'var(--conversation-text-primary)' }}>

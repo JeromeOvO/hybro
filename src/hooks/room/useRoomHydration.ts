@@ -2,9 +2,17 @@ import { useCallback, useEffect, useRef } from 'react'
 import type { MutableRefObject } from 'react'
 import { inquiryRoomMessagesByRoomId } from '@/lib/api/room'
 import { fetchPendingHitlRequests } from '@/lib/api/hitl'
-import { useMessageStore, detectAndMarkStaleTasks, filterHydrationMessages, convertApiMessageToIncoming } from '@/stores/message-store'
+import {
+  useMessageStore,
+  detectAndMarkStaleTasks,
+  filterHydrationMessages,
+  convertApiMessageToIncoming,
+  stampInferredTurnTerminalStatus,
+  collectActiveRunTriggerMessageIds,
+} from '@/stores/message-store'
 import { useStreamingStore } from '@/stores/streaming-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
+import { isTerminalState } from '@/lib/types/sse'
 import { overlayPendingHitlRequests } from './overlay-pending-hitl'
 
 function markInitialHydrationComplete(targetRoomId: string): boolean {
@@ -14,6 +22,24 @@ function markInitialHydrationComplete(targetRoomId: string): boolean {
   store.markDbSynced()
   useRoomUiStore.getState().markInitialHydrated(targetRoomId)
   return true
+}
+
+function pruneStaleProcessingPlaceholder(targetRoomId: string): void {
+  const store = useMessageStore.getState()
+  if (store.roomId !== targetRoomId) return
+
+  const placeholderId = `processing-placeholder-${targetRoomId}`
+  if (!store.entities[placeholderId]) return
+
+  const hasActiveTask = Object.values(store.entities).some(
+    e => e.roomId === targetRoomId
+      && !e.isEphemeral
+      && e.taskStatus
+      && !isTerminalState(e.taskStatus),
+  )
+  if (hasActiveTask) return
+
+  store.removeMessage(placeholderId)
 }
 
 export function useRoomHydration(
@@ -62,6 +88,9 @@ export function useRoomHydration(
         // SSE wins over DB for non-terminal state), so using filtered.map(m=>m.id)
         // would clear live buffers for messages where the DB write was a no-op.
         useStreamingStore.getState().clearByMessageIds(appliedIds)
+        stampInferredTurnTerminalStatus(targetRoomId, {
+          activeRunTriggerMessageIds: collectActiveRunTriggerMessageIds(room),
+        })
         markInitialHydrationComplete(targetRoomId)
         console.log(
           `[NormalizedStore] DB hydration: ${appliedIds.size}/${filtered.length} messages written ` +
@@ -117,7 +146,7 @@ export function useRoomHydration(
       // Mark as hydrated on error to avoid infinite loading
       markInitialHydrationComplete(targetRoomId)
     }
-  }, [getToken, userId, userName, getAgentName, getAgentSource, hitlRequestIndex])
+  }, [getToken, userId, userName, getAgentName, getAgentSource, hitlRequestIndex, room])
 
   const reconcileInflightRef = useRef<string | null>(null)
 
@@ -137,6 +166,7 @@ export function useRoomHydration(
     if (store.roomId === targetRoomId) {
       const appliedIds = store.upsertMany(filtered, 'db')
       store.markDbSynced()
+      pruneStaleProcessingPlaceholder(targetRoomId)
       // Clear streaming buffers only for messages that were actually written.
       // See hydrateFromDb for rationale — same rule applies here.
       useStreamingStore.getState().clearByMessageIds(appliedIds)

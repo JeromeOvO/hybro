@@ -10,6 +10,19 @@ export type TurnStatus =
   | 'failed'
   | 'partial'
 
+export type TurnDisplayMode =
+  | 'single_agent'
+  | 'summary_with_sources'
+  | 'parallel_results'
+  | 'awaiting_input'
+  | 'working'
+
+export type TurnPhase =
+  | 'collecting'
+  | 'synthesizing'
+  | 'answering'
+  | 'completed'
+
 // ── Turn view model ────────────────────────────────────────────
 
 export interface TurnViewModel {
@@ -33,6 +46,75 @@ export interface TurnViewModel {
     totalSteps?: number
     details?: string
   }
+  /** Resolved display mode (legacy; derived from finalAnswer for incremental rebuild). */
+  displayMode: TurnDisplayMode
+  /** Layout phase within a live turn. */
+  phase?: TurnPhase
+  /** Message whose stream drives scroll-follow (synthesis streaming). */
+  primaryStreamMessageId?: string
+  /** Scroll-follow target; equals primaryStreamMessageId when set. */
+  primaryMessageId?: string
+  /** Room-level terminal signal from user entity (processing_status SSE). */
+  turnTerminalStatus?: 'completed' | 'failed' | 'canceled'
+  /** V3: unified final-answer slot (§17). */
+  finalAnswer: FinalAnswerViewModel
+}
+
+// ── V3 final answer ──────────────────────────────────────────
+
+export type FinalAnswerKind =
+  | 'pending'
+  | 'hitl'
+  | 'llm_synthesis'
+  | 'deterministic_done'
+  | 'canceled'
+  | 'failed'
+  | 'single'
+
+export type SummaryOrigin = 'llm' | 'deterministic'
+
+export type FinalAnswerLabel =
+  | 'Synthesized'
+  | 'Combined agent responses'
+  | 'Working'
+  | 'Needs input'
+  | 'Canceled'
+  | 'Failed'
+
+export interface FinalAnswerSection {
+  messageId: string
+  agentId?: string
+  agentName: string
+  content: string
+  artifacts: ArtifactData[]
+  status: 'working' | 'completed' | 'failed' | 'awaiting_input'
+}
+
+export interface FinalAnswerHitlPrompt {
+  messageId: string
+  agentName: string
+  prompt: string
+  resolved?: { prompt: string; answer: string }
+}
+
+export interface FinalAnswerHitlViewModel {
+  source: 'supervisor' | 'agent'
+  prompts: FinalAnswerHitlPrompt[]
+}
+
+export interface FinalAnswerViewModel {
+  kind: FinalAnswerKind
+  label: FinalAnswerLabel
+  primaryMessageId?: string
+  /** Short HYBRO presenter copy for deterministic_done (virtual or backend entity body). */
+  deterministicIntro?: string
+  /** HYBRO presenter copy when the turn was canceled. */
+  canceledIntro?: string
+  /** HYBRO presenter copy when the turn failed (all agents failed / room failed). */
+  failedIntro?: string
+  summaryOrigin?: SummaryOrigin
+  sections?: FinalAnswerSection[]
+  hitl?: FinalAnswerHitlViewModel
 }
 
 // ── Timeline event types ───────────────────────────────────────
@@ -94,6 +176,10 @@ export interface AgentResultViewModel {
   eventCount?: number
   /** Duration in ms for inline chips. */
   durationMs?: number
+  /** True when this result came from an ephemeral placeholder entity. */
+  isEphemeral?: boolean
+  /** When isSummaryAgent — distinguishes LLM synthesis from deterministic DONE intro. */
+  summaryOrigin?: SummaryOrigin
 }
 
 // ── Event log input (raw event from SSE handler) ───────────────

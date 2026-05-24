@@ -92,6 +92,9 @@ export interface MessageEntity {
   // useMessageStoreSync can derive turn_completed/failed/canceled without
   // the turn store receiving direct writes (derived-only constraint).
   turnTerminalStatus?: 'completed' | 'failed' | 'canceled'
+
+  /** Parsed from backend extend_info.summary_origin for summary-family agents. */
+  summaryOrigin?: 'llm' | 'deterministic'
 }
 
 /**
@@ -137,4 +140,5 @@ export interface IncomingMessage {
   artifacts?: ArtifactData[]
   attachments?: AttachmentData[]
   turnTerminalStatus?: 'completed' | 'failed' | 'canceled'
+  summaryOrigin?: 'llm' | 'deterministic'
 }

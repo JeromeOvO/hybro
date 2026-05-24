@@ -296,6 +296,37 @@
   z-index: -1;
 }
 
+/* ---------- V2 live turn: stable primary surface + activity strip ---------- */
+
+.turn-primary-surface {
+  min-height: 6rem;
+}
+
+.turn-activity-strip {
+  overflow-anchor: none;
+}
+
+.turn-activity-strip-list {
+  scroll-padding-bottom: 8px;
+  padding-bottom: 2px;
+}
+
+.turn-activity-strip-list > * {
+  flex-shrink: 0;
+}
+
+.turn-activity-strip-content[data-state='open'] {
+  overflow: visible;
+}
+
+.conversation-agent-card.conversation-agent-card-compact {
+  padding: 8px 12px;
+}
+
+.conversation-agent-card-compact .conversation-agent-status {
+  font-size: 12px;
+}
+
 /* ---------- Bottom input dock ---------- */
 
 .conversation-input-dock {

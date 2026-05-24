@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
+import { allAgentsTerminalForUserMessage } from '@/lib/room-timeline/turn-agent-terminal'
 import { TASK_STATE, isTerminalState } from '@/lib/types/sse'
 import { isStale } from '@/lib/time'
 
@@ -40,11 +41,24 @@ export function useProcessingRestore(
 
     // Check if room has an active processing state
     if (hasActiveLifecycle) {
-      console.log('🔄 Restoring processing placeholder for message:', lifecycleMessageId)
-
-      // Always restore the message ID so cancellation works after refresh,
-      // regardless of whether the placeholder is shown below.
+      // Always restore the message ID so cancellation works after refresh.
       lifecycle.setMessageId(lifecycleMessageId)
+
+      // Stale active_runs after server restart — every agent task is already terminal.
+      if (
+        lifecycleMessageId
+        && allAgentsTerminalForUserMessage(store.entities, roomId, lifecycleMessageId)
+      ) {
+        console.log('🔄 Skipping processing restore — all agents terminal for message:', lifecycleMessageId)
+        const { sending } = useRoomUiStore.getState().rooms[roomId] ?? {}
+        if (!sending) {
+          store.removeMessage(lifecycle.placeholderId(roomId))
+          lifecycle.stopProcessing()
+        }
+        return
+      }
+
+      console.log('🔄 Restoring processing placeholder for message:', lifecycleMessageId)
 
       // Some active runs are proactive and may not be anchored to a user message.
       if (!lifecycleMessageId) {
