@@ -1077,6 +1077,7 @@ class TestHandleV2RunResultUnifiedSummary:
 
             rmc = create_room_message_center()
             rmc._emit_unified_summary = AsyncMock()
+            rmc._emit_deterministic_digest = AsyncMock()
             rmc._trigger_compaction_safe = AsyncMock()
             yield rmc
 
@@ -1112,16 +1113,65 @@ class TestHandleV2RunResultUnifiedSummary:
         assert call_kwargs[1]["synthesis_text"] == "Final synthesis."
 
     @pytest.mark.asyncio
-    async def test_no_synthesis_passes_none(
+    async def test_no_synthesis_emits_deterministic_digest_for_multi_agent_done(
         self, rmc, completed_result_without_synthesis
     ):
-        """When supervisor chose DONE (synthesis_text=None), no summary is emitted."""
+        """When supervisor chose DONE with 2+ agents, emit deterministic digest (not LLM summary)."""
+        from datetime import datetime
+        from models.supervisor_v2 import ActionType, SupervisorAction, TrajectoryEntry, V2StepResult
+
+        completed_result_without_synthesis.trajectory.entries = [
+            TrajectoryEntry(
+                step_number=1,
+                action=SupervisorAction(
+                    action=ActionType.DELEGATE,
+                    reasoning="delegate",
+                ),
+                started_at=datetime(2026, 1, 1),
+                results=[
+                    V2StepResult(
+                        step_number=1,
+                        agent_id="agent-1",
+                        agent_name="Agent A",
+                        task="Answer",
+                        success=True,
+                        response_text="Answer A",
+                    ),
+                    V2StepResult(
+                        step_number=2,
+                        agent_id="agent-2",
+                        agent_name="Agent B",
+                        task="Answer",
+                        success=True,
+                        response_text="Answer B",
+                    ),
+                ],
+            ),
+        ]
         await rmc._handle_v2_run_result(
             result=completed_result_without_synthesis,
             room_id="room-1",
             user_message_id="msg-1",
         )
         rmc._emit_unified_summary.assert_not_awaited()
+        rmc._emit_deterministic_digest.assert_awaited_once_with(
+            "room-1",
+            "msg-1",
+            agent_count=2,
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_synthesis_skips_digest_for_single_agent_done(
+        self, rmc, completed_result_without_synthesis
+    ):
+        """DONE with fewer than 2 agent responses does not emit deterministic digest."""
+        await rmc._handle_v2_run_result(
+            result=completed_result_without_synthesis,
+            room_id="room-1",
+            user_message_id="msg-1",
+        )
+        rmc._emit_unified_summary.assert_not_awaited()
+        rmc._emit_deterministic_digest.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_trajectory_responses_extracted_and_passed(self, rmc):

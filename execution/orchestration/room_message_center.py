@@ -1865,6 +1865,12 @@ class RoomMessageCenter:
                         is_debate=is_debate,
                         working_already_emitted=True,
                     )
+                elif len(trajectory_responses) >= 2:
+                    await self._emit_deterministic_digest(
+                        room_id,
+                        user_message_id,
+                        agent_count=len(trajectory_responses),
+                    )
                 # Emit turn_completed event
                 if getattr(self, '_turn_event_appender', None):
                     try:
@@ -2295,6 +2301,74 @@ class RoomMessageCenter:
             task_content="Summarizing agent responses\u2026",
             client_request_id=summary_client_request_id,
         )
+
+    async def _emit_deterministic_digest(
+        self,
+        room_id: str,
+        user_message_id: str,
+        *,
+        agent_count: int,
+    ) -> None:
+        """Persist a non-LLM summary stub when supervisor chose DONE (2+ agents)."""
+        summary_message_id = f"summary-{user_message_id}"
+        content = (
+            f"{agent_count} agent{'s' if agent_count != 1 else ''} responded. "
+            "Expand below to read each answer."
+        )
+
+        try:
+            user_message = await self.database_service.get_room_user_message_by_message_id(
+                user_message_id
+            )
+            user_id = user_message.user_id if user_message else None
+            summary_client_request_id = (
+                user_message.client_request_id if user_message else None
+            )
+
+            from models.room import MessageContent, RoomAgentMessage
+
+            summary_task = build_completed_text_task(
+                task_id=summary_message_id,
+                text=content,
+                context_id=summary_message_id,
+            )
+
+            summary_agent_message = RoomAgentMessage(
+                room_id=room_id,
+                message_id=summary_message_id,
+                agent_id=CoordinatorAgentId.SUMMARY,
+                related_message_id=user_message_id,
+                user_id=user_id,
+                client_request_id=summary_client_request_id,
+                message_content=MessageContent(message_task=summary_task),
+                message_created_at=utcnow(),
+                extend_info={
+                    "is_coordinator_summary": True,
+                    "source_user_message_id": user_message_id,
+                    "summary_origin": "deterministic",
+                },
+                task_content=content,
+            )
+
+            await self.database_service.upsert_room_agent_message(summary_agent_message)
+
+            await self.sse_manager.send_agent_response(
+                room_id,
+                summary_message_id,
+                CoordinatorAgentId.SUMMARY,
+                content,
+                related_message_id=user_message_id,
+                client_request_id=summary_client_request_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "RoomMessageCenter: _emit_deterministic_digest failed for room %s "
+                "user message %s: %s",
+                room_id,
+                user_message_id,
+                exc,
+                exc_info=True,
+            )
 
     async def _emit_unified_summary(
         self,
