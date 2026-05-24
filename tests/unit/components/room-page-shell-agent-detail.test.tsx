@@ -11,6 +11,21 @@ vi.mock('@/components/composer/ComposerShell', () => ({
   ComposerShell: () => <div data-testid="composer-shell" />,
 }))
 
+const setSidebarOpen = vi.fn()
+const setSidebarOpenMobile = vi.fn()
+
+vi.mock('@/components/ui/sidebar', () => ({
+  useSidebar: () => ({
+    state: 'expanded',
+    open: true,
+    setOpen: setSidebarOpen,
+    openMobile: false,
+    setOpenMobile: setSidebarOpenMobile,
+    isMobile: false,
+    toggleSidebar: vi.fn(),
+  }),
+}))
+
 const originalMatchMedia = window.matchMedia
 const originalResizeObserver = window.ResizeObserver
 const originalScrollTo = window.HTMLElement.prototype.scrollTo
@@ -56,6 +71,8 @@ function makeAdapter(roomId = 'room-1'): TimelineAdapter {
 
 describe('RoomPageShell agent detail pane', () => {
   beforeEach(() => {
+    setSidebarOpen.mockClear()
+    setSidebarOpenMobile.mockClear()
     Object.defineProperty(window, 'ResizeObserver', {
       writable: true,
       configurable: true,
@@ -117,8 +134,10 @@ describe('RoomPageShell agent detail pane', () => {
     expect(primaryPanel).toBeInTheDocument()
     expect(screen.getByTestId('conversation-detail-resize-handle')).toBeInTheDocument()
     expect(detailPanel).toBeInTheDocument()
-    expect(primaryPanel.getAttribute('style')).toMatch(/flex:\s*66\b/)
-    expect(detailPanel.getAttribute('style')).toMatch(/flex:\s*34\b/)
+    expect(primaryPanel.getAttribute('style')).toMatch(/flex:\s*50\b/)
+    expect(detailPanel.getAttribute('style')).toMatch(/flex:\s*50\b/)
+    expect(screen.queryByRole('button', { name: /enter fullscreen/i })).not.toBeInTheDocument()
+    expect(setSidebarOpen).toHaveBeenCalledWith(false)
 
     const pane = screen.getByTestId('agent-response-detail-pane')
     expect(within(pane).getByText('Researcher Alex')).toBeInTheDocument()
@@ -127,6 +146,7 @@ describe('RoomPageShell agent detail pane', () => {
 
     await userEvent.click(within(pane).getByRole('button', { name: /close agent response/i }))
 
+    expect(setSidebarOpen).toHaveBeenLastCalledWith(true)
     expect(screen.queryByTestId('agent-response-detail-pane')).not.toBeInTheDocument()
   })
 
@@ -161,6 +181,7 @@ describe('RoomPageShell agent detail pane', () => {
       value: vi.fn().mockImplementation((query: string) => ({
         matches: false,
         media: query,
+        onchange: null,
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
       })),
@@ -168,10 +189,7 @@ describe('RoomPageShell agent detail pane', () => {
 
     render(<RoomPageShell adapter={makeAdapter()} />)
 
-    // The card button IS present so users on mobile can tap it to open the sheet
     expect(screen.getByRole('button', { name: /open researcher alex response/i })).toBeInTheDocument()
-
-    // The desktop split-pane layout is NOT used at narrow widths
     expect(screen.queryByTestId('conversation-resizable-workspace')).not.toBeInTheDocument()
     expect(screen.queryByTestId('agent-response-detail-pane')).not.toBeInTheDocument()
   })
