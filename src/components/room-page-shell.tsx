@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import type { AgentGroup } from '@/lib/types/agent-group'
 import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
@@ -13,7 +13,9 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from '@/components/ui/resizable'
+import { useGroupRef } from 'react-resizable-panels'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
+import { useSidebar } from '@/components/ui/sidebar'
 import { useMessageStore } from '@/stores/message-store'
 import { useStreamingStore } from '@/stores/streaming-store'
 import { useRoomUiStore, useSelectedAgentMessageId } from '@/stores/room-ui-store'
@@ -24,8 +26,8 @@ const EMPTY_ENTITIES: Record<string, MessageEntity> = {}
 const EMPTY_ORDERED_IDS: string[] = []
 const DETAIL_PANE_QUERY = '(min-width: 1024px)'
 const DETAIL_PANE_LAYOUT = {
-  'conversation-primary-panel': 66,
-  'conversation-detail-panel': 34,
+  'conversation-primary-panel': 50,
+  'conversation-detail-panel': 50,
 }
 
 function canShowDetailPane(): boolean {
@@ -34,7 +36,7 @@ function canShowDetailPane(): boolean {
 }
 
 function useCanShowDetailPane(): boolean {
-  const [canShow, setCanShow] = useState(canShowDetailPane)
+  const [canShow, setCanShow] = React.useState(canShowDetailPane)
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia) return
@@ -92,41 +94,83 @@ interface RoomPageShellProps {
 
 export function RoomPageShell({ adapter }: RoomPageShellProps) {
   const canShowAgentDetail = useCanShowDetailPane()
+  const {
+    open: sidebarOpen,
+    openMobile: sidebarOpenMobile,
+    setOpen: setSidebarOpen,
+    setOpenMobile: setSidebarOpenMobile,
+    isMobile: isMobileSidebar,
+  } = useSidebar()
+  const conversationGroupRef = useGroupRef()
+  const prevSelectedMessageIdRef = useRef<string | undefined>(undefined)
+  const sidebarSnapshotRef = useRef<{ desktopOpen: boolean; mobileOpen: boolean } | null>(null)
   const selectedMessageId = useSelectedAgentMessageId(adapter.roomId)
-  // Always read entities so the mobile sheet has data too
   const entities = useMessageStore(s => selectedMessageId ? s.entities : EMPTY_ENTITIES)
   const orderedIds = useMessageStore(s => selectedMessageId ? s.orderedIds : EMPTY_ORDERED_IDS)
-  // Subscribe to streaming buffers so the detail pane shows live content
-  // during streaming (entity.content is empty until task_update checkpoint).
   const buffers = useStreamingStore(s => s.buffers)
 
-  // Compute detail regardless of breakpoint — needed for both side pane and mobile sheet
   const detail = useMemo(() => {
     if (!selectedMessageId) return null
     return selectAgentResponseDetail(adapter.roomId, selectedMessageId, entities, orderedIds, buffers)
   }, [adapter.roomId, selectedMessageId, entities, orderedIds, buffers])
 
+  const restoreSidebar = useCallback(() => {
+    const snapshot = sidebarSnapshotRef.current
+    if (!snapshot) return
+    if (isMobileSidebar) {
+      setSidebarOpenMobile(snapshot.mobileOpen)
+    } else {
+      setSidebarOpen(snapshot.desktopOpen)
+    }
+    sidebarSnapshotRef.current = null
+  }, [isMobileSidebar, setSidebarOpen, setSidebarOpenMobile])
+
   const prevRoomIdRef = useRef(adapter.roomId)
   useEffect(() => {
     if (adapter.roomId !== prevRoomIdRef.current) {
+      restoreSidebar()
       useRoomUiStore.getState().closeAgentDetail(prevRoomIdRef.current)
       prevRoomIdRef.current = adapter.roomId
+      prevSelectedMessageIdRef.current = undefined
     }
-  }, [adapter.roomId])
+  }, [adapter.roomId, restoreSidebar])
 
   useLayoutEffect(() => {
     if (selectedMessageId && !detail) {
+      restoreSidebar()
       useRoomUiStore.getState().closeAgentDetail(adapter.roomId)
     }
-  }, [selectedMessageId, detail, adapter.roomId])
+  }, [selectedMessageId, detail, adapter.roomId, restoreSidebar])
 
   const handleCloseDetail = useCallback(() => {
+    prevSelectedMessageIdRef.current = undefined
+    restoreSidebar()
     useRoomUiStore.getState().closeAgentDetail(adapter.roomId)
-  }, [adapter.roomId])
+  }, [adapter.roomId, restoreSidebar])
 
-  // Track the input dock height so the scroll area always pads enough to
-  // clear it — prevents agent cards near the bottom from being occluded by
-  // the dock and becoming non-clickable on mobile.
+  useLayoutEffect(() => {
+    if (!selectedMessageId) return
+
+    if (sidebarSnapshotRef.current !== null) return
+
+    sidebarSnapshotRef.current = {
+      desktopOpen: sidebarOpen,
+      mobileOpen: sidebarOpenMobile,
+    }
+    if (isMobileSidebar) {
+      setSidebarOpenMobile(false)
+    } else {
+      setSidebarOpen(false)
+    }
+  }, [
+    selectedMessageId,
+    sidebarOpen,
+    sidebarOpenMobile,
+    isMobileSidebar,
+    setSidebarOpen,
+    setSidebarOpenMobile,
+  ])
+
   const dockRef = useRef<HTMLDivElement>(null)
   const primaryRef = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
@@ -144,8 +188,25 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
     return () => ro.disconnect()
   }, [])
 
-  // On desktop the side pane is visible; on mobile the sheet takes over
   const desktopDetail = canShowAgentDetail ? detail : null
+
+  useLayoutEffect(() => {
+    if (!desktopDetail || !selectedMessageId) {
+      if (!selectedMessageId) prevSelectedMessageIdRef.current = undefined
+      return
+    }
+    if (prevSelectedMessageIdRef.current === selectedMessageId) return
+
+    const group = conversationGroupRef.current
+    if (group) {
+      try {
+        group.setLayout(DETAIL_PANE_LAYOUT)
+      } catch {
+        // Group may not be measured yet in non-layout environments.
+      }
+    }
+    prevSelectedMessageIdRef.current = selectedMessageId
+  }, [desktopDetail, selectedMessageId, conversationGroupRef])
 
   const primaryContent = (
     <div ref={primaryRef} className="conversation-primary">
@@ -166,44 +227,46 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
 
   return (
     <>
-      <ResizablePanelGroup
-        id={desktopDetail ? 'conversation-resizable-workspace' : undefined}
-        orientation="horizontal"
-        defaultLayout={desktopDetail ? DETAIL_PANE_LAYOUT : undefined}
-        className="conversation-workspace conversation-workspace-resizable"
-        data-detail-open={desktopDetail ? 'true' : undefined}
-      >
-        <ResizablePanel
-          id="conversation-primary-panel"
-          defaultSize={desktopDetail ? '66%' : '100%'}
-          minSize={desktopDetail ? '54%' : '100%'}
-          maxSize={desktopDetail ? '76%' : '100%'}
-          className="conversation-resizable-panel"
-          data-testid="conversation-primary-panel"
+      <div className="conversation-workspace-host relative h-full min-h-0">
+        <ResizablePanelGroup
+          id={desktopDetail ? 'conversation-resizable-workspace' : undefined}
+          groupRef={conversationGroupRef}
+          orientation="horizontal"
+          defaultLayout={desktopDetail ? DETAIL_PANE_LAYOUT : undefined}
+          className="conversation-workspace conversation-workspace-resizable"
+          data-detail-open={desktopDetail ? 'true' : undefined}
         >
-          {primaryContent}
-        </ResizablePanel>
-        {desktopDetail && (
-          <>
-            <ResizableHandle
-              id="conversation-detail-resize-handle"
-              className="conversation-detail-resize-handle"
-            />
-            <ResizablePanel
-              id="conversation-detail-panel"
-              defaultSize="34%"
-              minSize="24%"
-              maxSize="46%"
-              className="conversation-detail-resizable-panel"
-              data-testid="conversation-detail-panel"
-            >
-              <AgentResponseDetailPane detail={desktopDetail} onClose={handleCloseDetail} />
-            </ResizablePanel>
-          </>
-        )}
-      </ResizablePanelGroup>
+          <ResizablePanel
+            id="conversation-primary-panel"
+            defaultSize={desktopDetail ? '50%' : '100%'}
+            minSize={desktopDetail ? '15%' : '100%'}
+            maxSize={desktopDetail ? '80%' : '100%'}
+            className="conversation-resizable-panel"
+            data-testid="conversation-primary-panel"
+          >
+            {primaryContent}
+          </ResizablePanel>
+          {desktopDetail && (
+            <>
+              <ResizableHandle
+                id="conversation-detail-resize-handle"
+                className="conversation-detail-resize-handle"
+              />
+              <ResizablePanel
+                id="conversation-detail-panel"
+                defaultSize="50%"
+                minSize="20%"
+                maxSize="85%"
+                className="conversation-detail-resizable-panel"
+                data-testid="conversation-detail-panel"
+              >
+                <AgentResponseDetailPane detail={desktopDetail} onClose={handleCloseDetail} />
+              </ResizablePanel>
+            </>
+          )}
+        </ResizablePanelGroup>
+      </div>
 
-      {/* Mobile sheet — shown when a card is tapped on narrow screens */}
       {!canShowAgentDetail && (
         <Sheet open={!!detail} onOpenChange={(open) => { if (!open) handleCloseDetail() }}>
           <SheetContent

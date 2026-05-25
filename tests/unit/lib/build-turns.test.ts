@@ -1,6 +1,7 @@
 // tests/unit/lib/build-turns.test.ts
 import { describe, it, expect } from 'vitest'
-import { buildTurns, selectSummary, buildTurnsIncremental } from '@/lib/room-timeline/build-turns'
+import { buildTurns, selectSummary, buildTurnsIncremental, deriveTurnPhase } from '@/lib/room-timeline/build-turns'
+import { derivePrimaryStreamFromFinalAnswer } from '@/lib/room-timeline/derive-final-answer'
 import type { MessageEntity } from '@/stores/message-store/types'
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -371,62 +372,198 @@ describe('buildTurns – core construction', () => {
 })
 
 describe('buildTurns – V2 data model', () => {
-  // ── Ephemeral placeholder filtering ───────────────────────
+  // ── Ephemeral placeholder handling ───────────────────────
 
-  it('filters out ephemeral processing placeholder (no agentId)', () => {
-    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+  it('suppresses ephemeral placeholder when real agent shares clientRequestId', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z', clientRequestId: 'cr-1' })
     const placeholder = makeEntity({
       id: 'placeholder-1',
       messageType: 'agent',
       senderName: 'HYBRO AI',
       isEphemeral: true,
-      // no agentId
+      clientRequestId: 'cr-1',
       taskStatus: 'working' as any,
-      taskContent: 'Processing your request…',
+      taskContent: '',
       timestamp: '2026-01-01T00:00:01Z',
     })
     const realAgent = makeAgentEntity({
       id: 'a1',
       timestamp: '2026-01-01T00:00:02Z',
       agentId: 'agent-real-1',
+      clientRequestId: 'cr-1',
     })
     const turns = buildTurns(
       entitiesToMap([user, placeholder, realAgent]),
       ['u1', 'placeholder-1', 'a1'],
       [],
     )
-    // Placeholder should NOT appear in agent results
     expect(turns[0].agentResults).toHaveLength(1)
     expect(turns[0].agentResults[0].agentId).toBe('agent-real-1')
   })
 
-  it('filters out ephemeral processing placeholder WITH agentId', () => {
-    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
-    const ephemeralWithAgent = makeEntity({
-      id: 'eph-1',
+  it('suppresses Planning ephemeral when all real agents completed (DONE path)', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z', clientRequestId: 'cr-1' })
+    const placeholder = makeEntity({
+      id: 'placeholder-1',
       messageType: 'agent',
       senderName: 'HYBRO AI',
       isEphemeral: true,
-      agentId: 'supervisor_synthesis',
+      clientRequestId: 'cr-1',
       taskStatus: 'working' as any,
-      taskContent: 'Step 1 of 3 · Dispatching agents',
-      timestamp: '2026-01-01T00:00:01Z',
+      taskContent: 'Planning next action...',
+      timestamp: '2026-01-01T00:00:03Z',
     })
     const realAgent = makeAgentEntity({
       id: 'a1',
       timestamp: '2026-01-01T00:00:02Z',
       agentId: 'agent-real-1',
+      clientRequestId: 'cr-1',
       taskStatus: 'completed',
       content: 'Real response',
     })
     const turns = buildTurns(
-      entitiesToMap([user, ephemeralWithAgent, realAgent]),
-      ['u1', 'eph-1', 'a1'],
+      entitiesToMap([user, realAgent, placeholder]),
+      ['u1', 'a1', 'placeholder-1'],
       [],
     )
-    // Ephemeral entity with agentId should NOT appear in agent results
     expect(turns[0].agentResults).toHaveLength(1)
     expect(turns[0].agentResults[0].agentId).toBe('agent-real-1')
+    expect(turns[0].displayMode).toBe('single_agent')
+  })
+
+  it('suppresses Planning ephemeral without clientRequestId when agent completed', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z', clientRequestId: 'cr-1' })
+    const placeholder = makeEntity({
+      id: 'placeholder-1',
+      messageType: 'agent',
+      senderName: 'HYBRO AI',
+      isEphemeral: true,
+      taskStatus: 'working' as any,
+      taskContent: 'Planning next action...',
+      timestamp: '2026-01-01T00:00:03Z',
+    })
+    const realAgent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:02Z',
+      agentId: 'agent-real-1',
+      clientRequestId: 'cr-1',
+      taskStatus: 'completed',
+      content: 'Real response',
+    })
+    const turns = buildTurns(
+      entitiesToMap([user, realAgent, placeholder]),
+      ['u1', 'a1', 'placeholder-1'],
+      [],
+    )
+    expect(turns[0].agentResults).toHaveLength(1)
+    expect(turns[0].displayMode).toBe('single_agent')
+  })
+
+  it('suppresses all ephemerals when user message has turnTerminalStatus completed', () => {
+    const user = makeUserEntity({
+      id: 'u1',
+      timestamp: '2026-01-01T00:00:00Z',
+      clientRequestId: 'cr-1',
+      turnTerminalStatus: 'completed',
+    })
+    const placeholder = makeEntity({
+      id: 'placeholder-1',
+      messageType: 'agent',
+      senderName: 'HYBRO AI',
+      isEphemeral: true,
+      clientRequestId: 'cr-1',
+      taskStatus: 'working' as any,
+      taskContent: 'Synthesizing responses...',
+      timestamp: '2026-01-01T00:00:03Z',
+    })
+    const realAgent = makeAgentEntity({
+      id: 'a1',
+      agentId: 'agent-real-1',
+      clientRequestId: 'cr-1',
+      taskStatus: 'completed',
+      content: 'Real response',
+    })
+    const turns = buildTurns(
+      entitiesToMap([user, realAgent, placeholder]),
+      ['u1', 'a1', 'placeholder-1'],
+      [],
+    )
+    expect(turns[0].agentResults).toHaveLength(1)
+    expect(turns[0].displayMode).toBe('single_agent')
+  })
+
+  it('keeps Synthesizing ephemeral during synthesis gap', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z', clientRequestId: 'cr-1' })
+    const placeholder = makeEntity({
+      id: 'placeholder-1',
+      messageType: 'agent',
+      senderName: 'HYBRO AI',
+      isEphemeral: true,
+      clientRequestId: 'cr-1',
+      taskStatus: 'working' as any,
+      taskContent: 'Synthesizing responses...',
+      timestamp: '2026-01-01T00:00:03Z',
+    })
+    const realAgent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:02Z',
+      agentId: 'agent-a',
+      clientRequestId: 'cr-1',
+      taskStatus: 'completed',
+      content: 'Real response',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      timestamp: '2026-01-01T00:00:02Z',
+      agentId: 'agent-b',
+      clientRequestId: 'cr-1',
+      taskStatus: 'completed',
+      content: 'Real response B',
+    })
+    const turns = buildTurns(
+      entitiesToMap([user, realAgent, agentB, placeholder]),
+      ['u1', 'a1', 'a2', 'placeholder-1'],
+      [],
+    )
+    expect(turns[0].agentResults.some(r => r.isEphemeral)).toBe(true)
+    expect(turns[0].displayMode).toBe('working')
+  })
+
+  it('ephemeral synthesis agent triggers summary_with_sources while working', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z', clientRequestId: 'cr-1' })
+    const agentA = makeAgentEntity({
+      id: 'a1',
+      agentId: 'agent-a',
+      clientRequestId: 'cr-1',
+      taskStatus: 'completed',
+      content: 'Response A',
+      timestamp: '2026-01-01T00:00:01Z',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      agentId: 'agent-b',
+      clientRequestId: 'cr-1',
+      taskStatus: 'completed',
+      content: 'Response B',
+      timestamp: '2026-01-01T00:00:02Z',
+    })
+    const synthesisEphemeral = makeEntity({
+      id: 'eph-synth',
+      messageType: 'agent',
+      senderName: 'HYBRO AI',
+      isEphemeral: true,
+      agentId: 'supervisor_synthesis',
+      clientRequestId: 'cr-1',
+      taskStatus: 'working' as any,
+      taskContent: 'Synthesizing responses...',
+      timestamp: '2026-01-01T00:00:03Z',
+    })
+    const turns = buildTurns(
+      entitiesToMap([user, agentA, agentB, synthesisEphemeral]),
+      ['u1', 'a1', 'a2', 'eph-synth'],
+      [],
+    )
+    expect(turns[0].displayMode).toBe('summary_with_sources')
   })
 
   it('ephemeral entity with agentId still contributes to supervisorStage', () => {
@@ -655,6 +792,103 @@ describe('selectSummary – V2 fix', () => {
   })
 })
 
+describe('displayMode from finalAnswer', () => {
+  it('single agent turn uses single_agent', () => {
+    const user = makeUserEntity({ id: 'u1' })
+    const agent = makeAgentEntity({ id: 'a1', taskStatus: 'completed', content: 'Done' })
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    expect(turns[0].displayMode).toBe('single_agent')
+  })
+
+  it('supervisor DONE with 2+ agents uses deterministic_done final answer', () => {
+    const user = makeUserEntity({ id: 'u1', turnTerminalStatus: 'completed' })
+    const agentA = makeAgentEntity({
+      id: 'a1',
+      agentId: 'agent-a',
+      taskStatus: 'completed',
+      content: 'A response',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      agentId: 'agent-b',
+      taskStatus: 'completed',
+      content: 'B response',
+    })
+    const turns = buildTurns(entitiesToMap([user, agentA, agentB]), ['u1', 'a1', 'a2'], [])
+    expect(turns[0].summary).not.toBeNull()
+    expect(turns[0].finalAnswer.kind).toBe('deterministic_done')
+    expect(turns[0].displayMode).toBe('summary_with_sources')
+    expect(turns[0].finalAnswer.deterministicIntro).toContain('2 agents')
+  })
+
+  it('completed synthesis with 2+ sources uses summary_with_sources', () => {
+    const user = makeUserEntity({ id: 'u1' })
+    const agentA = makeAgentEntity({
+      id: 'a1',
+      agentId: 'agent-a',
+      taskStatus: 'completed',
+      content: 'A response',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      agentId: 'agent-b',
+      taskStatus: 'completed',
+      content: 'B response',
+    })
+    const synthesis = makeAgentEntity({
+      id: 'a3',
+      agentId: 'supervisor_synthesis',
+      senderName: 'HYBRO AI',
+      taskStatus: 'completed',
+      content: 'Combined synthesis answer',
+    })
+    const turns = buildTurns(
+      entitiesToMap([user, agentA, agentB, synthesis]),
+      ['u1', 'a1', 'a2', 'a3'],
+      [],
+    )
+    expect(turns[0].displayMode).toBe('summary_with_sources')
+  })
+
+  it('awaiting_input turn uses awaiting_input mode', () => {
+    const user = makeUserEntity({ id: 'u1' })
+    const agent = makeAgentEntity({
+      id: 'a1',
+      taskStatus: 'input-required' as any,
+      hitlPrompt: 'Which region?',
+      content: '',
+    })
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    expect(turns[0].displayMode).toBe('awaiting_input')
+  })
+
+  it('active turn with single working agent uses single_agent mode', () => {
+    const user = makeUserEntity({ id: 'u1' })
+    const agent = makeAgentEntity({ id: 'a1', taskStatus: 'working' as any, content: '' })
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    expect(turns[0].displayMode).toBe('single_agent')
+  })
+
+  it('empty summary agent falls back to deterministic_done', () => {
+    const user = makeUserEntity({ id: 'u1', turnTerminalStatus: 'completed' })
+    const agentA = makeAgentEntity({ id: 'a1', agentId: 'agent-a', taskStatus: 'completed', content: 'A' })
+    const agentB = makeAgentEntity({ id: 'a2', agentId: 'agent-b', taskStatus: 'completed', content: 'B' })
+    const emptySynthesis = makeAgentEntity({
+      id: 'a3',
+      agentId: 'supervisor_synthesis',
+      taskStatus: 'completed',
+      content: '   ',
+    })
+    const turns = buildTurns(
+      entitiesToMap([user, agentA, agentB, emptySynthesis]),
+      ['u1', 'a1', 'a2', 'a3'],
+      [],
+    )
+    expect(turns[0].finalAnswer.kind).toBe('deterministic_done')
+    expect(turns[0].displayMode).toBe('summary_with_sources')
+  })
+})
+
 describe('buildTurnsIncremental – identity regression', () => {
   it('summary.title change causes turn to lose referential identity', () => {
     const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
@@ -705,5 +939,226 @@ describe('buildTurnsIncremental – identity regression', () => {
     expect(nextTurns[0].agentResults[0].hitlResolved?.prompt).toBe('Corrected question?')
     // Must be a NEW object — referential identity must break
     expect(nextTurns[0]).not.toBe(prevTurns[0])
+  })
+})
+
+describe('deriveTurnPhase', () => {
+  it('returns collecting when agents are working', () => {
+    const user = makeUserEntity({ id: 'u1' })
+    const agent = makeAgentEntity({ id: 'a1', taskStatus: 'working', content: '' })
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    expect(deriveTurnPhase(turns[0])).toBe('collecting')
+  })
+
+  it('returns completed for terminal turn status', () => {
+    const user = makeUserEntity({ id: 'u1' })
+    const agent = makeAgentEntity({ id: 'a1', taskStatus: 'completed', content: 'Done' })
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    expect(deriveTurnPhase(turns[0])).toBe('completed')
+  })
+
+  it('returns synthesizing for summary agent in progress', () => {
+    const user = makeUserEntity({ id: 'u1' })
+    const agent = makeAgentEntity({ id: 'a1', agentId: 'agent-a', taskStatus: 'completed', content: 'A' })
+    const summary = makeAgentEntity({
+      id: 's1',
+      agentId: 'supervisor_synthesis',
+      taskStatus: 'working',
+      content: '',
+    })
+    const turns = buildTurns(entitiesToMap([user, agent, summary]), ['u1', 'a1', 's1'], [])
+    expect(deriveTurnPhase(turns[0])).toBe('synthesizing')
+  })
+})
+
+describe('primaryStreamMessageId', () => {
+  it('returns primaryMessageId for single working agent (direct streaming)', () => {
+    const user = makeUserEntity({ id: 'u1' })
+    const agent = makeAgentEntity({ id: 'a1', taskStatus: 'working', content: '' })
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    expect(turns[0].finalAnswer.kind).toBe('single')
+    expect(derivePrimaryStreamFromFinalAnswer(turns[0].finalAnswer)).toBe('a1')
+  })
+
+  it('prefers summary agent when synthesizing', () => {
+    const user = makeUserEntity({ id: 'u1' })
+    const agent = makeAgentEntity({ id: 'a1', agentId: 'agent-a', taskStatus: 'completed', content: 'A' })
+    const summary = makeAgentEntity({
+      id: 's1',
+      agentId: 'supervisor_synthesis',
+      taskStatus: 'working',
+      content: '',
+    })
+    const turns = buildTurns(entitiesToMap([user, agent, summary]), ['u1', 'a1', 's1'], [])
+    expect(derivePrimaryStreamFromFinalAnswer(turns[0].finalAnswer)).toBe('s1')
+  })
+
+  it('returns undefined for multi-agent collecting (shimmer-only)', () => {
+    const user = makeUserEntity({ id: 'u1' })
+    const agentA = makeAgentEntity({
+      id: 'a1',
+      agentId: 'agent-a',
+      taskStatus: 'completed',
+      content: 'First agent done',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      agentId: 'agent-b',
+      taskStatus: 'working',
+      content: '',
+    })
+    const turns = buildTurns(entitiesToMap([user, agentA, agentB]), ['u1', 'a1', 'a2'], [])
+    expect(deriveTurnPhase(turns[0])).toBe('collecting')
+    expect(derivePrimaryStreamFromFinalAnswer(turns[0].finalAnswer)).toBeUndefined()
+    expect(turns[0].primaryStreamMessageId).toBeUndefined()
+  })
+
+  it('returns undefined primary stream for deterministic_done without summary entity', () => {
+    const user = makeUserEntity({ id: 'u1', turnTerminalStatus: 'completed' })
+    const agentA = makeAgentEntity({
+      id: 'a1',
+      agentId: 'agent-a',
+      taskStatus: 'completed',
+      content: 'A response',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      agentId: 'agent-b',
+      taskStatus: 'completed',
+      content: 'B response',
+    })
+    const turns = buildTurns(entitiesToMap([user, agentA, agentB]), ['u1', 'a1', 'a2'], [])
+    expect(turns[0].finalAnswer.kind).toBe('deterministic_done')
+    expect(turns[0].displayMode).toBe('summary_with_sources')
+    expect(derivePrimaryStreamFromFinalAnswer(turns[0].finalAnswer)).toBeUndefined()
+    expect(turns[0].primaryStreamMessageId).toBeUndefined()
+  })
+
+  it('resolves supervisor DONE to deterministic_done when no synthesis gap', () => {
+    const user = makeUserEntity({ id: 'u1', turnTerminalStatus: 'completed' })
+    const agentA = makeAgentEntity({
+      id: 'a1',
+      agentId: 'agent-a',
+      taskStatus: 'completed',
+      content: 'A response',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      agentId: 'agent-b',
+      taskStatus: 'completed',
+      content: 'B response',
+    })
+    const supervisor = makeAgentEntity({
+      id: 's0',
+      agentId: 'supervisor_hitl',
+      taskStatus: 'completed',
+      content: '',
+    })
+    const turns = buildTurns(
+      entitiesToMap([user, supervisor, agentA, agentB]),
+      ['u1', 's0', 'a1', 'a2'],
+      [],
+    )
+    expect(turns[0].finalAnswer.kind).toBe('deterministic_done')
+    expect(turns[0].status).toBe('completed')
+  })
+
+  it('stays pending during synthesis gap on supervisor multi-agent turn', () => {
+    const user = makeUserEntity({ id: 'u1' })
+    const agentA = makeAgentEntity({
+      id: 'a1',
+      agentId: 'agent-a',
+      taskStatus: 'completed',
+      content: 'A response',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      agentId: 'agent-b',
+      taskStatus: 'completed',
+      content: 'B response',
+    })
+    const synthesizing = makeEntity({
+      id: 'e1',
+      messageType: 'agent',
+      senderName: 'HYBRO AI',
+      isEphemeral: true,
+      taskContent: 'Synthesizing responses...',
+      taskStatus: 'working' as any,
+    })
+    const turns = buildTurns(
+      entitiesToMap([user, agentA, agentB, synthesizing]),
+      ['u1', 'a1', 'a2', 'e1'],
+      [],
+    )
+    expect(turns[0].status).toBe('active')
+    expect(turns[0].finalAnswer.kind).toBe('pending')
+  })
+
+  it('drops synthesizing ephemeral when turnTerminalStatus is completed', () => {
+    const user = makeUserEntity({
+      id: 'u1',
+      turnTerminalStatus: 'completed',
+      clientRequestId: 'cr-1',
+    })
+    const agentA = makeAgentEntity({
+      id: 'a1',
+      agentId: 'agent-a',
+      clientRequestId: 'cr-1',
+      taskStatus: 'completed',
+      content: 'A',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      agentId: 'agent-b',
+      clientRequestId: 'cr-1',
+      taskStatus: 'completed',
+      content: 'B',
+    })
+    const synthesizing = makeEntity({
+      id: 'e1',
+      messageType: 'agent',
+      senderName: 'HYBRO AI',
+      isEphemeral: true,
+      clientRequestId: 'cr-1',
+      taskContent: 'Synthesizing responses...',
+      taskStatus: 'working' as any,
+    })
+    const turns = buildTurns(
+      entitiesToMap([user, agentA, agentB, synthesizing]),
+      ['u1', 'a1', 'a2', 'e1'],
+      [],
+    )
+    expect(turns[0].agentResults.some(r => r.isEphemeral)).toBe(false)
+    expect(turns[0].finalAnswer.kind).toBe('deterministic_done')
+  })
+
+  it('returns undefined for hitl (question in primary, not agent stream)', () => {
+    const user = makeUserEntity({ id: 'u1' })
+    const agentA = makeAgentEntity({
+      id: 'a1',
+      agentId: 'agent-a',
+      taskStatus: 'completed',
+      content: 'Done',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      agentId: 'agent-b',
+      taskStatus: 'input-required' as any,
+      hitlResolved: false,
+      hitlPrompt: 'Which region?',
+      content: '',
+    })
+    const turns = buildTurns(entitiesToMap([user, agentA, agentB]), ['u1', 'a1', 'a2'], [])
+    expect(turns[0].finalAnswer.kind).toBe('hitl')
+    expect(derivePrimaryStreamFromFinalAnswer(turns[0].finalAnswer)).toBeUndefined()
+  })
+
+  it('assembled turn includes phase and primaryStreamMessageId', () => {
+    const user = makeUserEntity({ id: 'u1' })
+    const agent = makeAgentEntity({ id: 'a1', taskStatus: 'completed', content: 'Done' })
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    expect(turns[0].phase).toBe('completed')
+    expect(turns[0].primaryStreamMessageId).toBe('a1')
+    expect(turns[0].primaryMessageId).toBe('a1')
   })
 })

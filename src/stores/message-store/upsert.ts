@@ -127,6 +127,7 @@ function mergeIncoming(
       artifacts: incoming.artifacts,
       attachments: incoming.attachments,
       turnTerminalStatus: incoming.turnTerminalStatus,
+      summaryOrigin: incoming.summaryOrigin,
     }
   }
 
@@ -167,6 +168,7 @@ function mergeIncoming(
     artifacts: incoming.artifacts !== undefined ? incoming.artifacts : existing.artifacts,
     attachments: incoming.attachments !== undefined ? incoming.attachments : existing.attachments,
     turnTerminalStatus: incoming.turnTerminalStatus !== undefined ? incoming.turnTerminalStatus : existing.turnTerminalStatus,
+    summaryOrigin: incoming.summaryOrigin !== undefined ? incoming.summaryOrigin : existing.summaryOrigin,
   }
 }
 
@@ -241,7 +243,8 @@ export function isNoOpUpdate(
     existing.isEphemeral       === (incoming.isEphemeral ?? existing.isEphemeral) &&
     artifactsEqual(existing.artifacts, coalesce(incoming.artifacts, existing.artifacts)) &&
     existing.attachments       === coalesce(incoming.attachments, existing.attachments) &&
-    existing.turnTerminalStatus === coalesce(incoming.turnTerminalStatus, existing.turnTerminalStatus)
+    existing.turnTerminalStatus === coalesce(incoming.turnTerminalStatus, existing.turnTerminalStatus) &&
+    existing.summaryOrigin === coalesce(incoming.summaryOrigin, existing.summaryOrigin)
   )
 }
 

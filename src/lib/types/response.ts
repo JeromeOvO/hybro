@@ -347,6 +347,7 @@ export interface RoomMessage {
   task_updated_at?: string | null;
   // Task description being processed (only set for agent messages with tasks)
   task_content?: string | null;
+  extend_info?: unknown;
 }
 export interface RoomCenterRoomSettingResponse {
   room_id?: string | null;

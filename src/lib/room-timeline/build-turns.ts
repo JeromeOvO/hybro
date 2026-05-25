@@ -4,6 +4,8 @@ import type { MessageEntity } from '@/stores/message-store/types'
 import type {
   TurnViewModel,
   TurnStatus,
+  TurnDisplayMode,
+  TurnPhase,
   AgentResultViewModel,
   TurnSummaryViewModel,
   TimelineEventViewModel,
@@ -12,6 +14,11 @@ import type {
 import { isTerminalState, isFailureState, isInteractiveState } from '@/lib/types/sse'
 import type { TaskState } from '@/lib/types/sse'
 import { isSystemAgent, isSupervisorSystemAgent, isSummarySystemAgent } from '@/lib/system-agents'
+import {
+  deriveDisplayModeFromFinalAnswer,
+  deriveFinalAnswer,
+  derivePrimaryStreamFromFinalAnswer,
+} from './derive-final-answer'
 
 // ── Constants ──────────────────────────────────────────────────
 
@@ -132,7 +139,7 @@ export function buildTurns(
 
 function routeAgentToTurn(
   agent: MessageEntity,
-  scaffolds: Array<{ userMessageId: string | null }>,
+  scaffolds: Array<{ userMessageId: string | null; userEntity?: MessageEntity | null }>,
   userMessageIndexById: Map<string, number>,
   currentTurnIndex: number,
   entities: Record<string, MessageEntity>,
@@ -151,7 +158,15 @@ function routeAgentToTurn(
     }
   }
 
-  // Priority 2: current turn by ordering position
+  // Priority 2: clientRequestId correlation (defensive hardening)
+  if (agent.clientRequestId) {
+    for (let i = 0; i < scaffolds.length; i++) {
+      const userEntity = scaffolds[i].userEntity ?? (scaffolds[i].userMessageId ? entities[scaffolds[i].userMessageId!] : null)
+      if (userEntity?.clientRequestId === agent.clientRequestId) return i
+    }
+  }
+
+  // Priority 3: current turn by ordering position
   if (currentTurnIndex >= 0) return currentTurnIndex
 
   // No user turn yet — will go to system turn
@@ -181,9 +196,13 @@ function assembleTurn(
   // Deduplicate: when both task_update and agent_response SSE events create
   // separate entities for the same agentId, keep the one with the most content
   // (or terminal status). This avoids rendering the same agent response twice.
-  const agentResults = deduplicateAgentResults(rawAgentResults)
+  const dedupedResults = deduplicateAgentResults(rawAgentResults)
+  const agentResults = suppressEphemeralResults(dedupedResults, entities, scaffold.userEntity)
 
-  const status = deriveTurnStatus(agentResults)
+  const status = deriveTurnStatus(agentResults, {
+    isSupervisorTurn: agentResults.some(r => isSupervisorSystemAgent(r.agentId)),
+    turnTerminalStatus: scaffold.userEntity?.turnTerminalStatus,
+  })
   const summary = selectSummary(agentResults)
   const activeAgentIds = agentResults
     .filter((r) => r.status !== 'completed' && r.status !== 'failed')
@@ -209,7 +228,7 @@ function assembleTurn(
     }
   }
 
-  return {
+  const turn: TurnViewModel = {
     id: turnId,
     roomId: scaffold.userEntity?.roomId ?? '',
     userMessageId: scaffold.userMessageId,
@@ -223,7 +242,18 @@ function assembleTurn(
     activeAgentIds,
     isSupervisorTurn,
     supervisorStage,
+    turnTerminalStatus: scaffold.userEntity?.turnTerminalStatus,
+    displayMode: 'single_agent', // placeholder, set below
+    finalAnswer: { kind: 'pending', label: 'Working' }, // placeholder
   }
+
+  turn.finalAnswer = deriveFinalAnswer(turn, scaffold.agentMessageIds)
+  turn.displayMode = deriveDisplayModeFromFinalAnswer(turn, turn.finalAnswer)
+  turn.phase = deriveTurnPhase(turn)
+  turn.primaryStreamMessageId = derivePrimaryStreamFromFinalAnswer(turn.finalAnswer)
+  turn.primaryMessageId = turn.primaryStreamMessageId
+
+  return turn
 }
 
 // ── Agent result construction ──────────────────────────────────
@@ -234,10 +264,20 @@ function buildAgentResult(
 ): AgentResultViewModel | null {
   if (!entity) return null
 
-  // Skip ALL ephemeral processing placeholders. V2 per-agent placeholders
-  // (pendingAgents prop) replace their visual function. Supervisor stage data
-  // is extracted separately in assembleTurn() from raw entities, not agentResults.
-  if (entity.isEphemeral) return null
+  if (entity.isEphemeral) {
+    return {
+      agentId: entity.agentId ?? entity.id,
+      agentName: entity.senderName,
+      agentSource: entity.agentSource,
+      messageId: entity.id,
+      status: 'working',
+      content: '',
+      artifacts: [],
+      isSummaryAgent: isSummarySystemAgent(entity.agentId),
+      taskStatusMessage: entity.taskContent,
+      isEphemeral: true,
+    }
+  }
 
   // Status derivation (spec §5.4)
   let status: AgentResultViewModel['status'] = 'completed'
@@ -297,6 +337,7 @@ function buildAgentResult(
     taskStatusMessage: entity.taskStatusMessage,
     hitlHistory: hitlHistory.length > 0 ? hitlHistory : undefined,
     isSummaryAgent: isSummarySystemAgent(entity.agentId),
+    summaryOrigin: entity.summaryOrigin,
     hitlResolved,
     hitlPending,
     eventCount,
@@ -395,20 +436,145 @@ function deduplicateAgentResults(results: AgentResultViewModel[]): AgentResultVi
   return output
 }
 
+// ── Ephemeral suppression ────────────────────────────────────
+
+/** Ephemeral placeholder that bridges the gap before synthesis streaming starts. */
+function isSynthesisGapEphemeral(result: AgentResultViewModel): boolean {
+  if (result.isSummaryAgent && result.status === 'working') return true
+  const stage = result.taskStatusMessage?.trim().toLowerCase() ?? ''
+  return stage.includes('synthesiz')
+}
+
+function allRealAgentsTerminal(results: readonly AgentResultViewModel[]): boolean {
+  const real = results.filter(r => !r.isEphemeral && !r.isSummaryAgent)
+  if (real.length === 0) return false
+  return real.every(r => r.status === 'completed' || r.status === 'failed')
+}
+
+/**
+ * Suppress ephemeral placeholder results when real agents exist, unless the
+ * placeholder bridges an active synthesis gap (summary agent working or
+ * "Synthesizing..." stage text).
+ */
+function suppressEphemeralResults(
+  results: AgentResultViewModel[],
+  entities: Record<string, MessageEntity>,
+  userEntity: MessageEntity | null,
+): AgentResultViewModel[] {
+  const terminalTurn = userEntity?.turnTerminalStatus
+  if (terminalTurn === 'completed' || terminalTurn === 'failed' || terminalTurn === 'canceled') {
+    return results.filter(r => !r.isEphemeral)
+  }
+
+  const clientReqIdsWithRealAgent = new Set<string>()
+  const clientReqIdsWithWorkingAgent = new Set<string>()
+
+  for (const r of results) {
+    if (r.isEphemeral) continue
+    const entity = entities[r.messageId]
+    if (!entity?.clientRequestId) continue
+    clientReqIdsWithRealAgent.add(entity.clientRequestId)
+    if (r.status === 'working') {
+      clientReqIdsWithWorkingAgent.add(entity.clientRequestId)
+    }
+  }
+
+  const hasAnyRealAgent = results.some(r => !r.isEphemeral)
+  const allRealTerminal = allRealAgentsTerminal(results)
+
+  return results.filter((r) => {
+    if (!r.isEphemeral) return true
+
+    // DONE path: all agents finished, no synthesis in progress — drop Planning ephemerals.
+    if (allRealTerminal && !isSynthesisGapEphemeral(r)) return false
+
+    const entity = entities[r.messageId]
+    const crId = entity?.clientRequestId
+
+    if (!crId) {
+      if (hasAnyRealAgent && !isSynthesisGapEphemeral(r)) return false
+      return true
+    }
+
+    const hasRealAgent = clientReqIdsWithRealAgent.has(crId)
+    const hasWorkingAgent = clientReqIdsWithWorkingAgent.has(crId)
+
+    if (hasRealAgent && isSynthesisGapEphemeral(r) && !hasWorkingAgent) return true
+    if (hasRealAgent) return false
+    return true
+  })
+}
+
+// ── Turn phase derivation ──────────────────────────────────────
+
+export function deriveTurnPhase(turn: TurnViewModel): TurnPhase {
+  if (turn.status === 'completed' || turn.status === 'failed' || turn.status === 'partial') {
+    return 'completed'
+  }
+
+  const summaryResult = turn.agentResults.find(r => r.isSummaryAgent)
+  const real = turn.agentResults.filter(r => !r.isSummaryAgent && !r.isEphemeral)
+  const inSynthesisGap =
+    turn.status === 'active'
+    && real.length > 0
+    && real.every(r => r.status === 'completed' || r.status === 'failed')
+    && !summaryResult
+    && turn.agentResults.some(r => r.isEphemeral && isSynthesisGapEphemeral(r))
+
+  if (summaryResult?.status === 'working' || inSynthesisGap) return 'synthesizing'
+  if (real.some(r => r.status === 'working')) return 'collecting'
+  if (turn.status === 'awaiting_input' || turn.finalAnswer.kind === 'hitl') return 'collecting'
+  return 'answering'
+}
+
 // ── Turn status derivation ─────────────────────────────────────
 
-function deriveTurnStatus(agentResults: AgentResultViewModel[]): TurnStatus {
-  if (agentResults.length === 0) return 'active'
+function deriveTurnStatus(
+  agentResults: AgentResultViewModel[],
+  opts: {
+    isSupervisorTurn: boolean
+    turnTerminalStatus?: TurnViewModel['turnTerminalStatus']
+  },
+): TurnStatus {
+  const substantive = agentResults.filter(r => !r.isEphemeral)
+  if (substantive.length === 0) {
+    if (agentResults.length === 0) return 'active'
+    return agentResults.some(r => r.status === 'working') ? 'active' : 'completed'
+  }
 
-  const hasWorking = agentResults.some((r) => r.status === 'working')
-  const hasAwaitingInput = agentResults.some((r) => r.status === 'awaiting_input')
-  const hasFailed = agentResults.some((r) => r.status === 'failed')
-  const hasCompleted = agentResults.some((r) => r.status === 'completed')
-  const allFailed = agentResults.every((r) => r.status === 'failed')
-  const allCompleted = agentResults.every((r) => r.status === 'completed')
+  const real = substantive.filter(r => !r.isSummaryAgent)
+  const hasWorking = substantive.some((r) => r.status === 'working')
+  const hasAwaitingInput = substantive.some((r) => r.status === 'awaiting_input')
+  const hasFailed = substantive.some((r) => r.status === 'failed')
+  const hasCompleted = substantive.some((r) => r.status === 'completed')
+  const allFailed = substantive.every((r) => r.status === 'failed')
+  const allCompleted = substantive.every((r) => r.status === 'completed')
+
+  const summaryAgent = substantive.find(r => r.isSummaryAgent)
+  const hasSummaryContent =
+    summaryAgent?.status === 'working'
+    || (summaryAgent?.content.trim().length ?? 0) > 0
+
+  const inSynthesisGap =
+    allRealAgentsTerminal(agentResults)
+    && agentResults.some(r => r.isEphemeral && isSynthesisGapEphemeral(r))
+    && !substantive.some(r => r.isSummaryAgent && r.status === 'working')
+
+  const synthesisGapActive =
+    agentResults.some(r => r.isEphemeral && isSynthesisGapEphemeral(r))
+    || (summaryAgent?.status === 'working' && (summaryAgent.content.trim().length ?? 0) === 0)
+
+  const awaitingSynthesisGap =
+    real.length >= 2
+    && allRealAgentsTerminal(agentResults)
+    && !hasSummaryContent
+    && synthesisGapActive
+    && opts.turnTerminalStatus !== 'completed'
+    && opts.turnTerminalStatus !== 'failed'
 
   if (hasWorking) return 'active'
   if (hasAwaitingInput) return 'awaiting_input'
+  if (inSynthesisGap || awaitingSynthesisGap) return 'active'
   if (allFailed) return 'failed'
   if (allCompleted) return 'completed'
   if (hasCompleted && hasFailed) return 'partial'
@@ -600,6 +766,14 @@ export function buildTurnsIncremental(
 function turnsAreEqual(a: TurnViewModel, b: TurnViewModel): boolean {
   if (a.id !== b.id) return false
   if (a.status !== b.status) return false
+  if (a.displayMode !== b.displayMode) return false
+  if (a.phase !== b.phase) return false
+  if (a.primaryStreamMessageId !== b.primaryStreamMessageId) return false
+  if (a.turnTerminalStatus !== b.turnTerminalStatus) return false
+  if (a.finalAnswer.kind !== b.finalAnswer.kind) return false
+  if (a.finalAnswer.primaryMessageId !== b.finalAnswer.primaryMessageId) return false
+  if (a.finalAnswer.deterministicIntro !== b.finalAnswer.deterministicIntro) return false
+  if ((a.finalAnswer.sections?.length ?? 0) !== (b.finalAnswer.sections?.length ?? 0)) return false
   if (a.agentResults.length !== b.agentResults.length) return false
   if (a.userContent !== b.userContent) return false
 
@@ -626,6 +800,7 @@ function turnsAreEqual(a: TurnViewModel, b: TurnViewModel): boolean {
     if (a.agentResults[i].hitlPending?.prompt !== b.agentResults[i].hitlPending?.prompt) return false
     if (a.agentResults[i].eventCount !== b.agentResults[i].eventCount) return false
     if (a.agentResults[i].durationMs !== b.agentResults[i].durationMs) return false
+    if (a.agentResults[i].isEphemeral !== b.agentResults[i].isEphemeral) return false
   }
 
   // Check events count changed

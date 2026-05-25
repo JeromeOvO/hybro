@@ -32,7 +32,10 @@ function EmptyResponse({ detail }: { detail: AgentResponseDetail }) {
   )
 }
 
-function AgentResponseDetailHeader({ detail, onClose }: AgentResponseDetailPaneProps) {
+function AgentResponseDetailHeader({
+  detail,
+  onClose,
+}: AgentResponseDetailPaneProps) {
   const catalogAgent = useAgentFromCatalog(detail.agentId)
   const iconUrl = catalogAgent?.agent_card?.iconUrl || undefined
   const isHubOnline = catalogAgent?.is_hub_online
@@ -124,9 +127,7 @@ function AgentResponseDetailHeader({ detail, onClose }: AgentResponseDetailPaneP
               )}
               style={{ transitionDuration: 'var(--conversation-chevron-duration)' }}
             />
-            <div
-              className="conversation-detail-agent-task-collapsible"
-            >
+            <div className="conversation-detail-agent-task-collapsible">
               <span className={cn(
                 "conversation-detail-agent-task-text",
                 !taskExpanded && "conversation-detail-agent-task-text-collapsed",

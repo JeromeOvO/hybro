@@ -5,6 +5,7 @@ import type { TaskState } from '@/lib/types/sse'
 import { isTerminalState } from '@/lib/types/sse'
 import type { AttachmentData } from '@/lib/types/attachments'
 import { normalizeTimestampOrNow } from '@/lib/time'
+import { parseSummaryOrigin } from '@/lib/room-timeline/derive-final-answer'
 import type { ArtifactData, ArtifactPart, IncomingMessage } from './types'
 
 /**
@@ -199,6 +200,9 @@ export async function convertApiMessageToIncoming(
   }
 
   // ── Build IncomingMessage ────────────────────────────────────
+  const extendInfo = apiMessage.extend_info as Record<string, unknown> | null | undefined
+  const summaryOrigin = parseSummaryOrigin(extendInfo?.summary_origin)
+
   return {
     id: apiMessage.message_id,
     clientRequestId: apiMessage.client_request_id ?? undefined,
@@ -239,5 +243,6 @@ export async function convertApiMessageToIncoming(
     hitlGroupIndex,
     attachments,
     artifacts,
+    summaryOrigin,
   }
 }

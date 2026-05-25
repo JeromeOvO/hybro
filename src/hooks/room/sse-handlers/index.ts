@@ -279,6 +279,16 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             lifecycle.startProcessing(lifecycle.getMessageId() ?? sseMessage.data.message_id ?? undefined)
             const stageDetails = sseMessage.data.details as string | undefined
 
+            const userMsgId = lifecycle.getMessageId() ?? (sseMessage.data.message_id as string | undefined)
+            const userEntity = userMsgId ? store.entities[userMsgId] : undefined
+            if (userEntity?.turnTerminalStatus) {
+              console.log('[SSE PROCESSING] skipping placeholder — turn already terminal', {
+                turnTerminalStatus: userEntity.turnTerminalStatus,
+                userMsgId,
+              })
+              break
+            }
+
             // When details are present (supervisor stage updates), always
             // re-show the placeholder — even after task_submitted dismissed
             // it — so the user sees "Planning next action...", etc.
@@ -292,9 +302,11 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
 
             if (stageDetails || !lifecycle.isPlaceholderDismissed()) {
               const defaultText = 'Processing your request\u2026'
-              console.log('[SSE PROCESSING] upserting placeholder', { stageDetails, placeholderId: lifecycle.placeholderId(roomId), roomId, isDismissed: lifecycle.isPlaceholderDismissed() })
+              const placeholderId = lifecycle.placeholderId(roomId)
+              const existingPlaceholder = store.entities[placeholderId]
+              console.log('[SSE PROCESSING] upserting placeholder', { stageDetails, placeholderId, roomId, isDismissed: lifecycle.isPlaceholderDismissed() })
               store.upsertMessage({
-                id: lifecycle.placeholderId(roomId),
+                id: placeholderId,
                 roomId,
                 messageType: 'agent',
                 content: '',
@@ -303,6 +315,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
                 taskContent: stageDetails || defaultText,
                 timestamp: new Date().toISOString(),
                 isEphemeral: true,
+                clientRequestId: correlation.clientReqId ?? existingPlaceholder?.clientRequestId,
               }, 'optimistic')
             }
           } else if (isProcessingDone(status as ProcessingStatus) || status === PROCESSING_STATUS.RATE_LIMITED) {

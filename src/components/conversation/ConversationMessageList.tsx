@@ -3,12 +3,11 @@
 import { useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react'
 import { useMessageStore } from '@/stores/message-store'
 import { useInitialHydrationSeq, useLocalSendSeq, useRoomUiStore } from '@/stores/room-ui-store'
-import { useConversationTurnViews } from '@/hooks/useConversationTurnViews'
-import { ConversationTurn } from './ConversationTurn'
+import { useTurnViewModels } from '@/hooks/useTurnViewModels'
+import { usePrimaryStreamScroll } from '@/hooks/usePrimaryStreamScroll'
+import { TurnRenderer } from './TurnRenderer'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { resolveScrollStateAfterEvent } from './scroll-state'
-import type { ConversationTurnView } from '@/lib/selectors/conversation-types'
-
 interface ConversationMessageListProps {
   roomId: string
   selectedAgentMessageId?: string
@@ -30,7 +29,7 @@ function isAtBottom(m: ScrollMetrics): boolean {
 }
 
 export function ConversationMessageList({ roomId, selectedAgentMessageId, enableAgentDetail = true }: ConversationMessageListProps) {
-  const turns = useConversationTurnViews(roomId)
+  const turns = useTurnViewModels(roomId)
   const scrollRef = useRef<HTMLDivElement>(null)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
   const [hasNewContent, setHasNewContent] = useState(false)
@@ -45,6 +44,18 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
   const userPausedRef = useRef(false)
   const programmaticScrollRef = useRef(false)
   const prevMetricsRef = useRef<ScrollMetrics | null>(null)
+  const primarySurfaceRef = useRef<HTMLDivElement>(null)
+
+  const lastTurn = turns[turns.length - 1]
+  const primaryStreamMessageId = lastTurn?.primaryStreamMessageId
+
+  usePrimaryStreamScroll({
+    scrollRef,
+    primarySurfaceRef,
+    primaryStreamMessageId,
+    userPausedRef,
+    programmaticScrollRef,
+  })
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const el = scrollRef.current
@@ -146,14 +157,6 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
     useRoomUiStore.getState().openAgentDetail(roomId, messageId)
   }, [roomId])
 
-  const hasMultipleAgents = (turn: ConversationTurnView) => {
-    const agentIds = new Set<string>()
-    for (const b of turn.blocks) {
-      if (b.type === 'agent_card') agentIds.add(b.agentId)
-    }
-    return agentIds.size > 1
-  }
-
   return (
     <div className="relative h-full bg-background">
       <div className="conversation-top-cover" />
@@ -168,13 +171,14 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
             data-hydrated={hydratedFromDb || undefined}
             style={{ paddingTop: 'var(--conversation-sticky-top)', paddingBottom: 'calc(var(--conversation-dock-height, 120px) + 24px)' }}
           >
-            {turns.map(turn => (
-              <ConversationTurn
-                key={turn.turnId}
+            {turns.map((turn, index) => (
+              <TurnRenderer
+                key={turn.id}
                 turn={turn}
-                multiAgentTurn={hasMultipleAgents(turn)}
                 selectedAgentMessageId={selectedAgentMessageId}
-                onOpenAgentDetail={handleOpenAgentDetail}
+                onOpenAgentDetail={enableAgentDetail ? handleOpenAgentDetail : undefined}
+                primarySurfaceRef={index === turns.length - 1 ? primarySurfaceRef : undefined}
+                isLastTurn={index === turns.length - 1}
               />
             ))}
           </div>
