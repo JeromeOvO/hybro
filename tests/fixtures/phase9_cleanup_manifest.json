@@ -3,7 +3,7 @@
     {
       "blocked_by": "legacy_workflow_decommission",
       "deletion_blockers": [
-        "29 test files still exercise legacy module compatibility paths.",
+        "30 test files still exercise legacy module compatibility paths.",
         "2 runtime files still bind or import legacy module compatibility paths.",
         "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
       ],
@@ -95,6 +95,7 @@
         "tests/test_api_webhooks.py",
         "tests/test_call_counters.py",
         "tests/test_debate_dispatcher.py",
+        "tests/test_deterministic_digest.py",
         "tests/test_direct_transport.py",
         "tests/test_dispatch_middleware.py",
         "tests/test_distributed_room_lock.py",
@@ -119,7 +120,7 @@
         "tests/test_unified_summary.py"
       ],
       "test_blockers": [
-        "29 test files under tests/ still import modules.* compatibility paths."
+        "30 test files under tests/ still import modules.* compatibility paths."
       ],
       "required_before_remove": [
         "Migrate remaining tests to Agent, Room, Execution, Delivery, HubRuntimeBridge, or Platform public APIs.",
