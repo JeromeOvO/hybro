@@ -1581,7 +1581,7 @@ class RoomMessageCenter:
                 lifecycle_message_id=user_message_id,
             )
             self.sse_manager.clear_cancellation(user_message_id)
-            return True
+            return RunStatus.CANCELED
 
         # 7. Resume the supervisor loop
         try:
