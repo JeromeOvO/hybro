@@ -189,51 +189,6 @@ export async function updateRoomExtendInfo(
   )
 }
 
-// Create and parse user message
-export async function createAndParseUserMessage(
-  room_id: string,
-  user_input: string,
-  getToken?: () => Promise<string | null>,
-  user_id?: string,
-  user_name?: string,
-  clientRequestId?: string,
-): Promise<RoomCenterUserMessageResponse> {
-  const resolvedClientRequestId = clientRequestId ?? crypto.randomUUID()
-  const requestData: RoomCenterUserMessageRequest = {
-    room_id,
-    user_id: user_id || "",
-    user_name: user_name || "",
-    user_input,
-    client_request_id: resolvedClientRequestId,
-    message: {
-      room_id,
-      message_id: "",
-      message_type: "user",
-      related_message_id: null,
-      message_content: {
-        message_text: user_input
-      },
-      user_id: user_id || "",
-      extend_info: null
-    }
-  }
-
-  console.log('🚀 Sending createAndParseUserMessage request:', JSON.stringify(requestData, null, 2))
-
-  try {
-    const result = await apiPost<RoomCenterUserMessageResponse>(
-      `${API_BASE_URL}/createAndParseUserMessage`,
-      requestData,
-      getToken
-    )
-    console.log('✅ API Response:', result)
-    return result
-  } catch (error) {
-    console.error('❌ API Error:', error)
-    throw error
-  }
-}
-
 // Query room messages
 export async function inquiryRoomMessagesByRoomId(
   room_id: string,

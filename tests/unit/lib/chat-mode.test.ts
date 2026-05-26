@@ -4,8 +4,6 @@ import {
   DEFAULT_CHAT_MODE,
   chatModeToFlags,
   flagsToChatMode,
-  chatModeToSupervisor,
-  supervisorToChatMode,
 } from '@/lib/types/chat-mode'
 
 describe('chat-mode helpers', () => {
@@ -56,22 +54,5 @@ describe('chat-mode helpers', () => {
 
   it('DEFAULT_CHAT_MODE is ultimate', () => {
     expect(DEFAULT_CHAT_MODE).toBe(CHAT_MODE.ULTIMATE)
-  })
-
-  describe('deprecated helpers', () => {
-    it('chatModeToSupervisor returns true for ultimate and ultimate_debate', () => {
-      expect(chatModeToSupervisor('ultimate')).toBe(true)
-      expect(chatModeToSupervisor('ultimate_debate')).toBe(true)
-    })
-
-    it('chatModeToSupervisor returns false for fast and fast_debate', () => {
-      expect(chatModeToSupervisor('fast')).toBe(false)
-      expect(chatModeToSupervisor('fast_debate')).toBe(false)
-    })
-
-    it('supervisorToChatMode maps booleans (ignores debate)', () => {
-      expect(supervisorToChatMode(true)).toBe('ultimate')
-      expect(supervisorToChatMode(false)).toBe('fast')
-    })
   })
 })
