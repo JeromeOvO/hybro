@@ -369,6 +369,53 @@ class RoomSupervisorService:
                 reasoning=f"Supervisor failed ({e}), stopping with current results",
             )
 
+    def _synthesis_v2_prompts(
+        self,
+        trajectory: SupervisorTrajectory,
+        synthesis_instruction: str,
+    ) -> tuple[str, str]:
+        trajectory_summary = self._format_trajectory(trajectory)
+        system_prompt = SUPERVISOR_V2_SYNTHESIS_SYSTEM_PROMPT.format(
+            trajectory_summary=trajectory_summary,
+            synthesis_instruction=synthesis_instruction
+            or "Combine the agent responses into a unified, coherent answer.",
+        )
+        user_prompt = (
+            "Synthesize the agent results into a unified response for the user."
+        )
+        return system_prompt, user_prompt
+
+    async def synthesize_v2_stream(
+        self,
+        trajectory: SupervisorTrajectory,
+        synthesis_instruction: str,
+    ):
+        """Stream synthesis tokens from the supervisor LLM (V2 adaptive loop)."""
+        system_prompt, user_prompt = self._synthesis_v2_prompts(
+            trajectory, synthesis_instruction
+        )
+        try:
+            stream = self._supervisor_llm_text_stream(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+            total = 0
+            async for token in stream:
+                total += len(token)
+                yield token
+            logger.info(
+                "Supervisor V2 synthesis stream completed",
+                extra={
+                    "trajectory_id": trajectory.trajectory_id,
+                    "synthesis_length": total,
+                },
+            )
+        except Exception as e:
+            logger.error("Supervisor V2 synthesis stream failed: %s", e)
+            fallback = self._fallback_v2_synthesis(trajectory)
+            if fallback:
+                yield fallback
+
     async def synthesize_v2(
         self,
         trajectory: SupervisorTrajectory,
@@ -379,32 +426,10 @@ class RoomSupervisorService:
         Called when ``decide_next`` returns SYNTHESIZE, or when the step
         budget is exhausted and results need combining.
         """
-        trajectory_summary = self._format_trajectory(trajectory)
-        system_prompt = SUPERVISOR_V2_SYNTHESIS_SYSTEM_PROMPT.format(
-            trajectory_summary=trajectory_summary,
-            synthesis_instruction=synthesis_instruction
-            or "Combine the agent responses into a unified, coherent answer.",
-        )
-        user_prompt = (
-            "Synthesize the agent results into a unified response for the user."
-        )
-
-        try:
-            response = await self._call_supervisor_llm_text(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-            )
-            logger.info(
-                "Supervisor V2 synthesis completed",
-                extra={
-                    "trajectory_id": trajectory.trajectory_id,
-                    "synthesis_length": len(response),
-                },
-            )
-            return response
-        except Exception as e:
-            logger.error("Supervisor V2 synthesis failed: %s", e)
-            return self._fallback_v2_synthesis(trajectory)
+        parts: list[str] = []
+        async for token in self.synthesize_v2_stream(trajectory, synthesis_instruction):
+            parts.append(token)
+        return "".join(parts)
 
     # -------------------------------------------------------------------------
     # V2 helpers
@@ -814,19 +839,32 @@ class RoomSupervisorService:
         Routes to either Bedrock (Claude Opus 4.6) or OpenAI (gpt-4o-mini)
         based on the USE_BEDROCK_SUPERVISOR feature flag.
         """
+        parts: list[str] = []
+        async for token in self._supervisor_llm_text_stream(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        ):
+            parts.append(token)
+        return "".join(parts)
+
+    def _supervisor_llm_text_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+    ):
+        """Return async iterator of Supervisor LLM text (Bedrock or OpenAI)."""
         from config.settings import settings
 
         if settings.use_bedrock_supervisor:
-            return await self._bedrock_service.call_claude_text(
+            return self._bedrock_service.call_claude_text_stream(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 model=settings.bedrock_supervisor_model,
             )
-        else:
-            return await self._openai_service.call_supervisor_llm_text(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-            )
+        return self._openai_service.call_supervisor_llm_text_stream(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
 
 
 # Singleton instance

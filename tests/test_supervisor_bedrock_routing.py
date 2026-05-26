@@ -5,9 +5,18 @@ LLM calls to either Bedrock (Claude Opus 4.6) or OpenAI (gpt-4o-mini).
 """
 
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from services.room_supervisor_service import RoomSupervisorService
+
+
+def _text_stream_mock(text: str):
+    """Build an async text stream factory for synthesis routing tests."""
+
+    async def _stream(system_prompt: str, user_prompt: str, model: str | None = None):
+        yield text
+
+    return MagicMock(side_effect=_stream)
 
 
 # ---------------------------------------------------------------------------
@@ -19,7 +28,7 @@ def mock_openai():
     """Mock OpenAIService."""
     svc = AsyncMock()
     svc.call_supervisor_llm_json = AsyncMock(return_value={"action": "done", "reasoning": "OpenAI response"})
-    svc.call_supervisor_llm_text = AsyncMock(return_value="OpenAI synthesis text")
+    svc.call_supervisor_llm_text_stream = _text_stream_mock("OpenAI synthesis text")
     return svc
 
 
@@ -28,7 +37,7 @@ def mock_bedrock():
     """Mock BedrockService."""
     svc = AsyncMock()
     svc.call_claude_json = AsyncMock(return_value={"action": "done", "reasoning": "Bedrock response"})
-    svc.call_claude_text = AsyncMock(return_value="Bedrock synthesis text")
+    svc.call_claude_text_stream = _text_stream_mock("Bedrock synthesis text")
     return svc
 
 
@@ -123,14 +132,14 @@ class TestSupervisorLLMTextRouting:
                 user_prompt="Agent A: ..., Agent B: ...",
             )
 
-            # Verify OpenAI was called
-            mock_openai.call_supervisor_llm_text.assert_awaited_once_with(
+            # Verify OpenAI stream was called
+            mock_openai.call_supervisor_llm_text_stream.assert_called_once_with(
                 system_prompt="Synthesize results",
                 user_prompt="Agent A: ..., Agent B: ...",
             )
 
             # Verify Bedrock was NOT called
-            mock_bedrock.call_claude_text.assert_not_awaited()
+            mock_bedrock.call_claude_text_stream.assert_not_called()
 
             # Verify response came from OpenAI
             assert result == "OpenAI synthesis text"
@@ -147,15 +156,15 @@ class TestSupervisorLLMTextRouting:
                 user_prompt="Agent A: ..., Agent B: ...",
             )
 
-            # Verify Bedrock was called
-            mock_bedrock.call_claude_text.assert_awaited_once_with(
+            # Verify Bedrock stream was called
+            mock_bedrock.call_claude_text_stream.assert_called_once_with(
                 system_prompt="Synthesize results",
                 user_prompt="Agent A: ..., Agent B: ...",
                 model="anthropic.claude-opus-4-6-20250514-v1:0",
             )
 
             # Verify OpenAI was NOT called
-            mock_openai.call_supervisor_llm_text.assert_not_awaited()
+            mock_openai.call_supervisor_llm_text_stream.assert_not_called()
 
             # Verify response came from Bedrock
             assert result == "Bedrock synthesis text"
@@ -195,11 +204,11 @@ class TestRoutingConsistency:
 
             # Verify all calls went to Bedrock
             assert mock_bedrock.call_claude_json.await_count == 2
-            assert mock_bedrock.call_claude_text.await_count == 1
+            assert mock_bedrock.call_claude_text_stream.call_count == 1
 
             # Verify no calls went to OpenAI
             mock_openai.call_supervisor_llm_json.assert_not_awaited()
-            mock_openai.call_supervisor_llm_text.assert_not_awaited()
+            mock_openai.call_supervisor_llm_text_stream.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_flag_change_switches_backend(self, supervisor_svc, mock_openai, mock_bedrock):
