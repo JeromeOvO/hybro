@@ -88,7 +88,26 @@ export function handleProcessingStatus(
     return
   }
 
-  const terminalUserMsgId = lifecycle.getMessageId() ?? (sseMessage.data.message_id as string | undefined)
+  // Guard: per-agent processing_status=COMPLETED (emitted by task_notification_service
+  // for each individual agent task) must not terminate the overall turn lifecycle.
+  // The authoritative turn-level terminal signal from the supervisor always carries
+  // message_id === lifecycle.getMessageId() (the user/trigger message).
+  const lifecycleMessageId = lifecycle.getMessageId()
+  const sseMessageId = sseMessage.data.message_id as string | undefined
+  const isPerAgentTerminal =
+    lifecycleMessageId
+    && sseMessageId
+    && sseMessageId !== lifecycleMessageId
+  if (isPerAgentTerminal) {
+    console.log('🚫 [SSE] Ignoring per-agent processing_status — not the turn-level signal', {
+      status,
+      sseMessageId,
+      lifecycleMessageId,
+    })
+    return
+  }
+
+  const terminalUserMsgId = lifecycleMessageId ?? sseMessageId
 
   console.log('✅ [SSE] Terminal processing_status received — clearing send guard', {
     status,
@@ -103,7 +122,7 @@ export function handleProcessingStatus(
   store.removeMessage(lifecycle.placeholderId(roomId))
   lifecycle.dismissPlaceholder()
 
-  if (sseMessage.data.message_id === lifecycle.getMessageId()) {
+  if (sseMessage.data.message_id === lifecycleMessageId) {
     lifecycle.setMessageId(null)
   }
   if (!lifecycle.hasCancelTimedOut()) {

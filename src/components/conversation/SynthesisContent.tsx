@@ -33,13 +33,17 @@ export function SynthesisContentBody({ content, isStreaming, artifacts }: Synthe
     return <SynthesisStreamingPlaceholder />
   }
 
+  const nonTextArtifacts = artifacts?.filter(
+    a => !a.parts.every(p => p.kind === 'text'),
+  )
+
   return (
     <div>
       <div className={`conversation-content-body ${isStreaming ? 'conversation-streaming-cursor' : ''}`}>
         <MarkdownContent className="conversation-markdown-body" content={content} isStreaming={isStreaming} />
       </div>
-      {artifacts && artifacts.length > 0 && (
-        <ArtifactList artifacts={artifacts} />
+      {nonTextArtifacts && nonTextArtifacts.length > 0 && (
+        <ArtifactList artifacts={nonTextArtifacts} />
       )}
     </div>
   )
