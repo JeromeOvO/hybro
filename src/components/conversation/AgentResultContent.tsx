@@ -1,6 +1,6 @@
 'use client'
 
-import { useStreamingStore } from '@/stores/streaming-store'
+import { useResultStreamDisplay } from '@/hooks/useStreamBuffer'
 import { getAgentTheme } from '@/lib/selectors/conversation-types'
 import { mapResultDisplayProps } from '@/lib/room-timeline/map-result-display'
 import type { AgentResultViewModel } from '@/lib/room-timeline/types'
@@ -23,10 +23,7 @@ export function AgentResultContent({
   selected,
   onOpenDetail,
 }: AgentResultContentProps) {
-  const buffer = useStreamingStore(s => s.buffers[result.messageId])
-  const content = buffer?.text ?? result.content
-  const isStreaming = buffer ? !buffer.isComplete : result.status === 'working'
-  const artifacts = buffer?.artifacts ?? result.artifacts
+  const { content, isStreaming, artifacts } = useResultStreamDisplay(result)
   const display = mapResultDisplayProps(result, isStreaming)
   const theme = getAgentTheme(result.agentId, result.agentName)
   const taskDescription = result.taskStatusMessage ?? ''

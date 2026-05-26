@@ -17,7 +17,7 @@ import { useGroupRef } from 'react-resizable-panels'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 import { useSidebar } from '@/components/ui/sidebar'
 import { useMessageStore } from '@/stores/message-store'
-import { useStreamingStore } from '@/stores/streaming-store'
+import { useStreamBuffer } from '@/hooks/useStreamBuffer'
 import { useRoomUiStore, useSelectedAgentMessageId } from '@/stores/room-ui-store'
 import { selectAgentResponseDetail } from '@/lib/selectors'
 import type { MessageEntity } from '@/stores/message-store/types'
@@ -107,12 +107,18 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
   const selectedMessageId = useSelectedAgentMessageId(adapter.roomId)
   const entities = useMessageStore(s => selectedMessageId ? s.entities : EMPTY_ENTITIES)
   const orderedIds = useMessageStore(s => selectedMessageId ? s.orderedIds : EMPTY_ORDERED_IDS)
-  const buffers = useStreamingStore(s => s.buffers)
+  const streamBuffer = useStreamBuffer(selectedMessageId)
 
   const detail = useMemo(() => {
     if (!selectedMessageId) return null
-    return selectAgentResponseDetail(adapter.roomId, selectedMessageId, entities, orderedIds, buffers)
-  }, [adapter.roomId, selectedMessageId, entities, orderedIds, buffers])
+    return selectAgentResponseDetail(
+      adapter.roomId,
+      selectedMessageId,
+      entities,
+      orderedIds,
+      streamBuffer,
+    )
+  }, [adapter.roomId, selectedMessageId, entities, orderedIds, streamBuffer])
 
   const restoreSidebar = useCallback(() => {
     const snapshot = sidebarSnapshotRef.current

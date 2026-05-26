@@ -5,11 +5,11 @@ import type { TurnViewModel, AgentResultViewModel } from '@/lib/room-timeline/ty
 import { getCollectingProgressLabel, getSupervisorStatusLine } from '@/lib/room-timeline/turn-live-shell'
 import { getAgentTheme } from '@/lib/selectors/conversation-types'
 import { mapResultDisplayProps } from '@/lib/room-timeline/map-result-display'
-import { useStreamingStore } from '@/stores/streaming-store'
+import { useResultStreamDisplay } from '@/hooks/useStreamBuffer'
 import { MarkdownContent } from '@/components/markdown-content'
 import { AgentCard } from './AgentCard'
 import { AgentResultContent } from './AgentResultContent'
-import { SynthesisContent } from './SynthesisContent'
+import { SynthesisContent, SynthesisContentFromStream } from './SynthesisContent'
 import { UserAnswerCard } from './UserAnswerCard'
 
 interface FinalAnswerSurfaceProps {
@@ -225,18 +225,17 @@ function SynthesisBlock({
   summaryResult: AgentResultViewModel
   supervisorStatus: string | null
 }) {
-  const buffer = useStreamingStore(s => s.buffers[summaryResult.messageId])
-  const isStreaming = buffer ? !buffer.isComplete : summaryResult.status === 'working'
+  const stream = useResultStreamDisplay(summaryResult)
 
   return (
     <>
-      <ResultHeader result={summaryResult} isStreaming={isStreaming} />
-      {supervisorStatus && !isStreaming && (
+      <ResultHeader result={summaryResult} isStreaming={stream.isStreaming} />
+      {supervisorStatus && !stream.isStreaming && (
         <p className="text-xs mt-1" style={{ color: 'var(--conversation-text-muted)' }} aria-live="polite">
           {supervisorStatus}
         </p>
       )}
-      <SynthesisContent summaryResult={summaryResult} />
+      <SynthesisContentFromStream stream={stream} />
     </>
   )
 }

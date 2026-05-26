@@ -327,10 +327,20 @@ The frontend uses a **three-layer state model**:
 │  │ • cancelAllNonTerminal(), setRoom(), clearRoom() │       │
 │  └─────────────────────────────────────────────────┘       │
 │                                                             │
+│  Layer 2b: Streaming Display Buffers (Zustand)              │
+│  ┌─────────────────────────────────────────────────┐       │
+│  │ useStreamingStore                                │       │
+│  │ • buffers: Record<messageId, StreamBuffer>       │       │
+│  │ • Ephemeral token/artifact chunks during SSE     │       │
+│  │ • Cleared on task_update checkpoint / reconcile  │       │
+│  │ • UI: useStreamBuffer(id), useResultStreamDisplay│       │
+│  │ • Pure helpers: lib/streaming/display.ts         │       │
+│  └─────────────────────────────────────────────────┘       │
+│                                                             │
 │  Layer 3: Ephemeral UI State (Zustand)                      │
 │  ┌─────────────────────────────────────────────────┐       │
 │  │ useRoomUiStore                                   │       │
-│  │ • sending, processing, cancelling, updatingRoom  │       │
+│  │ • Per-room flags keyed by roomId (sending, etc.) │       │
 │  │ • sseEnabled, sseConnected, sseError             │       │
 │  │ • pendingRoomData (cross-page data transfer)     │       │
 │  └─────────────────────────────────────────────────┘       │
@@ -368,16 +378,9 @@ Each `MessageEntity` carries:
 
 #### Display Type Resolution (`resolve-display-type.ts`)
 
-The `displayType` is computed at write time and determines which React component renders each message:
+The `displayType` is computed at write time (`user-bubble` | `agent-bubble`). Agent messages use a unified bubble; **phase** (waiting, streaming, HITL, failed, complete) is derived at render time via turn view models and `lib/streaming/display.ts` helpers.
 
-| Condition | DisplayType | Component |
-|---|---|---|
-| `messageType === 'user'` | `user-bubble` | `MessageBubble` (user style) |
-| `messageType === 'agent'` and no `taskStatus` | `agent-bubble` | `MessageBubble` (agent style, markdown) |
-| `taskStatus === 'completed'` and content is non-empty | `agent-bubble` | `MessageBubble` (agent style, markdown) |
-| Any other `taskStatus` (working, failed, canceled, etc.) | `task-status` | `TaskStatusMessage` |
-
-This means a message **transitions** from `task-status` to `agent-bubble` when the task completes with content — this is expected behavior, not a bug.
+Live token streaming reads `useStreamingStore` buffers; permanent content lands in `useMessageStore` on `task_update` checkpoint.
 
 #### Upsert Conflict Resolution Rules (`upsert.ts`)
 
@@ -798,15 +801,15 @@ This is used for complex multi-agent workflows where tasks are decomposed, assig
 
 ### 15.1 Architecture Issues
 
-#### `useRoomWebhook` is a God Hook (~1400 lines)
+#### Room orchestration split; SSE handler still large
 
-**File:** `src/hooks/useRoomWebhook.ts`
+**Files:** `src/hooks/room/useRoomWebhook.ts` (~220 lines, thin orchestrator), `src/hooks/room/sse-handlers/index.ts` (~850 lines)
 
-The central room orchestration hook manages SSE handling, message sending, room settings, cancellation, DB hydration, reconciliation, agent name resolution, placeholder lifecycle, timeout safety nets, HITL reconnect catch-up, and streaming buffer coordination — all in one function. Since the original audit (~944 lines), HITL support, token streaming, and supervisor toggle were successfully integrated, growing the hook to ~1400 lines. The decomposition concern is now more urgent.
+`useRoomWebhook` now composes focused hooks (`useRoomData`, `useRoomHydration`, `useRoomSSEConnection`, `useSendMessage`, `useRoomActions`, `processing-lifecycle`). SSE event handling lives in `createSSEDispatcher()` and still mutates `useMessageStore` / `useStreamingStore` via `getState()` (and room UI indirectly via lifecycle).
 
-**Risk:** High cognitive load for contributors; hard to test in isolation; any change can introduce subtle regressions across unrelated features.
+**Risk:** The SSE dispatcher remains hard to test in isolation and couples the event protocol to store shapes.
 
-**Recommendation:** Split into focused composable hooks: `useRoomHydration`, `useSSEMessageHandler`, `useSendMessage`, `useCancelProcessing`, `useAgentNameResolver`, `useHitlReconnect`. The current `useRoomWebhook` would become a thin orchestrator that wires them together.
+**Recommendation:** Introduce an event → command layer (or slimmer per-event handlers) in `sse-handlers/`; keep `useRoomWebhook` as wiring only. Unify DB hydration behind a single reconcile orchestrator (`useRoomHydration` + overlay/stale/filter modules).
 
 ---
 
@@ -893,15 +896,11 @@ The message hydration loads **all messages for a room** in a single request. For
 
 ---
 
-#### `useRoomUiStore` is a Global Singleton
+#### Streaming subscriptions in UI
 
-**File:** `src/stores/room-ui-store.ts`
+**Files:** `src/hooks/useStreamBuffer.ts`, `src/lib/streaming/display.ts`, `src/components/room-page-shell.tsx`
 
-`sending`, `processing`, `cancelling` are global — not scoped per room. If a user has multiple tabs open to different rooms (same origin), state from one room bleeds into another because Zustand stores share the same memory within a tab, and the hook resets state on room change via effects.
-
-This is mostly safe today (single-room-per-tab), but becomes a bug if the app ever supports multi-room views or room switching without full unmount.
-
-**Recommendation:** Key these flags by `roomId` inside the store, or scope them as local state within `useRoomWebhook`.
+Components should subscribe to `s.buffers[messageId]` (via `useStreamBuffer` / `useResultStreamDisplay`), not the full `buffers` map, so unrelated token chunks do not re-render the room shell or index rows.
 
 ---
 

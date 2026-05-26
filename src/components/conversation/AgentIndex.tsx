@@ -12,7 +12,7 @@ import {
   defaultAgentIndexOpen,
   getStripSourceResults,
 } from '@/lib/room-timeline/turn-live-shell'
-import { useStreamingStore } from '@/stores/streaming-store'
+import { useResultStreamDisplay } from '@/hooks/useStreamBuffer'
 import { AgentCard } from './AgentCard'
 import { AgentResultContent } from './AgentResultContent'
 import { cn } from '@/lib/utils'
@@ -34,11 +34,10 @@ function IndexRow({
   selected: boolean
   onOpenDetail: (messageId: string) => void
 }) {
-  const buffer = useStreamingStore(s => s.buffers[result.messageId])
-  const isStreaming = buffer ? !buffer.isComplete : result.status === 'working'
+  const { isStreaming, artifacts } = useResultStreamDisplay(result)
   const display = mapResultDisplayProps(result, isStreaming)
   const theme = getAgentTheme(result.agentId, result.agentName)
-  const artifactCount = (buffer?.artifacts ?? result.artifacts)?.length ?? 0
+  const artifactCount = artifacts?.length ?? 0
   const statusSuffix = artifactCount > 0 ? `${artifactCount} file${artifactCount === 1 ? '' : 's'}` : undefined
 
   return (
