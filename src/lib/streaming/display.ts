@@ -27,6 +27,7 @@ export function resolveEntityStreaming(
   taskStatus: TaskState | undefined,
 ): boolean {
   if (buffer) return !buffer.isComplete
+  if (!taskStatus) return false
   return ACTIVE_ENTITY_TASK_STATES.has(taskStatus)
 }
 
@@ -41,7 +42,7 @@ export function resolveStreamArtifacts(
   buffer: StreamBuffer | undefined,
   fallbackArtifacts: ArtifactData[] | undefined,
 ): ArtifactData[] | undefined {
-  if (isBufferStreaming(buffer)) return buffer.artifacts
+  if (buffer && !buffer.isComplete) return buffer.artifacts
   return fallbackArtifacts
 }
 

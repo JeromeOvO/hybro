@@ -45,10 +45,14 @@ export function sseArtifactDataFromPayload(
   isAppend: boolean,
   lastChunk: boolean | undefined,
 ): ArtifactData {
+  const rawParts = Array.isArray(artifact.parts)
+    ? (artifact.parts as Record<string, unknown>[])
+    : []
+
   return {
     artifactId: (artifact.artifact_id || artifact.artifactId) as string,
     name: artifact.name as string | undefined,
-    parts: (artifact.parts || []).map((p: Record<string, unknown>) => {
+    parts: rawParts.map((p: Record<string, unknown>) => {
       const root = (p.root ?? p) as Record<string, unknown>
       const fileData = root.file as Record<string, unknown> | undefined
       return {
