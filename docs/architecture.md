@@ -809,7 +809,7 @@ This is used for complex multi-agent workflows where tasks are decomposed, assig
 
 **Risk:** The SSE dispatcher remains hard to test in isolation and couples the event protocol to store shapes.
 
-**Recommendation:** Introduce an event → command layer (or slimmer per-event handlers) in `sse-handlers/`; keep `useRoomWebhook` as wiring only. Unify DB hydration behind a single reconcile orchestrator (`useRoomHydration` + overlay/stale/filter modules).
+**Recommendation:** Continue splitting `sse-handlers/` into per-type handlers + `applyRoomCommands`. DB hydration is unified in `src/lib/room-sync/` (`hydrateRoomFromDb`); see `docs/ROOM_SYNC_REFACTOR.md`.
 
 ---
 

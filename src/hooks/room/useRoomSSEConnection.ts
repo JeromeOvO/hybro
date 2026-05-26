@@ -1,11 +1,10 @@
 import { useEffect, useRef } from 'react'
 import type { MutableRefObject } from 'react'
 import type { SSEMessage } from '@/lib/types/sse'
-import { fetchPendingHitlRequests } from '@/lib/api/hitl'
 import { inquiryActiveRuns } from '@/lib/api/room'
+import { hydrateRoomFromDb } from '@/lib/room-sync'
 import { useRoomSSE } from '../useRoomSSE'
 import type { ProcessingLifecycle } from './processing-lifecycle'
-import { overlayPendingHitlRequests } from './overlay-pending-hitl'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 
 export function useRoomSSEConnection(
@@ -72,18 +71,16 @@ export function useRoomSSEConnection(
 
     // HITL reconnect catch-up: restore pending HITL requests after SSE reconnects
     if (justReconnected) {
-      fetchPendingHitlRequests(roomId, getToken)
-        .then(async (res) => {
-          if (res.requests?.length) {
-            console.log(`🔔 Restoring ${res.requests.length} pending HITL request(s)`)
-            await overlayPendingHitlRequests(roomId, res.requests, {
-              getAgentName, getAgentSource, hitlRequestIndex,
-            })
-          }
-        })
-        .catch((err) => {
-          console.error('[HITL] Failed to fetch pending requests on reconnect:', err)
-        })
+      hydrateRoomFromDb({
+        roomId,
+        phase: 'hitl_overlay',
+        getToken,
+        getAgentName,
+        getAgentSource,
+        hitlRequestIndex,
+      }).catch((err) => {
+        console.error('[HITL] Failed to restore pending requests on reconnect:', err)
+      })
     }
 
     // Any reconnection after a gap may have missed messages. Reconcile

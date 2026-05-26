@@ -98,6 +98,12 @@ export function enqueuePendingSseEvent(clientRequestId: string, event: SSEMessag
   return true
 }
 
+/** Test-only: clear module-level pending/resolution maps between tests. */
+export function resetPendingTurnBufferForTests(): void {
+  pendingByClientRequestId.clear()
+  messageIdByClientRequestId.clear()
+}
+
 export function flushPendingSseEvents(
   clientRequestId: string,
   dispatch: (event: SSEMessage) => Promise<void>,
