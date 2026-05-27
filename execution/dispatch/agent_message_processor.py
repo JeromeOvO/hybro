@@ -164,6 +164,7 @@ class AgentMessageProcessor:
             RoomCenterAgentMessageRequest(message=current_message),
             room_memory=room_memory,
             quoted_text=quoted_text,
+            orchestration_user_message_id=user_message_id,
         )
 
         if not process_response.success:

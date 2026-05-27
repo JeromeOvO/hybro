@@ -1041,6 +1041,17 @@ class RoomServices:
                     exc_info=True,
                 )
 
+        try:
+            from database.mongodb import mongodb
+
+            await mongodb.delete_room_quotes_by_room_id(room_id)
+        except Exception:
+            logger.warning(
+                "Room quotes cleanup failed for room %s",
+                room_id,
+                exc_info=True,
+            )
+
     # --- Attachment resolution helpers ---
 
     async def _resolve_attachments(
@@ -1855,14 +1866,13 @@ class RoomServices:
                     "RoomServices: ContextAssemblyService failed, falling back: %s", e
                 )
 
-        if user_message.extend_info is None:
-            user_message.extend_info = {}
-        user_message.extend_info.update({
+        user_message.extend_info = {
+            **(user_message.extend_info or {}),
             "supervisor_v2": True,
             "agent_registry": agent_dicts,
             "room_config": room_config.model_dump(mode="json"),
             "conversation_context": conversation_context,
-        })
+        }
         await self.database_service.update_room_user_message_by_message_id(
             user_message.message_id, user_message
         )
@@ -2013,9 +2023,8 @@ class RoomServices:
                     "RoomServices: ContextAssemblyService failed in clarify-resume: %s", e
                 )
 
-        if user_message.extend_info is None:
-            user_message.extend_info = {}
-        user_message.extend_info.update({
+        user_message.extend_info = {
+            **(user_message.extend_info or {}),
             "supervisor_v2": True,
             "supervisor_v2_clarify_resume": True,
             "clarify_original_message_id": pending_clarify_msg_id,
@@ -2023,7 +2032,7 @@ class RoomServices:
             "agent_registry": [p.model_dump(mode="json") for p in agent_registry],
             "room_config": room_config.model_dump(mode="json"),
             "conversation_context": conversation_context,
-        })
+        }
         await self.database_service.update_room_user_message_by_message_id(
             user_message.message_id, user_message
         )
@@ -2233,7 +2242,15 @@ class RoomServices:
             pre_resolved_scope = scope_result
 
         # ── Persist ───────────────────────────────────────────────────────
+        qerr = await self._materialize_room_quote(room, request, user_message)
+        if isinstance(qerr, RoomCenterUserMessageResponse):
+            return qerr
+
         if not await self._persist_user_message(user_message):
+            if getattr(user_message, "quote_id", None):
+                await self.database_service.delete_quoted_snippet_by_id(
+                    user_message.quote_id
+                )
             return RoomCenterUserMessageResponse(
                 message_id=None,
                 message=None,
@@ -2345,9 +2362,10 @@ class RoomServices:
         # Resolve dispatch strategy and annotate in-memory user_message for
         # downstream dispatch logic. NOT persisted back to DB (message already written).
         dispatch_strategy = resolve_strategy(use_supervisor, is_debate_mode, len(selected_agent_set))
-        if user_message.extend_info is None:
-            user_message.extend_info = {}
-        user_message.extend_info["dispatch_strategy"] = dispatch_strategy.value
+        user_message.extend_info = {
+            **(user_message.extend_info or {}),
+            "dispatch_strategy": dispatch_strategy.value,
+        }
 
         # Fetch room memory for context assembly.
         # V2 supervisor always needs room_memory for ContextAssemblyService (§11.1).
@@ -2370,6 +2388,14 @@ class RoomServices:
                 current_task=message_text,
                 max_turns=5,
             )
+        ext_q = (
+            user_message.extend_info.get("quoted_text")
+            if isinstance(user_message.extend_info, dict)
+            else None
+        )
+        if isinstance(ext_q, str) and ext_q.strip():
+            qblock = f"\n\n[User quoted excerpt for routing]\n{ext_q.strip()[:2000]}"
+            conversation_context = (conversation_context or "") + qblock
 
         # V2 Supervisor: lightweight preparation (no LLM call, no pre-generated messages)
         if use_supervisor:
@@ -2499,6 +2525,53 @@ class RoomServices:
         if size_err:
             return size_err
 
+        return None
+
+    async def _materialize_room_quote(
+        self,
+        room: Room,
+        request: RoomCenterUserMessageRequest,
+        user_message: RoomUserMessage,
+    ) -> RoomCenterUserMessageResponse | None:
+        """Persist ``QuotedSnippet`` when ``user_message.quote`` is set; dual-write extend_info."""
+        payload = user_message.quote
+        if payload is None:
+            return None
+        from services.quote_service import QuoteValidationError, create_quoted_snippet
+
+        try:
+            qid = await create_quoted_snippet(
+                self.database_service,
+                room_id=room.room_id,
+                created_by_user_id=request.user_id or user_message.user_id or "",
+                payload=payload,
+            )
+        except QuoteValidationError as e:
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=str(e),
+                status_code=400,
+            )
+        except Exception as e:
+            logger.exception("Quote snippet creation failed: %s", e)
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="Could not save quoted context. Try again.",
+                status_code=500,
+            )
+
+        user_message.quote_id = qid
+        ei = dict(user_message.extend_info or {})
+        ei["quoted_text"] = payload.text.strip()
+        if payload.sender_display_name:
+            ei["quoted_sender_name"] = payload.sender_display_name
+        ei["quote_id"] = qid
+        user_message.extend_info = ei
+        user_message.quote = None
         return None
 
     async def _persist_user_message(self, user_message: RoomUserMessage) -> bool:
@@ -3231,6 +3304,7 @@ class RoomServices:
         request: RoomCenterAgentMessageRequest,
         room_memory: "RoomMemory | None" = None,
         quoted_text: str | None = None,
+        orchestration_user_message_id: str | None = None,
     ) -> RoomCenterAgentMessageResponse:
         """
         Process an agent message by building budget-aware context.
@@ -3241,7 +3315,8 @@ class RoomServices:
         Args:
             request: The agent message request
             room_memory: Full RoomMemory object (preferred) or None
-            quoted_text: Text the user highlighted and quoted from a previous message
+            quoted_text: Legacy: text the user highlighted (used when no turn context)
+            orchestration_user_message_id: Root user message id for this turn (QUOTE_REPLY)
 
         Returns:
             Response with the prepared A2A message including context
@@ -3295,6 +3370,42 @@ class RoomServices:
         agent = await self.database_service.get_agent_by_agent_id(agent_id)
         agent_name = agent.agent_card.name if agent else None
 
+        # Turn context (QUOTE_REPLY): user prompt + quote snapshot + separate agent task
+        turn_ctx = None
+        if orchestration_user_message_id:
+            um = await self.database_service.get_room_user_message_by_message_id(
+                orchestration_user_message_id
+            )
+            if um:
+                from execution.orchestration.turn_context import (
+                    TurnQuoteMissingError,
+                    format_quoted_context_header,
+                    load_turn_context,
+                )
+
+                try:
+                    turn_ctx = await load_turn_context(self.database_service, um)
+                except TurnQuoteMissingError as e:
+                    return RoomCenterAgentMessageResponse(
+                        message_id=message.message_id,
+                        message=message,
+                        success=False,
+                        error=str(e),
+                        status_code=400,
+                    )
+
+        original_text = agent_message.parts[0].root.text or ""
+        current_task_for_cas = (
+            turn_ctx.message_text if turn_ctx else original_text
+        )
+        agent_task_for_cas = original_text if turn_ctx else None
+        quoted_for_cas: str | None = None
+        if turn_ctx and turn_ctx.quoted_text:
+            hdr = format_quoted_context_header(turn_ctx)
+            quoted_for_cas = f"{hdr}\n---\n{turn_ctx.quoted_text}\n---"
+        elif quoted_text:
+            quoted_for_cas = quoted_text
+
         # Build room awareness context (other agents in the team)
         # Only for Supervisor-orchestrated multi-agent tasks (task_content != None)
         # Extract pre-built agent_profiles from extend_info to avoid redundant DB lookups
@@ -3312,8 +3423,6 @@ class RoomServices:
         # Build context using ContextAssemblyService (§11.2) or legacy fallback
         try:
             if agent_message and agent_message.parts and len(agent_message.parts) > 0:
-                original_text = agent_message.parts[0].root.text or ""
-
                 room_memory_content = (
                     room_memory.memory_content if room_memory else None
                 )
@@ -3325,10 +3434,11 @@ class RoomServices:
                     try:
                         result = context_assembly_service.build_agent_execution_context(
                             room_memory=room_memory,
-                            current_task=original_text,
+                            current_task=current_task_for_cas,
                             agent_name=agent_name,
                             room_awareness=room_awareness,
-                            quoted_text=quoted_text,
+                            quoted_text=quoted_for_cas,
+                            agent_task=agent_task_for_cas,
                             include_system_instruction=True,
                         )
                         context = result.context
@@ -3339,31 +3449,41 @@ class RoomServices:
                         )
                         context = build_context_for_agent(
                             memory_content=room_memory_content,
-                            current_task=original_text,
+                            current_task=current_task_for_cas,
                             agent_name=agent_name,
                             include_system_instruction=True,
-                            quoted_text=quoted_text,
+                            quoted_text=quoted_for_cas,
                             room_awareness=room_awareness,
+                            agent_task=agent_task_for_cas,
                         )
                 elif (
                     isinstance(room_memory_content, str) and room_memory_content.strip()
                 ):
                     # Legacy style: Use raw text as context
                     quoted_section = ""
-                    if quoted_text:
-                        quoted_section = (
-                            f"[Quoted context]\n"
-                            f'The user is referencing the following specific content:\n'
-                            f'"{quoted_text}"\n\n'
-                        )
+                    if quoted_for_cas:
+                        if "\n---\n" in quoted_for_cas:
+                            quoted_section = (
+                                f"[Quoted context]\n{quoted_for_cas}\n\n"
+                            )
+                        else:
+                            quoted_section = (
+                                f"[Quoted context]\n"
+                                f'The user is referencing the following specific content:\n'
+                                f'"{quoted_for_cas}"\n\n'
+                            )
                     room_awareness_section = ""
                     if room_awareness:
                         room_awareness_section = f"{room_awareness}\n\n"
+                    task_section = ""
+                    if agent_task_for_cas:
+                        task_section = f"\n\n[Task]\n{agent_task_for_cas}"
                     context = (
                         f"[Context]\n{room_memory_content}\n\n"
                         f"{quoted_section}"
                         f"{room_awareness_section}"
-                        f"[Current request]\nUser: {original_text}"
+                        f"[Current request]\nUser: {current_task_for_cas}"
+                        f"{task_section}"
                     )
                     if agent_name:
                         context += (
@@ -3373,16 +3493,25 @@ class RoomServices:
                 else:
                     # No context available
                     quoted_section = ""
-                    if quoted_text:
-                        quoted_section = (
-                            f"[Quoted context]\n"
-                            f'The user is referencing the following specific content:\n'
-                            f'"{quoted_text}"\n\n'
-                        )
+                    if quoted_for_cas:
+                        if "\n---\n" in quoted_for_cas:
+                            quoted_section = f"[Quoted context]\n{quoted_for_cas}\n\n"
+                        else:
+                            quoted_section = (
+                                f"[Quoted context]\n"
+                                f'The user is referencing the following specific content:\n'
+                                f'"{quoted_for_cas}"\n\n'
+                            )
                     room_awareness_section = ""
                     if room_awareness:
                         room_awareness_section = f"{room_awareness}\n\n"
-                    context = f"{quoted_section}{room_awareness_section}[Current request]\nUser: {original_text}"
+                    task_section = ""
+                    if agent_task_for_cas:
+                        task_section = f"\n\n[Task]\n{agent_task_for_cas}"
+                    context = (
+                        f"{quoted_section}{room_awareness_section}"
+                        f"[Current request]\nUser: {current_task_for_cas}{task_section}"
+                    )
                     if agent_name:
                         context += (
                             f"\n\nYou are {agent_name}. "
@@ -3868,6 +3997,7 @@ class RoomServices:
                         message_content=user_msg.message_content,
                         message_created_at=user_msg.message_created_at,
                         user_id=user_msg.user_id,
+                        extend_info=user_msg.extend_info,
                     )
                     combined_messages.append(room_message)
 

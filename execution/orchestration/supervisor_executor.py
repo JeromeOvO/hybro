@@ -483,6 +483,7 @@ class SupervisorExecutor:
                     room_config=room_config,
                     trajectory=trajectory,
                     conversation_context=conversation_context,
+                    quoted_text=quoted_text,
                     max_steps=self.MAX_STEPS,
                 )
                 try:

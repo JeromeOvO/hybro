@@ -418,9 +418,12 @@ class TestAllAgentsPostPersistMessageId:
         request.message.message_content = MagicMock()
         request.message.message_content.message_text = "hello"
         request.message.message_content.message_attachments = None
+        request.message.quote = None
+        request.message.extend_info = {}
 
         room_center._validate_send_message_request = MagicMock(return_value=None)
         room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
+        room_center._materialize_room_quote = AsyncMock(return_value=None)
         room_center._persist_user_message = AsyncMock(return_value=True)
         room_center._send_processing_status = AsyncMock()
         room_center._initialize_room_memory = AsyncMock(return_value=None)
@@ -480,9 +483,12 @@ class TestClientRequestIdPropagation:
         request.message.message_content = MagicMock()
         request.message.message_content.message_text = "hello"
         request.message.message_content.message_attachments = None
+        request.message.quote = None
+        request.message.extend_info = {}
 
         room_center._validate_send_message_request = MagicMock(return_value=None)
         room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
+        room_center._materialize_room_quote = AsyncMock(return_value=None)
         room_center._persist_user_message = AsyncMock(return_value=True)
         room_center._send_processing_status = AsyncMock()
         room_center._initialize_room_memory = AsyncMock(return_value=None)

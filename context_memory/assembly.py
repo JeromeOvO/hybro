@@ -92,6 +92,7 @@ def build_agent_dynamic_suffix(
     agent_name: str | None = None,
     room_awareness: str | None = None,
     quoted_text: str | None = None,
+    agent_task: str | None = None,
     include_system_instruction: bool = True,
     task_budget: int | None = None,
 ) -> str:
@@ -109,14 +110,22 @@ def build_agent_dynamic_suffix(
     task_parts: list[str] = []
     if quoted_text:
         task_parts.append("[Quoted context]")
-        task_parts.append("The user is referencing the following specific content:")
-        task_parts.append(f'"{quoted_text}"')
+        qt = quoted_text.strip()
+        if "\n---\n" in qt:
+            task_parts.append(qt)
+        else:
+            task_parts.append("The user is referencing the following specific content:")
+            task_parts.append(f'"{qt}"')
         task_parts.append("")
     if room_awareness:
         task_parts.append(room_awareness)
         task_parts.append("")
     task_parts.append("[Current request]")
     task_parts.append(f"User: {current_task}")
+    if agent_task and agent_task.strip():
+        task_parts.append("")
+        task_parts.append("[Task]")
+        task_parts.append(agent_task.strip())
     if include_system_instruction and agent_name:
         task_parts.append("")
         instruction = (
@@ -140,18 +149,29 @@ def build_agent_dynamic_suffix(
                 task_parts_truncated: list[str] = []
                 if quoted_text:
                     task_parts_truncated.append("[Quoted context]")
-                    task_parts_truncated.append(
-                        "The user is referencing the following specific content:"
-                    )
-                    task_parts_truncated.append(f'"{quoted_text[:500]}..."')
+                    qt = quoted_text.strip()
+                    if "\n---\n" in qt:
+                        task_parts_truncated.append(qt)
+                    else:
+                        task_parts_truncated.append(
+                            "The user is referencing the following specific content:"
+                        )
+                        task_parts_truncated.append(f'"{qt}"')
                     task_parts_truncated.append("")
                 if room_awareness:
                     task_parts_truncated.append(room_awareness[:200] + "...")
                     task_parts_truncated.append("")
                 task_parts_truncated.append("[Current request]")
-                task_parts_truncated.append(
-                    f"User: {current_task[:max_task_chars]}... [truncated]"
-                )
+                task_parts_truncated.append(f"User: {current_task[:max_task_chars]}... [truncated]")
+                if agent_task and agent_task.strip():
+                    task_parts_truncated.append("")
+                    task_parts_truncated.append("[Task]")
+                    remain = max(0, max_task_chars - len(current_task))
+                    task_parts_truncated.append(
+                        (agent_task.strip()[:remain] + "... [truncated]")
+                        if remain < len(agent_task)
+                        else agent_task.strip()
+                    )
                 if include_system_instruction and agent_name:
                     task_parts_truncated.append("")
                     task_parts_truncated.append(
@@ -260,6 +280,7 @@ def assemble_agent_execution_context_from_memory(
     agent_name: str | None = None,
     room_awareness: str | None = None,
     quoted_text: str | None = None,
+    agent_task: str | None = None,
     include_system_instruction: bool = True,
 ):
     budget = token_budget or TokenBudgetConfig()
@@ -294,6 +315,7 @@ def assemble_agent_execution_context_from_memory(
         agent_name=agent_name,
         room_awareness=room_awareness,
         quoted_text=quoted_text,
+        agent_task=agent_task,
         include_system_instruction=include_system_instruction,
         task_budget=budget.current_task_tokens,
     )
@@ -311,6 +333,7 @@ def assemble_agent_execution_context_from_memory(
             agent_name=agent_name,
             room_awareness=room_awareness,
             quoted_text=quoted_text,
+            agent_task=agent_task,
             include_system_instruction=include_system_instruction,
             task_budget=budget.current_task_tokens,
         ),

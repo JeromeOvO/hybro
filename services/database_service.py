@@ -16,6 +16,7 @@ from database.pinecone_db import pinecone_db
 from models.agent import Agent, AgentStatus
 from models.agent_group import AgentGroup
 from models.memory import ChatContext, RoomMemory
+from models.quote import QuotedSnippet
 from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 from models.task import BaseTask, MetaTask, TaskSession
 from services.openai_service import openai_service
@@ -890,6 +891,34 @@ class DatabaseService:
                 f"Failed to get room user message by message id {message_id} from databases: {str(e)}"
             )
             return None
+
+    async def insert_quoted_snippet(self, snippet: QuotedSnippet) -> str:
+        try:
+            return await self.mongo.insert_quoted_snippet(snippet)
+        except Exception as e:
+            logger.error("Failed to insert quoted snippet: %s", e)
+            raise
+
+    async def get_quoted_snippet_by_id(self, quote_id: str) -> QuotedSnippet | None:
+        try:
+            return await self.mongo.get_quoted_snippet_by_id(quote_id)
+        except Exception as e:
+            logger.error("Failed to get quoted snippet %s: %s", quote_id, e)
+            return None
+
+    async def delete_quoted_snippet_by_id(self, quote_id: str) -> bool:
+        try:
+            return await self.mongo.delete_quoted_snippet_by_id(quote_id)
+        except Exception as e:
+            logger.error("Failed to delete quoted snippet %s: %s", quote_id, e)
+            return False
+
+    async def delete_room_quotes_by_room_id(self, room_id: str) -> int:
+        try:
+            return await self.mongo.delete_room_quotes_by_room_id(room_id)
+        except Exception as e:
+            logger.error("Failed to delete room quotes for %s: %s", room_id, e)
+            return 0
 
     async def update_room_user_message_by_message_id(
         self, message_id: str, room_user_message: RoomUserMessage

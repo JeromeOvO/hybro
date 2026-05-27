@@ -617,10 +617,32 @@ class RoomMessageCenter:
             (user_message.user_id if user_message else None) or request.user_id
         )
 
-        # Extract quoted context from user message extend_info (set when user quotes text)
+        # Extract quoted context via TurnContext (QUOTE_REPLY: quote_id + snippet or legacy)
         quoted_text: str | None = None
-        if user_message and isinstance(user_message.extend_info, dict):
-            quoted_text = user_message.extend_info.get("quoted_text") or None
+        if user_message:
+            from execution.orchestration.turn_context import (
+                TurnQuoteMissingError,
+                load_turn_context,
+            )
+
+            try:
+                _tc = await load_turn_context(self.database_service, user_message)
+                quoted_text = _tc.quoted_text
+            except TurnQuoteMissingError as e:
+                logger.error("RoomMessageCenter: %s", e)
+                await self._emit_processing_status(
+                    room_id=room_id,
+                    status=SSEProcessingStatus.FAILED,
+                    message_id=room_user_message_id,
+                    lifecycle_message_id=room_user_message_id,
+                    details="Quoted context could not be loaded for this turn",
+                )
+                return OrchestrationResponse(
+                    room_id=room_id,
+                    success=False,
+                    error=str(e),
+                    status_code=400,
+                )
 
         # Create a CancellationToken for this message pipeline (A-3).
         # The token is pre-signalled if cancel_message() was called before

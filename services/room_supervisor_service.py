@@ -125,6 +125,9 @@ Output ONLY valid JSON matching the schema below.
 - You have a maximum of {max_steps} actions. Use SYNTHESIZE or DONE before the limit.
 - You may CLARIFY at most once. After you receive the user's answers, you MUST
   proceed with DELEGATE — do not issue another CLARIFY.
+- When the user message includes quoted text (see Quoted text section), that quote is
+  the primary subject. In DELEGATE tasks, include the quoted text verbatim — do not
+  paraphrase, reformat, collapse line breaks, or wrap it in a new narrative frame.
 
 ## Quality Evaluation — before choosing SYNTHESIZE or DONE
 - Review each DELEGATE result for substance. Does it directly address the
@@ -165,6 +168,7 @@ SUPERVISOR_V2_USER_PROMPT = """{debate_mode_note}
 
 ## User Message
 {message_text}
+{quoted_section}
 
 ## Execution So Far
 {trajectory_summary}
@@ -265,6 +269,7 @@ class RoomSupervisorService:
         room_config: RoomConfig,
         trajectory: SupervisorTrajectory,
         conversation_context: str | None = None,
+        quoted_text: str | None = None,
         max_steps: int = 8,
     ) -> SupervisorAction:
         """Ask the Supervisor LLM for the next action (V2 adaptive loop).
@@ -309,9 +314,20 @@ class RoomSupervisorService:
             else:
                 budget_warning = ""
 
+            quoted_section = ""
+            if quoted_text and quoted_text.strip():
+                quoted_section = (
+                    "\n\n## Quoted text (user highlighted from a prior message)\n"
+                    f'"{quoted_text.strip()}"\n'
+                    "The user's message refers to this quoted content. When you DELEGATE, "
+                    "include the quoted text verbatim in each agent's task — do not paraphrase "
+                    "or flatten formatting."
+                )
+
             user_prompt = SUPERVISOR_V2_USER_PROMPT.format(
                 debate_mode_note=debate_note,
                 message_text=message_text,
+                quoted_section=quoted_section,
                 trajectory_summary=trajectory_summary,
                 steps_completed=steps_completed,
                 max_steps=max_steps,

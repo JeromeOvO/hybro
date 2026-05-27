@@ -597,6 +597,51 @@ class TestPromptCacheOptimization:
         assert "{max_steps}" in SUPERVISOR_V2_USER_PROMPT
         assert "{steps_remaining}" in SUPERVISOR_V2_USER_PROMPT
         assert "{budget_warning}" in SUPERVISOR_V2_USER_PROMPT
+        assert "{quoted_section}" in SUPERVISOR_V2_USER_PROMPT
+
+    @pytest.mark.asyncio
+    async def test_decide_next_includes_quoted_text_in_user_prompt(self):
+        """decide_next() should include verbatim quoted text in the user prompt."""
+        from services.room_supervisor_service import RoomSupervisorService
+        from models.supervisor_v2 import AgentProfile, RoomConfig, SupervisorTrajectory
+
+        mock_openai = AsyncMock()
+        service = RoomSupervisorService(openai_service=mock_openai)
+
+        agents = [
+            AgentProfile(
+                agent_id="agent-1",
+                agent_name="TestAgent",
+                description="Test agent",
+                is_healthy=True,
+            )
+        ]
+        room_config = RoomConfig(is_debate_mode=False)
+        trajectory = SupervisorTrajectory()
+
+        with patch.object(service, "_call_supervisor_llm", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = {
+                "action": "done",
+                "reasoning": "test",
+                "targets": [],
+                "synthesis_instruction": None,
+                "clarification_question": None,
+            }
+
+            await service.decide_next(
+                message_text="Get details about this",
+                agent_registry=agents,
+                room_config=room_config,
+                trajectory=trajectory,
+                quoted_text="line one\nline two",
+            )
+
+            user_prompt_arg = mock_llm.call_args.kwargs.get(
+                "user_prompt",
+                mock_llm.call_args[0][1] if len(mock_llm.call_args[0]) > 1 else "",
+            )
+            assert "line one\nline two" in user_prompt_arg
+            assert "## Quoted text" in user_prompt_arg
 
     @pytest.mark.asyncio
     async def test_decide_next_passes_context_to_system_prompt(self):
