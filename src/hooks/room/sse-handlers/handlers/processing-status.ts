@@ -84,6 +84,16 @@ export function handleProcessingStatus(
     return
   }
 
+  if (status === PROCESSING_STATUS.AWAITING_INPUT) {
+    console.log('⏸️ [SSE] awaiting_input — clearing lifecycle without terminal stamp')
+    lifecycle.stopProcessing({ clearMessageId: false })
+    ctx.setCancelling(false)
+    lifecycle.disarmCancelTimeout()
+    store.removeMessage(lifecycle.placeholderId(roomId))
+    lifecycle.dismissPlaceholder()
+    return
+  }
+
   if (!isProcessingDone(status as ProcessingStatus) && status !== PROCESSING_STATUS.RATE_LIMITED) {
     return
   }

@@ -7,6 +7,7 @@ import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ChatMode } from '@/lib/types/chat-mode'
 import { ConversationMessageList } from '@/components/conversation/ConversationMessageList'
 import { ComposerShell } from '@/components/composer/ComposerShell'
+import { useTextSelectionQuote } from '@/hooks/useTextSelectionQuote'
 import { AgentResponseDetailPane } from '@/components/conversation/AgentResponseDetailPane'
 import {
   ResizableHandle,
@@ -179,6 +180,9 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
 
   const dockRef = useRef<HTMLDivElement>(null)
   const primaryRef = useRef<HTMLDivElement>(null)
+  const workspaceHostRef = useRef<HTMLDivElement>(null)
+
+  useTextSelectionQuote(workspaceHostRef, adapter.quoteState.setQuote)
   useLayoutEffect(() => {
     const dock = dockRef.current
     const primary = primaryRef.current
@@ -233,7 +237,7 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
 
   return (
     <>
-      <div className="conversation-workspace-host relative h-full min-h-0">
+      <div ref={workspaceHostRef} className="conversation-workspace-host relative h-full min-h-0">
         <ResizablePanelGroup
           id={desktopDetail ? 'conversation-resizable-workspace' : undefined}
           groupRef={conversationGroupRef}

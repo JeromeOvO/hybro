@@ -11,6 +11,7 @@ import type {
   RoomCenterRoomMessageRequest,
 } from '@/lib/types/request'
 import type { RoomMembershipWriteInput, MessageDispatchInput } from '@/lib/types/agent-group'
+import type { RoomQuoteWire } from '@/lib/types/quote'
 
 import { getApiUrl } from '../utils'
 import { apiPost } from '../api-client'
@@ -217,27 +218,41 @@ export async function SendMessage(
   target_group: string = "all_agents",
   related_message_id?: string | null,
   quoted_text?: string | null,
+  quoted_sender_name?: string | null,
   attachments?: Array<{ file_id: string }>,
   dispatch?: MessageDispatchInput,
   clientRequestId?: string,
+  structuredQuote?: RoomQuoteWire | null,
 ): Promise<RoomCenterUserMessageResponse> {
+  const message: Record<string, unknown> = {
+    room_id,
+    message_id: "",
+    message_type: "user",
+    related_message_id: related_message_id || null,
+    message_content: {
+      message_text: user_input
+    },
+    user_id: user_id || "",
+    extend_info: null as Record<string, unknown> | null,
+  }
+
+  if (structuredQuote) {
+    message.quote = structuredQuote
+    message.extend_info = {
+      quoted_text: structuredQuote.text,
+      quoted_sender_name: structuredQuote.sender_display_name ?? null,
+    }
+  } else if (quoted_text) {
+    message.extend_info = { quoted_text, quoted_sender_name: quoted_sender_name || null }
+  }
+
   const requestData: Record<string, unknown> = {
     room_id,
     user_id: user_id || "",
     user_name: user_name || "",
     user_input,
     target_group,
-    message: {
-      room_id,
-      message_id: "",
-      message_type: "user",
-      related_message_id: related_message_id || null,
-      message_content: {
-        message_text: user_input
-      },
-      user_id: user_id || "",
-      extend_info: quoted_text ? { quoted_text } : null
-    },
+    message,
   }
 
   // Overlay canonical dispatch fields when provided.

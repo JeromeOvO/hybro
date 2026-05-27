@@ -57,6 +57,7 @@ export function AgentResultContent({
         <AgentContentBlock
           agentId={result.agentId ?? result.messageId}
           agentName={result.agentName}
+          messageId={result.messageId}
           content={content}
           isStreaming={isStreaming}
           showAttribution={showAttribution}

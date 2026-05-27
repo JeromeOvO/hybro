@@ -200,6 +200,29 @@ describe('Room API', () => {
       expect(message.extend_info).toMatchObject({ quoted_text: 'Quoted text here' })
     })
 
+    it('should include quoted sender name in extend_info', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, message_id: 'msg-1' })
+        })
+      )
+
+      await SendMessage(
+        'room-1', 'Reply', undefined, 'user-1', 'Test User',
+        'all_agents', 'related-msg-1', 'Quoted text here', 'Spec Agent',
+      )
+
+      expect(capturedBody).not.toBeNull()
+      const body = capturedBody as unknown as Record<string, unknown>
+      const message = body.message as Record<string, unknown>
+      expect(message.extend_info).toMatchObject({
+        quoted_text: 'Quoted text here',
+        quoted_sender_name: 'Spec Agent',
+      })
+    })
+
     it('should omit target_group when MentionDispatchInput is provided', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
@@ -211,7 +234,7 @@ describe('Room API', () => {
 
       await SendMessage(
         'room-1', 'Hello @agent', undefined, 'user-1', 'Test User',
-        'all_agents', null, null, undefined,
+        'all_agents', null, null, undefined, undefined,
         { mentioned_agent_ids: ['agent-a', 'agent-b'] },
       )
 
@@ -230,7 +253,7 @@ describe('Room API', () => {
 
       await SendMessage(
         'room-1', 'Hello', undefined, 'user-1', 'Test User',
-        'room_team', null, null, undefined,
+        'room_team', null, null, undefined, undefined,
         { message_target_mode: 'room_default' },
       )
 
@@ -250,7 +273,7 @@ describe('Room API', () => {
 
       await SendMessage(
         'room-1', 'Hello', undefined, 'user-1', 'Test User',
-        'all_agents', null, null, undefined, undefined,
+        'all_agents', null, null, undefined, undefined, undefined,
         'cr-uuid-123',
       )
 
@@ -283,7 +306,7 @@ describe('Room API', () => {
 
       await SendMessage(
         'room-1', 'Hello', undefined, 'user-1', 'Test User',
-        'grp-123', null, null, undefined,
+        'grp-123', null, null, undefined, undefined,
         { message_target_mode: 'saved_group', target_group_id: 'grp-123' },
       )
 

@@ -62,6 +62,12 @@ export function isSummarySystemAgent(agentId: string | undefined): boolean {
   return !!agentId && SUMMARY_SYSTEM_AGENT_IDS.has(agentId)
 }
 
+/** True for supervisor agents that issue HITL clarification questions (not synthesis). */
+export function isSupervisorClarifyAgent(agentId: string | undefined): boolean {
+  return agentId === 'supervisor_hitl' || agentId === 'supervisor_clarify'
+    || (!!agentId && SUPERVISOR_SYSTEM_AGENT_IDS.has(agentId) && !agentId.includes('synthesis'))
+}
+
 export function getSystemAgentName(agentId: string): string | undefined {
   return SYSTEM_AGENTS[agentId]?.name
 }

@@ -5,6 +5,7 @@ import type { ArtifactData } from '@/stores/message-store/types'
 interface AgentContentBlockProps {
   agentId: string
   agentName: string
+  messageId?: string
   content: string
   isStreaming: boolean
   showAttribution?: boolean
@@ -17,7 +18,7 @@ function textOnlyArtifactContent(artifact: ArtifactData): string | null {
   return artifact.parts.map(part => part.text ?? '').join('').trim()
 }
 
-export function AgentContentBlock({ agentName, content, isStreaming, showAttribution, artifacts }: AgentContentBlockProps) {
+export function AgentContentBlock({ agentName, messageId, content, isStreaming, showAttribution, artifacts }: AgentContentBlockProps) {
   const normalizedContent = content.trim()
   const displayArtifacts = artifacts?.filter(artifact => {
     if (!normalizedContent) return true
@@ -25,7 +26,7 @@ export function AgentContentBlock({ agentName, content, isStreaming, showAttribu
   })
 
   return (
-    <div>
+    <div data-quote-message-id={messageId} data-quote-agent-name={agentName} data-quote-source-kind="agent">
       {showAttribution && (
         <div className="text-xs mb-1" style={{ color: 'var(--conversation-text-muted)' }}>
           {agentName}:

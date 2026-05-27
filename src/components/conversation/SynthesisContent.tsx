@@ -25,10 +25,12 @@ export interface SynthesisContentBodyProps {
   content: string
   isStreaming: boolean
   artifacts: ArtifactData[] | undefined
+  messageId?: string
+  agentName?: string
 }
 
 /** Presentational synthesis body — no store subscription. */
-export function SynthesisContentBody({ content, isStreaming, artifacts }: SynthesisContentBodyProps) {
+export function SynthesisContentBody({ content, isStreaming, artifacts, messageId, agentName }: SynthesisContentBodyProps) {
   if (!content.trim() && isStreaming) {
     return <SynthesisStreamingPlaceholder />
   }
@@ -38,7 +40,7 @@ export function SynthesisContentBody({ content, isStreaming, artifacts }: Synthe
   )
 
   return (
-    <div>
+    <div data-quote-message-id={messageId} data-quote-agent-name={agentName} data-quote-source-kind="synthesis">
       <div className={`conversation-content-body ${isStreaming ? 'conversation-streaming-cursor' : ''}`}>
         <MarkdownContent className="conversation-markdown-body" content={content} isStreaming={isStreaming} />
       </div>
@@ -61,6 +63,8 @@ export function SynthesisContent({ summaryResult }: SynthesisContentProps) {
       content={stream.content}
       isStreaming={stream.isStreaming}
       artifacts={stream.artifacts}
+      messageId={summaryResult.messageId}
+      agentName={summaryResult.agentName}
     />
   )
 }
@@ -68,14 +72,20 @@ export function SynthesisContent({ summaryResult }: SynthesisContentProps) {
 /** Render synthesis body from a precomputed stream overlay (no extra subscription). */
 export function SynthesisContentFromStream({
   stream,
+  messageId,
+  agentName,
 }: {
   stream: ResultStreamDisplay
+  messageId?: string
+  agentName?: string
 }) {
   return (
     <SynthesisContentBody
       content={stream.content}
       isStreaming={stream.isStreaming}
       artifacts={stream.artifacts}
+      messageId={messageId}
+      agentName={agentName}
     />
   )
 }

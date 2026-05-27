@@ -87,6 +87,12 @@ export interface MessageEntity {
   // ── User attachments ──────────────────────────────────────
   attachments?: AttachmentData[]
 
+  // ── Quoted context (user messages only) ────────────────────
+  quotedText?: string
+  quotedSenderName?: string
+  /** Persisted quote snapshot id (QUOTE_REPLY). */
+  quoteId?: string
+
   // ── Turn terminal signal ──────────────────────────────────
   // Written by the processing_status SSE handler onto the user entity so
   // useMessageStoreSync can derive turn_completed/failed/canceled without
@@ -139,6 +145,9 @@ export interface IncomingMessage {
   isEphemeral?: boolean
   artifacts?: ArtifactData[]
   attachments?: AttachmentData[]
+  quotedText?: string
+  quotedSenderName?: string
+  quoteId?: string
   turnTerminalStatus?: 'completed' | 'failed' | 'canceled'
   summaryOrigin?: 'llm' | 'deterministic'
 }

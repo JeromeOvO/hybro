@@ -181,6 +181,7 @@ export type ProcessingStatus =
   | "rejected"
   | "rate_limited"
   | "error"
+  | "awaiting_input"
 
 export const PROCESSING_STATUS = {
   PROCESSING: "processing",
@@ -190,6 +191,7 @@ export const PROCESSING_STATUS = {
   REJECTED: "rejected",
   RATE_LIMITED: "rate_limited",
   ERROR: "error",
+  AWAITING_INPUT: "awaiting_input",
 } as const
 
 // Statuses that mean processing is done (clear spinner)

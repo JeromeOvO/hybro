@@ -636,6 +636,27 @@ describe('buildTurns – V2 data model', () => {
     })
   })
 
+  it('supervisor_hitl with user answer is completed, not working', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const clarify = makeAgentEntity({
+      id: 'hitl-1',
+      agentId: 'supervisor_hitl',
+      senderName: 'Question & Answer',
+      timestamp: '2026-01-01T00:00:01Z',
+      taskStatus: 'input-required' as any,
+      hitlUserAnswer: 'A',
+      hitlPrompt: 'Which option?',
+      content: 'Which option?',
+    })
+    const turns = buildTurns(entitiesToMap([user, clarify]), ['u1', 'hitl-1'], [])
+    expect(turns[0].agentResults[0].status).toBe('completed')
+    expect(turns[0].agentResults[0].hitlResolved).toEqual({
+      prompt: 'Which option?',
+      answer: 'A',
+    })
+    expect(turns[0].agentResults[0].hitlPending).toBeUndefined()
+  })
+
   it('unresolved interactive state produces awaiting_input with hitlPending', () => {
     const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
     const agent = makeAgentEntity({

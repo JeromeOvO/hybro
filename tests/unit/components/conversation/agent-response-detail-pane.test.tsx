@@ -63,6 +63,26 @@ describe('AgentResponseDetailPane', () => {
     expect(screen.getByText('A2A findings.')).toBeInTheDocument()
   })
 
+  it('shows quoted user context when the request message includes a quote', () => {
+    render(
+      <AgentResponseDetailPane
+        detail={{
+          ...detail,
+          requestMessage: {
+            ...detail.requestMessage!,
+            quotedText: 'task-lifecycle -> Full task',
+            quotedSenderName: 'Spec Agent',
+          },
+        }}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByTestId('agent-detail-quoted-context')).toBeInTheDocument()
+    expect(screen.getByText('Quoted from Spec Agent')).toBeInTheDocument()
+    expect(screen.getByText('task-lifecycle -> Full task')).toBeInTheDocument()
+  })
+
   it('closes from the header button', async () => {
     const onClose = vi.fn()
     const view = render(<AgentResponseDetailPane detail={detail} onClose={onClose} />)
