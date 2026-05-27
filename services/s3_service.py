@@ -1,7 +1,7 @@
 """Async S3 operations for file storage.
 
 Uses aioboto3 for non-blocking uploads and presigned URL generation.
-Shared by FileUploadService (user uploads) and ContentStorageService
+Shared by Platform file upload and content storage handling
 (compaction S3 expansion).
 """
 

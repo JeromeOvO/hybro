@@ -3,21 +3,19 @@ from collections.abc import AsyncIterable
 from typing import Any
 
 import httpx
-from a2a.types import (
-    AgentCard,
-    CancelTaskRequest,
-    CancelTaskResponse,
-    GetTaskRequest,
-    GetTaskResponse,
-    JSONRPCRequest,
-)
 from httpx_sse import connect_sse
 
 from common.types import (
     A2AClientHTTPError,
     A2AClientJSONError,
+    AgentCard,
+    CancelTaskRequest,
+    CancelTaskResponse,
+    GetTaskRequest,
+    GetTaskResponse,
     GetTaskPushNotificationRequest,
     GetTaskPushNotificationResponse,
+    JSONRPCRequest,
     SendTaskRequest,
     SendTaskResponse,
     SendTaskStreamingRequest,

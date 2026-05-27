@@ -1,12 +1,19 @@
+"""SDK-free internal task and agent card schemas.
+
+A2A SDK models are intentionally converted at adapter boundaries so common
+modules can remain stable even when the external SDK surface changes.
+"""
+
 from datetime import datetime
+from enum import Enum
 from typing import Annotated, Any, Literal, Self
 from uuid import uuid4
 
-from a2a.types import DataPart, FilePart, TaskState, TextPart
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    RootModel,
     TypeAdapter,
     field_serializer,
     model_validator,
@@ -30,27 +37,66 @@ class FileContent(BaseModel):
         return self
 
 
-Part = Annotated[TextPart | FilePart | DataPart, Field(discriminator="kind")]
+class TextPart(BaseModel):
+    kind: Literal["text"] = "text"
+    text: str
+    metadata: dict[str, Any] | None = None
+
+
+class FilePart(BaseModel):
+    kind: Literal["file"] = "file"
+    file: FileContent
+    metadata: dict[str, Any] | None = None
+
+
+class DataPart(BaseModel):
+    kind: Literal["data"] = "data"
+    data: dict[str, Any]
+    metadata: dict[str, Any] | None = None
+
+
+class TaskState(str, Enum):
+    submitted = "submitted"
+    working = "working"
+    input_required = "input-required"
+    auth_required = "auth-required"
+    completed = "completed"
+    failed = "failed"
+    canceled = "canceled"
+    rejected = "rejected"
+
+
+PartUnion = Annotated[TextPart | FilePart | DataPart, Field(discriminator="kind")]
+
+
+class Part(RootModel[PartUnion]):
+    """Wrapper that preserves .root access pattern used throughout the codebase."""
+    pass
 
 
 class Message(BaseModel):
     role: Literal["user", "agent"]
-    kind: str = "message"  # Add kind attribute for proper processing
+    kind: str = "message"
+    message_id: str | None = Field(default=None, alias="messageId")
+    context_id: str | None = Field(default=None, alias="contextId")
     parts: list[Part]
     metadata: dict[str, Any] | None = None
+
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
 
 
 class TaskStatus(BaseModel):
     state: TaskState
     message: Message | None = None
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime | None = Field(default_factory=datetime.now)
 
     @field_serializer("timestamp")
-    def serialize_dt(self, dt: datetime, _info):
-        return dt.isoformat()
+    def serialize_dt(self, dt: datetime | None, _info):
+        return dt.isoformat() if dt else None
 
 
 class Artifact(BaseModel):
+    artifact_id: str | None = Field(default=None, alias="artifactId")
     name: str | None = None
     description: str | None = None
     parts: list[Part]
@@ -59,30 +105,53 @@ class Artifact(BaseModel):
     append: bool | None = None
     lastChunk: bool | None = None
 
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
 
 class Task(BaseModel):
     id: str
-    kind: str = "task"  # Add kind attribute to match TypeScript definition
+    kind: str = "task"
     sessionId: str | None = None
+    context_id: str | None = Field(default=None, alias="contextId")
     status: TaskStatus
     artifacts: list[Artifact] | None = None
     history: list[Message] | None = None
     metadata: dict[str, Any] | None = None
 
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_from_sdk(cls, data):
+        """Accept SDK Task objects or dicts transparently."""
+        if isinstance(data, dict):
+            return data
+        if type(data).__module__.startswith("common.types"):
+            return data
+        if hasattr(data, "model_dump"):
+            return data.model_dump(mode="json")
+        return data
+
 
 class TaskStatusUpdateEvent(BaseModel):
     id: str
-    kind: str = "status-update"  # Add kind attribute for proper processing
+    kind: str = "status-update"
+    context_id: str | None = Field(default=None, alias="contextId")
     status: TaskStatus
     final: bool = False
     metadata: dict[str, Any] | None = None
 
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
 
 class TaskArtifactUpdateEvent(BaseModel):
     id: str
-    kind: str = "artifact-update"  # Add kind attribute for proper processing
+    kind: str = "artifact-update"
+    context_id: str | None = Field(default=None, alias="contextId")
     artifact: Artifact
     metadata: dict[str, Any] | None = None
+
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
 
 
 class AuthenticationInfo(BaseModel):
@@ -299,9 +368,27 @@ class AgentProvider(BaseModel):
 
 
 class AgentCapabilities(BaseModel):
-    streaming: bool = False
-    pushNotifications: bool = False
-    stateTransitionHistory: bool = False
+    model_config = ConfigDict(extra="ignore")
+
+    streaming: bool | None = False
+    pushNotifications: bool | None = False
+    stateTransitionHistory: bool | None = False
+
+    @property
+    def push_notifications(self) -> bool | None:
+        return self.pushNotifications
+
+    @push_notifications.setter
+    def push_notifications(self, value: bool | None) -> None:
+        self.pushNotifications = value
+
+    @property
+    def state_transition_history(self) -> bool | None:
+        return self.stateTransitionHistory
+
+    @state_transition_history.setter
+    def state_transition_history(self, value: bool | None) -> None:
+        self.stateTransitionHistory = value
 
 
 class AgentAuthentication(BaseModel):
@@ -320,17 +407,45 @@ class AgentSkill(BaseModel):
 
 
 class AgentCard(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     name: str
     description: str | None = None
     url: str
     provider: AgentProvider | None = None
     version: str
     documentationUrl: str | None = None
+    iconUrl: str | None = None
     capabilities: AgentCapabilities
     authentication: AgentAuthentication | None = None
     defaultInputModes: list[str] = ["text"]
     defaultOutputModes: list[str] = ["text"]
     skills: list[AgentSkill]
+    supports_authenticated_extended_card: bool | None = None
+
+    @property
+    def documentation_url(self) -> str | None:
+        return self.documentationUrl
+
+    @documentation_url.setter
+    def documentation_url(self, value: str | None) -> None:
+        self.documentationUrl = value
+
+    @property
+    def default_input_modes(self) -> list[str]:
+        return self.defaultInputModes
+
+    @default_input_modes.setter
+    def default_input_modes(self, value: list[str]) -> None:
+        self.defaultInputModes = value
+
+    @property
+    def default_output_modes(self) -> list[str]:
+        return self.defaultOutputModes
+
+    @default_output_modes.setter
+    def default_output_modes(self, value: list[str]) -> None:
+        self.defaultOutputModes = value
 
 
 class A2AClientError(Exception):

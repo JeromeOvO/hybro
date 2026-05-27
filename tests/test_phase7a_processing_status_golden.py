@@ -40,6 +40,8 @@ def _make_rmc_for_v2_result(manager: SSEManager) -> RoomMessageCenter:
     rmc._emit_unified_summary = AsyncMock()
     rmc._trigger_compaction_safe = AsyncMock()
     rmc._notify_all_non_terminal_tasks_failed = AsyncMock()
+    rmc.build_turn_content = None
+    rmc.supervisor_planning_error_cls = RuntimeError
     rmc._turn_event_appender = None
     return rmc
 
@@ -329,6 +331,7 @@ async def test_golden_clarify_resume_retry_failure_completed_is_transport_only(
     rmc.supervisor_executor = SimpleNamespace(
         run=AsyncMock(side_effect=SupervisorPlanningError("retry failed"))
     )
+    rmc.supervisor_planning_error_cls = SupervisorPlanningError
     rmc._persist_failed_trajectory = AsyncMock()
     rmc._log_room_memory_stats = AsyncMock()
 

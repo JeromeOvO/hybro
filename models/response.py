@@ -1,17 +1,11 @@
 from datetime import datetime
 from typing import Any, Generic, TypeVar
 
-from a2a.types import (
-    AgentCard,
-    Message,
-    SendMessageResponse,
-    SendStreamingMessageResponse,
-    Task,
-    TaskState,
-)
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from models.agent import Agent, AgentStatus
+from common.a2a_constants import CommonTaskState
+from common.types import AgentCard, Task
+from models.agent import Agent, AgentStatus, coerce_legacy_agent_card
 from models.memory import ChatContext, RoomMemory
 from models.room import Room, RoomAgentMessage, RoomMessage, RoomUserMessage
 from models.task import BaseTask, MetaTask, TaskSession
@@ -36,7 +30,7 @@ class Step(BaseModel):
     step_id: str
     description: str
     agent_id: str | None = None
-    status: str = TaskState.submitted
+    status: str = CommonTaskState.SUBMITTED.value
     input_data: Any | None = None
     output_data: Any | None = None
     priority: int = 2  # Default priority
@@ -49,7 +43,7 @@ class Step(BaseModel):
 
 class TaskResponse(BaseModel):
     task_id: str
-    status: str = TaskState.submitted
+    status: str = CommonTaskState.SUBMITTED.value
     steps: list[Step] = Field(default_factory=list)
     result: Any | None = None
     error: str | None = None
@@ -67,6 +61,11 @@ class InspectionCenterResponse(BaseModel):
     result: list[str]
     status_code: int = 200
 
+    @field_validator("agent_card", mode="before")
+    @classmethod
+    def _coerce_agent_card(cls, value: Any) -> Any:
+        return coerce_legacy_agent_card(value)
+
 
 class InsepectionCenterConnectionValidationResponse(BaseModel):
     agent_url: str
@@ -74,6 +73,11 @@ class InsepectionCenterConnectionValidationResponse(BaseModel):
     is_valid: bool
     result: list[str] | None = None
     status_code: int = 200
+
+    @field_validator("agent_card", mode="before")
+    @classmethod
+    def _coerce_agent_card(cls, value: Any) -> Any:
+        return coerce_legacy_agent_card(value)
 
 
 class OrchestrationResponse(BaseModel):
@@ -107,6 +111,11 @@ class AgentCenterResponse(BaseModel):
     success: bool
     error: str | None = None
     status_code: int = 200
+
+    @field_validator("agent_card", mode="before")
+    @classmethod
+    def _coerce_agent_card(cls, value: Any) -> Any:
+        return coerce_legacy_agent_card(value)
     
 
 class AgentResponse(BaseModel):
@@ -116,6 +125,11 @@ class AgentResponse(BaseModel):
 
     # Agent card
     agent_card: AgentCard
+
+    @field_validator("agent_card", mode="before")
+    @classmethod
+    def _coerce_agent_card(cls, value: Any) -> Any:
+        return coerce_legacy_agent_card(value)
 
     # Agent status
     agent_status: AgentStatus = AgentStatus.active
@@ -232,8 +246,8 @@ class RoomCenterAgentMessageResponse(BaseModel):
     agent_id: str | None = None
     agent_name: str | None = None
     message: RoomAgentMessage | None = None
-    a2a_response: SendMessageResponse | SendStreamingMessageResponse | None = None
-    a2a_message: Message | None = None  # The prepared A2A message ready to send
+    a2a_response: Any | None = None
+    a2a_message: Any | None = None
     message_list: list[RoomAgentMessage] | None = None
     success: bool
     error: str | None = None

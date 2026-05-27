@@ -63,6 +63,12 @@ LEGACY_TASK_STATE_VALUE_MAP = {
     "input_required": "input-required",
     "auth_required": "auth-required",
 }
+LEGACY_PROCESSING_STATUS_VALUE_MAP = {
+    "input_required": "awaiting_input",
+    "input-required": "awaiting_input",
+    "auth_required": "awaiting_input",
+    "auth-required": "awaiting_input",
+}
 VALID_ERROR_TASK_STATES = {"failed", "canceled", "rejected"}
 VALID_INTERACTIVE_TASK_STATES = {"input-required", "auth-required"}
 VALID_PROCESSING_STATUS_STATES = {
@@ -207,14 +213,17 @@ def _agent_event_details(value: Any) -> str | None:
 def _normalize_hub_state(kind: str, value: str | None) -> str | None:
     if value is None:
         return None
-    normalized = LEGACY_TASK_STATE_VALUE_MAP.get(value, value)
     if kind == "processing_status":
+        normalized = LEGACY_PROCESSING_STATUS_VALUE_MAP.get(value, value)
         allowed = VALID_PROCESSING_STATUS_STATES
     elif kind == "error":
+        normalized = LEGACY_TASK_STATE_VALUE_MAP.get(value, value)
         allowed = VALID_ERROR_TASK_STATES
     elif kind == "interactive":
+        normalized = LEGACY_TASK_STATE_VALUE_MAP.get(value, value)
         allowed = VALID_INTERACTIVE_TASK_STATES
     else:
+        normalized = LEGACY_TASK_STATE_VALUE_MAP.get(value, value)
         return normalized
     if normalized not in allowed:
         raise ValueError(f"Unsupported Hub AgentEvent state for {kind}: {value}")

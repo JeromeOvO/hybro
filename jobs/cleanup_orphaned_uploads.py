@@ -7,15 +7,13 @@ Deletes file_uploads records (and their S3 objects) that are older than
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import Any, Protocol
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from jobs.constants import ORPHANED_UPLOAD_CLEANER
-
-if TYPE_CHECKING:
-    from infrastructure.leader_election import LeaderElection
 
 logger = get_logger(__name__)
 
@@ -23,16 +21,38 @@ DEFAULT_INTERVAL_HOURS = 24
 MAX_AGE_HOURS = 24
 
 
+class LeaderGate(Protocol):
+    async def try_acquire(self, name: str, ttl_seconds: int) -> bool: ...
+
+    async def release(self, name: str) -> None: ...
+
+
+@dataclass(frozen=True)
+class OrphanedUploadCleanerDeps:
+    file_uploads_collection: Any
+    room_user_messages_collection: Any
+    object_storage: Any
+
+
 class OrphanedUploadCleaner:
     def __init__(self, interval_hours: int = DEFAULT_INTERVAL_HOURS):
         self.interval_hours = interval_hours
         self._running = False
         self._task: asyncio.Task | None = None
-        self._leader: LeaderElection | None = None
+        self._leader: LeaderGate | None = None
+        self._deps: OrphanedUploadCleanerDeps | None = None
 
-    def set_leader_election(self, leader: LeaderElection | None) -> None:
+    def set_leader_election(self, leader: LeaderGate | None) -> None:
         """Attach a LeaderElection instance for distributed leader gating."""
         self._leader = leader
+
+    def set_cleanup_deps(self, deps: OrphanedUploadCleanerDeps) -> None:
+        self._deps = deps
+
+    def _require_cleanup_deps(self) -> OrphanedUploadCleanerDeps:
+        if self._deps is None:
+            raise RuntimeError("Orphaned upload cleaner dependencies are not bound")
+        return self._deps
 
     async def start(self) -> None:
         if self._running:
@@ -74,7 +94,7 @@ class OrphanedUploadCleaner:
         """Run a single iteration, gated by leader election if available."""
         if self._leader:
             ttl = int(self.interval_hours * 3600 * 2)
-            acquired = await self._leader.try_acquire("orphaned_upload_cleaner", ttl)
+            acquired = await self._leader.try_acquire(ORPHANED_UPLOAD_CLEANER, ttl)
             if not acquired:
                 return  # another instance is the leader
             try:
@@ -82,7 +102,7 @@ class OrphanedUploadCleaner:
                 if deleted:
                     logger.info("Cleaned up %d orphaned uploads", deleted)
             finally:
-                await self._leader.release("orphaned_upload_cleaner")
+                await self._leader.release(ORPHANED_UPLOAD_CLEANER)
         else:
             deleted = await self.cleanup_orphaned_uploads()
             if deleted:
@@ -92,27 +112,25 @@ class OrphanedUploadCleaner:
         self, max_age_hours: int = MAX_AGE_HOURS
     ) -> int:
         """Delete file_uploads not referenced by any message after max_age_hours."""
-        from database.mongodb import mongodb
-        from services.s3_service import s3_service
-
+        deps = self._require_cleanup_deps()
         cutoff = utcnow() - timedelta(hours=max_age_hours)
-        cursor = mongodb.file_uploads_collection.find(
+        cursor = deps.file_uploads_collection.find(
             {"uploaded_at": {"$lt": cutoff}}
         )
         deleted = 0
         async for doc in cursor:
-            ref = await mongodb.room_user_messages_collection.find_one(
+            ref = await deps.room_user_messages_collection.find_one(
                 {"message_content.attachments.file_id": doc["file_id"]}
             )
             if ref is None:
-                s3_ok = await s3_service.delete_file(doc["s3_key"])
-                if not s3_ok:
+                storage_deleted = await deps.object_storage.delete_file(doc["s3_key"])
+                if not storage_deleted:
                     logger.warning(
-                        "S3 deletion failed for orphan %s — keeping metadata for retry",
+                        "Object deletion failed for orphan %s — keeping metadata for retry",
                         doc["file_id"],
                     )
                     continue
-                await mongodb.file_uploads_collection.delete_one({"_id": doc["_id"]})
+                await deps.file_uploads_collection.delete_one({"_id": doc["_id"]})
                 deleted += 1
                 logger.info("Cleaned up orphaned upload: %s", doc["file_id"])
 

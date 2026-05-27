@@ -13,6 +13,7 @@ from common.utils.logger import get_logger
 from common.utils.time import utcnow
 
 from context_memory.config import MemorySearchConfig
+from context_memory.content_storage import is_content_expired
 from context_memory.models import SearchRankingRecord
 from context_memory.translators import search_result_from_record
 
@@ -192,6 +193,8 @@ async def keyword_search(
     docs = await content_repository.text_search(room_id, query, limit=50)
     records = []
     for doc in docs:
+        if is_content_expired(doc):
+            continue
         notes = doc.get("turn_notes") or {}
         one_liner = notes.get("one_liner") if isinstance(notes, dict) else None
         content_type = doc.get("content_type") or "text"
@@ -315,7 +318,11 @@ async def hydrate_empty_results(
     if not turn_ids:
         return
     docs = await content_repository.hydrate_turn_notes(room_id, turn_ids)
-    by_turn = {doc.get("turn_id"): doc for doc in docs}
+    by_turn = {
+        doc.get("turn_id"): doc
+        for doc in docs
+        if not is_content_expired(doc)
+    }
     for record in results:
         if record.content or record.turn_id not in by_turn:
             continue

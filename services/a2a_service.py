@@ -31,6 +31,7 @@ from a2a.utils.constants import (
     PREV_AGENT_CARD_WELL_KNOWN_PATH,
 )
 
+from a2a_adapter.message_factory import from_sdk_task, to_sdk_message
 from common.utils.logger import get_logger
 from config.settings import settings
 from database.mongodb import mongodb
@@ -288,7 +289,7 @@ class A2AService:
 
         # Keep the in-memory object in sync with what was written to the DB.
         if current_message.message_content:
-            current_message.message_content.message_task = placeholder_task
+            current_message.message_content.message_task = from_sdk_task(placeholder_task)
         current_message.has_task_tracking = True
 
         return {
@@ -373,7 +374,7 @@ class A2AService:
         # blocking=True (no push_config) tells it to hold the connection until done.
         use_blocking = push_config is None
         payload = MessageSendParams(
-            message=message,
+            message=to_sdk_message(message),
             configuration=MessageSendConfiguration(
                 accepted_output_modes=self._resolve_accepted_modes(agent_card),
                 push_notification_config=push_config,
@@ -648,7 +649,7 @@ class A2AService:
         try:
             async with self.create_a2a_client(agent_card) as a2a_client:
                 payload = MessageSendParams(
-                    message=message,
+                    message=to_sdk_message(message),
                     configuration=MessageSendConfiguration(
                         accepted_output_modes=self._resolve_accepted_modes(agent_card)
                     ),
@@ -708,7 +709,7 @@ class A2AService:
         try:
             async with self.create_a2a_client(agent_card) as a2a_client:
                 payload = MessageSendParams(
-                    message=message,
+                    message=to_sdk_message(message),
                     configuration=MessageSendConfiguration(
                         accepted_output_modes=self._resolve_accepted_modes(agent_card)
                     ),

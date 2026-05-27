@@ -7,12 +7,10 @@ Tests cover:
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from fastapi import HTTPException
 
 from api.inspection_center import inspect_agent, inspect_a2a_connection
-
-PATCH_IC = "api.inspection_center.inspection_center"
 
 
 class TestInspectAgent:
@@ -32,9 +30,9 @@ class TestInspectAgent:
         request.json = AsyncMock(return_value={"agent_url": "https://agent.example.com"})
         expected = {"name": "TestAgent", "status": "ok"}
 
-        with patch(PATCH_IC) as mock_ic:
-            mock_ic.inspect_agent_card = AsyncMock(return_value=expected)
-            result = await inspect_agent(request)
+        mock_ic = MagicMock()
+        mock_ic.inspect_agent_card = AsyncMock(return_value=expected)
+        result = await inspect_agent(request, center=mock_ic)
 
         assert result == expected
         mock_ic.inspect_agent_card.assert_called_once()
@@ -59,9 +57,9 @@ class TestInspectA2AConnection:
         request.json = AsyncMock(return_value={"agent_url": "https://agent.example.com"})
         expected = {"connected": True}
 
-        with patch(PATCH_IC) as mock_ic:
-            mock_ic.inspect_a2a_connection = AsyncMock(return_value=expected)
-            result = await inspect_a2a_connection(request)
+        mock_ic = MagicMock()
+        mock_ic.inspect_a2a_connection = AsyncMock(return_value=expected)
+        result = await inspect_a2a_connection(request, center=mock_ic)
 
         assert result == expected
         mock_ic.inspect_a2a_connection.assert_called_once()

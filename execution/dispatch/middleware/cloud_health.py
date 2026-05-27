@@ -19,20 +19,26 @@ import time
 from typing import TYPE_CHECKING
 
 from common.utils.logger import get_logger
-from config.settings import settings
 from models.agent import AgentStatus
 from execution.dispatch.dispatch_middleware import DispatchContext
 
 if TYPE_CHECKING:
     from models.processing import ProcessingResult
-    from services.agent_health_service import AgentHealthService
 
 logger = get_logger(__name__)
 
 
 class CloudHealthMiddleware:
-    def __init__(self, health_service: AgentHealthService) -> None:
+    def __init__(
+        self,
+        health_service: AgentHealthService,
+        *,
+        cache_ttl: float = 30.0,
+        check_timeout: float = 5.0,
+    ) -> None:
         self._health = health_service
+        self._cache_ttl = cache_ttl
+        self._check_timeout = check_timeout
         self._cache: dict[str, tuple[bool, float]] = {}
 
     def _get_cached(self, agent_id: str) -> bool | None:
@@ -40,7 +46,7 @@ class CloudHealthMiddleware:
         if entry is None:
             return None
         is_healthy, ts = entry
-        if time.monotonic() - ts > settings.cloud_health_cache_ttl:
+        if time.monotonic() - ts > self._cache_ttl:
             del self._cache[agent_id]
             return None
         return is_healthy
@@ -57,7 +63,7 @@ class CloudHealthMiddleware:
 
         if cached is None:
             is_healthy, fetched_card = await self._health.check_agent_health(
-                ctx.agent, timeout=settings.cloud_health_check_timeout
+                ctx.agent, timeout=self._check_timeout
             )
             self._cache[agent_id] = (is_healthy, time.monotonic())
             if is_healthy and fetched_card:

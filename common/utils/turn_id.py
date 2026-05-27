@@ -9,10 +9,16 @@ See spec: docs/superpowers/specs/2026-04-11-room-message-area-redesign.md Sectio
 
 from __future__ import annotations
 
-from models.room import RoomAgentMessage
+from typing import Protocol
 
 
-async def resolve_turn_id(msg: RoomAgentMessage, db_service) -> str:
+class TurnMessage(Protocol):
+    message_id: str
+    related_message_id: str | None
+    turn_id: str | None
+
+
+async def resolve_turn_id(msg: TurnMessage, db_service) -> str:
     if msg.turn_id:
         return msg.turn_id
 

@@ -14,19 +14,31 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6 for compaction design.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 from common.utils.logger import get_logger
 from jobs.constants import COMPACTION_SWEEP
 from models.context_config import compaction_config
 
-if TYPE_CHECKING:
-    from infrastructure.leader_election import LeaderElection
-
 logger = get_logger(__name__)
 
 DEFAULT_INTERVAL_MINUTES = 30
 MAX_CONCURRENT_COMPACTIONS = 5
+
+
+class LeaderGate(Protocol):
+    async def try_acquire(self, name: str, ttl_seconds: int) -> bool: ...
+
+    async def release(self, name: str) -> None: ...
+
+
+@dataclass(frozen=True)
+class CompactionSweepDeps:
+    room_memories_collection: Any
+    get_room_ids_with_non_terminal_runs: Callable[[], Awaitable[list[str]]]
+    compaction_service: Any
 
 
 class CompactionSweep:
@@ -36,11 +48,20 @@ class CompactionSweep:
         self.interval_minutes = interval_minutes
         self._running = False
         self._task: asyncio.Task | None = None
-        self._leader: LeaderElection | None = None
+        self._leader: LeaderGate | None = None
+        self._deps: CompactionSweepDeps | None = None
 
-    def set_leader_election(self, leader: LeaderElection | None) -> None:
+    def set_leader_election(self, leader: LeaderGate | None) -> None:
         """Attach a LeaderElection instance for distributed leader gating."""
         self._leader = leader
+
+    def set_sweep_deps(self, deps: CompactionSweepDeps) -> None:
+        self._deps = deps
+
+    def _require_sweep_deps(self) -> CompactionSweepDeps:
+        if self._deps is None:
+            raise RuntimeError("Compaction sweep dependencies are not bound")
+        return self._deps
 
     async def start(self) -> None:
         if self._running:
@@ -101,12 +122,10 @@ class CompactionSweep:
 
         Returns a summary dict: {scanned, compacted, skipped, errors}.
         """
-        from database.mongodb import mongodb
-        from services.compaction_service import compaction_service
-
+        deps = self._require_sweep_deps()
         stats = {"scanned": 0, "compacted": 0, "skipped": 0, "errors": 0}
 
-        collection = mongodb.room_memories_collection
+        collection = deps.room_memories_collection
         if collection is None:
             logger.warning("Compaction sweep: room_memory collection not available")
             return stats
@@ -114,7 +133,7 @@ class CompactionSweep:
         # Pre-fetch room_ids with non-terminal runs (runs are source of truth)
         active_room_ids: set[str] = set()
         try:
-            ids = await mongodb.get_room_ids_with_non_terminal_runs()
+            ids = await deps.get_room_ids_with_non_terminal_runs()
             active_room_ids = {rid for rid in ids if rid}
         except Exception as e:
             logger.warning("Compaction sweep: could not check active rooms: %s", e)
@@ -128,7 +147,7 @@ class CompactionSweep:
                     queue.task_done()
                     return
                 try:
-                    result = await compaction_service.compact_if_needed(rid)
+                    result = await deps.compaction_service.compact_if_needed(rid)
                     if result and result.compacted_count > 0:
                         stats["compacted"] += 1
                         logger.info(

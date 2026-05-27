@@ -23,8 +23,8 @@ from common.utils.a2a_helpers import get_text_from_message
 from common.utils.cancellation import CancellationToken
 from models.processing import ProcessingContext, ProcessingStatus
 from models.room import MessageContent, RoomAgentMessage
+from models.error import A2AServiceError
 from modules.transports.direct import DirectTransport, MessageStreamingState
-from services.a2a_service import A2AServiceError
 
 
 # =============================================================================

@@ -31,11 +31,63 @@ from models.memory import (
     ContentType,
 )
 from models.hitl import HITLRequest, HITLStatus, HITLPromptType
+from models.request import AgentTaskRequest, TaskCenterRequest, TaskRequest
+from models.response import TaskCenterResponse
 
 
 # =============================================================================
 # Room Model Tests
 # =============================================================================
+
+
+class TestLegacyTaskRequestModels:
+    """Tests for legacy request helpers that build A2A SDK messages."""
+
+    def test_task_request_to_message_builds_valid_sdk_message(self):
+        message = TaskRequest(query="hello", context={"room_id": "room-1"}).to_message()
+
+        assert message.message_id
+        assert message.role == "user"
+        assert message.metadata == {"room_id": "room-1"}
+        assert message.model_dump(mode="json", by_alias=True)["messageId"]
+
+    def test_sdk_task_payloads_serialize_with_runtime_serializer(self):
+        task = Task(
+            id="task-1",
+            contextId="ctx-1",
+            status=TaskStatus(state=TaskState.working),
+        )
+
+        content = MessageContent(message_task=task)
+        request = TaskCenterRequest(task=task)
+        response = TaskCenterResponse(success=True, task=task)
+
+        assert content.model_dump(mode="json")["message_task"]["status"] == {
+            "message": None,
+            "state": "working",
+            "timestamp": None,
+        }
+        assert request.model_dump(mode="json")["task"]["contextId"] == "ctx-1"
+        assert response.model_dump(mode="json")["task"]["contextId"] == "ctx-1"
+
+    def test_agent_task_request_to_message_builds_valid_sdk_message(self):
+        message = AgentTaskRequest(
+            task_id="task-1",
+            agent_id="agent-1",
+            step_id="step-1",
+            input_data={"text": "hello"},
+            context={"room_id": "room-1"},
+        ).to_message()
+
+        assert message.message_id
+        assert message.role == "user"
+        assert message.metadata == {
+            "task_id": "task-1",
+            "agent_id": "agent-1",
+            "step_id": "step-1",
+            "room_id": "room-1",
+        }
+        assert message.model_dump(mode="json", by_alias=True)["messageId"]
 
 
 class TestRoomModel:

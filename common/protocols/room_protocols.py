@@ -5,6 +5,7 @@ from common.dto import (
     AgentMessageInput,
     AgentInfo,
     CreateRoomRequest,
+    HubPublishLineageSnapshot,
     MembershipUpdateRequest,
     RoomInfo,
     RoomMessageInfo,
@@ -59,8 +60,33 @@ class RoomHistoryReader(Protocol):
 
 @runtime_checkable
 class RoomOwnershipReader(Protocol):
+    async def get_room_owner(self, room_id: str) -> str | None: ...
     async def verify_room_agent_membership(self, room_id: str, agent_id: str) -> bool: ...
     async def verify_room_hub_ownership(self, room_id: str, hub_id: str) -> bool: ...
+
+
+@runtime_checkable
+class HubPublishAuthorizationReader(Protocol):
+    async def authorize_hub_publish(
+        self, *, hub_id: str, owner_id: str, room_id: str, agent_message_id: str
+    ) -> HubPublishLineageSnapshot | None: ...
+
+
+@runtime_checkable
+class HubPublishLineageReader(Protocol):
+    async def get_hub_publish_lineage(
+        self, *, room_id: str, agent_message_id: str
+    ) -> HubPublishLineageSnapshot | None: ...
+
+
+@runtime_checkable
+class MessageCancellationReader(Protocol):
+    async def is_message_cancelled(self, message_id: str) -> bool: ...
+
+
+@runtime_checkable
+class RoomAgentTaskTracker(Protocol):
+    async def track_hub_task(self, message_id: str, task_data: dict) -> None: ...
 
 
 @runtime_checkable
@@ -70,6 +96,10 @@ class RoomMembershipSeedSource(Protocol):
 
 
 __all__ = [
+    "HubPublishAuthorizationReader",
+    "HubPublishLineageReader",
+    "MessageCancellationReader",
+    "RoomAgentTaskTracker",
     "RoomHistoryReader",
     "RoomManagement",
     "RoomMembershipSeedSource",

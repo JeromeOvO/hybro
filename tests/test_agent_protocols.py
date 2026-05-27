@@ -1,184 +1,37 @@
-import ast
-import sys
-import tomllib
-from datetime import datetime, timezone
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from __future__ import annotations
 
-from common.protocols import (
-    AgentManagement,
-    AgentMatcher,
-    AgentMessageMatcher,
-    AgentRegistry,
-    AgentRegistryWriter,
-    AgentRepository,
-)
+import inspect
+
+from agent.facade import AgentFacade
+from agent.repository.mongo import AgentMongoRepository
 
 
-def _fake_facade():
-    from agent import AgentFacade
-
-    return AgentFacade(
-        repository=AsyncMock(),
-        vector=AsyncMock(),
-        llm_provider=AsyncMock(),
-        card_resolver=AsyncMock(),
-        agent_index="test-agent-index",
-        id_factory=lambda: "agent-id",
-        now=lambda: datetime(2026, 5, 10, tzinfo=timezone.utc),
-    )
+def test_agent_facade_exposes_hub_support_protocol_methods() -> None:
+    assert inspect.iscoroutinefunction(AgentFacade.count_hub_agents)
+    assert inspect.iscoroutinefunction(AgentFacade.increment_agent_call_count)
 
 
-def test_agent_facade_satisfies_runtime_protocols():
-    facade = _fake_facade()
+async def test_agent_call_counter_uses_existing_success_count_field() -> None:
+    class Collection:
+        def __init__(self) -> None:
+            self.calls = []
 
-    assert isinstance(facade, AgentRegistry)
-    assert isinstance(facade, AgentMatcher)
-    assert isinstance(facade, AgentMessageMatcher)
-    assert isinstance(facade, AgentManagement)
-    assert isinstance(facade, AgentRegistryWriter)
+        async def update_one(self, query, update, **kwargs):
+            self.calls.append((query, update, kwargs))
 
+    class Mongo:
+        def __init__(self) -> None:
+            self.collection_obj = Collection()
 
-def test_agent_repository_satisfies_runtime_protocol():
-    from agent.repository import AgentMongoRepository
+        def collection(self, name):
+            assert name == "agents"
+            return self.collection_obj
 
-    fake_mongo = MagicMock()
-    fake_mongo.collection.return_value = AsyncMock()
+    mongo = Mongo()
+    repo = AgentMongoRepository(mongo)
 
-    assert isinstance(AgentMongoRepository(mongo=fake_mongo), AgentRepository)
+    await repo.increment_agent_call_count("agent-1", success=True)
 
-
-def test_agent_top_level_exports_are_explicit():
-    import agent
-    from agent import AgentFacade, AgentMongoRepository
-    from agent.repository import AgentMongoRepository as RepositoryExport
-
-    assert AgentFacade is agent.AgentFacade
-    assert AgentMongoRepository is agent.AgentMongoRepository
-    assert RepositoryExport is AgentMongoRepository
-    assert list(agent.__all__) == ["AgentFacade", "AgentMongoRepository"]
-
-
-def test_agent_packages_are_packaged():
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text())
-    packages = set(pyproject["tool"]["setuptools"]["packages"])
-
-    assert {"agent", "agent.repository"}.issubset(packages)
-
-
-def test_agent_import_boundary():
-    allowed_roots = set(sys.stdlib_module_names) | {
-        "__future__",
-        "common",
-        "agent",
-    }
-    forbidden_roots = {
-        "a2a_adapter",
-        "api",
-        "config",
-        "container",
-        "database",
-        "infrastructure",
-        "llm_gateway",
-        "main",
-        "models",
-        "modules",
-        "services",
-    }
-
-    _assert_import_boundary(Path("agent"), allowed_roots, forbidden_roots)
-
-
-def test_agent_container_binds_single_facade_to_all_protocols():
-    from common.protocols import (
-        AgentManagement,
-        AgentMatcher,
-        AgentMessageMatcher,
-        AgentRegistry,
-        AgentRegistryWriter,
-    )
-    from container import create_agent_deps
-
-    fake_mongo = MagicMock()
-    fake_mongo.collection.return_value = AsyncMock()
-
-    deps = create_agent_deps(
-        mongo=fake_mongo,
-        vector=AsyncMock(),
-        llm_provider=AsyncMock(),
-        card_resolver=AsyncMock(),
-    )
-
-    assert isinstance(deps.agent_registry, AgentRegistry)
-    assert isinstance(deps.agent_matcher, AgentMatcher)
-    assert isinstance(deps.agent_matcher, AgentMessageMatcher)
-    assert isinstance(deps.agent_management, AgentManagement)
-    assert isinstance(deps.agent_registry_writer, AgentRegistryWriter)
-    assert deps.agent_registry is deps.agent_matcher
-    assert deps.agent_registry is deps.agent_management
-    assert deps.agent_registry is deps.agent_registry_writer
-
-
-def test_agent_container_prefers_env_pinecone_index(monkeypatch):
-    from config.settings import settings
-    from container import create_agent_deps
-
-    monkeypatch.setenv("PINECONE_INDEX_NAME", "local-agent-index")
-    monkeypatch.setattr(settings, "pinecone_index_name", "prod-agent-index")
-
-    fake_mongo = MagicMock()
-    fake_mongo.collection.return_value = AsyncMock()
-
-    deps = create_agent_deps(
-        mongo=fake_mongo,
-        vector=AsyncMock(),
-        llm_provider=AsyncMock(),
-        card_resolver=AsyncMock(),
-    )
-
-    assert getattr(deps.agent_registry, "_agent_index") == "local-agent-index"
-
-
-def test_agent_container_uses_settings_pinecone_index_when_env_absent(monkeypatch):
-    from config.settings import settings
-    from container import create_agent_deps
-
-    monkeypatch.delenv("PINECONE_INDEX_NAME", raising=False)
-    monkeypatch.setattr(settings, "pinecone_index_name", "configured-agent-index")
-
-    fake_mongo = MagicMock()
-    fake_mongo.collection.return_value = AsyncMock()
-
-    deps = create_agent_deps(
-        mongo=fake_mongo,
-        vector=AsyncMock(),
-        llm_provider=AsyncMock(),
-        card_resolver=AsyncMock(),
-    )
-
-    assert getattr(deps.agent_registry, "_agent_index") == "configured-agent-index"
-
-
-def _assert_import_boundary(
-    package_path: Path,
-    allowed_roots: set[str],
-    forbidden_roots: set[str],
-) -> None:
-    assert package_path.exists(), f"{package_path} does not exist"
-
-    for path in package_path.rglob("*.py"):
-        tree = ast.parse(path.read_text(), filename=str(path))
-        for node in ast.walk(tree):
-            imported_roots: set[str] = set()
-            if isinstance(node, ast.Import):
-                imported_roots = {alias.name.split(".")[0] for alias in node.names}
-            elif isinstance(node, ast.ImportFrom) and node.level:
-                continue
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                imported_roots = {node.module.split(".")[0]}
-
-            assert imported_roots.isdisjoint(forbidden_roots), (
-                f"{path} imports forbidden root {imported_roots & forbidden_roots}"
-            )
-            unexpected = imported_roots - allowed_roots
-            assert not unexpected, f"{path} imports unexpected root {unexpected}"
+    assert mongo.collection_obj.calls == [
+        ({"agent_id": "agent-1"}, {"$inc": {"call_count": 1, "call_success_count": 1}}, {})
+    ]

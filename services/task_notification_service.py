@@ -21,7 +21,7 @@ import uuid
 from collections import Counter
 from typing import TYPE_CHECKING
 
-from a2a.types import (
+from common.types import (
     Artifact,
     Part,
     Task,

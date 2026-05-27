@@ -672,3 +672,24 @@ async def test_facade_content_helpers():
     assert await service.content_get_content_by_document_id(document_id) == "stored"
     assert await service.content_get_content_by_turn_id("r1", "t1") == "stored"
     assert (await service.content_get_content_stats_for_room("r1"))["total_documents"] == 1
+
+
+@pytest.mark.asyncio
+async def test_facade_content_helpers_do_not_hydrate_expired_documents():
+    content_repo = StateContentRepository()
+    content_repo.docs["doc-expired"] = {
+        "document_id": "doc-expired",
+        "room_id": "r1",
+        "turn_id": "t1",
+        "content": "expired",
+        "expires_at": datetime(2026, 5, 12, tzinfo=timezone.utc),
+    }
+    service = facade(content_repo=content_repo)
+
+    assert await service.content_get_content_by_document_id("doc-expired") is None
+    assert await service.content_get_content_by_turn_id("r1", "t1") is None
+    with pytest.raises(Exception, match="not found in storage"):
+        await service.content_expand_mongodb_reference(
+            {"storage_type": "mongodb", "document_id": "doc-expired"},
+            "t1",
+        )

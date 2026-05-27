@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from common.dto.base import FrozenDTO
 
@@ -77,8 +77,28 @@ class CreateRoomRequest(FrozenDTO):
     membership_seed: MembershipSeed
     extend_info: dict[str, Any] | None = None
 
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, CreateRoomRequest):
+            return self.model_dump(mode="python") == other.model_dump(mode="python")
+        return super().__eq__(other)
 
-RoomCreationParams = CreateRoomRequest
+    __hash__ = None
+
+
+class RoomCreationParams(CreateRoomRequest):
+    """Defaulted room creation DTO for compatibility with legacy creation inputs."""
+
+    membership_seed: MembershipSeed = Field(
+        default_factory=lambda: MembershipSeed(mode="manual")
+    )
+    __hash__ = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def materialize_default_membership_seed(cls, data):
+        if isinstance(data, dict) and "membership_seed" not in data:
+            return {**data, "membership_seed": MembershipSeed(mode="manual")}
+        return data
 
 
 class UserMessageInput(FrozenDTO):
@@ -111,9 +131,26 @@ class SavedUserMessage(FrozenDTO):
 RoomMessageInfo = MessageRecord
 
 
+class HubPublishLineageSnapshot(FrozenDTO):
+    room_id: str
+    room_owner_id: str
+    agent_message_id: str
+    agent_id: str
+    agent_hub_id: str
+    related_message_id: str | None = None
+    turn_id: str | None = None
+    run_id: str | None = None
+    root_user_message_id: str | None = None
+    tracked_task_id: str | None = None
+    lifecycle_message_id: str | None = None
+    client_request_id: str | None = None
+    cancellation_message_ids: list[str] = Field(default_factory=list)
+
+
 __all__ = [
     "AgentMessageInput",
     "CreateRoomRequest",
+    "HubPublishLineageSnapshot",
     "MembershipSeed",
     "MembershipUpdateRequest",
     "MessageRecord",

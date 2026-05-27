@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from a2a.types import TaskState
+from common.a2a_constants import CommonTaskState
 from modules.RoomMessageCenter import RoomMessageCenter
 from models.supervisor_v2 import (
     SupervisorTrajectory,
@@ -547,7 +548,11 @@ async def test_failed_room_lock_still_emits_terminal_status_when_task_transition
     result = await rmc.process_room_user_message(request)
 
     assert result.status_code == 429
-    rmc.tsm.transition_task.assert_awaited_once()
+    rmc.tsm.transition_task.assert_awaited_once_with(
+        agent_message,
+        CommonTaskState.FAILED,
+        error="Processing failed",
+    )
     emit.assert_awaited_once()
     rmc.sse_manager.send_processing_status.assert_not_awaited()
 

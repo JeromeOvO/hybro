@@ -26,10 +26,6 @@ from execution.dispatch.dispatch_middleware import DispatchChain, DispatchContex
 if TYPE_CHECKING:
     from models.agent import Agent
     from execution.dispatch.transports.base import AgentTransport
-    from services.database_service import DatabaseService
-    from services.relay_service import RelayService
-    from services.room_services import RoomServices
-    from services.sse_services import SSEManager
 
 logger = get_logger(__name__)
 
@@ -49,8 +45,11 @@ class AgentMessageProcessor:
         room_services: RoomServices,
         database_service: DatabaseService,
         transports: dict[str, AgentTransport],
-        relay_service: RelayService | None = None,
+        relay_service: object | None = None,
         dispatch_chain: DispatchChain | None = None,
+        health_service: object | None = None,
+        cloud_health_cache_ttl: float = 30.0,
+        cloud_health_check_timeout: float = 5.0,
     ) -> None:
         self.sse_manager = sse_manager
         self.room_services = room_services
@@ -58,8 +57,11 @@ class AgentMessageProcessor:
         self.transports = dict(transports)
         self._relay_service_explicit = relay_service
         self._dispatch_chain_explicit = dispatch_chain
+        self._health_service = health_service
+        self._cloud_health_cache_ttl = cloud_health_cache_ttl
+        self._cloud_health_check_timeout = cloud_health_check_timeout
         self._lazy_initialized = False
-        self.relay_service: RelayService | None = relay_service
+        self.relay_service: object | None = relay_service
         self.dispatch_chain: DispatchChain = dispatch_chain or DispatchChain()
 
     def _ensure_relay_initialized(self) -> None:
@@ -76,26 +78,66 @@ class AgentMessageProcessor:
         if not self._lazy_initialized:
             self._lazy_initialized = True
             from execution.dispatch.middleware.cloud_health import CloudHealthMiddleware
-            from services.agent_health_service import agent_health_service
             chain = DispatchChain()
-            chain.add(CloudHealthMiddleware(agent_health_service))
+            if self._health_service is not None:
+                chain.add(
+                    CloudHealthMiddleware(
+                        self._health_service,
+                        cache_ttl=self._cloud_health_cache_ttl,
+                        check_timeout=self._cloud_health_check_timeout,
+                    )
+                )
             self.dispatch_chain = chain
             logger.info("AgentMessageProcessor: CloudHealthMiddleware initialized")
 
-        if self._relay_service_explicit is not None or self.relay_service is not None:
+        if self._relay_service_explicit is not None:
+            if self.relay_service is None:
+                self.relay_service = self._relay_service_explicit
+            self._add_hub_transport_middleware(self.relay_service)
+
+    def _add_hub_transport_middleware(self, relay_service: object) -> None:
+        if self._dispatch_chain_explicit is not None:
             return
 
-        try:
-            from services.relay_service import relay_service as _svc
-            if _svc is not None:
-                self.relay_service = _svc
-                from execution.dispatch.middleware.hub_transport import HubTransportMiddleware
-                self.dispatch_chain.add(HubTransportMiddleware(_svc))
-                if "relay" not in self.transports and _svc.relay_transport is not None:
-                    self.transports["relay"] = _svc.relay_transport
-                logger.info("AgentMessageProcessor: relay_service resolved lazily")
-        except Exception as exc:
-            logger.warning("AgentMessageProcessor: relay init deferred: %s", exc)
+        from execution.dispatch.middleware.hub_transport import HubTransportMiddleware
+
+        middlewares = getattr(self.dispatch_chain, "_middlewares", [])
+        if any(isinstance(mw, HubTransportMiddleware) for mw in middlewares):
+            return
+        self.dispatch_chain.add(HubTransportMiddleware(relay_service))
+        logger.info("AgentMessageProcessor: HubTransportMiddleware initialized")
+
+    def bind_relay_service(
+        self, relay_service: object, transport: AgentTransport | None = None
+    ) -> None:
+        self._ensure_relay_initialized()
+        self._relay_service_explicit = relay_service
+        self.relay_service = relay_service
+
+        resolved_transport = transport or getattr(relay_service, "relay_transport", None)
+        if resolved_transport is None:
+            direct_transport = self.transports.get("direct")
+            response_handler = getattr(direct_transport, "response_handler", None)
+            if response_handler is not None:
+                from execution.dispatch.transports.relay import RelayTransport
+
+                resolved_transport = RelayTransport(
+                    response_handler=response_handler,
+                    relay_service=relay_service,
+                    db=self.database_service,
+                    sse_manager=self.sse_manager,
+                    call_counter=getattr(relay_service, "agent_call_counter", None),
+                    ownership_store=getattr(relay_service, "task_ownership_store", None),
+                    ownership_lease_maintainer=getattr(
+                        relay_service,
+                        "ownership_lease_maintainer",
+                        None,
+                    ),
+                    worker_id=getattr(relay_service, "worker_id", "local-worker"),
+                )
+        if resolved_transport is not None:
+            self.transports["relay"] = resolved_transport
+        self._add_hub_transport_middleware(relay_service)
 
     async def process_single_message(
         self,

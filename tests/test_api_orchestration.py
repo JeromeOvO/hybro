@@ -3,20 +3,24 @@ Unit tests for Orchestration Center API endpoints.
 
 Tests cover:
 - _get_task_request validation
-- processRoomUserMessage returns HTTP 410 (deprecated)
-- Task-based endpoints delegation
+- legacy workflow endpoints return HTTP 410 (deprecated)
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from api.orchestration_center import (
     _get_task_request,
-    process_room_user_message,
+    assign_agent_to_meta_task,
+    assign_agents_to_meta_tasks_by_parent_task_id,
     decompose_task,
+    process_room_user_message,
+    retry_meta_task,
+    run_workflow,
+    summarize_meta_task_for_base_task,
 )
 from models.response import OrchestrationResponse
 from tests.conftest import PATCH
@@ -65,14 +69,7 @@ class TestProcessRoomUserMessage:
     @pytest.mark.asyncio
     async def test_returns_410_gone(self, mock_user):
         """Deprecated endpoint should return HTTP 410 Gone."""
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={
-            "room_id": "room-001",
-            "room_user_message_id": "msg-001",
-        })
-        mock_bg = MagicMock()
-
-        result = await process_room_user_message(mock_request, mock_bg, mock_user)
+        result = await process_room_user_message()
 
         assert result.status_code == 410
         body = result.body
@@ -80,3 +77,35 @@ class TestProcessRoomUserMessage:
         data = json.loads(body)
         assert data["success"] is False
         assert "deprecated" in data["error"].lower()
+
+
+class TestLegacyWorkflowRoutes:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "handler",
+        [
+            assign_agent_to_meta_task,
+            assign_agents_to_meta_tasks_by_parent_task_id,
+            decompose_task,
+            retry_meta_task,
+            run_workflow,
+            summarize_meta_task_for_base_task,
+        ],
+    )
+    async def test_returns_410_without_invoking_workflow_center(self, handler):
+        workflow = MagicMock()
+        for method_name in (
+            "assign_agent_to_meta_task",
+            "assign_agents_metatasks_by_parent_task_id",
+            "decompose_task",
+            "process_meta_task",
+            "run_workflow",
+            "summarize_meta_task_for_base_task",
+        ):
+            setattr(workflow, method_name, AsyncMock(return_value={"unexpected": True}))
+        request = MagicMock()
+
+        result = await handler()
+
+        assert result.status_code == 410
+        assert workflow.mock_calls == []

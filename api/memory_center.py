@@ -1,69 +1,7 @@
-from fastapi import APIRouter, Request
+"""Compatibility shim for route declarations moved to api_gateway.routes.memory_routes."""
 
-from models.request import ChatMemoryRequest
-from modules.MemoryCenter import MemoryCenter
+import sys as _sys
 
-router = APIRouter()
-memory_center = MemoryCenter()  # Singleton instance
+from api_gateway.routes import memory_routes as _routes
 
-
-@router.post("/memoryCenter/addChatContext")
-async def add_chat_context(request: Request):
-    request_data = await request.json()
-    user_name = request_data.get("user_name")
-    session_id = request_data.get("session_id")
-    user_input = request_data.get("user_input")
-    memory_center_request = ChatMemoryRequest(
-        user_name=user_name, session_id=session_id, user_input=user_input
-    )
-    memory_center_response = await memory_center.add_chat_context(memory_center_request)
-    return memory_center_response
-
-
-@router.post("/memoryCenter/getChatContextBySessionId")
-async def get_chat_context_by_session_id(request: Request):
-    request_data = await request.json()
-    user_name = request_data.get("user_name")
-    session_id = request_data.get("session_id")
-    memory_center_request = ChatMemoryRequest(
-        user_name=user_name, session_id=session_id
-    )
-    memory_center_response = await memory_center.get_chat_context_by_session_id(
-        memory_center_request
-    )
-    return memory_center_response
-
-
-@router.post("/memoryCenter/updateChatContextBySessionId")
-async def update_chat_context_by_session_id(request: Request):
-    request_data = await request.json()
-    user_name = request_data.get("user_name")
-    session_id = request_data.get("session_id")
-    user_input = request_data.get("user_input")
-    agent_response = request_data.get("agent_response")
-    chat_context = request_data.get("chat_context")
-    memory_center_request = ChatMemoryRequest(
-        user_name=user_name,
-        session_id=session_id,
-        user_input=user_input,
-        agent_response=agent_response,
-        chat_context=chat_context,
-    )
-    memory_center_response = await memory_center.update_chat_context_by_session_id(
-        memory_center_request
-    )
-    return memory_center_response
-
-
-@router.post("/memoryCenter/deleteChatContextBySessionId")
-async def delete_chat_context_by_session_id(request: Request):
-    request_data = await request.json()
-    user_name = request_data.get("user_name")
-    session_id = request_data.get("session_id")
-    memory_center_request = ChatMemoryRequest(
-        user_name=user_name, session_id=session_id
-    )
-    memory_center_response = await memory_center.delete_chat_context_by_session_id(
-        memory_center_request
-    )
-    return memory_center_response
+_sys.modules[__name__] = _routes

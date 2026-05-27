@@ -4,6 +4,7 @@ from common.dto import (
     AgentCardSnapshot,
     AgentInfo,
     AgentMatchResult,
+    HubAgentCounts,
     HubAgentDescriptor,
     SyncedHubAgent,
 )
@@ -14,6 +15,7 @@ class AgentRegistry(Protocol):
     async def get_agent(self, agent_id: str) -> AgentInfo | None: ...
     async def get_agent_card(self, agent_id: str) -> AgentCardSnapshot | None: ...
     async def get_agents_by_ids(self, agent_ids: list[str]) -> list[AgentInfo]: ...
+    async def get_agent_by_url(self, url: str) -> AgentInfo | None: ...
     async def is_agent_healthy(self, agent_id: str) -> bool: ...
     async def is_directly_callable(self, agent_id: str) -> bool: ...
 
@@ -59,6 +61,18 @@ class AgentManagement(Protocol):
 
 
 @runtime_checkable
+class AgentAvatarManager(Protocol):
+    async def store_avatar(
+        self,
+        *,
+        agent_id: str,
+        s3_key: str,
+        content: bytes,
+        content_type: str,
+    ) -> str: ...
+
+
+@runtime_checkable
 class AgentRegistryWriter(Protocol):
     async def sync_hub_agents(
         self,
@@ -71,11 +85,24 @@ class AgentRegistryWriter(Protocol):
     async def mark_hub_agents_offline(self, hub_id: str) -> None: ...
 
 
+@runtime_checkable
+class HubAgentStatusReader(Protocol):
+    async def count_hub_agents(self, hub_id: str) -> HubAgentCounts: ...
+
+
+@runtime_checkable
+class AgentCallCounter(Protocol):
+    async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> None: ...
+
+
 __all__ = [
+    "AgentCallCounter",
+    "AgentAvatarManager",
     "AgentManagement",
     "AgentExclusionReader",
     "AgentMatcher",
     "AgentMessageMatcher",
     "AgentRegistry",
     "AgentRegistryWriter",
+    "HubAgentStatusReader",
 ]

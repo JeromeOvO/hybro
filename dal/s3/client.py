@@ -4,6 +4,7 @@ import io
 from typing import Any
 
 import aioboto3
+from botocore.exceptions import ClientError
 
 from common.config import settings
 
@@ -46,6 +47,21 @@ class ObjectStorageDALImpl:
                 Params={"Bucket": self._bucket, "Key": key},
                 ExpiresIn=ttl,
             )
+
+    async def get_text(self, key: str) -> str | None:
+        try:
+            async with self._session.client("s3", region_name=self._region) as client:
+                response = await client.get_object(Bucket=self._bucket, Key=key)
+                body = response.get("Body")
+                if body is None:
+                    return None
+                data = await body.read()
+        except ClientError as exc:
+            error = exc.response.get("Error", {})
+            if error.get("Code") in {"NoSuchKey", "404", "NotFound"}:
+                return None
+            raise
+        return data.decode("utf-8")
 
     async def delete(self, key: str) -> bool:
         async with self._session.client("s3", region_name=self._region) as client:

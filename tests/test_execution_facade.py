@@ -508,3 +508,26 @@ def test_hub_agent_response_adapter_normalizes_interactive_state():
 
     assert agent_event.kind == "interactive"
     assert agent_event.state == "input-required"
+
+
+def test_hub_agent_response_adapter_normalizes_legacy_processing_input_required_state():
+    event = HubAgentResponseInternal(
+        hub_id="hub-1",
+        agent_id="agent-1",
+        task_id="task-1",
+        room_id="room-1",
+        is_terminal=False,
+        timestamp=utcnow(),
+        payload={
+            "kind": "processing_status",
+            "message_id": "msg-1",
+            "state": "input_required",
+            "lifecycle_message_id": "user-msg-1",
+            "lifecycle_message_id_verified": True,
+        },
+    )
+
+    agent_event = hub_agent_response_internal_to_agent_event(event)
+
+    assert agent_event.kind == "processing_status"
+    assert agent_event.state == "awaiting_input"

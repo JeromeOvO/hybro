@@ -3,8 +3,8 @@ from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
-from a2a.types import Task
-from pydantic import BaseModel, Field
+from common.types import Task
+from pydantic import BaseModel, Field, field_validator
 
 from common.utils.time import utcnow
 
@@ -85,11 +85,23 @@ class UserAttachment(BaseModel):
 
 
 class MessageContent(BaseModel):
-    # markdown
     message_text: str | None = None
     message_task: Task | None = None
     attachments: list[UserAttachment] | None = None
     content_summary: dict | None = None
+
+    @field_validator("message_task", mode="before")
+    @classmethod
+    def _coerce_task(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, Task):
+            return v
+        if isinstance(v, dict):
+            return Task.model_validate(v)
+        if hasattr(v, "model_dump"):
+            return Task.model_validate(v.model_dump(mode="json"))
+        return v
 
 
 MAX_MESSAGE_LENGTH = 10_000
