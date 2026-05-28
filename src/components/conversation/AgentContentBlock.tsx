@@ -18,7 +18,7 @@ function textOnlyArtifactContent(artifact: ArtifactData): string | null {
   return artifact.parts.map(part => part.text ?? '').join('').trim()
 }
 
-export function AgentContentBlock({ agentName, messageId, content, isStreaming, showAttribution, artifacts }: AgentContentBlockProps) {
+export function AgentContentBlock({ agentId, agentName, messageId, content, isStreaming, showAttribution, artifacts }: AgentContentBlockProps) {
   const normalizedContent = content.trim()
   const displayArtifacts = artifacts?.filter(artifact => {
     if (!normalizedContent) return true
@@ -26,7 +26,7 @@ export function AgentContentBlock({ agentName, messageId, content, isStreaming, 
   })
 
   return (
-    <div data-quote-message-id={messageId} data-quote-agent-name={agentName} data-quote-source-kind="agent">
+    <div data-quote-message-id={messageId} data-quote-agent-name={agentName} data-quote-source-kind="agent" data-quote-agent-id={agentId}>
       {showAttribution && (
         <div className="text-xs mb-1" style={{ color: 'var(--conversation-text-muted)' }}>
           {agentName}:

@@ -49,10 +49,10 @@ export function useTextSelectionQuote(
         fontSize: '13px',
         fontWeight: '700',
         lineHeight: '1',
-        color: '#000',
-        background: '#fff',
-        border: 'none',
-        boxShadow: '0 4px 20px rgba(0,0,0,.35), 0 0 0 1px rgba(0,0,0,.08)',
+        color: 'hsl(var(--color-foreground))',
+        background: 'hsl(var(--color-popover))',
+        border: '1px solid hsl(var(--color-border))',
+        boxShadow: '0 4px 20px rgba(0,0,0,.25), 0 0 0 1px rgba(0,0,0,.06)',
         cursor: 'pointer',
         whiteSpace: 'nowrap' as const,
         userSelect: 'none' as const,
@@ -110,9 +110,10 @@ export function useTextSelectionQuote(
           rawKind === 'agent' || rawKind === 'synthesis' || rawKind === 'user_turn' || rawKind === 'unknown'
             ? rawKind
             : undefined
+        const sourceAgentId = quotable.dataset.quoteAgentId || undefined
 
         const rect = range.getBoundingClientRect()
-        showButton(rect, { messageId, content: text, senderName, sourceKind })
+        showButton(rect, { messageId, content: text, senderName, sourceKind, sourceAgentId })
       })
     }
 
@@ -122,6 +123,47 @@ export function useTextSelectionQuote(
       }
     }
 
+    function handleGlobalTouchStart(e: TouchEvent) {
+      if (btnRef.current && !btnRef.current.contains(e.target as Node)) {
+        hideButton()
+      }
+    }
+
+    function handleSelectionChange() {
+      requestAnimationFrame(() => {
+        const sel = window.getSelection()
+        if (!sel || sel.isCollapsed || !sel.rangeCount) {
+          hideButton()
+          return
+        }
+
+        const range = sel.getRangeAt(0)
+        const text = getSelectionPlainText(container)
+        if (!text) {
+          hideButton()
+          return
+        }
+
+        const quotable = findQuoteAncestor(range.startContainer)
+        if (!quotable) {
+          hideButton()
+          return
+        }
+
+        const messageId = quotable.dataset.quoteMessageId!
+        const senderName = quotable.dataset.quoteAgentName ?? 'Agent'
+        const rawKind = quotable.dataset.quoteSourceKind
+        const sourceKind: QuoteSourceKind | undefined =
+          rawKind === 'agent' || rawKind === 'synthesis' || rawKind === 'user_turn' || rawKind === 'unknown'
+            ? rawKind
+            : undefined
+        const sourceAgentId = quotable.dataset.quoteAgentId || undefined
+
+        const rect = range.getBoundingClientRect()
+        showButton(rect, { messageId, content: text, senderName, sourceKind, sourceAgentId })
+      })
+    }
+
     function handleScroll() {
       hideButton()
     }
@@ -129,11 +171,15 @@ export function useTextSelectionQuote(
     container.addEventListener('mouseup', handleMouseUp)
     container.addEventListener('scroll', handleScroll, true)
     document.addEventListener('mousedown', handleGlobalMouseDown)
+    document.addEventListener('touchstart', handleGlobalTouchStart)
+    document.addEventListener('selectionchange', handleSelectionChange)
 
     return () => {
       container.removeEventListener('mouseup', handleMouseUp)
       container.removeEventListener('scroll', handleScroll, true)
       document.removeEventListener('mousedown', handleGlobalMouseDown)
+      document.removeEventListener('touchstart', handleGlobalTouchStart)
+      document.removeEventListener('selectionchange', handleSelectionChange)
       hideButton()
     }
   }, [containerRef, onQuote])
