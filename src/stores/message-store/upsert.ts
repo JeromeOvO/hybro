@@ -128,6 +128,9 @@ function mergeIncoming(
       attachments: incoming.attachments,
       turnTerminalStatus: incoming.turnTerminalStatus,
       summaryOrigin: incoming.summaryOrigin,
+      quotedText: incoming.quotedText,
+      quotedSenderName: incoming.quotedSenderName,
+      quoteId: incoming.quoteId,
     }
   }
 
@@ -169,6 +172,9 @@ function mergeIncoming(
     attachments: incoming.attachments !== undefined ? incoming.attachments : existing.attachments,
     turnTerminalStatus: incoming.turnTerminalStatus !== undefined ? incoming.turnTerminalStatus : existing.turnTerminalStatus,
     summaryOrigin: incoming.summaryOrigin !== undefined ? incoming.summaryOrigin : existing.summaryOrigin,
+    quotedText: incoming.quotedText !== undefined ? incoming.quotedText : existing.quotedText,
+    quotedSenderName: incoming.quotedSenderName !== undefined ? incoming.quotedSenderName : existing.quotedSenderName,
+    quoteId: incoming.quoteId !== undefined ? incoming.quoteId : existing.quoteId,
   }
 }
 
@@ -244,7 +250,8 @@ export function isNoOpUpdate(
     artifactsEqual(existing.artifacts, coalesce(incoming.artifacts, existing.artifacts)) &&
     existing.attachments       === coalesce(incoming.attachments, existing.attachments) &&
     existing.turnTerminalStatus === coalesce(incoming.turnTerminalStatus, existing.turnTerminalStatus) &&
-    existing.summaryOrigin === coalesce(incoming.summaryOrigin, existing.summaryOrigin)
+    existing.summaryOrigin === coalesce(incoming.summaryOrigin, existing.summaryOrigin) &&
+    existing.quoteId === coalesce(incoming.quoteId, existing.quoteId)
   )
 }
 

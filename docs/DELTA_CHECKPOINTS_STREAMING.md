@@ -125,55 +125,30 @@ interface StreamingState {
 // by artifact_update chunks — only by task_update or DB reconcile.
 ```
 
-### 2.4 Render Layer — Dual-Subscription Pattern
+### 2.4 Render Layer — Per-Message Stream Subscription
 
-The merge of streaming and entity content happens at the selector level
-(`selectConversationTurns`, `selectAgentResponseDetail`), not inside individual
-components. `AgentContentBlock` and `AgentResponseDetailPane` remain pure
-components receiving `content: string` and `isStreaming: boolean` as props.
+Streaming overlays are merged in leaf components and selectors via
+`lib/streaming/display.ts` helpers (`resolveStreamText`, `resolveViewModelStreaming`,
+`resolveEntityStreaming`, etc.) and hooks (`useStreamBuffer`, `useResultStreamDisplay`).
 
-`useConversationTurnViews` uses separate subscriptions + `useMemo`:
-
-```typescript
-// src/hooks/useConversationTurnViews.ts
-const buffers    = useStreamingStore(s => s.buffers)
-const entities   = useMessageStore(s => s.entities)
-const orderedIds = useMessageStore(s => s.orderedIds)
-
-const next = React.useMemo(
-  () => selectConversationTurns(roomId, entities, orderedIds, buffers),
-  [roomId, entities, orderedIds, buffers],
-)
-```
-
-Why separate subscriptions: composing `buffers` inside a `useMessageStore`
-selector is incorrect — when `buffers` changes (new chunk), `messageStore`'s
-selector never re-runs because `messageStore` state is unchanged during
-streaming.
-
-`selectConversationTurns` and `selectAgentResponseDetail` both apply the same
-merge pattern:
+**Do not** subscribe to the full `buffers` map in UI — every token chunk would
+re-render unrelated components. Subscribe to one message:
 
 ```typescript
-const buffer = buffers[agent.id]
-const content = buffer ? buffer.text : (agent.content ?? '').trim()
-const isStreaming = buffer
-  ? !buffer.isComplete
-  : (agent.taskStatus == null || agent.taskStatus === 'working' || agent.taskStatus === 'submitted')
-// Suppress raw artifacts while buffer is active: buffer.text already
-// represents their text — showing both would duplicate content.
-const artifacts = buffer ? undefined : agent.artifacts
-```
-
-The detail pane call site (`room-page-shell.tsx`) uses the same dual-subscribe:
-
-```typescript
-const buffers = useStreamingStore(s => s.buffers)
+const streamBuffer = useStreamBuffer(selectedMessageId)
 const detail = useMemo(
-  () => selectAgentResponseDetail(roomId, selectedMessageId, entities, orderedIds, buffers),
-  [roomId, selectedMessageId, entities, orderedIds, buffers],
+  () => selectAgentResponseDetail(roomId, selectedMessageId, entities, orderedIds, streamBuffer),
+  [roomId, selectedMessageId, entities, orderedIds, streamBuffer],
 )
 ```
+
+Timeline rows use `useResultStreamDisplay(result)` in `AgentResultContent`,
+`SynthesisContent`, etc. When parent and child share one overlay, use
+`SynthesisContentFromStream(stream)` (see `SynthesisBlock`) — not a second hook
+inside the child.
+
+`selectAgentResponseDetail` accepts an optional single `StreamBuffer` (not a map).
+Artifact suppression applies only while `!buffer.isComplete`.
 
 ### 2.5 SSE Handler
 
@@ -368,7 +343,7 @@ All five sources are now moot because `artifact_update` no longer writes to
 | `src/lib/selectors/select-conversation-turns.ts` | Dual-subscription merge of `buffers` into agent blocks; "Streaming" label; fallback description |
 | `src/lib/selectors/select-agent-response-detail.ts` | Same `buffers` merge for detail pane; "Streaming" label; fallback description; artifact suppression during streaming |
 | `src/hooks/useConversationTurnViews.ts` | Separate `useStreamingStore` + `useMessageStore` subscriptions |
-| `src/components/room-page-shell.tsx` | Dual-subscribe `buffers`; pass to `selectAgentResponseDetail` |
+| `src/components/room-page-shell.tsx` | `useStreamBuffer(selectedMessageId)`; pass single buffer to `selectAgentResponseDetail` |
 | `src/hooks/room/useRoomHydration.ts` | `clearRoom` after `upsertMany` on reconcile |
 | `src/hooks/room/useRoomReset.ts` | `clearRoom` on room switch |
 | `src/components/conversation/AgentResponseDetailPane.tsx` | Spinner on avatar when `isStreaming`; correct status tone colors |

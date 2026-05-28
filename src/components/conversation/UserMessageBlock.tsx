@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useMemo, useCallback, type ReactNode } from 'react'
+import { Quote } from 'lucide-react'
 import type { MessageEntity } from '@/stores/message-store/types'
 import { UserAttachmentCard } from './UserAttachmentCard'
 import { copySelectionWithMentions } from '@/components/markdown-content'
@@ -65,6 +66,24 @@ export function UserMessageBlock({ entity }: UserMessageBlockProps) {
       onClick={() => isOverflowing && setExpanded(prev => !prev)}
     >
       <div className="conversation-user-message-inner">
+        {entity.quotedText && (
+          <div className="flex items-start gap-2 rounded-lg bg-background/50 px-3 py-2 mb-2 text-sm">
+            <div className="w-0.5 shrink-0 self-stretch rounded-full bg-primary" />
+            <div className="min-w-0 flex-1">
+              {entity.quotedSenderName && (
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <Quote className="h-3 w-3 text-primary shrink-0" />
+                  <span className="text-xs font-semibold text-primary truncate">
+                    {entity.quotedSenderName}
+                  </span>
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground line-clamp-2 break-words">
+                {entity.quotedText}
+              </p>
+            </div>
+          </div>
+        )}
         <div
           ref={textRef}
           className="conversation-user-message-text text-foreground break-words"

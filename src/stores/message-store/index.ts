@@ -37,7 +37,7 @@ interface MessageStoreState {
   replaceAndPatchMessageId: (
     oldId: string,
     newId: string,
-    patch: Partial<Pick<MessageEntity, 'content' | 'attachments' | 'clientRequestId' | 'userId' | 'timestamp'>>
+    patch: Partial<Pick<MessageEntity, 'content' | 'attachments' | 'clientRequestId' | 'userId' | 'timestamp' | 'quoteId'>>
   ) => void
   removeMessage: (id: string) => void
   cancelAllNonTerminal: (roomId: string) => void

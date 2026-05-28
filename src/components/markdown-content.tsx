@@ -5,6 +5,7 @@ import { Streamdown } from 'streamdown'
 import rehypeHighlight from 'rehype-highlight'
 import { Check, ChevronRight, Code2, Copy } from 'lucide-react'
 import { cn, formatIfJson } from '@/lib/utils'
+import { getPlainTextFromRange } from '@/lib/selection-plain-text'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 
 const MENTION_CLIPBOARD_MIME = 'application/x-hybro-mentions'
@@ -135,22 +136,7 @@ export function copySelectionWithMentions(
   const range = selection.getRangeAt(0)
   if (!container.contains(range.commonAncestorContainer)) return
 
-  const fragment = range.cloneContents()
-  let plainText = ''
-  const visit = (node: Node) => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      plainText += node.textContent || ''
-      return
-    }
-    if (node.nodeType !== Node.ELEMENT_NODE) return
-    const element = node as HTMLElement
-    if (element.tagName === 'BR') {
-      plainText += '\n'
-      return
-    }
-    element.childNodes.forEach(visit)
-  }
-  fragment.childNodes.forEach(visit)
+  const plainText = getPlainTextFromRange(range)
 
   let mentionStorageText = plainText
   const mentionEls = Array.from(container.querySelectorAll<HTMLElement>('.room-mention'))

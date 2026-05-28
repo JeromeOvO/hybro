@@ -2,7 +2,8 @@ import type { A2ATaskStatus } from '@/lib/api/a2a-tasks'
 import { extractTaskContent, extractTaskError } from '@/lib/api/a2a-tasks'
 import type { RoomMessage } from '@/lib/types/response'
 import type { TaskState } from '@/lib/types/sse'
-import { isTerminalState } from '@/lib/types/sse'
+import { isInteractiveState, isTerminalState, TASK_STATE } from '@/lib/types/sse'
+import { isSupervisorClarifyAgent } from '@/lib/system-agents'
 import type { AttachmentData } from '@/lib/types/attachments'
 import { normalizeTimestampOrNow } from '@/lib/time'
 import { parseSummaryOrigin } from '@/lib/room-timeline/derive-final-answer'
@@ -199,9 +200,30 @@ export async function convertApiMessageToIncoming(
     if (artifacts.length === 0) artifacts = undefined
   }
 
+  // Answered HITL from DB: supervisor clarify is done; real agents may still be working.
+  let hitlResolved: boolean | undefined
+  if (hitlUserAnswer !== undefined) {
+    hitlResolved = true
+    if (
+      apiMessage.message_type === 'agent'
+      && taskStatus
+      && isInteractiveState(taskStatus)
+      && isSupervisorClarifyAgent(agentId)
+    ) {
+      taskStatus = TASK_STATE.COMPLETED
+    }
+  }
+
   // ── Build IncomingMessage ────────────────────────────────────
   const extendInfo = apiMessage.extend_info as Record<string, unknown> | null | undefined
   const summaryOrigin = parseSummaryOrigin(extendInfo?.summary_origin)
+  const quotedText = typeof extendInfo?.quoted_text === 'string' ? extendInfo.quoted_text : undefined
+  const quotedSenderName = typeof extendInfo?.quoted_sender_name === 'string' ? extendInfo.quoted_sender_name : undefined
+  const extQuoteId = typeof extendInfo?.quote_id === 'string' ? extendInfo.quote_id : undefined
+  const topQuoteId = typeof (apiMessage as { quote_id?: unknown }).quote_id === 'string'
+    ? (apiMessage as { quote_id: string }).quote_id
+    : undefined
+  const quoteId = topQuoteId || extQuoteId
 
   return {
     id: apiMessage.message_id,
@@ -237,6 +259,7 @@ export async function convertApiMessageToIncoming(
     hitlPrompt,
     hitlPromptType,
     hitlChoices,
+    hitlResolved,
     hitlUserAnswer,
     hitlGroupId,
     hitlGroupTotal,
@@ -244,5 +267,8 @@ export async function convertApiMessageToIncoming(
     attachments,
     artifacts,
     summaryOrigin,
+    quotedText,
+    quotedSenderName,
+    quoteId,
   }
 }

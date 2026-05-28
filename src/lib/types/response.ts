@@ -347,6 +347,8 @@ export interface RoomMessage {
   task_updated_at?: string | null;
   // Task description being processed (only set for agent messages with tasks)
   task_content?: string | null;
+  /** Persisted quote snapshot id on user messages (QUOTE_REPLY). */
+  quote_id?: string | null;
   extend_info?: unknown;
 }
 export interface RoomCenterRoomSettingResponse {
@@ -407,6 +409,8 @@ export interface RoomUserMessage {
   user_id?: string | null;
   agent_id?: string | null;
   related_message_id?: string | null;
+  /** Persisted quote snapshot id (QUOTE_REPLY). */
+  quote_id?: string | null;
   message_content: MessageContent;
   extend_info?: unknown;
 }

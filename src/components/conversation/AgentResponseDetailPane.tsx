@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { X, ChevronDown } from 'lucide-react'
+import { X, ChevronDown, Quote } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { MarkdownContent } from '@/components/markdown-content'
 import { ArtifactList } from '@/components/artifact-list'
@@ -21,6 +21,33 @@ function useAgentFromCatalog(agentId: string): Agent | undefined {
   const qc = useQueryClient()
   const agents = qc.getQueryData<Agent[]>(['agents', 'all'])
   return agents?.find(a => a.agent_id === agentId)
+}
+
+function QuotedUserContext({ detail }: { detail: AgentResponseDetail }) {
+  const quotedText = detail.requestMessage?.quotedText?.trim()
+  if (!quotedText) return null
+
+  const senderName = detail.requestMessage?.quotedSenderName?.trim()
+
+  return (
+    <div
+      className="mx-3 mb-2 flex items-start gap-2 rounded-lg border border-border/60 bg-background/60 px-3 py-2 text-sm"
+      data-testid="agent-detail-quoted-context"
+    >
+      <div className="w-0.5 shrink-0 self-stretch rounded-full bg-primary" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 mb-1">
+          <Quote className="h-3 w-3 text-primary shrink-0" />
+          <span className="text-xs font-semibold text-primary">
+            {senderName ? `Quoted from ${senderName}` : 'Quoted context'}
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground whitespace-pre-wrap break-words">
+          {quotedText}
+        </p>
+      </div>
+    </div>
+  )
 }
 
 function EmptyResponse({ detail }: { detail: AgentResponseDetail }) {
@@ -150,11 +177,12 @@ export function AgentResponseDetailPane({ detail, onClose }: AgentResponseDetail
     <aside className="conversation-detail-pane" data-testid="agent-response-detail-pane" aria-label="Agent response detail">
       <div className="conversation-detail-sticky" data-testid="agent-response-detail-sticky">
         <AgentResponseDetailHeader detail={detail} onClose={onClose} />
+        <QuotedUserContext detail={detail} />
       </div>
 
       <div className="conversation-detail-body">
         <div className="conversation-detail-frame">
-          <section className="conversation-detail-response" aria-label="Agent response">
+          <section className="conversation-detail-response" aria-label="Agent response" data-quote-message-id={detail.messageId} data-quote-agent-name={detail.agentName} data-quote-source-kind="agent">
             {hasContent ? (
               <div className={`conversation-content-body ${detail.isStreaming ? 'conversation-streaming-cursor' : ''}`}>
                 <MarkdownContent className="conversation-markdown-body" content={detail.content} isStreaming={detail.isStreaming} />

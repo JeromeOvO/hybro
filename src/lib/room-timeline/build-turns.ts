@@ -13,7 +13,7 @@ import type {
 } from './types'
 import { isTerminalState, isFailureState, isInteractiveState } from '@/lib/types/sse'
 import type { TaskState } from '@/lib/types/sse'
-import { isSystemAgent, isSupervisorSystemAgent, isSummarySystemAgent } from '@/lib/system-agents'
+import { isSystemAgent, isSupervisorSystemAgent, isSummarySystemAgent, isSupervisorClarifyAgent } from '@/lib/system-agents'
 import {
   deriveDisplayModeFromFinalAnswer,
   deriveFinalAnswer,
@@ -281,13 +281,13 @@ function buildAgentResult(
 
   // Status derivation (spec §5.4)
   let status: AgentResultViewModel['status'] = 'completed'
-  const hitlAnswered = entity.hitlResolved && !!entity.hitlUserAnswer
+  const hitlAnswered = !!entity.hitlUserAnswer
 
   if (entity.taskStatus && isFailureState(entity.taskStatus)) {
     status = 'failed'
   } else if (entity.taskStatus && isInteractiveState(entity.taskStatus)) {
     if (hitlAnswered) {
-      status = 'working'
+      status = isSupervisorClarifyAgent(entity.agentId) ? 'completed' : 'working'
     } else {
       status = 'awaiting_input'
     }
@@ -298,9 +298,9 @@ function buildAgentResult(
   // HITL split (spec §5.3)
   let hitlResolved: AgentResultViewModel['hitlResolved']
   let hitlPending: AgentResultViewModel['hitlPending']
-  if (entity.hitlPrompt && entity.hitlResolved && entity.hitlUserAnswer) {
+  if (entity.hitlPrompt && entity.hitlUserAnswer) {
     hitlResolved = { prompt: entity.hitlPrompt, answer: entity.hitlUserAnswer }
-  } else if (entity.hitlPrompt && !entity.hitlResolved) {
+  } else if (entity.hitlPrompt && !hitlAnswered) {
     hitlPending = { prompt: entity.hitlPrompt }
   }
 
@@ -543,7 +543,7 @@ function deriveTurnStatus(
   }
 
   const real = substantive.filter(r => !r.isSummaryAgent)
-  const hasWorking = substantive.some((r) => r.status === 'working')
+  const hasWorking = substantive.some((r) => r.status === 'working' && !isSupervisorClarifyAgent(r.agentId))
   const hasAwaitingInput = substantive.some((r) => r.status === 'awaiting_input')
   const hasFailed = substantive.some((r) => r.status === 'failed')
   const hasCompleted = substantive.some((r) => r.status === 'completed')

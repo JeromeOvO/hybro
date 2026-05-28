@@ -1,14 +1,15 @@
 'use client'
 
-import { useStreamingStore } from '@/stores/streaming-store'
+import { useResultStreamDisplay, type ResultStreamDisplay } from '@/hooks/useStreamBuffer'
 import { MarkdownContent } from '@/components/markdown-content'
 import { ArtifactList } from '@/components/artifact-list'
+import type { ArtifactData } from '@/stores/message-store/types'
 import type { AgentResultViewModel } from '@/lib/room-timeline/types'
 
 function SynthesisStreamingPlaceholder() {
   return (
     <div
-      className="conversation-content-body conversation-card-shimmer relative rounded-xl border px-4 py-6 min-h-[4rem]"
+      className="conversation-content-body conversation-card-shimmer relative rounded-xl border px-4 py-6 min-h-16"
       style={{ borderColor: 'var(--conversation-border-subtle)' }}
       aria-busy="true"
       aria-label="Synthesis in progress"
@@ -20,28 +21,71 @@ function SynthesisStreamingPlaceholder() {
   )
 }
 
-interface SynthesisContentProps {
-  summaryResult: AgentResultViewModel
+export interface SynthesisContentBodyProps {
+  content: string
+  isStreaming: boolean
+  artifacts: ArtifactData[] | undefined
+  messageId?: string
+  agentName?: string
 }
 
-export function SynthesisContent({ summaryResult }: SynthesisContentProps) {
-  const buffer = useStreamingStore(s => s.buffers[summaryResult.messageId])
-  const content = buffer?.text ?? summaryResult.content
-  const isStreaming = buffer ? !buffer.isComplete : summaryResult.status === 'working'
-  const artifacts = buffer?.artifacts ?? summaryResult.artifacts
-
+/** Presentational synthesis body — no store subscription. */
+export function SynthesisContentBody({ content, isStreaming, artifacts, messageId, agentName }: SynthesisContentBodyProps) {
   if (!content.trim() && isStreaming) {
     return <SynthesisStreamingPlaceholder />
   }
 
+  const nonTextArtifacts = artifacts?.filter(
+    a => !a.parts.every(p => p.kind === 'text'),
+  )
+
   return (
-    <div>
+    <div data-quote-message-id={messageId} data-quote-agent-name={agentName} data-quote-source-kind="synthesis">
       <div className={`conversation-content-body ${isStreaming ? 'conversation-streaming-cursor' : ''}`}>
         <MarkdownContent className="conversation-markdown-body" content={content} isStreaming={isStreaming} />
       </div>
-      {artifacts && artifacts.length > 0 && (
-        <ArtifactList artifacts={artifacts} />
+      {nonTextArtifacts && nonTextArtifacts.length > 0 && (
+        <ArtifactList artifacts={nonTextArtifacts} />
       )}
     </div>
+  )
+}
+
+interface SynthesisContentProps {
+  summaryResult: AgentResultViewModel
+}
+
+/** Subscribes to stream buffer for summaryResult; use SynthesisContentBody when parent already has stream. */
+export function SynthesisContent({ summaryResult }: SynthesisContentProps) {
+  const stream = useResultStreamDisplay(summaryResult)
+  return (
+    <SynthesisContentBody
+      content={stream.content}
+      isStreaming={stream.isStreaming}
+      artifacts={stream.artifacts}
+      messageId={summaryResult.messageId}
+      agentName={summaryResult.agentName}
+    />
+  )
+}
+
+/** Render synthesis body from a precomputed stream overlay (no extra subscription). */
+export function SynthesisContentFromStream({
+  stream,
+  messageId,
+  agentName,
+}: {
+  stream: ResultStreamDisplay
+  messageId?: string
+  agentName?: string
+}) {
+  return (
+    <SynthesisContentBody
+      content={stream.content}
+      isStreaming={stream.isStreaming}
+      artifacts={stream.artifacts}
+      messageId={messageId}
+      agentName={agentName}
+    />
   )
 }

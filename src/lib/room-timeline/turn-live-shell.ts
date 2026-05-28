@@ -1,4 +1,5 @@
 import type { AgentResultViewModel, FinalAnswerKind, TurnViewModel } from './types'
+import { isSupervisorClarifyAgent } from '@/lib/system-agents'
 
 /** Approximate compact strip row height (padding + single line + border). */
 export const STRIP_COMPACT_ROW_HEIGHT_PX = 42
@@ -16,7 +17,9 @@ export function getActivityStripListMaxHeight(agentCount: number): number {
 }
 
 export function getStripSourceResults(turn: TurnViewModel): AgentResultViewModel[] {
-  return turn.agentResults.filter(r => !r.isSummaryAgent && !r.isEphemeral)
+  return turn.agentResults.filter(r =>
+    !r.isSummaryAgent && !r.isEphemeral && !isSupervisorClarifyAgent(r.agentId),
+  )
 }
 
 export function getAgentIndexSummary(
@@ -71,7 +74,9 @@ export function getSupervisorStatusLine(turn: TurnViewModel): string | null {
 
 /** Build dynamic progress label from agent results during collecting phase. */
 export function getCollectingProgressLabel(turn: TurnViewModel): string {
-  const real = turn.agentResults.filter(r => !r.isSummaryAgent && !r.isEphemeral)
+  const real = turn.agentResults.filter(r =>
+    !r.isSummaryAgent && !r.isEphemeral && !isSupervisorClarifyAgent(r.agentId),
+  )
   if (real.length === 0) return 'Agents working on your request…'
 
   const completed = real.filter(r => r.status === 'completed')

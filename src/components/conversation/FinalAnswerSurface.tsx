@@ -2,14 +2,14 @@
 
 import type { Ref, ReactNode } from 'react'
 import type { TurnViewModel, AgentResultViewModel } from '@/lib/room-timeline/types'
-import { getCollectingProgressLabel, getSupervisorStatusLine } from '@/lib/room-timeline/turn-live-shell'
+import { getCollectingProgressLabel, getSupervisorStatusLine, getStripSourceResults } from '@/lib/room-timeline/turn-live-shell'
 import { getAgentTheme } from '@/lib/selectors/conversation-types'
 import { mapResultDisplayProps } from '@/lib/room-timeline/map-result-display'
-import { useStreamingStore } from '@/stores/streaming-store'
+import { useResultStreamDisplay } from '@/hooks/useStreamBuffer'
 import { MarkdownContent } from '@/components/markdown-content'
 import { AgentCard } from './AgentCard'
 import { AgentResultContent } from './AgentResultContent'
-import { SynthesisContent } from './SynthesisContent'
+import { SynthesisContent, SynthesisContentFromStream } from './SynthesisContent'
 import { UserAnswerCard } from './UserAnswerCard'
 
 interface FinalAnswerSurfaceProps {
@@ -86,7 +86,7 @@ function ResultHeader({ result, isStreaming }: { result: AgentResultViewModel; i
   )
 }
 
-function FailedBlock({ intro }: { intro: string }) {
+function FailedBlock({ intro, turnId }: { intro: string; turnId?: string }) {
   const theme = getAgentTheme('supervisor_synthesis', 'HYBRO AI')
   const display = {
     label: 'Failed',
@@ -105,14 +105,14 @@ function FailedBlock({ intro }: { intro: string }) {
         display={display}
         interactive={false}
       />
-      <div className="conversation-content-body">
+      <div className="conversation-content-body" data-quote-message-id={turnId} data-quote-agent-name="HYBRO AI" data-quote-source-kind="user_turn">
         <MarkdownContent className="conversation-markdown-body text-sm" content={intro} />
       </div>
     </>
   )
 }
 
-function CanceledBlock({ intro }: { intro: string }) {
+function CanceledBlock({ intro, turnId }: { intro: string; turnId?: string }) {
   const theme = getAgentTheme('supervisor_synthesis', 'HYBRO AI')
   const display = {
     label: 'Canceled',
@@ -131,7 +131,7 @@ function CanceledBlock({ intro }: { intro: string }) {
         display={display}
         interactive={false}
       />
-      <div className="conversation-content-body">
+      <div className="conversation-content-body" data-quote-message-id={turnId} data-quote-agent-name="HYBRO AI" data-quote-source-kind="user_turn">
         <MarkdownContent className="conversation-markdown-body text-sm" content={intro} />
       </div>
     </>
@@ -141,9 +141,11 @@ function CanceledBlock({ intro }: { intro: string }) {
 function DeterministicDoneBlock({
   intro,
   summaryResult,
+  turnId,
 }: {
   intro: string
   summaryResult?: AgentResultViewModel
+  turnId?: string
 }) {
   const theme = getAgentTheme('supervisor_synthesis', 'HYBRO AI')
   const display = {
@@ -172,7 +174,7 @@ function DeterministicDoneBlock({
         display={display}
         interactive={false}
       />
-      <div className="conversation-content-body">
+      <div className="conversation-content-body" data-quote-message-id={turnId} data-quote-agent-name="HYBRO AI" data-quote-source-kind="user_turn">
         <MarkdownContent className="conversation-markdown-body text-sm" content={intro} />
       </div>
     </>
@@ -225,18 +227,21 @@ function SynthesisBlock({
   summaryResult: AgentResultViewModel
   supervisorStatus: string | null
 }) {
-  const buffer = useStreamingStore(s => s.buffers[summaryResult.messageId])
-  const isStreaming = buffer ? !buffer.isComplete : summaryResult.status === 'working'
+  const stream = useResultStreamDisplay(summaryResult)
 
   return (
     <>
-      <ResultHeader result={summaryResult} isStreaming={isStreaming} />
-      {supervisorStatus && !isStreaming && (
+      <ResultHeader result={summaryResult} isStreaming={stream.isStreaming} />
+      {supervisorStatus && !stream.isStreaming && (
         <p className="text-xs mt-1" style={{ color: 'var(--conversation-text-muted)' }} aria-live="polite">
           {supervisorStatus}
         </p>
       )}
-      <SynthesisContent summaryResult={summaryResult} />
+      <SynthesisContentFromStream
+        stream={stream}
+        messageId={summaryResult.messageId}
+        agentName={summaryResult.agentName}
+      />
     </>
   )
 }
@@ -249,7 +254,7 @@ export function FinalAnswerSurface({
 }: FinalAnswerSurfaceProps) {
   const supervisorStatus = getSupervisorStatusLine(turn)
   const summaryResult = turn.agentResults.find(r => r.isSummaryAgent)
-  const realAgents = turn.agentResults.filter(r => !r.isSummaryAgent && !r.isEphemeral)
+  const realAgents = getStripSourceResults(turn)
   const { finalAnswer } = turn
 
   let body: ReactNode = null
@@ -266,10 +271,10 @@ export function FinalAnswerSurface({
       }
       break
     case 'canceled':
-      body = <CanceledBlock intro={finalAnswer.canceledIntro ?? ''} />
+      body = <CanceledBlock intro={finalAnswer.canceledIntro ?? ''} turnId={turn.id} />
       break
     case 'failed':
-      body = <FailedBlock intro={finalAnswer.failedIntro ?? ''} />
+      body = <FailedBlock intro={finalAnswer.failedIntro ?? ''} turnId={turn.id} />
       break
     case 'deterministic_done':
       body = (
@@ -278,6 +283,7 @@ export function FinalAnswerSurface({
           summaryResult={
             summaryResult?.summaryOrigin === 'deterministic' ? summaryResult : undefined
           }
+          turnId={turn.id}
         />
       )
       break

@@ -26,13 +26,3 @@ export function flagsToChatMode(useSupervisor: boolean, debateMode: boolean): Ch
   }
   return useSupervisor ? CHAT_MODE.ULTIMATE : CHAT_MODE.FAST
 }
-
-/** @deprecated Use chatModeToFlags instead */
-export function chatModeToSupervisor(mode: ChatMode): boolean {
-  return mode === CHAT_MODE.ULTIMATE || mode === CHAT_MODE.ULTIMATE_DEBATE
-}
-
-/** @deprecated Use flagsToChatMode instead */
-export function supervisorToChatMode(useSupervisor: boolean): ChatMode {
-  return useSupervisor ? CHAT_MODE.ULTIMATE : CHAT_MODE.FAST
-}

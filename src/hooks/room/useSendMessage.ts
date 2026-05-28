@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { SendMessage } from '@/lib/api/room'
 import { banner } from '@/components/ui/banner'
 import type { QuoteData } from '@/lib/types/quote'
+import { MAX_QUOTE_TEXT_LENGTH } from '@/lib/types/quote'
 import type { MessageDispatchInput } from '@/lib/types/agent-group'
 import { TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
@@ -79,6 +80,8 @@ export function useSendMessage(
         timestamp: currentTime,
         clientRequestId,
         attachments: optimisticAttachments,
+        quotedText: quoteData?.content ?? undefined,
+        quotedSenderName: quoteData?.senderName ?? undefined,
       },
       {
         id: processingPlaceholderId,
@@ -122,14 +125,44 @@ export function useSendMessage(
         uploadedAttachments = results
       }
 
+      if (quoteData?.content && quoteData.content.length > MAX_QUOTE_TEXT_LENGTH) {
+        banner.error(`Quote is too long (max ${MAX_QUOTE_TEXT_LENGTH} characters).`)
+        lifecycle.stopProcessing()
+        useRoomUiStore.getState().setPendingTurnSkeleton(roomId)
+        const msgStoreTooLong = useMessageStore.getState()
+        msgStoreTooLong.removeMessage(optimisticUserMessageId)
+        msgStoreTooLong.removeMessage(lifecycle.placeholderId(roomId))
+        clearPendingSseForClientRequest(clientRequestId)
+        setSending(false)
+        lifecycle.setSendGuard(false)
+        return false
+      }
+
+      const structuredQuote = quoteData
+        ? {
+            text: quoteData.content.trim(),
+            source_message_id: quoteData.messageId,
+            source_kind: quoteData.sourceKind ?? 'unknown',
+            sender_display_name: quoteData.senderName || null,
+            source_agent_id: quoteData.sourceAgentId ?? null,
+          }
+        : null
+
       // Step 1: Send user message to backend using unified SendMessage API
       const createResponse = await SendMessage(
-        roomId, userInput, getToken, userId, userName, targetGroup,
-        quoteData?.messageId ?? null,
-        quoteData?.content ?? null,
+        roomId,
+        userInput,
+        getToken,
+        userId,
+        userName,
+        targetGroup,
+        structuredQuote ? null : (quoteData?.messageId ?? null),
+        structuredQuote ? null : (quoteData?.content ?? null),
+        structuredQuote ? null : (quoteData?.senderName ?? null),
         uploadedAttachments,
         dispatch,
         clientRequestId,
+        structuredQuote,
       )
 
       if (!createResponse.success) {
@@ -171,12 +204,18 @@ export function useSendMessage(
       // separate calls (upsertMessage + replaceMessageId) would cause React to
       // render an intermediate state where both IDs exist, producing a visible
       // flash as the ConversationTurn key changes.
+      const serverQuoteId =
+        createResponse.message?.quote_id != null && createResponse.message.quote_id !== ''
+          ? createResponse.message.quote_id
+          : undefined
+
       const msgStoreSwap = useMessageStore.getState()
       msgStoreSwap.replaceAndPatchMessageId(optimisticUserMessageId, messageId, {
         content: userInput,
         clientRequestId,
         userId,
         timestamp: currentTime,
+        quoteId: serverQuoteId,
         attachments: pendingAttachments?.map(att => {
           const uploaded = uploadResponses?.get(att.id)
           return {

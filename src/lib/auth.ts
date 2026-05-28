@@ -17,22 +17,6 @@ export function setDefaultGetToken(getToken: () => Promise<string | null>) {
 }
 
 /**
- * Get auth token (stub for compatibility with unused API routes)
- * @deprecated These API routes are not used - direct backend calls are used instead
- */
-export async function getAuthToken(): Promise<string | null> {
-  return null
-}
-
-/**
- * Get auth headers (stub for compatibility with unused API routes)
- * @deprecated These API routes are not used - direct backend calls are used instead
- */
-export async function getAuthHeaders(): Promise<Record<string, string>> {
-  return {}
-}
-
-/**
  * Get authorization headers for client-side API requests
  * Uses provided getToken or falls back to default
  */
@@ -65,4 +49,3 @@ export async function getClientAuthHeaders(
   
   return baseHeaders
 }
-

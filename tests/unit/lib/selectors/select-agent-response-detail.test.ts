@@ -77,6 +77,57 @@ describe('selectAgentResponseDetail', () => {
     expect(detail?.isStreaming).toBe(true)
   })
 
+  it('uses stream buffer text and streaming flag when provided', () => {
+    const { entities, orderedIds } = setup([
+      createUserMessage({ id: 'user-1', roomId: 'room-1' }),
+      createAgentMessage({
+        id: 'agent-1',
+        roomId: 'room-1',
+        relatedMessageId: 'user-1',
+        taskStatus: TASK_STATE.COMPLETED,
+        content: 'final from db',
+      }),
+    ])
+
+    const detail = selectAgentResponseDetail('room-1', 'agent-1', entities, orderedIds, {
+      text: 'live tokens',
+      artifacts: [],
+      isComplete: false,
+      roomId: 'room-1',
+      lastUpdatedAt: Date.now(),
+    })
+
+    expect(detail?.content).toBe('live tokens')
+    expect(detail?.isStreaming).toBe(true)
+    expect(detail?.artifacts).toBeUndefined()
+  })
+
+  it('shows entity artifacts when buffer is complete but not yet cleared', () => {
+    const entityArtifacts = [{ artifactId: 'file-1', parts: [{ kind: 'file' as const, file: { uri: 's3://x' } }] }]
+    const { entities, orderedIds } = setup([
+      createUserMessage({ id: 'user-1', roomId: 'room-1' }),
+      createAgentMessage({
+        id: 'agent-1',
+        roomId: 'room-1',
+        relatedMessageId: 'user-1',
+        taskStatus: TASK_STATE.COMPLETED,
+        content: 'done',
+        artifacts: entityArtifacts,
+      }),
+    ])
+
+    const detail = selectAgentResponseDetail('room-1', 'agent-1', entities, orderedIds, {
+      text: 'done',
+      artifacts: [],
+      isComplete: true,
+      roomId: 'room-1',
+      lastUpdatedAt: Date.now(),
+    })
+
+    expect(detail?.isStreaming).toBe(false)
+    expect(detail?.artifacts).toEqual(entityArtifacts)
+  })
+
   it('returns null for non-agent or wrong-room messages', () => {
     const { entities, orderedIds } = setup([
       createUserMessage({ id: 'user-1', roomId: 'room-1' }),

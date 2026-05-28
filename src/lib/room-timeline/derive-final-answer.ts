@@ -142,6 +142,7 @@ function buildHitlFinalAnswer(
 
   for (const agent of pendingAgents) {
     if (!agent.hitlPending) continue
+    if (prompts.some(p => p.messageId === agent.messageId)) continue
     prompts.push({
       messageId: agent.messageId,
       agentName: agent.agentName,
@@ -331,10 +332,7 @@ export function derivePrimaryStreamFromFinalAnswer(
   return undefined
 }
 
-export function isSupervisorClarifyAgent(agentId: string | undefined): boolean {
-  return agentId === 'supervisor_hitl' || agentId === 'supervisor_clarify'
-    || (agentId !== undefined && isSupervisorSystemAgent(agentId) && !agentId.includes('synthesis'))
-}
+export { isSupervisorClarifyAgent } from '@/lib/system-agents'
 
 export function parseSummaryOrigin(value: unknown): SummaryOrigin | undefined {
   if (value === 'deterministic' || value === 'llm') return value

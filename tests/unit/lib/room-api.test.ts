@@ -200,6 +200,89 @@ describe('Room API', () => {
       expect(message.extend_info).toMatchObject({ quoted_text: 'Quoted text here' })
     })
 
+    it('should include quoted sender name in extend_info', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, message_id: 'msg-1' })
+        })
+      )
+
+      await SendMessage(
+        'room-1', 'Reply', undefined, 'user-1', 'Test User',
+        'all_agents', 'related-msg-1', 'Quoted text here', 'Spec Agent',
+      )
+
+      expect(capturedBody).not.toBeNull()
+      const body = capturedBody as unknown as Record<string, unknown>
+      const message = body.message as Record<string, unknown>
+      expect(message.extend_info).toMatchObject({
+        quoted_text: 'Quoted text here',
+        quoted_sender_name: 'Spec Agent',
+      })
+    })
+
+    it('should send structured quote payload when structuredQuote is provided', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, message_id: 'msg-1' })
+        })
+      )
+
+      await SendMessage(
+        'room-1', 'Get details', undefined, 'user-1', 'Test User',
+        'all_agents', null, null, undefined, undefined, undefined, undefined,
+        {
+          text: 'The highlighted content',
+          source_message_id: 'agent-msg-42',
+          source_kind: 'agent',
+          sender_display_name: 'Research Agent',
+          source_agent_id: 'agent-42',
+        },
+      )
+
+      expect(capturedBody).not.toBeNull()
+      const body = capturedBody as unknown as Record<string, unknown>
+      const message = body.message as Record<string, unknown>
+      expect(message.quote).toMatchObject({
+        text: 'The highlighted content',
+        source_message_id: 'agent-msg-42',
+        source_kind: 'agent',
+        sender_display_name: 'Research Agent',
+        source_agent_id: 'agent-42',
+      })
+      expect(message.extend_info).toMatchObject({
+        quoted_text: 'The highlighted content',
+        quoted_sender_name: 'Research Agent',
+      })
+      expect(message.related_message_id).toBeNull()
+    })
+
+    it('should use legacy extend_info when structuredQuote is null but quoted_text provided', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, message_id: 'msg-1' })
+        })
+      )
+
+      await SendMessage(
+        'room-1', 'Reply', undefined, 'user-1', 'Test User',
+        'all_agents', 'related-msg-1', 'Legacy quoted text', 'Agent Name',
+        undefined, undefined, undefined, null,
+      )
+
+      const body = capturedBody as unknown as Record<string, unknown>
+      const message = body.message as Record<string, unknown>
+      expect(message.quote).toBeUndefined()
+      expect(message.extend_info).toMatchObject({ quoted_text: 'Legacy quoted text', quoted_sender_name: 'Agent Name' })
+      expect(message.related_message_id).toBe('related-msg-1')
+    })
+
     it('should omit target_group when MentionDispatchInput is provided', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
@@ -211,7 +294,7 @@ describe('Room API', () => {
 
       await SendMessage(
         'room-1', 'Hello @agent', undefined, 'user-1', 'Test User',
-        'all_agents', null, null, undefined,
+        'all_agents', null, null, undefined, undefined,
         { mentioned_agent_ids: ['agent-a', 'agent-b'] },
       )
 
@@ -230,7 +313,7 @@ describe('Room API', () => {
 
       await SendMessage(
         'room-1', 'Hello', undefined, 'user-1', 'Test User',
-        'room_team', null, null, undefined,
+        'room_team', null, null, undefined, undefined,
         { message_target_mode: 'room_default' },
       )
 
@@ -250,7 +333,7 @@ describe('Room API', () => {
 
       await SendMessage(
         'room-1', 'Hello', undefined, 'user-1', 'Test User',
-        'all_agents', null, null, undefined, undefined,
+        'all_agents', null, null, undefined, undefined, undefined,
         'cr-uuid-123',
       )
 
@@ -283,7 +366,7 @@ describe('Room API', () => {
 
       await SendMessage(
         'room-1', 'Hello', undefined, 'user-1', 'Test User',
-        'grp-123', null, null, undefined,
+        'grp-123', null, null, undefined, undefined,
         { message_target_mode: 'saved_group', target_group_id: 'grp-123' },
       )
 

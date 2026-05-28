@@ -12,6 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { TASK_STATE, type SSEMessage } from '@/lib/types/sse'
+import { resetPendingTurnBufferForTests } from '@/hooks/room/sse-handlers/pending-turn-buffer'
 
 // Capture the onMessage callback passed to useRoomSSE
 let capturedOnMessage: ((msg: SSEMessage) => void) | undefined
@@ -83,6 +84,7 @@ describe('useRoomWebhook SSE message handling', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     capturedOnMessage = undefined
+    resetPendingTurnBufferForTests()
     useMessageStore.getState().clearRoom()
     useMessageStore.getState().setRoom('room-1')
     useMessageStore.getState().markDbSynced()

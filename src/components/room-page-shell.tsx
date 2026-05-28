@@ -7,6 +7,7 @@ import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ChatMode } from '@/lib/types/chat-mode'
 import { ConversationMessageList } from '@/components/conversation/ConversationMessageList'
 import { ComposerShell } from '@/components/composer/ComposerShell'
+import { useTextSelectionQuote } from '@/hooks/useTextSelectionQuote'
 import { AgentResponseDetailPane } from '@/components/conversation/AgentResponseDetailPane'
 import {
   ResizableHandle,
@@ -17,7 +18,7 @@ import { useGroupRef } from 'react-resizable-panels'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 import { useSidebar } from '@/components/ui/sidebar'
 import { useMessageStore } from '@/stores/message-store'
-import { useStreamingStore } from '@/stores/streaming-store'
+import { useStreamBuffer } from '@/hooks/useStreamBuffer'
 import { useRoomUiStore, useSelectedAgentMessageId } from '@/stores/room-ui-store'
 import { selectAgentResponseDetail } from '@/lib/selectors'
 import type { MessageEntity } from '@/stores/message-store/types'
@@ -107,12 +108,18 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
   const selectedMessageId = useSelectedAgentMessageId(adapter.roomId)
   const entities = useMessageStore(s => selectedMessageId ? s.entities : EMPTY_ENTITIES)
   const orderedIds = useMessageStore(s => selectedMessageId ? s.orderedIds : EMPTY_ORDERED_IDS)
-  const buffers = useStreamingStore(s => s.buffers)
+  const streamBuffer = useStreamBuffer(selectedMessageId)
 
   const detail = useMemo(() => {
     if (!selectedMessageId) return null
-    return selectAgentResponseDetail(adapter.roomId, selectedMessageId, entities, orderedIds, buffers)
-  }, [adapter.roomId, selectedMessageId, entities, orderedIds, buffers])
+    return selectAgentResponseDetail(
+      adapter.roomId,
+      selectedMessageId,
+      entities,
+      orderedIds,
+      streamBuffer,
+    )
+  }, [adapter.roomId, selectedMessageId, entities, orderedIds, streamBuffer])
 
   const restoreSidebar = useCallback(() => {
     const snapshot = sidebarSnapshotRef.current
@@ -173,6 +180,9 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
 
   const dockRef = useRef<HTMLDivElement>(null)
   const primaryRef = useRef<HTMLDivElement>(null)
+  const workspaceHostRef = useRef<HTMLDivElement>(null)
+
+  useTextSelectionQuote(workspaceHostRef, adapter.quoteState.setQuote)
   useLayoutEffect(() => {
     const dock = dockRef.current
     const primary = primaryRef.current
@@ -227,7 +237,7 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
 
   return (
     <>
-      <div className="conversation-workspace-host relative h-full min-h-0">
+      <div ref={workspaceHostRef} className="conversation-workspace-host relative h-full min-h-0">
         <ResizablePanelGroup
           id={desktopDetail ? 'conversation-resizable-workspace' : undefined}
           groupRef={conversationGroupRef}

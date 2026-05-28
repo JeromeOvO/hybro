@@ -1,6 +1,6 @@
 # Hybro Frontend — Interaction Architecture
 
-> Last updated: 2026-02-25
+> Last updated: 2026-05-25
 
 ## Table of Contents
 
@@ -24,7 +24,7 @@
 
 ## 1. Overview
 
-Hybro Frontend is a **Next.js 15 (App Router)** application that serves as the user interface for the Hybro AI multi-agent platform — an open **A2A (Agent-to-Agent)** network. The app is split into two portals served from a single codebase via subdomain-based routing:
+Hybro Frontend is a **Next.js 16 (App Router)** application that serves as the user interface for the Hybro AI multi-agent platform — an open **A2A (Agent-to-Agent)** network. The app is split into two portals served from a single codebase via subdomain-based routing:
 
 - **Consumer Portal** (`hybro.ai` / `localhost:3000`) — End users chat with AI agents in "rooms"
 - **Developer Portal** (`developer.hybro.ai` / `dev.localhost:3000`) — Developers register, manage, and inspect agents
@@ -37,16 +37,16 @@ The frontend communicates with a Python backend via REST APIs and receives real-
 
 | Category | Technology |
 |---|---|
-| Framework | Next.js 15 (App Router, Turbopack) |
+| Framework | Next.js 16 (App Router, Turbopack) |
 | Language | TypeScript |
 | UI Components | shadcn/ui (Radix primitives, New York style) |
 | Styling | Tailwind CSS v4 |
 | State Management | Zustand (message store, room UI store) |
 | Server State | TanStack React Query v5 |
 | Authentication | Clerk (`@clerk/nextjs`) |
-| Real-Time | Server-Sent Events (SSE) via `EventSource` |
+| Real-Time | Server-Sent Events (SSE) via `fetch()` streaming |
 | Forms | React Hook Form + Zod v4 |
-| Markdown | react-markdown + remark-gfm + rehype-highlight |
+| Markdown | Streamdown + rehype-highlight |
 | A2A Protocol | `@a2a-js/sdk` |
 | Icons | Lucide React |
 | Notifications | Sonner (toast) + custom Banner system |
@@ -98,15 +98,6 @@ src/
 │   │   ├── agents/               #   Manage agents (list + detail)
 │   │   ├── inspector/page.tsx    #   A2A Agent Inspector
 │   │   └── docs/page.tsx         #   Developer documentation
-│   ├── api/                      # Next.js API Route Proxies (LEGACY — unused by current client)
-│   │   ├── agent/[...endpoint]/  #   Proxy → Backend /api/v1/agent/*
-│   │   ├── roomCenter/[...endpoint]/
-│   │   ├── orchestrationCenter/[...endpoint]/
-│   │   ├── sse/[...endpoint]/    #   SSE stream proxy (GET/POST)
-│   │   ├── task/[...endpoint]/
-│   │   ├── memory/[...endpoint]/
-│   │   ├── inspectionCenter/[...endpoint]/
-│   │   └── health/               #   Health check proxy
 │   └── privacy/page.tsx          # Privacy policy
 │
 ├── components/
@@ -136,8 +127,6 @@ src/
 │   ├── room-chat-input.tsx       # Chat input with @mentions, groups
 │   ├── message-bubble.tsx        # Individual message display
 │   ├── task-status-message.tsx   # A2A task status card
-│   ├── workflow-message.tsx      # Workflow visualization (DEAD CODE)
-│   ├── workflow-container.tsx    # Workflow step container (DEAD CODE)
 │   ├── agent-card.tsx            # Agent display card
 │   ├── agent-selector.tsx        # Multi-agent selector
 │   ├── group-selector.tsx        # Agent group selector
@@ -162,7 +151,6 @@ src/
 │   ├── useRoomWebhook.ts         # Core room orchestration hook
 │   ├── useRoomSSE.ts             # SSE connection management
 │   ├── useRoomMessages.ts        # Message store selectors
-│   ├── useWorkflow.ts            # Workflow lifecycle management (DEAD CODE)
 │   ├── useChatRoomCreation.ts    # Room creation + navigation
 │   ├── useMyAgents.ts            # Developer's registered agents
 │   ├── useGroupManagement.ts     # Agent group CRUD + selection
@@ -189,8 +177,6 @@ src/
 │   │   ├── room.ts               #   Room + messaging APIs
 │   │   ├── sse.ts                #   SSE connection class + status
 │   │   ├── task.ts               #   Task query APIs
-│   │   ├── orchestration.ts      #   Workflow orchestration APIs
-│   │   ├── memory.ts             #   Chat memory APIs
 │   │   ├── inspection.ts         #   Agent inspection APIs
 │   │   ├── health.ts             #   Health check
 │   │   └── a2a-tasks.ts          #   A2A task status polling
@@ -218,7 +204,7 @@ src/
 │   ├── developer-nav.ts          # Developer portal nav items
 │   └── clerk-error.ts            # Clerk error utilities
 │
-└── middleware.ts                  # Subdomain routing middleware
+└── proxy.ts                      # Subdomain routing proxy (Next.js 16 convention)
 ```
 
 ---
@@ -327,10 +313,20 @@ The frontend uses a **three-layer state model**:
 │  │ • cancelAllNonTerminal(), setRoom(), clearRoom() │       │
 │  └─────────────────────────────────────────────────┘       │
 │                                                             │
+│  Layer 2b: Streaming Display Buffers (Zustand)              │
+│  ┌─────────────────────────────────────────────────┐       │
+│  │ useStreamingStore                                │       │
+│  │ • buffers: Record<messageId, StreamBuffer>       │       │
+│  │ • Ephemeral token/artifact chunks during SSE     │       │
+│  │ • Cleared on task_update checkpoint / reconcile  │       │
+│  │ • UI: useStreamBuffer(id), useResultStreamDisplay│       │
+│  │ • Pure helpers: lib/streaming/display.ts         │       │
+│  └─────────────────────────────────────────────────┘       │
+│                                                             │
 │  Layer 3: Ephemeral UI State (Zustand)                      │
 │  ┌─────────────────────────────────────────────────┐       │
 │  │ useRoomUiStore                                   │       │
-│  │ • sending, processing, cancelling, updatingRoom  │       │
+│  │ • Per-room flags keyed by roomId (sending, etc.) │       │
 │  │ • sseEnabled, sseConnected, sseError             │       │
 │  │ • pendingRoomData (cross-page data transfer)     │       │
 │  └─────────────────────────────────────────────────┘       │
@@ -368,16 +364,9 @@ Each `MessageEntity` carries:
 
 #### Display Type Resolution (`resolve-display-type.ts`)
 
-The `displayType` is computed at write time and determines which React component renders each message:
+The `displayType` is computed at write time (`user-bubble` | `agent-bubble`). Agent messages use a unified bubble; **phase** (waiting, streaming, HITL, failed, complete) is derived at render time via turn view models and `lib/streaming/display.ts` helpers.
 
-| Condition | DisplayType | Component |
-|---|---|---|
-| `messageType === 'user'` | `user-bubble` | `MessageBubble` (user style) |
-| `messageType === 'agent'` and no `taskStatus` | `agent-bubble` | `MessageBubble` (agent style, markdown) |
-| `taskStatus === 'completed'` and content is non-empty | `agent-bubble` | `MessageBubble` (agent style, markdown) |
-| Any other `taskStatus` (working, failed, canceled, etc.) | `task-status` | `TaskStatusMessage` |
-
-This means a message **transitions** from `task-status` to `agent-bubble` when the task completes with content — this is expected behavior, not a bug.
+Live token streaming reads `useStreamingStore` buffers; permanent content lands in `useMessageStore` on `task_update` checkpoint.
 
 #### Upsert Conflict Resolution Rules (`upsert.ts`)
 
@@ -418,9 +407,7 @@ Component / Hook
   (direct calls)
 ```
 
-**The frontend calls the backend directly** (not through Next.js API routes for most calls). The `getApiUrl()` helper constructs URLs like: `{NEXT_PUBLIC_API_BASE_URL}{NEXT_PUBLIC_API_PREFIX}/{service}`.
-
-Next.js API routes (`/api/*`) exist as **legacy proxy stubs** that forward to the same backend. They are **not actively used** by the current `lib/api/*.ts` client layer, which calls the backend directly via `getApiUrl()`. These proxy routes may have been used in an earlier architecture or kept for potential future use (e.g., adding server-side auth or rate limiting at the edge).
+**The frontend calls the backend directly** (not through Next.js API routes). The `getApiUrl()` helper constructs URLs like: `{NEXT_PUBLIC_API_BASE_URL}{NEXT_PUBLIC_API_PREFIX}/{service}`.
 
 ### 8.2 API Domains
 
@@ -431,8 +418,6 @@ Next.js API routes (`/api/*`) exist as **legacy proxy stubs** that forward to th
 | **Room** | `roomCenter` | `/api/v1/roomCenter` | createNewRoom, inquiryRoomSetting, sendMessage, suggestAgents |
 | **SSE** | `sse` | `/api/v1/sse` | SSE stream connection, status check, cancelMessage |
 | **Task** | `task` | `/api/v1/task` | queryTask, queryBaseTask, getAllSessions |
-| **Orchestration** | `orchestrationCenter` | `/api/v1/orchestrationCenter` | decomposeTask, assignAgents, runWorkflow, summarize |
-| **Memory** | `memoryCenter` | `/api/v1/memoryCenter` | addChatContext, getChatContextBySessionId |
 | **Inspection** | `inspectionCenter` | `/api/v1/inspectionCenter` | inspectAgentCard, inspectA2AConnection |
 | **A2A Tasks** | `a2a-tasks` | `/api/v1/a2a-tasks` | getTaskStatus, listRoomTasks, listUserPendingTasks |
 | **Health** | *(no prefix)* | `/health` | Backend health check (no auth) |
@@ -471,14 +456,14 @@ Next.js API routes (`/api/*`) exist as **legacy proxy stubs** that forward to th
 ┌──────────────┐                                            ┌─────────────┐
 │   Browser    │                                            │   Backend   │
 │              │                                            │   (Python)  │
-│ EventSource ─┼──GET (direct to backend)──────────────────►│  SSE Server │
+│ fetch() SSE ─┼──GET (direct to backend)──────────────────►│  SSE Server │
 │              │◄─────────────── text/event-stream ─────────┤             │
 └──────────────┘                                            └─────────────┘
 ```
 
-The `SSEConnection` class calls the backend **directly** via `getApiUrl('sse')` (e.g., `{BACKEND_URL}/api/v1/sse/room/{id}/stream`). Auth tokens are passed as query parameters since `EventSource` doesn't support custom headers.
+The `SSEConnection` class uses `fetch()` with `ReadableStream` to consume the SSE stream **directly** from `getApiUrl('sse')` (e.g., `{BACKEND_URL}/api/v1/sse/room/{id}/stream`). Auth tokens are sent via the standard `Authorization: Bearer` header (not query parameters).
 
-> **Note:** Next.js API routes at `/api/sse/[...endpoint]/` exist as an SSE proxy fallback, but the current `SSEConnection` implementation bypasses them in favor of direct backend calls.
+> **Note:** Next.js API routes at `/api/sse/[...endpoint]/` exist as a legacy SSE proxy fallback, but the current `SSEConnection` implementation bypasses them in favor of direct backend calls.
 
 ### 10.2 SSE Event Types
 
@@ -500,8 +485,10 @@ useRoomWebhook (orchestration)
     │
     ├── useRoomSSE (connection management)
     │       │
-    │       └── SSEConnection class (EventSource wrapper)
-    │           • Auto-reconnect (5 attempts, linear backoff: 1s, 2s, 3s...)
+    │       └── SSEConnection class (fetch + ReadableStream)
+    │           • Auto-reconnect (15 attempts, exponential backoff capped at 30s)
+    │           • Resurrect timer (45s) after permanent failure
+    │           • Read timeout (90s) detects stalled connections
     │           • Manual disconnect on room change
     │
     ├── handleSSEMessage callback
@@ -625,7 +612,7 @@ User clicks Cancel
 │         so apiClient can auto-attach    │
 │         Bearer tokens                   │
 │                                         │
-│  3. Middleware (clerkMiddleware)         │
+│  3. Proxy (clerkMiddleware in proxy.ts) │
 │     └── Validates sessions              │
 │     └── Authorized parties:             │
 │         hybro.ai, developer.hybro.ai    │
@@ -636,8 +623,8 @@ User clicks Cancel
 │         → Bearer ${token} header        │
 │                                         │
 │  5. SSE Connection                      │
-│     └── Token as query param            │
-│         (EventSource limitation)        │
+│     └── Authorization: Bearer header    │
+│         (fetch-based, not EventSource)  │
 │                                         │
 └─────────────────────────────────────────┘
 ```
@@ -729,27 +716,6 @@ Developer Portal (/d)
 └─────────────────────────────────────────────────────┘
 ```
 
-### 13.4 Workflow Orchestration (Legacy)
-
-The `useWorkflow` hook manages a multi-step task orchestration lifecycle:
-
-```
-Base Task Created
-    │
-    ├── DECOMPOSED: Task split into meta tasks
-    │   └── handleAssignAgents()
-    │
-    ├── AGENTS_ASSIGNED: Each meta task has an agent
-    │   └── handleRunWorkflow()
-    │
-    ├── RUNNING: Agents executing meta tasks
-    │   └── handleSummarizeResults()
-    │
-    └── COMPLETED: Base task has final summary
-```
-
-This is used for complex multi-agent workflows where tasks are decomposed, assigned, executed, and summarized through the Orchestration Center backend APIs.
-
 ---
 
 ## 14. Conventions & Patterns for Contributors
@@ -767,7 +733,6 @@ This is used for complex multi-agent workflows where tasks are decomposed, assig
 2. Use `apiGet`, `apiPost`, `apiPut`, or `apiDelete` from `lib/api-client.ts` — they auto-inject auth tokens.
 3. Define request/response types in `src/lib/types/`.
 4. Export from `src/lib/api/index.ts` barrel file.
-5. The Next.js API route proxies under `src/app/api/` are **legacy/unused** — do not add new ones.
 
 ### 14.3 Adding a New SSE Event Handler
 
@@ -787,7 +752,7 @@ This is used for complex multi-agent workflows where tasks are decomposed, assig
 ### 14.5 Key Gotchas
 
 - `getApiUrl()` calls the **backend directly** (not via Next.js API routes). The browser must have direct network access to `NEXT_PUBLIC_API_BASE_URL`.
-- SSE uses `EventSource` which requires same-origin OR the backend must set `Access-Control-Allow-Origin` headers for cross-origin SSE to work.
+- SSE uses `fetch()` streaming which requires the backend to set `Access-Control-Allow-Origin` and `Access-Control-Allow-Headers` for cross-origin requests.
 - The `useRoomWebhook` hook is the single orchestration point for the room page — it coordinates React Query, Zustand message store, Zustand UI store, and SSE. Any new room-level feature should integrate through this hook.
 - `pendingRoomData` in `useRoomUiStore` is used to pass the initial message from the chat creation page (`/c/chat`) to the room page (`/c/room/[id]`). It is consumed once on room load.
 - Agent group override state persists in `localStorage` per room via key `room-{roomId}-override-group`.
@@ -798,63 +763,23 @@ This is used for complex multi-agent workflows where tasks are decomposed, assig
 
 ### 15.1 Architecture Issues
 
-#### `useRoomWebhook` is a God Hook (~1400 lines)
+#### Room orchestration split; SSE handler still large
 
-**File:** `src/hooks/useRoomWebhook.ts`
+**Files:** `src/hooks/room/useRoomWebhook.ts` (~220 lines, thin orchestrator), `src/hooks/room/sse-handlers/index.ts` (~850 lines)
 
-The central room orchestration hook manages SSE handling, message sending, room settings, cancellation, DB hydration, reconciliation, agent name resolution, placeholder lifecycle, timeout safety nets, HITL reconnect catch-up, and streaming buffer coordination — all in one function. Since the original audit (~944 lines), HITL support, token streaming, and supervisor toggle were successfully integrated, growing the hook to ~1400 lines. The decomposition concern is now more urgent.
+`useRoomWebhook` now composes focused hooks (`useRoomData`, `useRoomHydration`, `useRoomSSEConnection`, `useSendMessage`, `useRoomActions`, `processing-lifecycle`). SSE event handling lives in `createSSEDispatcher()` and still mutates `useMessageStore` / `useStreamingStore` via `getState()` (and room UI indirectly via lifecycle).
 
-**Risk:** High cognitive load for contributors; hard to test in isolation; any change can introduce subtle regressions across unrelated features.
+**Risk:** The SSE dispatcher remains hard to test in isolation and couples the event protocol to store shapes.
 
-**Recommendation:** Split into focused composable hooks: `useRoomHydration`, `useSSEMessageHandler`, `useSendMessage`, `useCancelProcessing`, `useAgentNameResolver`, `useHitlReconnect`. The current `useRoomWebhook` would become a thin orchestrator that wires them together.
-
----
-
-#### Dead Code: Workflow Subsystem
-
-**Files:** `src/hooks/useWorkflow.ts`, `src/components/workflow-message.tsx`, `src/components/workflow-container.tsx`
-
-The entire workflow orchestration subsystem (decompose → assign → run → summarize) is **never imported** by any page or parent component. `WorkflowContainer` is only referenced within its own file. These files are dead code from a legacy multi-step orchestration approach that has been superseded by the SSE-based task flow.
-
-**Recommendation:** Remove or archive these files to reduce confusion. If the workflow UI is needed again, it should be rebuilt against the current SSE/message-store architecture. See `DEAD_CODE_CLEANUP.md` for the full removal plan.
-
----
-
-#### Dead Code: Legacy API Route Proxies
-
-**Files:** All routes under `src/app/api/` (agent, roomCenter, orchestrationCenter, task, memory, inspectionCenter, health)
-
-These Next.js API route proxy handlers forward requests to the backend, but the current `lib/api/*.ts` client layer bypasses them entirely via direct `getApiUrl()` calls. They add ~500 lines of maintenance burden with no active consumers.
-
-**Recommendation:** Remove unless there's a specific plan to use them (e.g., server-side token injection, rate limiting at edge). See `DEAD_CODE_CLEANUP.md` for the full removal plan.
-
----
-
-#### Dead Code: `createAndParseUserMessage` and `processRoomUserMessage`
-
-**Files:** `src/lib/api/room.ts` (line 133), `src/lib/api/orchestration.ts` (line 130)
-
-These functions are defined but never called — superseded by the unified `SendMessage` API which handles message creation and processing orchestration in a single backend call.
-
-**Recommendation:** Remove to reduce API surface confusion.
+**Recommendation:** Continue splitting `sse-handlers/` into per-type handlers + `applyRoomCommands`. DB hydration is unified in `src/lib/room-sync/` (`hydrateRoomFromDb`); see `docs/ROOM_SYNC_REFACTOR.md`.
 
 ---
 
 ### 15.2 Security Risks
 
-#### SSE Auth Token in URL Query Parameter
+#### ~~SSE Auth Token in URL Query Parameter~~ (RESOLVED)
 
-**File:** `src/lib/api/sse.ts` (line 53)
-
-The Clerk JWT is passed as `?token=...` in the SSE URL because `EventSource` does not support custom headers. While the code redacts the token in console logs, the token is visible in:
-- Browser network inspector (URL column)
-- Server access logs
-- Any proxy/CDN that logs full URLs
-- Browser history
-
-**Risk:** Token leakage through URL logging. Clerk JWTs are short-lived (60s default), which limits the window, but it's still a security surface.
-
-**Recommendation:** Consider migrating from `EventSource` to `fetch()`-based SSE streaming, which supports custom `Authorization` headers. Alternatively, use a one-time-use connection token exchanged server-side.
+**Status:** Fixed. The `SSEConnection` class now uses `fetch()` with `Authorization: Bearer` header instead of `EventSource` with query-parameter tokens. No token leakage via URLs.
 
 ---
 
@@ -868,10 +793,13 @@ The `apiClient` sends authenticated requests directly to the Python backend with
 
 #### SSE as Single Real-Time Channel (No Fallback)
 
-The room page relies entirely on `EventSource` for live updates. If SSE fails or is blocked (corporate firewalls, aggressive proxies), users see no task updates after sending a message. The only recovery is a manual page refresh or the `reconcileWithDb()` call that fires after processing completes — but if SSE never delivers the "completed" signal, the UI stays in "Processing..." indefinitely.
+The room page relies entirely on `fetch()`-based SSE streaming for live updates. If SSE fails or is blocked (corporate firewalls, aggressive proxies), users see no task updates after sending a message. The only recovery is a manual page refresh or the `reconcileWithDb()` call that fires after processing completes — but if SSE never delivers the "completed" signal, the UI stays in "Processing..." indefinitely.
 
 **Mitigation in place:**
-- Auto-reconnect with 5 attempts + linear backoff
+- Auto-reconnect with 15 attempts + exponential backoff (capped at 30s)
+- Resurrect timer (45s) after permanent failure exhausts all attempts
+- Read timeout (90s) detects silently-stalled connections (3× backend heartbeat)
+- Safety-net: 15s backend poll during processing confirms active runs
 - Stale task detection on DB hydration (10-minute threshold)
 - Processing placeholder restore on page reload
 - SSE disconnection tracking + post-processing reconciliation
@@ -893,15 +821,11 @@ The message hydration loads **all messages for a room** in a single request. For
 
 ---
 
-#### `useRoomUiStore` is a Global Singleton
+#### Streaming subscriptions in UI
 
-**File:** `src/stores/room-ui-store.ts`
+**Files:** `src/hooks/useStreamBuffer.ts`, `src/lib/streaming/display.ts`, `src/components/room-page-shell.tsx`
 
-`sending`, `processing`, `cancelling` are global — not scoped per room. If a user has multiple tabs open to different rooms (same origin), state from one room bleeds into another because Zustand stores share the same memory within a tab, and the hook resets state on room change via effects.
-
-This is mostly safe today (single-room-per-tab), but becomes a bug if the app ever supports multi-room views or room switching without full unmount.
-
-**Recommendation:** Key these flags by `roomId` inside the store, or scope them as local state within `useRoomWebhook`.
+Components should subscribe to `s.buffers[messageId]` (via `useStreamBuffer` / `useResultStreamDisplay`), not the full `buffers` map, so unrelated token chunks do not re-render the room shell or index rows.
 
 ---
 
@@ -979,7 +903,7 @@ Updating room settings fires up to 3 separate API calls sequentially: `updateRoo
 
 | Area | Improvement | Impact | Status |
 |---|---|---|---|
-| **Real-time** | Migrate SSE to WebSocket or `fetch()`-based streaming for header-based auth | Security, reliability | Open |
+| **Real-time** | ~~Migrate SSE to `fetch()`-based streaming for header-based auth~~ (Done) — consider WebSocket for bidirectional needs | Security, reliability | Resolved |
 | **Offline** | Add optimistic message queue with retry for network failures | UX | Open |
 | **Performance** | Message pagination + virtual scrolling | Scalability | Design doc: `MESSAGE_PAGINATION_DESIGN.md` |
 | **Testing** | E2E tests with Playwright for critical flows (room creation -> message -> response) | Reliability | Open |
@@ -991,4 +915,4 @@ Updating room settings fires up to 3 separate API calls sequentially: `updateRoo
 | **i18n** | Extract hardcoded English strings into a localization framework | Internationalization | Open |
 | **Multi-modal** | Agent artifact rendering + user file uploads | Feature completeness | Design docs: `ARTIFACT_RENDERING_DESIGN.md`, `MULTIMODAL_SUPPORT_DESIGN.md` |
 | **Reliability** | Retry UI for failed tasks | UX | Design doc: `TASK_RETRY_DESIGN.md` |
-| **Maintenance** | Remove ~1,675 lines of dead code | Code health | Design doc: `DEAD_CODE_CLEANUP.md` |
+| **Maintenance** | ~~Remove ~1,675 lines of dead code~~ | Code health | Done |
