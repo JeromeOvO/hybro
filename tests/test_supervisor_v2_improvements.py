@@ -293,7 +293,14 @@ class TestSupervisorSSEStageNotifications:
             ),
         ])
         se._checkpoint_trajectory = AsyncMock(return_value=None)
-        se.supervisor_service.synthesize_v2.return_value = "synthesized"
+        se.database_service.resolve_client_request_id_for_message_id = AsyncMock(
+            return_value=None
+        )
+
+        async def synthesize_v2_stream(trajectory, synthesis_instruction):
+            yield "synthesized"
+
+        se.supervisor_service.synthesize_v2_stream = synthesize_v2_stream
 
         await se.run(
             room_id="room-1",

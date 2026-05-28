@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
 from a2a.types import Role
@@ -581,28 +582,15 @@ Your response should be an complete answer with all the specific details the use
             print(f"Error in debate_with_openai: {str(e)}")
             return f"Error: {str(e)}"
 
-    async def summarize_agent_responses(
+    def _build_summarize_agent_messages(
         self,
         agent_responses: list[dict[str, str]],
         mode: str = "non_debate",
         user_question: str | None = None,
-    ) -> str:
-        """
-        Summarize the answers from multiple AI agents into a single summary using Lead_ai.
-
-        Args:
-            agent_responses: List of dicts with 'agent_name' and 'message' keys
-                Example: [{"agent_name": "Research Agent", "message": "..."}, ...]
-            mode: Summary mode - "debate" or "non_debate"
-                - "debate": Compares viewpoints, highlights agreements/disagreements
-                - "non_debate": Combines contributions into a unified response
-            user_question: The original user question/request, used to calibrate
-                the summary style (e.g. introductions vs. task responses)
-
-        Returns:
-            Summary text string
-        """
-        # Select system prompt based on mode
+    ) -> list[
+        ChatCompletionSystemMessageParam | ChatCompletionUserMessageParam
+    ]:
+        """Build chat messages for multi-agent summary / synthesis."""
         if mode == "debate":
             system_prompt = """You are an expert debate summarizer for multi-agent systems. Your task is to analyze responses from multiple AI agents and create a structured summary that captures different perspectives, agreements, and disagreements.
 
@@ -680,24 +668,67 @@ QUALITY STANDARDS:
             question=question_text,
         )
 
-        chat_messages = [
+        return [
             ChatCompletionSystemMessageParam(role="system", content=system_prompt),
             ChatCompletionUserMessageParam(role="user", content=user_prompt),
         ]
 
+    async def summarize_agent_responses_stream(
+        self,
+        agent_responses: list[dict[str, str]],
+        mode: str = "non_debate",
+        user_question: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream summary tokens from Lead_ai."""
+        chat_messages = self._build_summarize_agent_messages(
+            agent_responses, mode=mode, user_question=user_question
+        )
+        model = os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini"
         try:
-            response = await self.client.chat.completions.create(
-                model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
+            stream = await self.client.chat.completions.create(
+                model=model,
                 messages=chat_messages,
+                stream=True,
             )
-            return (
-                response.choices[0].message.content
-                if response.choices[0].message.content
-                else ""
-            )
+            async for chunk in stream:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    yield delta
         except Exception as e:
-            logger.error(f"Error in summarize_agent_responses (mode={mode}): {str(e)}")
-            return f"Error: {str(e)}"
+            logger.error(
+                "Error in summarize_agent_responses_stream (mode=%s): %s",
+                mode,
+                e,
+            )
+            yield f"Error: {str(e)}"
+
+    async def summarize_agent_responses(
+        self,
+        agent_responses: list[dict[str, str]],
+        mode: str = "non_debate",
+        user_question: str | None = None,
+    ) -> str:
+        """
+        Summarize the answers from multiple AI agents into a single summary using Lead_ai.
+
+        Args:
+            agent_responses: List of dicts with 'agent_name' and 'message' keys
+                Example: [{"agent_name": "Research Agent", "message": "..."}, ...]
+            mode: Summary mode - "debate" or "non_debate"
+                - "debate": Compares viewpoints, highlights agreements/disagreements
+                - "non_debate": Combines contributions into a unified response
+            user_question: The original user question/request, used to calibrate
+                the summary style (e.g. introductions vs. task responses)
+
+        Returns:
+            Summary text string
+        """
+        parts: list[str] = []
+        async for token in self.summarize_agent_responses_stream(
+            agent_responses, mode=mode, user_question=user_question
+        ):
+            parts.append(token)
+        return "".join(parts)
 
     # Backwards-compatible aliases
     async def summarize_debate_answer(
@@ -1403,6 +1434,34 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
             raise ValueError("Empty response from Supervisor LLM")
 
         return content
+
+    async def call_supervisor_llm_text_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream Supervisor LLM text deltas (for synthesis)."""
+        messages = [
+            ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+            ChatCompletionUserMessageParam(role="user", content=user_prompt),
+        ]
+        llm_model = (
+            model
+            or os.getenv("SUPERVISOR_MODEL")
+            or os.getenv("LEAD_AI_MODEL")
+            or "gpt-4o-mini"
+        )
+        stream = await self.client.chat.completions.create(
+            model=llm_model,
+            messages=messages,
+            timeout=90.0,
+            stream=True,
+        )
+        async for chunk in stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
 
 
 openai_service = OpenAIService()

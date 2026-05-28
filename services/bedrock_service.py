@@ -18,6 +18,7 @@ See implementation plan for full architecture details.
 
 import json
 import re
+from collections.abc import AsyncIterator
 from typing import Any
 
 import aioboto3
@@ -221,6 +222,70 @@ class BedrockService:
         except (KeyError, json.JSONDecodeError) as e:
             logger.error("Failed to parse Bedrock response: %s", str(e))
             raise ValueError(f"Invalid Bedrock response format: {str(e)}") from e
+
+    async def call_claude_text_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream Claude text deltas via Bedrock invoke_model_with_response_stream."""
+        model_id = model or settings.bedrock_supervisor_model
+        request_body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 4096,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_prompt}],
+            "temperature": 1.0,
+        }
+
+        try:
+            logger.info(
+                "Bedrock call_claude_text_stream - model=%s, timeout=%.1fs",
+                model_id,
+                self._timeout,
+            )
+            async with self._session.client(
+                "bedrock-runtime",
+                region_name=self._region,
+            ) as client:
+                response = await client.invoke_model_with_response_stream(
+                    modelId=model_id,
+                    body=json.dumps(request_body),
+                    contentType="application/json",
+                    accept="application/json",
+                )
+                stream = response.get("body")
+                if stream is None:
+                    return
+
+                async for event in stream:
+                    chunk_bytes = event.get("chunk", {}).get("bytes")
+                    if not chunk_bytes:
+                        continue
+                    chunk = json.loads(chunk_bytes)
+                    if chunk.get("type") != "content_block_delta":
+                        continue
+                    delta = chunk.get("delta") or {}
+                    text = delta.get("text")
+                    if text:
+                        yield text
+
+        except ClientError as e:
+            error_code = e.response["Error"]["Code"]
+            error_message = e.response["Error"]["Message"]
+            logger.error(
+                "Bedrock streaming API error - code=%s, message=%s",
+                error_code,
+                error_message,
+            )
+            raise ValueError(
+                f"Bedrock API error: {error_code} - {error_message}"
+            ) from e
+
+        except (KeyError, json.JSONDecodeError) as e:
+            logger.error("Failed to parse Bedrock stream chunk: %s", str(e))
+            raise ValueError(f"Invalid Bedrock stream format: {str(e)}") from e
 
     @staticmethod
     def _extract_json(text: str) -> dict[str, Any]:

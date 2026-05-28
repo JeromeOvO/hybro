@@ -92,6 +92,7 @@ def build_agent_dynamic_suffix(
     agent_name: str | None = None,
     room_awareness: str | None = None,
     quoted_text: str | None = None,
+    agent_task: str | None = None,
     include_system_instruction: bool = True,
     task_budget: int | None = None,
 ) -> str:
@@ -109,14 +110,22 @@ def build_agent_dynamic_suffix(
     task_parts: list[str] = []
     if quoted_text:
         task_parts.append("[Quoted context]")
-        task_parts.append("The user is referencing the following specific content:")
-        task_parts.append(f'"{quoted_text}"')
+        qt = quoted_text.strip()
+        if "\n---\n" in qt:
+            task_parts.append(qt)
+        else:
+            task_parts.append("The user is referencing the following specific content:")
+            task_parts.append(f'"{qt}"')
         task_parts.append("")
     if room_awareness:
         task_parts.append(room_awareness)
         task_parts.append("")
     task_parts.append("[Current request]")
     task_parts.append(f"User: {current_task}")
+    if agent_task and agent_task.strip():
+        task_parts.append("")
+        task_parts.append("[Task]")
+        task_parts.append(agent_task.strip())
     if include_system_instruction and agent_name:
         task_parts.append("")
         instruction = (
@@ -140,18 +149,29 @@ def build_agent_dynamic_suffix(
                 task_parts_truncated: list[str] = []
                 if quoted_text:
                     task_parts_truncated.append("[Quoted context]")
-                    task_parts_truncated.append(
-                        "The user is referencing the following specific content:"
-                    )
-                    task_parts_truncated.append(f'"{quoted_text[:500]}..."')
+                    qt = quoted_text.strip()
+                    if "\n---\n" in qt:
+                        task_parts_truncated.append(qt)
+                    else:
+                        task_parts_truncated.append(
+                            "The user is referencing the following specific content:"
+                        )
+                        task_parts_truncated.append(f'"{qt}"')
                     task_parts_truncated.append("")
                 if room_awareness:
                     task_parts_truncated.append(room_awareness[:200] + "...")
                     task_parts_truncated.append("")
                 task_parts_truncated.append("[Current request]")
-                task_parts_truncated.append(
-                    f"User: {current_task[:max_task_chars]}... [truncated]"
-                )
+                task_parts_truncated.append(f"User: {current_task[:max_task_chars]}... [truncated]")
+                if agent_task and agent_task.strip():
+                    task_parts_truncated.append("")
+                    task_parts_truncated.append("[Task]")
+                    remain = max(0, max_task_chars - len(current_task))
+                    task_parts_truncated.append(
+                        (agent_task.strip()[:remain] + "... [truncated]")
+                        if remain < len(agent_task)
+                        else agent_task.strip()
+                    )
                 if include_system_instruction and agent_name:
                     task_parts_truncated.append("")
                     task_parts_truncated.append(
@@ -260,6 +280,7 @@ def assemble_agent_execution_context_from_memory(
     agent_name: str | None = None,
     room_awareness: str | None = None,
     quoted_text: str | None = None,
+    agent_task: str | None = None,
     include_system_instruction: bool = True,
 ):
     budget = token_budget or TokenBudgetConfig()
@@ -294,6 +315,7 @@ def assemble_agent_execution_context_from_memory(
         agent_name=agent_name,
         room_awareness=room_awareness,
         quoted_text=quoted_text,
+        agent_task=agent_task,
         include_system_instruction=include_system_instruction,
         task_budget=budget.current_task_tokens,
     )
@@ -311,6 +333,7 @@ def assemble_agent_execution_context_from_memory(
             agent_name=agent_name,
             room_awareness=room_awareness,
             quoted_text=quoted_text,
+            agent_task=agent_task,
             include_system_instruction=include_system_instruction,
             task_budget=budget.current_task_tokens,
         ),
@@ -410,6 +433,7 @@ def _finalize(
 
 def _truncate_context_to_token_budget(context: str, available_tokens: int) -> str:
     current_request = _current_request_section(context)
+    quoted_context = _quoted_context_section(context)
     if available_tokens <= 0:
         return current_request or ""
 
@@ -418,6 +442,22 @@ def _truncate_context_to_token_budget(context: str, available_tokens: int) -> st
         marker = "..."
     if estimate_tokens(marker) > available_tokens:
         return ""
+
+    # Policy A: preserve [Quoted context] + [Current request] together when possible
+    if quoted_context and current_request:
+        combined = f"{quoted_context}\n\n{current_request}"
+        candidate = f"{marker.lstrip()}\n{combined}"
+        if estimate_tokens(candidate) <= available_tokens:
+            return candidate
+        # Quote + request too large — keep quote and truncate request
+        quote_tokens = estimate_tokens(f"{marker.lstrip()}\n{quoted_context}\n\n")
+        remaining = available_tokens - quote_tokens
+        if remaining > 50:
+            truncated_req = _truncate_current_request_section(
+                current_request, remaining, marker,
+            )
+            if truncated_req is not None:
+                return f"{marker.lstrip()}\n{quoted_context}\n\n{truncated_req}"
 
     if current_request:
         candidate = _truncate_current_request_section(
@@ -447,6 +487,14 @@ def _truncate_context_to_char_limit(context: str, max_chars: int) -> str:
     if max_chars <= len(marker):
         return marker[-max_chars:]
     current_request = _current_request_section(context)
+    quoted_context = _quoted_context_section(context)
+    # Policy A: preserve [Quoted context] + [Current request] together
+    if quoted_context and current_request:
+        prefix_marker = marker.lstrip()
+        combined = f"{quoted_context}\n\n{current_request}"
+        candidate = f"{prefix_marker}\n{combined}"
+        if len(candidate) <= max_chars:
+            return candidate
     if current_request:
         prefix_marker = marker.lstrip()
         candidate = f"{prefix_marker}\n{current_request}"
@@ -469,6 +517,20 @@ def _current_request_section(context: str) -> str | None:
     if index == -1:
         return None
     return context[index:].lstrip()
+
+
+def _quoted_context_section(context: str) -> str | None:
+    """Extract ``[Quoted context]`` block up to (but not including) the next section."""
+    start_marker = "[Quoted context]"
+    idx = context.rfind(start_marker)
+    if idx == -1:
+        return None
+    remainder = context[idx:]
+    for next_section in ("[Current request]", "[Task]"):
+        end = remainder.find(next_section)
+        if end > 0:
+            return remainder[:end].rstrip()
+    return remainder.rstrip()
 
 
 def _truncate_current_request_section(

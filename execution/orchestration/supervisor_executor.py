@@ -139,6 +139,31 @@ class SupervisorExecutor:
             agents=agents,
         )
 
+    async def _stream_supervisor_synthesis(
+        self,
+        *,
+        room_id: str,
+        user_message_id: str,
+        trajectory: SupervisorTrajectory,
+        synthesis_instruction: str,
+        client_request_id: str | None,
+    ) -> str:
+        """Run supervisor LLM synthesis with live artifact_update streaming."""
+        from common.utils.summary_streaming import stream_summary_to_sse
+
+        summary_message_id = f"summary-{user_message_id}"
+        return await stream_summary_to_sse(
+            self.sse_manager,
+            room_id=room_id,
+            message_id=summary_message_id,
+            agent_id=CoordinatorAgentId.SUMMARY,
+            token_stream=self.supervisor_service.synthesize_v2_stream(
+                trajectory=trajectory,
+                synthesis_instruction=synthesis_instruction,
+            ),
+            client_request_id=client_request_id,
+        )
+
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
@@ -396,6 +421,23 @@ class SupervisorExecutor:
                     and r.paused_message_id
                 ]
                 if all_still_paused:
+                    # Reconcile against DB: a relay agent may have completed
+                    # before its continuation was saved (race between webhook
+                    # response and _save_interrupted_state during concurrent
+                    # dispatch). Check actual DB state and upgrade if terminal.
+                    await self._reconcile_paused_results(
+                        all_still_paused, trajectory, room_id
+                    )
+                    # Re-check after reconciliation
+                    all_still_paused = [
+                        r
+                        for entry in trajectory.entries
+                        for r in entry.results
+                        if r.status == StepStatus.PAUSED
+                        and r.paused_message_id
+                    ]
+
+                if all_still_paused:
                     logger.info(
                         "supervisor_resume_still_paused",
                         extra={
@@ -441,6 +483,7 @@ class SupervisorExecutor:
                     room_config=room_config,
                     trajectory=trajectory,
                     conversation_context=conversation_context,
+                    quoted_text=quoted_text,
                     max_steps=self.MAX_STEPS,
                 )
                 try:
@@ -868,6 +911,11 @@ class SupervisorExecutor:
                             ),
                         )
 
+                    client_req_id = (
+                        await self.database_service.resolve_client_request_id_for_message_id(
+                            user_message_id
+                        )
+                    )
                     # SSE: notify frontend of synthesis stage
                     if not (token and token.is_cancelled):
                         try:
@@ -882,9 +930,6 @@ class SupervisorExecutor:
                             logger.debug("SSE stage notification failed (synthesizing)", exc_info=True)
                         try:
                             summary_message_id = f"summary-{user_message_id}"
-                            client_req_id = await self.database_service.resolve_client_request_id_for_message_id(
-                                user_message_id
-                            )
                             await self.sse_manager.send_task_submitted(
                                 room_id=room_id,
                                 message_id=summary_message_id,
@@ -900,9 +945,12 @@ class SupervisorExecutor:
                         except Exception:
                             logger.debug("SSE summary working card failed", exc_info=True)
 
-                    synth_coro = self.supervisor_service.synthesize_v2(
+                    synth_coro = self._stream_supervisor_synthesis(
+                        room_id=room_id,
+                        user_message_id=user_message_id,
                         trajectory=trajectory,
                         synthesis_instruction=action.synthesis_instruction or "",
+                        client_request_id=client_req_id,
                     )
                     try:
                         synthesis = (
@@ -1123,6 +1171,11 @@ class SupervisorExecutor:
                         status=RunStatus.FAILED, trajectory=trajectory
                     ),
                 )
+            budget_client_req_id = (
+                await self.database_service.resolve_client_request_id_for_message_id(
+                    user_message_id
+                )
+            )
             # SSE: notify frontend of budget-exhaustion synthesis
             if not (token and token.is_cancelled):
                 try:
@@ -1137,9 +1190,6 @@ class SupervisorExecutor:
                     logger.debug("SSE stage notification failed (budget synthesis)", exc_info=True)
                 try:
                     summary_message_id = f"summary-{user_message_id}"
-                    client_req_id = await self.database_service.resolve_client_request_id_for_message_id(
-                        user_message_id
-                    )
                     await self.sse_manager.send_task_submitted(
                         room_id=room_id,
                         message_id=summary_message_id,
@@ -1150,14 +1200,17 @@ class SupervisorExecutor:
                         related_message_id=user_message_id,
                         created_at=utcnow().isoformat(),
                         task_content="Summarizing agent responses\u2026",
-                        client_request_id=client_req_id,
+                        client_request_id=budget_client_req_id,
                     )
                 except Exception:
                     logger.debug("SSE summary working card failed (budget)", exc_info=True)
 
-            budget_synth_coro = self.supervisor_service.synthesize_v2(
+            budget_synth_coro = self._stream_supervisor_synthesis(
+                room_id=room_id,
+                user_message_id=user_message_id,
                 trajectory=trajectory,
                 synthesis_instruction="Budget exhausted. Synthesize available results.",
+                client_request_id=budget_client_req_id,
             )
             try:
                 synthesis = (
@@ -1674,6 +1727,91 @@ class SupervisorExecutor:
                 },
             )
             return cached_user_message
+
+    # ------------------------------------------------------------------
+    # Reconcile PAUSED results against actual DB state
+    # ------------------------------------------------------------------
+
+    async def _reconcile_paused_results(
+        self,
+        paused_results: list[V2StepResult],
+        trajectory: SupervisorTrajectory,
+        room_id: str,
+    ) -> None:
+        """Upgrade PAUSED trajectory entries whose agent messages are already terminal in DB.
+
+        This handles the race condition where a relay agent completes (via webhook)
+        before the supervisor has saved the continuation. In that case the response
+        handler's resume attempt finds no continuation and is a no-op, leaving the
+        trajectory entry permanently PAUSED. This method detects and corrects that.
+        """
+        _TERMINAL = {"completed", "failed", "canceled", "rejected"}
+
+        for pr in paused_results:
+            msg_id = pr.agent_message_id or pr.paused_message_id
+            if not msg_id:
+                continue
+            msg = await self.database_service.get_room_agent_message_by_message_id(msg_id)
+            if not msg:
+                continue
+            if msg.last_notified_state not in _TERMINAL:
+                continue
+
+            is_success = msg.last_notified_state == "completed"
+            response_text = ""
+            if msg.message_content and msg.message_content.message_text:
+                response_text = msg.message_content.message_text
+
+            for entry in trajectory.entries:
+                for idx, result in enumerate(entry.results):
+                    if (
+                        result.status == StepStatus.PAUSED
+                        and result.agent_message_id == msg_id
+                    ):
+                        entry.results[idx] = V2StepResult(
+                            step_number=entry.step_number,
+                            agent_id=result.agent_id,
+                            agent_name=result.agent_name,
+                            task=result.task,
+                            response_text=response_text,
+                            success=is_success,
+                            status=StepStatus.SUCCESS if is_success else StepStatus.FAILED,
+                            error_message=None if is_success else "Agent task failed",
+                            agent_message_id=msg_id,
+                            completed_at=utcnow(),
+                        )
+                        if entry.completed_at is None:
+                            still_paused = any(
+                                r.status == StepStatus.PAUSED
+                                for r in entry.results
+                            )
+                            if not still_paused:
+                                entry.completed_at = utcnow()
+                        break
+                else:
+                    continue
+                break
+
+            if is_success and response_text:
+                await self.room_memory_service.add_agent_response_to_memory(
+                    room_id=room_id,
+                    agent_id=pr.agent_id,
+                    agent_name=pr.agent_name or "Agent",
+                    response_text=response_text,
+                    was_successful=True,
+                    message_id=msg_id,
+                )
+
+            logger.info(
+                "supervisor_reconciled_paused_result",
+                extra={
+                    "room_id": room_id,
+                    "agent_message_id": msg_id,
+                    "agent_name": pr.agent_name,
+                    "resolved_state": msg.last_notified_state,
+                    "trajectory_id": trajectory.trajectory_id,
+                },
+            )
 
     # ------------------------------------------------------------------
     # Unified interrupt state persistence

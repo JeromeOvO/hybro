@@ -15,6 +15,7 @@ from models.agent import AGENT_CARD_HUB_NO_OVERWRITE, Agent
 from models.agent_group import AgentGroup
 from models.api_key import APIKey
 from models.memory import ChatContext, RoomMemory
+from models.quote import QuotedSnippet
 from models.room import Room, RoomAgentMessage, RoomUserMessage
 from models.run import NON_TERMINAL_RUN_STATE_VALUES
 from models.supervisor_v2 import TrajectoryStatus
@@ -250,6 +251,15 @@ class MongoDB:
                 "MongoDB client is not connected. Please call connect() first."
             )
         return self.db.room_agent_messages
+
+    @property
+    def room_quotes_collection(self):
+        """Persisted quoted text snapshots (QUOTE_REPLY)."""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.room_quotes
 
     @property
     def room_memories_collection(self):
@@ -988,10 +998,28 @@ class MongoDB:
         """
         Add a room user message to the database
         """
-        doc = room_user_message.model_dump(mode="json")
+        doc = room_user_message.model_dump(mode="json", exclude={"quote"})
         self._strip_file_urls(doc)
         result = await self.room_user_messages_collection.insert_one(doc)
         return str(result.inserted_id)
+
+    async def insert_quoted_snippet(self, snippet: QuotedSnippet) -> str:
+        """Insert a quoted snippet; returns quote_id."""
+        doc = snippet.model_dump(mode="json")
+        await self.room_quotes_collection.insert_one(doc)
+        return snippet.quote_id
+
+    async def get_quoted_snippet_by_id(self, quote_id: str) -> QuotedSnippet | None:
+        doc = await self.room_quotes_collection.find_one({"quote_id": quote_id})
+        return QuotedSnippet.model_validate(doc) if doc else None
+
+    async def delete_quoted_snippet_by_id(self, quote_id: str) -> bool:
+        result = await self.room_quotes_collection.delete_one({"quote_id": quote_id})
+        return result.deleted_count > 0
+
+    async def delete_room_quotes_by_room_id(self, room_id: str) -> int:
+        result = await self.room_quotes_collection.delete_many({"room_id": room_id})
+        return int(result.deleted_count)
 
     async def get_room_user_messages_by_room_id(
         self, room_id: str
@@ -2705,6 +2733,23 @@ class MongoDB:
             logger.info("Run lifecycle indexes created on runs/run_events")
         except Exception as e:
             logger.error("Error creating run lifecycle indexes: %s", e)
+
+    async def create_room_quotes_indexes(self) -> None:
+        """Create indexes for room_quotes collection (QUOTE_REPLY)."""
+        try:
+            coll = self.room_quotes_collection
+            await coll.create_index(
+                "quote_id",
+                unique=True,
+                name="quote_id_unique",
+            )
+            await coll.create_index(
+                "room_id",
+                name="room_id_lookup",
+            )
+            logger.info("Room quotes indexes created on room_quotes")
+        except Exception as e:
+            logger.error("Error creating room quotes indexes: %s", e)
 
 mongodb = MongoDB()
 

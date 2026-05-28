@@ -226,6 +226,7 @@ class ContextMemoryFacade:
         agent_name: str | None = None,
         room_awareness: str | None = None,
         quoted_text: str | None = None,
+        agent_task: str | None = None,
         include_system_instruction: bool = True,
     ) -> AssembledContext:
         return assembly.assemble_agent_execution_context_from_memory(
@@ -236,6 +237,7 @@ class ContextMemoryFacade:
             agent_name=agent_name,
             room_awareness=room_awareness,
             quoted_text=quoted_text,
+            agent_task=agent_task,
             include_system_instruction=include_system_instruction,
         )
 

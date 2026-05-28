@@ -624,6 +624,7 @@ async def lifespan(app: FastAPI):
         await mongodb.ensure_agent_indexes()
         await mongodb.create_capability_issue_indexes()
         await mongodb.create_run_lifecycle_indexes()
+        await mongodb.create_room_quotes_indexes()
         if mongodb.client is not None:
             if _execution_deps is None:
                 raise RuntimeError("ExecutionDeps have not been bound")

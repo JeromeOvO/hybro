@@ -545,6 +545,9 @@ class HITLService:
             await self.database_service.persist_hitl_user_answer(
                 request.display_message_id, user_input,
             )
+            await self.database_service.update_agent_message_task_state(
+                request.display_message_id, "completed"
+            )
 
         logger.info(
             "hitl_response_handled",

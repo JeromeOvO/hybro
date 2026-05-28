@@ -12,6 +12,7 @@ from common.a2a_constants import CommonTaskState, SSEProcessingStatus, is_termin
 from common.protocols import RoomDistributedLock
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
+from common.utils.summary_streaming import stream_summary_to_sse
 from common.utils.time import utcnow
 from models.request import OrchestrationRequest, RoomCenterAgentMessageRequest
 from models.response import OrchestrationResponse
@@ -616,10 +617,32 @@ class RoomMessageCenter:
             (user_message.user_id if user_message else None) or request.user_id
         )
 
-        # Extract quoted context from user message extend_info (set when user quotes text)
+        # Extract quoted context via TurnContext (QUOTE_REPLY: quote_id + snippet or legacy)
         quoted_text: str | None = None
-        if user_message and isinstance(user_message.extend_info, dict):
-            quoted_text = user_message.extend_info.get("quoted_text") or None
+        if user_message:
+            from execution.orchestration.turn_context import (
+                TurnQuoteMissingError,
+                load_turn_context,
+            )
+
+            try:
+                _tc = await load_turn_context(self.database_service, user_message)
+                quoted_text = _tc.quoted_text
+            except TurnQuoteMissingError as e:
+                logger.error("RoomMessageCenter: %s", e)
+                await self._emit_processing_status(
+                    room_id=room_id,
+                    status=SSEProcessingStatus.FAILED,
+                    message_id=room_user_message_id,
+                    lifecycle_message_id=room_user_message_id,
+                    details="Quoted context could not be loaded for this turn",
+                )
+                return OrchestrationResponse(
+                    room_id=room_id,
+                    success=False,
+                    error=str(e),
+                    status_code=400,
+                )
 
         # Create a CancellationToken for this message pipeline (A-3).
         # The token is pre-signalled if cancel_message() was called before
@@ -1262,7 +1285,29 @@ class RoomMessageCenter:
         message_text = continuation.get("message_text", "")
         request_user_id = continuation.get("request_user_id")
         conversation_context = continuation.get("conversation_context")
-        quoted_text = continuation.get("quoted_text")
+
+        # Reload quoted text from DB (QUOTE_REPLY: prefer TurnContext over continuation)
+        quoted_text: str | None = None
+        if user_message_id:
+            from execution.orchestration.turn_context import (
+                TurnQuoteMissingError,
+                load_turn_context,
+            )
+
+            um = await self.database_service.get_room_user_message_by_message_id(
+                user_message_id
+            )
+            if um:
+                try:
+                    _tc = await load_turn_context(self.database_service, um)
+                    quoted_text = _tc.quoted_text
+                except TurnQuoteMissingError:
+                    logger.error(
+                        "RoomMessageCenter: V2 resume missing quoted snippet for turn %s",
+                        user_message_id,
+                    )
+        if quoted_text is None:
+            quoted_text = continuation.get("quoted_text")
 
         if not room_id or not user_message_id:
             logger.error(
@@ -2302,6 +2347,23 @@ class RoomMessageCenter:
             client_request_id=summary_client_request_id,
         )
 
+    async def _stream_summary_content(
+        self,
+        room_id: str,
+        summary_message_id: str,
+        token_stream,
+        summary_client_request_id: str | None,
+    ) -> str:
+        """Stream synthesis tokens via artifact_update; return accumulated text."""
+        return await stream_summary_to_sse(
+            self.sse_manager,
+            room_id=room_id,
+            message_id=summary_message_id,
+            agent_id=CoordinatorAgentId.SUMMARY,
+            token_stream=token_stream,
+            client_request_id=summary_client_request_id,
+        )
+
     async def _emit_deterministic_digest(
         self,
         room_id: str,
@@ -2384,7 +2446,8 @@ class RoomMessageCenter:
 
         Routing logic:
         - If synthesis_text is provided (supervisor path), use it directly.
-        - Otherwise, collect agent responses and call OpenAI to generate.
+          Supervisor synthesis is streamed via artifact_update before this call.
+        - Otherwise, collect agent responses and stream OpenAI summary generation.
         - Deterministic message_id ensures at most one summary per turn.
         """
         summary_message_id = f"summary-{user_message_id}"
@@ -2471,8 +2534,15 @@ class RoomMessageCenter:
                 )
 
                 mode = "debate" if is_debate else "non_debate"
-                content = await self.openai_service.summarize_agent_responses(
-                    agent_responses, mode=mode, user_question=user_question_text
+                content = await self._stream_summary_content(
+                    room_id,
+                    summary_message_id,
+                    self.openai_service.summarize_agent_responses_stream(
+                        agent_responses,
+                        mode=mode,
+                        user_question=user_question_text,
+                    ),
+                    summary_client_request_id,
                 )
                 origin = "coordinator"
 

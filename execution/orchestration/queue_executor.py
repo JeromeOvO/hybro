@@ -791,6 +791,28 @@ class QueueExecutor:
             )
             return ResumeResult(success=False)
 
+        quoted_text_resume: str | None = None
+        um_resume = await self.database_service.get_room_user_message_by_message_id(
+            user_message_id
+        )
+        if um_resume:
+            from execution.orchestration.turn_context import (
+                TurnQuoteMissingError,
+                load_turn_context,
+            )
+
+            try:
+                tc = await load_turn_context(self.database_service, um_resume)
+                quoted_text_resume = tc.quoted_text
+            except TurnQuoteMissingError:
+                logger.error(
+                    "QueueExecutor: missing quoted snippet for turn %s on resume",
+                    user_message_id,
+                )
+                return ResumeResult(success=False)
+            if quoted_text_resume is None and isinstance(um_resume.extend_info, dict):
+                quoted_text_resume = um_resume.extend_info.get("quoted_text")
+
         if task_result_text:
             current_agent_id = continuation.get("current_agent_id")
             current_agent_name = continuation.get("current_agent_name", "Agent")
@@ -814,6 +836,7 @@ class QueueExecutor:
                 user_message_id,
                 token=token,
                 request_user_id=request_user_id,
+                quoted_text=quoted_text_resume,
             )
 
             if queue_processing_result.result == QueueResult.PAUSED:

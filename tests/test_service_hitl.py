@@ -553,6 +553,44 @@ class TestHandleResponseErrors:
 
         assert exc_info.value.message == "Request already responded"
 
+    @pytest.mark.asyncio
+    async def test_handle_response_marks_display_message_completed(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
+    ):
+        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._sse_manager = mock_hitl_sse_manager
+        mock_hitl_db_service.persist_hitl_user_answer = AsyncMock()
+        mock_hitl_db_service.update_agent_message_task_state = AsyncMock()
+
+        request = sample_hitl_request.model_copy(
+            update={
+                "source": "agent",
+                "display_message_id": "display-msg-1",
+                "a2a_task_id": "task-1",
+                "a2a_context_id": "ctx-1",
+            }
+        )
+        doc = request.model_dump(mode="json")
+        mock_hitl_db_service.get_hitl_request.return_value = doc
+        mock_hitl_db_service.claim_hitl_request.return_value = doc
+        mock_hitl_db_service.fenced_update_hitl_request.return_value = True
+        hitl_service._handle_agent_response = AsyncMock()
+
+        result = await hitl_service.handle_response(
+            room_id=request.room_id,
+            request_id=request.request_id,
+            user_input="A",
+            user_id="user-1",
+        )
+
+        assert result == {"status": "ok", "request_id": request.request_id}
+        mock_hitl_db_service.persist_hitl_user_answer.assert_awaited_once_with(
+            "display-msg-1", "A"
+        )
+        mock_hitl_db_service.update_agent_message_task_state.assert_awaited_once_with(
+            "display-msg-1", "completed"
+        )
+
 
 class TestGroupedHandleResponse:
     """Tests for grouped HITL response routing."""

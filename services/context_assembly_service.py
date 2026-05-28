@@ -277,6 +277,7 @@ class ContextAssemblyService:
         agent_name: str | None = None,
         room_awareness: str | None = None,
         quoted_text: str | None = None,
+        agent_task: str | None = None,
         include_system_instruction: bool = True,
     ) -> ContextAssemblyResult:
         """
@@ -289,10 +290,11 @@ class ContextAssemblyService:
 
         Args:
             room_memory: The room's durable memory
-            current_task: The current task for this agent
+            current_task: User follow-up text for ``[Current request]`` (not supervisor task)
             agent_name: Name of the agent (for personalization)
             room_awareness: Description of other agents in the room
-            quoted_text: Text the user quoted from a previous message
+            quoted_text: Verbatim quoted block (or legacy single-line quote)
+            agent_task: Supervisor/queue task for ``[Task]`` (optional)
             include_system_instruction: Whether to add agent instructions
 
         Returns:
@@ -308,6 +310,7 @@ class ContextAssemblyService:
                 agent_name=agent_name,
                 room_awareness=room_awareness,
                 quoted_text=quoted_text,
+                agent_task=agent_task,
                 include_system_instruction=include_system_instruction,
             )
             result = _legacy_context_result(assembled)
@@ -363,6 +366,7 @@ class ContextAssemblyService:
             agent_name=agent_name,
             room_awareness=room_awareness,
             quoted_text=quoted_text,
+            agent_task=agent_task,
             include_system_instruction=include_system_instruction,
             task_budget=task_budget,
         )
@@ -393,6 +397,7 @@ class ContextAssemblyService:
                     agent_name=agent_name,
                     room_awareness=room_awareness,
                     quoted_text=quoted_text,
+                    agent_task=agent_task,
                     include_system_instruction=include_system_instruction,
                     task_budget=task_budget,
                 )
@@ -613,6 +618,7 @@ class ContextAssemblyService:
         agent_name: str | None = None,
         room_awareness: str | None = None,
         quoted_text: str | None = None,
+        agent_task: str | None = None,
         include_system_instruction: bool = True,
         task_budget: int | None = None,
     ) -> str:
@@ -625,10 +631,11 @@ class ContextAssemblyService:
         Args:
             turns: Recent conversation turns
             summary: Summary of older context
-            current_task: The current user request
+            current_task: User follow-up for ``[Current request]``
             agent_name: Name of the agent
             room_awareness: Description of other agents
-            quoted_text: Text the user quoted
+            quoted_text: Verbatim quote (``\\n---\\n`` = preformatted block body)
+            agent_task: Supervisor/queue task for ``[Task]``
             include_system_instruction: Whether to add agent instructions
             task_budget: Optional token budget for task-related content
 
@@ -653,11 +660,15 @@ class ContextAssemblyService:
         # Track task-related tokens for budget enforcement
         task_parts = []
 
-        # Quoted context (part of task budget)
+        # Quoted context (part of task budget) — Policy A: never truncate quote
         if quoted_text:
             task_parts.append("[Quoted context]")
-            task_parts.append("The user is referencing the following specific content:")
-            task_parts.append(f'"{quoted_text}"')
+            qt = quoted_text.strip()
+            if "\n---\n" in qt:
+                task_parts.append(qt)
+            else:
+                task_parts.append("The user is referencing the following specific content:")
+                task_parts.append(f'"{qt}"')
             task_parts.append("")
 
         # Room awareness (part of task budget)
@@ -668,6 +679,10 @@ class ContextAssemblyService:
         # Current task (always included)
         task_parts.append("[Current request]")
         task_parts.append(f"User: {current_task}")
+        if agent_task and agent_task.strip():
+            task_parts.append("")
+            task_parts.append("[Task]")
+            task_parts.append(agent_task.strip())
 
         # Agent instruction
         if include_system_instruction and agent_name:
@@ -689,10 +704,9 @@ class ContextAssemblyService:
         if task_budget:
             task_tokens = estimate_tokens(task_content)
             if task_tokens > task_budget:
-                # Truncate current_task if it's too long
                 logger.warning(
                     f"Task content ({task_tokens} tokens) exceeds budget ({task_budget}). "
-                    f"Truncating current_task."
+                    f"Truncating request/task (quoted text preserved)."
                 )
                 # Rebuild with truncated task
                 max_task_chars = (task_budget * 4) - 500  # Reserve for headers/instructions
@@ -701,14 +715,28 @@ class ContextAssemblyService:
                     task_parts_truncated = []
                     if quoted_text:
                         task_parts_truncated.append("[Quoted context]")
-                        task_parts_truncated.append("The user is referencing the following specific content:")
-                        task_parts_truncated.append(f'"{quoted_text[:500]}..."')  # Also truncate quote
+                        qt = quoted_text.strip()
+                        if "\n---\n" in qt:
+                            task_parts_truncated.append(qt)
+                        else:
+                            task_parts_truncated.append(
+                                "The user is referencing the following specific content:"
+                            )
+                            task_parts_truncated.append(f'"{qt}"')
                         task_parts_truncated.append("")
                     if room_awareness:
                         task_parts_truncated.append(room_awareness[:200] + "...")
                         task_parts_truncated.append("")
                     task_parts_truncated.append("[Current request]")
                     task_parts_truncated.append(f"User: {truncated_task}")
+                    if agent_task and agent_task.strip():
+                        task_parts_truncated.append("")
+                        task_parts_truncated.append("[Task]")
+                        remain = max(0, max_task_chars - len(current_task))
+                        at = agent_task.strip()
+                        task_parts_truncated.append(
+                            (at[:remain] + "... [truncated]") if remain < len(at) else at
+                        )
                     if include_system_instruction and agent_name:
                         task_parts_truncated.append("")
                         task_parts_truncated.append(
