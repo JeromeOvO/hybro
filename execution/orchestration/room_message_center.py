@@ -1285,7 +1285,29 @@ class RoomMessageCenter:
         message_text = continuation.get("message_text", "")
         request_user_id = continuation.get("request_user_id")
         conversation_context = continuation.get("conversation_context")
-        quoted_text = continuation.get("quoted_text")
+
+        # Reload quoted text from DB (QUOTE_REPLY: prefer TurnContext over continuation)
+        quoted_text: str | None = None
+        if user_message_id:
+            from execution.orchestration.turn_context import (
+                TurnQuoteMissingError,
+                load_turn_context,
+            )
+
+            um = await self.database_service.get_room_user_message_by_message_id(
+                user_message_id
+            )
+            if um:
+                try:
+                    _tc = await load_turn_context(self.database_service, um)
+                    quoted_text = _tc.quoted_text
+                except TurnQuoteMissingError:
+                    logger.error(
+                        "RoomMessageCenter: V2 resume missing quoted snippet for turn %s",
+                        user_message_id,
+                    )
+        if quoted_text is None:
+            quoted_text = continuation.get("quoted_text")
 
         if not room_id or not user_message_id:
             logger.error(

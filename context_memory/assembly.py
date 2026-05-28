@@ -433,6 +433,7 @@ def _finalize(
 
 def _truncate_context_to_token_budget(context: str, available_tokens: int) -> str:
     current_request = _current_request_section(context)
+    quoted_context = _quoted_context_section(context)
     if available_tokens <= 0:
         return current_request or ""
 
@@ -441,6 +442,22 @@ def _truncate_context_to_token_budget(context: str, available_tokens: int) -> st
         marker = "..."
     if estimate_tokens(marker) > available_tokens:
         return ""
+
+    # Policy A: preserve [Quoted context] + [Current request] together when possible
+    if quoted_context and current_request:
+        combined = f"{quoted_context}\n\n{current_request}"
+        candidate = f"{marker.lstrip()}\n{combined}"
+        if estimate_tokens(candidate) <= available_tokens:
+            return candidate
+        # Quote + request too large — keep quote and truncate request
+        quote_tokens = estimate_tokens(f"{marker.lstrip()}\n{quoted_context}\n\n")
+        remaining = available_tokens - quote_tokens
+        if remaining > 50:
+            truncated_req = _truncate_current_request_section(
+                current_request, remaining, marker,
+            )
+            if truncated_req is not None:
+                return f"{marker.lstrip()}\n{quoted_context}\n\n{truncated_req}"
 
     if current_request:
         candidate = _truncate_current_request_section(
@@ -470,6 +487,14 @@ def _truncate_context_to_char_limit(context: str, max_chars: int) -> str:
     if max_chars <= len(marker):
         return marker[-max_chars:]
     current_request = _current_request_section(context)
+    quoted_context = _quoted_context_section(context)
+    # Policy A: preserve [Quoted context] + [Current request] together
+    if quoted_context and current_request:
+        prefix_marker = marker.lstrip()
+        combined = f"{quoted_context}\n\n{current_request}"
+        candidate = f"{prefix_marker}\n{combined}"
+        if len(candidate) <= max_chars:
+            return candidate
     if current_request:
         prefix_marker = marker.lstrip()
         candidate = f"{prefix_marker}\n{current_request}"
@@ -492,6 +517,20 @@ def _current_request_section(context: str) -> str | None:
     if index == -1:
         return None
     return context[index:].lstrip()
+
+
+def _quoted_context_section(context: str) -> str | None:
+    """Extract ``[Quoted context]`` block up to (but not including) the next section."""
+    start_marker = "[Quoted context]"
+    idx = context.rfind(start_marker)
+    if idx == -1:
+        return None
+    remainder = context[idx:]
+    for next_section in ("[Current request]", "[Task]"):
+        end = remainder.find(next_section)
+        if end > 0:
+            return remainder[:end].rstrip()
+    return remainder.rstrip()
 
 
 def _truncate_current_request_section(

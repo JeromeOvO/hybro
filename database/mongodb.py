@@ -2734,6 +2734,23 @@ class MongoDB:
         except Exception as e:
             logger.error("Error creating run lifecycle indexes: %s", e)
 
+    async def create_room_quotes_indexes(self) -> None:
+        """Create indexes for room_quotes collection (QUOTE_REPLY)."""
+        try:
+            coll = self.room_quotes_collection
+            await coll.create_index(
+                "quote_id",
+                unique=True,
+                name="quote_id_unique",
+            )
+            await coll.create_index(
+                "room_id",
+                name="room_id_lookup",
+            )
+            logger.info("Room quotes indexes created on room_quotes")
+        except Exception as e:
+            logger.error("Error creating room quotes indexes: %s", e)
+
 mongodb = MongoDB()
 
 
