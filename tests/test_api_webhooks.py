@@ -125,6 +125,154 @@ class TestParseStreamResponse:
 
 
 # =============================================================================
+# Proto/v1.x statusUpdate fallback Tests
+# =============================================================================
+
+
+class TestParseStreamResponseProtoFallback:
+    """Tests for v1.x proto-format statusUpdate payloads that fail strict validation.
+
+    The a2a-sdk v1.x push sender wraps events in proto-JSON (camelCase, TASK_STATE_*
+    enums, embedded Message with ROLE_AGENT and content[] instead of parts[]). These
+    must parse successfully instead of returning HTTP 400.
+    """
+
+    def test_v1x_completed_extracts_text_from_message(self):
+        """Terminal completed statusUpdate with embedded agent message."""
+        payload = {
+            "statusUpdate": {
+                "taskId": "task-proto-1",
+                "contextId": "ctx-proto-1",
+                "status": {
+                    "state": "TASK_STATE_COMPLETED",
+                    "message": {
+                        "role": "ROLE_AGENT",
+                        "messageId": "m1",
+                        "content": [{"text": "Hello from OpenClaw!"}],
+                    },
+                    "timestamp": "2026-05-30T00:53:17Z",
+                },
+                "final": True,
+            }
+        }
+        result = parse_stream_response(payload, "msg-proto-1")
+        assert result.status.state == TaskState.completed
+        assert result.id == "task-proto-1"
+        assert result.context_id == "ctx-proto-1"
+        assert result.artifacts is not None
+        assert len(result.artifacts) == 1
+        text = result.artifacts[0].parts[0].root.text
+        assert text == "Hello from OpenClaw!"
+
+    def test_v1x_working_without_final_field(self):
+        """Non-terminal working update with final omitted (proto drops false)."""
+        payload = {
+            "statusUpdate": {
+                "taskId": "task-proto-2",
+                "contextId": "ctx-proto-2",
+                "status": {"state": "TASK_STATE_WORKING"},
+            }
+        }
+        result = parse_stream_response(payload, "msg-proto-2")
+        assert result.status.state == TaskState.working
+        assert result.id == "task-proto-2"
+        assert result.artifacts is None
+
+    def test_v1x_failed_extracts_error_text(self):
+        """Terminal failed statusUpdate with error message."""
+        payload = {
+            "statusUpdate": {
+                "taskId": "task-proto-3",
+                "contextId": "ctx-proto-3",
+                "status": {
+                    "state": "TASK_STATE_FAILED",
+                    "message": {
+                        "role": "ROLE_AGENT",
+                        "content": [{"text": "Command timed out after 600s"}],
+                    },
+                },
+                "final": True,
+            }
+        }
+        result = parse_stream_response(payload, "msg-proto-3")
+        assert result.status.state == TaskState.failed
+        assert result.artifacts is not None
+        assert result.artifacts[0].parts[0].root.text == "Command timed out after 600s"
+
+    def test_v1x_completed_no_message(self):
+        """Terminal completed without embedded message (no artifacts created)."""
+        payload = {
+            "statusUpdate": {
+                "taskId": "task-proto-4",
+                "contextId": "ctx-proto-4",
+                "status": {"state": "TASK_STATE_COMPLETED"},
+                "final": True,
+            }
+        }
+        result = parse_stream_response(payload, "msg-proto-4")
+        assert result.status.state == TaskState.completed
+        assert result.artifacts is None
+
+    def test_v1x_uses_v0x_parts_key_for_text(self):
+        """Fallback handles v0.x-style parts key in status.message."""
+        payload = {
+            "statusUpdate": {
+                "taskId": "task-proto-5",
+                "contextId": "ctx-proto-5",
+                "status": {
+                    "state": "TASK_STATE_COMPLETED",
+                    "message": {
+                        "role": "agent",
+                        "parts": [{"kind": "text", "text": "via parts key"}],
+                    },
+                },
+            }
+        }
+        result = parse_stream_response(payload, "msg-proto-5")
+        assert result.status.state == TaskState.completed
+        assert result.artifacts[0].parts[0].root.text == "via parts key"
+
+    def test_v1x_malformed_status_returns_working(self):
+        """Completely malformed statusUpdate still returns a Task, never 400s."""
+        payload = {
+            "statusUpdate": {
+                "taskId": "task-proto-6",
+            }
+        }
+        result = parse_stream_response(payload, "msg-proto-6")
+        assert result.status.state == TaskState.working
+        assert result.id == "task-proto-6"
+
+    def test_v1x_unknown_state_enum_defaults_to_working(self):
+        """Unknown TASK_STATE_* enum value falls back gracefully."""
+        payload = {
+            "statusUpdate": {
+                "taskId": "task-proto-7",
+                "contextId": "ctx-7",
+                "status": {"state": "TASK_STATE_UNKNOWN_FUTURE"},
+            }
+        }
+        result = parse_stream_response(payload, "msg-proto-7")
+        assert result.status.state == TaskState.working
+
+    def test_v0x_status_update_still_uses_strict_path(self):
+        """Genuine v0.x statusUpdate payloads still parse via strict validation."""
+        payload = {
+            "statusUpdate": {
+                "taskId": "task-v0",
+                "contextId": "ctx-v0",
+                "status": {"state": "completed"},
+                "final": True,
+                "kind": "status-update",
+            }
+        }
+        result = parse_stream_response(payload, "msg-v0")
+        assert result.status.state == TaskState.completed
+        assert result.id == "task-v0"
+        assert result.artifacts is None
+
+
+# =============================================================================
 # WebhookTransport Tests
 # =============================================================================
 
