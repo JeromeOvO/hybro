@@ -7,16 +7,80 @@ Streaming events (artifact_update) use ``SSEManager`` directly.
 from __future__ import annotations
 
 import inspect
-from typing import TYPE_CHECKING, Any
+from typing import Any, Protocol
 
 from a2a_adapter.task_status import coerce_task_state
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
 from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
 
-if TYPE_CHECKING:
-    from services.database_service import DatabaseService
-    from services.sse_services import SSEManager
+
+class _DatabaseServiceLike(Protocol):
+    async def accumulate_artifact_on_message(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        ...
+
+    async def update_task_state_on_message(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        ...
+
+    async def get_pending_continuation_on_message(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        ...
+
+    async def get_room_agent_message_by_message_id(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        ...
+
+    async def get_room_by_room_id(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        ...
+
+
+class _SSEManagerLike(Protocol):
+    async def send_artifact_update(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        ...
+
+    async def send_task_submitted(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        ...
+
+    async def send_task_update(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        ...
+
+    async def send_processing_status(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        ...
+
 
 logger = get_logger(__name__)
 
@@ -30,8 +94,8 @@ class AgentResponseHandler:
 
     def __init__(
         self,
-        db: DatabaseService,
-        sse: SSEManager,
+        db: _DatabaseServiceLike,
+        sse: _SSEManagerLike,
         room_message_center: object,
         slot_lifecycle=None,
         hitl_coordinator=None,
@@ -177,45 +241,8 @@ class AgentResponseHandler:
     # --- Terminal events (DB persist -> notify_task_update -> orchestration) ---
 
     async def _on_response(self, e: AgentEvent) -> None:
-        # Convert inline base64 file parts to S3 URIs before persisting/broadcasting
-        if not e.skip_persist and (e.parts or e.artifacts):
-            from common.utils.a2a_helpers import convert_inline_bytes_to_s3
-
-            # Convert parts referenced by both e.parts and nested inside e.artifacts
-            if e.parts:
-                await convert_inline_bytes_to_s3(
-                    e.parts,
-                    e.room_id,
-                    e.message_id,
-                )
-            if e.artifacts:
-                for artifact in e.artifacts:
-                    artifact_parts = artifact.get("parts", [])
-                    if artifact_parts:
-                        await convert_inline_bytes_to_s3(
-                            artifact_parts,
-                            e.room_id,
-                            e.message_id,
-                        )
-
-        # Build artifacts list for DB persistence
-        artifacts_for_db: list[dict] | None = None
-        if not e.skip_persist and (e.parts or e.artifacts):
-            if e.artifacts:
-                artifacts_for_db = e.artifacts
-            elif e.parts:
-                # Only persist non-text parts as artifacts (text is in message_text)
-                non_text = [p for p in e.parts if p.get("kind") in ("file", "data")]
-                if non_text:
-                    from uuid import uuid4
-
-                    artifacts_for_db = [
-                        {
-                            "artifactId": uuid4().hex,
-                            "name": "agent-output",
-                            "parts": non_text,
-                        }
-                    ]
+        await self._convert_response_parts_to_s3(e)
+        artifacts_for_db = self._artifacts_for_response_db(e)
 
         if not e.skip_persist:
             await self._db.update_task_state_on_message(
@@ -235,6 +262,51 @@ class AgentResponseHandler:
         # content + parts via task_update SSE. The redundant agent_response SSE
         # created a duplicate message entity in the frontend.
         await self._resume_orchestration(e.message_id, e.text)
+
+    async def _convert_response_parts_to_s3(self, e: AgentEvent) -> None:
+        if e.skip_persist or not (e.parts or e.artifacts):
+            return
+
+        from common.utils.a2a_helpers import convert_inline_bytes_to_s3
+
+        # Convert parts referenced by both e.parts and nested inside e.artifacts.
+        if e.parts:
+            await convert_inline_bytes_to_s3(
+                e.parts,
+                e.room_id,
+                e.message_id,
+            )
+        for artifact in e.artifacts or []:
+            artifact_parts = artifact.get("parts", [])
+            if artifact_parts:
+                await convert_inline_bytes_to_s3(
+                    artifact_parts,
+                    e.room_id,
+                    e.message_id,
+                )
+
+    def _artifacts_for_response_db(self, e: AgentEvent) -> list[dict] | None:
+        if e.skip_persist or not (e.parts or e.artifacts):
+            return None
+        if e.artifacts:
+            return e.artifacts
+        if not e.parts:
+            return None
+
+        # Only persist non-text parts as artifacts; text is in message_text.
+        non_text = [p for p in e.parts if p.get("kind") in ("file", "data")]
+        if not non_text:
+            return None
+
+        from uuid import uuid4
+
+        return [
+            {
+                "artifactId": uuid4().hex,
+                "name": "agent-output",
+                "parts": non_text,
+            }
+        ]
 
     async def _on_error(self, e: AgentEvent) -> None:
         error = e.error_text or e.text or "Unknown agent error"

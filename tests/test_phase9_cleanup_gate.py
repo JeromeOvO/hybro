@@ -486,6 +486,21 @@ def test_main_legacy_startup_import_inventory_is_preserved():
     assert actual == EXPECTED_MAIN_LEGACY_IMPORTS
 
 
+def test_response_handler_has_no_services_imports_including_type_checking():
+    path = Path("execution/dispatch/response_handler.py")
+    modules = _import_modules_including_type_checking(path)
+    violations = [
+        module
+        for module in modules
+        if module == "services" or module.startswith("services.")
+    ]
+
+    assert not violations, (
+        "response_handler.py still imports legacy services, including type-only imports:\n"
+        + "\n".join(violations)
+    )
+
+
 def test_no_production_imports_from_legacy_singletons():
     violations = _import_violations()
 
