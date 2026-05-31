@@ -47,7 +47,7 @@ from common.protocols import (
 )
 from common.observability import MetricsCollector, traced_create_task
 from common.utils.time import utcnow
-from config.settings import (
+from common.config.settings import (
     get_memory_search_index_name,
     get_pinecone_index_name,
     settings,

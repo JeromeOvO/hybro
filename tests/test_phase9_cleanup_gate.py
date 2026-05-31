@@ -332,6 +332,94 @@ def _imports_package(path: Path, package: str) -> bool:
     return False
 
 
+def _import_modules_including_type_checking(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    modules: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            modules.append(node.module)
+    return sorted(modules)
+
+
+def _import_modules(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    modules: list[str] = []
+    type_checking_lines: set[int] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.If)
+            and isinstance(node.test, ast.Name)
+            and node.test.id == "TYPE_CHECKING"
+        ):
+            for child in ast.walk(node):
+                if hasattr(child, "lineno"):
+                    type_checking_lines.add(child.lineno)
+    for node in ast.walk(tree):
+        if hasattr(node, "lineno") and node.lineno in type_checking_lines:
+            continue
+        if isinstance(node, ast.Import):
+            modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            modules.append(node.module)
+    return sorted(modules)
+
+
+EXPECTED_MAIN_LEGACY_IMPORTS = {
+    "services": [
+        "services.a2a_service",
+        "services.agent_capability_issue_service",
+        "services.agent_health_service",
+        "services.agent_liveness_service",
+        "services.agent_matcher",
+        "services.agent_resolver_service",
+        "services.agent_selection_service",
+        "services.agent_service",
+        "services.compaction_service",
+        "services.context_assembly_service",
+        "services.database_service",
+        "services.debate_service",
+        "services.hitl_service",
+        "services.memory_search_service",
+        "services.memory_service",
+        "services.notification_service",
+        "services.openai_service",
+        "services.relay_service",
+        "services.room_coordinator_service",
+        "services.room_membership_source",
+        "services.room_services",
+        "services.room_supervisor_service",
+        "services.run_command_handler",
+        "services.run_metrics",
+        "services.s3_service",
+        "services.sse_services",
+        "services.task_notification_service",
+        "services.task_service",
+    ],
+    "modules": [
+        "modules.AgentCenter",
+        "modules.InspectionCenter",
+        "modules.MemoryCenter",
+        "modules.RoomCenter",
+        "modules.RoomMessageCenter",
+    ],
+    "infrastructure": [
+        "infrastructure.leader_election",
+        "infrastructure.redis_service",
+        "infrastructure.relay_streams",
+    ],
+}
+
+
+EXTERNAL_DECOMMISSION_FORBIDDEN_TERMS = (
+    "traffic evidence collected",
+    "deployment evidence collected",
+    "ready to delete",
+    "ready=true",
+)
+
+
 def _package_python_file_count(package: str) -> int:
     package_path = Path(package)
     if not package_path.exists():
@@ -360,6 +448,42 @@ def _test_import_files_for_package(package: str) -> list[str]:
         for path in sorted(Path("tests").rglob("*.py"))
         if _imports_package(path, package)
     ]
+
+
+def test_repo_local_config_callers_use_common_config_settings():
+    expected_callers = {
+        Path("container.py"),
+        Path("database/mongodb.py"),
+        Path("main.py"),
+        Path("scripts/_discovery_client.py"),
+    }
+    violations: list[str] = []
+    for path in sorted(expected_callers):
+        modules = _import_modules_including_type_checking(path)
+        if "config.settings" in modules:
+            violations.append(f"{path}: still imports config.settings")
+        if "common.config.settings" not in modules:
+            violations.append(f"{path}: missing common.config.settings import")
+
+    assert not violations, "Repo-local config callers are not migrated:\n" + "\n".join(
+        violations
+    )
+
+
+def test_main_legacy_startup_import_inventory_is_preserved():
+    modules = _import_modules(Path("main.py"))
+    actual = {
+        package: sorted(
+            {
+                module
+                for module in modules
+                if module == package or module.startswith(f"{package}.")
+            }
+        )
+        for package in EXPECTED_MAIN_LEGACY_IMPORTS
+    }
+
+    assert actual == EXPECTED_MAIN_LEGACY_IMPORTS
 
 
 def test_no_production_imports_from_legacy_singletons():
