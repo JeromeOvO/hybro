@@ -516,6 +516,14 @@ def test_operational_script_blockers_are_explicit():
         if isinstance(entry.get("path"), str)
     }
     violations: list[str] = []
+    unexpected = sorted(set(blockers) - set(EXPECTED_OPERATIONAL_SCRIPT_BLOCKERS))
+    missing = sorted(set(EXPECTED_OPERATIONAL_SCRIPT_BLOCKERS) - set(blockers))
+    if unexpected:
+        violations.append(
+            "unexpected operational script blockers: " + ", ".join(unexpected)
+        )
+    if missing:
+        violations.append("missing operational script blockers: " + ", ".join(missing))
 
     for path, legacy_import in EXPECTED_OPERATIONAL_SCRIPT_BLOCKERS.items():
         entry = blockers.get(path)
