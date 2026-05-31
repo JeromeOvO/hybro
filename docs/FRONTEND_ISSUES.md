@@ -117,7 +117,7 @@ Combines message data + task tracking + HITL state + artifacts into one type wit
 ### ARC-8 LOW: Non-Hook Modules in `/hooks/` Folder
 
 **Source**: Architecture audit (March 16, 2026)
-**Location**: `src/hooks/room/processing-lifecycle.ts`, `overlay-pending-hitl.ts`, `sse-handlers/`
+**Location**: `src/hooks/room/processing-lifecycle.ts`, `sse-handlers/`
 **Status**: Open
 
 Pure utility functions and factory patterns placed in hooks directory despite not being React hooks.

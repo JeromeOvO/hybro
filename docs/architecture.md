@@ -144,8 +144,7 @@ src/
 │   ├── nav-main.tsx              # Sidebar main navigation
 │   ├── nav-agent.tsx             # Sidebar agent nav item
 │   ├── nav-user.tsx              # User avatar/dropdown in sidebar
-│   ├── nav-discord-button.tsx    # Discord link in sidebar
-│   └── upgrade-button.tsx        # Pricing/upgrade sidebar button
+│   └── nav-discord-button.tsx    # Discord link in sidebar
 │
 ├── hooks/
 │   ├── useRoomWebhook.ts         # Core room orchestration hook
@@ -154,7 +153,6 @@ src/
 │   ├── useChatRoomCreation.ts    # Room creation + navigation
 │   ├── useMyAgents.ts            # Developer's registered agents
 │   ├── useGroupManagement.ts     # Agent group CRUD + selection
-│   ├── useAutoHideScroll.ts      # UI scroll behavior
 │   └── use-mobile.ts             # Mobile viewport detection
 │
 ├── stores/
@@ -197,7 +195,6 @@ src/
 │   ├── utils.ts                  # cn(), getApiUrl(), formatIfJson()
 │   ├── time.ts                   # Timestamp normalization utilities
 │   ├── system-agents.ts          # System agent name mappings
-│   ├── agent-colors.ts           # Agent color assignments
 │   ├── sidebar-styles.ts         # Sidebar styling utilities
 │   ├── nav-items.ts              # Navigation configuration
 │   ├── consumer-nav.ts           # Consumer portal nav items
