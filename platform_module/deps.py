@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Protocol
 from uuid import uuid4
 
@@ -61,7 +61,7 @@ class PlatformDeps:
     file_metadata_repository: FileMetadataRepository | None = None
     content_storage_repository: ContentStorageRepository | None = None
     file_id_factory: Callable[[], str] = lambda: uuid4().hex
-    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC)
     logger: LoggerLike | None = None
 
 

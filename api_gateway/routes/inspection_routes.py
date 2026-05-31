@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.params import Depends as DependsParam
 from loguru import logger
 
+from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from app_shell.bound import InspectionCenter
 from models.request import InspectionCenterRequest
 
@@ -64,7 +65,5 @@ async def inspect_a2a_connection(
     )
     return inspection_center_response
 
-
-from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 
 _mark_declared_owner(router, __name__)

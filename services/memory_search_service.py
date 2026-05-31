@@ -14,7 +14,6 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §8 for design specification.
 
 import asyncio
 import math
-import time
 from datetime import datetime
 
 from pinecone.exceptions import NotFoundException as PineconeNotFoundException
@@ -41,7 +40,7 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     Returns a value in [-1, 1]. For normalized embeddings this is equivalent
     to the dot product, but we compute the full formula for safety.
     """
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(x * x for x in b))
     if norm_a == 0 or norm_b == 0:

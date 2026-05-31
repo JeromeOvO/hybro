@@ -7,14 +7,14 @@ and that flow-control flags (skip_persist) work.
 """
 
 import ast
-import pytest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from modules.agent_event import AgentEvent
-from execution.dispatch.response_handler import AgentResponseHandler
+import pytest
 
+from execution.dispatch.response_handler import AgentResponseHandler
+from modules.agent_event import AgentEvent
 
 # =============================================================================
 # Fixtures

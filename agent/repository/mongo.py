@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from common.protocols import MongoDAL
-
 from agent.constants import AGENT_CARD_NO_OVERWRITE
 from agent.url_utils import normalize_agent_url
+from common.protocols import MongoDAL
 
 _LEGACY_NORMALIZED_URL_SCAN_LIMIT = 500
 

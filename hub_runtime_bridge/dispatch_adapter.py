@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from common.dto import HubCancelCommand, HubDispatchCommand, HubDispatchResult, HubReplyCommand
+from common.dto import (
+    HubCancelCommand,
+    HubDispatchCommand,
+    HubDispatchResult,
+    HubReplyCommand,
+)
 
 
 class HubDispatchAdapter:

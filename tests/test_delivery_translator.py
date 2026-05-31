@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from common.dto import (
     AgentMessageFinal,
@@ -13,8 +13,7 @@ from common.dto import (
 )
 from delivery.translator import to_sse_frame
 
-
-NOW = datetime(2026, 5, 17, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
 
 
 def test_processing_status_translation():

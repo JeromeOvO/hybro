@@ -8,32 +8,30 @@ Tests cover:
 - Field constraints
 """
 
-import pytest
 from datetime import datetime
 from uuid import uuid4
 
-from a2a.types import Task, TaskStatus, TaskState
+from a2a.types import Task, TaskState, TaskStatus
 
-from models.room import (
-    Room,
-    RoomUserMessage,
-    RoomAgentMessage,
-    MessageContent,
-    CoordinatorAgentId,
-)
 from models.agent import Agent, AgentStatus
+from models.hitl import HITLPromptType, HITLRequest, HITLStatus
 from models.memory import (
-    RoomMemory,
-    MemoryContent,
-    ConversationTurn,
-    TurnRole,
-    TurnRepresentation,
     ContentType,
+    ConversationTurn,
+    MemoryContent,
+    RoomMemory,
+    TurnRepresentation,
+    TurnRole,
 )
-from models.hitl import HITLRequest, HITLStatus, HITLPromptType
 from models.request import AgentTaskRequest, TaskCenterRequest, TaskRequest
 from models.response import TaskCenterResponse
-
+from models.room import (
+    CoordinatorAgentId,
+    MessageContent,
+    Room,
+    RoomAgentMessage,
+    RoomUserMessage,
+)
 
 # =============================================================================
 # Room Model Tests

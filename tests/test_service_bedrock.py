@@ -8,11 +8,11 @@ Tests cover:
 """
 
 import json
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from services.bedrock_service import BedrockService
+import pytest
 
+from services.bedrock_service import BedrockService
 
 # ---------------------------------------------------------------------------
 # Fixtures & helpers
@@ -350,7 +350,7 @@ class TestBedrockServiceInit:
             mock_settings.bedrock_region = "us-west-2"
 
             with patch('services.bedrock_service.aioboto3.Session') as mock_session_class:
-                svc = BedrockService()
+                BedrockService()
 
                 mock_session_class.assert_called_once_with(
                     aws_access_key_id="AKIAIOSFODNN7EXAMPLE",

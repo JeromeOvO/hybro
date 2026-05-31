@@ -17,21 +17,18 @@ from uuid import uuid4
 import pytest
 
 from common.utils.context_utils import (
-    LLM_TURN_NOTES_THRESHOLD,
     add_turn_to_history,
-    extract_turn_notes,
     estimate_tokens,
 )
 from models.compaction import CompactionResult
 from models.memory import (
-    ConversationTurn,
     ContentType,
+    ConversationTurn,
     MemoryContent,
     RoomMemory,
     TurnRepresentation,
     TurnRole,
 )
-
 
 # =============================================================================
 # Fixtures
@@ -409,7 +406,9 @@ class TestSearchToContextIntegration:
 
         class Facade:
             def assemble_supervisor_context_from_memory(self, room_memory_doc, current_task, **kwargs):
-                from context_memory.assembly import assemble_supervisor_context_from_memory
+                from context_memory.assembly import (
+                    assemble_supervisor_context_from_memory,
+                )
 
                 return assemble_supervisor_context_from_memory(
                     room_memory_doc,

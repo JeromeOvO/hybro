@@ -6,9 +6,9 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import uuid4
 
-from common.utils.time import utcnow
 from pydantic import BaseModel, Field
 
+from common.utils.time import utcnow
 
 MAX_QUOTE_TEXT_LENGTH = 8000
 

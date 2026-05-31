@@ -2,8 +2,9 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, ClassVar
 
-from common.types import AgentCard
 from pydantic import BaseModel, field_serializer, field_validator
+
+from common.types import AgentCard
 
 # ---------------------------------------------------------------------------
 # Agent-card field protection constants

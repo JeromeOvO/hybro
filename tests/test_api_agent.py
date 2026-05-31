@@ -10,26 +10,25 @@ Tests cover:
 - Authorization checks
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 
 from api.agent import (
-    register_agent,
-    get_agent_by_provider,
     delete_agent,
-    update_agent,
-    get_agent_card_from_url,
     get_agent,
+    get_agent_by_provider,
+    get_agent_card_from_url,
     get_agent_list,
     get_all_active_agents,
+    register_agent,
+    update_agent,
 )
-from models.agent import Agent, AgentStatus
+from models.agent import AgentStatus
 from models.request import AgentSettingsUpdateRequest
 from models.response import AgentCenterResponse
 from tests.conftest import PATCH
-
 
 # =============================================================================
 # Agent Registration Tests
@@ -191,7 +190,7 @@ class TestGetAgent:
         )
         patch_agent_deps.query_agent_by_agent_id.return_value = expected_response
         
-        response = await get_agent(sample_agent.agent_id, user=mock_user)
+        await get_agent(sample_agent.agent_id, user=mock_user)
         
         # Verify user_id was passed in request
         call_args = patch_agent_deps.query_agent_by_agent_id.call_args[0][0]
@@ -252,7 +251,7 @@ class TestGetAllActiveAgents:
         )
         patch_agent_deps.get_all_active_agents.return_value = expected_response
         
-        response = await get_all_active_agents(user=mock_user)
+        await get_all_active_agents(user=mock_user)
         
         # Verify user_id was passed for visibility filtering
         call_args = patch_agent_deps.get_all_active_agents.call_args[0][0]

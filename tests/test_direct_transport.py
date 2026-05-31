@@ -6,10 +6,10 @@ Tests cover:
   JSONRPCErrorResponse, and default fallback
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock
 from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from a2a.types import (
     JSONRPCError,
     JSONRPCErrorResponse,
@@ -19,12 +19,10 @@ from a2a.types import (
     TextPart,
 )
 
-from common.utils.cancellation import CancellationToken
+from models.error import A2AServiceError
 from models.processing import ProcessingContext, ProcessingStatus
 from models.room import MessageContent, RoomAgentMessage
-from models.error import A2AServiceError
 from modules.transports.direct import DirectTransport, MessageStreamingState
-
 
 # =============================================================================
 # _parse_sync_fallback_response Tests

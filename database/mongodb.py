@@ -8,9 +8,9 @@ from a2a.types import AgentCard, TaskState
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
+from common.config.settings import settings
 from common.utils.a2a_helpers import sanitize_artifact_parts as _sanitize_parts
 from common.utils.time import utcnow
-from config.settings import settings
 from models.agent import AGENT_CARD_HUB_NO_OVERWRITE, Agent
 from models.agent_group import AgentGroup
 from models.api_key import APIKey

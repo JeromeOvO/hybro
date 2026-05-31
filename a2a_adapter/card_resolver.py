@@ -12,7 +12,6 @@ from common.dto import AgentCardSnapshot
 
 from .translators import a2a_card_to_snapshot
 
-
 logger = logging.getLogger(__name__)
 
 

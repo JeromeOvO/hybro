@@ -1,6 +1,6 @@
-import pytest
 from unittest.mock import MagicMock
-from models.room import RoomAgentMessage, MessageContent
+
+from models.room import MessageContent
 
 
 class TestTurnIdOnRoomAgentMessage:

@@ -10,11 +10,11 @@ Covers:
 """
 
 import asyncio
-
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from modules.RoomMessageCenter import RoomMessageCenter, ROOM_LOCK_HOLD_TTL_SECONDS
+import pytest
+
+from modules.RoomMessageCenter import ROOM_LOCK_HOLD_TTL_SECONDS, RoomMessageCenter
 
 
 def _make_rmc(redis=None):

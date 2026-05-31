@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from typing import Any
 from uuid import uuid4
 
-from typing import Any
-
 from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
+
 from common.utils.time import utcnow
 
 

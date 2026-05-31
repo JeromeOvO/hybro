@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import timedelta
 import inspect
+from datetime import timedelta
 from uuid import uuid4
 
 from common.utils.time import ensure_utc, utcnow
@@ -233,12 +233,12 @@ async def _claim_with_duplicate_retry(
                 upsert=upsert,
             )
         )
-    except Exception:
+    except Exception as exc:
         for value in update_fields.values():
             if isinstance(value, str):
                 existing = await _maybe_await(collection.find_one(_alias_query(value)))
                 if existing:
-                    raise ValueError("ownership lease is held by another worker")
+                    raise ValueError("ownership lease is held by another worker") from exc
         raise
 
 

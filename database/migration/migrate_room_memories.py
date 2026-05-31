@@ -81,7 +81,7 @@ _STOP_WORDS = {
     "because", "until", "while", "this", "that", "these", "those", "i",
     "you", "he", "she", "it", "we", "they", "me", "him", "her", "us",
     "them", "my", "your", "his", "its", "our", "their", "what", "which",
-    "who", "whom", "please", "thanks", "thank", "yes", "no", "okay", "ok",
+    "who", "whom", "please", "thanks", "thank", "yes", "okay", "ok",
 }
 
 

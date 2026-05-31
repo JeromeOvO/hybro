@@ -4,8 +4,9 @@ Verifies that the USE_BEDROCK_SUPERVISOR feature flag correctly routes
 LLM calls to either Bedrock (Claude Opus 4.6) or OpenAI (gpt-4o-mini).
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from services.room_supervisor_service import RoomSupervisorService
 

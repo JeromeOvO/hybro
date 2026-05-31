@@ -1,10 +1,8 @@
 import asyncio
 import contextvars
 from collections.abc import Awaitable, Iterator
-from contextlib import contextmanager
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from typing import Any, ContextManager, Protocol, runtime_checkable
-
 
 _trace_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "hybro_trace_id",

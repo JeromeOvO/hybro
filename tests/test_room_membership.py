@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -12,20 +12,20 @@ from common.dto import (
     SavedAgentGroupSnapshot,
     UserMessageInput,
 )
-from room.message_graph import select_thread, sort_messages, status_update_payload
 from room.membership import normalize_room_agent_set, resolve_membership_seed
+from room.message_graph import select_thread, sort_messages, status_update_payload
 from room.translators import (
     create_room_doc,
     message_info_from_doc,
+    room_info_from_doc,
     saved_user_message_from_doc,
     user_message_doc_from_input,
-    room_info_from_doc,
 )
 from services.room_membership_source import LegacyRoomMembershipSeedSource
 
 
 def test_room_translator_maps_legacy_fields_and_defaults_provenance():
-    created = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    created = datetime(2026, 5, 11, tzinfo=UTC)
     info = room_info_from_doc(
         {
             "room_id": "r1",
@@ -50,7 +50,7 @@ def test_room_translator_maps_legacy_fields_and_defaults_provenance():
 
 
 def test_create_room_doc_preserves_room_fields_without_legacy_model_imports():
-    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 11, tzinfo=UTC)
 
     doc = create_room_doc(
         room_id="r1",
@@ -81,7 +81,7 @@ def test_create_room_doc_preserves_room_fields_without_legacy_model_imports():
 
 
 def test_message_translators_map_user_agent_and_saved_user_shapes():
-    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 11, tzinfo=UTC)
     user = message_info_from_doc(
         {
             "room_id": "r1",
@@ -127,7 +127,7 @@ def test_message_translators_map_user_agent_and_saved_user_shapes():
 
 
 def test_user_message_doc_from_input_preserves_metadata():
-    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 11, tzinfo=UTC)
 
     doc = user_message_doc_from_input(
         room_id="r1",
@@ -191,8 +191,8 @@ def test_legacy_membership_source_warns_for_missing_critical_agent_fields():
 
 
 def test_message_graph_sort_thread_and_status_payload_helpers():
-    older = datetime(2026, 5, 10, tzinfo=timezone.utc)
-    newer = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    older = datetime(2026, 5, 10, tzinfo=UTC)
+    newer = datetime(2026, 5, 11, tzinfo=UTC)
     rows = [
         {"message_id": "missing"},
         {"message_id": "a2", "message_created_at": older, "step_number": 2},

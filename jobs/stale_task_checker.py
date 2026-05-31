@@ -20,9 +20,9 @@ from typing import Any, Protocol
 from a2a_adapter.task_requests import build_get_task_request, extract_get_task_result
 from a2a_adapter.task_status import build_failed_text_task
 from common.a2a_constants import (
-    CommonTaskState,
     INTERACTIVE_STATES,
     NON_TERMINAL_STATES,
+    CommonTaskState,
     is_terminal_state,
 )
 from common.utils.logger import get_logger

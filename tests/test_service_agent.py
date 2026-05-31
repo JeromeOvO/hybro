@@ -11,17 +11,16 @@ Tests cover:
 - Visibility filtering
 """
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from common.dto.agent import AgentInfo
 from models.agent import Agent, AgentStatus
-from models.request import AgentCenterRequest
 from models.error import (
-    AgentCardRequiredError,
     AgentIdRequiredError,
-    AgentNotFoundError,
 )
+from models.request import AgentCenterRequest
 from models.response import AgentCenterResponse
 from services.agent_service import (
     AgentService,
@@ -29,7 +28,6 @@ from services.agent_service import (
     is_local_agent_url,
     normalize_agent_url,
 )
-
 
 # =============================================================================
 # URL Normalization Tests

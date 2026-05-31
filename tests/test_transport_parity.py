@@ -6,12 +6,12 @@ asserts identical DB + SSE outcomes regardless of skip_persist flag
 (direct transport uses skip_persist=True, relay/webhook use False).
 """
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, call
 
 from modules.agent_event import AgentEvent
 from modules.agent_response_handler import AgentResponseHandler
-
 
 # =========================================================================
 # Fixtures

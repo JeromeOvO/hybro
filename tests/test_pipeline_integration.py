@@ -11,18 +11,23 @@ End-to-end tests verifying data flow across:
 Per design doc §Testing Strategy - Integration Tests.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from a2a.types import AgentCard, AgentSkill, AgentCapabilities
+import pytest
+from a2a.types import AgentCapabilities, AgentCard
+
 from models.agent import Agent, AgentStatus
 from models.room import MessageContent, RoomUserMessage, UserAttachment
-from services.agent_matcher import AgentMatcher, MatchedAgent, MatchResult, compute_capability_score, select_top_agents
-from services.agent_selection_service import AgentSelectionService, RoutingStrategy
-from services.room_services import DispatchStrategy, resolve_strategy, RoomServices
 from modules.debate_dispatcher import SequentialDebateDispatcher
+from services.agent_matcher import (
+    MatchedAgent,
+    MatchResult,
+    compute_capability_score,
+    select_top_agents,
+)
+from services.agent_selection_service import AgentSelectionService, RoutingStrategy
 from services.debate_service import debate_service
-
+from services.room_services import DispatchStrategy, RoomServices, resolve_strategy
 
 # ---- Test Helpers ----
 
@@ -386,8 +391,9 @@ def test_sequential_debate_first_agent_gets_raw_task():
 @pytest.mark.asyncio
 async def test_debate_service_uses_shared_dispatcher():
     """Verify debate_service delegates to SequentialDebateDispatcher."""
+    from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
+
     from models.room import RoomAgentMessage
-    from a2a.types import Task, Message, TextPart, Role, TaskStatus, TaskState
 
     # Create mock agent message with related message
     prior_message = RoomAgentMessage(
@@ -439,7 +445,7 @@ async def test_debate_service_uses_shared_dispatcher():
         mock_get_name.return_value = "PriorAgent"
         mock_update.return_value = True
 
-        result = await debate_service.inject_short_debate_for_agent_message(current_message)
+        await debate_service.inject_short_debate_for_agent_message(current_message)
         assert mock_update.called
 
 

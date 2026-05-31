@@ -23,6 +23,10 @@ from models.processing import ProcessingContext
 from models.request import RoomCenterAgentMessageRequest
 from models.room import RoomAgentMessage
 
+if TYPE_CHECKING:
+    from services.notification_service import NotificationService
+    from services.room_services import RoomServices
+
 logger = get_logger(__name__)
 
 

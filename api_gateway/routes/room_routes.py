@@ -4,6 +4,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.params import Depends as DependsParam
 from fastapi.responses import JSONResponse
 
+from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from app_shell.bound import AgentSelectionSuggester, RoomCenterRouteOwner
 from app_shell.database_service import A2ATaskReader
 from common.auth import ClerkUser, get_current_user
@@ -11,12 +12,14 @@ from common.dto import ExecutionRequest, RunInfo
 from common.protocols import ExecutionEngine
 from models.file_upload import MAX_ATTACHMENT_REFS_PER_REQUEST
 from models.request import (
-    OrchestrationRequest,
     RoomCenterRoomMessageRequest,
     RoomCenterRoomSettingRequest,
-    RoomCenterUserMessageRequest,
 )
-from models.response import ActiveRunRef, RoomCenterActiveRunsResponse, RoomCenterUserMessageResponse
+from models.response import (
+    ActiveRunRef,
+    RoomCenterActiveRunsResponse,
+    RoomCenterUserMessageResponse,
+)
 
 router = APIRouter()
 room_center: RoomCenterRouteOwner | None = None
@@ -457,7 +460,5 @@ async def suggest_agents(
     except Exception as e:
         return {"success": False, "error": str(e), "status_code": 500}
 
-
-from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 
 _mark_declared_owner(router, __name__)

@@ -4,7 +4,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from execution.orchestration.turn_context import TurnQuoteMissingError, load_turn_context
+from execution.orchestration.turn_context import (
+    TurnQuoteMissingError,
+    load_turn_context,
+)
 from models.quote import QuotedSnippet
 from models.room import MessageContent, RoomUserMessage
 

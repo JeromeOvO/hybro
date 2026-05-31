@@ -3,6 +3,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.params import Depends as DependsParam
 
+from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from app_shell.bound import LegacyMemoryCenter
 from models.request import ChatMemoryRequest
 
@@ -105,7 +106,5 @@ async def delete_chat_context_by_session_id(
     )
     return memory_center_response
 
-
-from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 
 _mark_declared_owner(router, __name__)

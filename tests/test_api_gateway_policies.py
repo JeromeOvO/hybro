@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 
-
 FIXTURE = Path(__file__).parent / "fixtures" / "api_gateway_policy_matrix.json"
 
 

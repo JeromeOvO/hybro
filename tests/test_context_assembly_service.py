@@ -11,29 +11,30 @@ Tests cover:
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §5 and §18 for specification.
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
 from datetime import datetime
+from unittest.mock import patch
 
-from services.context_assembly_service import (
-    ContextAssemblyService,
-    ContextAssemblyResult,
-    TruncationReason,
-)
+import pytest
+
 from context_memory import assembly as context_memory_assembly
 from context_memory.config import TokenBudgetConfig
+from models.context_config import TokenBudget
 from models.memory import (
-    RoomMemory,
-    RoomSummary,
-    RoomFact,
+    ContentType,
     ConversationTurn,
     MemoryContent,
-    TurnRole,
+    RoomFact,
+    RoomMemory,
+    RoomSummary,
     TurnRepresentation,
-    ContentType,
+    TurnRole,
     TurnType,
 )
-from models.context_config import TokenBudget
+from services.context_assembly_service import (
+    ContextAssemblyResult,
+    ContextAssemblyService,
+    TruncationReason,
+)
 
 
 def _token_budget_config(service: ContextAssemblyService) -> TokenBudgetConfig:
@@ -643,18 +644,13 @@ class TestTaskBudgetEnforcement:
         # Create a very large task that exceeds task budget
         large_task = "X" * 50000  # Very large task
 
-        with patch("services.context_assembly_service.logger") as mock_logger:
+        with patch("services.context_assembly_service.logger"):
             result = service.build_agent_execution_context(
                 room_memory=room_memory,
                 current_task=large_task,
                 agent_name="TestAgent",
             )
 
-            # Should have logged a warning about task truncation
-            warning_calls = [
-                c for c in mock_logger.warning.call_args_list
-                if "task" in str(c).lower() or "truncat" in str(c).lower()
-            ]
             # May or may not trigger depending on budget calculation
             # The important thing is it doesn't crash
             assert result.context is not None

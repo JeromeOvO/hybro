@@ -1,6 +1,6 @@
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -10,8 +10,7 @@ from delivery.config import DeliveryConfig
 from delivery.event_bus import CrossInstanceEventBus
 from delivery.types import RoomSubscriptionLimitExceeded
 
-
-NOW = datetime(2026, 5, 17, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
 
 
 def fixed_now():

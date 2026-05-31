@@ -8,11 +8,11 @@ renewal/release, and a context manager with automatic renewal loop.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
-from infrastructure.redis_service import RedisService
 from common.utils.logger import get_logger
+from infrastructure.redis_service import RedisService
 
 logger = get_logger(__name__)
 

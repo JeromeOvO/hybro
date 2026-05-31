@@ -27,6 +27,8 @@ from api.gateway import (
     gateway_send,
     gateway_stream,
 )
+from common.dto import GatewayResponse, InternalAgentMessage
+from common.errors import GatewayPlatformError, PlatformRouteError
 from models.api_key import APIKey
 from models.gateway import (
     GatewayCardResponse,
@@ -34,11 +36,7 @@ from models.gateway import (
     GatewayDiscoveryResponse,
     GatewaySendRequest,
 )
-from common.dto import GatewayResponse, InternalAgentMessage
-from common.errors import GatewayPlatformError
-from common.errors import PlatformRouteError
 from tests.conftest import FROZEN_TIME, PATCH
-
 
 # =============================================================================
 # Fixtures

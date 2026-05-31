@@ -28,7 +28,6 @@ from common.types import (
     TaskState,
     TextPart,
 )
-
 from common.utils.a2a_helpers import (
     extract_error_message,
     extract_status_message,

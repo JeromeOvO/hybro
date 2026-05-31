@@ -1048,7 +1048,7 @@ class WorkflowCenter:
         # Build context section
         context_section = "\n\n=== CONTEXT FROM PREVIOUS STEPS ===\n"
 
-        for task_id, result in meta_task.context_from_previous.items():
+        for _task_id, result in meta_task.context_from_previous.items():
             context_section += (
                 f"\nResults from {result.get('task_description', 'Previous Task')}:\n"
             )

@@ -20,17 +20,15 @@ from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from a2a.types import (
-    AgentCard,
     AgentCapabilities,
+    AgentCard,
     AgentSkill,
     Message,
     MessageSendConfiguration,
     Role,
     TextPart,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -69,7 +67,7 @@ def _make_message() -> Message:
 
 
 def _build_mock_response() -> MagicMock:
-    from a2a.types import Task, TaskState, TaskStatus
+    from a2a.types import TaskState, TaskStatus
 
     mock_result = MagicMock()
     mock_result.kind = "task"
@@ -96,8 +94,8 @@ class TestSendMessageTrackedAgentWebhookFallback:
     @pytest.mark.asyncio
     async def test_webhook_url_set_uses_push_notification(self):
         """When webhook_base_url is configured, push config is built and blocking=False."""
-        from services.a2a_service import A2AService
         import services.database_service as db_module
+        from services.a2a_service import A2AService
 
         captured_payload = {}
 
@@ -141,8 +139,8 @@ class TestSendMessageTrackedAgentWebhookFallback:
     @pytest.mark.asyncio
     async def test_no_webhook_url_uses_blocking_true(self):
         """When webhook_base_url is empty, blocking=True and no push_config."""
-        from services.a2a_service import A2AService
         import services.database_service as db_module
+        from services.a2a_service import A2AService
 
         captured_payload = {}
 
@@ -185,8 +183,8 @@ class TestSendMessageTrackedAgentWebhookFallback:
     @pytest.mark.asyncio
     async def test_trailing_slash_stripped_from_webhook_url(self):
         """Trailing slash is stripped from webhook_base_url to avoid double-slash URLs."""
-        from services.a2a_service import A2AService
         import services.database_service as db_module
+        from services.a2a_service import A2AService
 
         captured_payload = {}
 
@@ -230,8 +228,8 @@ class TestSendMessageTrackedAgentWebhookFallback:
     @pytest.mark.asyncio
     async def test_agent_without_push_capability_uses_blocking_true(self):
         """Agent without push-notification capability → blocking=True even if webhook URL is set."""
-        from services.a2a_service import A2AService
         import services.database_service as db_module
+        from services.a2a_service import A2AService
 
         captured_payload = {}
 
@@ -274,8 +272,8 @@ class TestSendMessageTrackedAgentWebhookFallback:
     @pytest.mark.asyncio
     async def test_timeout_is_long_when_blocking(self):
         """With blocking=True, the a2a_client is created with DEFAULT_REQUEST_TIMEOUT."""
-        from services.a2a_service import A2AService
         import services.database_service as db_module
+        from services.a2a_service import A2AService
 
         captured_timeout = {}
 
@@ -572,8 +570,8 @@ class TestSendMessageTrackedAgentPersistedFlag:
     @pytest.mark.asyncio
     async def test_persisted_true_on_successful_db_write(self):
         """update_task_on_message returns True → response has persisted=True."""
-        from services.a2a_service import A2AService
         import services.database_service as db_module
+        from services.a2a_service import A2AService
 
         @asynccontextmanager
         async def fake_client_ctx(*args, **kwargs):
@@ -608,8 +606,8 @@ class TestSendMessageTrackedAgentPersistedFlag:
     @pytest.mark.asyncio
     async def test_persisted_false_on_failed_db_write(self):
         """update_task_on_message returns False → response has persisted=False."""
-        from services.a2a_service import A2AService
         import services.database_service as db_module
+        from services.a2a_service import A2AService
 
         @asynccontextmanager
         async def fake_client_ctx(*args, **kwargs):

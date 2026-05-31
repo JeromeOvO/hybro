@@ -8,19 +8,23 @@ Tests cover:
 - Database error handling
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from api.agent_group import (
     create_agent_group,
-    list_agent_groups,
-    get_agent_group,
-    update_agent_group,
     delete_agent_group,
+    get_agent_group,
+    list_agent_groups,
+    update_agent_group,
 )
-from models.agent_group import AgentGroup, BUILTIN_GROUP_ALL_AGENTS, BUILTIN_GROUP_ROOM_TEAM
+from models.agent_group import (
+    BUILTIN_GROUP_ALL_AGENTS,
+    BUILTIN_GROUP_ROOM_TEAM,
+    AgentGroup,
+)
 from tests.conftest import PATCH
-
 
 # =============================================================================
 # Create Agent Group Tests

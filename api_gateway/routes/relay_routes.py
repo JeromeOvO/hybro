@@ -13,6 +13,7 @@ from fastapi.params import Depends as DependsParam
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.api_key_auth import get_api_key, get_api_key_no_track
 from common.protocols import HubRelayManagement
 from common.utils.logger import get_logger
@@ -201,7 +202,5 @@ async def relay_heartbeat(
             status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
         ) from exc
 
-
-from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 
 _mark_declared_owner(router, __name__)

@@ -4,7 +4,6 @@ import httpx
 
 from common.types import A2AClientJSONError, AgentCard
 
-
 _REQUIRED_AGENT_CARD_FIELDS = (
     "name",
     "description",

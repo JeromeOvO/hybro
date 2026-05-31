@@ -14,6 +14,14 @@ from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from common.utils.summary_streaming import stream_summary_to_sse
 from common.utils.time import utcnow
+from execution.dispatch.agent_dispatcher import AgentDispatcher
+from execution.dispatch.agent_message_processor import AgentMessageProcessor
+from execution.dispatch.response_handler import AgentResponseHandler
+from execution.dispatch.transports.direct import DirectTransport
+from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
+from execution.orchestration.queue_executor import QueueExecutor, QueueResult
+from execution.orchestration.supervisor_executor import SupervisorExecutor
+from execution.state.task_state_manager import TaskStateManager
 from models.request import OrchestrationRequest, RoomCenterAgentMessageRequest
 from models.response import OrchestrationResponse
 from models.room import CoordinatorAgentId
@@ -26,14 +34,6 @@ from models.supervisor_v2 import (
     SupervisorTrajectory,
     TrajectoryStatus,
 )
-from execution.dispatch.agent_dispatcher import AgentDispatcher
-from execution.dispatch.agent_message_processor import AgentMessageProcessor
-from execution.dispatch.response_handler import AgentResponseHandler
-from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
-from execution.orchestration.queue_executor import QueueExecutor, QueueResult
-from execution.dispatch.transports.direct import DirectTransport
-from execution.orchestration.supervisor_executor import SupervisorExecutor
-from execution.state.task_state_manager import TaskStateManager
 
 a2a_service = None
 agent_resolver_service = None
@@ -389,7 +389,7 @@ class RoomMessageCenter:
         try:
             remaining = max(0.1, timeout - elapsed)
             await asyncio.wait_for(local_lock.acquire(), timeout=remaining)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             if use_distributed:
                 await self._release_distributed_lock(room_id, owner)
             return None
@@ -2513,7 +2513,9 @@ class RoomMessageCenter:
                             and task.status.state != CommonTaskState.COMPLETED
                         ):
                             continue
-                        from common.utils.a2a_helpers import extract_agent_text_from_room_message
+                        from common.utils.a2a_helpers import (
+                            extract_agent_text_from_room_message,
+                        )
                         text = extract_agent_text_from_room_message(msg)
                         if text and msg.agent_id:
                             agent_name = await self.database_service.get_agent_name_by_agent_id(

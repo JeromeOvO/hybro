@@ -9,6 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from fastapi.params import Depends as DependsParam
 
+from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
 from common.protocols import HubStatusReader
 from models.hub import HubStatusResponse
@@ -43,7 +44,5 @@ async def hub_status_for_user(
     hubs = await svc.get_hub_status(user.user_id)
     return HubStatusResponse(hubs=hubs)
 
-
-from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 
 _mark_declared_owner(router, __name__)

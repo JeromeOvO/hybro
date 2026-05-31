@@ -1,10 +1,9 @@
 """Integration tests for multimodal flows (upload -> sendMessage -> verify)."""
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from models.file_upload import FileUploadMetadata, FileUploadResponse
-from models.request import RoomCenterUserMessageRequest, UserAttachmentRequest
-from models.room import MessageContent, RoomUserMessage, UserAttachment
+import pytest
+
+from models.room import UserAttachment
 from services.room_services import RoomServices
 
 

@@ -6,6 +6,7 @@ from types import TracebackType
 from typing import Protocol, TypeAlias, runtime_checkable
 
 from pydantic import BaseModel
+
 from models.agent import Agent, AgentCapabilityIssue, IssueStatus
 from models.request import (
     AgentCenterRequest,
@@ -26,7 +27,6 @@ from models.response import (
     RoomCenterRoomSettingResponse,
     RoomCenterUserMessageResponse,
 )
-
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
@@ -99,7 +99,7 @@ class ViewSetRepositoryFactory(Protocol):
         *,
         collection_name: str,
         db: ViewSetDatabase,
-        pinecone: "VectorIndex | None",
+        pinecone: VectorIndex | None,
         pk_field: str = "_id",
     ) -> ViewSetRepository: ...
 

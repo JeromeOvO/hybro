@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.params import Depends as DependsParam
 
+from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from app_shell.database_service import A2ATaskReader
 from common.a2a_constants import (
     NON_TERMINAL_STATES,
@@ -192,7 +193,5 @@ async def list_user_pending_tasks(
         ]
     }
 
-
-from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 
 _mark_declared_owner(router, __name__)

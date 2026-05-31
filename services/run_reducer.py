@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from models.run import RunEventType, RunState, TERMINAL_RUN_STATES
+from models.run import TERMINAL_RUN_STATES, RunEventType, RunState
 
 
 class RunTransitionError(ValueError):

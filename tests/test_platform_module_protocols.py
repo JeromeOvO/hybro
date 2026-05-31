@@ -1,11 +1,9 @@
 import ast
 import inspect
+import tomllib
 from pathlib import Path
 
-import tomllib
-
 from common.protocols import APIKeyRateLimiter, FileStorage, GatewayService, RateLimiter
-
 
 FORBIDDEN_PLATFORM_IMPORT_PREFIXES = (
     "api",
@@ -179,9 +177,9 @@ def test_container_preserves_disabled_platform_rate_limits():
 
 
 def test_container_builds_platform_facade_from_protocol_dependencies():
+    from common.dto import AgentTaskResult
     from container import create_platform_deps, create_platform_facade
     from platform_module import PlatformConfig
-    from common.dto import AgentTaskResult
 
     class AgentDeps:
         agent_registry = object()
@@ -254,8 +252,12 @@ def test_container_builds_platform_facade_from_protocol_dependencies():
 def test_container_platform_factory_uses_protocol_annotations():
     from typing import get_type_hints
 
+    from common.protocols import (
+        AgentCardResolver,
+        AgentTransport,
+        GatewayDiscoveryProvider,
+    )
     from container import create_platform_deps
-    from common.protocols import AgentCardResolver, AgentTransport, GatewayDiscoveryProvider
     from platform_module.deps import DiscoveryQueryExpander, LoggerLike
 
     hints = get_type_hints(create_platform_deps)

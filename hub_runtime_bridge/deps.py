@@ -4,7 +4,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from common.observability import MetricsCollector, NoopMetricsCollector, traced_create_task
+from common.observability import (
+    MetricsCollector,
+    NoopMetricsCollector,
+    traced_create_task,
+)
 from common.protocols import (
     AgentCallCounter,
     AgentRegistryWriter,
@@ -20,7 +24,6 @@ from common.protocols import (
 )
 from common.protocols.room_protocols import HubPublishAuthorizationReader
 from hub_runtime_bridge.config import HubRuntimeBridgeConfig
-
 
 TaskRunner = Callable[[Awaitable[Any]], Any]
 

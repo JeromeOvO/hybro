@@ -3,21 +3,21 @@ import inspect
 import json
 import tomllib
 import warnings
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 
-from common.errors import AppError, NotFoundError, ValidationError
 from common.dto import (
-    AgentEvent,
     AgentCardSnapshot,
+    AgentEvent,
     AgentInfo,
-    AgentRegistered,
     AgentMessageFinal,
     AgentMessagePartial,
+    AgentRegistered,
     CancellationEvent,
     CompactionResult,
     ContextBlock,
@@ -50,6 +50,7 @@ from common.dto import (
     ModelInfo,
     NotificationPayload,
     PaginationParams,
+    ProcessingStatusEvent,
     QueryFilter,
     RateLimitInfo,
     RelayPayload,
@@ -62,17 +63,17 @@ from common.dto import (
     RunInfo,
     RunState,
     SavedUserMessage,
-    SSEEvent,
     SortOrder,
+    SSEEvent,
     WorkflowState,
-    ProcessingStatusEvent,
 )
+from common.errors import AppError, NotFoundError, ValidationError
 
 
 def test_frozen_dto_is_immutable():
     agent = AgentInfo(agent_id="a1", name="Agent", status="active")
 
-    with pytest.raises(Exception):
+    with pytest.raises(PydanticValidationError):
         agent.name = "Changed"
 
 
@@ -80,10 +81,10 @@ def test_frozen_dto_container_fields_are_immutable():
     agent = AgentInfo(agent_id="a1", capabilities=["search"])
     delivery = DeliveryEnvelope(room_id="r1", event_type="message", payload={"x": 1})
 
-    with pytest.raises(Exception):
+    with pytest.raises(TypeError):
         agent.capabilities += ("write",)
 
-    with pytest.raises(Exception):
+    with pytest.raises(TypeError):
         delivery.payload["x"] = 2
 
     with warnings.catch_warnings():
@@ -196,8 +197,9 @@ def test_common_card_resolver_keeps_sdk_agent_card_validation(monkeypatch):
 
 
 def test_common_types_expose_sdk_free_task_parts():
-    from common.types import DataPart, FileContent, FilePart, Part, TaskState, TextPart
     from pydantic import TypeAdapter
+
+    from common.types import DataPart, FileContent, FilePart, Part, TaskState, TextPart
 
     assert TextPart.__module__ == "common.types"
     assert FilePart.__module__ == "common.types"
@@ -273,7 +275,7 @@ async def test_auth_config_binds_authorized_parties(monkeypatch):
 
 
 def test_common_foundation_dtos_can_be_instantiated():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     AgentInfo(agent_id="a1", name="Agent", status="active")
     AgentCardSnapshot(agent_id="a1", url="http://agent", name="Agent", raw_card={})

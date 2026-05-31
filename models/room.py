@@ -3,9 +3,9 @@ from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
-from common.types import Task
 from pydantic import BaseModel, Field, field_validator
 
+from common.types import Task
 from common.utils.time import utcnow
 from models.quote import UserQuoteCreatePayload
 

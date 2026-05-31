@@ -1,4 +1,3 @@
-import pytest
 from modules.agent_event import AgentEvent
 
 

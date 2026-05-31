@@ -1,14 +1,14 @@
 """Tests for AgentSelectionService facade over AgentMatcher."""
 
-import pytest
 from unittest.mock import AsyncMock, patch
 
-from a2a.types import AgentCard, AgentCapabilities
+import pytest
+from a2a.types import AgentCapabilities, AgentCard
+
 from models.agent import Agent, AgentStatus
 from models.room import MessageContent, RoomUserMessage, UserAttachment
 from services.agent_matcher import MatchedAgent, MatchResult
 from services.agent_selection_service import (
-    AgentSelection,
     AgentSelectionResult,
     AgentSelectionService,
     RoutingStrategy,

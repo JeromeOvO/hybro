@@ -1,10 +1,10 @@
 """Tests for createAndParseUserMessage attachment coverage."""
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from models.file_upload import MAX_ATTACHMENT_REFS_PER_REQUEST
-from models.response import RoomCenterUserMessageResponse
+import pytest
+
 from api.room_center import _extract_attachments
+from models.file_upload import MAX_ATTACHMENT_REFS_PER_REQUEST
 
 
 class TestExtractAttachments:
@@ -106,6 +106,7 @@ class TestCreateAndParseOversizedMessage:
     async def test_rejects_oversized_message_text(self):
         """create_and_parse_user_message should reject messages > MAX_MESSAGE_LENGTH."""
         from unittest.mock import MagicMock
+
         from models.room import MAX_MESSAGE_LENGTH, MessageContent, RoomUserMessage
         from services.room_services import RoomServices
 
@@ -137,9 +138,9 @@ class TestCreateAndParseOversizedMessage:
 async def test_create_and_parse_persists_client_request_without_processing_status_lifecycle(
     monkeypatch,
 ):
+    import services.room_services as room_services
     from models.room import MessageContent, RoomUserMessage
     from services.room_services import RoomServices
-    import services.room_services as room_services
 
     rc = object.__new__(RoomServices)
     persisted_messages = []

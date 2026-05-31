@@ -9,7 +9,6 @@ import pytest
 from fastapi import BackgroundTasks, Request
 from fastapi.routing import APIRoute
 
-
 FORBIDDEN_API_IMPORT_PREFIXES = (
     "database",
     "motor",

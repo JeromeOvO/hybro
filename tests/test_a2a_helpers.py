@@ -4,14 +4,12 @@ Covers sanitize_artifact_parts (write-path defense), extract_parts,
 extract_parts_from_artifacts, and append_artifact_to_task_dict.
 """
 
-import pytest
 from unittest.mock import MagicMock
 
 from common.utils.a2a_helpers import (
     ExtractedParts,
     append_artifact_to_task_dict,
     extract_parts,
-    extract_parts_from_artifacts,
     sanitize_artifact_parts,
 )
 

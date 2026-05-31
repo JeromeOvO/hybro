@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from fastapi.params import Depends as DependsParam
 from fastapi.responses import JSONResponse
 
+from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from app_shell.bound import LegacyTaskCenter
 
 router = APIRouter()
@@ -100,7 +101,5 @@ async def get_meta_tasks_by_parent_task_id(
 ):
     return _legacy_task_gone()
 
-
-from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 
 _mark_declared_owner(router, __name__)

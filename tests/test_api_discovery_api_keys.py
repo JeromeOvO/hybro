@@ -7,10 +7,10 @@ Tests cover:
 - Deactivating API keys (success, already inactive, not found, wrong owner, db failure)
 """
 
-import pytest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 
 from api.discovery_api_keys import create_api_key, deactivate_api_key, list_api_keys

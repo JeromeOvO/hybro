@@ -17,26 +17,32 @@ Tests cover:
 6. Error handling
 """
 
-import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from a2a.types import AgentCard, AgentSkill, AgentCapabilities, Task, TaskStatus, TaskState
+import pytest
+from a2a.types import (
+    AgentCapabilities,
+    AgentCard,
+    AgentSkill,
+    Task,
+    TaskState,
+    TaskStatus,
+)
 
 from common.auth import ClerkUser
 from common.dto import ExecutionAck
 from common.dto.agent import AgentInfo
 from models.agent import Agent, AgentStatus
-from models.room import Room, RoomUserMessage, RoomAgentMessage, MessageContent
-from models.hitl import HITLRequest, HITLStatus, HITLPromptType
+from models.hitl import HITLPromptType, HITLRequest, HITLStatus
 from models.response import (
+    AgentCenterResponse,
+    RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
     RoomCenterUserMessageResponse,
-    RoomCenterRoomMessageResponse,
-    AgentCenterResponse,
 )
+from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 from tests.conftest import PATCH
-
 
 # =============================================================================
 # Fixtures
@@ -69,9 +75,9 @@ class TestRoomLifecycleFlow:
         """
         from api.room_center import (
             create_new_room,
+            inquiry_room_messages,
             inquiry_room_setting,
             send_message,
-            inquiry_room_messages,
         )
 
         room_id = "flow-room-001"
@@ -174,13 +180,14 @@ class TestRoomLifecycleFlow:
     @pytest.mark.asyncio
     async def test_room_ownership_enforcement(self, flow_user):
         """Verify that a non-owner is blocked at every ownership-gated step."""
+        from fastapi import HTTPException
+
         from api.room_center import (
             inquiry_active_runs,
+            inquiry_room_messages,
             inquiry_room_setting,
             send_message,
-            inquiry_room_messages,
         )
-        from fastapi import HTTPException
 
         other_user = ClerkUser(
             user_id="other_user_999",
@@ -234,7 +241,7 @@ class TestAgentLifecycleFlow:
     @pytest.mark.asyncio
     async def test_register_query_and_delete_agent_flow(self, flow_user):
         """register_agent -> get_agent -> delete_agent through real endpoints."""
-        from api.agent import register_agent, get_agent, delete_agent
+        from api.agent import delete_agent, get_agent, register_agent
 
         agent_id = "flow-agent-001"
 
@@ -313,8 +320,8 @@ class TestAgentLifecycleFlow:
     @pytest.mark.asyncio
     async def test_private_agent_visibility(self, flow_user):
         """Private agent: owner sees it, others get 404."""
-        from services.agent_service import AgentService
         from models.request import AgentCenterRequest
+        from services.agent_service import AgentService
 
         agent_id = "private-flow-001"
 
@@ -434,7 +441,7 @@ class TestHITLFlow:
     @pytest.mark.asyncio
     async def test_hitl_max_rounds_enforcement(self):
         """Should return None when max rounds exceeded."""
-        from services.hitl_service import HITLService, MAX_HITL_ROUNDS
+        from services.hitl_service import MAX_HITL_ROUNDS, HITLService
 
         svc = HITLService()
         mock_db = MagicMock()
@@ -596,8 +603,8 @@ class TestErrorHandlingFlow:
 
     @pytest.mark.asyncio
     async def test_graceful_db_error_handling(self):
-        from services.agent_service import AgentService
         from models.request import AgentCenterRequest
+        from services.agent_service import AgentService
 
         svc = AgentService()
         facade = MagicMock()
@@ -614,6 +621,7 @@ class TestErrorHandlingFlow:
     @pytest.mark.asyncio
     async def test_ownership_blocks_unauthorized_user(self):
         from fastapi import HTTPException
+
         from api.room_center import verify_room_ownership
 
         other_user = ClerkUser(

@@ -1,6 +1,6 @@
+import inspect
 from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import datetime
-import inspect
 from typing import Any, Protocol, TypeAlias, runtime_checkable
 
 from common.dto import (

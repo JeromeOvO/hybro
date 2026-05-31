@@ -9,20 +9,22 @@ Tests cover:
 - Error handling
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+from a2a.types import (
+    Artifact,
+    Task,
+    TaskState,
+    TaskStatus,
+    TextPart,
+)
 from fastapi import HTTPException
 
-from a2a.types import (
-    Task, TaskState, TaskStatus, TaskStatusUpdateEvent,
-    Artifact, Part, TextPart, Message,
-)
+from api import webhooks
 from modules.agent_event import AgentEvent
 from modules.agent_response_handler import AgentResponseHandler
 from modules.transports.webhook import WebhookTransport, parse_stream_response
-from api import webhooks
-
 
 # =============================================================================
 # parse_stream_response Tests (pure function)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 import inspect
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -12,7 +12,6 @@ from common.dto import (
     HubReplyCommand,
     OfflineHubFailureCommand,
 )
-from common.utils.time import utcnow
 from common.protocols import (
     AgentCallCounter,
     HubAgentStatusReader,
@@ -23,6 +22,7 @@ from common.protocols import (
     HubManagement,
     OfflineHubFailurePort,
 )
+from common.utils.time import utcnow
 from database.migration.phase8_legacy_workflow_cleanup import (
     LEGACY_WORKFLOW_COLLECTIONS,
     assess_cleanup_readiness,
@@ -31,12 +31,13 @@ from hub_runtime_bridge import HubFacade, HubRuntimeBridgeConfig, HubRuntimeBrid
 from hub_runtime_bridge.config import config_from_settings
 from hub_runtime_bridge.hub_response_journal import InMemoryHubResponseJournal
 from hub_runtime_bridge.repository.mongo import HubMongoRepository
-from hub_runtime_bridge.service.ownership_lease_maintainer import OwnershipLeaseMaintainer
+from hub_runtime_bridge.service.ownership_lease_maintainer import (
+    OwnershipLeaseMaintainer,
+)
 from hub_runtime_bridge.task_ownership import (
     InMemoryHubTaskOwnershipStore,
     MongoHubTaskOwnershipStore,
 )
-
 
 ROOT = Path(__file__).resolve().parents[1]
 

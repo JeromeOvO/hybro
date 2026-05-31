@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from common.utils.time import utcnow
 
 if TYPE_CHECKING:
-    from models.supervisor_v2 import SupervisorTrajectory
+    pass
 
 
 class SessionContext(BaseModel):

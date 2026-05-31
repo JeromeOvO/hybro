@@ -1,10 +1,8 @@
 import ast
 import importlib
 import json
-from pathlib import Path
-
 import tomllib
-
+from pathlib import Path
 
 PRODUCTION_ROOTS = (
     "api",
@@ -332,6 +330,101 @@ def _imports_package(path: Path, package: str) -> bool:
     return False
 
 
+def _import_modules_including_type_checking(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    modules: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            modules.append(node.module)
+    return sorted(modules)
+
+
+def _import_modules(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    modules: list[str] = []
+    type_checking_lines: set[int] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.If)
+            and isinstance(node.test, ast.Name)
+            and node.test.id == "TYPE_CHECKING"
+        ):
+            for child in ast.walk(node):
+                if hasattr(child, "lineno"):
+                    type_checking_lines.add(child.lineno)
+    for node in ast.walk(tree):
+        if hasattr(node, "lineno") and node.lineno in type_checking_lines:
+            continue
+        if isinstance(node, ast.Import):
+            modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            modules.append(node.module)
+    return sorted(modules)
+
+
+EXPECTED_MAIN_LEGACY_IMPORTS = {
+    "services": [
+        "services.a2a_service",
+        "services.agent_capability_issue_service",
+        "services.agent_health_service",
+        "services.agent_liveness_service",
+        "services.agent_matcher",
+        "services.agent_resolver_service",
+        "services.agent_selection_service",
+        "services.agent_service",
+        "services.compaction_service",
+        "services.context_assembly_service",
+        "services.database_service",
+        "services.debate_service",
+        "services.hitl_service",
+        "services.memory_search_service",
+        "services.memory_service",
+        "services.notification_service",
+        "services.openai_service",
+        "services.relay_service",
+        "services.room_coordinator_service",
+        "services.room_membership_source",
+        "services.room_services",
+        "services.room_supervisor_service",
+        "services.run_command_handler",
+        "services.run_metrics",
+        "services.s3_service",
+        "services.sse_services",
+        "services.task_notification_service",
+        "services.task_service",
+    ],
+    "modules": [
+        "modules.AgentCenter",
+        "modules.InspectionCenter",
+        "modules.MemoryCenter",
+        "modules.RoomCenter",
+        "modules.RoomMessageCenter",
+    ],
+    "infrastructure": [
+        "infrastructure.leader_election",
+        "infrastructure.redis_service",
+        "infrastructure.relay_streams",
+    ],
+}
+
+
+EXTERNAL_DECOMMISSION_FORBIDDEN_TERMS = (
+    "traffic evidence collected",
+    "deployment evidence collected",
+    "ready to delete",
+    "ready=true",
+)
+
+EXPECTED_OPERATIONAL_SCRIPT_BLOCKERS = {
+    "scripts/backfill_domain_aliases.py": (
+        "services.domain_alias_service.domain_alias_service"
+    ),
+    "scripts/reupsert_agents_pinecone.py": "services.database_service.db_service",
+}
+
+
 def _package_python_file_count(package: str) -> int:
     package_path = Path(package)
     if not package_path.exists():
@@ -360,6 +453,193 @@ def _test_import_files_for_package(package: str) -> list[str]:
         for path in sorted(Path("tests").rglob("*.py"))
         if _imports_package(path, package)
     ]
+
+
+def test_repo_local_config_callers_use_common_config_settings():
+    expected_callers = {
+        Path("container.py"),
+        Path("database/mongodb.py"),
+        Path("main.py"),
+        Path("scripts/_discovery_client.py"),
+    }
+    violations: list[str] = []
+    for path in sorted(expected_callers):
+        modules = _import_modules_including_type_checking(path)
+        if "config.settings" in modules:
+            violations.append(f"{path}: still imports config.settings")
+        if "common.config.settings" not in modules:
+            violations.append(f"{path}: missing common.config.settings import")
+
+    assert not violations, "Repo-local config callers are not migrated:\n" + "\n".join(
+        violations
+    )
+
+
+def test_main_legacy_startup_import_inventory_is_preserved():
+    modules = _import_modules(Path("main.py"))
+    actual = {
+        package: sorted(
+            {
+                module
+                for module in modules
+                if module == package or module.startswith(f"{package}.")
+            }
+        )
+        for package in EXPECTED_MAIN_LEGACY_IMPORTS
+    }
+
+    assert actual == EXPECTED_MAIN_LEGACY_IMPORTS
+
+
+def test_response_handler_has_no_services_imports_including_type_checking():
+    path = Path("execution/dispatch/response_handler.py")
+    modules = _import_modules_including_type_checking(path)
+    violations = [
+        module
+        for module in modules
+        if module == "services" or module.startswith("services.")
+    ]
+
+    assert not violations, (
+        "response_handler.py still imports legacy services, including type-only imports:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_operational_script_blockers_are_explicit():
+    manifest = _manifest()
+    blockers = {
+        entry.get("path"): entry
+        for entry in manifest.get("operational_script_blockers", [])
+        if isinstance(entry.get("path"), str)
+    }
+    violations: list[str] = []
+    unexpected = sorted(set(blockers) - set(EXPECTED_OPERATIONAL_SCRIPT_BLOCKERS))
+    missing = sorted(set(EXPECTED_OPERATIONAL_SCRIPT_BLOCKERS) - set(blockers))
+    if unexpected:
+        violations.append(
+            "unexpected operational script blockers: " + ", ".join(unexpected)
+        )
+    if missing:
+        violations.append("missing operational script blockers: " + ", ".join(missing))
+
+    for path, legacy_import in EXPECTED_OPERATIONAL_SCRIPT_BLOCKERS.items():
+        entry = blockers.get(path)
+        if entry is None:
+            violations.append(f"{path}: missing operational script blocker")
+            continue
+        violations.extend(
+            _operational_script_blocker_violations(path, entry, legacy_import)
+        )
+
+    assert not violations, "Operational script blockers are incomplete:\n" + "\n".join(
+        violations
+    )
+
+
+def _operational_script_blocker_violations(
+    path: str, entry: dict, legacy_import: str
+) -> list[str]:
+    violations: list[str] = []
+    if entry.get("legacy_import") != legacy_import:
+        violations.append(f"{path}: expected legacy_import={legacy_import}")
+    if legacy_import not in _imported_names_including_type_checking(Path(path)):
+        violations.append(f"{path}: does not import {legacy_import}")
+    if entry.get("package") != "services":
+        violations.append(f"{path}: expected package=services")
+    if entry.get("status") != "blocked":
+        violations.append(f"{path}: expected status=blocked")
+    if not entry.get("reason"):
+        violations.append(f"{path}: missing reason")
+    if not entry.get("required_before_remove"):
+        violations.append(f"{path}: missing required_before_remove")
+    violations.extend(_operational_script_parity_violations(path, entry))
+    return violations
+
+
+def _operational_script_parity_violations(path: str, entry: dict) -> list[str]:
+    parity = entry.get("parity_note")
+    if not isinstance(parity, dict):
+        return [f"{path}: missing parity_note object"]
+
+    violations = [
+        f"{path}: missing parity_note.{key}"
+        for key in ("database", "logging", "cleanup")
+        if not parity.get(key)
+    ]
+    if path == "scripts/reupsert_agents_pinecone.py" and not parity.get("pinecone"):
+        violations.append(f"{path}: missing parity_note.pinecone")
+    return violations
+
+
+def _imported_names_including_type_checking(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    imported_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            imported_names.update(
+                f"{node.module}.{alias.name}" for alias in node.names
+            )
+    return imported_names
+
+
+def test_app_shell_runtime_blockers_match_main_inventory():
+    manifest = _manifest()
+    blockers = manifest.get("app_shell_runtime_blockers", [])
+    blocker_by_package = {
+        entry.get("package"): entry
+        for entry in blockers
+        if isinstance(entry.get("package"), str)
+    }
+    violations: list[str] = []
+
+    for package, expected_imports in EXPECTED_MAIN_LEGACY_IMPORTS.items():
+        entry = blocker_by_package.get(package)
+        if entry is None:
+            violations.append(f"{package}: missing app-shell runtime blocker")
+            continue
+        if entry.get("path") != "main.py":
+            violations.append(f"{package}: expected path=main.py")
+        if entry.get("purpose") not in {"startup_shutdown_binding", "startup_binding"}:
+            violations.append(f"{package}: missing app-shell purpose")
+        if entry.get("status") != "blocked":
+            violations.append(f"{package}: expected status=blocked")
+        if entry.get("legacy_imports") != expected_imports:
+            violations.append(f"{package}: legacy_imports do not match main.py inventory")
+        if not entry.get("required_before_remove"):
+            violations.append(f"{package}: missing required_before_remove")
+
+    assert not violations, "App-shell runtime blockers are incomplete:\n" + "\n".join(
+        violations
+    )
+
+
+def test_external_decommission_evidence_remains_deferred_and_repo_local_only():
+    manifest = _manifest()
+    legacy_workflow = manifest.get("legacy_workflow_decommission", {})
+    evidence = legacy_workflow.get("evidence") or []
+    violations: list[str] = []
+
+    if legacy_workflow.get("ready") is not False:
+        violations.append("legacy_workflow_decommission.ready must remain false")
+    if not evidence:
+        violations.append("legacy_workflow_decommission.evidence must be preserved")
+    for entry in evidence:
+        if entry.get("classification") != "blocked_decommission_readiness":
+            violations.append("external evidence classification changed")
+        if entry.get("status") != "deferred_non_actionable":
+            violations.append("external evidence status must be deferred_non_actionable")
+        text = json.dumps(entry, sort_keys=True).lower()
+        for term in EXTERNAL_DECOMMISSION_FORBIDDEN_TERMS:
+            if term in text:
+                violations.append(f"external evidence adds forbidden claim: {term}")
+
+    assert not violations, (
+        "External decommission evidence is no longer repo-local/deferred:\n"
+        + "\n".join(violations)
+    )
 
 
 def test_no_production_imports_from_legacy_singletons():

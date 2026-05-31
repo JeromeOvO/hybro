@@ -10,10 +10,10 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from execution.dispatch.dispatch_middleware import DispatchContext
+    from execution.dispatch.response_handler import AgentResponseHandler
     from models.processing import ProcessingResult
     from models.room import RoomAgentMessage
-    from execution.dispatch.response_handler import AgentResponseHandler
-    from execution.dispatch.dispatch_middleware import DispatchContext
 
 
 class AgentTransport(ABC):

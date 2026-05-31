@@ -5,7 +5,13 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
-from common.dto import AssembledContext, CompactionResult, MemorySearchResult, RoomMemoryInfo, UserMemory
+from common.dto import (
+    AssembledContext,
+    CompactionResult,
+    MemorySearchResult,
+    RoomMemoryInfo,
+    UserMemory,
+)
 from common.observability import NoopTracingProvider
 from common.protocols import (
     ContentStorageRepository,
@@ -15,7 +21,6 @@ from common.protocols import (
     VectorDAL,
 )
 from common.utils.logger import get_logger
-
 from context_memory import assembly, compaction, projection, search, summary
 from context_memory.config import (
     CompactionConfig,

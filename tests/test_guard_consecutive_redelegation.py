@@ -10,7 +10,7 @@ Covers:
 - Consecutive failure guard — strips agents that keep failing
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from models.supervisor_v2 import (
     ActionType,
@@ -33,7 +33,7 @@ def _target(agent_id: str, name: str, task: str = "do something") -> DelegateTar
 
 def _entry_with_successes(agent_ids: list[str]) -> TrajectoryEntry:
     """Create a trajectory entry that delegated to the given agents, all successful."""
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     return TrajectoryEntry(
         step_number=1,
         action=SupervisorAction(
@@ -59,7 +59,7 @@ def _entry_with_successes(agent_ids: list[str]) -> TrajectoryEntry:
 
 def _entry_with_failures(agent_ids: list[str]) -> TrajectoryEntry:
     """Create a trajectory entry that delegated to the given agents, all failed."""
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     return TrajectoryEntry(
         step_number=1,
         action=SupervisorAction(
@@ -228,7 +228,7 @@ class TestGuardTrajectoryBreaks:
 
     def test_non_delegate_entry_breaks_chain(self):
         svc = _make_service()
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         action = SupervisorAction(
             action=ActionType.DELEGATE,
             reasoning="go",
@@ -340,7 +340,7 @@ class TestFailureAndSuccessGuardsCombined:
                 _target("C", "Charlie"),
             ],
         )
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         mixed_entry = TrajectoryEntry(
             step_number=1,
             action=SupervisorAction(

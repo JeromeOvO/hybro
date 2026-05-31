@@ -4,11 +4,11 @@ Tests the shared Redis client for key-value and stream operations.
 Uses mocks to avoid requiring a real Redis instance.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from infrastructure.redis_service import RedisService, create_redis_service
+import pytest
 
+from infrastructure.redis_service import RedisService, create_redis_service
 
 # =============================================================================
 # Test Helpers

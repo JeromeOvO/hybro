@@ -11,7 +11,6 @@ Later edits to the saved group do not change existing rooms.
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -33,9 +32,9 @@ class AgentGroup(BaseModel):
 
     group_id: str = Field(default_factory=lambda: uuid4().hex)
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     type: str  # 'builtin' | 'user'
-    owner_id: Optional[str] = None
+    owner_id: str | None = None
     agents: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)

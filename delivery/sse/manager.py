@@ -1,8 +1,7 @@
+import asyncio
 from collections.abc import AsyncIterator, Callable
 from datetime import datetime
 from typing import Any
-
-import asyncio
 
 from common.observability import MetricsCollector, NoopMetricsCollector
 from common.utils.cancellation import CancellationToken

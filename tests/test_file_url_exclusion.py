@@ -1,4 +1,3 @@
-import pytest
 from database.mongodb import MongoDB
 
 

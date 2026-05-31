@@ -844,19 +844,6 @@ class ContextAssemblyService:
 
         See CONTEXT_MEMORY_SYSTEM_DESIGN.md §15 for metrics specification.
         """
-        metrics = ContextMetrics(
-            room_id=room_id,
-            total_tokens=total_tokens,
-            budget_tokens=self._budget.available_for_content,
-            occupancy_pct=occupancy_pct,
-            was_truncated=was_truncated,
-            truncation_reason=truncation_reason.value if truncation_reason else None,
-            turns_included=turns_included,
-            turns_truncated=turns_truncated,
-            full_turns=full_turns,
-            compact_turns=compact_turns,
-        )
-
         # Log at appropriate level based on occupancy thresholds (§15.1)
         # Include cache_prefix_tokens for KV-cache analysis (§15.2)
         if occupancy_pct > 90:

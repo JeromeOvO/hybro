@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from common.dto import ExecutionAck, ExecutionRequest, HubAgentResponseInternal
+from common.utils.time import utcnow
 from execution.facade import (
     ExecutionFacade,
     hub_agent_response_internal_to_agent_event,
 )
 from execution.translators import room_response_to_execution_ack
 from models.response import RoomCenterUserMessageResponse
-from common.utils.time import utcnow
 
 
 class RecordingTaskFactory:

@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -13,8 +13,7 @@ from common.observability import get_current_trace_id, trace_id_context
 from delivery.config import DeliveryConfig
 from delivery.event_publisher import EventPublisherImpl
 
-
-NOW = datetime(2026, 5, 17, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
 
 
 def fixed_now():

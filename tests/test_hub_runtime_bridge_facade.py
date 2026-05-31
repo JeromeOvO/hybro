@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 
 from common.dto import HubAgentCounts, HubDispatchCommand
-from hub_runtime_bridge.hub_response_journal import InMemoryHubResponseJournal
-from hub_runtime_bridge.hub_response_journal import MongoHubResponseJournal
+from hub_runtime_bridge import HubFacade, HubRuntimeBridgeConfig, HubRuntimeBridgeDeps
+from hub_runtime_bridge.hub_response_journal import (
+    InMemoryHubResponseJournal,
+    MongoHubResponseJournal,
+)
 from hub_runtime_bridge.internal_response_router import HubInternalResponseRouter
 from hub_runtime_bridge.task_ownership import MongoHubTaskOwnershipStore
-from hub_runtime_bridge import HubFacade, HubRuntimeBridgeConfig, HubRuntimeBridgeDeps
 
 
 class Repo:

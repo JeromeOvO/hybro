@@ -6,11 +6,10 @@ Tests cover:
 - legacy workflow endpoints return HTTP 410 (deprecated)
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
-from fastapi.testclient import TestClient
 
 from api.orchestration_center import (
     _get_task_request,
@@ -22,9 +21,6 @@ from api.orchestration_center import (
     run_workflow,
     summarize_meta_task_for_base_task,
 )
-from models.response import OrchestrationResponse
-from tests.conftest import PATCH
-
 
 # =============================================================================
 # _get_task_request Tests
@@ -103,8 +99,6 @@ class TestLegacyWorkflowRoutes:
             "summarize_meta_task_for_base_task",
         ):
             setattr(workflow, method_name, AsyncMock(return_value={"unexpected": True}))
-        request = MagicMock()
-
         result = await handler()
 
         assert result.status_code == 410

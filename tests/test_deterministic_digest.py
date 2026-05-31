@@ -1,6 +1,6 @@
 """Tests for RoomMessageCenter._emit_deterministic_digest."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 

@@ -16,7 +16,6 @@ from a2a.types import (
     TextPart,
 )
 
-
 _PROTO_STATE_MAP: dict[str, str] = {
     "TASK_STATE_SUBMITTED": "submitted",
     "TASK_STATE_WORKING": "working",

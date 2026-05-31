@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from context_memory import assembly
 from context_memory.config import TokenBudgetConfig
-from context_memory.models import ConversationTurnData, RoomSummaryData, TruncationReason
+from context_memory.models import (
+    ConversationTurnData,
+    RoomSummaryData,
+    TruncationReason,
+)
 
 
 def turn(

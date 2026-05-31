@@ -23,7 +23,7 @@ class QuoteValidationError(ValueError):
 
 
 async def validate_quote_source(
-    db: "DatabaseService",
+    db: DatabaseService,
     *,
     room_id: str,
     payload: UserQuoteCreatePayload,
@@ -50,7 +50,7 @@ async def validate_quote_source(
 
 
 async def create_quoted_snippet(
-    db: "DatabaseService",
+    db: DatabaseService,
     *,
     room_id: str,
     created_by_user_id: str,

@@ -5,15 +5,16 @@ Tests cover:
 - legacy workflow task endpoints return HTTP 410
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from api.task import (
-    query_task,
-    query_base_task,
     get_all_sessions,
     get_base_task_by_session_id,
     get_meta_tasks_by_parent_task_id,
+    query_base_task,
+    query_task,
 )
 
 

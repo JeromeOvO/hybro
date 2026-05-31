@@ -1,19 +1,22 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 
 from common.errors import VectorIndexUnavailableError
 from common.observability import NoopTracingProvider
-from context_memory.config import CompactionConfig, MemorySearchConfig, TokenBudgetConfig
+from context_memory.config import (
+    CompactionConfig,
+    MemorySearchConfig,
+    TokenBudgetConfig,
+)
 from context_memory.facade import ContextMemoryFacade
 from context_memory.projection import new_room_memory_doc
 from context_memory.translators import room_memory_info_from_doc
 
-
-NOW = datetime(2026, 5, 13, tzinfo=timezone.utc)
+NOW = datetime(2026, 5, 13, tzinfo=UTC)
 
 
 def now():
@@ -682,7 +685,7 @@ async def test_facade_content_helpers_do_not_hydrate_expired_documents():
         "room_id": "r1",
         "turn_id": "t1",
         "content": "expired",
-        "expires_at": datetime(2026, 5, 12, tzinfo=timezone.utc),
+        "expires_at": datetime(2026, 5, 12, tzinfo=UTC),
     }
     service = facade(content_repo=content_repo)
 

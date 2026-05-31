@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from fastapi.params import Depends as DependsParam
 from fastapi.responses import StreamingResponse
 
+from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from app_shell.bound import SSEManagerRouteOwner
 from app_shell.database_service import A2ATaskReader
 from common.auth import ClerkUser, get_current_user, get_current_user_with_query_token
@@ -233,7 +234,5 @@ async def cancel_message(
             status_code=500, detail=f"Failed to cancel message: {str(e)}"
         ) from e
 
-
-from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 
 _mark_declared_owner(router, __name__)

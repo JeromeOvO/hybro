@@ -1,10 +1,9 @@
-from datetime import datetime, timezone
 import inspect
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
-from common.errors import AppError, NotFoundError, ValidationError
 from common.dto import (
     AgentCardSnapshot,
     AgentInfo,
@@ -37,21 +36,22 @@ from common.dto import (
     RoomCreationParams,
     RoomMembership,
     RoomSummary,
-    SSEEvent,
     SortOrder,
+    SSEEvent,
     WorkflowState,
 )
+from common.errors import AppError, NotFoundError, ValidationError
 
 
 def test_frozen_dto_is_immutable():
     agent = AgentInfo(agent_id="a1", name="Agent", status="active")
 
-    with pytest.raises(Exception):
+    with pytest.raises(PydanticValidationError):
         agent.name = "Changed"
 
 
 def test_phase0_dtos_can_be_instantiated():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     AgentInfo(agent_id="a1", name="Agent", status="active")
     AgentCardSnapshot(agent_id="a1", url="http://agent", name="Agent", raw_card={})

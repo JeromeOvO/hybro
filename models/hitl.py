@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 
 from common.utils.time import utcnow
 
-
 # ---------------------------------------------------------------------------
 # InterruptKind — routing key for _resume_supervisor_v2()
 # ---------------------------------------------------------------------------
