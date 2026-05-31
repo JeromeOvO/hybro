@@ -240,9 +240,46 @@ class AgentResponseHandler:
 
     # --- Terminal events (DB persist -> notify_task_update -> orchestration) ---
 
-    async def _on_response(self, e: AgentEvent) -> None:
-        await self._convert_response_parts_to_s3(e)
-        artifacts_for_db = self._artifacts_for_response_db(e)
+    async def _on_response(self, e: AgentEvent) -> None:  # noqa: C901
+        # Convert inline base64 file parts to S3 URIs before persisting/broadcasting
+        if not e.skip_persist and (e.parts or e.artifacts):
+            from common.utils.a2a_helpers import convert_inline_bytes_to_s3
+
+            # Convert parts referenced by both e.parts and nested inside e.artifacts
+            if e.parts:
+                await convert_inline_bytes_to_s3(
+                    e.parts,
+                    e.room_id,
+                    e.message_id,
+                )
+            if e.artifacts:
+                for artifact in e.artifacts:
+                    artifact_parts = artifact.get("parts", [])
+                    if artifact_parts:
+                        await convert_inline_bytes_to_s3(
+                            artifact_parts,
+                            e.room_id,
+                            e.message_id,
+                        )
+
+        # Build artifacts list for DB persistence
+        artifacts_for_db: list[dict] | None = None
+        if not e.skip_persist and (e.parts or e.artifacts):
+            if e.artifacts:
+                artifacts_for_db = e.artifacts
+            elif e.parts:
+                # Only persist non-text parts as artifacts (text is in message_text)
+                non_text = [p for p in e.parts if p.get("kind") in ("file", "data")]
+                if non_text:
+                    from uuid import uuid4
+
+                    artifacts_for_db = [
+                        {
+                            "artifactId": uuid4().hex,
+                            "name": "agent-output",
+                            "parts": non_text,
+                        }
+                    ]
 
         if not e.skip_persist:
             await self._db.update_task_state_on_message(
@@ -262,51 +299,6 @@ class AgentResponseHandler:
         # content + parts via task_update SSE. The redundant agent_response SSE
         # created a duplicate message entity in the frontend.
         await self._resume_orchestration(e.message_id, e.text)
-
-    async def _convert_response_parts_to_s3(self, e: AgentEvent) -> None:
-        if e.skip_persist or not (e.parts or e.artifacts):
-            return
-
-        from common.utils.a2a_helpers import convert_inline_bytes_to_s3
-
-        # Convert parts referenced by both e.parts and nested inside e.artifacts.
-        if e.parts:
-            await convert_inline_bytes_to_s3(
-                e.parts,
-                e.room_id,
-                e.message_id,
-            )
-        for artifact in e.artifacts or []:
-            artifact_parts = artifact.get("parts", [])
-            if artifact_parts:
-                await convert_inline_bytes_to_s3(
-                    artifact_parts,
-                    e.room_id,
-                    e.message_id,
-                )
-
-    def _artifacts_for_response_db(self, e: AgentEvent) -> list[dict] | None:
-        if e.skip_persist or not (e.parts or e.artifacts):
-            return None
-        if e.artifacts:
-            return e.artifacts
-        if not e.parts:
-            return None
-
-        # Only persist non-text parts as artifacts; text is in message_text.
-        non_text = [p for p in e.parts if p.get("kind") in ("file", "data")]
-        if not non_text:
-            return None
-
-        from uuid import uuid4
-
-        return [
-            {
-                "artifactId": uuid4().hex,
-                "name": "agent-output",
-                "parts": non_text,
-            }
-        ]
 
     async def _on_error(self, e: AgentEvent) -> None:
         error = e.error_text or e.text or "Unknown agent error"
