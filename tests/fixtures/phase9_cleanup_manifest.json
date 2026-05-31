@@ -34,7 +34,7 @@
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
       "owner": "phase-9-platform-api-cleanup",
       "path": "config",
-      "reason": "Package remains shipped for compatibility with legacy startup, scripts, and tests until remaining legacy workflow package removal is safe."
+      "reason": "Package remains shipped for remaining infrastructure and service compatibility imports plus legacy config tests until remaining legacy workflow package removal is safe."
     },
     {
       "blocked_by": "legacy_workflow_decommission",
