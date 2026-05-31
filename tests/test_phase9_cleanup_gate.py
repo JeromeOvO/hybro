@@ -501,6 +501,106 @@ def test_response_handler_has_no_services_imports_including_type_checking():
     )
 
 
+def test_operational_script_blockers_are_explicit():
+    manifest = _manifest()
+    blockers = {
+        entry.get("path"): entry
+        for entry in manifest.get("operational_script_blockers", [])
+        if isinstance(entry.get("path"), str)
+    }
+    expected = {
+        "scripts/backfill_domain_aliases.py": (
+            "services.domain_alias_service.domain_alias_service"
+        ),
+        "scripts/reupsert_agents_pinecone.py": "services.database_service.db_service",
+    }
+    violations: list[str] = []
+
+    for path, legacy_import in expected.items():
+        entry = blockers.get(path)
+        if entry is None:
+            violations.append(f"{path}: missing operational script blocker")
+            continue
+        if entry.get("legacy_import") != legacy_import:
+            violations.append(f"{path}: expected legacy_import={legacy_import}")
+        if entry.get("package") != "services":
+            violations.append(f"{path}: expected package=services")
+        if entry.get("status") != "blocked":
+            violations.append(f"{path}: expected status=blocked")
+        if not entry.get("reason"):
+            violations.append(f"{path}: missing reason")
+        if not entry.get("required_before_remove"):
+            violations.append(f"{path}: missing required_before_remove")
+        parity = entry.get("parity_note")
+        if not isinstance(parity, dict):
+            violations.append(f"{path}: missing parity_note object")
+            continue
+        for key in ("database", "logging", "cleanup"):
+            if not parity.get(key):
+                violations.append(f"{path}: missing parity_note.{key}")
+        if path == "scripts/reupsert_agents_pinecone.py" and not parity.get("pinecone"):
+            violations.append(f"{path}: missing parity_note.pinecone")
+
+    assert not violations, "Operational script blockers are incomplete:\n" + "\n".join(
+        violations
+    )
+
+
+def test_app_shell_runtime_blockers_match_main_inventory():
+    manifest = _manifest()
+    blockers = manifest.get("app_shell_runtime_blockers", [])
+    blocker_by_package = {
+        entry.get("package"): entry
+        for entry in blockers
+        if isinstance(entry.get("package"), str)
+    }
+    violations: list[str] = []
+
+    for package, expected_imports in EXPECTED_MAIN_LEGACY_IMPORTS.items():
+        entry = blocker_by_package.get(package)
+        if entry is None:
+            violations.append(f"{package}: missing app-shell runtime blocker")
+            continue
+        if entry.get("path") != "main.py":
+            violations.append(f"{package}: expected path=main.py")
+        if entry.get("purpose") not in {"startup_shutdown_binding", "startup_binding"}:
+            violations.append(f"{package}: missing app-shell purpose")
+        if entry.get("status") != "blocked":
+            violations.append(f"{package}: expected status=blocked")
+        if entry.get("legacy_imports") != expected_imports:
+            violations.append(f"{package}: legacy_imports do not match main.py inventory")
+        if not entry.get("required_before_remove"):
+            violations.append(f"{package}: missing required_before_remove")
+
+    assert not violations, "App-shell runtime blockers are incomplete:\n" + "\n".join(
+        violations
+    )
+
+
+def test_external_decommission_evidence_remains_deferred_and_repo_local_only():
+    manifest = _manifest()
+    legacy_workflow = manifest.get("legacy_workflow_decommission", {})
+    evidence = legacy_workflow.get("evidence") or []
+    violations: list[str] = []
+
+    if legacy_workflow.get("ready") is not False:
+        violations.append("legacy_workflow_decommission.ready must remain false")
+    for entry in evidence:
+        if entry.get("classification") != "blocked_decommission_readiness":
+            violations.append("external evidence classification changed")
+        if entry.get("status") != "deferred_non_actionable":
+            violations.append("external evidence status must be deferred_non_actionable")
+        text = json.dumps(entry, sort_keys=True).lower()
+        for term in EXTERNAL_DECOMMISSION_FORBIDDEN_TERMS:
+            if term in text:
+                violations.append(f"external evidence adds forbidden claim: {term}")
+
+    assert not violations, (
+        "External decommission evidence is no longer repo-local/deferred:\n"
+        + "\n".join(violations)
+    )
+
+
 def test_no_production_imports_from_legacy_singletons():
     violations = _import_violations()
 

@@ -3,8 +3,8 @@
     {
       "blocked_by": "legacy_workflow_decommission",
       "deletion_blockers": [
-        "30 test files still exercise legacy module compatibility paths.",
-        "2 runtime files still bind or import legacy module compatibility paths.",
+        "30 test files still exercise legacy modules compatibility paths.",
+        "2 runtime files still bind or import legacy modules compatibility paths.",
         "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
       ],
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
@@ -15,8 +15,8 @@
     {
       "blocked_by": "legacy_workflow_decommission",
       "deletion_blockers": [
-        "49 test files still exercise legacy service compatibility paths.",
-        "9 runtime files still bind or import legacy services.",
+        "49 test files still exercise legacy services compatibility paths.",
+        "9 runtime files still bind or import legacy services compatibility paths.",
         "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
       ],
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
@@ -27,8 +27,8 @@
     {
       "blocked_by": "legacy_workflow_decommission",
       "deletion_blockers": [
-        "3 test files still verify legacy config compatibility.",
-        "18 runtime files still import config.settings compatibility paths.",
+        "3 test files still exercise legacy config compatibility paths.",
+        "14 runtime files still bind or import legacy config compatibility paths.",
         "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
       ],
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
@@ -39,8 +39,8 @@
     {
       "blocked_by": "legacy_workflow_decommission",
       "deletion_blockers": [
-        "5 test files still verify legacy infrastructure compatibility.",
-        "1 runtime files still import legacy infrastructure compatibility paths.",
+        "5 test files still exercise legacy infrastructure compatibility paths.",
+        "1 runtime files still bind or import legacy infrastructure compatibility paths.",
         "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
       ],
       "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
@@ -70,11 +70,125 @@
           "route traffic evidence for legacy workflow endpoints",
           "live-code reference scan covering frontend and deployed workers",
           "collection backup and rollback plan"
-        ]
+        ],
+        "status": "deferred_non_actionable"
       }
     ],
     "ready": false
   },
+  "app_shell_runtime_blockers": [
+    {
+      "legacy_imports": [
+        "services.a2a_service",
+        "services.agent_capability_issue_service",
+        "services.agent_health_service",
+        "services.agent_liveness_service",
+        "services.agent_matcher",
+        "services.agent_resolver_service",
+        "services.agent_selection_service",
+        "services.agent_service",
+        "services.compaction_service",
+        "services.context_assembly_service",
+        "services.database_service",
+        "services.debate_service",
+        "services.hitl_service",
+        "services.memory_search_service",
+        "services.memory_service",
+        "services.notification_service",
+        "services.openai_service",
+        "services.relay_service",
+        "services.room_coordinator_service",
+        "services.room_membership_source",
+        "services.room_services",
+        "services.room_supervisor_service",
+        "services.run_command_handler",
+        "services.run_metrics",
+        "services.s3_service",
+        "services.sse_services",
+        "services.task_notification_service",
+        "services.task_service"
+      ],
+      "package": "services",
+      "path": "main.py",
+      "purpose": "startup_shutdown_binding",
+      "required_before_remove": [
+        "Replace main.py service singleton binding with container-owned module facade and app-shell dependency providers.",
+        "Prove startup and shutdown behavior with focused app-shell tests before removing services from shipped packages."
+      ],
+      "status": "blocked"
+    },
+    {
+      "legacy_imports": [
+        "modules.AgentCenter",
+        "modules.InspectionCenter",
+        "modules.MemoryCenter",
+        "modules.RoomCenter",
+        "modules.RoomMessageCenter"
+      ],
+      "package": "modules",
+      "path": "main.py",
+      "purpose": "startup_shutdown_binding",
+      "required_before_remove": [
+        "Replace main.py module compatibility centers with execution, room, agent, and app-shell dependency providers.",
+        "Prove route binding and startup behavior before removing modules from shipped packages."
+      ],
+      "status": "blocked"
+    },
+    {
+      "legacy_imports": [
+        "infrastructure.leader_election",
+        "infrastructure.redis_service",
+        "infrastructure.relay_streams"
+      ],
+      "package": "infrastructure",
+      "path": "main.py",
+      "purpose": "startup_shutdown_binding",
+      "required_before_remove": [
+        "Move Redis service, leader election, and relay stream construction behind app-shell or DAL-owned providers.",
+        "Prove startup, shutdown, and health-check behavior before removing infrastructure from shipped packages."
+      ],
+      "status": "blocked"
+    }
+  ],
+  "operational_script_blockers": [
+    {
+      "legacy_import": "services.domain_alias_service.domain_alias_service",
+      "package": "services",
+      "parity_note": {
+        "cleanup": "Script opens and closes the shared MongoDB connection through database.mongodb.mongodb.",
+        "database": "Script queries and updates agent documents with missing public_url values.",
+        "logging": "Script logs dry-run and live migration status through common.utils.logger."
+      },
+      "path": "scripts/backfill_domain_aliases.py",
+      "reason": "No repo-local non-legacy domain-alias API has been verified to preserve URL generation and update semantics without the legacy singleton.",
+      "required_before_remove": [
+        "Extract or identify a non-legacy domain-alias generation API with parity tests.",
+        "Add mocked tests covering dry-run, force prompt behavior, Mongo update shape, per-agent failure handling, logging, and connection cleanup.",
+        "Remove the services.domain_alias_service import after the replacement API is proven."
+      ],
+      "replacement_api": null,
+      "status": "blocked"
+    },
+    {
+      "legacy_import": "services.database_service.db_service",
+      "package": "services",
+      "parity_note": {
+        "cleanup": "Script opens and closes the MongoDB connection through db_service.mongo.",
+        "database": "Script enumerates agents through db_service.get_all_agents.",
+        "logging": "Script logs per-agent Pinecone upsert success and failure.",
+        "pinecone": "Script writes vectors with metadata type=a2a_agent and agent_id."
+      },
+      "path": "scripts/reupsert_agents_pinecone.py",
+      "reason": "No repo-local non-legacy DAL/vector/LLM gateway combination has been verified to preserve db_service initialization, embedding, and Pinecone upsert behavior for this operational script.",
+      "required_before_remove": [
+        "Identify a non-legacy agent enumeration, embedding, and vector upsert path with equivalent initialization semantics.",
+        "Add mocked tests covering connection lifecycle, embedding delegation, Pinecone vector metadata shape, per-agent best-effort failures, logging, and cleanup.",
+        "Remove the services.database_service import after the replacement API is proven."
+      ],
+      "replacement_api": null,
+      "status": "blocked"
+    }
+  ],
   "package_removal_checklist": [
     {
       "package": "modules",
@@ -143,7 +257,10 @@
         "scripts/reupsert_agents_pinecone.py"
       ],
       "runtime_blockers": [
-        "main.py imports legacy service compatibility objects during app-shell startup and shutdown binding."
+        "main.py imports legacy service compatibility objects during app-shell startup and shutdown binding.",
+        "modules/* compatibility files still import services.* while legacy module shims remain shipped.",
+        "scripts/backfill_domain_aliases.py imports services.domain_alias_service.domain_alias_service for public URL generation.",
+        "scripts/reupsert_agents_pinecone.py imports services.database_service.db_service for Mongo, embedding, and Pinecone operations."
       ],
       "status": "blocked",
       "test_import_files": [
@@ -203,6 +320,7 @@
       "required_before_remove": [
         "Migrate remaining service tests to module facades, Platform, DAL, Delivery, Execution, HubRuntimeBridge, or Common protocol behavior.",
         "Remove main.py legacy service binding imports after legacy workflow decommission readiness is supplied.",
+        "Migrate or delete modules/* compatibility paths that still import services.* before removing services from shipped packages.",
         "Delete services from pyproject.toml only after full test and route inventory verification."
       ]
     },
@@ -210,13 +328,9 @@
       "package": "config",
       "py_files": 2,
       "runtime_import_files": [
-        "container.py",
-        "database/mongodb.py",
         "infrastructure/brokers/__init__.py",
         "infrastructure/brokers/redis_broker.py",
         "infrastructure/redis_service.py",
-        "main.py",
-        "scripts/_discovery_client.py",
         "services/a2a_service.py",
         "services/agent_capability_issue_service.py",
         "services/agent_health_service.py",
