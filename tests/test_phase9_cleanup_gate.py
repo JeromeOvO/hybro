@@ -555,14 +555,20 @@ def _operational_script_blocker_violations(
         violations.append(f"{path}: missing reason")
     if not entry.get("required_before_remove"):
         violations.append(f"{path}: missing required_before_remove")
+    violations.extend(_operational_script_parity_violations(path, entry))
+    return violations
 
+
+def _operational_script_parity_violations(path: str, entry: dict) -> list[str]:
     parity = entry.get("parity_note")
     if not isinstance(parity, dict):
-        violations.append(f"{path}: missing parity_note object")
-        return violations
-    for key in ("database", "logging", "cleanup"):
-        if not parity.get(key):
-            violations.append(f"{path}: missing parity_note.{key}")
+        return [f"{path}: missing parity_note object"]
+
+    violations = [
+        f"{path}: missing parity_note.{key}"
+        for key in ("database", "logging", "cleanup")
+        if not parity.get(key)
+    ]
     if path == "scripts/reupsert_agents_pinecone.py" and not parity.get("pinecone"):
         violations.append(f"{path}: missing parity_note.pinecone")
     return violations
@@ -620,6 +626,8 @@ def test_external_decommission_evidence_remains_deferred_and_repo_local_only():
 
     if legacy_workflow.get("ready") is not False:
         violations.append("legacy_workflow_decommission.ready must remain false")
+    if not evidence:
+        violations.append("legacy_workflow_decommission.evidence must be preserved")
     for entry in evidence:
         if entry.get("classification") != "blocked_decommission_readiness":
             violations.append("external evidence classification changed")
