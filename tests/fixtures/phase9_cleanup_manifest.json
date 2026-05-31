@@ -368,7 +368,7 @@
         "main.py"
       ],
       "runtime_blockers": [
-        "Legacy infrastructure broker compatibility paths still import config.settings."
+        "main.py imports legacy infrastructure compatibility objects during app-shell startup and shutdown binding."
       ],
       "status": "blocked",
       "test_import_files": [
@@ -382,7 +382,7 @@
         "5 test files still verify infrastructure compatibility."
       ],
       "required_before_remove": [
-        "Move remaining infrastructure broker callers to DAL, Delivery, or app-shell composition points.",
+        "Move main.py Redis service, leader election, and relay stream construction behind app-shell or DAL-owned providers.",
         "Migrate tests away from infrastructure.* compatibility imports.",
         "Delete infrastructure from pyproject.toml only after no runtime or test imports remain."
       ]
