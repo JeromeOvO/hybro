@@ -7,6 +7,12 @@ from typing import Any
 from uuid import uuid4
 
 from agent import AgentFacade, AgentMongoRepository
+from common.config.settings import (
+    get_memory_search_index_name,
+    get_pinecone_index_name,
+    settings,
+)
+from common.observability import MetricsCollector, traced_create_task
 from common.protocols import (
     AgentCallCounter,
     AgentCardResolver,
@@ -45,13 +51,7 @@ from common.protocols import (
     SSETransport,
     VectorDAL,
 )
-from common.observability import MetricsCollector, traced_create_task
 from common.utils.time import utcnow
-from common.config.settings import (
-    get_memory_search_index_name,
-    get_pinecone_index_name,
-    settings,
-)
 from context_memory import (
     ContentStorageMongoRepository,
     ContextMemoryFacade,

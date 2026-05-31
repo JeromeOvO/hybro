@@ -43,8 +43,8 @@ from api_gateway.viewsets import base as viewset
 from app_shell.viewset import AppShellViewSetRepositoryProvider
 from common.api_key_auth import bind_api_key_authenticator
 from common.auth import bind_auth_config
-from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
 from common.config.settings import settings
+from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 from jobs.cleanup_orphaned_uploads import (

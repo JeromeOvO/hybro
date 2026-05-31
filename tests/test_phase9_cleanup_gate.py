@@ -419,6 +419,13 @@ EXTERNAL_DECOMMISSION_FORBIDDEN_TERMS = (
     "ready=true",
 )
 
+EXPECTED_OPERATIONAL_SCRIPT_BLOCKERS = {
+    "scripts/backfill_domain_aliases.py": (
+        "services.domain_alias_service.domain_alias_service"
+    ),
+    "scripts/reupsert_agents_pinecone.py": "services.database_service.db_service",
+}
+
 
 def _package_python_file_count(package: str) -> int:
     package_path = Path(package)
@@ -508,42 +515,47 @@ def test_operational_script_blockers_are_explicit():
         for entry in manifest.get("operational_script_blockers", [])
         if isinstance(entry.get("path"), str)
     }
-    expected = {
-        "scripts/backfill_domain_aliases.py": (
-            "services.domain_alias_service.domain_alias_service"
-        ),
-        "scripts/reupsert_agents_pinecone.py": "services.database_service.db_service",
-    }
     violations: list[str] = []
 
-    for path, legacy_import in expected.items():
+    for path, legacy_import in EXPECTED_OPERATIONAL_SCRIPT_BLOCKERS.items():
         entry = blockers.get(path)
         if entry is None:
             violations.append(f"{path}: missing operational script blocker")
             continue
-        if entry.get("legacy_import") != legacy_import:
-            violations.append(f"{path}: expected legacy_import={legacy_import}")
-        if entry.get("package") != "services":
-            violations.append(f"{path}: expected package=services")
-        if entry.get("status") != "blocked":
-            violations.append(f"{path}: expected status=blocked")
-        if not entry.get("reason"):
-            violations.append(f"{path}: missing reason")
-        if not entry.get("required_before_remove"):
-            violations.append(f"{path}: missing required_before_remove")
-        parity = entry.get("parity_note")
-        if not isinstance(parity, dict):
-            violations.append(f"{path}: missing parity_note object")
-            continue
-        for key in ("database", "logging", "cleanup"):
-            if not parity.get(key):
-                violations.append(f"{path}: missing parity_note.{key}")
-        if path == "scripts/reupsert_agents_pinecone.py" and not parity.get("pinecone"):
-            violations.append(f"{path}: missing parity_note.pinecone")
+        violations.extend(
+            _operational_script_blocker_violations(path, entry, legacy_import)
+        )
 
     assert not violations, "Operational script blockers are incomplete:\n" + "\n".join(
         violations
     )
+
+
+def _operational_script_blocker_violations(
+    path: str, entry: dict, legacy_import: str
+) -> list[str]:
+    violations: list[str] = []
+    if entry.get("legacy_import") != legacy_import:
+        violations.append(f"{path}: expected legacy_import={legacy_import}")
+    if entry.get("package") != "services":
+        violations.append(f"{path}: expected package=services")
+    if entry.get("status") != "blocked":
+        violations.append(f"{path}: expected status=blocked")
+    if not entry.get("reason"):
+        violations.append(f"{path}: missing reason")
+    if not entry.get("required_before_remove"):
+        violations.append(f"{path}: missing required_before_remove")
+
+    parity = entry.get("parity_note")
+    if not isinstance(parity, dict):
+        violations.append(f"{path}: missing parity_note object")
+        return violations
+    for key in ("database", "logging", "cleanup"):
+        if not parity.get(key):
+            violations.append(f"{path}: missing parity_note.{key}")
+    if path == "scripts/reupsert_agents_pinecone.py" and not parity.get("pinecone"):
+        violations.append(f"{path}: missing parity_note.pinecone")
+    return violations
 
 
 def test_app_shell_runtime_blockers_match_main_inventory():

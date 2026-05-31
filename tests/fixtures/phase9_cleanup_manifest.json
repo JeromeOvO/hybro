@@ -344,7 +344,7 @@
         "services/s3_service.py"
       ],
       "runtime_blockers": [
-        "main.py, container.py, scripts, database compatibility paths, services compatibility paths, and infrastructure compatibility paths still import config.settings."
+        "Infrastructure broker compatibility paths and legacy service compatibility paths still import config.settings."
       ],
       "status": "blocked",
       "test_import_files": [
@@ -356,7 +356,7 @@
         "3 test files still verify legacy config.settings compatibility."
       ],
       "required_before_remove": [
-        "Move remaining app-shell, script, and database compatibility imports to common.config or injected scalar config.",
+        "Move remaining infrastructure and service compatibility imports to common.config or injected scalar config.",
         "Migrate legacy config tests to common.config where behavior is still required.",
         "Delete config from pyproject.toml only after compatibility imports are gone."
       ]
