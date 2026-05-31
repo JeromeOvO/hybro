@@ -545,6 +545,8 @@ def _operational_script_blocker_violations(
     violations: list[str] = []
     if entry.get("legacy_import") != legacy_import:
         violations.append(f"{path}: expected legacy_import={legacy_import}")
+    if legacy_import not in _imported_names_including_type_checking(Path(path)):
+        violations.append(f"{path}: does not import {legacy_import}")
     if entry.get("package") != "services":
         violations.append(f"{path}: expected package=services")
     if entry.get("status") != "blocked":
@@ -564,6 +566,19 @@ def _operational_script_blocker_violations(
     if path == "scripts/reupsert_agents_pinecone.py" and not parity.get("pinecone"):
         violations.append(f"{path}: missing parity_note.pinecone")
     return violations
+
+
+def _imported_names_including_type_checking(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    imported_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            imported_names.update(
+                f"{node.module}.{alias.name}" for alias in node.names
+            )
+    return imported_names
 
 
 def test_app_shell_runtime_blockers_match_main_inventory():
