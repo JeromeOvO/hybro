@@ -26,7 +26,9 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "../../.env"))
 
-from database.mongodb import mongodb
+from database.mongodb import (  # noqa: E402 - sys.path is adjusted for direct script execution
+    mongodb,  # noqa: E402 - sys.path is adjusted for direct script execution
+)
 
 
 async def create_run_lifecycle_indexes() -> int:

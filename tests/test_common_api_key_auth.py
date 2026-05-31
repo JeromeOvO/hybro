@@ -11,18 +11,18 @@ Tests cover:
 
 import ast
 import hashlib
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 
 from app_shell.api_key_auth import MongoAPIKeyAuthenticator
 from common.api_key_auth import (
     bind_api_key_authenticator,
-    hash_api_key,
-    validate_api_key,
     get_api_key,
     get_api_key_no_track,
+    hash_api_key,
+    validate_api_key,
 )
 
 
@@ -72,7 +72,7 @@ def test_common_auth_does_not_import_legacy_api_key_model():
 class TestHashApiKey:
     def test_returns_sha256_hex(self):
         result = hash_api_key("test-key-123")
-        expected = hashlib.sha256("test-key-123".encode()).hexdigest()
+        expected = hashlib.sha256(b"test-key-123").hexdigest()
         assert result == expected
         assert len(result) == 64
 

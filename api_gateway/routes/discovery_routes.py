@@ -12,6 +12,7 @@ from fastapi.params import Depends as DependsParam
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.api_key_auth import get_api_key
 from common.errors import PlatformRouteError
 from common.protocols import APIKeyRateLimiter, GatewayDiscoveryProvider
@@ -193,7 +194,5 @@ async def discover_agents(
 
     return result
 
-
-from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 
 _mark_declared_owner(router, __name__)

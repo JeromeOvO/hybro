@@ -1,14 +1,15 @@
 import re
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum
 from typing import Any
 from uuid import uuid4
 
 from a2a.types import (
-    FileWithUri,
     FilePart,
+    FileWithUri,
     Message,
     Part,
     Role,
@@ -20,19 +21,18 @@ from a2a.types import (
     TextPart,
 )
 
+from common.dto import CreateRoomRequest, MembershipSeed, RoomInfo
 from common.utils.cancellation import CancellationToken
 from common.utils.context_utils import (
     build_context_for_agent,
     build_minimal_context,
     migrate_legacy_memory,
 )
-from common.dto import CreateRoomRequest, MembershipSeed, RoomInfo
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
-from dataclasses import dataclass
 from models.agent import AgentStatus
 from models.file_upload import MAX_ATTACHMENTS_PER_MESSAGE
-from models.memory import MemoryContent
+from models.memory import MemoryContent, RoomMemory
 from models.request import (
     AgentCenterRequest,
     RoomCenterAgentMessageRequest,
@@ -1219,7 +1219,6 @@ class RoomServices:
 
         for match in re.finditer(slack_pattern, message_text):
             agent_id = match.group(1).strip()
-            agent_name = match.group(2).strip()
             position = match.start()
 
             # Check if agent exists in room by agent_id
@@ -1368,7 +1367,7 @@ class RoomServices:
             context_groups[context]["mentions"].append(mention)
 
         # Detect consecutive mentions within each context
-        for context, group_info in context_groups.items():
+        for _context, group_info in context_groups.items():
             mentions_in_context = group_info["mentions"]
             if len(mentions_in_context) > 1:
                 all_have_position = all(
@@ -1695,7 +1694,6 @@ class RoomServices:
         for step_index, step in enumerate(task_steps, start=1):
             step_id = step.get("step_id")
             agent_id = step.get("agent_id")  # Can be None
-            agent_name = step.get("agent_name")  # Can be None
             task_content = step.get("task_content", "")
             dependencies = step.get("dependencies", [])
 
@@ -1909,7 +1907,11 @@ class RoomServices:
         Returns ``False`` if the pending clarification is stale, missing, or
         otherwise invalid — the caller should fall through to a fresh V2 run.
         """
-        from models.supervisor_v2 import RoomConfig, SupervisorTrajectory, TrajectoryStatus
+        from models.supervisor_v2 import (
+            RoomConfig,
+            SupervisorTrajectory,
+            TrajectoryStatus,
+        )
 
         original_msg = (
             await self.database_service.get_room_user_message_by_message_id(
@@ -3127,7 +3129,7 @@ class RoomServices:
                         message.message_id
                     )  # Start with user message ID
 
-                    for i, task_info in enumerate(tasks_group):
+                    for _i, task_info in enumerate(tasks_group):
                         agent_message = RoomAgentMessage(
                             room_id=room_id,
                             message_id=str(uuid4()),
@@ -3429,7 +3431,9 @@ class RoomServices:
 
                 if isinstance(room_memory_content, MemoryContent):
                     # Budget-aware context via ContextAssemblyService (§11.2)
-                    from services.context_assembly_service import context_assembly_service
+                    from services.context_assembly_service import (
+                        context_assembly_service,
+                    )
 
                     try:
                         result = context_assembly_service.build_agent_execution_context(
@@ -3844,7 +3848,9 @@ class RoomServices:
                             current_state,
                             real_state,
                         )
-                        from a2a_adapter.message_factory import from_sdk_task as _from_sdk_task
+                        from a2a_adapter.message_factory import (
+                            from_sdk_task as _from_sdk_task,
+                        )
                         msg.message_content.message_task = _from_sdk_task(real_task)
                         msg.task_updated_at = utcnow()
                         await self.database_service.update_room_agent_message_by_message_id(

@@ -6,7 +6,6 @@ from typing import Any
 from common.utils.cancellation import CancellationToken
 from services.sse_services import SSEConnection, SSEManager
 
-
 TERMINAL_STATUSES = {
     "completed",
     "failed",

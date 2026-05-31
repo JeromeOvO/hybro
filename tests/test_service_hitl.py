@@ -10,9 +10,9 @@ Tests cover:
 - SSE event emission
 """
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from execution.hitl.exceptions import (
     HITLConflictError,
@@ -21,12 +21,12 @@ from execution.hitl.exceptions import (
     HITLRoutingFailedError,
 )
 from models.hitl import (
+    HITLEventType,
+    HITLPromptType,
     HITLRequest,
     HITLStatus,
-    HITLPromptType,
-    HITLEventType,
 )
-from services.hitl_service import HITLService, MAX_HITL_ROUNDS
+from services.hitl_service import MAX_HITL_ROUNDS, HITLService
 
 
 class _AsyncCursor:
@@ -39,8 +39,8 @@ class _AsyncCursor:
     async def __anext__(self):
         try:
             return next(self._docs)
-        except StopIteration:
-            raise StopAsyncIteration
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
 
 
 # =============================================================================
@@ -142,7 +142,8 @@ def test_bound_hitl_service_proxy_raises_before_binding_and_forwards_after_bindi
 
     proxy = BoundHITLServiceProxy()
     with pytest.raises(RuntimeError):
-        proxy.recover_stale_processing
+        attr_name = "recover_stale_processing"
+        getattr(proxy, attr_name)
 
     target = MagicMock()
     target.recover_stale_processing = AsyncMock(return_value=3)

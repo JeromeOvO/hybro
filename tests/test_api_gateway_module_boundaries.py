@@ -1,7 +1,6 @@
 import ast
-from pathlib import Path
 import tomllib
-
+from pathlib import Path
 
 FORBIDDEN_API_GATEWAY_IMPORTS = (
     "database.mongodb",

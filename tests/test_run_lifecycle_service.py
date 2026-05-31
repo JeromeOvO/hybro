@@ -24,10 +24,9 @@ async def test_record_processing_status_skips_when_dual_write_disabled(monkeypat
 @pytest.mark.asyncio
 async def test_record_processing_status_dual_write_default_allows_calls(monkeypatch):
     monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
-    from services.a2a_constants import SSEProcessingStatus
-
     import services.run_command_handler as handler_mod
     import services.run_lifecycle_service as mod
+    from services.a2a_constants import SSEProcessingStatus
 
     fake_runs = MagicMock()
     fake_runs.find_one = AsyncMock(return_value=None)

@@ -1,5 +1,6 @@
+from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Any, AsyncIterator, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from common.dto import (
     FileInfo,

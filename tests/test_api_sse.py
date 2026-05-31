@@ -8,20 +8,18 @@ Tests cover:
 - Authorization checks
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 from api.sse import (
-    router,
-    stream_room_messages,
-    get_room_sse_status,
     cancel_message,
+    get_room_sse_status,
+    stream_room_messages,
 )
 from tests.conftest import PATCH
-
 
 # =============================================================================
 # SSE Stream Tests

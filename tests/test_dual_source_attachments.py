@@ -1,10 +1,14 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from models.file_upload import MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_REFS_PER_REQUEST
+import pytest
+
+from models.file_upload import (
+    MAX_ATTACHMENT_REFS_PER_REQUEST,
+    MAX_ATTACHMENTS_PER_MESSAGE,
+)
 from models.request import RoomCenterUserMessageRequest, UserAttachmentRequest
 from models.response import RoomCenterUserMessageResponse
-from models.room import MessageContent, RoomUserMessage, UserAttachment
+from models.room import MessageContent, RoomUserMessage
 from services.room_services import RoomServices
 
 

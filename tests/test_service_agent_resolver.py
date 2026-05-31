@@ -7,16 +7,15 @@ Tests cover:
 - resolve: empty candidates, sanitization fail-fast, health-check bypass
 """
 
-import pytest
-from time import monotonic
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from services.agent_resolver_service import (
-    _HealthCache,
     AgentResolverService,
     ResolveResult,
+    _HealthCache,
 )
-
 
 # =============================================================================
 # _HealthCache Tests

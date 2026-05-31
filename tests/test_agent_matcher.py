@@ -8,10 +8,11 @@ Tests:
 - AgentMatcher.match(): end-to-end pipeline integration
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from a2a.types import AgentCard, AgentCapabilities, AgentProvider, AgentSkill
+import pytest
+from a2a.types import AgentCapabilities, AgentCard, AgentProvider, AgentSkill
+
 from common.dto.agent import AgentInfo
 from models.agent import Agent, AgentStatus
 from services.agent_matcher import (
@@ -22,7 +23,6 @@ from services.agent_matcher import (
     compute_capability_score,
     select_top_agents,
 )
-
 
 # ---- Fixtures ----
 
@@ -432,6 +432,6 @@ async def test_agent_matcher_with_user_id():
     ])
     matcher = AgentMatcher(facade=facade)
 
-    result = await matcher.match("test", user_id="user123")
+    await matcher.match("test", user_id="user123")
 
     assert facade.match_for_message.call_args.kwargs["requesting_user_id"] == "user123"

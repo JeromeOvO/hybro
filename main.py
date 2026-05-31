@@ -6,14 +6,12 @@ import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from uvicorn.config import LOGGING_CONFIG
 
 import api_gateway
-from app_shell.api_key_auth import MongoAPIKeyAuthenticator
-from app_shell.health_check import AppShellHealthCheck, HealthCheck
 from api_gateway.dependencies import (
     APIGatewayDeps,
     bind_api_gateway_deps,
@@ -21,25 +19,53 @@ from api_gateway.dependencies import (
 )
 from api_gateway.routes import (
     a2a_task_routes as a2a_tasks,
+)
+from api_gateway.routes import (
     agent_group_routes as agent_group,
+)
+from api_gateway.routes import (
     agent_routes as agent,
+)
+from api_gateway.routes import (
     discovery_api_key_routes as discovery_api_keys,
+)
+from api_gateway.routes import (
     discovery_routes as discovery,
+)
+from api_gateway.routes import (
     files_routes as files,
+)
+from api_gateway.routes import (
     hitl_routes as hitl,
+)
+from api_gateway.routes import (
     hub_routes as hub,
+)
+from api_gateway.routes import (
     inspection_routes as inspection_center,
+)
+from api_gateway.routes import (
     memory_routes as memory_center,
-    orchestration_routes as orchestration_center,
+)
+from api_gateway.routes import (
     platform_gateway_routes as gateway,
+)
+from api_gateway.routes import (
     relay_routes as relay,
+)
+from api_gateway.routes import (
     room_routes as room_center,
+)
+from api_gateway.routes import (
     sse_routes as sse,
-    task_routes as task,
+)
+from api_gateway.routes import (
     webhook_routes as webhooks,
 )
 from api_gateway.viewsets import agent as agent_viewset
 from api_gateway.viewsets import base as viewset
+from app_shell.api_key_auth import MongoAPIKeyAuthenticator
+from app_shell.health_check import AppShellHealthCheck, HealthCheck
 from app_shell.viewset import AppShellViewSetRepositoryProvider
 from common.api_key_auth import bind_api_key_authenticator
 from common.auth import bind_auth_config
@@ -194,6 +220,8 @@ async def lifespan(app: FastAPI):
 
         if mongodb.client is not None:
             from a2a_adapter import AgentCardResolverImpl, AgentTransportImpl
+            from a2a_adapter import artifact_storage as a2a_artifact_storage
+            from common.utils.a2a_helpers import bind_a2a_artifact_storage
             from container import (
                 create_agent_deps,
                 create_context_memory_deps,
@@ -214,10 +242,15 @@ async def lifespan(app: FastAPI):
                 create_room_deps,
                 create_vector_dal,
             )
-            from a2a_adapter import artifact_storage as a2a_artifact_storage
-            from common.utils.a2a_helpers import bind_a2a_artifact_storage
             from context_memory.config import ContextMemoryLLMConfig
+            from database.mongodb import get_db
+            from database.repository import Repository
             from llm_gateway import LLMGatewayImpl, ModelRegistryImpl
+            from modules.AgentCenter import AgentCenter
+            from modules.InspectionCenter import InspectionCenter
+            from modules.MemoryCenter import MemoryCenter
+            from modules.RoomCenter import RoomCenter
+            from platform_module.rate_limit import PlatformAgentRateLimiter
             from services.agent_capability_issue_service import (
                 CapabilityIssueExclusionReader,
                 capability_issue_service,
@@ -228,10 +261,11 @@ async def lifespan(app: FastAPI):
             from services.agent_service import agent_service
             from services.compaction_service import compaction_service
             from services.context_assembly_service import context_assembly_service
+            from services.debate_service import debate_service
             from services.memory_search_service import memory_search_service
             from services.memory_service import room_memory_service
             from services.notification_service import notification_service
-            from services.debate_service import debate_service
+            from services.openai_service import openai_service
             from services.room_coordinator_service import room_coordinator_service
             from services.room_membership_source import LegacyRoomMembershipSeedSource
             from services.room_services import build_turn_content, room_services
@@ -239,16 +273,8 @@ async def lifespan(app: FastAPI):
                 SupervisorPlanningError,
                 room_supervisor_service,
             )
-            from services.task_service import task_service
-            from services.openai_service import openai_service
             from services.s3_service import s3_service
-            from modules.AgentCenter import AgentCenter
-            from modules.InspectionCenter import InspectionCenter
-            from modules.MemoryCenter import MemoryCenter
-            from modules.RoomCenter import RoomCenter
-            from database.mongodb import get_db
-            from database.repository import Repository
-            from platform_module.rate_limit import PlatformAgentRateLimiter
+            from services.task_service import task_service
 
             a2a_artifact_storage.bind_a2a_storage_dependencies(
                 storage_service=s3_service,
@@ -336,29 +362,32 @@ async def lifespan(app: FastAPI):
             app.state.delivery_facade = _delivery_facade
             app.state.delivery_deps = _delivery_deps
 
-            from execution.legacy_processing_status import (
-                LegacyProcessingStatusC3Adapter,
-                SSEClientRequestIdResolver,
-            )
-            from execution.events import (
-                emit_processing_status,
-                run_event_notification_from_payload,
-            )
-            from execution.dispatch.task_notifications import TaskNotificationAdapter
-            from execution.dispatch.response_handler import AgentResponseHandler
-            from execution.dispatch.transports.webhook import WebhookTransport
-            from execution.hitl.adapters import (
-                A2AHITLContinuationAdapter,
-                HITLTaskNotificationAdapter,
-            )
+            from a2a_adapter.task_status import coerce_task_state
             from execution.cancellation import (
                 AgentTaskCleanupAdapter,
                 CancellationStateC3Adapter,
                 HITLMessageCancellationAdapter,
                 MongoCancellationStoreAdapter,
             )
+            from execution.dispatch.response_handler import AgentResponseHandler
+            from execution.dispatch.task_notifications import TaskNotificationAdapter
+            from execution.dispatch.transports.webhook import WebhookTransport
+            from execution.events import (
+                emit_processing_status,
+                run_event_notification_from_payload,
+            )
+            from execution.hitl.adapters import (
+                A2AHITLContinuationAdapter,
+                HITLTaskNotificationAdapter,
+            )
+            from execution.legacy_processing_status import (
+                LegacyProcessingStatusC3Adapter,
+                SSEClientRequestIdResolver,
+            )
             from execution.orchestration.factory import (
                 create_room_message_center,
+            )
+            from execution.orchestration.factory import (
                 room_message_center as execution_room_message_center,
             )
             from execution.run_lifecycle import RunLifecycleAdapter
@@ -379,7 +408,6 @@ async def lifespan(app: FastAPI):
                 _notify_task_update_impl,
                 notify_task_update,
             )
-            from a2a_adapter.task_status import coerce_task_state
             room_center.bind_room_dependencies(
                 center=RoomCenter(),
                 database_service=_db_svc,
@@ -814,6 +842,9 @@ async def lifespan(app: FastAPI):
         await orphaned_upload_cleaner.start()
 
         # Initialize relay service
+        from app_shell.room_lock import RedisRoomDistributedLock
+        from execution.facade import hub_agent_response_internal_to_agent_event
+        from modules.RoomMessageCenter import room_message_center as _rmc
         from services.agent_liveness_service import (
             bind_agent_liveness_deps,
             check_and_sync_liveness,
@@ -823,9 +854,6 @@ async def lifespan(app: FastAPI):
             RelayHubLivenessReader,
             init_relay_service,
         )
-        from app_shell.room_lock import RedisRoomDistributedLock
-        from execution.facade import hub_agent_response_internal_to_agent_event
-        from modules.RoomMessageCenter import room_message_center as _rmc
         _rmc.set_room_distributed_lock(RedisRoomDistributedLock(_redis_service))
         _relay_svc = init_relay_service(
             mongo=mongodb, database_service=_db_svc, sse_manager=sse_manager,

@@ -1,11 +1,9 @@
 import json
-import os
-
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from services.openai_service import OpenAIService
+import pytest
 
+from services.openai_service import OpenAIService
 
 # ---------------------------------------------------------------------------
 # Fixtures & helpers

@@ -7,8 +7,9 @@ Tests cover:
 - Agent name resolution from agent_card fallback
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from services.notification_service import NotificationService
 

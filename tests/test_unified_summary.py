@@ -1,6 +1,6 @@
 """Tests for RoomMessageCenter._emit_unified_summary."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -23,7 +23,6 @@ def rmc():
 
 def _make_agent_message(agent_id, text, *, completed=True, extend_info=None):
     """Build a minimal RoomAgentMessage-like object for testing."""
-    from unittest.mock import MagicMock
     from a2a.types import TaskState
 
     msg = MagicMock()

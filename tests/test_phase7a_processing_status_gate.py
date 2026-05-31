@@ -17,7 +17,6 @@ from typing import Any
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "tests" / "fixtures" / "phase7a_processing_status_callers.json"
 PRODUCTION_ROOTS = ("modules", "services", "api", "jobs", "execution")

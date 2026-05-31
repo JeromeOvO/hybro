@@ -18,14 +18,17 @@ from typing import TYPE_CHECKING
 
 from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
+from execution.dispatch.dispatch_middleware import DispatchChain, DispatchContext
 from models.processing import ProcessingResult, ProcessingStatus
 from models.request import RoomCenterAgentMessageRequest
 from models.room import RoomAgentMessage
-from execution.dispatch.dispatch_middleware import DispatchChain, DispatchContext
 
 if TYPE_CHECKING:
-    from models.agent import Agent
     from execution.dispatch.transports.base import AgentTransport
+    from models.agent import Agent
+    from services.database_service import DatabaseService
+    from services.room_services import RoomServices
+    from services.sse_services import SSEManager
 
 logger = get_logger(__name__)
 

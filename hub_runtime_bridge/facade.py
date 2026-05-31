@@ -10,8 +10,8 @@ from common.dto import (
     HubDispatchCommand,
     HubDispatchResult,
     HubInfo,
-    OfflineHubFailureCommand,
     HubReplyCommand,
+    OfflineHubFailureCommand,
 )
 from common.utils.time import utcnow
 from hub_runtime_bridge.config import HubRuntimeBridgeConfig
@@ -26,8 +26,12 @@ from hub_runtime_bridge.service.hub_connection import HubConnectionService
 from hub_runtime_bridge.service.hub_liveness import HubLivenessService
 from hub_runtime_bridge.service.hub_publish import HubPublishService
 from hub_runtime_bridge.service.hub_relay import HubRelayService
-from hub_runtime_bridge.service.hub_response_replay_worker import HubResponseReplayWorker
-from hub_runtime_bridge.service.ownership_lease_maintainer import OwnershipLeaseMaintainer
+from hub_runtime_bridge.service.hub_response_replay_worker import (
+    HubResponseReplayWorker,
+)
+from hub_runtime_bridge.service.ownership_lease_maintainer import (
+    OwnershipLeaseMaintainer,
+)
 from hub_runtime_bridge.task_ownership import (
     InMemoryHubTaskOwnershipStore,
     MongoHubTaskOwnershipStore,
@@ -233,7 +237,7 @@ class HubFacade:
                             queue.get(),
                             timeout=self.deps.config.heartbeat_interval_seconds,
                         )
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         yield {"type": "heartbeat", "timestamp": utcnow().isoformat()}
                         continue
                     if event.get("type") == "_disconnect":

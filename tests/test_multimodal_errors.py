@@ -1,7 +1,8 @@
 import base64
 import io
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from botocore.exceptions import ClientError
 
 from services.s3_service import S3Service
@@ -92,8 +93,8 @@ class TestSharedInlineConversionCap:
     MAX_INLINE_CONVERSIONS_PER_MESSAGE."""
 
     async def test_total_conversions_respect_cap_across_both_paths(self):
-        from modules.transports.direct import DirectTransport, MessageStreamingState
         from models.file_upload import MAX_INLINE_CONVERSIONS_PER_MESSAGE
+        from modules.transports.direct import DirectTransport, MessageStreamingState
 
         upload_calls: list[str] = []
 
@@ -122,7 +123,8 @@ class TestSharedInlineConversionCap:
         # --- Phase 1: simulate artifact-update consuming (cap - 2) conversions ---
         streaming_state = MessageStreamingState()
 
-        from a2a.types import Artifact as A2AArtifact, FilePart, FileWithBytes, Part
+        from a2a.types import Artifact as A2AArtifact
+        from a2a.types import FilePart, FileWithBytes, Part
 
         for idx in range(cap - 2):
             fp = FilePart(file=FileWithBytes(bytes=raw_b64, mime_type="image/png"))
@@ -168,8 +170,8 @@ class TestSharedInlineConversionCap:
 
 class TestMissingFileId:
     async def test_resolve_attachments_missing_file(self):
-        from services.room_services import RoomServices
         from models.response import RoomCenterUserMessageResponse
+        from services.room_services import RoomServices
 
         svc = RoomServices()
         svc.database_service = MagicMock()

@@ -1,13 +1,13 @@
 from common.protocols.a2a_protocols import AgentCardResolver, AgentTransport
 from common.protocols.agent_protocols import (
     AgentAvatarManager,
+    AgentCallCounter,
     AgentExclusionReader,
     AgentManagement,
     AgentMatcher,
     AgentMessageMatcher,
     AgentRegistry,
     AgentRegistryWriter,
-    AgentCallCounter,
     HubAgentStatusReader,
 )
 from common.protocols.context_memory_protocols import (
@@ -36,8 +36,8 @@ from common.protocols.execution_protocols import (
     RoomDistributedLock,
 )
 from common.protocols.hub_protocols import (
-    HubDispatchPort,
     HubDispatchPolicy,
+    HubDispatchPort,
     HubInternalResponseDispatcher,
     HubLivenessReader,
     HubManagement,
@@ -71,12 +71,12 @@ from common.protocols.repository_protocols import (
     RunRepository,
 )
 from common.protocols.room_protocols import (
-    RoomHistoryReader,
     HubPublishAuthorizationReader,
     HubPublishLineageReader,
     MessageCancellationReader,
-    RoomManagement,
     RoomAgentTaskTracker,
+    RoomHistoryReader,
+    RoomManagement,
     RoomMembershipSeedSource,
     RoomMessageStore,
     RoomOwnershipReader,

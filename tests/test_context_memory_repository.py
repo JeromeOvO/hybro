@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -967,7 +967,7 @@ async def test_content_upsert_and_get(content_repo):
         content="hello",
         content_type="text",
         content_hash="hash",
-        stored_at=datetime.now(timezone.utc),
+        stored_at=datetime.now(UTC),
     )
 
     assert stored == "doc1"
@@ -976,8 +976,8 @@ async def test_content_upsert_and_get(content_repo):
 
 @pytest.mark.asyncio
 async def test_content_upsert_replaces_existing_content_and_expiry(content_repo):
-    first_expiry = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    second_expiry = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    first_expiry = datetime(2026, 1, 1, tzinfo=UTC)
+    second_expiry = datetime(2026, 1, 2, tzinfo=UTC)
 
     await content_repo.upsert_full_content(
         document_id="doc-old",
@@ -1080,7 +1080,7 @@ async def test_content_hydrate_turn_notes_filters_expired_documents(content_repo
             "room_id": "r1",
             "turn_id": "expired",
             "turn_notes": {"one_liner": "expired"},
-            "expires_at": datetime.now(timezone.utc) - timedelta(days=1),
+            "expires_at": datetime.now(UTC) - timedelta(days=1),
         }
     )
     await coll.insert_one(
@@ -1088,7 +1088,7 @@ async def test_content_hydrate_turn_notes_filters_expired_documents(content_repo
             "room_id": "r1",
             "turn_id": "active",
             "turn_notes": {"one_liner": "active"},
-            "expires_at": datetime.now(timezone.utc) + timedelta(days=1),
+            "expires_at": datetime.now(UTC) + timedelta(days=1),
         }
     )
 

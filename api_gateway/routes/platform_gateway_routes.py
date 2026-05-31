@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.params import Depends as DependsParam
 from fastapi.responses import StreamingResponse
 
+from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.api_key_auth import get_api_key
 from common.dto import GatewayResponse, InternalAgentMessage
 from common.errors import GatewayPlatformError, PlatformRouteError
@@ -279,7 +280,5 @@ async def gateway_get_card(
     await _record_request(rate_limiter, api_key)
     return GatewayCardResponse(agent_id=agent_id, agent_card=_gateway_payload(card))
 
-
-from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 
 _mark_declared_owner(router, __name__)

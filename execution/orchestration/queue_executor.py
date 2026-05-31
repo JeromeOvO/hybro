@@ -20,18 +20,26 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from a2a_adapter.task_status import coerce_task_state
+from common.a2a_constants import SSEProcessingStatus
 from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
-from models.room import RoomAgentMessage
 from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
+from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
 from execution.state.task_state_manager import TaskStateManager
 from models.processing import ProcessingResult, ProcessingStatus
-from common.a2a_constants import SSEProcessingStatus
-from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
+from models.room import RoomAgentMessage
 
 if TYPE_CHECKING:
+    from services.rate_limit_service import RateLimitService
+
     from execution.dispatch.response_handler import AgentResponseHandler
+    from services.a2a_service import A2AService
+    from services.database_service import DatabaseService
+    from services.debate_service import DebateService
+    from services.memory_service import RoomMemoryService
+    from services.room_services import RoomServices
+    from services.sse_services import SSEManager
 
 logger = get_logger(__name__)
 

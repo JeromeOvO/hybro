@@ -14,7 +14,6 @@ from common.utils.context_utils import (
     extract_turn_notes,
 )
 from common.utils.logger import get_logger
-
 from context_memory.config import ContextMemoryLLMConfig
 
 logger = get_logger(__name__)

@@ -8,10 +8,11 @@ Covers:
 - Scope: all_agents + debate bypasses LLM selector
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modules.SupervisorExecutor import SupervisorExecutor
+import pytest
+
+from common.utils.time import utcnow
 from models.supervisor_v2 import (
     ActionType,
     AgentProfile,
@@ -20,13 +21,11 @@ from models.supervisor_v2 import (
     RunStatus,
     StepStatus,
     SupervisorAction,
-    SupervisorRunResult,
     SupervisorTrajectory,
     TrajectoryEntry,
     V2StepResult,
 )
-from common.utils.time import utcnow
-
+from modules.SupervisorExecutor import SupervisorExecutor
 
 # ---------------------------------------------------------------------------
 # Fixtures

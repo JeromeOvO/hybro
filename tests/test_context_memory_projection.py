@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from context_memory.config import ContextMemoryLLMConfig
 from context_memory import projection
+from context_memory.config import ContextMemoryLLMConfig
 from context_memory.translators import normalize_room_memory
 
-
-NOW = datetime(2026, 5, 13, tzinfo=timezone.utc)
+NOW = datetime(2026, 5, 13, tzinfo=UTC)
 
 
 class StateMemoryRepository:

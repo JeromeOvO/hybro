@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 import hashlib
 import re
+from collections.abc import Awaitable, Callable
 
 RESERVED_SUBDOMAINS = frozenset({
     "admin",

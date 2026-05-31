@@ -6,11 +6,12 @@ Tests cover:
 - inspect_a2a_connection: validation, delegation to InspectionCenter
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 from fastapi import HTTPException
 
-from api.inspection_center import inspect_agent, inspect_a2a_connection
+from api.inspection_center import inspect_a2a_connection, inspect_agent
 
 
 class TestInspectAgent:

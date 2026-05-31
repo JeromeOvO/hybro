@@ -4,21 +4,25 @@ Tests for Supervisor V2 Improvements:
 - Part 2: SSE stage notifications in SupervisorExecutor
 """
 
-import pytest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from models.supervisor_v2 import (
     ActionType,
+    AgentProfile,
+    DelegateTarget,
+    RoomConfig,
+    RunStatus,
+    StepStatus,
     SupervisorAction,
     SupervisorTrajectory,
     TrajectoryEntry,
     V2StepResult,
-    DelegateTarget,
-    StepStatus,
 )
+from modules.SupervisorExecutor import SupervisorExecutor
 from services.room_supervisor_service import RoomSupervisorService
-
 
 # =============================================================================
 # Part 1a: Trajectory response preview (3000-char cap)
@@ -32,7 +36,7 @@ class TestTrajectoryResponsePreview:
         trajectory = SupervisorTrajectory()
         entry = TrajectoryEntry(
             step_number=1,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             action=SupervisorAction(
                 action=ActionType.DELEGATE,
                 reasoning="test",
@@ -119,15 +123,6 @@ class TestQualityEvaluationPrompt:
 # =============================================================================
 # Part 2: SSE stage notifications in SupervisorExecutor
 # =============================================================================
-
-from modules.SupervisorExecutor import SupervisorExecutor
-from models.supervisor_v2 import (
-    SupervisorRunResult,
-    RunStatus,
-    TrajectoryStatus,
-    RoomConfig,
-    AgentProfile,
-)
 
 
 def _make_executor() -> SupervisorExecutor:

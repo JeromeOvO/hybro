@@ -4,6 +4,7 @@ from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Re
 from fastapi.params import Depends as DependsParam
 from fastapi.responses import JSONResponse
 
+from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from app_shell.bound import LegacyWorkflowCenter
 from common.auth import ClerkUser, get_current_user
 from models.request import OrchestrationRequest
@@ -140,7 +141,5 @@ async def process_room_user_message(
     """
     return _legacy_workflow_gone()
 
-
-from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 
 _mark_declared_owner(router, __name__)

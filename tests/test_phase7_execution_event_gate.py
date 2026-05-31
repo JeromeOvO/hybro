@@ -1,6 +1,6 @@
-from datetime import datetime, timezone
 import ast
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -16,8 +16,7 @@ from execution.events import (
 )
 from execution.legacy_processing_status import SSEClientRequestIdResolver
 
-
-NOW = datetime(2026, 5, 17, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
 ROOT = Path(__file__).resolve().parents[1]
 
 

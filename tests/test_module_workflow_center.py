@@ -10,15 +10,13 @@ Tests cover:
 """
 
 import json
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-
 from a2a.types import Task, TaskState, TaskStatus
 
 from models.request import OrchestrationRequest
-from models.response import OrchestrationResponse
-from models.task import MetaTask, TaskDefaultValue
+from models.task import MetaTask
 from modules.WorkflowCenter import WorkflowCenter
 
 
@@ -136,7 +134,8 @@ class TestDecomposeTask:
         )
         wc.openai_service.decompose_task = AsyncMock(return_value=decompose_response)
 
-        from a2a.types import Message as SdkMessage, TextPart as SdkTextPart
+        from a2a.types import Message as SdkMessage
+        from a2a.types import TextPart as SdkTextPart
 
         new_task = _a2a_task(task_id="new-t")
         wc.task_service.create_a2a_task = AsyncMock(return_value=new_task)

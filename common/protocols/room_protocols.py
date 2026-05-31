@@ -2,8 +2,8 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from common.dto import (
-    AgentMessageInput,
     AgentInfo,
+    AgentMessageInput,
     CreateRoomRequest,
     HubPublishLineageSnapshot,
     MembershipUpdateRequest,

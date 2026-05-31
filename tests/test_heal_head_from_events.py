@@ -1,6 +1,6 @@
 """Tests for RunCommandHandler.heal_head_from_events and watchdog integration."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -37,7 +37,7 @@ def _make_event(
         "seq": seq,
         "type": event_type,
         "payload": payload or {},
-        "ts": datetime(2025, 6, 1, tzinfo=timezone.utc),
+        "ts": datetime(2025, 6, 1, tzinfo=UTC),
     }
 
 

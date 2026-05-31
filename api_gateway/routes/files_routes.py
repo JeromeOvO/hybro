@@ -3,6 +3,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.params import Depends as DependsParam
 
+from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
 from common.errors import FileStoragePlatformError
 from common.protocols import FileStorage, RoomOwnershipReader
@@ -91,7 +92,5 @@ async def upload_file(
         size_bytes=uploaded.size_bytes,
     )
 
-
-from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 
 _mark_declared_owner(router, __name__)

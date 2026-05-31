@@ -10,35 +10,32 @@ Tests cover:
 - Authorization checks
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 
-from common.dto import ExecutionAck, RunInfo
 from api.room_center import (
-    verify_room_ownership,
+    create_and_parse_user_message,
     create_new_room,
     inquiry_active_runs,
+    inquiry_room_messages,
     inquiry_room_setting,
     inquiry_rooms_by_room_owner_id,
-    update_room_agent_set,
-    update_room_name,
-    update_room_extend_info,
-    create_and_parse_user_message,
-    inquiry_room_messages,
     send_message,
     suggest_agents,
+    update_room_agent_set,
+    update_room_extend_info,
+    update_room_name,
+    verify_room_ownership,
+)
+from common.dto import ExecutionAck, RunInfo
+from models.response import (
+    RoomCenterRoomMessageResponse,
+    RoomCenterRoomSettingResponse,
 )
 from modules.RoomCenter import RoomCenter
-from models.room import Room
-from models.response import (
-    RoomCenterRoomSettingResponse,
-    RoomCenterUserMessageResponse,
-    RoomCenterRoomMessageResponse,
-)
 from tests.conftest import PATCH
-
 
 # =============================================================================
 # Room Ownership Verification Tests
@@ -174,7 +171,7 @@ class TestCreateNewRoom:
         mock_room_center.create_new_room.return_value = expected_response
         
         with patch(PATCH["room_center.room_center"], mock_room_center):
-            response = await create_new_room(mock_request, mock_user)
+            await create_new_room(mock_request, mock_user)
         
         call_args = mock_room_center.create_new_room.call_args[0][0]
         assert call_args.applied_from_group == "group-123"

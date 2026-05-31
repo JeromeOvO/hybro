@@ -12,35 +12,33 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6 for design specification.
 """
 
 import asyncio
+from datetime import datetime
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 import pytest
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
 
 from common.dto import CompactionResult as DtoCompactionResult
 from common.utils.time import utcnow
 from models.compaction import (
     ContentReference,
     StorageType,
-    StoredContent,
 )
 from models.memory import (
-    ConversationTurn,
     ContentType,
+    ConversationTurn,
     MemoryContent,
     RoomMemory,
     TurnRepresentation,
     TurnRole,
 )
-from services.compaction_service import (
-    CompactionService,
-)
 from platform_module.content_storage import (
     ContentExpiredError,
     hash_content,
 )
-
+from services.compaction_service import (
+    CompactionService,
+)
 
 # =============================================================================
 # Test Fixtures
@@ -1523,7 +1521,7 @@ class TestCompactTurnEviction:
         the summary should contain the brief_summary + pointer, not
         '[content unavailable]'.
         """
-        from common.utils.context_utils import add_turn_to_history, MAX_HISTORY_TURNS
+        from common.utils.context_utils import MAX_HISTORY_TURNS, add_turn_to_history
 
         memory = MemoryContent()
 

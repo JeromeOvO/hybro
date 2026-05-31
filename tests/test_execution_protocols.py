@@ -4,8 +4,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from common.dto import AgentEvent, ExecutionAck, ExecutionRequest, HITLRequest, RunInfo
 
+from common.dto import AgentEvent, ExecutionAck, ExecutionRequest, HITLRequest, RunInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -353,7 +353,6 @@ def test_room_message_center_constructor_requires_explicit_dependencies():
 
 
 def test_room_message_center_uses_common_room_lock_protocol():
-    import inspect
     from pathlib import Path
     from typing import get_type_hints
 
@@ -373,7 +372,6 @@ def test_room_message_center_uses_common_room_lock_protocol():
 
 
 def test_app_shell_room_lock_uses_public_redis_protocol_surface():
-    import inspect
     from pathlib import Path
     from typing import get_type_hints
 

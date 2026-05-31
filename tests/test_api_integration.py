@@ -6,17 +6,16 @@ these tests use AsyncClient to verify that auth, request parsing, response
 serialization, and error handling all work through the HTTP transport layer.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from httpx import AsyncClient, ASGITransport
+import pytest
+from httpx import ASGITransport, AsyncClient
 
 from common.auth import ClerkUser, get_current_user, get_optional_user
 from models.response import (
     AgentCenterResponse,
-    RoomCenterRoomSettingResponse,
-    RoomCenterUserMessageResponse,
     RoomCenterRoomMessageResponse,
+    RoomCenterRoomSettingResponse,
 )
 from tests.conftest import PATCH
 

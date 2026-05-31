@@ -205,7 +205,7 @@ def sanitize_agent_data(agent_data: dict[str, Any]) -> dict[str, Any]:
         if isinstance(obj, dict):
             if "values" in obj and not isinstance(obj["values"], list):
                 obj["values"] = []
-            for key, value in obj.items():
+            for _key, value in obj.items():
                 fix_nested_values(value)
         elif isinstance(obj, list):
             for item in obj:

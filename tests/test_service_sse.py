@@ -8,14 +8,13 @@ Tests cover:
 - SSEManager: add_connection/remove_connection/broadcast_to_room
 """
 
-import asyncio
 import json
-import pytest
 from unittest.mock import AsyncMock
 
-from services.sse_services import SSEConnection, SSEManager
-from tests.delivery_adapter_fakes import make_bound_manager
+import pytest
 
+from services.sse_services import SSEConnection
+from tests.delivery_adapter_fakes import make_bound_manager
 
 # =============================================================================
 # SSEConnection Tests
@@ -89,7 +88,7 @@ class TestSSEManagerCancellation:
 
     def test_clear_also_removes_token(self):
         mgr = make_bound_manager()
-        token = mgr.create_token("msg-1")
+        mgr.create_token("msg-1")
         mgr.clear_cancellation("msg-1")
         assert mgr.get_token("msg-1") is None
 

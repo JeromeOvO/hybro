@@ -232,7 +232,7 @@ def test_delivery_package_skeleton_and_config_exports():
     assert policy.allow_degraded_change_stream is False
 
     assert issubclass(RoomSubscriptionLimitExceeded, RuntimeError)
-    assert hasattr(TaskRunner, "__call__")
+    assert callable(TaskRunner)
 
 
 @pytest.mark.parametrize(

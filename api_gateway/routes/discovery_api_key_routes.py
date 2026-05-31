@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.params import Depends as DependsParam
 from loguru import logger
 
+from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.api_key_auth import hash_api_key
 from common.auth import ClerkUser, get_current_user
 from common.protocols import APIKeyStore
@@ -197,7 +198,5 @@ async def deactivate_api_key(
             detail={"error": "internal_error", "message": "Failed to deactivate API key"},
         ) from e
 
-
-from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 
 _mark_declared_owner(router, __name__)

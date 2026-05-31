@@ -9,12 +9,12 @@ Tests cover:
 """
 
 import ast
-import pytest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from modules.SupervisorExecutor import SupervisorExecutor
+import pytest
+
 from models.supervisor_v2 import (
     ActionType,
     AgentProfile,
@@ -28,6 +28,7 @@ from models.supervisor_v2 import (
     SupervisorTrajectory,
     V2StepResult,
 )
+from modules.SupervisorExecutor import SupervisorExecutor
 
 _ROOT = Path(__file__).resolve().parents[1]
 
@@ -192,7 +193,9 @@ class TestClarifyCleanupCompensation:
         """If all questions are created but continuation save fails,
         all HITL requests and messages must be cleaned up."""
         from models.supervisor_v2 import (
-            SupervisorAction, ActionType, ClarifyQuestion,
+            ActionType,
+            ClarifyQuestion,
+            SupervisorAction,
         )
 
         req_a = MagicMock()
@@ -242,7 +245,9 @@ class TestClarifyCleanupCompensation:
         """If request_input returns None mid-group (e.g. max rounds),
         previously created requests must be canceled."""
         from models.supervisor_v2 import (
-            SupervisorAction, ActionType, ClarifyQuestion,
+            ActionType,
+            ClarifyQuestion,
+            SupervisorAction,
         )
 
         req_a = MagicMock()

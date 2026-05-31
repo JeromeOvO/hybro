@@ -8,6 +8,7 @@ See docs/HITL_DESIGN.md §7.4 for design details.
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
 from common.protocols import HITLManager, RoomOwnershipReader
 from models.hitl import HITLResponseRequest
@@ -126,7 +127,5 @@ async def cancel_hitl_request(
         _raise_http_for_hitl_error(exc)
     return {"status": "canceled"}
 
-
-from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 
 _mark_declared_owner(router, __name__)

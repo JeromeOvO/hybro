@@ -15,15 +15,14 @@ from __future__ import annotations
 import inspect
 import re
 from datetime import timedelta
-from typing import TYPE_CHECKING
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from execution.hitl.exceptions import (
     ContinuationLostError,
-    HITLError,
     HITLConflictError,
+    HITLError,
     HITLNotFoundError,
     HITLRoomMismatchError,
     HITLRoutingFailedError,

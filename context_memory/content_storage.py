@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from common.protocols import ContentStorageRepository
-
 from context_memory.config import CompactionConfig
 
 
@@ -79,14 +78,14 @@ def is_content_expired(doc: dict[str, Any], *, now: datetime | None = None) -> b
     expires_at = doc.get("expires_at")
     if not isinstance(expires_at, datetime):
         return False
-    reference = now or datetime.now(timezone.utc)
+    reference = now or datetime.now(UTC)
     return _as_utc_aware(expires_at) <= _as_utc_aware(reference)
 
 
 def _as_utc_aware(value: datetime) -> datetime:
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def compact_pointer(content_ref: dict[str, Any]) -> str:

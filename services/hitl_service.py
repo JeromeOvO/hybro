@@ -1,14 +1,14 @@
 import sys
 
 from execution.hitl import service as _impl
+from execution.hitl.factory import create_hitl_service
 from execution.hitl.service import (
+    MAX_HITL_ROUNDS,
     BoundHITLServiceProxy,
     ContinuationLostError,
     HITLService,
-    MAX_HITL_ROUNDS,
     hitl_service,
 )
-from execution.hitl.factory import create_hitl_service
 
 
 def bind_hitl_service(service: HITLService) -> None:

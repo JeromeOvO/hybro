@@ -5,7 +5,13 @@ from api_gateway.viewsets import base as viewset
 from api_gateway.viewsets.base import REPO_ACTIONS_MAP
 from app_shell.bound import EmbeddingProvider, VectorIndex
 from common.auth import ClerkUser, get_current_user, get_optional_user
-from models.request import AgentCreate, AgentPatch, AgentUpdate, FilterParams, PaginationParams
+from models.request import (
+    AgentCreate,
+    AgentPatch,
+    AgentUpdate,
+    FilterParams,
+    PaginationParams,
+)
 from models.response import AgentResponse, PaginatedResponse, PaginationMeta
 
 embedding_provider: EmbeddingProvider | None = None

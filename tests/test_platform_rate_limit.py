@@ -1,12 +1,11 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 
 from common.dto import RateLimitResult
 
-
-NOW = datetime(2026, 5, 19, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 5, 19, 12, 0, tzinfo=UTC)
 
 
 class InMemoryRateLimitCollection:
@@ -48,7 +47,7 @@ class InMemoryRateLimitCollection:
             return value
         if value.tzinfo is None:
             return value
-        return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.astimezone(UTC).replace(tzinfo=None)
 
 
 class BoolRaisingRateLimitCollection(InMemoryRateLimitCollection):
@@ -59,8 +58,8 @@ class BoolRaisingRateLimitCollection(InMemoryRateLimitCollection):
 @pytest.mark.asyncio
 async def test_rate_limiters_accept_collections_without_truth_value_testing():
     from platform_module.rate_limit import (
-        PlatformAPIKeyRateLimiter,
         PlatformAgentRateLimiter,
+        PlatformAPIKeyRateLimiter,
         PlatformProtocolRateLimiter,
     )
 

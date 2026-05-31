@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from common.utils.context_utils import MAX_CONTEXT_CHARS, estimate_tokens
 from common.utils.logger import get_logger
-
 from context_memory.config import TokenBudgetConfig
 from context_memory.models import AssemblyResult, ConversationTurnData, TruncationReason
 from context_memory.translators import assemble_context_dto, normalize_room_memory

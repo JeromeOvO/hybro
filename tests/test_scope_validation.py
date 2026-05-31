@@ -9,18 +9,17 @@ Covers:
 - _resolve_room_agent_refs marks private agents as inaccessible for non-owners
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from models.agent import Agent, AgentStatus
 from models.response import (
     RoomCenterUserMessageResponse,
-    RoomAgentRef,
     ScopeResolutionError,
 )
-from models.room import Room, RoomUserMessage, MessageContent
+from models.room import Room
 from services.room_services import RoomServices
-from a2a.types import AgentCard, AgentCapabilities
 
 HITL_PATCH = "services.room_services.hitl_service"
 

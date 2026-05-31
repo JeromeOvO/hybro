@@ -6,11 +6,12 @@ Tests cover:
 - _resolve_allowed_agent_ids: group normalization and merging
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from modules.AgentDispatcher import AgentDispatcher
+import pytest
+
 from models.room import RoomAgentMessage
+from modules.AgentDispatcher import AgentDispatcher
 
 
 def _make_dispatcher():

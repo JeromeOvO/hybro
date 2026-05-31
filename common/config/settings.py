@@ -3,7 +3,6 @@ import os
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
-
 PINECONE_INDEX_NAME_DEFAULT = "agentmatch"
 PINECONE_API_KEY_DEFAULT = ""
 MEMORY_SEARCH_INDEX_NAME_DEFAULT = "room-memory"

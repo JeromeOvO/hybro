@@ -37,7 +37,7 @@ async def run_migration():
     # (has memory_text but no conversation_history)
     legacy_query = {
         "$and": [
-            {"memory_content.memory_text": {"$exists": True, "$ne": None, "$ne": ""}},
+            {"memory_content.memory_text": {"$exists": True, "$nin": [None, ""]}},
             {
                 "$or": [
                     {"memory_content.conversation_history": {"$exists": False}},
@@ -92,7 +92,7 @@ async def run_migration():
             failed_count += 1
             print(f"Error migrating room {room_id}: {e}")
 
-    print(f"\n=== Migration Complete ===")
+    print("\n=== Migration Complete ===")
     print(f"Total found: {total_count}")
     print(f"Successfully migrated: {migrated_count}")
     print(f"Failed: {failed_count}")
@@ -113,7 +113,7 @@ async def dry_run():
 
     legacy_query = {
         "$and": [
-            {"memory_content.memory_text": {"$exists": True, "$ne": None, "$ne": ""}},
+            {"memory_content.memory_text": {"$exists": True, "$nin": [None, ""]}},
             {
                 "$or": [
                     {"memory_content.conversation_history": {"$exists": False}},
@@ -125,7 +125,7 @@ async def dry_run():
     }
 
     total_count = await collection.count_documents(legacy_query)
-    print(f"\n=== Dry Run ===")
+    print("\n=== Dry Run ===")
     print(f"Found {total_count} room memories that would be migrated")
 
     # Show sample

@@ -5,8 +5,10 @@ manager with automatic renewal.
 """
 
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from infrastructure.leader_election import LeaderElection
 
 

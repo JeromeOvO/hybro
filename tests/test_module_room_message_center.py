@@ -10,24 +10,23 @@ Tests cover:
 
 import ast
 import asyncio
-import pytest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from a2a.types import TaskState
-from common.a2a_constants import CommonTaskState
-from modules.RoomMessageCenter import RoomMessageCenter
+
+from common.a2a_constants import CommonTaskState, SSEProcessingStatus
 from models.supervisor_v2 import (
+    ActionType,
+    StepStatus,
+    SupervisorAction,
     SupervisorTrajectory,
     TrajectoryEntry,
-    SupervisorAction,
-    ActionType,
     V2StepResult,
-    StepStatus,
 )
-from common.a2a_constants import SSEProcessingStatus
-
+from modules.RoomMessageCenter import RoomMessageCenter
 
 # =============================================================================
 # _validate_room_message_request Tests

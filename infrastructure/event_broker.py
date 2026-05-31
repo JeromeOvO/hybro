@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
+from collections.abc import Awaitable, Callable
+from typing import Any, Protocol, runtime_checkable
 
 # Type alias for the async handler callback
 MessageHandler = Callable[[dict[str, Any]], Awaitable[None]]

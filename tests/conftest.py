@@ -9,26 +9,32 @@ This module provides:
 - Centralized patch targets for maintainability
 """
 
-import pytest
 from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from a2a.types import AgentCard, AgentSkill, AgentCapabilities, Task, TaskStatus, TaskState
-
-from common.auth import ClerkUser, get_current_user, get_optional_user
-from models.agent import Agent, AgentStatus
-from models.room import Room, RoomUserMessage, RoomAgentMessage, MessageContent
-from models.memory import (
-    RoomMemory,
-    MemoryContent,
-    ConversationTurn,
-    TurnRole,
-    TurnRepresentation,
-    ContentType,
+import pytest
+from a2a.types import (
+    AgentCapabilities,
+    AgentCard,
+    AgentSkill,
+    Task,
+    TaskState,
+    TaskStatus,
 )
-from models.hitl import HITLRequest, HITLStatus, HITLPromptType
 
+from common.auth import ClerkUser
+from models.agent import Agent, AgentStatus
+from models.hitl import HITLPromptType, HITLRequest, HITLStatus
+from models.memory import (
+    ContentType,
+    ConversationTurn,
+    MemoryContent,
+    RoomMemory,
+    TurnRepresentation,
+    TurnRole,
+)
+from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 
 FROZEN_TIME = datetime(2026, 1, 15, 12, 0, 0)
 
@@ -588,6 +594,7 @@ def patch_sse_deps(mock_db_service, mock_sse_manager, mock_mongodb, mock_hitl_se
 def patch_room_center_deps(mock_db_service, mock_room_center):
     """Patch all room center endpoint dependencies at once."""
     from contextlib import ExitStack
+
     from common.dto import ExecutionAck
     with ExitStack() as stack:
         stack.enter_context(patch(PATCH["room_center.db_service"], mock_db_service))

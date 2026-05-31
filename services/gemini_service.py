@@ -3,15 +3,14 @@ import os
 import uuid
 from typing import Any
 
+from a2a.types import Message, Part, Role, Task, TaskState, TaskStatus, TextPart
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-load_dotenv()
-
-from a2a.types import Message, Part, Role, Task, TaskState, TaskStatus, TextPart
-
 from common.utils.time import utcnow
+
+load_dotenv()
 
 
 class GeminiService:

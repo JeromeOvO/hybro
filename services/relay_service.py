@@ -138,7 +138,7 @@ class _RelayCancellationReader:
 class _LegacyPublishSink:
     def __init__(
         self,
-        relay: "RelayService",
+        relay: RelayService,
         *,
         response_converter: Callable[[Any], Any] | None = None,
     ) -> None:

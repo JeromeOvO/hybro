@@ -8,7 +8,6 @@ from common.dto import (
     InternalAgentMessage,
 )
 
-
 TERMINAL_STATES = {"completed", "failed", "canceled", "cancelled", "rejected"}
 
 

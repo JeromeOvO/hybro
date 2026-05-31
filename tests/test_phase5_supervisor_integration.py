@@ -28,7 +28,6 @@ from models.memory import (
     RoomMemory,
     RoomSummary,
     TurnRole,
-    TurnRepresentation,
 )
 from models.supervisor_v2 import (
     ActionType,
@@ -39,7 +38,6 @@ from models.supervisor_v2 import (
     TrajectoryEntry,
     V2StepResult,
 )
-
 
 # =========================================================================
 # Fixtures
@@ -602,8 +600,8 @@ class TestPromptCacheOptimization:
     @pytest.mark.asyncio
     async def test_decide_next_includes_quoted_text_in_user_prompt(self):
         """decide_next() should include verbatim quoted text in the user prompt."""
-        from services.room_supervisor_service import RoomSupervisorService
         from models.supervisor_v2 import AgentProfile, RoomConfig, SupervisorTrajectory
+        from services.room_supervisor_service import RoomSupervisorService
 
         mock_openai = AsyncMock()
         service = RoomSupervisorService(openai_service=mock_openai)
@@ -646,12 +644,12 @@ class TestPromptCacheOptimization:
     @pytest.mark.asyncio
     async def test_decide_next_passes_context_to_system_prompt(self):
         """decide_next() should format conversation_context into system prompt."""
-        from services.room_supervisor_service import RoomSupervisorService
         from models.supervisor_v2 import (
             AgentProfile,
             RoomConfig,
             SupervisorTrajectory,
         )
+        from services.room_supervisor_service import RoomSupervisorService
 
         mock_openai = AsyncMock()
         service = RoomSupervisorService(openai_service=mock_openai)
@@ -667,12 +665,10 @@ class TestPromptCacheOptimization:
         room_config = RoomConfig(is_debate_mode=False)
         trajectory = SupervisorTrajectory()
 
-        valid_json = '{"action":"done","reasoning":"test","targets":[],"synthesis_instruction":null,"clarification_question":null}'
-
         with patch.object(service, "_call_supervisor_llm", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = {"action": "done", "reasoning": "test", "targets": [], "synthesis_instruction": None, "clarification_question": None}
 
-            action = await service.decide_next(
+            await service.decide_next(
                 message_text="Test message",
                 agent_registry=agents,
                 room_config=room_config,
@@ -736,7 +732,6 @@ class TestCompactionTrigger:
         rmc.database_service.cancel_descendants.return_value = None
         rmc.database_service.cancel_agent_messages_by_ids.return_value = None
 
-        from modules.RoomMessageCenter import RunStatus
 
         mock_memory_service = AsyncMock()
         mock_memory_service.add_synthesis_to_history.return_value = "turn_synth_123"
@@ -1018,6 +1013,7 @@ class TestTrajectoryStatusSerialization:
     def test_enum_status_serializes_without_warning(self):
         """model_dump(mode='json') with enum status should not warn."""
         import warnings
+
         from models.supervisor_v2 import (
             SupervisorTrajectory,
             TrajectoryStatus,
@@ -1043,6 +1039,7 @@ class TestTrajectoryStatusSerialization:
     def test_all_statuses_roundtrip_cleanly(self, status):
         """Every TrajectoryStatus value should serialize and deserialize."""
         import warnings
+
         from models.supervisor_v2 import (
             SupervisorTrajectory,
             TrajectoryStatus,
@@ -1069,6 +1066,7 @@ class TestTrajectoryStatusSerialization:
         """Assigning a raw string (not enum) to status should trigger a
         Pydantic serialization warning — proving the old code was broken."""
         import warnings
+
         from models.supervisor_v2 import SupervisorTrajectory
 
         trajectory = SupervisorTrajectory()
@@ -1163,7 +1161,13 @@ class TestHandleV2RunResultUnifiedSummary:
     ):
         """When supervisor chose DONE with 2+ agents, emit deterministic digest (not LLM summary)."""
         from datetime import datetime
-        from models.supervisor_v2 import ActionType, SupervisorAction, TrajectoryEntry, V2StepResult
+
+        from models.supervisor_v2 import (
+            ActionType,
+            SupervisorAction,
+            TrajectoryEntry,
+            V2StepResult,
+        )
 
         completed_result_without_synthesis.trajectory.entries = [
             TrajectoryEntry(

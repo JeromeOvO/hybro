@@ -5,9 +5,12 @@ the defensive layer that strips malformed A2A Part dicts before Pydantic
 validation so a single bad part doesn't poison the entire RoomAgentMessage.
 """
 
-import pytest
 
-from database.mongodb import _parse_room_agent_message, _sanitize_parts, _sanitize_task_dict
+from database.mongodb import (
+    _parse_room_agent_message,
+    _sanitize_parts,
+    _sanitize_task_dict,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +132,7 @@ class TestSanitizeTaskDict:
                 }
             }
         }
-        result = _sanitize_task_dict(task)
+        _sanitize_task_dict(task)
         assert task["status"]["message"]["parts"] == []
 
     def test_no_artifacts_or_history(self):

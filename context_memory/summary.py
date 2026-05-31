@@ -4,7 +4,6 @@ from typing import Any
 
 from common.protocols import LLMProvider, MemoryRepository
 from common.utils.logger import get_logger
-
 from context_memory.config import ContextMemoryLLMConfig
 
 logger = get_logger(__name__)

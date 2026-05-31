@@ -13,13 +13,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from a2a.types import TaskState
 
 from common.utils.cancellation import CancellationToken
 from models.processing import ProcessingResult, ProcessingStatus
 from modules.QueueExecutor import QueueExecutor, QueueProcessingResult, QueueResult
-
 
 # =============================================================================
 # QueueResult Tests

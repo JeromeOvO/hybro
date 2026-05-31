@@ -21,11 +21,15 @@ import os
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from common.a2a_constants import SSEProcessingStatus
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from models.hitl import InterruptKind
+from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
 from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
+from models.hitl import InterruptKind
+from models.processing import ProcessingStatus
+from models.room import CoordinatorAgentId
 from models.supervisor_v2 import (
     ActionType,
     AgentProfile,
@@ -40,15 +44,19 @@ from models.supervisor_v2 import (
     TrajectoryStatus,
     V2StepResult,
 )
-from models.processing import ProcessingStatus
-from models.room import CoordinatorAgentId
-from common.a2a_constants import SSEProcessingStatus
-from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
 
 if TYPE_CHECKING:
+    from services.rate_limit_service import RateLimitService
+
     from execution.dispatch.agent_dispatcher import AgentDispatcher
     from execution.dispatch.agent_message_processor import AgentMessageProcessor
     from execution.state.task_state_manager import TaskStateManager
+    from services.database_service import DatabaseService
+    from services.memory_service import RoomMemoryService
+    from services.room_coordinator_service import RoomCoordinatorService
+    from services.room_services import RoomServices
+    from services.room_supervisor_service import RoomSupervisorService
+    from services.sse_services import SSEManager
 
 logger = get_logger(__name__)
 
@@ -691,7 +699,6 @@ class SupervisorExecutor:
                     # SSE: notify frontend of delegation stage
                     if not (token and token.is_cancelled):
                         try:
-                            agent_names = [t.agent_name for t in action.targets]
                             await self._emit_processing_status(
                                 room_id=room_id,
                                 status=SSEProcessingStatus.PROCESSING,
@@ -1013,14 +1020,17 @@ class SupervisorExecutor:
                     created_messages: list[str] = []
                     created_request_ids: list[str] = []
 
-                    async def _cleanup_clarify_artifacts() -> None:
+                    async def _cleanup_clarify_artifacts(
+                        request_ids: list[str] = created_request_ids,
+                        message_ids: list[str] = created_messages,
+                    ) -> None:
                         """Cancel HITL requests and delete agent messages created in this CLARIFY."""
-                        for rid in created_request_ids:
+                        for rid in request_ids:
                             try:
                                 await self.hitl_coordinator.cancel_request(rid, room_id)
                             except Exception:
                                 logger.warning("Failed to cancel orphaned HITL request %s", rid)
-                        for mid in created_messages:
+                        for mid in message_ids:
                             try:
                                 await self.database_service.delete_room_agent_message_by_message_id(mid)
                             except Exception:

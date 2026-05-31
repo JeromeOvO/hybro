@@ -344,7 +344,7 @@ class TestNotifyTaskUpdate:
             patch(PATCH_SSE) as sse,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
             patch(PATCH_EXTRACT_PARTS, return_value=extracted) as mock_ep,
-            patch(PATCH_EXTRACT_ERR, return_value="Agent error") as mock_err,
+            patch(PATCH_EXTRACT_ERR, return_value="Agent error"),
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
         ):
             _setup_db_mock(db, msg=msg)

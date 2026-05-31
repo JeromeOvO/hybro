@@ -13,8 +13,8 @@ import pytest
 from app_shell.room_lock import RedisRoomDistributedLock
 from infrastructure.redis_service import RedisService
 from modules.RoomMessageCenter import (
-    RoomMessageCenter,
     ROOM_LOCK_HOLD_TTL_SECONDS,
+    RoomMessageCenter,
 )
 
 REDIS_URL = "redis://localhost:6379/0"

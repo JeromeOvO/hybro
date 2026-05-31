@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
@@ -10,8 +10,7 @@ import pytest
 from services.sse_services import SSEManager
 from tests.delivery_adapter_fakes import FakeDeliveryCompat, FakeDeliveryFacade
 
-
-NOW = datetime(2026, 5, 17, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
 FAIL_FAST = re.escape("SSEManager.bind_facade() not called - startup incomplete")
 
 

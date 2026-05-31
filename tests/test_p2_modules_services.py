@@ -8,9 +8,9 @@ Tests cover:
 - AgentHealthCheckService: _get_retry_delay backoff math, _update_agent_card_in_db partial update
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 
 # =============================================================================
 # WorkflowCenter Tests
@@ -208,8 +208,9 @@ class TestUpdateAgentCardInDb:
     @pytest.fixture
     def agent(self):
         """Minimal Agent with a stored card that differs from fetched_card."""
+        from a2a.types import AgentCapabilities, AgentCard
+
         from models.agent import Agent
-        from a2a.types import AgentCard, AgentCapabilities
         stored_card = AgentCard(
             name="Old Name",
             description="Old description",
@@ -225,7 +226,7 @@ class TestUpdateAgentCardInDb:
 
     @pytest.fixture
     def fetched_card(self):
-        from a2a.types import AgentCard, AgentCapabilities
+        from a2a.types import AgentCapabilities, AgentCard
         return AgentCard(
             name="Updated Name",
             description="New description",

@@ -8,18 +8,18 @@ Tests cover:
 - Room ownership verification
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 
 from api.hitl import (
-    respond_to_hitl_request,
-    get_pending_hitl_requests,
     cancel_hitl_request,
+    get_pending_hitl_requests,
+    respond_to_hitl_request,
 )
-from models.hitl import HITLResponseRequest, HITLRequest, HITLStatus
-from common.dto import HITLRequest as CommonHITLRequest, HITLResponse as CommonHITLResponse
+from common.dto import HITLRequest as CommonHITLRequest
+from common.dto import HITLResponse as CommonHITLResponse
 from execution.hitl.exceptions import (
     HITLConflictError,
     HITLContinuationLostError,
@@ -27,8 +27,8 @@ from execution.hitl.exceptions import (
     HITLRoomMismatchError,
     HITLRoutingFailedError,
 )
+from models.hitl import HITLResponseRequest
 from tests.conftest import PATCH
-
 
 # =============================================================================
 # HITL Response Tests

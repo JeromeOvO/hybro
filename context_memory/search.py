@@ -11,7 +11,6 @@ from common.errors import VectorIndexUnavailableError
 from common.protocols import ContentStorageRepository, LLMProvider, VectorDAL
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-
 from context_memory.config import MemorySearchConfig
 from context_memory.content_storage import is_content_expired
 from context_memory.models import SearchRankingRecord
@@ -21,7 +20,7 @@ logger = get_logger(__name__)
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(x * x for x in b))
     if norm_a == 0 or norm_b == 0:

@@ -37,6 +37,7 @@ def test_translator_internal_message_to_a2a_preserves_message_fields():
 
 def test_completed_text_task_factory_builds_sdk_task_payload():
     from a2a.types import TaskState
+
     from a2a_adapter.task_status import build_completed_text_task
 
     task = build_completed_text_task(
@@ -59,6 +60,7 @@ def test_completed_text_task_factory_builds_sdk_task_payload():
 
 def test_failed_text_task_factory_builds_sdk_task_payload():
     from a2a.types import TaskState
+
     from a2a_adapter.task_status import build_failed_text_task
 
     task = build_failed_text_task(
@@ -79,6 +81,7 @@ def test_failed_text_task_factory_builds_sdk_task_payload():
 
 def test_get_task_request_helpers_keep_sdk_details_in_adapter():
     from a2a.types import GetTaskRequest
+
     from a2a_adapter.task_requests import build_get_task_request
 
     request = build_get_task_request("task-1")
@@ -91,7 +94,8 @@ def test_get_task_request_helpers_keep_sdk_details_in_adapter():
 def test_get_task_response_helper_returns_none_for_jsonrpc_errors():
     from types import SimpleNamespace
 
-    from a2a.types import JSONRPCErrorResponse, JSONRPCError
+    from a2a.types import JSONRPCError, JSONRPCErrorResponse
+
     from a2a_adapter.task_requests import (
         extract_get_task_result,
         is_jsonrpc_error_response,
@@ -110,6 +114,7 @@ def test_get_task_response_helper_returns_none_for_jsonrpc_errors():
 
 def test_message_factory_builds_sdk_message_from_parts():
     from a2a.types import TextPart
+
     from a2a_adapter.message_factory import build_message_from_parts
 
     message = build_message_from_parts(

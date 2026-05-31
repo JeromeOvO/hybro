@@ -2,7 +2,6 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from common.types import AgentCard, Task
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -10,9 +9,16 @@ from pydantic import (
     field_validator,
 )
 
+from common.types import AgentCard, Task
 from models.agent import Agent, AgentStatus, coerce_legacy_agent_card
 from models.memory import ChatContext, RoomMemory
-from models.room import Room, RoomAgentMessage, RoomMessage, RoomUserMessage, UserAttachment
+from models.room import (
+    Room,
+    RoomAgentMessage,
+    RoomMessage,
+    RoomUserMessage,
+    UserAttachment,
+)
 from models.task import BaseTask, MetaTask, TaskSession
 
 
@@ -87,7 +93,7 @@ class AgentTaskRequest(BaseModel):
             # Try to convert to string or use as-is
             try:
                 text = str(self.input_data)
-            except:
+            except Exception:
                 # Use generic text if conversion fails
                 text = f"Processing step {self.step_id}"
 

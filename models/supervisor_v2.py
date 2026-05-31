@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from common.utils.time import utcnow
 
 if TYPE_CHECKING:
-    from models.agent import Agent, AgentStatus
+    from models.agent import Agent
 
 
 # =========================================================================
@@ -41,7 +41,7 @@ class AgentProfile(BaseModel):
     is_healthy: bool = True
 
     @classmethod
-    def from_agent(cls, agent: "Agent") -> "AgentProfile":
+    def from_agent(cls, agent: Agent) -> AgentProfile:
         """Create an AgentProfile from a full Agent model."""
         from models.agent import AgentStatus
 

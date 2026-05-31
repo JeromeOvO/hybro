@@ -2,7 +2,7 @@ import json
 import os
 import re
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from a2a.types import Role
 from dotenv import load_dotenv
@@ -1053,7 +1053,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
             previous_step_id = None
 
             step_counter = 1
-            for round_num in range(1, num_rounds + 1):
+            for _round_num in range(1, num_rounds + 1):
                 for agent in debate_agents:
                     step_id = f"step_{step_counter}"
 
@@ -1304,7 +1304,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
 
         user_prompt = f"""Analyze this message and decide how to route it:
 
-                Current date/time: {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
+                Current date/time: {datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")}
                 {context_section}
                 Available agents in room:
                 {agent_list if agent_list else "None"}

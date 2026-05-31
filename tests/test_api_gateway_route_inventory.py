@@ -3,7 +3,6 @@ from pathlib import Path
 
 from fastapi.routing import APIRoute
 
-
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 AUTH_DEPENDENCY_NAMES = {
     "get_api_key",

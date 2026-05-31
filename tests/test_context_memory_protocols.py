@@ -2,6 +2,7 @@ import ast
 import inspect
 import sys
 import tomllib
+from datetime import UTC
 from pathlib import Path
 
 import pytest
@@ -165,7 +166,7 @@ class FakeLLM:
 
 
 def _facade():
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from context_memory import ContextMemoryFacade
 
@@ -176,7 +177,7 @@ def _facade():
         vector=FakeVector(),
         llm_provider=FakeLLM(),
         id_factory=lambda: "id-1",
-        now=lambda: datetime.now(timezone.utc),
+        now=lambda: datetime.now(UTC),
     )
 
 
@@ -205,7 +206,9 @@ def test_context_memory_exports_are_stable():
     from context_memory.repository import (
         ContentStorageMongoRepository as RepoContentStorageMongoRepository,
     )
-    from context_memory.repository import MemoryMongoRepository as RepoMemoryMongoRepository
+    from context_memory.repository import (
+        MemoryMongoRepository as RepoMemoryMongoRepository,
+    )
 
     assert ContextMemoryFacade.__name__ == "ContextMemoryFacade"
     assert MemoryMongoRepository is RepoMemoryMongoRepository

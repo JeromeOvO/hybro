@@ -8,12 +8,20 @@ from common.types import (
     Artifact,
     CancelTaskRequest,
     CancelTaskResponse,
+    GetTaskPushNotificationRequest,
+    GetTaskPushNotificationResponse,
     GetTaskRequest,
     GetTaskResponse,
     InternalError,
     JSONRPCError,
     JSONRPCResponse,
     PushNotificationConfig,
+    SendTaskRequest,
+    SendTaskResponse,
+    SendTaskStreamingRequest,
+    SendTaskStreamingResponse,
+    SetTaskPushNotificationRequest,
+    SetTaskPushNotificationResponse,
     Task,
     TaskIdParams,
     TaskNotCancelableError,
@@ -21,18 +29,10 @@ from common.types import (
     TaskPushNotificationConfig,
     TaskQueryParams,
     TaskResubscriptionRequest,
+    TaskSendParams,
     TaskState,
     TaskStatus,
     TaskStatusUpdateEvent,
-    GetTaskPushNotificationRequest,
-    GetTaskPushNotificationResponse,
-    SendTaskRequest,
-    SendTaskResponse,
-    SendTaskStreamingRequest,
-    SendTaskStreamingResponse,
-    SetTaskPushNotificationRequest,
-    SetTaskPushNotificationResponse,
-    TaskSendParams,
 )
 
 logger = logging.getLogger(__name__)
@@ -223,9 +223,9 @@ class InMemoryTaskManager(TaskManager):
         async with self.lock:
             try:
                 task = self.tasks[task_id]
-            except KeyError:
+            except KeyError as exc:
                 logger.error(f"Task {task_id} not found for updating the task")
-                raise ValueError(f"Task {task_id} not found")
+                raise ValueError(f"Task {task_id} not found") from exc
 
             task.status = status
 

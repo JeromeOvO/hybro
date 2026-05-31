@@ -6,7 +6,6 @@ from datetime import datetime
 
 from common.protocols import ContentStorageRepository, MemoryRepository
 from common.utils.context_utils import estimate_tokens
-
 from context_memory.config import CompactionConfig
 from context_memory.content_storage import (
     ContentExpiredError,
@@ -295,6 +294,7 @@ async def fetch_turn_content(
     *,
     turn_id: str,
     room_id: str,
+    now: datetime | None = None,
 ) -> str:
     doc = await repository.get_room_memory(room_id)
     if not doc:

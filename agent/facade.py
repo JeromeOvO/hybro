@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
-from datetime import datetime
 import hashlib
 import logging
+from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from agent.constants import AGENT_CARD_NO_OVERWRITE
@@ -19,8 +19,7 @@ from agent.translators import (
     registration_doc_from_card,
 )
 from agent.url_utils import is_local_agent_url, normalize_agent_url
-from common.dto import VectorRecord
-from common.dto import HubAgentCounts
+from common.dto import HubAgentCounts, VectorRecord
 from common.dto.agent import (
     AgentCardSnapshot,
     AgentInfo,
@@ -660,7 +659,7 @@ def _description_changed(before: dict, after: dict) -> bool:
 def _vector_result_id(result: Any) -> str:
     if isinstance(result, dict):
         return result.get("id") or result.get("agent_id")
-    return getattr(result, "id")
+    return result.id
 
 
 def _vector_result_score(result: Any) -> float:

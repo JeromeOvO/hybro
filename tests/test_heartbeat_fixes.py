@@ -2,9 +2,9 @@
 
 import asyncio
 import logging
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from models.api_key import APIKey
 from models.hub import HubAgentSync, RelayToHubEvent
@@ -18,7 +18,6 @@ from services.relay_service import (
     RelayService,
 )
 from tests.conftest import FROZEN_TIME
-
 
 # ===========================================================================
 # Helpers
@@ -186,6 +185,7 @@ class TestIsHubAlive:
 
     async def test_agent_liveness_uses_async_liveness_reader(self):
         from types import SimpleNamespace
+
         from models.agent import AgentStatus
 
         reader = FakeHubLivenessReader(True)

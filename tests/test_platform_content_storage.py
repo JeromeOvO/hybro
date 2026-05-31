@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -82,7 +82,7 @@ def _service(
         deps=PlatformDeps(
             content_storage_repository=repo,
             object_storage=object_storage,
-            clock=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc),
+            clock=lambda: datetime(2026, 1, 1, tzinfo=UTC),
         ),
     )
     return service, repo
@@ -113,8 +113,8 @@ async def test_upsert_full_content_writes_hash_and_optional_expiry():
             "content": "full content",
             "content_type": "text",
             "content_hash": hash_content("full content"),
-            "stored_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
-            "expires_at": datetime(2026, 1, 1, tzinfo=timezone.utc)
+            "stored_at": datetime(2026, 1, 1, tzinfo=UTC),
+            "expires_at": datetime(2026, 1, 1, tzinfo=UTC)
             + timedelta(seconds=60),
             "turn_notes": {"topic": "billing"},
         }
@@ -142,14 +142,14 @@ async def test_expired_mongodb_content_is_not_hydrated_even_before_ttl_cleanup()
         "room_id": "room-1",
         "turn_id": "turn-1",
         "content": "expired content",
-        "expires_at": datetime(2025, 12, 31, 23, 59, tzinfo=timezone.utc),
+        "expires_at": datetime(2025, 12, 31, 23, 59, tzinfo=UTC),
     }
     repo.by_document_id[expired["document_id"]] = expired
     content_ref = ContentReference(
         storage_type=StorageType.MONGODB,
         collection="conversation_content",
         document_id=expired["document_id"],
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
 
     assert await service.get_content_by_document_id(expired["document_id"]) is None
@@ -171,7 +171,7 @@ async def test_expand_mongodb_reference_uses_repository_document():
         storage_type=StorageType.MONGODB,
         collection="conversation_content",
         document_id=document_id,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
 
     assert (
@@ -186,7 +186,7 @@ async def test_expand_mongodb_reference_missing_document_raises_expired():
         storage_type=StorageType.MONGODB,
         collection="conversation_content",
         document_id="missing-doc",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
 
     with pytest.raises(ContentExpiredError) as exc_info:
@@ -203,7 +203,7 @@ async def test_expand_s3_reference_uses_injected_object_storage():
         storage_type=StorageType.S3,
         s3_bucket="bucket",
         s3_key="objects/content.txt",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
 
     assert await service.expand_content_reference(content_ref, "turn-1") == "s3 content"
@@ -217,7 +217,7 @@ async def test_expand_s3_reference_supports_object_storage_protocol_get_text():
         storage_type=StorageType.S3,
         s3_bucket="bucket",
         s3_key="objects/content.txt",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
 
     assert await service.expand_content_reference(content_ref, "turn-1") == "s3 content"
@@ -229,13 +229,13 @@ async def test_expand_s3_reference_missing_key_or_object_fails():
     missing_key = ContentReference(
         storage_type=StorageType.S3,
         s3_bucket="bucket",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     missing_object = ContentReference(
         storage_type=StorageType.S3,
         s3_bucket="bucket",
         s3_key="missing",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
 
     with pytest.raises(ValueError, match="no s3_key"):
@@ -250,7 +250,7 @@ async def test_url_reference_remains_blocked():
     content_ref = ContentReference(
         storage_type=StorageType.URL,
         url="https://example.com/content.txt",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
 
     with pytest.raises(NotImplementedError):

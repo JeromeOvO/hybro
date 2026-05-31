@@ -1,6 +1,6 @@
-import pytest
 from models.room import UserAttachment
-from services.room_services import build_turn_content, _human_size
+from services.room_services import _human_size, build_turn_content
+
 
 class TestHumanSize:
     def test_bytes(self):

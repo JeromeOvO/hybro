@@ -8,14 +8,14 @@ Tests cover:
 - cancel_remaining_queue: batch cancellation
 """
 
-import pytest
 from collections import deque
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from a2a.types import TaskState, TaskStatus
 
-from modules.TaskStateManager import TaskStateManager, get_task, state_str
 from models.room import RoomAgentMessage
+from modules.TaskStateManager import TaskStateManager, get_task, state_str
 
 
 def _make_message_with_task(state: TaskState | None = None) -> RoomAgentMessage:

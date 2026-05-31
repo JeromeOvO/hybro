@@ -9,19 +9,15 @@ Tests cover:
 - extract_error_message: error text extraction from task status
 """
 
-import pytest
 from unittest.mock import MagicMock
 
-from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart, Artifact
+from a2a.types import Artifact, Message, Role, Task, TaskState, TaskStatus, TextPart
 
 from common.utils.a2a_helpers import (
-    get_text_from_message,
-    get_message_from_task,
-    get_text_from_a2a_response,
-    extract_text_from_artifacts,
     extract_error_message,
+    get_message_from_task,
+    get_text_from_message,
 )
-
 
 # =============================================================================
 # get_text_from_message Tests

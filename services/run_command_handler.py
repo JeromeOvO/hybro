@@ -10,7 +10,7 @@ from pymongo.errors import DuplicateKeyError
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from database.mongodb import mongodb
-from models.run import Run, RunEvent, RunEventType, RunState, TERMINAL_RUN_STATES
+from models.run import TERMINAL_RUN_STATES, Run, RunEvent, RunEventType, RunState
 from services.a2a_constants import SSEProcessingStatus
 from services.run_metrics import increment_counter
 from services.run_reducer import RunTransitionError, ensure_transition_allowed
