@@ -14,11 +14,12 @@ import {
   ChevronRight,
 } from "lucide-react"
 import Link from "next/link"
+import { useEffect, useRef, useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Badge } from "@/components/ui/badge"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { InlineCopyButton } from "@/components/inline-copy-button"
 import { useHubStatus, HUB_STATUS_QUERY_KEY } from "@/hooks/useHubStatus"
 import { getAllActiveAgents } from "@/lib/api/agent"
@@ -33,10 +34,22 @@ interface HubPageContentProps {
   basePath: string
 }
 
+const MANUAL_REFRESH_SPIN_MS = 600
+
 export function HubPageContent({ apiKeysPath, basePath }: HubPageContentProps) {
   const { getToken } = useAuth()
   const queryClient = useQueryClient()
-  const { hub, isOnline, hasHub, isLoading: hubLoading } = useHubStatus()
+  const { hub, isOnline, hasHub, isLoading: hubLoading, isFetching: hubFetching } = useHubStatus()
+  const [isManualRefreshAnimating, setIsManualRefreshAnimating] = useState(false)
+  const manualRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (manualRefreshTimeoutRef.current) {
+        clearTimeout(manualRefreshTimeoutRef.current)
+      }
+    }
+  }, [])
 
   const agentsQuery = useQuery<Agent[]>({
     queryKey: ["agents", "active"],
@@ -48,9 +61,17 @@ export function HubPageContent({ apiKeysPath, basePath }: HubPageContentProps) {
   })
 
   const hubAgents = (agentsQuery.data ?? []).filter(a => a.source === "hub")
-  const isRefreshing = hubLoading
+  const isRefreshing = hubLoading || hubFetching || agentsQuery.isFetching || isManualRefreshAnimating
 
   const handleRefresh = () => {
+    setIsManualRefreshAnimating(true)
+    if (manualRefreshTimeoutRef.current) {
+      clearTimeout(manualRefreshTimeoutRef.current)
+    }
+    manualRefreshTimeoutRef.current = setTimeout(() => {
+      setIsManualRefreshAnimating(false)
+      manualRefreshTimeoutRef.current = null
+    }, MANUAL_REFRESH_SPIN_MS)
     queryClient.invalidateQueries({ queryKey: HUB_STATUS_QUERY_KEY })
     queryClient.invalidateQueries({ queryKey: ["agents", "active"] })
   }
@@ -69,15 +90,26 @@ export function HubPageContent({ apiKeysPath, basePath }: HubPageContentProps) {
               Run agents locally on your machine for privacy and lower latency.
             </p>
           </div>
-          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={isRefreshing}>
-            <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isRefreshing ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+                className="transition-all duration-150 ease-out hover:bg-black/10 hover:text-foreground dark:hover:bg-white/15"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isRefreshing ? "animate-spin" : ""}`} />
+                Refresh
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">Refresh hub status</TooltipContent>
+          </Tooltip>
         </div>
 
         {/* Status Card */}
         <Card>
-          <CardContent className="pt-6">
+          <CardContent>
             {hubLoading ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <RefreshCw className="h-4 w-4 animate-spin" />
@@ -86,16 +118,16 @@ export function HubPageContent({ apiKeysPath, basePath }: HubPageContentProps) {
             ) : hasHub ? (
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-1 items-center gap-3">
                     {isOnline ? (
                       <>
                         <div className="flex items-center justify-center h-10 w-10 rounded-lg bg-emerald-500/10">
                           <House className="h-5 w-5 text-emerald-500" />
                         </div>
-                        <div>
-                          <p className="font-medium text-emerald-600 dark:text-emerald-400">Hub Connected</p>
+                        <div className="flex min-w-0 flex-1 items-center gap-3">
+                          <p className="shrink-0 font-medium text-emerald-600 dark:text-emerald-400">Hub Connected</p>
                           {hub?.last_connected_at && (
-                            <p className="text-xs text-muted-foreground">
+                            <p className="ml-auto shrink-0 text-right font-medium text-foreground">
                               Connected since {formatTimestamp(hub.last_connected_at)}
                             </p>
                           )}
@@ -106,10 +138,10 @@ export function HubPageContent({ apiKeysPath, basePath }: HubPageContentProps) {
                         <div className="flex items-center justify-center h-10 w-10 rounded-lg bg-amber-500/10">
                           <House className="h-5 w-5 text-amber-500" />
                         </div>
-                        <div>
-                          <p className="font-medium text-amber-600 dark:text-amber-400">Hub Offline</p>
+                        <div className="flex min-w-0 flex-1 items-center gap-3">
+                          <p className="shrink-0 font-medium text-amber-600 dark:text-amber-400">Hub Offline</p>
                           {hub?.last_connected_at && (
-                            <p className="text-xs text-muted-foreground">
+                            <p className="ml-auto shrink-0 text-right font-medium text-foreground">
                               Last seen {formatTimestamp(hub.last_connected_at)}
                             </p>
                           )}
@@ -117,9 +149,6 @@ export function HubPageContent({ apiKeysPath, basePath }: HubPageContentProps) {
                       </>
                     )}
                   </div>
-                  <Badge variant={isOnline ? "success" : "inactive"}>
-                    {isOnline ? "Online" : "Offline"}
-                  </Badge>
                 </div>
 
                 {!isOnline && (
@@ -247,7 +276,7 @@ export function HubPageContent({ apiKeysPath, basePath }: HubPageContentProps) {
                       !isOnline && "pointer-events-none opacity-50",
                     )}
                   >
-                    <Card className="transition-colors hover:bg-muted/50">
+                    <Card className="transition-all duration-150 ease-out hover:bg-black/10 dark:hover:bg-white/15">
                       <CardContent className="pt-4 pb-4">
                         <div className="flex items-center gap-3">
                           <Avatar className="h-9 w-9 shrink-0 rounded-lg">

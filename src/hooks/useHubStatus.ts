@@ -34,6 +34,7 @@ export function useHubStatus() {
     isOnline: primaryHub?.is_online ?? false,
     hasHub: primaryHub !== null,
     isLoading: query.isLoading || !isLoaded,
+    isFetching: query.isFetching,
     isError: query.isError,
     error: query.error,
     invalidate,

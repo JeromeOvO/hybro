@@ -42,6 +42,7 @@ describe('useHubStatus', () => {
     const { result } = renderHook(() => useHubStatus(), { wrapper: createWrapper() })
 
     expect(result.current.isLoading).toBe(true)
+    expect(result.current.isFetching).toBe(true)
     expect(result.current.hasHub).toBe(false)
     expect(result.current.isOnline).toBe(false)
     expect(result.current.hub).toBeNull()
