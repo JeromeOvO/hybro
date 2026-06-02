@@ -1,8 +1,11 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
 
 from models.supervisor import RunStatus, SupervisorRunResult, SupervisorTrajectory
 from modules.RoomMessageCenter import RoomMessageCenter
@@ -352,11 +355,18 @@ async def test_golden_clarify_resume_retry_failure_completed_is_transport_only(
     lifecycle.assert_not_awaited()
 
 
-def test_clarifying_post_emit_turn_event_appender_remains_in_handoff_doc():
-    doc = (
-        "docs/superpowers/plans/"
-        "2026-05-16-phase-7a-delivery-extraction-handoff.md"
-    )
-    text = open(doc, encoding="utf-8").read()
+def test_clarifying_path_emits_turn_completed_via_turn_event_appender():
+    """CLARIFYING must append turn_completed before completed processing_status."""
+    text = (
+        ROOT / "execution/orchestration/room_message_center.py"
+    ).read_text(encoding="utf-8")
     assert "RunStatus.CLARIFYING" in text
-    assert 'turn_event_appender.append("turn_completed"' in text
+    assert "_turn_event_appender.append" in text
+    assert '"turn_completed"' in text
+    # turn_completed for CLARIFYING must precede COMPLETED processing_status emit.
+    clarifying = text.split("case RunStatus.CLARIFYING:")[1].split("case RunStatus.")[0]
+    assert "turn_completed" in clarifying
+    assert "SSEProcessingStatus.COMPLETED" in clarifying
+    assert clarifying.index("turn_completed") < clarifying.index(
+        "SSEProcessingStatus.COMPLETED"
+    )
