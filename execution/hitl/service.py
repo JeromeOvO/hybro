@@ -690,7 +690,7 @@ class HITLService:
     async def _handle_supervisor_response(
         self, request: HITLRequest, user_input: str
     ) -> None:
-        """Resume V2 supervisor loop with user's answer injected into trajectory."""
+        """Resume supervisor loop with user's answer injected into trajectory."""
         continuation = await self.database_service.get_pending_continuation_on_message(
             request.continuation_message_id
         )
@@ -700,7 +700,7 @@ class HITLService:
                 "the supervisor loop may have already been cleaned up or recovered"
             )
 
-        if continuation.get("supervisor_v2"):
+        if continuation.get("supervisor"):
             traj = continuation.get("trajectory", {})
             traj["hitl_user_reply"] = user_input
             traj["hitl_original_message_id"] = continuation.get("user_message_id")

@@ -310,7 +310,7 @@ class StaleTaskChecker:
                     exc_info=True,
                 )
 
-        # 6. Recover V2 supervisor trajectories stuck in "running" status.
+        # 6. Recover supervisor trajectories stuck in "running" status.
         #    This handles mid-loop crashes where the server restarted while
         #    SupervisorExecutor.run() was in-flight.
         await self._recover_stuck_supervisor_trajectories()
@@ -790,13 +790,13 @@ class StaleTaskChecker:
                 )
 
     async def _recover_stuck_supervisor_trajectories(self) -> None:
-        """Recover V2 supervisor trajectories stuck in "running" status.
+        """Recover supervisor trajectories stuck in "running" status.
 
         When the server crashes mid-loop, ``_checkpoint_trajectory`` has
         already persisted the trajectory with ``status="running"`` to the
         user message's ``extend_info.supervisor_trajectory``.  On restart,
         we scan for these and re-trigger ``process_room_user_message`` so
-        ``_process_supervisor_v2`` picks up the checkpointed trajectory.
+        ``_process_supervisor`` picks up the checkpointed trajectory.
 
         Only messages older than ``orphan_threshold_minutes`` are recovered
         to avoid racing with actively running trajectories.
@@ -814,7 +814,7 @@ class StaleTaskChecker:
             return
 
         logger.info(
-            "supervisor_recovery: found %d stuck V2 trajectories to recover",
+            "supervisor_recovery: found %d stuck supervisor trajectories to recover",
             len(stuck_messages),
         )
 

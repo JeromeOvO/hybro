@@ -1,5 +1,5 @@
 """
-Tests for Supervisor V2 Improvements:
+Tests for Supervisor Improvements:
 - Part 1: Expanded response preview + quality evaluation prompt
 - Part 2: SSE stage notifications in SupervisorExecutor
 """
@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from models.supervisor_v2 import (
+from models.supervisor import (
     ActionType,
     AgentProfile,
     DelegateTarget,
@@ -19,7 +19,7 @@ from models.supervisor_v2 import (
     SupervisorAction,
     SupervisorTrajectory,
     TrajectoryEntry,
-    V2StepResult,
+    StepResult,
 )
 from modules.SupervisorExecutor import SupervisorExecutor
 from services.room_supervisor_service import RoomSupervisorService
@@ -50,7 +50,7 @@ class TestTrajectoryResponsePreview:
             ),
         )
         entry.results = [
-            V2StepResult(
+            StepResult(
                 step_number=1,
                 agent_id="agent-1",
                 agent_name="TestAgent",
@@ -107,17 +107,17 @@ class TestQualityEvaluationPrompt:
     """Verify the system prompt includes quality evaluation instructions."""
 
     def test_system_prompt_contains_quality_evaluation_block(self):
-        from services.room_supervisor_service import SUPERVISOR_V2_SYSTEM_PROMPT
+        from services.room_supervisor_service import SUPERVISOR_SYSTEM_PROMPT
 
-        assert "QUALITY EVALUATION" in SUPERVISOR_V2_SYSTEM_PROMPT
-        assert "unsatisfactory" in SUPERVISOR_V2_SYSTEM_PROMPT
+        assert "QUALITY EVALUATION" in SUPERVISOR_SYSTEM_PROMPT
+        assert "unsatisfactory" in SUPERVISOR_SYSTEM_PROMPT
 
     def test_system_prompt_mentions_re_delegation_criteria(self):
-        from services.room_supervisor_service import SUPERVISOR_V2_SYSTEM_PROMPT
+        from services.room_supervisor_service import SUPERVISOR_SYSTEM_PROMPT
 
-        assert "couldn't\n  find anything" in SUPERVISOR_V2_SYSTEM_PROMPT or \
-               "couldn't find anything" in SUPERVISOR_V2_SYSTEM_PROMPT or \
-               "couldn" in SUPERVISOR_V2_SYSTEM_PROMPT
+        assert "couldn't\n  find anything" in SUPERVISOR_SYSTEM_PROMPT or \
+               "couldn't find anything" in SUPERVISOR_SYSTEM_PROMPT or \
+               "couldn" in SUPERVISOR_SYSTEM_PROMPT
 
 
 # =============================================================================
@@ -195,17 +195,17 @@ class TestSupervisorSSEStageNotifications:
             SupervisorAction(action=ActionType.DONE, reasoning="done"),
         ]
         se._dispatch_targets = AsyncMock(return_value=[
-            V2StepResult(
+            StepResult(
                 step_number=1, agent_id="a1", agent_name="Agent1",
                 task="t1", success=True, status=StepStatus.SUCCESS,
                 response_text="result",
             ),
-            V2StepResult(
+            StepResult(
                 step_number=1, agent_id="a2", agent_name="Agent2",
                 task="t2", success=True, status=StepStatus.SUCCESS,
                 response_text="result",
             ),
-            V2StepResult(
+            StepResult(
                 step_number=1, agent_id="a3", agent_name="Agent3",
                 task="t3", success=True, status=StepStatus.SUCCESS,
                 response_text="result",
@@ -243,7 +243,7 @@ class TestSupervisorSSEStageNotifications:
             SupervisorAction(action=ActionType.DONE, reasoning="done"),
         ]
         se._dispatch_targets = AsyncMock(return_value=[
-            V2StepResult(
+            StepResult(
                 step_number=1, agent_id="a1", agent_name="Agent1",
                 task="t1", success=True, status=StepStatus.SUCCESS,
                 response_text="result",
@@ -281,7 +281,7 @@ class TestSupervisorSSEStageNotifications:
             ),
         ]
         se._dispatch_targets = AsyncMock(return_value=[
-            V2StepResult(
+            StepResult(
                 step_number=1, agent_id="a1", agent_name="Agent1",
                 task="t1", success=True, status=StepStatus.SUCCESS,
                 response_text="result",
@@ -292,10 +292,10 @@ class TestSupervisorSSEStageNotifications:
             return_value=None
         )
 
-        async def synthesize_v2_stream(trajectory, synthesis_instruction):
+        async def synthesize_stream(trajectory, synthesis_instruction):
             yield "synthesized"
 
-        se.supervisor_service.synthesize_v2_stream = synthesize_v2_stream
+        se.supervisor_service.synthesize_stream = synthesize_stream
 
         await se.run(
             room_id="room-1",
@@ -323,7 +323,7 @@ class TestSupervisorSSEStageNotifications:
             SupervisorAction(action=ActionType.DONE, reasoning="done"),
         ]
         se._dispatch_targets = AsyncMock(return_value=[
-            V2StepResult(
+            StepResult(
                 step_number=1, agent_id="a1", agent_name="Agent1",
                 task="t1", success=True, status=StepStatus.SUCCESS,
                 response_text="result",

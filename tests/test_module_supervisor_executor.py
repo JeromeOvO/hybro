@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from models.supervisor_v2 import (
+from models.supervisor import (
     ActionType,
     AgentProfile,
     ClarifyQuestion,
@@ -26,7 +26,7 @@ from models.supervisor_v2 import (
     SupervisorAction,
     SupervisorRunResult,
     SupervisorTrajectory,
-    V2StepResult,
+    StepResult,
 )
 from modules.SupervisorExecutor import SupervisorExecutor
 
@@ -192,7 +192,7 @@ class TestClarifyCleanupCompensation:
     async def test_cancels_requests_when_save_interrupted_state_fails(self, se):
         """If all questions are created but continuation save fails,
         all HITL requests and messages must be cleaned up."""
-        from models.supervisor_v2 import (
+        from models.supervisor import (
             ActionType,
             ClarifyQuestion,
             SupervisorAction,
@@ -244,7 +244,7 @@ class TestClarifyCleanupCompensation:
     async def test_cancels_prior_requests_when_request_input_returns_none(self, se):
         """If request_input returns None mid-group (e.g. max rounds),
         previously created requests must be canceled."""
-        from models.supervisor_v2 import (
+        from models.supervisor import (
             ActionType,
             ClarifyQuestion,
             SupervisorAction,
@@ -365,7 +365,7 @@ class TestProcessingStatusLifecycleOrder:
         )
         se._dispatch_targets = AsyncMock(
             return_value=[
-                V2StepResult(
+                StepResult(
                     step_number=1,
                     agent_id="agent-1",
                     agent_name="Agent",

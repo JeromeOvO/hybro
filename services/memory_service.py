@@ -14,7 +14,7 @@ from services.database_service import db_service
 from services.openai_service import openai_service
 
 if TYPE_CHECKING:
-    from models.supervisor_v2 import SupervisorTrajectory
+    from models.supervisor import SupervisorTrajectory
 
 logger = get_logger(__name__)
 

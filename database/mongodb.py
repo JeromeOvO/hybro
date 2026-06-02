@@ -18,7 +18,7 @@ from models.memory import ChatContext, RoomMemory
 from models.quote import QuotedSnippet
 from models.room import Room, RoomAgentMessage, RoomUserMessage
 from models.run import NON_TERMINAL_RUN_STATE_VALUES
-from models.supervisor_v2 import TrajectoryStatus
+from models.supervisor import TrajectoryStatus
 from models.task import BaseTask, MetaTask, TaskSession
 
 logger = logging.getLogger(__name__)
@@ -2284,7 +2284,7 @@ class MongoDB:
         docs = await self.room_user_messages_collection.find(
             {
                 "extend_info.supervisor_trajectory.status": TrajectoryStatus.RUNNING,
-                "extend_info.supervisor_v2": True,
+                "extend_info.supervisor": True,
                 "message_created_at": {"$lt": threshold},
             },
             {"message_id": 1, "room_id": 1, "_id": 0},

@@ -18,13 +18,13 @@ from pydantic import BaseModel, Field
 from common.utils.time import utcnow
 
 # ---------------------------------------------------------------------------
-# InterruptKind — routing key for _resume_supervisor_v2()
+# InterruptKind — routing key for _resume_supervisor()
 # ---------------------------------------------------------------------------
 
 
 class InterruptKind(str, Enum):
     """The interrupt_kind field in every continuation payload is the single
-    routing signal for _resume_supervisor_v2().
+    routing signal for _resume_supervisor().
 
     Backward compatibility: if the field is absent (legacy push-notification
     continuations saved before this design), assume PUSH_NOTIFICATION.

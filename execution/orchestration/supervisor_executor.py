@@ -1,4 +1,4 @@
-"""SupervisorExecutor — adaptive step-at-a-time orchestration (V2).
+"""SupervisorExecutor — adaptive step-at-a-time orchestration.
 
 The sole orchestration executor for supervisor-enabled rooms (``use_supervisor``).
 ``QueueExecutor`` continues to serve non-supervisor rooms and fast-path cases
@@ -11,7 +11,7 @@ Responsibilities:
 - Enforce cancellation, rate limits, and step budget
 - Dispatch concurrent targets via ``asyncio.gather``
 
-See docs/SUPERVISOR_V2_DESIGN.md §6.2–§6.3 for design details.
+See System-Architecture.md for design details.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
 from models.hitl import InterruptKind
 from models.processing import ProcessingStatus
 from models.room import CoordinatorAgentId
-from models.supervisor_v2 import (
+from models.supervisor import (
     ActionType,
     AgentProfile,
     DelegateTarget,
@@ -42,7 +42,7 @@ from models.supervisor_v2 import (
     SupervisorTrajectory,
     TrajectoryEntry,
     TrajectoryStatus,
-    V2StepResult,
+    StepResult,
 )
 
 if TYPE_CHECKING:
@@ -165,7 +165,7 @@ class SupervisorExecutor:
             room_id=room_id,
             message_id=summary_message_id,
             agent_id=CoordinatorAgentId.SUMMARY,
-            token_stream=self.supervisor_service.synthesize_v2_stream(
+            token_stream=self.supervisor_service.synthesize_stream(
                 trajectory=trajectory,
                 synthesis_instruction=synthesis_instruction,
             ),
@@ -375,7 +375,7 @@ class SupervisorExecutor:
                         ),
                         started_at=utcnow(),
                         completed_at=utcnow(),
-                        results=[V2StepResult(
+                        results=[StepResult(
                             step_number=step_number + 1,
                             agent_id=next_id,
                             agent_name=next_id,
@@ -421,7 +421,7 @@ class SupervisorExecutor:
                 # Fix: if any result across all entries is still PAUSED, update
                 # the continuation for each remaining PAUSED agent (so it
                 # carries the now-partially-resolved trajectory) and pause again.
-                all_still_paused: list[V2StepResult] = [
+                all_still_paused: list[StepResult] = [
                     r
                     for entry in trajectory.entries
                     for r in entry.results
@@ -995,7 +995,7 @@ class SupervisorExecutor:
                     trajectory.status = TrajectoryStatus.AWAITING_INPUT
 
                     from models.hitl import HITLPromptType
-                    from models.supervisor_v2 import ClarifyQuestion
+                    from models.supervisor import ClarifyQuestion
                     if self.hitl_coordinator is None:
                         raise RuntimeError("HITL coordinator has not been bound")
 
@@ -1267,11 +1267,11 @@ class SupervisorExecutor:
         token: CancellationToken | None,
         request_user_id: str | None,
         quoted_text: str | None,
-    ) -> list[V2StepResult]:
+    ) -> list[StepResult]:
         """Dispatch one or more agents, concurrently if multiple targets."""
         valid_ids = {a.agent_id for a in agent_registry}
 
-        async def dispatch_one(target: DelegateTarget) -> V2StepResult:
+        async def dispatch_one(target: DelegateTarget) -> StepResult:
             try:
                 # Validate agent_id against registry before any DB writes
                 if target.agent_id not in valid_ids:
@@ -1280,7 +1280,7 @@ class SupervisorExecutor:
                         target.agent_id,
                         valid_ids,
                     )
-                    return V2StepResult(
+                    return StepResult(
                         step_number=step_number,
                         agent_id=target.agent_id,
                         agent_name=target.agent_name,
@@ -1323,7 +1323,7 @@ class SupervisorExecutor:
                         "dispatch_one: agent %s not found or inactive",
                         target.agent_id,
                     )
-                    return V2StepResult(
+                    return StepResult(
                         step_number=step_number,
                         agent_id=target.agent_id,
                         agent_name=target.agent_name,
@@ -1343,7 +1343,7 @@ class SupervisorExecutor:
                         rate_limit_system=agent.rate_limit_system_per_hour,
                     )
                     if not rate_result.allowed:
-                        return V2StepResult(
+                        return StepResult(
                             step_number=step_number,
                             agent_id=target.agent_id,
                             agent_name=target.agent_name,
@@ -1414,7 +1414,7 @@ class SupervisorExecutor:
                     ProcessingStatus.PAUSED,
                     ProcessingStatus.RELAY_DISPATCHED,
                 ):
-                    return V2StepResult(
+                    return StepResult(
                         step_number=step_number,
                         agent_id=target.agent_id,
                         agent_name=target.agent_name,
@@ -1427,7 +1427,7 @@ class SupervisorExecutor:
                     )
 
                 if result.status == ProcessingStatus.AWAITING_INPUT:
-                    return V2StepResult(
+                    return StepResult(
                         step_number=step_number,
                         agent_id=target.agent_id,
                         agent_name=target.agent_name,
@@ -1449,7 +1449,7 @@ class SupervisorExecutor:
                     )
 
                 is_success = result.status == ProcessingStatus.SUCCESS
-                step_result = V2StepResult(
+                step_result = StepResult(
                     step_number=step_number,
                     agent_id=target.agent_id,
                     agent_name=target.agent_name,
@@ -1490,7 +1490,7 @@ class SupervisorExecutor:
                 logger.exception(
                     "dispatch_one failed for agent %s: %s", target.agent_id, e
                 )
-                return V2StepResult(
+                return StepResult(
                     step_number=step_number,
                     agent_id=target.agent_id,
                     agent_name=target.agent_name,
@@ -1528,7 +1528,7 @@ class SupervisorExecutor:
                         return [work.result()]
                     except Exception:
                         pass
-                return [V2StepResult(
+                return [StepResult(
                     step_number=step_number,
                     agent_id=targets[0].agent_id,
                     agent_name=targets[0].agent_name,
@@ -1569,7 +1569,7 @@ class SupervisorExecutor:
             # All tasks completed normally.
             raw_results = all_work.result()
             return [
-                r if isinstance(r, V2StepResult) else V2StepResult(
+                r if isinstance(r, StepResult) else StepResult(
                     step_number=step_number,
                     agent_id=targets[i].agent_id,
                     agent_name=targets[i].agent_name,
@@ -1590,7 +1590,7 @@ class SupervisorExecutor:
         except (asyncio.CancelledError, Exception):
             pass
 
-        results: list[V2StepResult] = []
+        results: list[StepResult] = []
         completed_ids: set[str] = set()
         for task in tasks:
             if task.done() and not task.cancelled():
@@ -1604,7 +1604,7 @@ class SupervisorExecutor:
                 task.cancel()
         for t in targets:
             if t.agent_id not in completed_ids:
-                results.append(V2StepResult(
+                results.append(StepResult(
                     step_number=step_number,
                     agent_id=t.agent_id,
                     agent_name=t.agent_name,
@@ -1744,7 +1744,7 @@ class SupervisorExecutor:
 
     async def _reconcile_paused_results(
         self,
-        paused_results: list[V2StepResult],
+        paused_results: list[StepResult],
         trajectory: SupervisorTrajectory,
         room_id: str,
     ) -> None:
@@ -1778,7 +1778,7 @@ class SupervisorExecutor:
                         result.status == StepStatus.PAUSED
                         and result.agent_message_id == msg_id
                     ):
-                        entry.results[idx] = V2StepResult(
+                        entry.results[idx] = StepResult(
                             step_number=entry.step_number,
                             agent_id=result.agent_id,
                             agent_name=result.agent_name,
@@ -1842,7 +1842,7 @@ class SupervisorExecutor:
         quoted_text: str | None = None,
         hitl_request_id: str | None = None,
         # For PUSH_NOTIFICATION / HITL_AGENT: list of paused results
-        paused_results: list[V2StepResult] | None = None,
+        paused_results: list[StepResult] | None = None,
         # For HITL_AGENT / HITL_SUPERVISOR: single message_id
         message_id: str | None = None,
     ) -> bool:
@@ -1855,7 +1855,7 @@ class SupervisorExecutor:
         Returns True if saved successfully.
         """
         interrupted_state = {
-            "supervisor_v2": True,
+            "supervisor": True,
             "interrupt_kind": kind.value,
             "trajectory": trajectory.model_dump(mode="json"),
             "room_id": room_id,

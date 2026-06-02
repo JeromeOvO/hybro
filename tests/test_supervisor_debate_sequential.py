@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from common.utils.time import utcnow
-from models.supervisor_v2 import (
+from models.supervisor import (
     ActionType,
     AgentProfile,
     DelegateTarget,
@@ -23,7 +23,7 @@ from models.supervisor_v2 import (
     SupervisorAction,
     SupervisorTrajectory,
     TrajectoryEntry,
-    V2StepResult,
+    StepResult,
 )
 from modules.SupervisorExecutor import SupervisorExecutor
 
@@ -74,7 +74,7 @@ def _make_delegate_entry(
         started_at=utcnow(),
         completed_at=utcnow(),
         results=[
-            V2StepResult(
+            StepResult(
                 step_number=step,
                 agent_id=agent_id,
                 agent_name=agent_name,
@@ -224,7 +224,7 @@ class TestGetRemainingDebateAgentIds:
             started_at=utcnow(),
             completed_at=utcnow(),
             results=[
-                V2StepResult(
+                StepResult(
                     step_number=2,
                     agent_id="a2",
                     agent_name="a2",
@@ -386,7 +386,7 @@ class TestSequentialDebateDispatch:
 
         async def fake_dispatch(targets, **kwargs):
             dispatch_calls.append([t.agent_id for t in targets])
-            return [V2StepResult(
+            return [StepResult(
                 step_number=kwargs.get("step_number", 1),
                 agent_id=targets[0].agent_id,
                 agent_name=targets[0].agent_name,
@@ -424,7 +424,7 @@ class TestSequentialDebateDispatch:
         agents = [_make_agent_profile("a1", "Alpha")]
 
         async def fake_dispatch(targets, **kwargs):
-            return [V2StepResult(
+            return [StepResult(
                 step_number=1,
                 agent_id="a1",
                 agent_name="Alpha",
@@ -458,7 +458,7 @@ class TestSequentialDebateDispatch:
         async def fake_dispatch(targets, **kwargs):
             nonlocal dispatch_count
             dispatch_count += 1
-            return [V2StepResult(
+            return [StepResult(
                 step_number=dispatch_count,
                 agent_id=targets[0].agent_id,
                 agent_name=targets[0].agent_name,
@@ -500,7 +500,7 @@ class TestSequentialDebateDispatch:
 
         async def fake_dispatch(targets, **kwargs):
             dispatch_ids.append(targets[0].agent_id)
-            return [V2StepResult(
+            return [StepResult(
                 step_number=kwargs.get("step_number", 1),
                 agent_id=targets[0].agent_id,
                 agent_name=targets[0].agent_name,
@@ -579,7 +579,7 @@ class TestDebateResume:
 
         async def fake_dispatch(targets, **kwargs):
             dispatch_ids.append(targets[0].agent_id)
-            return [V2StepResult(
+            return [StepResult(
                 step_number=kwargs.get("step_number", 1),
                 agent_id=targets[0].agent_id,
                 agent_name=targets[0].agent_name,
@@ -677,7 +677,7 @@ class TestDebateResume:
 
         async def fake_dispatch(targets, **kwargs):
             dispatch_ids.append(targets[0].agent_id)
-            return [V2StepResult(
+            return [StepResult(
                 step_number=kwargs.get("step_number", 1),
                 agent_id=targets[0].agent_id,
                 agent_name=targets[0].agent_name,
@@ -769,7 +769,7 @@ class TestResumePreservesDebateParticipants:
 
         is_debate_mode = True
 
-        # Simulate the preservation logic from RoomMessageCenter._resume_supervisor_v2
+        # Simulate the preservation logic from RoomMessageCenter._resume_supervisor
         if trajectory.debate_agent_ids and is_debate_mode:
             current_ids = {a.agent_id for a in current_registry}
             missing_ids = [

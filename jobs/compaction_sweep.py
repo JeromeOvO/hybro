@@ -115,7 +115,7 @@ class CompactionSweep:
         """Scan all rooms with memory and compact where needed.
 
         Skips rooms with any non-terminal run (queued / processing / awaiting_input)
-        to avoid read-modify-write races with the V2 loop (§6.9).
+        to avoid read-modify-write races with the supervisor loop (§6.9).
 
         Uses a fixed-size worker pool to bound memory usage instead of
         creating one task per room.

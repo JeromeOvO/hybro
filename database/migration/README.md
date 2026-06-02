@@ -38,6 +38,19 @@ python database/migration/purge_empty_artifact_parts.py
 
 `DRY_RUN=1` prints the match count and performs no writes.
 
+## Rename legacy supervisor v2 field names
+
+**When:** Deploying the supervisor v2 naming cleanup (code uses `extend_info.supervisor`).
+
+**Command** (venv active, `MONGODB_URL` set):
+
+```bash
+python -m database.migration.rename_supervisor_v2_fields --dry-run
+python -m database.migration.rename_supervisor_v2_fields
+```
+
+Renames `extend_info.supervisor_v2`, `extend_info.supervisor_v2_clarify_resume`, and `pending_continuation.supervisor_v2` on `room_user_messages` and `room_agent_messages`.
+
 ## Feature flags (rollout; set in your deploy config after indexes exist)
 
 | Variable | Purpose |
