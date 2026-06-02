@@ -66,6 +66,7 @@ beforeEach(async () => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   cleanup()
 })
 
@@ -89,6 +90,8 @@ describe('HubPageContent', () => {
       expect(screen.getByText('No hub connected')).toBeInTheDocument()
     })
     expect(screen.getByText(/pip install hybro-hub/)).toBeInTheDocument()
+    expect(screen.queryByText(/Connected since/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Last seen/)).not.toBeInTheDocument()
   })
 
   it('shows setup guide with API Keys link', async () => {
@@ -118,6 +121,38 @@ describe('HubPageContent', () => {
     })
   })
 
+  it('does not show a redundant status badge when hub status text is shown', async () => {
+    mockUseHubStatus.mockReturnValue({
+      hub: { hub_id: 'h1', is_online: true, last_connected_at: null, agent_count: 0 },
+      isOnline: true, hasHub: true, isLoading: false, invalidate: mockInvalidate,
+    })
+    mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
+
+    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+
+    await waitFor(() => {
+      expect(screen.getByText('Hub Connected')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Online')).not.toBeInTheDocument()
+  })
+
+  it('does not add extra top padding to the hub status card content', async () => {
+    mockUseHubStatus.mockReturnValue({
+      hub: { hub_id: 'h1', is_online: true, last_connected_at: null, agent_count: 0 },
+      isOnline: true, hasHub: true, isLoading: false, invalidate: mockInvalidate,
+    })
+    mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
+
+    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+
+    await waitFor(() => {
+      expect(screen.getByText('Hub Connected')).toBeInTheDocument()
+    })
+    const statusCard = screen.getByText('Hub Connected').closest('[data-slot="card"]')
+    const statusContent = statusCard?.querySelector('[data-slot="card-content"]')
+    expect(statusContent).not.toHaveClass('pt-6')
+  })
+
   it('shows "Hub Offline" when hub is not online', async () => {
     mockUseHubStatus.mockReturnValue({
       hub: { hub_id: 'h1', is_online: false, last_connected_at: '2026-01-01T00:00:00Z', agent_count: 0 },
@@ -144,6 +179,13 @@ describe('HubPageContent', () => {
     await waitFor(() => {
       expect(screen.getByText(/Connected since/)).toBeInTheDocument()
     })
+    const connectedSince = screen.getByText(/Connected since/)
+    expect(connectedSince).toHaveClass('font-medium')
+    expect(connectedSince).toHaveClass('text-foreground')
+    expect(connectedSince).not.toHaveClass('text-xs')
+    expect(connectedSince).not.toHaveClass('text-muted-foreground')
+    expect(connectedSince).toHaveClass('ml-auto')
+    expect(connectedSince).toHaveClass('text-right')
   })
 
   it('shows "Last seen" timestamp when offline', async () => {
@@ -158,6 +200,27 @@ describe('HubPageContent', () => {
     await waitFor(() => {
       expect(screen.getByText(/Last seen/)).toBeInTheDocument()
     })
+    const lastSeen = screen.getByText(/Last seen/)
+    expect(lastSeen).toHaveClass('font-medium')
+    expect(lastSeen).toHaveClass('text-foreground')
+    expect(lastSeen).not.toHaveClass('text-xs')
+    expect(lastSeen).not.toHaveClass('text-muted-foreground')
+  })
+
+  it('does not show last-seen text when hub is offline without connection history', async () => {
+    mockUseHubStatus.mockReturnValue({
+      hub: { hub_id: 'h1', is_online: false, last_connected_at: null, agent_count: 0 },
+      isOnline: false, hasHub: true, isLoading: false, invalidate: mockInvalidate,
+    })
+    mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
+
+    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+
+    await waitFor(() => {
+      expect(screen.getByText('Hub Offline')).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/Connected since/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Last seen/)).not.toBeInTheDocument()
   })
 
   it('lists hub agents with name and description', async () => {
@@ -234,6 +297,98 @@ describe('HubPageContent', () => {
     render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
 
     expect(screen.getByRole('button', { name: /Refresh/ })).toBeInTheDocument()
+  })
+
+  it('highlights the Refresh button like sidebar items on hover', () => {
+    mockUseHubStatus.mockReturnValue({ hub: null, isOnline: false, hasHub: false, isLoading: false, invalidate: mockInvalidate })
+    mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
+
+    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+
+    const refreshButton = screen.getByRole('button', { name: /Refresh/ })
+    expect(refreshButton).toHaveClass('hover:bg-black/10')
+    expect(refreshButton).toHaveClass('dark:hover:bg-white/15')
+  })
+
+  it('shows a tooltip for the Refresh button', async () => {
+    const user = userEvent.setup()
+    mockUseHubStatus.mockReturnValue({ hub: null, isOnline: false, hasHub: false, isLoading: false, invalidate: mockInvalidate })
+    mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
+
+    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+
+    await user.hover(screen.getByRole('button', { name: /Refresh/ }))
+    await waitFor(() => {
+      expect(screen.getByRole('tooltip')).toHaveTextContent('Refresh hub status')
+    })
+  })
+
+  it('highlights local agent cards like sidebar items on hover', async () => {
+    mockUseHubStatus.mockReturnValue({
+      hub: { hub_id: 'h1', is_online: true, last_connected_at: null, agent_count: 1 },
+      isOnline: true, hasHub: true, isLoading: false, invalidate: mockInvalidate,
+    })
+    mockGetAllActiveAgents.mockResolvedValue({
+      success: true,
+      agents: [buildAgent({ agent_id: 'a1', name: 'Hover Agent' })],
+    })
+
+    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+
+    await waitFor(() => {
+      expect(screen.getByText('Hover Agent')).toBeInTheDocument()
+    })
+    const agentCard = screen.getByText('Hover Agent').closest('[data-slot="card"]')
+    expect(agentCard).toHaveClass('hover:bg-black/10')
+    expect(agentCard).toHaveClass('dark:hover:bg-white/15')
+  })
+
+  it('spins the Refresh icon while hub status is refetching', () => {
+    mockUseHubStatus.mockReturnValue({
+      hub: { hub_id: 'h1', is_online: true, last_connected_at: null, agent_count: 0 },
+      isOnline: true,
+      hasHub: true,
+      isLoading: false,
+      isFetching: true,
+      invalidate: mockInvalidate,
+    })
+    mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
+
+    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+
+    const refreshIcon = screen.getByRole('button', { name: /Refresh/ }).querySelector('svg')
+    expect(refreshIcon).toHaveClass('animate-spin')
+  })
+
+  it('keeps the Refresh icon spinning briefly after a fast manual refresh', async () => {
+    const user = userEvent.setup()
+    mockUseHubStatus.mockReturnValue({
+      hub: { hub_id: 'h1', is_online: true, last_connected_at: null, agent_count: 0 },
+      isOnline: true,
+      hasHub: true,
+      isLoading: false,
+      isFetching: false,
+      invalidate: mockInvalidate,
+    })
+    mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
+
+    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+
+    const refreshButton = screen.getByRole('button', { name: /Refresh/ })
+    const refreshIcon = refreshButton.querySelector('svg')
+    await waitFor(() => {
+      expect(refreshIcon).not.toHaveClass('animate-spin')
+    })
+
+    await user.click(refreshButton)
+
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(refreshIcon).toHaveClass('animate-spin')
+
+    await new Promise(resolve => setTimeout(resolve, 350))
+    await waitFor(() => {
+      expect(refreshIcon).not.toHaveClass('animate-spin')
+    })
   })
 
   it('renders agent cards as links to the correct portal detail page', async () => {
