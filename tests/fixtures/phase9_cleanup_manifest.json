@@ -228,7 +228,7 @@
         "tests/test_sdr_wave1.py",
         "tests/test_service_agent.py",
         "tests/test_supervisor_debate_sequential.py",
-        "tests/test_supervisor_v2_improvements.py",
+        "tests/test_supervisor_improvements.py",
         "tests/test_transport_parity.py",
         "tests/test_turn_id_passthrough.py",
         "tests/test_unified_summary.py"
@@ -310,7 +310,7 @@
         "tests/test_service_task_notification.py",
         "tests/test_sse_adapter_delivery.py",
         "tests/test_supervisor_bedrock_routing.py",
-        "tests/test_supervisor_v2_improvements.py",
+        "tests/test_supervisor_improvements.py",
         "tests/test_turn_annotation.py",
         "tests/test_turn_id_passthrough.py"
       ],

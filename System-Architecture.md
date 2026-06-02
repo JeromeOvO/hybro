@@ -202,7 +202,7 @@ Key components:
   queue and supervisor modes, and terminal processing status.
 - `QueueExecutor`: sequentially processes pre-created agent messages for
   non-supervisor flows, mention flows, and legacy routing.
-- `SupervisorExecutor`: adaptive V2 supervisor loop for rooms with
+- `SupervisorExecutor`: adaptive supervisor loop for rooms with
   `extend_info.use_supervisor`.
 - `AgentMessageProcessor`: transport router shared by queue and supervisor
   execution. It builds the A2A message, runs dispatch middleware, selects
@@ -425,9 +425,9 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
      - explicit mentions,
      - room default/saved group,
      - all-agent matching,
-     - supervisor V2 if `room.extend_info.use_supervisor` is true,
+     - supervisor if `room.extend_info.use_supervisor` is true,
    - either creates initial agent messages or marks the user message with
-     supervisor V2 preparation data.
+     supervisor preparation data.
 
 6. `ExecutionFacade.start_orchestration` builds an `OrchestrationRequest` and
    calls `RoomMessageCenter.process_room_user_message`.
@@ -439,7 +439,7 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - loads quoted context when present,
    - creates or reuses a cancellation token,
    - chooses one of two execution paths:
-     - Supervisor V2 path for `extend_info.supervisor_v2`.
+     - Supervisor path for `extend_info.supervisor`.
      - Queue path for pre-created agent messages.
 
 8. Queue path:
@@ -449,7 +449,7 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
      `AgentMessageProcessor` for transport selection and dispatch.
    - On success, emit unified summary and terminal `completed` status.
 
-9. Supervisor V2 path:
+9. Supervisor path:
    - Build agent registry and room config.
    - Assemble room/conversation context.
    - Run the adaptive `SupervisorExecutor` loop.

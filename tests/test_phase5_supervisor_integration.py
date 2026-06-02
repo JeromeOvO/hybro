@@ -1,12 +1,12 @@
 """
-Unit tests for Phase 5: Supervisor V2 Integration.
+Unit tests for Phase 5: Supervisor Integration.
 
 Tests cover:
-1. build_supervisor_context() wiring into _prepare_for_supervisor_v2()
+1. build_supervisor_context() wiring into _prepare_for_supervisor()
 2. build_agent_execution_context() wiring into process_agent_message()
 3. add_synthesis_to_history() in RoomMemoryService
 4. update_room_summary() with LLM extraction
-5. Compaction trigger in _handle_v2_run_result() for terminal statuses
+5. Compaction trigger in _handle_supervisor_run_result() for terminal statuses
 6. Prompt cache optimization (conversation_context in system prompt)
 
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §11, §12.3, §18 Phase 5 for specification.
@@ -29,14 +29,14 @@ from models.memory import (
     RoomSummary,
     TurnRole,
 )
-from models.supervisor_v2 import (
+from models.supervisor import (
     ActionType,
     RunStatus,
     SupervisorAction,
     SupervisorRunResult,
     SupervisorTrajectory,
     TrajectoryEntry,
-    V2StepResult,
+    StepResult,
 )
 
 # =========================================================================
@@ -574,33 +574,33 @@ class TestPromptCacheOptimization:
 
     def test_conversation_context_in_system_prompt(self):
         """conversation_context placeholder should be in the system prompt template."""
-        from services.room_supervisor_service import SUPERVISOR_V2_SYSTEM_PROMPT
+        from services.room_supervisor_service import SUPERVISOR_SYSTEM_PROMPT
 
-        assert "{conversation_context}" in SUPERVISOR_V2_SYSTEM_PROMPT
+        assert "{conversation_context}" in SUPERVISOR_SYSTEM_PROMPT
 
     def test_conversation_context_not_in_user_prompt(self):
         """conversation_context placeholder should NOT be in the user prompt template."""
-        from services.room_supervisor_service import SUPERVISOR_V2_USER_PROMPT
+        from services.room_supervisor_service import SUPERVISOR_USER_PROMPT
 
-        assert "{conversation_context}" not in SUPERVISOR_V2_USER_PROMPT
+        assert "{conversation_context}" not in SUPERVISOR_USER_PROMPT
 
     def test_user_prompt_has_only_dynamic_fields(self):
         """User prompt should only contain fields that change per iteration."""
-        from services.room_supervisor_service import SUPERVISOR_V2_USER_PROMPT
+        from services.room_supervisor_service import SUPERVISOR_USER_PROMPT
 
-        assert "{message_text}" in SUPERVISOR_V2_USER_PROMPT
-        assert "{trajectory_summary}" in SUPERVISOR_V2_USER_PROMPT
-        assert "{debate_mode_note}" in SUPERVISOR_V2_USER_PROMPT
-        assert "{steps_completed}" in SUPERVISOR_V2_USER_PROMPT
-        assert "{max_steps}" in SUPERVISOR_V2_USER_PROMPT
-        assert "{steps_remaining}" in SUPERVISOR_V2_USER_PROMPT
-        assert "{budget_warning}" in SUPERVISOR_V2_USER_PROMPT
-        assert "{quoted_section}" in SUPERVISOR_V2_USER_PROMPT
+        assert "{message_text}" in SUPERVISOR_USER_PROMPT
+        assert "{trajectory_summary}" in SUPERVISOR_USER_PROMPT
+        assert "{debate_mode_note}" in SUPERVISOR_USER_PROMPT
+        assert "{steps_completed}" in SUPERVISOR_USER_PROMPT
+        assert "{max_steps}" in SUPERVISOR_USER_PROMPT
+        assert "{steps_remaining}" in SUPERVISOR_USER_PROMPT
+        assert "{budget_warning}" in SUPERVISOR_USER_PROMPT
+        assert "{quoted_section}" in SUPERVISOR_USER_PROMPT
 
     @pytest.mark.asyncio
     async def test_decide_next_includes_quoted_text_in_user_prompt(self):
         """decide_next() should include verbatim quoted text in the user prompt."""
-        from models.supervisor_v2 import AgentProfile, RoomConfig, SupervisorTrajectory
+        from models.supervisor import AgentProfile, RoomConfig, SupervisorTrajectory
         from services.room_supervisor_service import RoomSupervisorService
 
         mock_openai = AsyncMock()
@@ -644,7 +644,7 @@ class TestPromptCacheOptimization:
     @pytest.mark.asyncio
     async def test_decide_next_passes_context_to_system_prompt(self):
         """decide_next() should format conversation_context into system prompt."""
-        from models.supervisor_v2 import (
+        from models.supervisor import (
             AgentProfile,
             RoomConfig,
             SupervisorTrajectory,
@@ -690,7 +690,7 @@ class TestPromptCacheOptimization:
 
 
 class TestCompactionTrigger:
-    """Tests for compaction trigger in _handle_v2_run_result() (§6.5)."""
+    """Tests for compaction trigger in _handle_supervisor_run_result() (§6.5)."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -711,7 +711,7 @@ class TestCompactionTrigger:
         rmc._trigger_compaction_safe = AsyncMock()
         rmc._update_room_summary_safe = AsyncMock()
 
-        from models.supervisor_v2 import SupervisorTrajectory
+        from models.supervisor import SupervisorTrajectory
 
         trajectory = SupervisorTrajectory()
 
@@ -737,7 +737,7 @@ class TestCompactionTrigger:
         mock_memory_service.add_synthesis_to_history.return_value = "turn_synth_123"
         rmc.room_memory_service = mock_memory_service
 
-        await rmc._handle_v2_run_result(
+        await rmc._handle_supervisor_run_result(
             result=result,
             room_id="test_room",
             user_message_id="msg-1",
@@ -829,12 +829,12 @@ class TestMaxContextCharsEnforcement:
 
 
 # =========================================================================
-# Test: _parse_v2_action case-insensitive parsing
+# Test: _parse_supervisor_action case-insensitive parsing
 # =========================================================================
 
 
 class TestParseV2ActionCaseInsensitive:
-    """Tests for case-insensitive action parsing in _parse_v2_action.
+    """Tests for case-insensitive action parsing in _parse_supervisor_action.
 
     The LLM may return action strings in any case (DELEGATE, delegate, Delegate).
     The parser must normalize to lowercase before matching the ActionType enum.
@@ -860,7 +860,7 @@ class TestParseV2ActionCaseInsensitive:
     ])
     def test_parses_any_case(self, service, action_str, expected_action):
         """Action strings in any case should be recognized."""
-        from models.supervisor_v2 import ActionType
+        from models.supervisor import ActionType
 
         response_json = {
             "action": action_str,
@@ -869,35 +869,35 @@ class TestParseV2ActionCaseInsensitive:
             "synthesis_instruction": None,
             "clarification_question": None,
         }
-        action = service._parse_v2_action(response_json)
+        action = service._parse_supervisor_action(response_json)
         assert action.action == ActionType(expected_action)
 
     def test_unknown_action_defaults_to_done(self, service):
         """Unrecognized action strings should default to DONE."""
-        from models.supervisor_v2 import ActionType
+        from models.supervisor import ActionType
 
         response_json = {
             "action": "INVALID_ACTION",
             "reasoning": "test",
             "targets": [],
         }
-        action = service._parse_v2_action(response_json)
+        action = service._parse_supervisor_action(response_json)
         assert action.action == ActionType.DONE
 
     def test_missing_action_defaults_to_done(self, service):
         """Missing action key should default to DONE."""
-        from models.supervisor_v2 import ActionType
+        from models.supervisor import ActionType
 
         response_json = {
             "reasoning": "test",
             "targets": [],
         }
-        action = service._parse_v2_action(response_json)
+        action = service._parse_supervisor_action(response_json)
         assert action.action == ActionType.DONE
 
     def test_delegate_with_targets(self, service):
         """DELEGATE (uppercase) with targets should parse targets correctly."""
-        from models.supervisor_v2 import ActionType
+        from models.supervisor import ActionType
 
         response_json = {
             "action": "DELEGATE",
@@ -906,7 +906,7 @@ class TestParseV2ActionCaseInsensitive:
                 {"agent_id": "agent-1", "agent_name": "TestAgent", "task": "Do something"},
             ],
         }
-        action = service._parse_v2_action(response_json)
+        action = service._parse_supervisor_action(response_json)
         assert action.action == ActionType.DELEGATE
         assert len(action.targets) == 1
         assert action.targets[0].agent_id == "agent-1"
@@ -914,40 +914,40 @@ class TestParseV2ActionCaseInsensitive:
 
     def test_null_action_defaults_to_done(self, service):
         """LLM returning null for action should default to DONE."""
-        from models.supervisor_v2 import ActionType
+        from models.supervisor import ActionType
 
         response_json = {"action": None, "reasoning": "test", "targets": []}
-        action = service._parse_v2_action(response_json)
+        action = service._parse_supervisor_action(response_json)
         assert action.action == ActionType.DONE
 
     def test_numeric_action_defaults_to_done(self, service):
         """LLM returning a number for action should default to DONE."""
-        from models.supervisor_v2 import ActionType
+        from models.supervisor import ActionType
 
         response_json = {"action": 42, "reasoning": "test", "targets": []}
-        action = service._parse_v2_action(response_json)
+        action = service._parse_supervisor_action(response_json)
         assert action.action == ActionType.DONE
 
     def test_object_action_defaults_to_done(self, service):
         """LLM returning an object for action should default to DONE."""
-        from models.supervisor_v2 import ActionType
+        from models.supervisor import ActionType
 
         response_json = {
             "action": {"type": "delegate"},
             "reasoning": "test",
             "targets": [],
         }
-        action = service._parse_v2_action(response_json)
+        action = service._parse_supervisor_action(response_json)
         assert action.action == ActionType.DONE
 
 
 # =========================================================================
-# Test: _parse_v2_action prompt_type/choices sanitization
+# Test: _parse_supervisor_action prompt_type/choices sanitization
 # =========================================================================
 
 
 class TestParseV2ActionClarifySanitization:
-    """Tests that _parse_v2_action sanitizes prompt_type and choices from LLM output."""
+    """Tests that _parse_supervisor_action sanitizes prompt_type and choices from LLM output."""
 
     @pytest.fixture
     def service(self):
@@ -966,38 +966,38 @@ class TestParseV2ActionClarifySanitization:
         return base
 
     def test_valid_prompt_type_text(self, service):
-        action = service._parse_v2_action(self._clarify_json(prompt_type="text"))
+        action = service._parse_supervisor_action(self._clarify_json(prompt_type="text"))
         assert action.prompt_type == "text"
 
     def test_valid_prompt_type_choice_with_choices(self, service):
-        action = service._parse_v2_action(
+        action = service._parse_supervisor_action(
             self._clarify_json(prompt_type="choice", choices=["A", "B", "C"])
         )
         assert action.prompt_type == "choice"
         assert action.choices == ["A", "B", "C"]
 
     def test_valid_prompt_type_confirmation(self, service):
-        action = service._parse_v2_action(self._clarify_json(prompt_type="confirmation"))
+        action = service._parse_supervisor_action(self._clarify_json(prompt_type="confirmation"))
         assert action.prompt_type == "confirmation"
 
     def test_invalid_prompt_type_number_becomes_none(self, service):
-        action = service._parse_v2_action(self._clarify_json(prompt_type=42))
+        action = service._parse_supervisor_action(self._clarify_json(prompt_type=42))
         assert action.prompt_type is None
 
     def test_invalid_prompt_type_unknown_string_becomes_none(self, service):
-        action = service._parse_v2_action(self._clarify_json(prompt_type="multiple_choice"))
+        action = service._parse_supervisor_action(self._clarify_json(prompt_type="multiple_choice"))
         assert action.prompt_type is None
 
     def test_choices_non_list_becomes_none(self, service):
-        action = service._parse_v2_action(self._clarify_json(choices="not a list"))
+        action = service._parse_supervisor_action(self._clarify_json(choices="not a list"))
         assert action.choices is None
 
     def test_choices_list_with_non_strings_becomes_none(self, service):
-        action = service._parse_v2_action(self._clarify_json(choices=["ok", 123, None]))
+        action = service._parse_supervisor_action(self._clarify_json(choices=["ok", 123, None]))
         assert action.choices is None
 
     def test_missing_prompt_type_is_none(self, service):
-        action = service._parse_v2_action(self._clarify_json())
+        action = service._parse_supervisor_action(self._clarify_json())
         assert action.prompt_type is None
         assert action.choices is None
 
@@ -1014,7 +1014,7 @@ class TestTrajectoryStatusSerialization:
         """model_dump(mode='json') with enum status should not warn."""
         import warnings
 
-        from models.supervisor_v2 import (
+        from models.supervisor import (
             SupervisorTrajectory,
             TrajectoryStatus,
         )
@@ -1040,7 +1040,7 @@ class TestTrajectoryStatusSerialization:
         """Every TrajectoryStatus value should serialize and deserialize."""
         import warnings
 
-        from models.supervisor_v2 import (
+        from models.supervisor import (
             SupervisorTrajectory,
             TrajectoryStatus,
         )
@@ -1067,7 +1067,7 @@ class TestTrajectoryStatusSerialization:
         Pydantic serialization warning — proving the old code was broken."""
         import warnings
 
-        from models.supervisor_v2 import SupervisorTrajectory
+        from models.supervisor import SupervisorTrajectory
 
         trajectory = SupervisorTrajectory()
         trajectory.status = "completed"  # type: ignore[assignment]
@@ -1086,12 +1086,12 @@ class TestTrajectoryStatusSerialization:
 
 
 # =========================================================================
-# Tests: _handle_v2_run_result — supervisor synthesis vs default summary
+# Tests: _handle_supervisor_run_result — supervisor synthesis vs default summary
 # =========================================================================
 
 
 class TestHandleV2RunResultUnifiedSummary:
-    """Verify that _handle_v2_run_result routes to _emit_unified_summary
+    """Verify that _handle_supervisor_run_result routes to _emit_unified_summary
     with correct arguments for both synthesis and non-synthesis paths."""
 
     @pytest.fixture
@@ -1145,7 +1145,7 @@ class TestHandleV2RunResultUnifiedSummary:
         self, rmc, completed_result_with_synthesis
     ):
         """When supervisor produces synthesis, it is passed directly."""
-        await rmc._handle_v2_run_result(
+        await rmc._handle_supervisor_run_result(
             result=completed_result_with_synthesis,
             room_id="room-1",
             user_message_id="msg-1",
@@ -1162,11 +1162,11 @@ class TestHandleV2RunResultUnifiedSummary:
         """When supervisor chose DONE with 2+ agents, emit deterministic digest (not LLM summary)."""
         from datetime import datetime
 
-        from models.supervisor_v2 import (
+        from models.supervisor import (
             ActionType,
             SupervisorAction,
             TrajectoryEntry,
-            V2StepResult,
+            StepResult,
         )
 
         completed_result_without_synthesis.trajectory.entries = [
@@ -1178,7 +1178,7 @@ class TestHandleV2RunResultUnifiedSummary:
                 ),
                 started_at=datetime(2026, 1, 1),
                 results=[
-                    V2StepResult(
+                    StepResult(
                         step_number=1,
                         agent_id="agent-1",
                         agent_name="Agent A",
@@ -1186,7 +1186,7 @@ class TestHandleV2RunResultUnifiedSummary:
                         success=True,
                         response_text="Answer A",
                     ),
-                    V2StepResult(
+                    StepResult(
                         step_number=2,
                         agent_id="agent-2",
                         agent_name="Agent B",
@@ -1197,7 +1197,7 @@ class TestHandleV2RunResultUnifiedSummary:
                 ],
             ),
         ]
-        await rmc._handle_v2_run_result(
+        await rmc._handle_supervisor_run_result(
             result=completed_result_without_synthesis,
             room_id="room-1",
             user_message_id="msg-1",
@@ -1214,7 +1214,7 @@ class TestHandleV2RunResultUnifiedSummary:
         self, rmc, completed_result_without_synthesis
     ):
         """DONE with fewer than 2 agent responses does not emit deterministic digest."""
-        await rmc._handle_v2_run_result(
+        await rmc._handle_supervisor_run_result(
             result=completed_result_without_synthesis,
             room_id="room-1",
             user_message_id="msg-1",
@@ -1237,7 +1237,7 @@ class TestHandleV2RunResultUnifiedSummary:
             action=delegate_action,
             started_at=datetime(2026, 1, 1),
             results=[
-                V2StepResult(
+                StepResult(
                     step_number=1,
                     agent_id="agent-1",
                     agent_name="Agent Alpha",
@@ -1245,7 +1245,7 @@ class TestHandleV2RunResultUnifiedSummary:
                     response_text="Alpha's answer here.",
                     success=True,
                 ),
-                V2StepResult(
+                StepResult(
                     step_number=2,
                     agent_id="agent-2",
                     agent_name="Agent Beta",
@@ -1260,7 +1260,7 @@ class TestHandleV2RunResultUnifiedSummary:
             trajectory=SupervisorTrajectory(entries=[entry]),
             synthesis_text="Combined synthesis.",
         )
-        await rmc._handle_v2_run_result(
+        await rmc._handle_supervisor_run_result(
             result=result,
             room_id="room-1",
             user_message_id="msg-1",
@@ -1274,12 +1274,12 @@ class TestHandleV2RunResultUnifiedSummary:
 
 
 # =========================================================================
-# Test: _parse_v2_action multi-question CLARIFY parsing
+# Test: _parse_supervisor_action multi-question CLARIFY parsing
 # =========================================================================
 
 
 class TestParseV2ActionMultiQuestion:
-    """Tests that _parse_v2_action correctly parses the questions array."""
+    """Tests that _parse_supervisor_action correctly parses the questions array."""
 
     @pytest.fixture
     def service(self):
@@ -1290,7 +1290,7 @@ class TestParseV2ActionMultiQuestion:
         )
 
     def test_parses_valid_questions_array(self, service):
-        action = service._parse_v2_action({
+        action = service._parse_supervisor_action({
             "action": "clarify",
             "reasoning": "need more info",
             "questions": [
@@ -1307,7 +1307,7 @@ class TestParseV2ActionMultiQuestion:
         assert action.questions[2].prompt_type == "confirmation"
 
     def test_falls_back_to_clarification_question_when_no_questions(self, service):
-        action = service._parse_v2_action({
+        action = service._parse_supervisor_action({
             "action": "clarify",
             "reasoning": "need info",
             "clarification_question": "What dates?",
@@ -1316,7 +1316,7 @@ class TestParseV2ActionMultiQuestion:
         assert action.clarification_question == "What dates?"
 
     def test_ignores_questions_with_invalid_prompts(self, service):
-        action = service._parse_v2_action({
+        action = service._parse_supervisor_action({
             "action": "clarify",
             "reasoning": "need info",
             "questions": [
@@ -1329,7 +1329,7 @@ class TestParseV2ActionMultiQuestion:
         assert action.questions[0].prompt == "Valid question?"
 
     def test_sanitizes_invalid_prompt_type_in_questions(self, service):
-        action = service._parse_v2_action({
+        action = service._parse_supervisor_action({
             "action": "clarify",
             "reasoning": "need info",
             "questions": [
@@ -1343,7 +1343,7 @@ class TestParseV2ActionMultiQuestion:
         assert action.questions[1].choices is None
 
     def test_empty_questions_array_yields_none(self, service):
-        action = service._parse_v2_action({
+        action = service._parse_supervisor_action({
             "action": "clarify",
             "reasoning": "need info",
             "questions": [],
@@ -1351,7 +1351,7 @@ class TestParseV2ActionMultiQuestion:
         assert action.questions is None
 
     def test_questions_array_not_a_list_yields_none(self, service):
-        action = service._parse_v2_action({
+        action = service._parse_supervisor_action({
             "action": "clarify",
             "reasoning": "need info",
             "questions": "not a list",

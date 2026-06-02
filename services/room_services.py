@@ -1774,7 +1774,7 @@ class RoomServices:
         selected_agent_set: dict,
     ) -> list:
         """Build an ``AgentProfile`` list from resolved agents or the agent set."""
-        from models.supervisor_v2 import AgentProfile
+        from models.supervisor import AgentProfile
 
         registry: list[AgentProfile] = []
         if agents:
@@ -1792,7 +1792,7 @@ class RoomServices:
                 )
         return registry
 
-    async def _prepare_for_supervisor_v2(
+    async def _prepare_for_supervisor(
         self,
         room: Room,
         user_message: RoomUserMessage,
@@ -1814,12 +1814,12 @@ class RoomServices:
         Agent messages are created one at a time inside
         ``SupervisorExecutor._dispatch_targets``.
         """
-        from models.supervisor_v2 import RoomConfig
+        from models.supervisor import RoomConfig
         from services.context_assembly_service import context_assembly_service
 
         if token and token.is_cancelled:
             logger.info(
-                "RoomServices: Message parsing cancelled (V2) for %s",
+                "RoomServices: Message parsing cancelled (supervisor) for %s",
                 user_message.message_id,
             )
             self.sse_manager.clear_cancellation(user_message.message_id)
@@ -1866,7 +1866,7 @@ class RoomServices:
 
         user_message.extend_info = {
             **(user_message.extend_info or {}),
-            "supervisor_v2": True,
+            "supervisor": True,
             "agent_registry": agent_dicts,
             "room_config": room_config.model_dump(mode="json"),
             "conversation_context": conversation_context,
@@ -1876,7 +1876,7 @@ class RoomServices:
         )
 
         logger.info(
-            "RoomServices: V2 supervisor data prepared for message %s (%d agents)",
+            "RoomServices: supervisor data prepared for message %s (%d agents)",
             user_message.message_id,
             len(agent_registry),
         )
@@ -1884,12 +1884,12 @@ class RoomServices:
         return ParseResult(success=True)
 
     # ------------------------------------------------------------------
-    # V2 Supervisor clarify-resume preparation (Phase 4, §7.4)
+    # Supervisor clarify-resume preparation (Phase 4, §7.4)
     # ------------------------------------------------------------------
 
     CLARIFY_TTL_SECONDS: int = 3600  # 1 hour
 
-    async def _prepare_clarify_resume_v2(
+    async def _prepare_clarify_resume(
         self,
         room: Room,
         user_message: RoomUserMessage,
@@ -1903,11 +1903,11 @@ class RoomServices:
         """Check whether a pending CLARIFY can be resumed and prepare extend_info.
 
         Returns ``True`` if the user message was prepared for clarify-resume
-        (``extend_info`` updated with ``supervisor_v2_clarify_resume``).
+        (``extend_info`` updated with ``supervisor_clarify_resume``).
         Returns ``False`` if the pending clarification is stale, missing, or
-        otherwise invalid — the caller should fall through to a fresh V2 run.
+        otherwise invalid — the caller should fall through to a fresh supervisor run.
         """
-        from models.supervisor_v2 import (
+        from models.supervisor import (
             RoomConfig,
             SupervisorTrajectory,
             TrajectoryStatus,
@@ -2027,8 +2027,8 @@ class RoomServices:
 
         user_message.extend_info = {
             **(user_message.extend_info or {}),
-            "supervisor_v2": True,
-            "supervisor_v2_clarify_resume": True,
+            "supervisor": True,
+            "supervisor_clarify_resume": True,
             "clarify_original_message_id": pending_clarify_msg_id,
             "resumed_trajectory": trajectory.model_dump(mode="json"),
             "agent_registry": [p.model_dump(mode="json") for p in agent_registry],
@@ -2043,7 +2043,7 @@ class RoomServices:
         await self._clear_pending_clarification(room)
 
         logger.info(
-            "RoomServices: V2 clarify resume prepared for message %s "
+            "RoomServices: Supervisor clarify resume prepared for message %s "
             "(original: %s, %d agents)",
             user_message.message_id,
             pending_clarify_msg_id,
@@ -2370,8 +2370,8 @@ class RoomServices:
         }
 
         # Fetch room memory for context assembly.
-        # V2 supervisor always needs room_memory for ContextAssemblyService (§11.1).
-        # Non-V2 multi-agent paths need it for build_minimal_context.
+        # supervisor always needs room_memory for ContextAssemblyService (§11.1).
+        # Non-supervisor multi-agent paths need it for build_minimal_context.
         room_memory = None
         if use_supervisor or len(selected_agent_set) > 1:
             room_memory = await self.database_service.get_room_memory_by_room_id(
@@ -2382,7 +2382,7 @@ class RoomServices:
                     room_memory.memory_content
                 )
 
-        # Build conversation_context for non-V2 paths (V1 decomposer, mentions, etc.)
+        # Build conversation_context for non-supervisor paths (V1 decomposer, mentions, etc.)
         conversation_context = None
         if room_memory and room_memory.memory_content:
             conversation_context = build_minimal_context(
@@ -2399,7 +2399,7 @@ class RoomServices:
             qblock = f"\n\n[User quoted excerpt for routing]\n{ext_q.strip()[:2000]}"
             conversation_context = (conversation_context or "") + qblock
 
-        # V2 Supervisor: lightweight preparation (no LLM call, no pre-generated messages)
+        # Supervisor: lightweight preparation (no LLM call, no pre-generated messages)
         if use_supervisor:
             # --- Clarify resume check (§7.4) ---
             clarify_resume_prepared = False
@@ -2409,7 +2409,7 @@ class RoomServices:
                 else None
             )
             if pending_clarify_msg_id:
-                clarify_resume_prepared = await self._prepare_clarify_resume_v2(
+                clarify_resume_prepared = await self._prepare_clarify_resume(
                     room=room,
                     user_message=user_message,
                     message_text=message_text,
@@ -2423,7 +2423,7 @@ class RoomServices:
             if clarify_resume_prepared:
                 parse_result = ParseResult(success=True)
             else:
-                parse_result = await self._prepare_for_supervisor_v2(
+                parse_result = await self._prepare_for_supervisor(
                     room=room,
                     user_message=user_message,
                     message_text=message_text,

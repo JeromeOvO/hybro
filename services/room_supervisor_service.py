@@ -1,13 +1,8 @@
-"""Room Supervisor Service (V2 only)
+"""Room Supervisor Service.
 
 Provides adaptive-loop orchestration for multi-agent chat rooms:
 1. DECIDE_NEXT: Given the trajectory so far, decide the next action
 2. SYNTHESIZE: Produce a unified response from collected agent results
-
-V1 plan-and-execute methods (create_plan, review_step, synthesize_results)
-were removed in Phase 5.
-
-See docs/SUPERVISOR_V2_DESIGN.md for full architecture details.
 """
 
 from __future__ import annotations
@@ -15,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from common.utils.logger import get_logger
-from models.supervisor_v2 import (
+from models.supervisor import (
     ActionType,
     AgentProfile,
     ClarifyQuestion,
@@ -49,10 +44,10 @@ class SupervisorPlanningError(Exception):
 
 
 # =============================================================================
-# V2 Prompts (adaptive loop)
+# Prompts (adaptive loop)
 # =============================================================================
 
-SUPERVISOR_V2_SYSTEM_PROMPT = """You are a Supervisor coordinating specialist agents in a chat room.
+SUPERVISOR_SYSTEM_PROMPT = """You are a Supervisor coordinating specialist agents in a chat room.
 
 ## Available Agents
 {agent_registry}
@@ -164,7 +159,7 @@ Output ONLY valid JSON matching the schema below.
   ] | null
 }}"""
 
-SUPERVISOR_V2_USER_PROMPT = """{debate_mode_note}
+SUPERVISOR_USER_PROMPT = """{debate_mode_note}
 
 ## User Message
 {message_text}
@@ -180,7 +175,7 @@ Actions remaining: {steps_remaining}.
 
 ## What should happen next?"""
 
-SUPERVISOR_V2_SYNTHESIS_SYSTEM_PROMPT = """You are synthesizing the results from multiple specialist agents into a single coherent response for the user.
+SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = """You are synthesizing the results from multiple specialist agents into a single coherent response for the user.
 
 ## Execution Trajectory
 {trajectory_summary}
@@ -203,7 +198,7 @@ SUPERVISOR_V2_SYNTHESIS_SYSTEM_PROMPT = """You are synthesizing the results from
 
 
 class RoomSupervisorService:
-    """Supervisor for multi-agent room orchestration (V2 adaptive loop).
+    """Supervisor for multi-agent room orchestration (adaptive loop).
 
     Responsibilities:
     1. DECIDE_NEXT: Analyze trajectory + agent registry -> SupervisorAction
@@ -259,7 +254,7 @@ class RoomSupervisorService:
         return "\n".join(lines)
 
     # =========================================================================
-    # V2: Adaptive Loop — decide_next / synthesize
+    # Adaptive loop — decide_next / synthesize
     # =========================================================================
 
     async def decide_next(
@@ -272,7 +267,7 @@ class RoomSupervisorService:
         quoted_text: str | None = None,
         max_steps: int = 8,
     ) -> SupervisorAction:
-        """Ask the Supervisor LLM for the next action (V2 adaptive loop).
+        """Ask the Supervisor LLM for the next action (adaptive loop).
 
         Called once per loop iteration by the ``SupervisorExecutor``.
 
@@ -284,7 +279,7 @@ class RoomSupervisorService:
         """
         try:
             agent_registry_str = self._format_agent_registry(agent_registry)
-            system_prompt = SUPERVISOR_V2_SYSTEM_PROMPT.format(
+            system_prompt = SUPERVISOR_SYSTEM_PROMPT.format(
                 agent_registry=agent_registry_str,
                 max_steps=max_steps,
                 conversation_context=conversation_context or "No prior conversation.",
@@ -324,7 +319,7 @@ class RoomSupervisorService:
                     "or flatten formatting."
                 )
 
-            user_prompt = SUPERVISOR_V2_USER_PROMPT.format(
+            user_prompt = SUPERVISOR_USER_PROMPT.format(
                 debate_mode_note=debate_note,
                 message_text=message_text,
                 quoted_section=quoted_section,
@@ -340,7 +335,7 @@ class RoomSupervisorService:
                 user_prompt=user_prompt,
             )
 
-            action = self._parse_v2_action(response_json)
+            action = self._parse_supervisor_action(response_json)
 
             # Hard guard: if the LLM keeps re-delegating to the same agent(s)
             # despite successful results, override to DONE.  Prompt hints are
@@ -354,7 +349,7 @@ class RoomSupervisorService:
                 )
 
             logger.info(
-                "Supervisor V2 decide_next — action=%s targets=%s reasoning=%s",
+                "Supervisor decide_next — action=%s targets=%s reasoning=%s",
                 action.action.value
                 if hasattr(action.action, "value")
                 else action.action,
@@ -365,7 +360,7 @@ class RoomSupervisorService:
             return action
 
         except Exception as e:
-            logger.warning("Supervisor V2 decide_next failed: %s", e)
+            logger.warning("Supervisor decide_next failed: %s", e)
             if not trajectory.entries:
                 raise SupervisorPlanningError(str(e)) from e
             completed_results = [
@@ -385,13 +380,13 @@ class RoomSupervisorService:
                 reasoning=f"Supervisor failed ({e}), stopping with current results",
             )
 
-    def _synthesis_v2_prompts(
+    def _synthesis_prompts(
         self,
         trajectory: SupervisorTrajectory,
         synthesis_instruction: str,
     ) -> tuple[str, str]:
         trajectory_summary = self._format_trajectory(trajectory)
-        system_prompt = SUPERVISOR_V2_SYNTHESIS_SYSTEM_PROMPT.format(
+        system_prompt = SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT.format(
             trajectory_summary=trajectory_summary,
             synthesis_instruction=synthesis_instruction
             or "Combine the agent responses into a unified, coherent answer.",
@@ -401,13 +396,13 @@ class RoomSupervisorService:
         )
         return system_prompt, user_prompt
 
-    async def synthesize_v2_stream(
+    async def synthesize_stream(
         self,
         trajectory: SupervisorTrajectory,
         synthesis_instruction: str,
     ):
-        """Stream synthesis tokens from the supervisor LLM (V2 adaptive loop)."""
-        system_prompt, user_prompt = self._synthesis_v2_prompts(
+        """Stream synthesis tokens from the supervisor LLM (adaptive loop)."""
+        system_prompt, user_prompt = self._synthesis_prompts(
             trajectory, synthesis_instruction
         )
         try:
@@ -420,35 +415,35 @@ class RoomSupervisorService:
                 total += len(token)
                 yield token
             logger.info(
-                "Supervisor V2 synthesis stream completed",
+                "Supervisor synthesis stream completed",
                 extra={
                     "trajectory_id": trajectory.trajectory_id,
                     "synthesis_length": total,
                 },
             )
         except Exception as e:
-            logger.error("Supervisor V2 synthesis stream failed: %s", e)
-            fallback = self._fallback_v2_synthesis(trajectory)
+            logger.error("Supervisor synthesis stream failed: %s", e)
+            fallback = self._fallback_synthesis(trajectory)
             if fallback:
                 yield fallback
 
-    async def synthesize_v2(
+    async def synthesize(
         self,
         trajectory: SupervisorTrajectory,
         synthesis_instruction: str,
     ) -> str:
-        """Produce a synthesis from collected results (V2 adaptive loop).
+        """Produce a synthesis from collected results (adaptive loop).
 
         Called when ``decide_next`` returns SYNTHESIZE, or when the step
         budget is exhausted and results need combining.
         """
         parts: list[str] = []
-        async for token in self.synthesize_v2_stream(trajectory, synthesis_instruction):
+        async for token in self.synthesize_stream(trajectory, synthesis_instruction):
             parts.append(token)
         return "".join(parts)
 
     # -------------------------------------------------------------------------
-    # V2 helpers
+    # Helpers
     # -------------------------------------------------------------------------
 
     # Maximum number of recent trajectory entries to include in full detail.
@@ -706,7 +701,7 @@ class RoomSupervisorService:
             max_consecutive, "consecutive successes",
         )
 
-    def _parse_v2_action(self, response_json: dict) -> SupervisorAction:
+    def _parse_supervisor_action(self, response_json: dict) -> SupervisorAction:
         """Parse the LLM JSON response into a ``SupervisorAction``."""
 
         raw_action = response_json.get("action", "done")
@@ -715,7 +710,7 @@ class RoomSupervisorService:
             action_type = ActionType(action_str)
         except ValueError:
             logger.warning(
-                "Supervisor V2: unknown action '%s' (raw: '%s'), defaulting to DONE",
+                "Supervisor: unknown action '%s' (raw: '%s'), defaulting to DONE",
                 action_str,
                 raw_action,
             )
@@ -734,13 +729,13 @@ class RoomSupervisorService:
                 )
             else:
                 logger.warning(
-                    "Supervisor V2: dropping malformed target (missing agent_id): %s",
+                    "Supervisor: dropping malformed target (missing agent_id): %s",
                     t,
                 )
 
         if action_type == ActionType.DELEGATE and raw_targets and not targets:
             logger.warning(
-                "Supervisor V2: all %d targets were malformed, converting DELEGATE to DONE",
+                "Supervisor: all %d targets were malformed, converting DELEGATE to DONE",
                 len(raw_targets),
             )
             action_type = ActionType.DONE
@@ -800,7 +795,7 @@ class RoomSupervisorService:
         )
 
     @staticmethod
-    def _fallback_v2_synthesis(trajectory: SupervisorTrajectory) -> str:
+    def _fallback_synthesis(trajectory: SupervisorTrajectory) -> str:
         """Simple fallback synthesis when the LLM call fails."""
         lines = ["Here's a summary of the agent responses:\n"]
         for entry in trajectory.entries:

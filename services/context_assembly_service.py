@@ -124,7 +124,7 @@ class ContextAssemblyService:
         """
         Build context for the Supervisor LLM (decide_next calls).
 
-        This context is FROZEN for the entire V2 loop duration.
+        This context is FROZEN for the entire supervisor loop duration.
         Agent results during the loop appear in trajectory_summary, not here.
 
         Uses minimal turns (default 5) to keep supervisor context lean.

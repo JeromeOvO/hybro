@@ -1,10 +1,6 @@
-"""Supervisor V2 Data Models — adaptive loop orchestration.
+"""Supervisor data models — adaptive loop orchestration.
 
-These models support the V2 Supervisor's step-at-a-time adaptive loop.
-Since Phase 5, V1 models have been removed and this is the sole supervisor
-model module.
-
-See docs/SUPERVISOR_V2_DESIGN.md for full architecture details.
+These models support the supervisor's step-at-a-time adaptive loop.
 """
 
 from __future__ import annotations
@@ -23,7 +19,7 @@ if TYPE_CHECKING:
 
 
 # =========================================================================
-# Shared models (formerly in models/supervisor.py)
+# Shared models
 # =========================================================================
 
 
@@ -124,7 +120,7 @@ class StepStatus(StrEnum):
     AWAITING_INPUT = "awaiting_input"
 
 
-class V2StepResult(BaseModel):
+class StepResult(BaseModel):
     """Result of a completed (or paused) agent delegation."""
 
     step_number: int
@@ -161,7 +157,7 @@ class TrajectoryEntry(BaseModel):
 
     step_number: int
     action: SupervisorAction
-    results: list[V2StepResult] = Field(default_factory=list)
+    results: list[StepResult] = Field(default_factory=list)
     started_at: datetime
     completed_at: datetime | None = None
 
@@ -202,7 +198,7 @@ class SupervisorTrajectory(BaseModel):
     clarify_original_message_id: str | None = None
     """The ``user_message_id`` of the message that originally triggered the
     CLARIFY action.  Carried through pause/resume so that
-    ``_handle_v2_run_result`` can update the original message's trajectory
+    ``_handle_supervisor_run_result`` can update the original message's trajectory
     status even when the clarify-resume itself gets paused by a push
     notification and later resumes via the webhook path."""
 

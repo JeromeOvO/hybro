@@ -214,14 +214,22 @@ def test_legacy_collection_cleanup_is_blocked_on_current_main() -> None:
     assert "api/task.py" in data["blockers"]
 
 
-def test_phase8_plan_documents_design_deviations() -> None:
-    plan = (
-        ROOT / "docs/superpowers/plans/2026-05-18-phase-8-hub-runtime-bridge.md"
-    ).read_text()
-    for phrase in [
-        "Known Deviations / Deferred Target Architecture",
-        "sidecar `hub_response_journal`",
-        "cleanup readiness gate",
-        "Local owned publish handling intentionally bypasses Delivery scheduling",
-    ]:
-        assert phrase in plan
+def test_phase8_hub_runtime_bridge_design_reflected_in_code() -> None:
+    """Gate: journal sidecar, legacy cleanup block, owned publish not via Delivery."""
+    journal_path = ROOT / "hub_runtime_bridge" / "hub_response_journal.py"
+    assert journal_path.is_file()
+    assert "hub_response_journal" in journal_path.read_text(encoding="utf-8")
+
+    cleanup = json.loads(
+        (ROOT / "tests/fixtures/phase8_legacy_collection_cleanup.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert cleanup["cleanup_allowed"] is False
+
+    hub_publish_path = ROOT / "hub_runtime_bridge/service/hub_publish.py"
+    hub_publish_text = hub_publish_path.read_text(encoding="utf-8")
+    hub_publish_imports = _imports(hub_publish_path)
+    assert "_journal" in hub_publish_text
+    assert "dispatch_hub_internal_response" in hub_publish_text
+    assert not any(name.startswith("delivery") for name in hub_publish_imports)

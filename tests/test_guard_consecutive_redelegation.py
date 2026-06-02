@@ -12,13 +12,13 @@ Covers:
 
 from datetime import UTC, datetime
 
-from models.supervisor_v2 import (
+from models.supervisor import (
     ActionType,
     DelegateTarget,
     SupervisorAction,
     SupervisorTrajectory,
     TrajectoryEntry,
-    V2StepResult,
+    StepResult,
 )
 from services.room_supervisor_service import RoomSupervisorService
 
@@ -42,7 +42,7 @@ def _entry_with_successes(agent_ids: list[str]) -> TrajectoryEntry:
             targets=[_target(aid, f"Agent-{aid}") for aid in agent_ids],
         ),
         results=[
-            V2StepResult(
+            StepResult(
                 step_number=1,
                 agent_id=aid,
                 agent_name=f"Agent-{aid}",
@@ -68,7 +68,7 @@ def _entry_with_failures(agent_ids: list[str]) -> TrajectoryEntry:
             targets=[_target(aid, f"Agent-{aid}") for aid in agent_ids],
         ),
         results=[
-            V2StepResult(
+            StepResult(
                 step_number=1,
                 agent_id=aid,
                 agent_name=f"Agent-{aid}",
@@ -352,11 +352,11 @@ class TestFailureAndSuccessGuardsCombined:
                 ],
             ),
             results=[
-                V2StepResult(
+                StepResult(
                     step_number=1, agent_id="A", agent_name="Alpha",
                     task="test", response_text="err", success=False,
                 ),
-                V2StepResult(
+                StepResult(
                     step_number=1, agent_id="B", agent_name="Bravo",
                     task="test", response_text="ok", success=True,
                 ),

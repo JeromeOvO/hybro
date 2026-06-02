@@ -57,7 +57,7 @@ class RoomCoordinatorService:
         - In debate mode: Uses debate-style summary (comparing viewpoints)
         - In normal mode: Uses non_debate-style summary (combining contributions)
 
-        ``trajectory_responses`` is an optional fast-path for the supervisor V2
+        ``trajectory_responses`` is an optional fast-path for the supervisor
         execution path.  When the supervisor executor completes (debate fast-path
         returns synthesis_text=None), the trajectory already holds every agent's
         response text in memory.  Passing those responses directly here avoids a
