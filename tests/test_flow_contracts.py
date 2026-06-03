@@ -70,7 +70,7 @@ class TestRoomLifecycleFlow:
     async def test_create_room_and_send_message_flow(self, flow_user):
         """Create room -> ownership check -> send message -> query messages.
 
-        Each step calls the REAL endpoint function; only the modules/services
+        Each step calls the REAL endpoint function; only the runtime dependencies
         behind the endpoint are mocked.
         """
         from api.room_center import (
@@ -321,7 +321,7 @@ class TestAgentLifecycleFlow:
     async def test_private_agent_visibility(self, flow_user):
         """Private agent: owner sees it, others get 404."""
         from models.request import AgentCenterRequest
-        from services.agent_service import AgentService
+        from app_shell.agent_service import AgentService
 
         agent_id = "private-flow-001"
 
@@ -380,7 +380,7 @@ class TestHITLFlow:
     @pytest.mark.asyncio
     async def test_complete_hitl_flow(self):
         """request_input -> get_pending_requests -> cancel_request."""
-        from services.hitl_service import HITLService
+        from app_shell.hitl_service import HITLService
 
         room_id = "hitl-flow-room"
         msg_id = "hitl-flow-msg"
@@ -441,7 +441,7 @@ class TestHITLFlow:
     @pytest.mark.asyncio
     async def test_hitl_max_rounds_enforcement(self):
         """Should return None when max rounds exceeded."""
-        from services.hitl_service import MAX_HITL_ROUNDS, HITLService
+        from app_shell.hitl_service import MAX_HITL_ROUNDS, HITLService
 
         svc = HITLService()
         mock_db = MagicMock()
@@ -604,7 +604,7 @@ class TestErrorHandlingFlow:
     @pytest.mark.asyncio
     async def test_graceful_db_error_handling(self):
         from models.request import AgentCenterRequest
-        from services.agent_service import AgentService
+        from app_shell.agent_service import AgentService
 
         svc = AgentService()
         facade = MagicMock()

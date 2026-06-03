@@ -76,7 +76,7 @@ def test_hub_runtime_bridge_import_boundaries() -> None:
         "room",
         "delivery",
         "dal",
-        "config.settings",
+        "config",
         "common.config",
     )
     legacy_model_allowlist = {
@@ -133,7 +133,7 @@ def test_execution_depends_on_common_not_relay_or_hub_concrete() -> None:
         if module in temporary:
             continue
         imported = _imports(path)
-        assert "services.relay_service" not in imported
+        assert "app_shell.relay_service" not in imported
         assert not any(name.startswith("hub_runtime_bridge") for name in imported)
 
 
@@ -145,26 +145,28 @@ def test_execution_relay_transport_is_outbound_only() -> None:
     assert "handle_publish_event" not in text
     assert "models.hub" not in imported
     assert "database.mongodb" not in imported
-    assert "services.relay_service" not in imported
+    assert "app_shell.relay_service" not in imported
 
 
-def test_legacy_relay_and_stream_files_are_shims() -> None:
-    relay = ROOT / "services/relay_service.py"
+def test_legacy_relay_is_shim_and_stream_runtime_moved_to_app_shell() -> None:
+    from app_shell.redis_runtime import AppShellRelayStreamService
+    from hub_runtime_bridge.transport.relay_streams import RelayStreamService
+
+    relay = ROOT / "app_shell/relay_service.py"
     relay_imports = _imports(relay)
     relay_calls = _calls(relay)
     relay_text = relay.read_text()
 
     assert "hub_runtime_bridge.facade" in relay_imports
-    assert "modules.transports.relay" not in relay_imports
-    assert "modules.agent_response_handler" not in relay_imports
+    assert not any(name.startswith("modules") for name in relay_imports)
     assert "execution.facade" not in relay_text
     assert "AgentResponseHandler" not in relay_text
     assert "RelayTransport" not in relay_text
     assert "AgentResponseHandler" not in relay_calls
     assert "RelayTransport" not in relay_calls
 
-    streams = ROOT / "infrastructure/relay_streams.py"
-    assert "hub_runtime_bridge.transport.relay_streams" in _imports(streams)
+    assert not (ROOT / "infrastructure/relay_streams.py").exists()
+    assert issubclass(AppShellRelayStreamService, RelayStreamService)
 
 
 def test_app_shell_routes_internal_hub_events_through_hub_router() -> None:
@@ -199,33 +201,11 @@ def test_relay_and_hub_route_inventory_matches_fixture() -> None:
     )
 
 
-def test_legacy_collection_cleanup_is_blocked_on_current_main() -> None:
-    fixture = ROOT / "tests/fixtures/phase8_legacy_collection_cleanup.json"
-    assert fixture.exists()
-    data = json.loads(fixture.read_text())
-    assert data["collections"] == [
-        "base_tasks",
-        "meta_tasks",
-        "task_sessions",
-        "chat_contexts",
-    ]
-    assert data["cleanup_allowed"] is False
-    assert "api/orchestration_center.py" in data["blockers"]
-    assert "api/task.py" in data["blockers"]
-
-
 def test_phase8_hub_runtime_bridge_design_reflected_in_code() -> None:
-    """Gate: journal sidecar, legacy cleanup block, owned publish not via Delivery."""
+    """Gate: journal sidecar and owned publish not via Delivery."""
     journal_path = ROOT / "hub_runtime_bridge" / "hub_response_journal.py"
     assert journal_path.is_file()
     assert "hub_response_journal" in journal_path.read_text(encoding="utf-8")
-
-    cleanup = json.loads(
-        (ROOT / "tests/fixtures/phase8_legacy_collection_cleanup.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert cleanup["cleanup_allowed"] is False
 
     hub_publish_path = ROOT / "hub_runtime_bridge/service/hub_publish.py"
     hub_publish_text = hub_publish_path.read_text(encoding="utf-8")

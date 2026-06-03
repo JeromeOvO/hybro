@@ -20,7 +20,7 @@ from models.supervisor import (
     TrajectoryEntry,
     StepResult,
 )
-from services.room_supervisor_service import RoomSupervisorService
+from execution.orchestration.room_supervisor_service import RoomSupervisorService
 
 
 def _make_service() -> RoomSupervisorService:

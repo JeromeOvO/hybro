@@ -15,7 +15,7 @@ from a2a.types import AgentCapabilities, AgentCard, AgentProvider, AgentSkill
 
 from common.dto.agent import AgentInfo
 from models.agent import Agent, AgentStatus
-from services.agent_matcher import (
+from app_shell.agent_matcher import (
     AgentMatcher,
     MatchedAgent,
     MatchResult,

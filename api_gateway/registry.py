@@ -72,8 +72,6 @@ def route_group_for_path(path: str) -> str:
         return "inspection"
     if matches("/memoryCenter"):
         return "memory"
-    if matches("/orchestrationCenter"):
-        return "orchestration"
     if matches("/relay"):
         return "relay"
     if matches("/roomCenter"):
@@ -82,8 +80,6 @@ def route_group_for_path(path: str) -> str:
         return "hitl"
     if matches("/sse"):
         return "sse"
-    if matches("/task") or matches("/tasks"):
-        return "task"
     if matches("/webhooks"):
         return "webhook"
     return "unknown"

@@ -8,12 +8,12 @@ import pytest
 
 from models.api_key import APIKey
 from models.hub import HubAgentSync, RelayToHubEvent
-from services.agent_liveness_service import (
+from app_shell.agent_liveness_service import (
     bind_agent_liveness_deps,
     check_and_sync_liveness,
     reset_agent_liveness_deps,
 )
-from services.relay_service import (
+from app_shell.relay_service import (
     RelayHubLivenessReader,
     RelayService,
 )
@@ -376,7 +376,7 @@ class TestHeartbeatCheckConnectionIdGuard:
         svc.bind_agent_registry_writer(_make_writer())
         svc._hub_disconnect_events["hub-stale"] = asyncio.Event()
 
-        with caplog.at_level(logging.WARNING, logger="services.relay_service"):
+        with caplog.at_level(logging.WARNING, logger="app_shell.relay_service"):
             await svc._do_heartbeat_check(stale_threshold=90)
 
         assert "hub-stale" in caplog.text
@@ -397,7 +397,7 @@ async def test_streams_push_logs_redis_dead_rejection(caplog):
         local_agent_id="local-1",
     )
 
-    with caplog.at_level(logging.WARNING, logger="services.relay_service"):
+    with caplog.at_level(logging.WARNING, logger="app_shell.relay_service"):
         delivered = await svc.push_to_hub("hub-dead", event)
 
     assert delivered is False
@@ -673,7 +673,7 @@ class TestHeartbeatOwnershipCheck:
         svc = _make_service(mongo=mongo, streams=streams)
         api_key = _make_api_key(user_id="user-attacker")
 
-        with caplog.at_level(logging.WARNING, logger="services.relay_service"):
+        with caplog.at_level(logging.WARNING, logger="app_shell.relay_service"):
             with pytest.raises(PermissionError, match="not owned"):
                 await svc.record_hub_heartbeat("hub-1", api_key)
 

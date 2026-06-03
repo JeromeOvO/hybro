@@ -4,11 +4,10 @@ from typing import Any, Generic, TypeVar
 from pydantic import BaseModel, Field, field_validator
 
 from common.a2a_constants import CommonTaskState
-from common.types import AgentCard, Task
+from common.types import AgentCard
 from models.agent import Agent, AgentStatus, coerce_legacy_agent_card
 from models.memory import ChatContext, RoomMemory
 from models.room import Room, RoomAgentMessage, RoomMessage, RoomUserMessage
-from models.task import BaseTask, MetaTask, TaskSession
 
 T = TypeVar('T')
 
@@ -146,23 +145,6 @@ class AgentResponse(BaseModel):
     # Dislike count from user
     dislike_count: int = 0
 
-
-
-class TaskCenterResponse(BaseModel):
-    task_id: str | None = None
-    user_name: str | None = None
-    parent_task_id: str | None = None
-    session_id: str | None = None
-    task: Task | None = None
-    meta_task: MetaTask | None = None
-    base_task: BaseTask | None = None
-    task_session: TaskSession | None = None
-    meta_tasks: list[MetaTask] | None = None
-    base_tasks: list[BaseTask] | None = None
-    task_sessions: list[TaskSession] | None = None
-    success: bool
-    error: str | None = None
-    status_code: int = 200
 
 
 class ChatResponse(BaseModel):

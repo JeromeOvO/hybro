@@ -1,4 +1,4 @@
-"""Unit tests for RedisService.
+"""Unit tests for AppShellRedisService.
 
 Tests the shared Redis client for key-value and stream operations.
 Uses mocks to avoid requiring a real Redis instance.
@@ -8,16 +8,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from infrastructure.redis_service import RedisService, create_redis_service
+from app_shell.redis_runtime import (
+    AppShellLeaderElection,
+    AppShellRedisService,
+    AppShellRelayStreamService,
+    create_app_shell_redis_runtime,
+)
 
 # =============================================================================
 # Test Helpers
 # =============================================================================
 
 
-def _make_service() -> RedisService:
-    """Create RedisService with mocked client for testing."""
-    svc = RedisService(url="redis://localhost:6379/0")
+def _make_service() -> AppShellRedisService:
+    """Create AppShellRedisService with mocked client for testing."""
+    svc = AppShellRedisService(url="redis://localhost:6379/0")
     svc._client = MagicMock()
     return svc
 
@@ -27,23 +32,30 @@ def _make_service() -> RedisService:
 # =============================================================================
 
 
-class TestRedisServiceFactory:
-    """Tests for the create_redis_service factory function."""
+class TestAppShellRedisServiceFactory:
+    """Tests for the create_app_shell_redis_runtime factory function."""
 
     def test_returns_none_when_redis_url_empty(self):
-        """Factory returns None when redis_url is empty."""
-        with patch("infrastructure.redis_service.settings") as mock_settings:
+        """Factory returns an empty runtime when redis_url is empty."""
+        with patch("app_shell.redis_runtime.settings") as mock_settings:
             mock_settings.redis_url = ""
-            result = create_redis_service()
-            assert result is None
+            result = create_app_shell_redis_runtime(instance_id="inst-1")
+            assert result.command_client is None
+            assert result.streams_client is None
+            assert result.leader is None
+            assert result.relay_streams is None
 
-    def test_returns_service_when_redis_url_set(self):
-        """Factory returns RedisService instance when redis_url is configured."""
-        with patch("infrastructure.redis_service.settings") as mock_settings:
+    def test_returns_runtime_when_redis_url_set(self):
+        """Factory returns app-shell Redis runtime objects when redis_url is configured."""
+        with patch("app_shell.redis_runtime.settings") as mock_settings:
             mock_settings.redis_url = "redis://localhost:6379/0"
-            result = create_redis_service()
-            assert result is not None
-            assert isinstance(result, RedisService)
+            mock_settings.relay_stream_maxlen = 10
+            mock_settings.relay_hub_heartbeat_ttl = 60
+            result = create_app_shell_redis_runtime(instance_id="inst-1")
+            assert isinstance(result.command_client, AppShellRedisService)
+            assert isinstance(result.streams_client, AppShellRedisService)
+            assert isinstance(result.leader, AppShellLeaderElection)
+            assert isinstance(result.relay_streams, AppShellRelayStreamService)
 
 
 # =============================================================================
@@ -51,7 +63,7 @@ class TestRedisServiceFactory:
 # =============================================================================
 
 
-class TestRedisServiceSetNx:
+class TestAppShellRedisServiceSetNx:
     """Tests for set_nx (SET if not exists) operation."""
 
     @pytest.mark.asyncio
@@ -80,7 +92,7 @@ class TestRedisServiceSetNx:
     @pytest.mark.asyncio
     async def test_set_nx_returns_false_when_not_connected(self):
         """set_nx returns False when client is not connected."""
-        svc = RedisService(url="redis://localhost:6379/0")
+        svc = AppShellRedisService(url="redis://localhost:6379/0")
         # _client is None (not connected)
 
         result = await svc.set_nx("test_key", "test_value")
@@ -103,7 +115,7 @@ class TestRedisServiceSetNx:
 # =============================================================================
 
 
-class TestRedisServiceExists:
+class TestAppShellRedisServiceExists:
     """Tests for exists operation."""
 
     @pytest.mark.asyncio
@@ -130,7 +142,7 @@ class TestRedisServiceExists:
     @pytest.mark.asyncio
     async def test_exists_returns_false_when_not_connected(self):
         """exists returns False when client is not connected."""
-        svc = RedisService(url="redis://localhost:6379/0")
+        svc = AppShellRedisService(url="redis://localhost:6379/0")
         # _client is None (not connected)
 
         result = await svc.exists("test_key")
@@ -153,7 +165,7 @@ class TestRedisServiceExists:
 # =============================================================================
 
 
-class TestRedisServiceGet:
+class TestAppShellRedisServiceGet:
     """Tests for get operation."""
 
     @pytest.mark.asyncio
@@ -180,7 +192,7 @@ class TestRedisServiceGet:
     @pytest.mark.asyncio
     async def test_get_returns_none_when_not_connected(self):
         """get returns None when client is not connected."""
-        svc = RedisService(url="redis://localhost:6379/0")
+        svc = AppShellRedisService(url="redis://localhost:6379/0")
         # _client is None (not connected)
 
         result = await svc.get("test_key")
@@ -203,7 +215,7 @@ class TestRedisServiceGet:
 # =============================================================================
 
 
-class TestRedisServiceDelete:
+class TestAppShellRedisServiceDelete:
     """Tests for delete operation."""
 
     @pytest.mark.asyncio
@@ -230,7 +242,7 @@ class TestRedisServiceDelete:
     @pytest.mark.asyncio
     async def test_delete_returns_false_when_not_connected(self):
         """delete returns False when client is not connected."""
-        svc = RedisService(url="redis://localhost:6379/0")
+        svc = AppShellRedisService(url="redis://localhost:6379/0")
         # _client is None (not connected)
 
         result = await svc.delete("test_key")
@@ -253,7 +265,7 @@ class TestRedisServiceDelete:
 # =============================================================================
 
 
-class TestRedisServiceSetWithTtl:
+class TestAppShellRedisServiceSetWithTtl:
     """Tests for set_with_ttl operation."""
 
     @pytest.mark.asyncio
@@ -281,7 +293,7 @@ class TestRedisServiceSetWithTtl:
     @pytest.mark.asyncio
     async def test_set_with_ttl_returns_false_when_not_connected(self):
         """set_with_ttl returns False when client is not connected."""
-        svc = RedisService(url="redis://localhost:6379/0")
+        svc = AppShellRedisService(url="redis://localhost:6379/0")
         # _client is None (not connected)
 
         result = await svc.set_with_ttl("test_key", "test_value")
@@ -304,7 +316,7 @@ class TestRedisServiceSetWithTtl:
 # =============================================================================
 
 
-class TestRedisServiceEvalScript:
+class TestAppShellRedisServiceEvalScript:
     """Tests for eval_script (Lua script execution)."""
 
     @pytest.mark.asyncio
@@ -322,7 +334,7 @@ class TestRedisServiceEvalScript:
     @pytest.mark.asyncio
     async def test_eval_script_returns_none_when_not_connected(self):
         """eval_script returns None when client is not connected."""
-        svc = RedisService(url="redis://localhost:6379/0")
+        svc = AppShellRedisService(url="redis://localhost:6379/0")
         # _client is None (not connected)
 
         result = await svc.eval_script("return 1", 0)
@@ -345,7 +357,7 @@ class TestRedisServiceEvalScript:
 # =============================================================================
 
 
-class TestRedisServiceStreams:
+class TestAppShellRedisServiceStreams:
     """Tests for Redis Streams operations."""
 
     @pytest.mark.asyncio
@@ -377,7 +389,7 @@ class TestRedisServiceStreams:
     @pytest.mark.asyncio
     async def test_xadd_returns_none_when_not_connected(self):
         """xadd returns None when client is not connected."""
-        svc = RedisService(url="redis://localhost:6379/0")
+        svc = AppShellRedisService(url="redis://localhost:6379/0")
         # _client is None (not connected)
 
         result = await svc.xadd("test_stream", {"field": "value"})
@@ -429,7 +441,7 @@ class TestRedisServiceStreams:
     @pytest.mark.asyncio
     async def test_xread_returns_none_when_not_connected(self):
         """xread returns None when client is not connected."""
-        svc = RedisService(url="redis://localhost:6379/0")
+        svc = AppShellRedisService(url="redis://localhost:6379/0")
         # _client is None (not connected)
 
         result = await svc.xread({"stream1": "0"})
@@ -460,7 +472,7 @@ class TestRedisServiceStreams:
     @pytest.mark.asyncio
     async def test_xlen_returns_zero_when_not_connected(self):
         """xlen returns 0 when client is not connected."""
-        svc = RedisService(url="redis://localhost:6379/0")
+        svc = AppShellRedisService(url="redis://localhost:6379/0")
         # _client is None (not connected)
 
         result = await svc.xlen("test_stream")
@@ -483,15 +495,15 @@ class TestRedisServiceStreams:
 # =============================================================================
 
 
-class TestRedisServiceLifecycle:
+class TestAppShellRedisServiceLifecycle:
     """Tests for start/stop lifecycle methods."""
 
     @pytest.mark.asyncio
     async def test_start_connects_and_pings(self):
         """start creates client and pings Redis."""
-        svc = RedisService(url="redis://localhost:6379/0")
+        svc = AppShellRedisService(url="redis://localhost:6379/0")
 
-        with patch("infrastructure.redis_service.aioredis") as mock_redis:
+        with patch("app_shell.redis_runtime.aioredis") as mock_redis:
             mock_client = MagicMock()
             mock_client.ping = AsyncMock()
             mock_redis.from_url.return_value = mock_client
@@ -510,9 +522,9 @@ class TestRedisServiceLifecycle:
     @pytest.mark.asyncio
     async def test_start_is_idempotent(self):
         """start can be called multiple times without effect."""
-        svc = RedisService(url="redis://localhost:6379/0")
+        svc = AppShellRedisService(url="redis://localhost:6379/0")
 
-        with patch("infrastructure.redis_service.aioredis") as mock_redis:
+        with patch("app_shell.redis_runtime.aioredis") as mock_redis:
             mock_client = MagicMock()
             mock_client.ping = AsyncMock()
             mock_redis.from_url.return_value = mock_client
@@ -526,9 +538,9 @@ class TestRedisServiceLifecycle:
     @pytest.mark.asyncio
     async def test_start_sets_client_to_none_on_error(self):
         """start sets _client to None when connection fails."""
-        svc = RedisService(url="redis://localhost:6379/0")
+        svc = AppShellRedisService(url="redis://localhost:6379/0")
 
-        with patch("infrastructure.redis_service.aioredis") as mock_redis:
+        with patch("app_shell.redis_runtime.aioredis") as mock_redis:
             mock_redis.from_url.side_effect = Exception("Connection failed")
 
             await svc.start()
@@ -551,7 +563,7 @@ class TestRedisServiceLifecycle:
     @pytest.mark.asyncio
     async def test_stop_is_idempotent(self):
         """stop can be called multiple times safely."""
-        svc = RedisService(url="redis://localhost:6379/0")
+        svc = AppShellRedisService(url="redis://localhost:6379/0")
 
         await svc.stop()  # first call when _client is None
         await svc.stop()  # second call should be safe
@@ -571,7 +583,7 @@ class TestRedisServiceLifecycle:
 
     def test_is_connected_returns_false_when_client_none(self):
         """is_connected returns False when _client is None."""
-        svc = RedisService(url="redis://localhost:6379/0")
+        svc = AppShellRedisService(url="redis://localhost:6379/0")
         assert svc.is_connected is False
 
     def test_is_connected_returns_true_when_client_set(self):

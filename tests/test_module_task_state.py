@@ -15,7 +15,7 @@ import pytest
 from a2a.types import TaskState, TaskStatus
 
 from models.room import RoomAgentMessage
-from modules.TaskStateManager import TaskStateManager, get_task, state_str
+from execution.state.task_state_manager import TaskStateManager, get_task, state_str
 
 
 def _make_message_with_task(state: TaskState | None = None) -> RoomAgentMessage:
@@ -122,13 +122,13 @@ class TestTransitionTask:
     async def test_persists_by_default(self, tsm):
         msg = _make_message_with_task(TaskState.submitted)
         await tsm.transition_task(msg, TaskState.working)
-        tsm.room_services.update_agent_message_by_message_id.assert_called_once()
+        tsm.room_runtime.update_agent_message_by_message_id.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_skips_persist_when_disabled(self, tsm):
         msg = _make_message_with_task(TaskState.submitted)
         await tsm.transition_task(msg, TaskState.working, persist=False)
-        tsm.room_services.update_agent_message_by_message_id.assert_not_called()
+        tsm.room_runtime.update_agent_message_by_message_id.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_longer_notifies_directly(self, tsm):
@@ -151,7 +151,7 @@ class TestTransitionTask:
         msg = MagicMock()
         msg.message_content = None
         await tsm.transition_task(msg, TaskState.working)
-        tsm.room_services.update_agent_message_by_message_id.assert_not_called()
+        tsm.room_runtime.update_agent_message_by_message_id.assert_not_called()
 
 
 # =============================================================================

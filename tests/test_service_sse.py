@@ -1,5 +1,5 @@
 """
-Unit tests for SSE services (sse_services.py).
+Unit tests for SSE services (sse_app_shell.py).
 
 Tests cover:
 - SSEConnection: send_message, get_message (with timeout/heartbeat), close
@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from services.sse_services import SSEConnection
+from app_shell.delivery_runtime import SSEConnection
 from tests.delivery_adapter_fakes import make_bound_manager
 
 # =============================================================================
@@ -205,7 +205,7 @@ class TestSendProcessingStatusClientRequestId:
 
     @pytest.mark.asyncio
     async def test_send_processing_status_does_not_record_or_emit_run_event(self, monkeypatch):
-        import services.run_command_handler as handler_mod
+        import execution.run_command_handler as handler_mod
 
         mgr = make_bound_manager()
         conn = await mgr.add_connection("room-1")

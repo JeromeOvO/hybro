@@ -23,7 +23,8 @@ class AppShellHealthCheck:
         delivery_facade = getattr(request.app.state, "delivery_facade", None)
         if delivery_facade is not None:
             await delivery_facade.refresh_health()
-        legacy_redis_service = getattr(request.app.state, "legacy_redis_service", None)
+        redis_runtime = getattr(request.app.state, "redis_runtime", None)
+        redis_service = getattr(redis_runtime, "command_client", None)
         relay_service = getattr(request.app.state, "relay_service", None)
         relay_streams = getattr(relay_service, "_streams", None)
         result = self._compute_health_status(
@@ -34,7 +35,7 @@ class AppShellHealthCheck:
                 delivery_facade and delivery_facade.delivery_kv_connected
             ),
             legacy_redis_service_connected=bool(
-                legacy_redis_service and legacy_redis_service.is_connected
+                redis_service and redis_service.is_connected
             ),
             relay_streams_available=bool(
                 relay_streams and relay_streams.is_connected

@@ -28,7 +28,7 @@ from models.supervisor import (
     SupervisorTrajectory,
     StepResult,
 )
-from modules.SupervisorExecutor import SupervisorExecutor
+from execution.orchestration.supervisor_executor import SupervisorExecutor
 
 _ROOT = Path(__file__).resolve().parents[1]
 
@@ -37,7 +37,7 @@ def _make_supervisor_executor():
     se = object.__new__(SupervisorExecutor)
     se.database_service = AsyncMock()
     se.sse_manager = MagicMock()
-    se.room_services = MagicMock()
+    se.room_runtime = MagicMock()
     se.supervisor_service = MagicMock()
     se.tsm = MagicMock()
     se.agent_dispatcher = MagicMock()
@@ -208,7 +208,7 @@ class TestClarifyCleanupCompensation:
         hitl_mock.cancel_request = AsyncMock()
 
         agent_msg = MagicMock(message_id="msg-agent-1")
-        se.room_services.create_agent_message.return_value = agent_msg
+        se.room_runtime.create_agent_message.return_value = agent_msg
         se.database_service.add_room_agent_message = AsyncMock()
         se.database_service.delete_room_agent_message_by_message_id = AsyncMock()
 
@@ -258,7 +258,7 @@ class TestClarifyCleanupCompensation:
         hitl_mock.cancel_request = AsyncMock()
 
         agent_msg = MagicMock(message_id="msg-agent-1")
-        se.room_services.create_agent_message.return_value = agent_msg
+        se.room_runtime.create_agent_message.return_value = agent_msg
         se.database_service.add_room_agent_message = AsyncMock()
         se.database_service.delete_room_agent_message_by_message_id = AsyncMock()
 
@@ -418,7 +418,7 @@ class TestProcessingStatusLifecycleOrder:
                 questions=[ClarifyQuestion(prompt="Which account?")],
             )
         )
-        se.room_services.create_agent_message.return_value = SimpleNamespace(
+        se.room_runtime.create_agent_message.return_value = SimpleNamespace(
             message_id="hitl-agent-msg"
         )
         se.database_service.resolve_client_request_id_for_message_id = AsyncMock(

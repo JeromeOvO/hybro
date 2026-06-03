@@ -30,7 +30,7 @@ from models.memory import (
     TurnRole,
     TurnType,
 )
-from services.context_assembly_service import (
+from app_shell.context_assembly_service import (
     ContextAssemblyResult,
     ContextAssemblyService,
     TruncationReason,
@@ -415,7 +415,7 @@ class TestOccupancyThresholds:
 
     def test_healthy_occupancy_logs_debug(self, service):
         """Test that <70% occupancy logs at debug level."""
-        with patch("services.context_assembly_service.logger") as mock_logger:
+        with patch("app_shell.context_assembly_service.logger") as mock_logger:
             service._log_context_metrics(
                 room_id="test",
                 total_tokens=5000,  # 50% of 10000
@@ -433,7 +433,7 @@ class TestOccupancyThresholds:
 
     def test_soft_warning_occupancy_logs_info(self, service):
         """Test that 70-85% occupancy logs at info level."""
-        with patch("services.context_assembly_service.logger") as mock_logger:
+        with patch("app_shell.context_assembly_service.logger") as mock_logger:
             service._log_context_metrics(
                 room_id="test",
                 total_tokens=7500,  # 75% of 10000
@@ -450,7 +450,7 @@ class TestOccupancyThresholds:
 
     def test_hard_cap_occupancy_logs_warning(self, service):
         """Test that 85-90% occupancy logs at warning level."""
-        with patch("services.context_assembly_service.logger") as mock_logger:
+        with patch("app_shell.context_assembly_service.logger") as mock_logger:
             service._log_context_metrics(
                 room_id="test",
                 total_tokens=8700,  # 87% of 10000
@@ -467,7 +467,7 @@ class TestOccupancyThresholds:
 
     def test_emergency_occupancy_logs_error(self, service):
         """Test that >90% occupancy logs at error level."""
-        with patch("services.context_assembly_service.logger") as mock_logger:
+        with patch("app_shell.context_assembly_service.logger") as mock_logger:
             service._log_context_metrics(
                 room_id="test",
                 total_tokens=9500,  # 95% of 10000
@@ -553,7 +553,7 @@ class TestHardCapEnforcement:
             key_decisions=["B" * 1000 for _ in range(10)],
         )
 
-        with patch("services.context_assembly_service.logger") as mock_logger:
+        with patch("app_shell.context_assembly_service.logger") as mock_logger:
             result = service.build_agent_execution_context(
                 room_memory=large_room_memory,
                 current_task="Test",
@@ -566,7 +566,7 @@ class TestHardCapEnforcement:
 
     def test_supervisor_context_no_duplicate_warning(self, service, large_room_memory):
         """Test that supervisor context doesn't log duplicate warnings."""
-        with patch("services.context_assembly_service.logger") as mock_logger:
+        with patch("app_shell.context_assembly_service.logger") as mock_logger:
             result = service.build_supervisor_context(
                 room_memory=large_room_memory,
                 current_task="Test",
@@ -644,7 +644,7 @@ class TestTaskBudgetEnforcement:
         # Create a very large task that exceeds task budget
         large_task = "X" * 50000  # Very large task
 
-        with patch("services.context_assembly_service.logger"):
+        with patch("app_shell.context_assembly_service.logger"):
             result = service.build_agent_execution_context(
                 room_memory=room_memory,
                 current_task=large_task,

@@ -14,7 +14,7 @@ Environment variables (loaded from repo-root .env):
     HYBRO_API_URL     Optional base URL, default: http://localhost:8000
     HYBRO_API_PREFIX  Optional API prefix, default: /api/v1
 
-Timeout is read from config.settings (hybro_timeout_seconds).
+Timeout is read from common.config.settings (hybro_timeout_seconds).
 
 Exit codes:
     0  Success

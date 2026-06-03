@@ -1,9 +1,8 @@
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from services.openai_service import OpenAIService
+from app_shell.openai_service import OpenAIService
 
 # ---------------------------------------------------------------------------
 # Fixtures & helpers
@@ -21,30 +20,6 @@ def openai_svc():
 def _chat_completion(content: str):
     """Build mock ChatCompletion for chat.completions.create."""
     return MagicMock(choices=[MagicMock(message=MagicMock(content=content))])
-
-
-def _responses_result(text: str):
-    """Build mock Response for responses.create."""
-    return MagicMock(output_text=text)
-
-
-def _make_base_task(goal: str = "Write a blog post about AI"):
-    task = MagicMock()
-    part = MagicMock()
-    part.root.kind = "text"
-    part.root.text = goal
-    msg = MagicMock()
-    msg.parts = [part]
-    task.task.history = [msg]
-    return task
-
-
-def _make_context_data():
-    ctx = MagicMock()
-    ctx.room_context = ""
-    ctx.conversation_history = ""
-    ctx.task_context = ""
-    return ctx
 
 
 def _make_agent(agent_id: str, name: str, description: str = "A test agent",
@@ -85,79 +60,6 @@ class TestExpandQueryForDiscovery:
         assert result == "AI"
 
 
-# ---------------------------------------------------------------------------
-# Group 2: decompose_task
-# ---------------------------------------------------------------------------
-
-class TestDecomposeTask:
-
-    @pytest.mark.asyncio
-    async def test_returns_json_string_with_execution_steps(self, openai_svc):
-        valid_json = json.dumps({
-            "execution_steps": [
-                {
-                    "step_number": 1,
-                    "step_description": "Research the topic",
-                    "execution_context": "Use web search",
-                    "expected_output": "Research notes",
-                    "depends_on_steps": [],
-                },
-                {
-                    "step_number": 2,
-                    "step_description": "Write the blog post",
-                    "execution_context": "Based on research",
-                    "expected_output": "Blog post draft",
-                    "depends_on_steps": [1],
-                },
-            ]
-        })
-        openai_svc.client.responses.create.return_value = _responses_result(valid_json)
-
-        with patch.object(openai_svc, "_can_agent_handle_task_alone", new_callable=AsyncMock, return_value="NO"):
-            result = await openai_svc.decompose_task(
-                _make_base_task(), _make_context_data(), _make_agent("agent-1", "TestAgent")
-            )
-
-        parsed = json.loads(result)
-        assert "execution_steps" in parsed
-        assert len(parsed["execution_steps"]) == 2
-        openai_svc.client.responses.create.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_returns_fallback_json_string_on_malformed_response(self, openai_svc):
-        openai_svc.client.responses.create.return_value = _responses_result(
-            "This is not JSON at all, just plain garbage text with no braces"
-        )
-
-        with patch.object(openai_svc, "_can_agent_handle_task_alone", new_callable=AsyncMock, return_value="NO"):
-            result = await openai_svc.decompose_task(
-                _make_base_task(), _make_context_data(), _make_agent("agent-1", "TestAgent")
-            )
-
-        parsed = json.loads(result)
-        assert "execution_steps" in parsed
-        assert len(parsed["execution_steps"]) == 1
-
-    @pytest.mark.asyncio
-    async def test_single_agent_shortcircuit_skips_llm(self, openai_svc):
-        best_agent = _make_agent("agent-1", "TestAgent")
-
-        with patch.object(openai_svc, "_can_agent_handle_task_alone", new_callable=AsyncMock, return_value="YES"):
-            result = await openai_svc.decompose_task(
-                _make_base_task(), _make_context_data(), best_agent
-            )
-
-        parsed = json.loads(result)
-        assert "execution_steps" in parsed
-        assert len(parsed["execution_steps"]) == 1
-        assert "TestAgent" in parsed["execution_steps"][0]["execution_context"]
-        openai_svc.client.responses.create.assert_not_awaited()
-
-
-# ---------------------------------------------------------------------------
-# Group 3: call_supervisor_llm_json
-# ---------------------------------------------------------------------------
-
 class TestCallSupervisorLlmJson:
 
     @pytest.mark.asyncio
@@ -184,12 +86,14 @@ class TestCallSupervisorLlmJson:
             "not json at all"
         )
 
+        import json
+
         with pytest.raises(json.JSONDecodeError):
             await openai_svc.call_supervisor_llm_json("system", "user")
 
 
 # ---------------------------------------------------------------------------
-# Group 4: select_best_agent_for_task
+# Group 2: select_best_agent_for_task
 # ---------------------------------------------------------------------------
 
 class TestSelectBestAgentForTask:

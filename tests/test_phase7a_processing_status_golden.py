@@ -8,8 +8,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 from models.supervisor import RunStatus, SupervisorRunResult, SupervisorTrajectory
-from modules.RoomMessageCenter import RoomMessageCenter
-from services.sse_services import SSEManager
+from execution.orchestration.room_message_center import RoomMessageCenter
+from app_shell.delivery_runtime import SSEManager
 from tests.delivery_adapter_fakes import make_bound_manager
 
 
@@ -99,9 +99,9 @@ def _bind_test_processing_emitter(
 
 @pytest.mark.asyncio
 async def test_golden_send_message_processing_status_order(monkeypatch):
-    import services.room_services as room_services
-    from services.a2a_constants import SSEProcessingStatus
-    from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
+    import app_shell.room_runtime as room_services
+    from common.a2a_constants import SSEProcessingStatus
+    from execution.run_lifecycle_service import record_and_maybe_broadcast_run_event
 
     manager = make_bound_manager()
     conn = await manager.add_connection("room-1")
@@ -117,7 +117,7 @@ async def test_golden_send_message_processing_status_order(monkeypatch):
 
     monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
     monkeypatch.setattr(
-        "services.run_lifecycle_service.run_command_handler.record_processing_status",
+        "execution.run_lifecycle_service.run_command_handler.record_processing_status",
         record,
     )
     monkeypatch.setattr(room_services, "sse_manager", manager)
@@ -305,7 +305,7 @@ async def test_golden_clarify_resume_retry_failure_completed_is_transport_only(
     monkeypatch,
 ):
     from models.supervisor import AgentProfile, RoomConfig
-    from services.room_supervisor_service import SupervisorPlanningError
+    from execution.orchestration.room_supervisor_service import SupervisorPlanningError
 
     manager = make_bound_manager()
     conn = await manager.add_connection("room-1")

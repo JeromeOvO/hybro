@@ -9,7 +9,7 @@ from models.room import CoordinatorAgentId
 
 @pytest.fixture
 def rmc():
-    from modules.RoomMessageCenter import RoomMessageCenter
+    from execution.orchestration.room_message_center import RoomMessageCenter
 
     center = RoomMessageCenter.__new__(RoomMessageCenter)
     center.sse_manager = AsyncMock()

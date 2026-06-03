@@ -1,8 +1,8 @@
 from hub_runtime_bridge.transport.relay_streams import (
     RelayStreamService as HubRelayStreamService,
 )
-from infrastructure.relay_streams import RelayStreamService
+from app_shell.redis_runtime import AppShellRelayStreamService
 
 
-def test_legacy_relay_stream_import_is_phase8_shim() -> None:
-    assert RelayStreamService is HubRelayStreamService
+def test_app_shell_relay_stream_service_uses_hub_runtime_behavior() -> None:
+    assert issubclass(AppShellRelayStreamService, HubRelayStreamService)

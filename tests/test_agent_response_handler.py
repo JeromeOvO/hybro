@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from execution.dispatch.response_handler import AgentResponseHandler
-from modules.agent_event import AgentEvent
+from execution.dispatch.agent_event import AgentEvent
 
 # =============================================================================
 # Fixtures

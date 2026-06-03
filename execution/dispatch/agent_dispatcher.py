@@ -19,8 +19,8 @@ from models.dispatcher import AssignResult
 from models.room import RoomAgentMessage
 
 if TYPE_CHECKING:
-    from services.agent_resolver_service import AgentResolverService
-    from services.database_service import DatabaseService
+    from app_shell.agent_resolver_service import AgentResolverService
+    from app_shell.database_service import DatabaseService
 
 logger = get_logger(__name__)
 

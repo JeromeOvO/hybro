@@ -46,17 +46,17 @@ from models.supervisor import (
 )
 
 if TYPE_CHECKING:
-    from services.rate_limit_service import RateLimitService
+    from app_shell.rate_limit_service import RateLimitService
 
     from execution.dispatch.agent_dispatcher import AgentDispatcher
     from execution.dispatch.agent_message_processor import AgentMessageProcessor
     from execution.state.task_state_manager import TaskStateManager
-    from services.database_service import DatabaseService
-    from services.memory_service import RoomMemoryService
-    from services.room_coordinator_service import RoomCoordinatorService
-    from services.room_services import RoomServices
-    from services.room_supervisor_service import RoomSupervisorService
-    from services.sse_services import SSEManager
+    from app_shell.database_service import DatabaseService
+    from app_shell.memory_service import RoomMemoryService
+    from app_shell.room_coordinator_service import RoomCoordinatorService
+    from app_shell.room_runtime import RoomServices
+    from execution.orchestration.room_supervisor_service import RoomSupervisorService
+    from app_shell.delivery_runtime import SSEManager
 
 logger = get_logger(__name__)
 
@@ -91,7 +91,7 @@ class SupervisorExecutor:
         debate_rounds: int | None = None,
     ) -> None:
         self.supervisor_service = supervisor_service
-        self.room_services = room_services
+        self.room_runtime = room_services
         self.tsm = tsm
         self.sse_manager = sse_manager
         self.database_service = database_service
@@ -1044,7 +1044,7 @@ class SupervisorExecutor:
                             except ValueError:
                                 pass
 
-                        hitl_agent_message = self.room_services.create_agent_message(
+                        hitl_agent_message = self.room_runtime.create_agent_message(
                             room_id=room_id,
                             related_message_id=user_message_id,
                             agent_id="supervisor_hitl",
@@ -1355,7 +1355,7 @@ class SupervisorExecutor:
                         )
 
                 # Create RoomAgentMessage only after validation passes
-                message = self.room_services.create_agent_message(
+                message = self.room_runtime.create_agent_message(
                     room_id=room_id,
                     related_message_id=user_message_id,
                     agent_id=target.agent_id,

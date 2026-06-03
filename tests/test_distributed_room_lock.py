@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modules.RoomMessageCenter import ROOM_LOCK_HOLD_TTL_SECONDS, RoomMessageCenter
+from execution.orchestration.room_message_center import ROOM_LOCK_HOLD_TTL_SECONDS, RoomMessageCenter
 
 
 def _make_rmc(redis=None):
@@ -360,7 +360,9 @@ class TestLockHoldDurationWarning:
         fake_acquired_at = _time.monotonic() - (ROOM_LOCK_HOLD_TTL_SECONDS * 0.85)
 
         import logging
-        with caplog.at_level(logging.WARNING, logger="modules.RoomMessageCenter"):
+        with caplog.at_level(
+            logging.WARNING, logger="execution.orchestration.room_message_center"
+        ):
             await rmc._release_room_lock("room-1", owner, acquired_at=fake_acquired_at)
 
         assert any("approaching TTL" in msg for msg in caplog.messages)
@@ -375,7 +377,9 @@ class TestLockHoldDurationWarning:
         fake_acquired_at = _time.monotonic() - 120  # 2 minutes, well under 80% of 600s
 
         import logging
-        with caplog.at_level(logging.INFO, logger="modules.RoomMessageCenter"):
+        with caplog.at_level(
+            logging.INFO, logger="execution.orchestration.room_message_center"
+        ):
             await rmc._release_room_lock("room-1", owner, acquired_at=fake_acquired_at)
 
         assert any("held lock for" in msg for msg in caplog.messages)
@@ -391,7 +395,9 @@ class TestLockHoldDurationWarning:
         fake_acquired_at = _time.monotonic() - 2  # 2 seconds
 
         import logging
-        with caplog.at_level(logging.DEBUG, logger="modules.RoomMessageCenter"):
+        with caplog.at_level(
+            logging.DEBUG, logger="execution.orchestration.room_message_center"
+        ):
             await rmc._release_room_lock("room-1", owner, acquired_at=fake_acquired_at)
 
         assert not any("approaching TTL" in msg for msg in caplog.messages)

@@ -5,9 +5,9 @@ from pathlib import Path
 FORBIDDEN_API_GATEWAY_IMPORTS = (
     "database.mongodb",
     "modules",
-    "services.gateway_service",
-    "services.file_upload_service",
-    "services.rate_limit_service",
+    "app_shell.gateway_service",
+    "app_shell.file_upload_service",
+    "app_shell.rate_limit_service",
 )
 
 
@@ -111,11 +111,9 @@ def test_old_api_route_modules_are_compatibility_shims_only():
         "hub.py",
         "inspection_center.py",
         "memory_center.py",
-        "orchestration_center.py",
         "relay.py",
         "room_center.py",
         "sse.py",
-        "task.py",
         "viewset.py",
         "webhooks.py",
     }
@@ -166,8 +164,6 @@ def test_api_gateway_packages_are_registered_for_distribution():
         "common.middleware",
         "common.server",
         "common.utils",
-        "modules.middleware",
-        "modules.transports",
     }.issubset(packages)
     assert "main" in set(setuptools_config.get("py-modules", []))
 

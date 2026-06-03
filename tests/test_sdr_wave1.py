@@ -96,7 +96,7 @@ class TestIdempotencyGuardInRoomMessageCenter:
     @pytest.mark.asyncio
     async def test_normal_claim_rejected_returns_409(self):
         """Second call with same message_id should return 409."""
-        from modules.RoomMessageCenter import RoomMessageCenter
+        from execution.orchestration.room_message_center import RoomMessageCenter
 
         rmc = object.__new__(RoomMessageCenter)
         rmc.database_service = MagicMock()
@@ -117,7 +117,7 @@ class TestIdempotencyGuardInRoomMessageCenter:
     @pytest.mark.asyncio
     async def test_recovery_uses_reclaim(self):
         """Recovery path with is_recovery=True should use claim_or_reclaim."""
-        from modules.RoomMessageCenter import RoomMessageCenter
+        from execution.orchestration.room_message_center import RoomMessageCenter
 
         rmc = object.__new__(RoomMessageCenter)
         rmc.database_service = MagicMock()
@@ -140,7 +140,7 @@ class TestIdempotencyGuardInRoomMessageCenter:
     async def test_recovery_threshold_uses_orphan_threshold(self):
         """Recovery reclaim threshold must use orphan_threshold_minutes, not processing_status_expiry_minutes."""
         from common.utils.time import utcnow as real_utcnow
-        from modules.RoomMessageCenter import RoomMessageCenter
+        from execution.orchestration.room_message_center import RoomMessageCenter
 
         rmc = object.__new__(RoomMessageCenter)
         rmc.database_service = MagicMock()
@@ -154,7 +154,7 @@ class TestIdempotencyGuardInRoomMessageCenter:
             is_recovery=True,
         )
 
-        with patch("modules.RoomMessageCenter.settings") as mock_settings:
+        with patch("execution.orchestration.room_message_center.settings") as mock_settings:
             mock_settings.orphan_threshold_minutes = 2
             mock_settings.processing_status_expiry_minutes = 30
             await rmc.process_room_user_message(request)

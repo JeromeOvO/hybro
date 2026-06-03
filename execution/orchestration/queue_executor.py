@@ -31,15 +31,15 @@ from models.processing import ProcessingResult, ProcessingStatus
 from models.room import RoomAgentMessage
 
 if TYPE_CHECKING:
-    from services.rate_limit_service import RateLimitService
+    from app_shell.rate_limit_service import RateLimitService
 
     from execution.dispatch.response_handler import AgentResponseHandler
-    from services.a2a_service import A2AService
-    from services.database_service import DatabaseService
-    from services.debate_service import DebateService
-    from services.memory_service import RoomMemoryService
-    from services.room_services import RoomServices
-    from services.sse_services import SSEManager
+    from app_shell.a2a_runtime import A2AService
+    from app_shell.database_service import DatabaseService
+    from app_shell.debate_service import DebateService
+    from app_shell.memory_service import RoomMemoryService
+    from app_shell.room_runtime import RoomServices
+    from app_shell.delivery_runtime import SSEManager
 
 logger = get_logger(__name__)
 
@@ -109,7 +109,7 @@ class QueueExecutor:
         self.tsm = tsm
         self.sse_manager = sse_manager
         self.a2a_service = a2a_service
-        self.room_services = room_services
+        self.room_runtime = room_services
         self.room_memory_service = room_memory_service
         self.database_service = database_service
         self.debate_service = debate_service

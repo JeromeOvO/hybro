@@ -56,7 +56,7 @@ PATCH = {
     "sse.mongodb": "api.sse.mongodb",
     "a2a_tasks.db_service": "api.a2a_tasks.db_service",
     "agent_selection_service": "api.room_center.agent_selection_service",
-    "hitl_service_singleton": "services.hitl_service.hitl_service",
+    "hitl_service_singleton": "app_shell.hitl_service.hitl_service",
     # Webhook endpoints
     "webhooks.db_service": "api.webhooks.db_service",
     "webhooks.sse_manager": "api.webhooks.sse_manager",
@@ -65,14 +65,11 @@ PATCH = {
     # Discovery endpoints
     "discovery.discovery_service": "api.discovery.discovery_service",
     "discovery.discovery_rate_limit_service": "api.discovery.discovery_rate_limit_service",
-    # Orchestration center
-    "orchestration.room_message_center": "api.orchestration_center.room_message_center",
-    "orchestration.workflow_center": "api.orchestration_center.workflow_center",
     # File upload / S3
     "files.room_ownership_reader": "api.files.room_ownership_reader",
-    "s3_service": "services.s3_service.s3_service",
-    "room_services.mongodb": "services.room_services.mongodb",
-    "room_services.s3_service": "services.room_services.s3_service",
+    "s3_service": "app_shell.s3_service.s3_service",
+    "room_runtime.mongodb": "app_shell.room_runtime.mongodb",
+    "room_runtime.s3_service": "app_shell.room_runtime.s3_service",
     # Gateway endpoints
     "gateway.gateway_service": "api.gateway.gateway_service",
     "gateway.gateway_rate_limit_service": "api.gateway.gateway_rate_limit_service",
@@ -528,7 +525,7 @@ def mock_room_center():
 @pytest.fixture
 def mock_settings():
     """Create mock settings for tests."""
-    with patch("config.settings.settings") as mock:
+    with patch("common.config.settings.settings") as mock:
         mock.clerk_secret_key = "test_secret_key"
         mock.mongodb_uri = "mongodb://localhost:27017"
         mock.mongodb_database = "test_db"

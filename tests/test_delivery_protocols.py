@@ -797,10 +797,9 @@ def test_main_does_not_construct_legacy_sse_broker():
     forbidden_names = {"create_event_broker", "RedisBroker"}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module:
-            assert node.module != "infrastructure.brokers"
-            assert not node.module.startswith("infrastructure.brokers.")
+            assert node.module.split(".", 1)[0] != "infrastructure"
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                assert not alias.name.startswith("infrastructure.brokers")
+                assert alias.name.split(".", 1)[0] != "infrastructure"
         elif isinstance(node, ast.Name):
             assert node.id not in forbidden_names

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from services.sse_services import SSEManager
+from app_shell.delivery_runtime import SSEManager
 from tests.delivery_adapter_fakes import FakeDeliveryCompat, FakeDeliveryFacade
 
 NOW = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
@@ -72,7 +72,7 @@ async def test_bind_unbind_and_rebind_delegates_to_current_facade():
 
 @pytest.mark.asyncio
 async def test_broadcast_to_room_builds_legacy_frame(monkeypatch):
-    monkeypatch.setattr("services.sse_services.utcnow", lambda: NOW)
+    monkeypatch.setattr("app_shell.delivery_runtime.utcnow", lambda: NOW)
     manager = SSEManager()
     compat = _bind(manager)
 
@@ -95,8 +95,8 @@ async def test_broadcast_to_room_builds_legacy_frame(monkeypatch):
 async def test_send_processing_status_preserves_legacy_payload_and_skips_recording(
     monkeypatch,
 ):
-    monkeypatch.setattr("services.sse_services.utcnow", lambda: NOW)
-    import services.run_command_handler as handler_mod
+    monkeypatch.setattr("app_shell.delivery_runtime.utcnow", lambda: NOW)
+    import execution.run_command_handler as handler_mod
 
     record = AsyncMock()
     monkeypatch.setattr(
@@ -138,7 +138,7 @@ async def test_send_processing_status_preserves_legacy_payload_and_skips_recordi
 
 @pytest.mark.asyncio
 async def test_legacy_send_methods_have_golden_frame_shapes(monkeypatch):
-    monkeypatch.setattr("services.sse_services.utcnow", lambda: NOW)
+    monkeypatch.setattr("app_shell.delivery_runtime.utcnow", lambda: NOW)
     manager = SSEManager()
     compat = _bind(manager)
 

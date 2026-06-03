@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from services.database_service import DatabaseService
+from app_shell.database_service import DatabaseService
 
 
 @pytest.fixture

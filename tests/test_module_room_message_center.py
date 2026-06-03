@@ -26,7 +26,7 @@ from models.supervisor import (
     TrajectoryEntry,
     StepResult,
 )
-from modules.RoomMessageCenter import RoomMessageCenter
+from execution.orchestration.room_message_center import RoomMessageCenter
 
 # =============================================================================
 # _validate_room_message_request Tests

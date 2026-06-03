@@ -21,7 +21,7 @@ from room.translators import (
     saved_user_message_from_doc,
     user_message_doc_from_input,
 )
-from services.room_membership_source import LegacyRoomMembershipSeedSource
+from app_shell.room_membership_source import LegacyRoomMembershipSeedSource
 
 
 def test_room_translator_maps_legacy_fields_and_defaults_provenance():
@@ -173,7 +173,7 @@ async def test_legacy_membership_source_logs_agent_service_fallback():
         ),
     )
 
-    with patch("services.room_membership_source.logger", create=True) as logger:
+    with patch("app_shell.room_membership_source.logger", create=True) as logger:
         agents = await source.list_current_agents("owner")
 
     assert [agent.agent_id for agent in agents] == ["a1"]
@@ -183,7 +183,7 @@ async def test_legacy_membership_source_logs_agent_service_fallback():
 def test_legacy_membership_source_warns_for_missing_critical_agent_fields():
     agent = SimpleNamespace(agent_id="a1", agent_card=None)
 
-    with patch("services.room_membership_source.logger", create=True) as logger:
+    with patch("app_shell.room_membership_source.logger", create=True) as logger:
         info = LegacyRoomMembershipSeedSource.agent_info_from_legacy(agent)
 
     assert info.agent_id == "a1"

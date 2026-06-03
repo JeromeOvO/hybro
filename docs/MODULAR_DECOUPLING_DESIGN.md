@@ -29,8 +29,8 @@ This document proposes restructuring the codebase into **well-defined modules** 
 
 | Problem | Example | Impact |
 |---------|---------|--------|
-| Service Locator | `from services.room_services import room_services` | Cannot inject mocks; hidden dependencies |
-| Global Settings | `from config.settings import settings` everywhere | No test isolation; env coupling |
+| Service Locator | Legacy singleton imports for room runtime dependencies | Cannot inject mocks; hidden dependencies |
+| Global Settings | Imports from the old deleted config package | No test isolation; env coupling |
 | Monolithic Init | main.py 548-line lifespan with phased startup | Startup order is implicit; fragile |
 | No Interface Layer | Services import concrete classes | Change ripples across entire codebase |
 | SSE God Object | `sse_manager` has Redis, DB, broker, change stream + run_command_handler side effects | Single class with 6+ responsibilities |
@@ -42,7 +42,7 @@ This document proposes restructuring the codebase into **well-defined modules** 
 ### 2.2 Current Dependency Graph (Implicit)
 
 ```
-api/* ──→ modules/* ──→ services/* ──→ database/*
+api/* ──→ app_shell/* ──→ domain facades ──→ database/*
   │           │              │              │
   └───────────┼──────────────┼──────────────┘
               │              │         (all import settings, sse_manager, mongodb,
@@ -114,22 +114,22 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 
 | # | Module | Responsibility | Current Source |
 |---|--------|---------------|----------------|
-| 1 | **Common** | Protocols, DTOs, auth, config, utils, errors | `common/`, `models/`, `config/` |
-| 2 | **DAL** | Unified data access clients (split by concern) | `database/`, `infrastructure/redis_service.py`, `services/s3_service.py` |
-| 3 | **A2A Protocol Adapter** | Anti-corruption for a2a-sdk, internal model ↔ A2A types | `services/a2a_service.py`, `common/client/` |
-| 4 | **LLM Gateway** | Unified LLM invocation, provider routing, capability registry | `services/openai_service.py`, `services/gemini_service.py`, `services/bedrock_service.py` |
-| 5 | **Agent** | Agent lifecycle, health, matching, discovery | `services/agent_*.py`, `api/agent.py`, `api/discovery.py` |
-| 6 | **Room** | Room CRUD, membership, raw message persistence, message graph | `modules/RoomCenter.py`, `services/room_*.py` |
-| 7 | **Context & Memory** | Context assembly, compaction, search, user memory, ~~chat contexts~~ (legacy; source removed in Phase 0d/8) | `services/memory_*.py`, `services/compaction_service.py`, `services/context_assembly_service.py` |
-| 8 | **Execution** | Run lifecycle, supervisor, debate, HITL, dispatch (NOT workflow) | `modules/SupervisorExecutor.py`, `modules/RoomMessageCenter.py`, `services/run_*.py`, `services/hitl_service.py` |
-| 9 | **Delivery** | SSE connections, event broker, dedup, domain→frontend event translation | `services/sse_services.py`, `infrastructure/event_broker.py`, `infrastructure/brokers/` |
-| 10 | **Platform** | Gateway API, rate limiting, file storage | `services/gateway_service.py`, `services/*_rate_limit_service.py`, `services/file_upload_service.py` |
-| 11 | **HubRuntimeBridge** | Hub connection, relay, liveness, offline queue, agent sync | `services/relay_service.py`, `infrastructure/relay_streams.py`, `api/relay.py`, `api/hub.py` |
-| 12 | **Jobs** | Background tasks with leader election | `jobs/*`, `infrastructure/leader_election.py` |
+| 1 | **Common** | Protocols, DTOs, auth, config, utils, errors | `common/`, `models/` |
+| 2 | **DAL** | Unified data access clients (split by concern) | `database/`, app-shell Redis and object-storage adapters |
+| 3 | **A2A Protocol Adapter** | Anti-corruption for a2a-sdk, internal model ↔ A2A types | `app_shell/a2a_runtime.py`, `common/client/` |
+| 4 | **LLM Gateway** | Unified LLM invocation, provider routing, capability registry | `app_shell/openai_service.py`, `app_shell/gemini_service.py`, `app_shell/bedrock_service.py` |
+| 5 | **Agent** | Agent lifecycle, health, matching, discovery | `app_shell/agent_*.py`, `api/agent.py`, `api/discovery.py` |
+| 6 | **Room** | Room CRUD, membership, raw message persistence, message graph | `app_shell/room_runtime.py` |
+| 7 | **Context & Memory** | Context assembly, compaction, search, user memory, ~~chat contexts~~ (legacy; source removed in Phase 0d/8) | `app_shell/memory_*.py`, `app_shell/compaction_service.py`, `app_shell/context_assembly_service.py` |
+| 8 | **Execution** | Run lifecycle, supervisor, debate, HITL, dispatch (NOT workflow) | `execution/`, `app_shell/hitl_service.py` |
+| 9 | **Delivery** | SSE connections, event broker, dedup, domain→frontend event translation | `app_shell/delivery_runtime.py`, `delivery/` |
+| 10 | **Platform** | Gateway API, rate limiting, file storage | `platform_module/`, `api/gateway.py`, `api/discovery.py`, `api/files.py` |
+| 11 | **HubRuntimeBridge** | Hub connection, relay, liveness, offline queue, agent sync | `hub_runtime_bridge/`, `api/relay.py`, `api/hub.py` |
+| 12 | **Jobs** | Background tasks with leader election | `jobs/`, app-shell Redis runtime |
 
 > **NOTE (Workflow decommission)**: The legacy `base_tasks` / `meta_tasks` / `task_sessions` data model
 > (from the first version of chat room) is **deleted** in this refactor, NOT wrapped. The endpoints
-> `api/orchestration_center.py` and `api/task.py` are decommissioned in Phase 0d / follow-up
+> the old workflow and task route files are decommissioned in Phase 0d / follow-up
 > workflow cleanup, not in Phase 7b. Phase 7b explicitly excludes active legacy workflow routes
 > from the Execution extraction static gates except as documented out-of-scope manifest entries.
 > See Phase 0d for frontend coordination and deprecation timeline.
@@ -636,7 +636,7 @@ class EventPublisher(Protocol):
     - Caller MUST complete all business side effects BEFORE calling emit().
     - In particular: run_command_handler.record_processing_status() must execute
       before emit("processing_status", ...).
-    - EventPublisher is a pure delivery pipe — it NEVER calls back into business modules.
+    - EventPublisher is a pure delivery pipe — it NEVER calls back into business components.
     - EventPublisher/Delivery MUST preserve legacy terminal `ProcessingStatusEvent`
       deduplication: duplicate `completed`, `failed`, or `canceled`
       processing-status frames for the same `(room_id, message_id)` are
@@ -787,8 +787,8 @@ DeliveryEvent = Annotated[
   does not mutate the delivered frame to inject a trace id.
 
 **Phase 6 compatibility seam:**
-- `services/sse_services.py` is now a C3 migration adapter. Startup binds it to
-  `DeliveryFacade`; before binding, public methods fail fast.
+- `app_shell/delivery_runtime.py` is now the C3 migration adapter. Startup binds
+  it to `DeliveryFacade`; before binding, public methods fail fast.
 - Legacy SSE methods not represented in `DeliveryEvent` use
   `DeliveryFacade.compat.emit_legacy_frame()`, which is the only adapter-visible path to
   `EventPublisherImpl._emit_legacy_frame()`.
@@ -2055,13 +2055,10 @@ Rules:
 #### Phase 0d: Legacy Workflow Decommission (1 week)
 
 - Coordinate with frontend to remove all UI dependencies on:
-  - `POST /orchestrationCenter/runWorkflow`
-  - `POST /orchestrationCenter/retryMetaTask`
-  - `POST /orchestrationCenter/summarizeMetaTaskForBaseTask`
-  - `GET /task/queryTask`, `GET /task/queryBaseTask`, `GET /task/getAllSessions`
-  - `GET /task/getBaseTasksBySessionId`, `GET /task/getMetaTasksByParentTaskId`
-- Remove `api/orchestration_center.py`, `api/task.py`
-- Remove `modules/WorkflowCenter.py`, `services/task_service.py`
+  - retired workflow run, retry, and summary endpoints
+  - retired task query/session endpoints
+- Remove the old workflow and task route shims
+- Remove old workflow-center and task-service compatibility code
 - 4-week deprecation window: endpoints return 410 Gone with deprecation message
 - Drop `base_tasks`, `meta_tasks`, `task_sessions`, `chat_contexts` collections in Phase 8 cleanup
 
@@ -2139,7 +2136,7 @@ Rules:
 - `RunLifecycleService.record_processing_status()` returns the optional run-event payload so callers can preserve legacy `run_event` SSE ordering before processing-status delivery.
 - Phase 7a golden and manifest tests prove `record_processing_status()` -> legacy `run_event` broadcast -> processing-status delivery ordering.
 - This works against the post-Phase-7a SSE manager, which is delivery/dedup only;
-  lifecycle writes live in `services/run_command_handler.py`.
+  lifecycle writes live in `execution/run_command_handler.py`.
 
 **Phase 6 (week 2-3): Delivery module extraction — implemented on branch `phase-6-delivery-module`**
 - `delivery/facade.py` implementing EventPublisher, SSETransport
@@ -2149,7 +2146,7 @@ Rules:
 - Deduplication (TTLCache per terminal status)
 - `register_internal_handler()` + `emit_internal()` for internal events
 - **No business logic** — verify by asserting no business module imports in delivery/
-- `services/sse_services.py` is a fail-fast C3 adapter bound to `DeliveryFacade` during startup.
+- `app_shell/delivery_runtime.py` is a fail-fast C3 adapter bound to `DeliveryFacade` during startup.
 - `main.py` constructs Delivery through `container.py` helpers and does not import concrete `delivery.*`, concrete `dal.*`, or legacy SSE `RedisBroker`.
 - Old `sse_manager.send_processing_status()` is transport-only: no `record_processing_status()`, no `run_event_sse_enabled()`, no DB fallback.
 - At this point, the historical record-inside-send path is gone: callers already
@@ -2179,7 +2176,7 @@ Rules:
 
 - `platform/facade.py` implementing GatewayService, RateLimiter, FileStorage
 - `api/` thin adapter layer (all routes extracted)
-- Remove old `modules/`, `services/` directories
+- Remove old compatibility package directories
 - Remove singleton imports
 - Full import linter enforcement
 - Remove migration adapters
@@ -2191,7 +2188,7 @@ Rules:
 During transition, old singletons delegate to new facades:
 
 ```python
-# services/agent_service.py (during Phase 3)
+# app_shell/agent_service.py (during Phase 3)
 
 class AgentService:
     """Legacy wrapper — delegates to new AgentFacade.
@@ -2224,80 +2221,80 @@ class AgentService:
 | Feature | Current Location | Target Module | Target Component |
 |---------|-----------------|---------------|-----------------|
 | **Agent lifecycle** | | | |
-| Agent registration | `services/agent_service.py` | Agent | `service/agent_crud.py` |
-| Agent health checking | `services/agent_health_service.py` | Agent + Jobs | `service/agent_health.py` |
-| Agent matching (vector) | `services/agent_selection_service.py` | Agent | `service/agent_matching.py` |
+| Agent registration | `app_shell/agent_service.py` | Agent | `service/agent_crud.py` |
+| Agent health checking | `app_shell/agent_health_service.py` | Agent + Jobs | `service/agent_health.py` |
+| Agent matching (vector) | `app_shell/agent_selection_service.py` | Agent | `service/agent_matching.py` |
 | Agent groups | `api/agent_group.py` | Agent | `repository/agent_group_repo.py` |
-| Agent card fetching | `services/a2a_service.py` | A2A Adapter | `card_resolver.py` |
-| Agent inspection | `modules/InspectionCenter.py` | Agent | `service/agent_crud.py` |
-| Discovery API (no visibility filter) | `services/discovery_service.py` | Agent | `facade.match_agents(respect_visibility=False)` |
-| Listings (owner-scoped, masked) | `services/agent_service.py` | Agent | `facade.match_agents(respect_visibility=True)` |
+| Agent card fetching | `app_shell/a2a_runtime.py` | A2A Adapter | `card_resolver.py` |
+| Agent inspection | `app_shell/inspection_runtime.py` | Agent | `service/agent_crud.py` |
+| Discovery API (no visibility filter) | `api/discovery.py` | Agent | `facade.match_agents(respect_visibility=False)` |
+| Listings (owner-scoped, masked) | `app_shell/agent_service.py` | Agent | `facade.match_agents(respect_visibility=True)` |
 | is_directly_callable (hub 502) | implicit in gateway_service | Agent | `facade.is_directly_callable()` |
 | Hub agent enrichment (is_hub_online) | mongodb._enrich_hub_fields | Agent + HubRuntimeBridge | Agent calls `HubLivenessReader` |
 | **Room & messages** | | | |
-| Room CRUD | `modules/RoomCenter.py` | Room | `service/room_crud.py` |
-| Room membership (3 seed modes) | `services/room_services.py` | Room | `service/room_membership.py` (handles MembershipSeed) |
-| User message persistence | `services/room_services.py` | Room | `service/message_service.py` |
-| Agent message persistence | `services/room_services.py` | Room | `service/message_service.py` |
-| Message graph | `services/room_services.py` | Room | `repository/message_repo.py` |
+| Room CRUD | `app_shell/room_runtime.py` | Room | `service/room_crud.py` |
+| Room membership (3 seed modes) | `app_shell/room_runtime.py` | Room | `service/room_membership.py` (handles MembershipSeed) |
+| User message persistence | `app_shell/room_runtime.py` | Room | `service/message_service.py` |
+| Agent message persistence | `app_shell/room_runtime.py` | Room | `service/message_service.py` |
+| Message graph | `app_shell/room_runtime.py` | Room | `repository/message_repo.py` |
 | **Context & Memory** | | | |
-| Context assembly | `services/context_assembly_service.py` | Context & Memory | `service/context_assembly.py` |
-| Memory compaction | `services/compaction_service.py` | Context & Memory | `service/compaction.py` |
-| Memory search | `services/memory_search_service.py` | Context & Memory | `service/memory_search.py` |
-| User memories | `services/memory_service.py` | Context & Memory | `service/user_memory.py` |
+| Context assembly | `app_shell/context_assembly_service.py` | Context & Memory | `service/context_assembly.py` |
+| Memory compaction | `app_shell/compaction_service.py` | Context & Memory | `service/compaction.py` |
+| Memory search | `app_shell/memory_search_service.py` | Context & Memory | `service/memory_search.py` |
+| User memories | `app_shell/memory_service.py` | Context & Memory | `service/user_memory.py` |
 | **Execution** | | | |
-| Message dispatch | `modules/RoomMessageCenter.py` | Execution | `orchestration/` + `dispatch/` |
-| Supervisor loop | `modules/SupervisorExecutor.py` | Execution | `orchestration/supervisor_executor.py` |
-| Debate mode | `modules/debate_dispatcher.py` | Execution | `orchestration/debate_dispatcher.py` |
-| Queue execution | `modules/QueueExecutor.py` | Execution | `orchestration/queue_executor.py` |
-| Run lifecycle | `services/run_lifecycle_service.py` | Execution | `run_lifecycle.py` in Phase 7b; target `run/lifecycle.py` |
-| Run events | `services/run_command_handler.py` | Execution | `run_lifecycle.py` adapter in Phase 7b; target `run/command_handler.py` |
-| record_processing_status | `services/run_command_handler.py` | Execution | `events.py` + `run_lifecycle.py` adapter in Phase 7b |
-| HITL requests | `services/hitl_service.py` | Execution | `hitl/service.py` in Phase 7b; target `hitl/hitl_service.py` |
-| Room-level locking | `modules/RoomMessageCenter.py` | Execution | `state/locking.py` |
+| Message dispatch | `execution/orchestration/room_message_center.py` | Execution | `orchestration/` + `dispatch/` |
+| Supervisor loop | `execution/orchestration/supervisor_executor.py` | Execution | `orchestration/supervisor_executor.py` |
+| Debate mode | `execution/orchestration/debate_dispatcher.py` | Execution | `orchestration/debate_dispatcher.py` |
+| Queue execution | `execution/orchestration/queue_executor.py` | Execution | `orchestration/queue_executor.py` |
+| Run lifecycle | `execution/run_lifecycle_service.py` | Execution | `run_lifecycle.py` in Phase 7b; target `run/lifecycle.py` |
+| Run events | `execution/run_command_handler.py` | Execution | `run_lifecycle.py` adapter in Phase 7b; target `run/command_handler.py` |
+| record_processing_status | `execution/run_command_handler.py` | Execution | `events.py` + `run_lifecycle.py` adapter in Phase 7b |
+| HITL requests | `app_shell/hitl_service.py` | Execution | `hitl/service.py` in Phase 7b; target `hitl/hitl_service.py` |
+| Room-level locking | `execution/orchestration/room_message_center.py` | Execution | `state/locking.py` |
 | heal_diverged_runs_on_startup | `main.py` | Execution | `run/lifecycle.py` (exposed via Protocol) |
 | A2A long-running tasks | `api/a2a_tasks.py` | Execution (API) | Phase 7b deferred; target `api/a2a_task_routes.py` |
 | Webhooks | `api/webhooks.py` | Execution (API) | `api/webhook_routes.py` |
 | **Legacy Workflow** (DECOMMISSIONED — see Phase 0d) | | | |
-| Task decomposition / assignment / execution / CRUD | `modules/WorkflowCenter.py`, `services/task_service.py`, `api/orchestration_center.py`, `api/task.py` | DELETED | Endpoints removed; collections dropped in Phase 8 cleanup |
+| Task decomposition / assignment / execution / CRUD | old workflow/task API surface | DELETED | Endpoints removed; collections dropped in Phase 8 cleanup |
 | **Delivery** | | | |
-| SSE broadcasting | `services/sse_services.py` | Delivery | `sse/manager.py` |
-| SSE connections | `services/sse_services.py` | Delivery | `sse/connection.py` |
-| Event dedup | `services/sse_services.py` | Delivery | `sse/deduplication.py` |
-| Cross-instance pub/sub | `infrastructure/brokers/redis_broker.py` | Delivery | `event_bus/cross_instance.py` |
-| Cancellation watcher | `services/sse_services.py` | Delivery | `sse/cancellation_watcher.py` |
-| Domain→SSE translation | `services/sse_services.py` | Delivery | `translator.py` |
+| SSE broadcasting | `app_shell/delivery_runtime.py` | Delivery | `sse/manager.py` |
+| SSE connections | `app_shell/delivery_runtime.py` | Delivery | `sse/connection.py` |
+| Event dedup | `delivery/` | Delivery | `sse/deduplication.py` |
+| Cross-instance pub/sub | `delivery/` | Delivery | `event_bus/cross_instance.py` |
+| Cancellation watcher | `delivery/` | Delivery | `sse/cancellation_watcher.py` |
+| Domain to SSE translation | `delivery/` | Delivery | `translator.py` |
 | **Platform** | | | |
-| Gateway API | `services/gateway_service.py` | Platform | `gateway/gateway_service.py` |
-| Rate limiting | `services/*_rate_limit_service.py` | Platform | `rate_limit/rate_limiter.py` |
-| File uploads | `services/file_upload_service.py` | Platform | `files/upload_service.py` |
-| Content storage | `services/content_storage_service.py` | Platform | `files/content_storage.py` |
+| Gateway API | `platform_module/` | Platform | `gateway/gateway_service.py` |
+| Rate limiting | `platform_module/rate_limit.py` | Platform | `rate_limit/rate_limiter.py` |
+| File uploads | `platform_module/` | Platform | `files/upload_service.py` |
+| Content storage | `platform_module/` | Platform | `files/content_storage.py` |
 | **HubRuntimeBridge** | | | |
-| Hub relay | `services/relay_service.py` | HubRuntimeBridge | `service/hub_relay.py` |
-| Hub liveness | `services/relay_service.py` | HubRuntimeBridge | `service/hub_liveness.py` |
+| Hub relay | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_relay.py` |
+| Hub liveness | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_liveness.py` |
 | Hub connection | `api/hub.py` | HubRuntimeBridge | `service/hub_connection.py` |
-| Hub publish intake | `services/relay_service.py` | HubRuntimeBridge | `service/hub_publish.py` |
-| Offline queue | `services/relay_service.py` | HubRuntimeBridge | `transport/offline_queue.py` |
-| Redis Streams relay | `infrastructure/relay_streams.py` | HubRuntimeBridge | `transport/relay_transport.py` |
-| Hub agent sync | `services/relay_service.py` | HubRuntimeBridge → Agent | via `AgentRegistryWriter` |
+| Hub publish intake | `hub_runtime_bridge/service/hub_publish.py` | HubRuntimeBridge | `service/hub_publish.py` |
+| Offline queue | `hub_runtime_bridge/` | HubRuntimeBridge | `transport/offline_queue.py` |
+| Redis Streams relay | `app_shell/redis_runtime.py` | HubRuntimeBridge | `transport/relay_transport.py` |
+| Hub agent sync | `app_shell/relay_service.py` | HubRuntimeBridge -> Agent | via `AgentRegistryWriter` |
 | **LLM Gateway** | | | |
-| OpenAI calls | `services/openai_service.py` | LLM Gateway | `providers/openai_provider.py` |
-| Gemini calls | `services/gemini_service.py` | LLM Gateway | `providers/gemini_provider.py` |
-| Bedrock calls | `services/bedrock_service.py` | LLM Gateway | `providers/bedrock_provider.py` |
-| Embedding generation | `services/openai_service.py` | LLM Gateway | `gateway.py` (embed) |
+| OpenAI calls | `app_shell/openai_service.py` | LLM Gateway | `providers/openai_provider.py` |
+| Gemini calls | `app_shell/gemini_service.py` | LLM Gateway | `providers/gemini_provider.py` |
+| Bedrock calls | `app_shell/bedrock_service.py` | LLM Gateway | `providers/bedrock_provider.py` |
+| Embedding generation | `app_shell/openai_service.py` | LLM Gateway | `gateway.py` (embed) |
 | **A2A Adapter** | | | |
-| A2A message send/stream | `services/a2a_service.py` | A2A Adapter | `transport.py` |
+| A2A message send/stream | `app_shell/a2a_runtime.py` | A2A Adapter | `transport.py` |
 | A2A card resolution | `common/client/card_resolver.py` | A2A Adapter | `card_resolver.py` |
 | A2A type mapping | scattered | A2A Adapter | `translators/` |
 | Push notification auth | `common/utils/push_notification_auth.py` | A2A Adapter | `push_notification.py` |
 | **DAL** | | | |
 | MongoDB client | `database/mongodb.py` | DAL | `mongo/client.py` |
-| Redis KV | `infrastructure/redis_service.py` | DAL | `redis/kv.py` |
-| Redis Pub/Sub | `infrastructure/brokers/redis_broker.py` | DAL | `redis/pubsub.py` |
-| Redis Streams | `infrastructure/relay_streams.py` | DAL | `redis/streams.py` |
+| Redis KV | `app_shell/redis_runtime.py` | DAL | `redis/kv.py` |
+| Redis Pub/Sub | `delivery/` | DAL | `redis/pubsub.py` |
+| Redis Streams | `app_shell/redis_runtime.py` | DAL | `redis/streams.py` |
 | Pinecone | `database/pinecone_db.py` | DAL | `pinecone/client.py` |
-| S3 | `services/s3_service.py` | DAL | `s3/client.py` |
-| Leader election | `infrastructure/leader_election.py` | DAL | `redis/leader.py` |
+| S3 | `app_shell/s3_service.py` | DAL | `s3/client.py` |
+| Leader election | `app_shell/redis_runtime.py` | DAL | `redis/leader.py` |
 | **Jobs** | | | |
 | Health check | `jobs/agent_health_service.py` | Jobs | `agent_health_job.py` |
 | Compaction sweep | `jobs/compaction_sweep.py` | Jobs | `compaction_sweep_job.py` |

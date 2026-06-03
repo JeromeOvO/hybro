@@ -79,15 +79,6 @@
       "memory"
     ]
   },
-  "orchestration": {
-    "api_key": false,
-    "auth": "clerk-global",
-    "cors": "default",
-    "deprecated": true,
-    "tags": [
-      "orchestration"
-    ]
-  },
   "platform_gateway": {
     "api_key": true,
     "auth": "api-key-route-level",
@@ -118,15 +109,6 @@
     "cors": "default",
     "tags": [
       "sse"
-    ]
-  },
-  "task": {
-    "api_key": false,
-    "auth": "clerk-global",
-    "cors": "default",
-    "deprecated": true,
-    "tags": [
-      "task"
     ]
   },
   "webhook": {

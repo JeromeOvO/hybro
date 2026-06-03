@@ -34,7 +34,7 @@ from models.response import (
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
 )
-from modules.RoomCenter import RoomCenter
+from app_shell.room_runtime import AppShellRoomCenter as RoomCenter
 from tests.conftest import PATCH
 
 # =============================================================================

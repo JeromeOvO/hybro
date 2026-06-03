@@ -6,9 +6,6 @@ behavior and app-shell health aliases covered for callers that still import the
 old test helpers.
 """
 
-from unittest.mock import patch
-
-
 class MockRedisService:
     """In-memory mock used by Phase 7a golden transport tests."""
 
@@ -35,15 +32,6 @@ class MockRedisService:
 
     async def get(self, key: str) -> str | None:
         return self._store.get(key)
-
-
-class TestBrokerFactory:
-    def test_broker_disabled_when_no_redis_url(self):
-        from infrastructure.brokers import create_event_broker
-
-        with patch("config.settings.settings") as mock_settings:
-            mock_settings.redis_url = ""
-            assert create_event_broker() is None
 
 
 class TestHealthStatus:
@@ -115,4 +103,3 @@ class TestHealthStatus:
         assert result["body"]["status"] == "degraded"
         assert result["status_code"] == 503
         assert result["body"]["change_stream_connected"] is False
-

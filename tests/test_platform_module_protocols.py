@@ -11,7 +11,7 @@ FORBIDDEN_PLATFORM_IMPORT_PREFIXES = (
     "services",
     "modules",
     "database.mongodb",
-    "config.settings",
+    "config",
 )
 
 
@@ -126,6 +126,27 @@ def test_main_uses_execution_room_message_center_runtime_for_startup_wiring():
     assert "room_center.room_message_center" not in source
     assert "execution_room_message_center.bind(" in source
     assert "room_message_center=execution_room_message_center" in source
+
+
+def test_main_imports_room_runtime_singleton_for_lifespan_bindings():
+    tree = ast.parse(Path("main.py").read_text(), filename="main.py")
+    room_runtime_uses = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "room_runtime"
+    ]
+    imported_names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.module != "app_shell.room_runtime":
+            continue
+        imported_names.update(alias.asname or alias.name for alias in node.names)
+
+    assert room_runtime_uses
+    assert "room_runtime" in imported_names
 
 
 def test_container_builds_platform_config_from_scalar_settings():
@@ -352,5 +373,5 @@ def test_main_binds_discovery_route_to_platform_facade():
 def test_gateway_discovery_is_not_backed_by_legacy_discovery_service():
     source = Path("main.py").read_text()
 
-    assert "from services.discovery_service import discovery_service" not in source
+    assert "from app_shell.discovery_service import discovery_service" not in source
     assert "discovery_provider=discovery_service" not in source

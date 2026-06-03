@@ -24,7 +24,7 @@ from models.agent import AgentStatus
 
 if TYPE_CHECKING:
     from models.processing import ProcessingResult
-    from services.agent_health_service import AgentHealthService
+    from app_shell.agent_health_service import AgentHealthService
 
 logger = get_logger(__name__)
 

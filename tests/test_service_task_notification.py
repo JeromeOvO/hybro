@@ -1,4 +1,4 @@
-"""Tests for services.task_notification_service.notify_task_update."""
+"""Tests for execution.dispatch.task_notifications.notify_task_update."""
 
 from __future__ import annotations
 
@@ -8,19 +8,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from a2a.types import Artifact, Part, Task, TaskState, TaskStatus, TextPart
 
+from common.a2a_constants import SSEProcessingStatus
 from models.room import MessageContent, Room, RoomAgentMessage
-from services.a2a_constants import SSEProcessingStatus
-from services.task_notification_service import notify_task_update
+from execution.dispatch.task_notifications import notify_task_update
 
 FROZEN_TIME = datetime(2026, 1, 15, 12, 0, 0)
 
-PATCH_DB = "services.database_service.db_service"
-PATCH_NOTIF = "services.notification_service.notification_service"
-PATCH_SSE = "services.sse_services.sse_manager"
-PATCH_EXTRACT_ERR = "services.task_notification_service.extract_error_message"
-PATCH_EXTRACT_STATUS = "services.task_notification_service.extract_status_message"
-PATCH_HAS_VISIBLE = "services.task_notification_service.task_has_visible_content"
-PATCH_SLEEP = "services.task_notification_service.asyncio.sleep"
+PATCH_DB = "app_shell.database_service.db_service"
+PATCH_NOTIF = "app_shell.notification_service.notification_service"
+PATCH_SSE = "app_shell.delivery_runtime.sse_manager"
+PATCH_EXTRACT_ERR = "execution.dispatch.task_notifications.extract_error_message"
+PATCH_EXTRACT_STATUS = "execution.dispatch.task_notifications.extract_status_message"
+PATCH_HAS_VISIBLE = "execution.dispatch.task_notifications.task_has_visible_content"
+PATCH_SLEEP = "execution.dispatch.task_notifications.asyncio.sleep"
 PATCH_EXTRACT_PARTS = "common.utils.a2a_helpers.extract_parts_from_artifacts"
 PATCH_CONVERT_S3 = "common.utils.a2a_helpers.convert_inline_bytes_to_s3"
 

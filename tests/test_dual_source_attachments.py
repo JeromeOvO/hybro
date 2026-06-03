@@ -9,7 +9,7 @@ from models.file_upload import (
 from models.request import RoomCenterUserMessageRequest, UserAttachmentRequest
 from models.response import RoomCenterUserMessageResponse
 from models.room import MessageContent, RoomUserMessage
-from services.room_services import RoomServices
+from app_shell.room_runtime import RoomServices
 
 
 @pytest.fixture

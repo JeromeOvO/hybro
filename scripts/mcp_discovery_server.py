@@ -10,7 +10,7 @@ Environment variables:
     HYBRO_API_URL     Optional base URL, default: http://localhost:8000
     HYBRO_API_PREFIX  Optional API prefix, default: /api/v1
 
-Timeout is read from config.settings (hybro_timeout_seconds).
+Timeout is read from common.config.settings (hybro_timeout_seconds).
 """
 
 from __future__ import annotations
