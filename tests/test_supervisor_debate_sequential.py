@@ -25,7 +25,7 @@ from models.supervisor import (
     TrajectoryEntry,
     StepResult,
 )
-from modules.SupervisorExecutor import SupervisorExecutor
+from execution.orchestration.supervisor_executor import SupervisorExecutor
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -45,7 +45,7 @@ def _make_supervisor_executor() -> SupervisorExecutor:
     se.database_service = AsyncMock()
     se.sse_manager = AsyncMock()
     se.sse_manager.send_processing_status = AsyncMock()
-    se.room_services = MagicMock()
+    se.room_runtime = MagicMock()
     se.supervisor_service = MagicMock()
     se.tsm = MagicMock()
     se.agent_dispatcher = MagicMock()
@@ -93,7 +93,7 @@ def _make_delegate_entry(
 
 
 class TestSnapshotDebateAgents:
-    @patch("modules.SupervisorExecutor.settings")
+    @patch("execution.orchestration.supervisor_executor.settings")
     def test_initialized_once(self, mock_settings):
         mock_settings.debate_rounds = 1
         registry = [
@@ -112,7 +112,7 @@ class TestSnapshotDebateAgents:
         ids2 = SupervisorExecutor._snapshot_debate_agents(registry, trajectory)
         assert ids2 == ["a1", "a2"]
 
-    @patch("modules.SupervisorExecutor.settings")
+    @patch("execution.orchestration.supervisor_executor.settings")
     def test_multi_round_snapshot(self, mock_settings):
         """With debate_rounds=2, each agent appears twice in the snapshot."""
         mock_settings.debate_rounds = 2
@@ -364,7 +364,7 @@ class TestCollectPriorDebateResponses:
 # =========================================================================
 
 
-@patch("modules.SupervisorExecutor.settings", MagicMock(debate_rounds=1))
+@patch("execution.orchestration.supervisor_executor.settings", MagicMock(debate_rounds=1))
 class TestSequentialDebateDispatch:
     """Integration tests that run the full executor loop with mocked dispatch."""
 
@@ -554,7 +554,7 @@ class TestSequentialDebateDispatch:
 # =========================================================================
 
 
-@patch("modules.SupervisorExecutor.settings", MagicMock(debate_rounds=1))
+@patch("execution.orchestration.supervisor_executor.settings", MagicMock(debate_rounds=1))
 class TestDebateResume:
     @pytest.fixture
     def se(self):

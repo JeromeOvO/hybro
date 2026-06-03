@@ -19,7 +19,6 @@ from models.room import (
     RoomUserMessage,
     UserAttachment,
 )
-from models.task import BaseTask, MetaTask, TaskSession
 
 
 class PaginationParams(BaseModel):
@@ -216,23 +215,6 @@ class AgentSettingsUpdateRequest(BaseModel):
     agent_status: AgentStatus | None = None
     is_public: bool | None = None
     model_config = ConfigDict(use_enum_values=True)
-
-
-class TaskCenterRequest(BaseModel):
-    task_id: str | None = None
-    user_name: str | None = None
-    parent_task_id: str | None = None
-    session_id: str | None = None
-    agent_id: str | None = None
-    meta_task: MetaTask | None = None
-    base_task: BaseTask | None = None
-    task_session: TaskSession | None = None
-    task: Task | None = None
-    message: Any | None = None
-    user_input: str | None = None
-    execution_order: int = 0
-    depends_on_tasks: list[str] | None = None
-    context_from_previous: dict[str, Any] | None = None
 
 
 class ChatRequest(BaseModel):

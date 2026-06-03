@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING, Any
 from fastapi import HTTPException
 
 from a2a_adapter.webhook_payloads import (
-    _is_proto_format,  # noqa: F401 - legacy modules.transports.webhook re-export
-    _normalize_proto_payload,  # noqa: F401 - legacy modules.transports.webhook re-export
+    _is_proto_format,  # noqa: F401 - compatibility re-export
+    _normalize_proto_payload,  # noqa: F401 - compatibility re-export
     parse_stream_response_payload,
 )
 from common.a2a_constants import (
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from execution.dispatch.dispatch_middleware import DispatchContext
     from execution.dispatch.response_handler import AgentResponseHandler
     from models.room import RoomAgentMessage
-    from services.database_service import DatabaseService
+    from app_shell.database_service import DatabaseService
 
 logger = get_logger(__name__)
 

@@ -11,8 +11,8 @@ import asyncio
 import pytest
 
 from app_shell.room_lock import RedisRoomDistributedLock
-from infrastructure.redis_service import RedisService
-from modules.RoomMessageCenter import (
+from app_shell.redis_runtime import AppShellRedisService
+from execution.orchestration.room_message_center import (
     ROOM_LOCK_HOLD_TTL_SECONDS,
     RoomMessageCenter,
 )
@@ -25,8 +25,8 @@ LOCK_PREFIX = "room:lock:"
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_rmc(redis_service: RedisService) -> RoomMessageCenter:
-    """Build a minimal RoomMessageCenter wired to a real RedisService."""
+def _make_rmc(redis_service: AppShellRedisService) -> RoomMessageCenter:
+    """Build a minimal RoomMessageCenter wired to a real AppShellRedisService."""
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
     rmc._room_locks = {}
     rmc._room_distributed_lock = RedisRoomDistributedLock(redis_service)
@@ -35,8 +35,8 @@ def _make_rmc(redis_service: RedisService) -> RoomMessageCenter:
 
 @pytest.fixture()
 async def redis():
-    """Provide a connected RedisService and clean up test keys afterwards."""
-    svc = RedisService(url=REDIS_URL)
+    """Provide a connected AppShellRedisService and clean up test keys afterwards."""
+    svc = AppShellRedisService(url=REDIS_URL)
     await svc.start()
     if not svc.is_connected:
         pytest.skip("Redis not available at localhost:6379")
@@ -57,7 +57,7 @@ async def redis():
 class TestRealRedisLockPrimitives:
     """Low-level acquire/release against a live Redis."""
 
-    async def test_acquire_creates_key_with_ttl(self, redis: RedisService):
+    async def test_acquire_creates_key_with_ttl(self, redis: AppShellRedisService):
         rmc = _make_rmc(redis)
         room = "integration-ttl-check"
 
@@ -73,7 +73,7 @@ class TestRealRedisLockPrimitives:
         # cleanup
         await redis._client.delete(f"{LOCK_PREFIX}{room}")
 
-    async def test_acquire_blocked_by_existing_key(self, redis: RedisService):
+    async def test_acquire_blocked_by_existing_key(self, redis: AppShellRedisService):
         rmc = _make_rmc(redis)
         room = "integration-blocked"
 
@@ -84,7 +84,7 @@ class TestRealRedisLockPrimitives:
 
         await redis._client.delete(f"{LOCK_PREFIX}{room}")
 
-    async def test_lua_release_only_deletes_own_key(self, redis: RedisService):
+    async def test_lua_release_only_deletes_own_key(self, redis: AppShellRedisService):
         rmc = _make_rmc(redis)
         room = "integration-lua-release"
 
@@ -105,7 +105,7 @@ class TestRealRedisLockPrimitives:
 class TestRealRedisRoomLockFlow:
     """Full _acquire_room_lock / _release_room_lock against live Redis."""
 
-    async def test_acquire_and_release_round_trip(self, redis: RedisService):
+    async def test_acquire_and_release_round_trip(self, redis: AppShellRedisService):
         rmc = _make_rmc(redis)
         room = "integration-round-trip"
 
@@ -122,7 +122,7 @@ class TestRealRedisRoomLockFlow:
         value = await redis._client.get(f"{LOCK_PREFIX}{room}")
         assert value is None
 
-    async def test_ttl_is_hold_duration_not_timeout(self, redis: RedisService):
+    async def test_ttl_is_hold_duration_not_timeout(self, redis: AppShellRedisService):
         rmc = _make_rmc(redis)
         room = "integration-ttl-value"
 
@@ -137,7 +137,7 @@ class TestRealRedisRoomLockFlow:
 
         await rmc._release_room_lock(room, owner)
 
-    async def test_second_acquire_blocks_until_first_releases(self, redis: RedisService):
+    async def test_second_acquire_blocks_until_first_releases(self, redis: AppShellRedisService):
         """Two RMC instances (simulating two workers) contend on same room."""
         rmc1 = _make_rmc(redis)
         rmc2 = _make_rmc(redis)
@@ -164,7 +164,7 @@ class TestRealRedisRoomLockFlow:
             f"{second}-releasing",
         ]
 
-    async def test_timeout_when_key_held_by_another(self, redis: RedisService):
+    async def test_timeout_when_key_held_by_another(self, redis: AppShellRedisService):
         rmc = _make_rmc(redis)
         room = "integration-timeout"
 
@@ -176,7 +176,7 @@ class TestRealRedisRoomLockFlow:
 
         await redis._client.delete(f"{LOCK_PREFIX}{room}")
 
-    async def test_lock_reused_across_acquires(self, redis: RedisService):
+    async def test_lock_reused_across_acquires(self, redis: AppShellRedisService):
         """Lock object stays in dict after release and is reused."""
         rmc = _make_rmc(redis)
         room = "integration-reuse"

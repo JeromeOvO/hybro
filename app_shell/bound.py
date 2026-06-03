@@ -198,16 +198,6 @@ class VectorIndex(Protocol):
 
 
 @runtime_checkable
-class LegacyWorkflowCenter(Protocol):
-    pass
-
-
-@runtime_checkable
-class LegacyTaskCenter(Protocol):
-    pass
-
-
-@runtime_checkable
 class LegacyMemoryCenter(Protocol):
     async def add_chat_context(self, request: ChatMemoryRequest) -> ChatMemoryResponse: ...
     async def get_chat_context_by_session_id(
@@ -271,8 +261,6 @@ __all__ = [
     "EmbeddingProvider",
     "InspectionCenter",
     "LegacyMemoryCenter",
-    "LegacyTaskCenter",
-    "LegacyWorkflowCenter",
     "RoomCenterRouteOwner",
     "SSEManagerRouteOwner",
     "VectorIndex",

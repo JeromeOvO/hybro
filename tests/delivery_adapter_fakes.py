@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from common.utils.cancellation import CancellationToken
-from services.sse_services import SSEConnection, SSEManager
+from app_shell.delivery_runtime import SSEConnection, SSEManager
 
 TERMINAL_STATUSES = {
     "completed",

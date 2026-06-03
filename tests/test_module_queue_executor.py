@@ -17,7 +17,7 @@ from a2a.types import TaskState
 
 from common.utils.cancellation import CancellationToken
 from models.processing import ProcessingResult, ProcessingStatus
-from modules.QueueExecutor import QueueExecutor, QueueProcessingResult, QueueResult
+from execution.orchestration.queue_executor import QueueExecutor, QueueProcessingResult, QueueResult
 
 # =============================================================================
 # QueueResult Tests
@@ -54,7 +54,7 @@ def _make_queue_executor():
         return_value=None
     )
     qe.a2a_service = MagicMock()
-    qe.room_services = MagicMock()
+    qe.room_runtime = MagicMock()
     qe.agent_dispatcher = MagicMock()
     qe._agent_message_processor = MagicMock()
     qe.response_handler = MagicMock()
@@ -427,7 +427,7 @@ class TestProcessQueue:
             return_value=QueueProcessingResult(result=QueueResult.COMPLETED)
         )
 
-        with patch("modules.QueueExecutor.RoomAgentMessage") as MockRAM:
+        with patch("execution.orchestration.queue_executor.RoomAgentMessage") as MockRAM:
             MockRAM.model_validate.return_value = MagicMock(message_id="msg-2")
             result = await qe.resume_from_continuation(
                 "paused-msg", task_result_text="task done"

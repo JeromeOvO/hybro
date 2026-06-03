@@ -22,7 +22,7 @@ from models.error import (
 )
 from models.request import AgentCenterRequest
 from models.response import AgentCenterResponse
-from services.agent_service import (
+from app_shell.agent_service import (
     AgentService,
     _agent_info_to_legacy_agent,
     is_local_agent_url,
@@ -202,7 +202,7 @@ class TestRegisterAgent:
 
     @pytest.mark.asyncio
     async def test_agent_center_register_agent_delegates_without_a2a_prefetch(self):
-        from modules.AgentCenter import AgentCenter
+        from app_shell.agent_runtime import AppShellAgentCenter as AgentCenter
 
         center = AgentCenter()
         center.agent_service = MagicMock()

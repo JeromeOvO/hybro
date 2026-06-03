@@ -1024,11 +1024,11 @@ def test_settings_class_loads_from_env(monkeypatch):
     assert settings.mongodb_db_name == "common_foundation_test_db"
 
 
-def test_legacy_settings_singleton_is_common_singleton():
+def test_common_settings_package_exports_settings_singleton():
     from common.config import settings as common_settings
-    from config.settings import settings as legacy_settings
+    from common.config.settings import settings as exported_settings
 
-    assert legacy_settings is common_settings
+    assert exported_settings is common_settings
 
 
 def test_error_hierarchy():

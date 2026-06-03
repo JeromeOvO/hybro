@@ -87,7 +87,7 @@ class ChatContext(BaseModel):
     """
     A ChatContext represents a chat context between a user and the multi-agent system.
     It tracks session metadata like creation time, user info, and context content.
-    Multiple ChatContext objects can belong to one TaskSession during a conversation.
+    Multiple ChatContext objects can belong to one conversation session.
     """
 
     memory_id: str

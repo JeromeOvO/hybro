@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from services.bedrock_service import BedrockService
+from app_shell.bedrock_service import BedrockService
 
 # ---------------------------------------------------------------------------
 # Fixtures & helpers
@@ -176,7 +176,7 @@ class TestCallClaudeJson:
         mock_client.invoke_model.return_value = _make_bedrock_response('{"action": "done"}')
         bedrock_svc._session.client.return_value.__aenter__.return_value = mock_client
 
-        with patch('services.bedrock_service.settings') as mock_settings:
+        with patch('app_shell.bedrock_service.settings') as mock_settings:
             mock_settings.bedrock_supervisor_model = "anthropic.claude-opus-4-6-20250514-v1:0"
             await bedrock_svc.call_claude_json(
                 system_prompt="Test",
@@ -278,7 +278,7 @@ class TestCallClaudeText:
         mock_client.invoke_model.return_value = _make_bedrock_response("Response text")
         bedrock_svc._session.client.return_value.__aenter__.return_value = mock_client
 
-        with patch('services.bedrock_service.settings') as mock_settings:
+        with patch('app_shell.bedrock_service.settings') as mock_settings:
             mock_settings.bedrock_supervisor_model = "anthropic.claude-opus-4-6-20250514-v1:0"
             await bedrock_svc.call_claude_text(
                 system_prompt="Test",
@@ -344,12 +344,12 @@ class TestBedrockServiceInit:
 
     def test_initializes_with_settings_credentials(self):
         """Should initialize session with AWS credentials from settings."""
-        with patch('services.bedrock_service.settings') as mock_settings:
+        with patch('app_shell.bedrock_service.settings') as mock_settings:
             mock_settings.aws_access_key_id = "AKIAIOSFODNN7EXAMPLE"
             mock_settings.aws_secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
             mock_settings.bedrock_region = "us-west-2"
 
-            with patch('services.bedrock_service.aioboto3.Session') as mock_session_class:
+            with patch('app_shell.bedrock_service.aioboto3.Session') as mock_session_class:
                 BedrockService()
 
                 mock_session_class.assert_called_once_with(
@@ -360,15 +360,15 @@ class TestBedrockServiceInit:
 
     def test_timeout_is_45_seconds(self):
         """Timeout should be 45s (longer than OpenAI's 30s for larger model)."""
-        with patch('services.bedrock_service.aioboto3.Session'):
+        with patch('app_shell.bedrock_service.aioboto3.Session'):
             svc = BedrockService()
             assert svc._timeout == 45.0
 
     def test_region_stored_from_settings(self):
         """Region should be stored from settings."""
-        with patch('services.bedrock_service.settings') as mock_settings:
+        with patch('app_shell.bedrock_service.settings') as mock_settings:
             mock_settings.bedrock_region = "ap-southeast-1"
-            with patch('services.bedrock_service.aioboto3.Session'):
+            with patch('app_shell.bedrock_service.aioboto3.Session'):
                 svc = BedrockService()
                 assert svc._region == "ap-southeast-1"
 

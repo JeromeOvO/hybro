@@ -19,15 +19,14 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "tests" / "fixtures" / "phase7a_processing_status_callers.json"
-PRODUCTION_ROOTS = ("modules", "services", "api", "jobs", "execution")
-PATH_ALIASES = {
-    "modules/QueueExecutor.py": "execution/orchestration/queue_executor.py",
-    "modules/RoomMessageCenter.py": "execution/orchestration/room_message_center.py",
-    "modules/SupervisorExecutor.py": "execution/orchestration/supervisor_executor.py",
-    "modules/agent_response_handler.py": "execution/dispatch/response_handler.py",
-}
+PRODUCTION_ROOTS = ("api", "app_shell", "jobs", "execution")
 OBSOLETE_CALL_IDS = {
     "api.sse.cancel_message.canceled",
+}
+DELETED_PACKAGE_PATH_PREFIXES = ("config/", "infrastructure/", "modules/", "services/")
+ROOM_RUNTIME_STATUS_EMITTERS = {
+    "_emit_processing_status_event",
+    "_send_processing_status",
 }
 
 
@@ -161,12 +160,12 @@ class ProcessingStatusCall:
     client_request_id_expression: str | None
     details_expression: str | None
     delivery_expression: str | None
+    emitter_kind: str
     call: ast.Call
     parents: dict[ast.AST, ast.AST]
 
     def matches_manifest_entry(self, entry: dict[str, Any]) -> bool:
-        expected_path = PATH_ALIASES.get(entry.get("path"), entry.get("path"))
-        if self.path != expected_path:
+        if self.path != entry.get("path"):
             return False
         if self.function_or_method != entry.get("function_or_method"):
             return False
@@ -194,7 +193,6 @@ def _discover_calls() -> list[ProcessingStatusCall]:
         rel_path = path.relative_to(ROOT).as_posix()
         if rel_path in {
             "execution/legacy_processing_status.py",
-            "services/room_services.py",
         }:
             continue
         tree = ast.parse(path.read_text(), filename=rel_path)
@@ -204,21 +202,65 @@ def _discover_calls() -> list[ProcessingStatusCall]:
                 continue
             if not isinstance(node.func, ast.Attribute):
                 continue
-            if node.func.attr != "send_processing_status":
+            call_name = node.func.attr
+            if call_name == "send_processing_status":
+                room_id_expression = _unparse(_arg_or_kw(node, 0, "room_id"))
+                status_expression = _unparse(_arg_or_kw(node, 1, "status"))
+                sse_message_id_expression = _unparse(_arg_or_kw(node, 2, "message_id"))
+                client_request_id_expression = _unparse(
+                    _keyword(node, "client_request_id")
+                )
+                details_expression = _unparse(_keyword(node, "details"))
+                delivery_expression = _unparse(node.func.value)
+                emitter_kind = "direct_transport"
+                if (
+                    rel_path == "app_shell/room_runtime.py"
+                    and _enclosing_function(node, parents)
+                    == "RoomServices._emit_processing_status_event"
+                ):
+                    status_expression = "status"
+                    client_request_id_expression = "client_request_id"
+                    details_expression = "details"
+            elif (
+                rel_path == "app_shell/room_runtime.py"
+                and call_name in ROOM_RUNTIME_STATUS_EMITTERS
+            ):
+                room_id_expression = _unparse(_arg_or_kw(node, 0, "room_id"))
+                if call_name == "_send_processing_status":
+                    status_expression = "SSEProcessingStatus.PROCESSING"
+                    sse_message_id_expression = _unparse(
+                        _arg_or_kw(node, 1, "message_id")
+                    )
+                    client_request_id_expression = _unparse(
+                        _arg_or_kw(node, 2, "client_request_id")
+                    )
+                    details_expression = None
+                    delivery_expression = "self.sse_manager"
+                else:
+                    status_expression = _unparse(_arg_or_kw(node, 1, "status"))
+                    sse_message_id_expression = _unparse(
+                        _arg_or_kw(node, 2, "message_id")
+                    )
+                    client_request_id_expression = _unparse(
+                        _keyword(node, "client_request_id")
+                    )
+                    details_expression = _unparse(_keyword(node, "details"))
+                    delivery_expression = "self.sse_manager"
+                emitter_kind = call_name
+            else:
                 continue
             calls.append(
                 ProcessingStatusCall(
                     path=rel_path,
                     function_or_method=_enclosing_function(node, parents),
                     line=node.lineno,
-                    room_id_expression=_unparse(_arg_or_kw(node, 0, "room_id")),
-                    status_expression=_unparse(_arg_or_kw(node, 1, "status")),
-                    sse_message_id_expression=_unparse(_arg_or_kw(node, 2, "message_id")),
-                    client_request_id_expression=_unparse(
-                        _keyword(node, "client_request_id")
-                    ),
-                    details_expression=_unparse(_keyword(node, "details")),
-                    delivery_expression=_unparse(node.func.value),
+                    room_id_expression=room_id_expression,
+                    status_expression=status_expression,
+                    sse_message_id_expression=sse_message_id_expression,
+                    client_request_id_expression=client_request_id_expression,
+                    details_expression=details_expression,
+                    delivery_expression=delivery_expression,
+                    emitter_kind=emitter_kind,
                     call=node,
                     parents=parents,
                 )
@@ -250,7 +292,33 @@ def _assert_lifecycle_helper_matches(
     item: ProcessingStatusCall,
     entry: dict[str, Any],
 ) -> None:
+    if item.emitter_kind in ROOM_RUNTIME_STATUS_EMITTERS:
+        record_lifecycle = _keyword(item.call, "record_lifecycle")
+        assert record_lifecycle is None or _expr_equal(
+            _unparse(record_lifecycle), "True"
+        ), f"{entry['call_id']} disables lifecycle recording"
+        return
+
     helper = _find_prior_awaited_helper(item, "record_and_maybe_broadcast_run_event")
+    if (
+        helper is None
+        and item.path == "app_shell/room_runtime.py"
+        and item.function_or_method == "RoomServices._emit_processing_status_event"
+    ):
+        for stmt in reversed(_prior_statements(item)):
+            if not isinstance(stmt, ast.If) or not _expr_equal(
+                _unparse(stmt.test), "record_lifecycle"
+            ):
+                continue
+            for child in stmt.body:
+                helper = _direct_awaited_call(
+                    child,
+                    name="record_and_maybe_broadcast_run_event",
+                )
+                if helper is not None:
+                    break
+            if helper is not None:
+                break
     assert helper is not None, f"{entry['call_id']} missing awaited lifecycle helper"
     assert _expr_equal(_unparse(_arg_or_kw(helper, 0, "room_id")), entry["room_id_expression"])
     assert _expr_equal(_unparse(_arg_or_kw(helper, 1, "status")), entry["status_expression"])
@@ -267,6 +335,13 @@ def _assert_lifecycle_helper_matches(
 
 
 def _assert_no_prior_lifecycle_work(item: ProcessingStatusCall, call_id: str) -> None:
+    if item.emitter_kind in ROOM_RUNTIME_STATUS_EMITTERS:
+        record_lifecycle = _keyword(item.call, "record_lifecycle")
+        assert record_lifecycle is not None and _expr_equal(
+            _unparse(record_lifecycle), "False"
+        ), f"{call_id} transport-only helper call must pass record_lifecycle=False"
+        return
+
     helper = _find_prior_awaited_helper(item, "record_and_maybe_broadcast_run_event")
     broadcast = _find_prior_awaited_helper(item, "broadcast_run_event_payload")
     assert helper is None, f"{call_id} is transport-only but has lifecycle helper"
@@ -395,10 +470,7 @@ def test_production_processing_status_callers_are_manifest_covered() -> None:
     errors: list[str] = []
 
     for entry in manifest:
-        if (
-            entry.get("call_id") in OBSOLETE_CALL_IDS
-            or entry.get("path") == "services/room_services.py"
-        ):
+        if entry.get("call_id") in OBSOLETE_CALL_IDS:
             continue
         matches = [
             call
@@ -487,6 +559,7 @@ async def send(flag):
         client_request_id_expression=None,
         details_expression=None,
         delivery_expression=_unparse(send_call.func.value),
+        emitter_kind="direct_transport",
         call=send_call,
         parents=parents,
     )
@@ -516,6 +589,7 @@ def _pre_recorded_item_from_source(source: str) -> ProcessingStatusCall:
         client_request_id_expression=_unparse(_keyword(send_call, "client_request_id")),
         details_expression=_unparse(_keyword(send_call, "details")),
         delivery_expression=_unparse(send_call.func.value),
+        emitter_kind="direct_transport",
         call=send_call,
         parents=parents,
     )
@@ -646,15 +720,29 @@ def test_manifest_call_ids_do_not_encode_line_numbers() -> None:
     assert not line_suffixed
 
 
+def test_manifest_paths_do_not_reference_deleted_packages() -> None:
+    manifest = _load_manifest()
+    deleted_paths = [
+        entry["path"]
+        for entry in manifest
+        if any(
+            str(entry.get("path", "")).startswith(prefix)
+            for prefix in DELETED_PACKAGE_PATH_PREFIXES
+        )
+    ]
+
+    assert not deleted_paths
+
+
 def test_sse_manager_processing_status_has_no_run_lifecycle_side_effects() -> None:
     if os.environ.get("PHASE7A_ALLOW_LEGACY_SSE_MANAGER") == "1":
         return
 
-    path = ROOT / "services" / "sse_services.py"
-    tree = ast.parse(path.read_text(), filename="services/sse_services.py")
+    path = ROOT / "app_shell" / "delivery_runtime.py"
+    tree = ast.parse(path.read_text(), filename="app_shell/delivery_runtime.py")
     forbidden_imports: list[str] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "services.run_command_handler":
+        if isinstance(node, ast.ImportFrom) and node.module == "execution.run_command_handler":
             forbidden_imports.extend(alias.name for alias in node.names)
     assert "run_command_handler" not in forbidden_imports
     assert "run_event_sse_enabled" not in forbidden_imports

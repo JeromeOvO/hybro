@@ -108,7 +108,7 @@ class TestCreateAndParseOversizedMessage:
         from unittest.mock import MagicMock
 
         from models.room import MAX_MESSAGE_LENGTH, MessageContent, RoomUserMessage
-        from services.room_services import RoomServices
+        from app_shell.room_runtime import RoomServices
 
         rc = object.__new__(RoomServices)
         rc.database_service = MagicMock()
@@ -138,9 +138,9 @@ class TestCreateAndParseOversizedMessage:
 async def test_create_and_parse_persists_client_request_without_processing_status_lifecycle(
     monkeypatch,
 ):
-    import services.room_services as room_services
+    import app_shell.room_runtime as room_services
     from models.room import MessageContent, RoomUserMessage
-    from services.room_services import RoomServices
+    from app_shell.room_runtime import RoomServices
 
     rc = object.__new__(RoomServices)
     persisted_messages = []

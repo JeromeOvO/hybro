@@ -149,17 +149,10 @@ packages = [
     "a2a_adapter",
     "llm_gateway",
     "llm_gateway.providers",
-    "modules",
-    "modules.middleware",
-    "modules.transports",
     "database",
     "database.migration",
-    "services",
-    "config",
     "jobs",
     "scripts",
-    "infrastructure",
-    "infrastructure.brokers",
 ]
 
 [tool.uv]

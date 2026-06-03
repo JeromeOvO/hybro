@@ -24,10 +24,10 @@ from models.hub import (
     RelayToHubEvent,
 )
 from models.room import MessageContent, Room, RoomAgentMessage
-from modules.agent_event import AgentEvent
-from modules.agent_response_handler import AgentResponseHandler
-from modules.transports.relay import RelayTransport
-from services.relay_service import (
+from execution.dispatch.agent_event import AgentEvent
+from execution.dispatch.response_handler import AgentResponseHandler
+from execution.dispatch.transports.relay import RelayTransport
+from app_shell.relay_service import (
     RelayService,
     _LegacyPublishSink,
     _RelayPublishAuthorizationReader,
@@ -625,7 +625,7 @@ class TestRelayServicePush:
         svc = _make_relay_service()
         svc.bind_agent_registry_writer(_make_writer())
 
-        with patch("services.relay_service.settings") as mock_settings:
+        with patch("app_shell.relay_service.settings") as mock_settings:
             mock_settings.relay_offline_queue_max = 2
             mock_settings.relay_offline_queue_ttl = 86400
 

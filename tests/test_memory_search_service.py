@@ -25,7 +25,7 @@ from common.dto import MemorySearchResult as DtoMemorySearchResult
 from common.utils.time import utcnow
 from models.memory import ContentType, ConversationTurn, TurnRepresentation, TurnRole
 from models.search import MemorySearchResult, MemorySourceType
-from services.memory_search_service import (
+from app_shell.memory_search_service import (
     MemorySearchService,
     _cosine_similarity,
 )
@@ -868,7 +868,7 @@ class TestVectorSearchPineconeNotFound:
 
     @pytest.fixture
     def service(self):
-        from services.memory_search_service import MemorySearchService
+        from app_shell.memory_search_service import MemorySearchService
         svc = MemorySearchService()
         svc.openai_service = MagicMock()
         svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
@@ -932,7 +932,7 @@ class TestIndexAvailabilityCheck:
 
     @pytest.fixture
     def service(self):
-        from services.memory_search_service import MemorySearchService
+        from app_shell.memory_search_service import MemorySearchService
         svc = MemorySearchService()
         svc.openai_service = MagicMock()
         svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
@@ -1052,7 +1052,7 @@ class TestWritePathPineconeNotFound:
 
     @pytest.fixture
     def service(self):
-        from services.memory_search_service import MemorySearchService
+        from app_shell.memory_search_service import MemorySearchService
         svc = MemorySearchService()
         svc.openai_service = MagicMock()
         svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)

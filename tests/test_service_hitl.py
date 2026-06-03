@@ -26,7 +26,7 @@ from models.hitl import (
     HITLRequest,
     HITLStatus,
 )
-from services.hitl_service import MAX_HITL_ROUNDS, HITLService
+from app_shell.hitl_service import MAX_HITL_ROUNDS, HITLService
 
 
 class _AsyncCursor:
@@ -152,7 +152,7 @@ def test_bound_hitl_service_proxy_raises_before_binding_and_forwards_after_bindi
 
 
 def test_legacy_hitl_singleton_is_bound_proxy():
-    from services.hitl_service import BoundHITLServiceProxy, hitl_service
+    from app_shell.hitl_service import BoundHITLServiceProxy, hitl_service
 
     assert isinstance(hitl_service, BoundHITLServiceProxy)
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from modules.debate_dispatcher import SequentialDebateDispatcher
+from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
 
 
 class TestSequentialDebateDispatcher:

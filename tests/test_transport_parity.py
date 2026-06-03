@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modules.agent_event import AgentEvent
-from modules.agent_response_handler import AgentResponseHandler
+from execution.dispatch.agent_event import AgentEvent
+from execution.dispatch.response_handler import AgentResponseHandler
 
 # =========================================================================
 # Fixtures
@@ -97,7 +97,7 @@ class TestMultiEventSequenceWithPersist:
         with pytest.MonkeyPatch.context() as mp:
             mock_notify = AsyncMock(return_value=True)
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 mock_notify,
             )
             for event in _multi_event_sequence(skip_persist=False):
@@ -137,7 +137,7 @@ class TestMultiEventSequenceSkipPersist:
         with pytest.MonkeyPatch.context() as mp:
             mock_notify = AsyncMock(return_value=True)
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 mock_notify,
             )
             for event in _multi_event_sequence(skip_persist=True):
@@ -170,7 +170,7 @@ class TestSSEParity:
             h = _make_handler()
             with pytest.MonkeyPatch.context() as mp:
                 mp.setattr(
-                    "modules.agent_response_handler.AgentResponseHandler._notify",
+                    "execution.dispatch.response_handler.AgentResponseHandler._notify",
                     AsyncMock(return_value=True),
                 )
                 for event in _multi_event_sequence(skip_persist=skip):
@@ -205,7 +205,7 @@ class TestErrorEventParity:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             await h.handle(event)
@@ -228,7 +228,7 @@ class TestErrorEventParity:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             await h.handle(event)
@@ -250,7 +250,7 @@ class TestCanceledEventParity:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             await h.handle(event)
@@ -272,7 +272,7 @@ class TestCanceledEventParity:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "modules.agent_response_handler.AgentResponseHandler._notify",
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
             await h.handle(event)

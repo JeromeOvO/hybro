@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from services.run_projector import compute_processing_message_id_mirror
+from execution.run_projector import compute_processing_message_id_mirror
 
 
 def test_mirror_empty_runs():

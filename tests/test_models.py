@@ -23,8 +23,7 @@ from models.memory import (
     TurnRepresentation,
     TurnRole,
 )
-from models.request import AgentTaskRequest, TaskCenterRequest, TaskRequest
-from models.response import TaskCenterResponse
+from models.request import AgentTaskRequest, TaskRequest
 from models.room import (
     CoordinatorAgentId,
     MessageContent,
@@ -57,16 +56,11 @@ class TestLegacyTaskRequestModels:
         )
 
         content = MessageContent(message_task=task)
-        request = TaskCenterRequest(task=task)
-        response = TaskCenterResponse(success=True, task=task)
-
         assert content.model_dump(mode="json")["message_task"]["status"] == {
             "message": None,
             "state": "working",
             "timestamp": None,
         }
-        assert request.model_dump(mode="json")["task"]["contextId"] == "ctx-1"
-        assert response.model_dump(mode="json")["task"]["contextId"] == "ctx-1"
 
     def test_agent_task_request_to_message_builds_valid_sdk_message(self):
         message = AgentTaskRequest(

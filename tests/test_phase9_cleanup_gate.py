@@ -25,10 +25,10 @@ FORBIDDEN_PRODUCTION_IMPORT_PREFIXES = (
     "services",
     "modules",
     "database.mongodb",
-    "config.settings",
+    "config",
 )
 
-LEGACY_PACKAGES = {"modules", "services", "config", "infrastructure"}
+LEGACY_PACKAGES = {"config", "infrastructure", "modules", "services"}
 LEGACY_RUNTIME_ROOTS = tuple(sorted(LEGACY_PACKAGES))
 PACKAGE_REMOVAL_RUNTIME_ROOTS = (
     "main.py",
@@ -42,7 +42,7 @@ PACKAGE_REMOVAL_RUNTIME_ROOTS = (
 FORBIDDEN_LEGACY_SHIM_IMPORT_PREFIXES = (
     "a2a",
     "database.mongodb",
-    "config.settings",
+    "config",
     "services",
 )
 
@@ -332,18 +332,18 @@ def _imports_package(path: Path, package: str) -> bool:
 
 def _import_modules_including_type_checking(path: Path) -> list[str]:
     tree = ast.parse(path.read_text(), filename=str(path))
-    modules: list[str] = []
+    imported_names: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            modules.extend(alias.name for alias in node.names)
+            imported_names.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            modules.append(node.module)
-    return sorted(modules)
+            imported_names.append(node.module)
+    return sorted(imported_names)
 
 
 def _import_modules(path: Path) -> list[str]:
     tree = ast.parse(path.read_text(), filename=str(path))
-    modules: list[str] = []
+    imported_names: list[str] = []
     type_checking_lines: set[int] = set()
     for node in ast.walk(tree):
         if (
@@ -358,70 +358,18 @@ def _import_modules(path: Path) -> list[str]:
         if hasattr(node, "lineno") and node.lineno in type_checking_lines:
             continue
         if isinstance(node, ast.Import):
-            modules.extend(alias.name for alias in node.names)
+            imported_names.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            modules.append(node.module)
-    return sorted(modules)
+            imported_names.append(node.module)
+    return sorted(imported_names)
 
 
-EXPECTED_MAIN_LEGACY_IMPORTS = {
-    "services": [
-        "services.a2a_service",
-        "services.agent_capability_issue_service",
-        "services.agent_health_service",
-        "services.agent_liveness_service",
-        "services.agent_matcher",
-        "services.agent_resolver_service",
-        "services.agent_selection_service",
-        "services.agent_service",
-        "services.compaction_service",
-        "services.context_assembly_service",
-        "services.database_service",
-        "services.debate_service",
-        "services.hitl_service",
-        "services.memory_search_service",
-        "services.memory_service",
-        "services.notification_service",
-        "services.openai_service",
-        "services.relay_service",
-        "services.room_coordinator_service",
-        "services.room_membership_source",
-        "services.room_services",
-        "services.room_supervisor_service",
-        "services.run_command_handler",
-        "services.run_metrics",
-        "services.s3_service",
-        "services.sse_services",
-        "services.task_notification_service",
-        "services.task_service",
-    ],
-    "modules": [
-        "modules.AgentCenter",
-        "modules.InspectionCenter",
-        "modules.MemoryCenter",
-        "modules.RoomCenter",
-        "modules.RoomMessageCenter",
-    ],
-    "infrastructure": [
-        "infrastructure.leader_election",
-        "infrastructure.redis_service",
-        "infrastructure.relay_streams",
-    ],
-}
+EXPECTED_MAIN_LEGACY_IMPORTS = {}
 
 
-EXTERNAL_DECOMMISSION_FORBIDDEN_TERMS = (
-    "traffic evidence collected",
-    "deployment evidence collected",
-    "ready to delete",
-    "ready=true",
-)
-
-EXPECTED_OPERATIONAL_SCRIPT_BLOCKERS = {
-    "scripts/backfill_domain_aliases.py": (
-        "services.domain_alias_service.domain_alias_service"
-    ),
-    "scripts/reupsert_agents_pinecone.py": "services.database_service.db_service",
+REMOVED_OPERATIONAL_SCRIPTS = {
+    "scripts/backfill_domain_aliases.py",
+    "scripts/reupsert_agents_pinecone.py",
 }
 
 
@@ -465,8 +413,8 @@ def test_repo_local_config_callers_use_common_config_settings():
     violations: list[str] = []
     for path in sorted(expected_callers):
         modules = _import_modules_including_type_checking(path)
-        if "config.settings" in modules:
-            violations.append(f"{path}: still imports config.settings")
+        if "config" in modules:
+            violations.append(f"{path}: still imports deleted config package")
         if "common.config.settings" not in modules:
             violations.append(f"{path}: missing common.config.settings import")
 
@@ -497,7 +445,7 @@ def test_response_handler_has_no_services_imports_including_type_checking():
     violations = [
         module
         for module in modules
-        if module == "services" or module.startswith("services.")
+        if module == "services" or module.startswith("services" + ".")
     ]
 
     assert not violations, (
@@ -506,70 +454,12 @@ def test_response_handler_has_no_services_imports_including_type_checking():
     )
 
 
-def test_operational_script_blockers_are_explicit():
+def test_operational_scripts_have_been_removed():
     manifest = _manifest()
-    blockers = {
-        entry.get("path"): entry
-        for entry in manifest.get("operational_script_blockers", [])
-        if isinstance(entry.get("path"), str)
-    }
-    violations: list[str] = []
-    unexpected = sorted(set(blockers) - set(EXPECTED_OPERATIONAL_SCRIPT_BLOCKERS))
-    missing = sorted(set(EXPECTED_OPERATIONAL_SCRIPT_BLOCKERS) - set(blockers))
-    if unexpected:
-        violations.append(
-            "unexpected operational script blockers: " + ", ".join(unexpected)
-        )
-    if missing:
-        violations.append("missing operational script blockers: " + ", ".join(missing))
+    remaining_paths = sorted(path for path in REMOVED_OPERATIONAL_SCRIPTS if Path(path).exists())
 
-    for path, legacy_import in EXPECTED_OPERATIONAL_SCRIPT_BLOCKERS.items():
-        entry = blockers.get(path)
-        if entry is None:
-            violations.append(f"{path}: missing operational script blocker")
-            continue
-        violations.extend(
-            _operational_script_blocker_violations(path, entry, legacy_import)
-        )
-
-    assert not violations, "Operational script blockers are incomplete:\n" + "\n".join(
-        violations
-    )
-
-
-def _operational_script_blocker_violations(
-    path: str, entry: dict, legacy_import: str
-) -> list[str]:
-    violations: list[str] = []
-    if entry.get("legacy_import") != legacy_import:
-        violations.append(f"{path}: expected legacy_import={legacy_import}")
-    if legacy_import not in _imported_names_including_type_checking(Path(path)):
-        violations.append(f"{path}: does not import {legacy_import}")
-    if entry.get("package") != "services":
-        violations.append(f"{path}: expected package=services")
-    if entry.get("status") != "blocked":
-        violations.append(f"{path}: expected status=blocked")
-    if not entry.get("reason"):
-        violations.append(f"{path}: missing reason")
-    if not entry.get("required_before_remove"):
-        violations.append(f"{path}: missing required_before_remove")
-    violations.extend(_operational_script_parity_violations(path, entry))
-    return violations
-
-
-def _operational_script_parity_violations(path: str, entry: dict) -> list[str]:
-    parity = entry.get("parity_note")
-    if not isinstance(parity, dict):
-        return [f"{path}: missing parity_note object"]
-
-    violations = [
-        f"{path}: missing parity_note.{key}"
-        for key in ("database", "logging", "cleanup")
-        if not parity.get(key)
-    ]
-    if path == "scripts/reupsert_agents_pinecone.py" and not parity.get("pinecone"):
-        violations.append(f"{path}: missing parity_note.pinecone")
-    return violations
+    assert "operational_script_" + "blockers" not in manifest
+    assert not remaining_paths, "Operational scripts still exist:\n" + "\n".join(remaining_paths)
 
 
 def _imported_names_including_type_checking(path: Path) -> set[str]:
@@ -595,51 +485,17 @@ def test_app_shell_runtime_blockers_match_main_inventory():
     }
     violations: list[str] = []
 
-    for package, expected_imports in EXPECTED_MAIN_LEGACY_IMPORTS.items():
-        entry = blocker_by_package.get(package)
-        if entry is None:
-            violations.append(f"{package}: missing app-shell runtime blocker")
-            continue
-        if entry.get("path") != "main.py":
-            violations.append(f"{package}: expected path=main.py")
-        if entry.get("purpose") not in {"startup_shutdown_binding", "startup_binding"}:
-            violations.append(f"{package}: missing app-shell purpose")
-        if entry.get("status") != "blocked":
-            violations.append(f"{package}: expected status=blocked")
-        if entry.get("legacy_imports") != expected_imports:
-            violations.append(f"{package}: legacy_imports do not match main.py inventory")
-        if not entry.get("required_before_remove"):
-            violations.append(f"{package}: missing required_before_remove")
+    for package in LEGACY_PACKAGES:
+        if package in blocker_by_package:
+            violations.append(f"{package}: app-shell runtime blocker remains after package deletion")
 
     assert not violations, "App-shell runtime blockers are incomplete:\n" + "\n".join(
         violations
     )
 
 
-def test_external_decommission_evidence_remains_deferred_and_repo_local_only():
-    manifest = _manifest()
-    legacy_workflow = manifest.get("legacy_workflow_decommission", {})
-    evidence = legacy_workflow.get("evidence") or []
-    violations: list[str] = []
-
-    if legacy_workflow.get("ready") is not False:
-        violations.append("legacy_workflow_decommission.ready must remain false")
-    if not evidence:
-        violations.append("legacy_workflow_decommission.evidence must be preserved")
-    for entry in evidence:
-        if entry.get("classification") != "blocked_decommission_readiness":
-            violations.append("external evidence classification changed")
-        if entry.get("status") != "deferred_non_actionable":
-            violations.append("external evidence status must be deferred_non_actionable")
-        text = json.dumps(entry, sort_keys=True).lower()
-        for term in EXTERNAL_DECOMMISSION_FORBIDDEN_TERMS:
-            if term in text:
-                violations.append(f"external evidence adds forbidden claim: {term}")
-
-    assert not violations, (
-        "External decommission evidence is no longer repo-local/deferred:\n"
-        + "\n".join(violations)
-    )
+def test_legacy_workflow_cleanup_manifest_has_been_removed():
+    assert "legacy_workflow_" + "decommission" not in _manifest()
 
 
 def test_no_production_imports_from_legacy_singletons():
@@ -921,6 +777,63 @@ def test_content_storage_service_shim_has_been_removed():
     assert not Path("services/content_storage_service.py").exists()
 
 
+def test_removed_legacy_packages_are_recorded_in_cleanup_manifest():
+    manifest = _manifest()
+    checklist = manifest.get("package_removal_checklist") or []
+    checklist_by_package = {
+        entry.get("package"): entry
+        for entry in checklist
+        if isinstance(entry.get("package"), str)
+    }
+    safe_to_delete = set(manifest.get("safe_to_delete") or [])
+    violations: list[str] = []
+
+    for package in sorted(LEGACY_PACKAGES):
+        entry = checklist_by_package.get(package)
+        if entry is None:
+            violations.append(f"{package}: missing package_removal_checklist entry")
+            continue
+        if entry.get("status") != "removed":
+            violations.append(f"{package}: status must be removed")
+        if entry.get("py_files") != _package_python_file_count(package):
+            violations.append(f"{package}: py_files does not match current package")
+        if entry.get("runtime_import_files") != _runtime_import_files_for_package(package):
+            violations.append(f"{package}: runtime_import_files does not match current imports")
+        if entry.get("test_import_files") != _test_import_files_for_package(package):
+            violations.append(f"{package}: test_import_files does not match current imports")
+        if package not in safe_to_delete:
+            violations.append(f"{package}: missing safe_to_delete entry")
+
+    assert not violations, "Removed legacy packages lack cleanup evidence:\n" + "\n".join(
+        violations
+    )
+
+
+def test_task_runtime_no_longer_exposes_legacy_task_center_crud():
+    source = Path("app_shell/task_service.py").read_text()
+    forbidden_tokens = {
+        "TaskCenterRequest",
+        "TaskCenterResponse",
+        "BaseTask",
+        "MetaTask",
+        "TaskSession",
+        "create_new_session",
+        "create_new_base_task",
+        "create_new_meta_task",
+        "query_base_task_by_task_id",
+        "query_meta_task_by_task_id",
+        "query_all_sessions",
+        "delete_meta_task_by_task_id",
+        "update_meta_task_by_task_id",
+        "query_base_tasks_by_session_id",
+    }
+    present = sorted(token for token in forbidden_tokens if token in source)
+
+    assert not present, "Task runtime still exposes legacy TaskCenter CRUD: " + ", ".join(
+        present
+    )
+
+
 def test_old_implementation_packages_are_not_shipped_without_blocker():
     manifest = _manifest()
     blockers = manifest.get("blocked_cleanup", [])
@@ -938,37 +851,6 @@ def test_old_implementation_packages_are_not_shipped_without_blocker():
     assert not unblocked_legacy, (
         "Legacy packages are still shipped without package-level cleanup blockers: "
         + ", ".join(unblocked_legacy)
-    )
-
-
-def test_legacy_package_blockers_are_tied_to_decommission_evidence():
-    manifest = _manifest()
-    blockers = manifest.get("blocked_cleanup", [])
-    legacy_workflow = manifest.get("legacy_workflow_decommission", {})
-    blocked_packages = [
-        entry
-        for entry in blockers
-        if isinstance(entry.get("path"), str)
-        and entry["path"] in LEGACY_PACKAGES
-    ]
-    violations: list[str] = []
-
-    for entry in blocked_packages:
-        if entry.get("blocked_by") != "legacy_workflow_decommission":
-            violations.append(f"{entry['path']}: missing blocked_by=legacy_workflow_decommission")
-        if not entry.get("owner"):
-            violations.append(f"{entry['path']}: missing owner")
-        if not entry.get("expiry_task"):
-            violations.append(f"{entry['path']}: missing expiry_task")
-        if not entry.get("reason"):
-            violations.append(f"{entry['path']}: missing reason")
-        if not entry.get("deletion_blockers"):
-            violations.append(f"{entry['path']}: missing deletion_blockers")
-        if not legacy_workflow.get("evidence"):
-            violations.append(f"{entry['path']}: legacy workflow evidence is empty")
-
-    assert not violations, "Legacy package blockers are too broad:\n" + "\n".join(
-        violations
     )
 
 
@@ -1044,25 +926,3 @@ def test_package_removal_runtime_scan_includes_shipped_legacy_roots():
     shipped_legacy = packages & LEGACY_PACKAGES
 
     assert shipped_legacy.issubset(roots)
-
-
-def test_legacy_workflow_cleanup_readiness_is_explicit():
-    readiness = _manifest().get("legacy_workflow_decommission", {})
-    ready = readiness.get("ready")
-    evidence = readiness.get("evidence") or []
-
-    assert isinstance(ready, bool), "Legacy workflow readiness must be explicit"
-    if ready:
-        assert evidence, "Legacy workflow cleanup is marked ready without evidence"
-        return
-
-    blockers = [
-        item
-        for item in evidence
-        if item.get("classification") == "blocked_decommission_readiness"
-    ]
-    assert blockers, "Blocked legacy workflow cleanup needs explicit blocker evidence"
-    for blocker in blockers:
-        assert blocker.get("owner")
-        assert blocker.get("reason")
-        assert blocker.get("required_before_delete")

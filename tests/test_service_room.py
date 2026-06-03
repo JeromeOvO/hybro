@@ -1,5 +1,5 @@
 """
-Unit tests for RoomCenter (room_services.py) -- pure logic methods.
+Unit tests for RoomCenter (room_runtime.py) -- pure logic methods.
 
 Tests cover:
 - _looks_like_agent_id heuristic
@@ -18,7 +18,7 @@ import pytest
 
 from common.dto import RoomInfo
 from models.request import RoomCenterRoomSettingRequest
-from services.room_services import RoomServices
+from app_shell.room_runtime import RoomServices
 
 
 @pytest.fixture
@@ -36,7 +36,7 @@ def room_center():
 
 
 _ROOT = Path(__file__).resolve().parents[1]
-_ROOM_SERVICES_PATH = _ROOT / "services" / "room_services.py"
+_ROOM_SERVICES_PATH = _ROOT / "app_shell" / "room_runtime.py"
 
 
 def _room_services_function(function_name: str) -> ast.AsyncFunctionDef:

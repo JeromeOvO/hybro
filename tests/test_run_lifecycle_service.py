@@ -8,8 +8,8 @@ import pytest
 @pytest.mark.asyncio
 async def test_record_processing_status_skips_when_dual_write_disabled(monkeypatch):
     monkeypatch.setenv("FEATURE_RUN_DUAL_WRITE", "0")
-    import services.run_command_handler as handler_mod
-    import services.run_lifecycle_service as mod
+    import execution.run_command_handler as handler_mod
+    import execution.run_lifecycle_service as mod
 
     fake = MagicMock()
     with patch.object(handler_mod, "mongodb", fake):
@@ -24,9 +24,9 @@ async def test_record_processing_status_skips_when_dual_write_disabled(monkeypat
 @pytest.mark.asyncio
 async def test_record_processing_status_dual_write_default_allows_calls(monkeypatch):
     monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
-    import services.run_command_handler as handler_mod
-    import services.run_lifecycle_service as mod
-    from services.a2a_constants import SSEProcessingStatus
+    import execution.run_command_handler as handler_mod
+    import execution.run_lifecycle_service as mod
+    from common.a2a_constants import SSEProcessingStatus
 
     fake_runs = MagicMock()
     fake_runs.find_one = AsyncMock(return_value=None)
@@ -50,7 +50,7 @@ async def test_record_processing_status_dual_write_default_allows_calls(monkeypa
 @pytest.mark.asyncio
 async def test_record_processing_status_returns_handler_payload(monkeypatch):
     monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
-    import services.run_lifecycle_service as mod
+    import execution.run_lifecycle_service as mod
 
     payload = {
         "event_id": "evt-1",
@@ -77,9 +77,46 @@ async def test_record_processing_status_returns_handler_payload(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_bind_run_lifecycle_service_uses_injected_handler(monkeypatch):
+    monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
+    import execution.run_lifecycle_service as mod
+
+    original = mod.run_command_handler
+    payload = {
+        "event_id": "evt-bound",
+        "run_id": "msg-1",
+        "seq": 1,
+        "type": "RUN_STARTED",
+        "payload": {"status": "processing"},
+    }
+    bound = MagicMock()
+    bound.record_processing_status = AsyncMock(return_value=payload)
+
+    try:
+        mod.bind_run_lifecycle_service(bound)
+        result = await mod.run_lifecycle_service.record_processing_status(
+            room_id="room-1",
+            status="processing",
+            message_id="msg-1",
+            client_request_id="cr-1",
+        )
+    finally:
+        mod.bind_run_lifecycle_service(original)
+
+    assert result is payload
+    bound.record_processing_status.assert_awaited_once_with(
+        room_id="room-1",
+        status="processing",
+        message_id="msg-1",
+        client_request_id="cr-1",
+        details=None,
+    )
+
+
+@pytest.mark.asyncio
 async def test_record_and_maybe_broadcast_run_event_records_before_broadcast(monkeypatch):
     monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
-    import services.run_lifecycle_service as mod
+    import execution.run_lifecycle_service as mod
 
     calls: list[str] = []
     payload = {
@@ -117,7 +154,7 @@ async def test_record_and_maybe_broadcast_run_event_records_before_broadcast(mon
 @pytest.mark.asyncio
 async def test_record_and_maybe_broadcast_run_event_uses_provided_sse(monkeypatch):
     monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
-    import services.run_lifecycle_service as mod
+    import execution.run_lifecycle_service as mod
 
     payload = {
         "event_id": "evt-1",
@@ -159,7 +196,7 @@ async def test_record_and_maybe_broadcast_run_event_uses_provided_sse(monkeypatc
 
 
 def test_build_run_event_sse_payload_includes_correlation_id():
-    import services.run_lifecycle_service as mod
+    import execution.run_lifecycle_service as mod
 
     payload = {
         "event_id": "evt-1",
@@ -184,7 +221,7 @@ def test_build_run_event_sse_payload_includes_correlation_id():
 @pytest.mark.asyncio
 async def test_record_and_maybe_broadcast_run_event_skips_when_flag_disabled(monkeypatch):
     monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
-    import services.run_lifecycle_service as mod
+    import execution.run_lifecycle_service as mod
 
     payload = {"event_id": "evt-1", "run_id": "msg-1", "seq": 1, "type": "RUN_STARTED"}
     sse = MagicMock()
@@ -206,7 +243,7 @@ async def test_record_and_maybe_broadcast_run_event_skips_when_flag_disabled(mon
 @pytest.mark.asyncio
 async def test_record_and_maybe_broadcast_run_event_skips_when_payload_none(monkeypatch):
     monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
-    import services.run_lifecycle_service as mod
+    import execution.run_lifecycle_service as mod
 
     sse = MagicMock()
     sse.broadcast_to_room = AsyncMock()
@@ -227,7 +264,7 @@ async def test_record_and_maybe_broadcast_run_event_skips_when_payload_none(monk
 @pytest.mark.asyncio
 async def test_duplicate_terminal_payload_none_does_not_emit_second_run_event(monkeypatch):
     monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
-    import services.run_lifecycle_service as mod
+    import execution.run_lifecycle_service as mod
 
     payload = {"event_id": "evt-1", "run_id": "msg-1", "seq": 3, "type": "RUN_COMPLETED"}
     sse = MagicMock()
@@ -251,7 +288,7 @@ async def test_duplicate_terminal_payload_none_does_not_emit_second_run_event(mo
 
 @pytest.mark.asyncio
 async def test_broadcast_run_event_payload_does_not_record(monkeypatch):
-    import services.run_lifecycle_service as mod
+    import execution.run_lifecycle_service as mod
 
     payload = {"event_id": "evt-1", "run_id": "msg-1", "seq": 3, "type": "RUN_FAILED"}
     sse = MagicMock()
@@ -270,7 +307,7 @@ async def test_broadcast_run_event_payload_does_not_record(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_broadcast_run_event_payload_requires_explicit_sse(monkeypatch):
-    import services.run_lifecycle_service as mod
+    import execution.run_lifecycle_service as mod
 
     payload = {"event_id": "evt-1", "run_id": "msg-1", "seq": 3, "type": "RUN_FAILED"}
     monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")

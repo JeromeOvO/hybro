@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from services.notification_service import NotificationService
+from app_shell.notification_service import NotificationService
 
 
 @pytest.fixture

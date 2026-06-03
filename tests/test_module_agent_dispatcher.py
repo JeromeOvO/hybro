@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from models.room import RoomAgentMessage
-from modules.AgentDispatcher import AgentDispatcher
+from execution.dispatch.agent_dispatcher import AgentDispatcher
 
 
 def _make_dispatcher():

@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from services.a2a_service import A2AService
+from app_shell.a2a_runtime import A2AService
 
 
 @pytest.fixture

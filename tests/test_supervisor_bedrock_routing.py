@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from services.room_supervisor_service import RoomSupervisorService
+from execution.orchestration.room_supervisor_service import RoomSupervisorService
 
 
 def _text_stream_mock(text: str):
@@ -69,7 +69,7 @@ class TestSupervisorLLMRouting:
     @pytest.mark.asyncio
     async def test_routes_to_openai_when_flag_disabled(self, supervisor_svc, mock_openai, mock_bedrock):
         """When USE_BEDROCK_SUPERVISOR=false, should call OpenAI."""
-        with patch('config.settings.settings') as mock_settings:
+        with patch('common.config.settings.settings') as mock_settings:
             mock_settings.use_bedrock_supervisor = False
 
             result = await supervisor_svc._call_supervisor_llm(
@@ -92,7 +92,7 @@ class TestSupervisorLLMRouting:
     @pytest.mark.asyncio
     async def test_routes_to_bedrock_when_flag_enabled(self, supervisor_svc, mock_openai, mock_bedrock):
         """When USE_BEDROCK_SUPERVISOR=true, should call Bedrock."""
-        with patch('config.settings.settings') as mock_settings:
+        with patch('common.config.settings.settings') as mock_settings:
             mock_settings.use_bedrock_supervisor = True
             mock_settings.bedrock_supervisor_model = "anthropic.claude-opus-4-6-20250514-v1:0"
 
@@ -125,7 +125,7 @@ class TestSupervisorLLMTextRouting:
     @pytest.mark.asyncio
     async def test_routes_to_openai_when_flag_disabled(self, supervisor_svc, mock_openai, mock_bedrock):
         """When USE_BEDROCK_SUPERVISOR=false, should call OpenAI."""
-        with patch('config.settings.settings') as mock_settings:
+        with patch('common.config.settings.settings') as mock_settings:
             mock_settings.use_bedrock_supervisor = False
 
             result = await supervisor_svc._call_supervisor_llm_text(
@@ -148,7 +148,7 @@ class TestSupervisorLLMTextRouting:
     @pytest.mark.asyncio
     async def test_routes_to_bedrock_when_flag_enabled(self, supervisor_svc, mock_openai, mock_bedrock):
         """When USE_BEDROCK_SUPERVISOR=true, should call Bedrock."""
-        with patch('config.settings.settings') as mock_settings:
+        with patch('common.config.settings.settings') as mock_settings:
             mock_settings.use_bedrock_supervisor = True
             mock_settings.bedrock_supervisor_model = "anthropic.claude-opus-4-6-20250514-v1:0"
 
@@ -181,7 +181,7 @@ class TestRoutingConsistency:
     @pytest.mark.asyncio
     async def test_multiple_calls_use_same_backend(self, supervisor_svc, mock_openai, mock_bedrock):
         """Multiple calls should consistently use the same backend."""
-        with patch('config.settings.settings') as mock_settings:
+        with patch('common.config.settings.settings') as mock_settings:
             mock_settings.use_bedrock_supervisor = True
             mock_settings.bedrock_supervisor_model = "anthropic.claude-opus-4-6-20250514-v1:0"
 
@@ -215,7 +215,7 @@ class TestRoutingConsistency:
     async def test_flag_change_switches_backend(self, supervisor_svc, mock_openai, mock_bedrock):
         """Changing flag should switch backend for subsequent calls."""
         # First call with Bedrock
-        with patch('config.settings.settings') as mock_settings:
+        with patch('common.config.settings.settings') as mock_settings:
             mock_settings.use_bedrock_supervisor = True
             mock_settings.bedrock_supervisor_model = "anthropic.claude-opus-4-6-20250514-v1:0"
 
@@ -225,7 +225,7 @@ class TestRoutingConsistency:
             )
 
         # Second call with OpenAI (flag changed)
-        with patch('config.settings.settings') as mock_settings:
+        with patch('common.config.settings.settings') as mock_settings:
             mock_settings.use_bedrock_supervisor = False
 
             await supervisor_svc._call_supervisor_llm(

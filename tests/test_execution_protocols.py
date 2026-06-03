@@ -223,19 +223,19 @@ def test_execution_boundary_temporary_legacy_import_inventory_does_not_expand():
                 for child in ast.walk(node):
                     if hasattr(child, "lineno"):
                         type_checking_lines.add(child.lineno)
-        modules: set[str] = set()
+        imported_names: set[str] = set()
         for node in ast.walk(tree):
             if hasattr(node, "lineno") and node.lineno in type_checking_lines:
                 continue
             if isinstance(node, ast.ImportFrom) and node.module:
                 if node.module.split(".")[0] in legacy_prefixes:
-                    modules.add(node.module)
+                    imported_names.add(node.module)
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     if alias.name.split(".")[0] in legacy_prefixes:
-                        modules.add(alias.name)
-        if modules:
-            actual[rel] = modules
+                        imported_names.add(alias.name)
+        if imported_names:
+            actual[rel] = imported_names
 
     assert actual == expected
 
@@ -288,9 +288,9 @@ def test_room_message_center_factory_propagates_overrides_to_children():
 
     assert runtime.database_service is deps["database_service"]
     assert runtime.sse_manager is deps["sse_manager"]
-    assert runtime.room_services is deps["room_services"]
+    assert runtime.room_runtime is deps["room_services"]
     assert runtime.openai_service is deps["openai_service"]
-    assert runtime.tsm.room_services is deps["room_services"]
+    assert runtime.tsm.room_runtime is deps["room_services"]
     assert runtime.tsm.notification_service is deps["notification_service"]
     assert runtime.agent_dispatcher.database_service is deps["database_service"]
     assert runtime.agent_dispatcher.agent_resolver is deps["agent_resolver_service"]
@@ -304,11 +304,11 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.agent_message_processor.sse_manager is deps["sse_manager"]
     assert runtime.queue_executor.database_service is deps["database_service"]
     assert runtime.queue_executor.sse_manager is deps["sse_manager"]
-    assert runtime.queue_executor.room_services is deps["room_services"]
+    assert runtime.queue_executor.room_runtime is deps["room_services"]
     assert runtime.queue_executor.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.supervisor_executor.database_service is deps["database_service"]
     assert runtime.supervisor_executor.sse_manager is deps["sse_manager"]
-    assert runtime.supervisor_executor.room_services is deps["room_services"]
+    assert runtime.supervisor_executor.room_runtime is deps["room_services"]
     assert runtime.supervisor_executor.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.agent_response_handler.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.task_notifications is deps["task_notifications"]
@@ -342,7 +342,7 @@ def test_room_message_center_factory_owns_default_dependency_wiring():
 
     assert runtime.database_service is deps["database_service"]
     assert runtime.sse_manager is deps["sse_manager"]
-    assert runtime.room_services is deps["room_services"]
+    assert runtime.room_runtime is deps["room_services"]
 
 
 def test_room_message_center_constructor_requires_explicit_dependencies():
@@ -362,7 +362,7 @@ def test_room_message_center_uses_common_room_lock_protocol():
     source = Path("execution/orchestration/room_message_center.py").read_text()
     hints = get_type_hints(RoomMessageCenter.set_room_distributed_lock)
 
-    assert "infrastructure.redis_service" not in source
+    assert "AppShellRedisService" not in source
     assert "._client" not in source
     assert hints["room_lock"] == RoomDistributedLock | None
     assert (

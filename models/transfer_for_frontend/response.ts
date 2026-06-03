@@ -230,18 +230,6 @@ export interface AgentCenterResponse {
   status_code?: number;
 }
 /**
- * A BaseTask represents a complete user request and serves as the top-level container.
- * It wraps a Task object and includes session/user metadata for tracking purposes.
- * This is the main task that gets decomposed into MetaTasks for multi-agent processing.
- */
-export interface BaseTask {
-  task_id: string;
-  session_id: string;
-  user_name: string;
-  task: Task;
-  extend_info?: unknown;
-}
-/**
  * Represents a single, stateful operation or conversation between a client and an agent.
  */
 export interface Task {
@@ -352,7 +340,7 @@ export interface TaskStatus {
 /**
  * A ChatContext represents a chat context between a user and the multi-agent system.
  * It tracks session metadata like creation time, user info, and context content.
- * Multiple ChatContext objects can belong to one TaskSession during a conversation.
+ * Multiple ChatContext objects can belong to one conversation session.
  */
 export interface ChatContext {
   memory_id: string;
@@ -403,24 +391,6 @@ export interface InspectionCenterResponse {
   agent_card?: AgentCard | null;
   result: string[];
   status_code?: number;
-}
-/**
- * A MetaTask represents an atomic subtask created from decomposing a larger user request(BaseTask).
- * These are the individual work units assigned to specific agents in the multi-agent system.
- * Each MetaTask contains a Task object with the actual agent communication data.
- */
-export interface MetaTask {
-  task_id: string;
-  parent_task_id: string;
-  agent_id?: string;
-  task_description?: string | null;
-  task?: Task | null;
-  execution_order?: number;
-  depends_on_tasks?: string[] | null;
-  context_from_previous?: {
-    [k: string]: unknown;
-  } | null;
-  extend_info?: unknown;
 }
 export interface OrchestrationResponse {
   task_id?: string | null;
@@ -735,36 +705,6 @@ export interface Step {
   result?: unknown;
   agent_name?: string | null;
   is_remote_agent?: boolean | null;
-}
-export interface TaskCenterResponse {
-  task_id?: string | null;
-  user_name?: string | null;
-  parent_task_id?: string | null;
-  session_id?: string | null;
-  task?: Task | null;
-  meta_task?: MetaTask | null;
-  base_task?: BaseTask | null;
-  task_session?: TaskSession | null;
-  meta_tasks?: MetaTask[] | null;
-  base_tasks?: BaseTask[] | null;
-  task_sessions?: TaskSession[] | null;
-  success: boolean;
-  error?: string | null;
-  status_code?: number;
-}
-/**
- * A TaskSession represents a chat conversation between a user and the multi-agent system.
- * It tracks session metadata like creation time, user info, and session description.
- * Multiple BaseTask objects can belong to one TaskSession during a conversation.
- */
-export interface TaskSession {
-  session_id: string;
-  user_name: string;
-  session_name: string;
-  session_description?: string | null;
-  session_created_at?: string;
-  session_updated_at?: string;
-  extend_info?: unknown;
 }
 export interface TaskResponse {
   task_id: string;

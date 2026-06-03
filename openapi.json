@@ -454,6 +454,225 @@
         }
       }
     },
+    "/api/v1/agent/{agent_id}/avatar": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Upload Agent Avatar",
+        "description": "Upload a custom avatar image for an agent - PROTECTED (requires ownership)\n\nAccepts multipart/form-data with a single `file` field.\nStores the image under the agent-avatars/ S3 prefix (publicly readable)\nand persists the permanent URL to agent_card.iconUrl in MongoDB.\n\nReturns: { \"iconUrl\": \"<permanent public URL>\" }",
+        "operationId": "upload_agent_avatar_api_v1_agent__agent_id__avatar_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_agent_avatar_api_v1_agent__agent_id__avatar_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/{agent_id}/capability-issues": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Get Capability Issues",
+        "description": "Get capability issues for an agent - PROTECTED (requires ownership)",
+        "operationId": "get_capability_issues_api_v1_agent__agent_id__capability_issues_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by status: open or resolved",
+              "title": "Status"
+            },
+            "description": "Filter by status: open or resolved"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "description": "Max issues to return",
+              "default": 100,
+              "title": "Limit"
+            },
+            "description": "Max issues to return"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of issues to skip",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Number of issues to skip"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/{agent_id}/capability-issues/resolve-all": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Resolve All Capability Issues",
+        "description": "Bulk resolve all open capability issues for an agent - PROTECTED",
+        "operationId": "resolve_all_capability_issues_api_v1_agent__agent_id__capability_issues_resolve_all_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/capability-issues/{issue_id}/resolve": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Resolve Capability Issue",
+        "description": "Resolve a single capability issue - PROTECTED (requires ownership)",
+        "operationId": "resolve_capability_issue_api_v1_agent_capability_issues__issue_id__resolve_post",
+        "parameters": [
+          {
+            "name": "issue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Issue Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agent/getAgentCardFromUrl": {
       "post": {
         "tags": [
@@ -689,141 +908,6 @@
         }
       }
     },
-    "/api/v1/orchestrationCenter/decomposeTask": {
-      "post": {
-        "tags": [
-          "orchestration"
-        ],
-        "summary": "Decompose Task",
-        "operationId": "decompose_task_api_v1_orchestrationCenter_decomposeTask_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/orchestrationCenter/assignAgentsToMetaTasks": {
-      "post": {
-        "tags": [
-          "orchestration"
-        ],
-        "summary": "Assign Agents To Meta Tasks By Parent Task Id",
-        "operationId": "assign_agents_to_meta_tasks_by_parent_task_id_api_v1_orchestrationCenter_assignAgentsToMetaTasks_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/orchestrationCenter/assignAgentToMetaTask": {
-      "post": {
-        "tags": [
-          "orchestration"
-        ],
-        "summary": "Assign Agent To Meta Task",
-        "operationId": "assign_agent_to_meta_task_api_v1_orchestrationCenter_assignAgentToMetaTask_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/orchestrationCenter/runWorkflow": {
-      "post": {
-        "tags": [
-          "orchestration"
-        ],
-        "summary": "Run Workflow",
-        "operationId": "run_workflow_api_v1_orchestrationCenter_runWorkflow_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/orchestrationCenter/retryMetaTask": {
-      "post": {
-        "tags": [
-          "orchestration"
-        ],
-        "summary": "Retry Meta Task",
-        "operationId": "retry_meta_task_api_v1_orchestrationCenter_retryMetaTask_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/orchestrationCenter/summarizeMetaTaskForBaseTask": {
-      "post": {
-        "tags": [
-          "orchestration"
-        ],
-        "summary": "Summarize Meta Task For Base Task",
-        "operationId": "summarize_meta_task_for_base_task_api_v1_orchestrationCenter_summarizeMetaTaskForBaseTask_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/orchestrationCenter/processRoomUserMessage": {
-      "post": {
-        "tags": [
-          "orchestration"
-        ],
-        "summary": "Process Room User Message",
-        "description": "**Deprecated.** Message processing is now triggered internally by sendMessage.\nThis endpoint returns HTTP 410 Gone.",
-        "operationId": "process_room_user_message_api_v1_orchestrationCenter_processRoomUserMessage_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        },
-        "deprecated": true
-      }
-    },
     "/api/v1/roomCenter/createNewRoom": {
       "post": {
         "tags": [
@@ -851,6 +935,26 @@
         "summary": "Inquiry Room Setting",
         "description": "Get room settings - PROTECTED (requires room ownership)",
         "operationId": "inquiry_room_setting_api_v1_roomCenter_inquiryRoomSetting_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roomCenter/inquiryActiveRuns": {
+      "post": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Inquiry Active Runs",
+        "description": "List non-terminal orchestration runs for a room \u2014 same auth as inquiryRoomSetting.",
+        "operationId": "inquiry_active_runs_api_v1_roomCenter_inquiryActiveRuns_post",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -948,7 +1052,7 @@
           "room"
         ],
         "summary": "Create And Parse User Message",
-        "description": "Create and parse user message - PROTECTED (requires room ownership)",
+        "description": "**Deprecated.** Message creation and processing now go through sendMessage.\nThis endpoint returns HTTP 410 Gone before parsing the request body.",
         "operationId": "create_and_parse_user_message_api_v1_roomCenter_createAndParseUserMessage_post",
         "responses": {
           "200": {
@@ -959,7 +1063,8 @@
               }
             }
           }
-        }
+        },
+        "deprecated": true
       }
     },
     "/api/v1/roomCenter/inquiryRoomMessagesByRoomId": {
@@ -1173,7 +1278,6 @@
           "hub"
         ],
         "summary": "Hub Status For User",
-        "description": "Return hub connection status for the authenticated user.",
         "operationId": "hub_status_for_user_api_v1_hub_my_status_get",
         "responses": {
           "200": {
@@ -1182,206 +1286,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HubStatusResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/task/queryTask/{task_id}": {
-      "get": {
-        "tags": [
-          "task"
-        ],
-        "summary": "Query Task",
-        "operationId": "query_task_api_v1_task_queryTask__task_id__get",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Task Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/task/queryBaseTask/{task_id}": {
-      "get": {
-        "tags": [
-          "task"
-        ],
-        "summary": "Query Base Task",
-        "operationId": "query_base_task_api_v1_task_queryBaseTask__task_id__get",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Task Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/task/getAllSessions/{user_name}": {
-      "get": {
-        "tags": [
-          "task"
-        ],
-        "summary": "Get All Sessions",
-        "operationId": "get_all_sessions_api_v1_task_getAllSessions__user_name__get",
-        "parameters": [
-          {
-            "name": "user_name",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "User Name"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/task/getBaseTasksBySessionId/{session_id}": {
-      "get": {
-        "tags": [
-          "task"
-        ],
-        "summary": "Get Base Task By Session Id",
-        "operationId": "get_base_task_by_session_id_api_v1_task_getBaseTasksBySessionId__session_id__get",
-        "parameters": [
-          {
-            "name": "session_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Session Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/task/getMetaTasksByParentTaskId/{parent_task_id}": {
-      "get": {
-        "tags": [
-          "task"
-        ],
-        "summary": "Get Meta Tasks By Parent Task Id",
-        "operationId": "get_meta_tasks_by_parent_task_id_api_v1_task_getMetaTasksByParentTaskId__parent_task_id__get",
-        "parameters": [
-          {
-            "name": "parent_task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Parent Task Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -2365,6 +2269,22 @@
               "type": "string",
               "title": "Hub Id"
             }
+          },
+          {
+            "name": "last_event_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Event Id"
+            }
           }
         ],
         "responses": {
@@ -2759,8 +2679,81 @@
         ],
         "title": "APIKeyOperationResponse"
       },
-      "APIKeySecurityScheme": {
+      "AgentAuthentication": {
         "properties": {
+          "schemes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Schemes"
+          },
+          "credentials": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credentials"
+          }
+        },
+        "type": "object",
+        "required": [
+          "schemes"
+        ],
+        "title": "AgentAuthentication"
+      },
+      "AgentCapabilities": {
+        "properties": {
+          "streaming": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Streaming",
+            "default": false
+          },
+          "pushNotifications": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pushnotifications",
+            "default": false
+          },
+          "stateTransitionHistory": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Statetransitionhistory",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "AgentCapabilities"
+      },
+      "AgentCard": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
           "description": {
             "anyOf": [
               {
@@ -2772,121 +2765,23 @@
             ],
             "title": "Description"
           },
-          "in": {
-            "$ref": "#/components/schemas/In"
-          },
-          "name": {
+          "url": {
             "type": "string",
-            "title": "Name"
+            "title": "Url"
           },
-          "type": {
-            "type": "string",
-            "const": "apiKey",
-            "title": "Type",
-            "default": "apiKey"
-          }
-        },
-        "type": "object",
-        "required": [
-          "in",
-          "name"
-        ],
-        "title": "APIKeySecurityScheme",
-        "description": "Defines a security scheme using an API key."
-      },
-      "AgentCapabilities": {
-        "properties": {
-          "extensions": {
+          "provider": {
             "anyOf": [
               {
-                "items": {
-                  "$ref": "#/components/schemas/AgentExtension"
-                },
-                "type": "array"
+                "$ref": "#/components/schemas/AgentProvider"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Extensions"
-          },
-          "pushNotifications": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Pushnotifications"
-          },
-          "stateTransitionHistory": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Statetransitionhistory"
-          },
-          "streaming": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Streaming"
-          }
-        },
-        "type": "object",
-        "title": "AgentCapabilities",
-        "description": "Defines optional capabilities supported by an agent."
-      },
-      "AgentCard-Input": {
-        "properties": {
-          "additionalInterfaces": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/AgentInterface"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Additionalinterfaces"
-          },
-          "capabilities": {
-            "$ref": "#/components/schemas/AgentCapabilities"
-          },
-          "defaultInputModes": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Defaultinputmodes"
-          },
-          "defaultOutputModes": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Defaultoutputmodes"
-          },
-          "description": {
-            "type": "string",
-            "title": "Description",
-            "examples": [
-              "Agent that helps users with recipes and cooking."
             ]
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
           },
           "documentationUrl": {
             "anyOf": [
@@ -2910,328 +2805,38 @@
             ],
             "title": "Iconurl"
           },
-          "name": {
-            "type": "string",
-            "title": "Name",
-            "examples": [
-              "Recipe Agent"
-            ]
-          },
-          "preferredTransport": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Preferredtransport",
-            "default": "JSONRPC",
-            "examples": [
-              "JSONRPC",
-              "GRPC",
-              "HTTP+JSON"
-            ]
-          },
-          "protocolVersion": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Protocolversion",
-            "default": "0.3.0"
-          },
-          "provider": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AgentProvider"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "security": {
-            "anyOf": [
-              {
-                "items": {
-                  "additionalProperties": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "type": "object"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Security",
-            "examples": [
-              [
-                {
-                  "oauth": [
-                    "read"
-                  ]
-                },
-                {
-                  "api-key": [],
-                  "mtls": []
-                }
-              ]
-            ]
-          },
-          "securitySchemes": {
-            "anyOf": [
-              {
-                "additionalProperties": {
-                  "$ref": "#/components/schemas/SecurityScheme-Input"
-                },
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Securityschemes"
-          },
-          "signatures": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/AgentCardSignature"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Signatures"
-          },
-          "skills": {
-            "items": {
-              "$ref": "#/components/schemas/AgentSkill"
-            },
-            "type": "array",
-            "title": "Skills"
-          },
-          "supportsAuthenticatedExtendedCard": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Supportsauthenticatedextendedcard"
-          },
-          "url": {
-            "type": "string",
-            "title": "Url",
-            "examples": [
-              "https://api.example.com/a2a/v1"
-            ]
-          },
-          "version": {
-            "type": "string",
-            "title": "Version",
-            "examples": [
-              "1.0.0"
-            ]
-          }
-        },
-        "type": "object",
-        "required": [
-          "capabilities",
-          "defaultInputModes",
-          "defaultOutputModes",
-          "description",
-          "name",
-          "skills",
-          "url",
-          "version"
-        ],
-        "title": "AgentCard",
-        "description": "The AgentCard is a self-describing manifest for an agent. It provides essential\nmetadata including the agent's identity, capabilities, skills, supported\ncommunication methods, and security requirements."
-      },
-      "AgentCard-Output": {
-        "properties": {
-          "additionalInterfaces": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/AgentInterface"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Additionalinterfaces"
-          },
           "capabilities": {
             "$ref": "#/components/schemas/AgentCapabilities"
+          },
+          "authentication": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentAuthentication"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "defaultInputModes": {
             "items": {
               "type": "string"
             },
             "type": "array",
-            "title": "Defaultinputmodes"
+            "title": "Defaultinputmodes",
+            "default": [
+              "text"
+            ]
           },
           "defaultOutputModes": {
             "items": {
               "type": "string"
             },
             "type": "array",
-            "title": "Defaultoutputmodes"
-          },
-          "description": {
-            "type": "string",
-            "title": "Description",
-            "examples": [
-              "Agent that helps users with recipes and cooking."
+            "title": "Defaultoutputmodes",
+            "default": [
+              "text"
             ]
-          },
-          "documentationUrl": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Documentationurl"
-          },
-          "iconUrl": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Iconurl"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name",
-            "examples": [
-              "Recipe Agent"
-            ]
-          },
-          "preferredTransport": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Preferredtransport",
-            "default": "JSONRPC",
-            "examples": [
-              "JSONRPC",
-              "GRPC",
-              "HTTP+JSON"
-            ]
-          },
-          "protocolVersion": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Protocolversion",
-            "default": "0.3.0"
-          },
-          "provider": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AgentProvider"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "security": {
-            "anyOf": [
-              {
-                "items": {
-                  "additionalProperties": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "type": "object"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Security",
-            "examples": [
-              [
-                {
-                  "oauth": [
-                    "read"
-                  ]
-                },
-                {
-                  "api-key": [],
-                  "mtls": []
-                }
-              ]
-            ]
-          },
-          "securitySchemes": {
-            "anyOf": [
-              {
-                "additionalProperties": {
-                  "$ref": "#/components/schemas/SecurityScheme-Output"
-                },
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Securityschemes"
-          },
-          "signatures": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/AgentCardSignature"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Signatures"
           },
           "skills": {
             "items": {
@@ -3240,7 +2845,7 @@
             "type": "array",
             "title": "Skills"
           },
-          "supportsAuthenticatedExtendedCard": {
+          "supports_authenticated_extended_card": {
             "anyOf": [
               {
                 "type": "boolean"
@@ -3249,67 +2854,18 @@
                 "type": "null"
               }
             ],
-            "title": "Supportsauthenticatedextendedcard"
-          },
-          "url": {
-            "type": "string",
-            "title": "Url",
-            "examples": [
-              "https://api.example.com/a2a/v1"
-            ]
-          },
-          "version": {
-            "type": "string",
-            "title": "Version",
-            "examples": [
-              "1.0.0"
-            ]
+            "title": "Supports Authenticated Extended Card"
           }
         },
         "type": "object",
         "required": [
-          "capabilities",
-          "defaultInputModes",
-          "defaultOutputModes",
-          "description",
           "name",
-          "skills",
           "url",
-          "version"
+          "version",
+          "capabilities",
+          "skills"
         ],
-        "title": "AgentCard",
-        "description": "The AgentCard is a self-describing manifest for an agent. It provides essential\nmetadata including the agent's identity, capabilities, skills, supported\ncommunication methods, and security requirements."
-      },
-      "AgentCardSignature": {
-        "properties": {
-          "header": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Header"
-          },
-          "protected": {
-            "type": "string",
-            "title": "Protected"
-          },
-          "signature": {
-            "type": "string",
-            "title": "Signature"
-          }
-        },
-        "type": "object",
-        "required": [
-          "protected",
-          "signature"
-        ],
-        "title": "AgentCardSignature",
-        "description": "AgentCardSignature represents a JWS signature of an AgentCard.\nThis follows the JSON format of an RFC 7515 JSON Web Signature (JWS)."
+        "title": "AgentCard"
       },
       "AgentCreate": {
         "properties": {
@@ -3318,7 +2874,7 @@
             "title": "Agent Url"
           },
           "agent_card": {
-            "$ref": "#/components/schemas/AgentCard-Input"
+            "$ref": "#/components/schemas/AgentCard"
           },
           "call_count": {
             "anyOf": [
@@ -3432,83 +2988,6 @@
         ],
         "title": "AgentCreate"
       },
-      "AgentExtension": {
-        "properties": {
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "params": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Params"
-          },
-          "required": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Required"
-          },
-          "uri": {
-            "type": "string",
-            "title": "Uri"
-          }
-        },
-        "type": "object",
-        "required": [
-          "uri"
-        ],
-        "title": "AgentExtension",
-        "description": "A declaration of a protocol extension supported by an Agent."
-      },
-      "AgentInterface": {
-        "properties": {
-          "transport": {
-            "type": "string",
-            "title": "Transport",
-            "examples": [
-              "JSONRPC",
-              "GRPC",
-              "HTTP+JSON"
-            ]
-          },
-          "url": {
-            "type": "string",
-            "title": "Url",
-            "examples": [
-              "https://api.example.com/a2a/v1",
-              "https://grpc.example.com/a2a",
-              "https://rest.example.com/v1"
-            ]
-          }
-        },
-        "type": "object",
-        "required": [
-          "transport",
-          "url"
-        ],
-        "title": "AgentInterface",
-        "description": "Declares a combination of a target URL and a transport protocol for interacting with the agent.\nThis allows agents to expose the same functionality over multiple transport mechanisms."
-      },
       "AgentPatch": {
         "properties": {
           "agent_url": {
@@ -3525,7 +3004,7 @@
           "agent_card": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/AgentCard-Input"
+                "$ref": "#/components/schemas/AgentCard"
               },
               {
                 "type": "null"
@@ -3634,17 +3113,22 @@
             "title": "Organization"
           },
           "url": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Url"
           }
         },
         "type": "object",
         "required": [
-          "organization",
-          "url"
+          "organization"
         ],
-        "title": "AgentProvider",
-        "description": "Represents the service provider of an agent."
+        "title": "AgentProvider"
       },
       "AgentResponse": {
         "properties": {
@@ -3653,7 +3137,7 @@
             "title": "Agent Id"
           },
           "agent_card": {
-            "$ref": "#/components/schemas/AgentCard-Output"
+            "$ref": "#/components/schemas/AgentCard"
           },
           "agent_status": {
             "$ref": "#/components/schemas/AgentStatus",
@@ -3739,9 +3223,38 @@
       },
       "AgentSkill": {
         "properties": {
-          "description": {
+          "id": {
             "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Description"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags"
           },
           "examples": {
             "anyOf": [
@@ -3755,16 +3268,7 @@
                 "type": "null"
               }
             ],
-            "title": "Examples",
-            "examples": [
-              [
-                "I need a recipe for bread"
-              ]
-            ]
-          },
-          "id": {
-            "type": "string",
-            "title": "Id"
+            "title": "Examples"
           },
           "inputModes": {
             "anyOf": [
@@ -3780,10 +3284,6 @@
             ],
             "title": "Inputmodes"
           },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
           "outputModes": {
             "anyOf": [
               {
@@ -3797,60 +3297,14 @@
               }
             ],
             "title": "Outputmodes"
-          },
-          "security": {
-            "anyOf": [
-              {
-                "items": {
-                  "additionalProperties": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  "type": "object"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Security",
-            "examples": [
-              [
-                {
-                  "google": [
-                    "oidc"
-                  ]
-                }
-              ]
-            ]
-          },
-          "tags": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Tags",
-            "examples": [
-              [
-                "cooking",
-                "customer support",
-                "billing"
-              ]
-            ]
           }
         },
         "type": "object",
         "required": [
-          "description",
           "id",
-          "name",
-          "tags"
+          "name"
         ],
-        "title": "AgentSkill",
-        "description": "Represents a distinct capability or function that an agent can perform."
+        "title": "AgentSkill"
       },
       "AgentStatus": {
         "type": "string",
@@ -3877,7 +3331,7 @@
           "agent_card": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/AgentCard-Input"
+                "$ref": "#/components/schemas/AgentCard"
               },
               {
                 "type": "null"
@@ -3995,43 +3449,19 @@
         ],
         "title": "AgentUpdate"
       },
-      "AuthorizationCodeOAuthFlow": {
+      "Body_upload_agent_avatar_api_v1_agent__agent_id__avatar_post": {
         "properties": {
-          "authorizationUrl": {
+          "file": {
             "type": "string",
-            "title": "Authorizationurl"
-          },
-          "refreshUrl": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Refreshurl"
-          },
-          "scopes": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object",
-            "title": "Scopes"
-          },
-          "tokenUrl": {
-            "type": "string",
-            "title": "Tokenurl"
+            "format": "binary",
+            "title": "File"
           }
         },
         "type": "object",
         "required": [
-          "authorizationUrl",
-          "scopes",
-          "tokenUrl"
+          "file"
         ],
-        "title": "AuthorizationCodeOAuthFlow",
-        "description": "Defines configuration details for the OAuth 2.0 Authorization Code flow."
+        "title": "Body_upload_agent_avatar_api_v1_agent__agent_id__avatar_post"
       },
       "Body_upload_file_api_v1_files_upload_post": {
         "properties": {
@@ -4051,72 +3481,6 @@
           "room_id"
         ],
         "title": "Body_upload_file_api_v1_files_upload_post"
-      },
-      "ClientCredentialsOAuthFlow": {
-        "properties": {
-          "refreshUrl": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Refreshurl"
-          },
-          "scopes": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object",
-            "title": "Scopes"
-          },
-          "tokenUrl": {
-            "type": "string",
-            "title": "Tokenurl"
-          }
-        },
-        "type": "object",
-        "required": [
-          "scopes",
-          "tokenUrl"
-        ],
-        "title": "ClientCredentialsOAuthFlow",
-        "description": "Defines configuration details for the OAuth 2.0 Client Credentials flow."
-      },
-      "DataPart": {
-        "properties": {
-          "data": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Data"
-          },
-          "kind": {
-            "type": "string",
-            "const": "data",
-            "title": "Kind",
-            "default": "data"
-          },
-          "metadata": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Metadata"
-          }
-        },
-        "type": "object",
-        "required": [
-          "data"
-        ],
-        "title": "DataPart",
-        "description": "Represents a structured data segment (e.g., JSON) within a message or artifact."
       },
       "DiscoveryAgentResult": {
         "properties": {
@@ -4212,117 +3576,6 @@
         ],
         "title": "DiscoveryResponse",
         "description": "Successful response from the Discovery API."
-      },
-      "FilePart": {
-        "properties": {
-          "file": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/FileWithBytes"
-              },
-              {
-                "$ref": "#/components/schemas/FileWithUri"
-              }
-            ],
-            "title": "File"
-          },
-          "kind": {
-            "type": "string",
-            "const": "file",
-            "title": "Kind",
-            "default": "file"
-          },
-          "metadata": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Metadata"
-          }
-        },
-        "type": "object",
-        "required": [
-          "file"
-        ],
-        "title": "FilePart",
-        "description": "Represents a file segment within a message or artifact. The file content can be\nprovided either directly as bytes or as a URI."
-      },
-      "FileWithBytes": {
-        "properties": {
-          "bytes": {
-            "type": "string",
-            "title": "Bytes"
-          },
-          "mimeType": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Mimetype"
-          },
-          "name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Name"
-          }
-        },
-        "type": "object",
-        "required": [
-          "bytes"
-        ],
-        "title": "FileWithBytes",
-        "description": "Represents a file with its content provided directly as a base64-encoded string."
-      },
-      "FileWithUri": {
-        "properties": {
-          "mimeType": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Mimetype"
-          },
-          "name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Name"
-          },
-          "uri": {
-            "type": "string",
-            "title": "Uri"
-          }
-        },
-        "type": "object",
-        "required": [
-          "uri"
-        ],
-        "title": "FileWithUri",
-        "description": "Represents a file with its content located at a specific URI."
       },
       "GatewayCardResponse": {
         "properties": {
@@ -4442,7 +3695,7 @@
             "title": "Created At"
           },
           "message": {
-            "$ref": "#/components/schemas/Message"
+            "title": "Message"
           }
         },
         "type": "object",
@@ -4471,48 +3724,6 @@
         ],
         "title": "HITLResponseRequest",
         "description": "REST request body for POST /rooms/{room_id}/hitl/respond."
-      },
-      "HTTPAuthSecurityScheme": {
-        "properties": {
-          "bearerFormat": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Bearerformat"
-          },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "scheme": {
-            "type": "string",
-            "title": "Scheme"
-          },
-          "type": {
-            "type": "string",
-            "const": "http",
-            "title": "Type",
-            "default": "http"
-          }
-        },
-        "type": "object",
-        "required": [
-          "scheme"
-        ],
-        "title": "HTTPAuthSecurityScheme",
-        "description": "Defines a security scheme using HTTP authentication."
       },
       "HTTPValidationError": {
         "properties": {
@@ -4687,6 +3898,16 @@
             "type": "integer",
             "title": "Agent Count",
             "default": 0
+          },
+          "active_agent_count": {
+            "type": "integer",
+            "title": "Active Agent Count",
+            "default": 0
+          },
+          "inactive_agent_count": {
+            "type": "integer",
+            "title": "Inactive Agent Count",
+            "default": 0
           }
         },
         "type": "object",
@@ -4711,327 +3932,6 @@
           "hubs"
         ],
         "title": "HubStatusResponse"
-      },
-      "ImplicitOAuthFlow": {
-        "properties": {
-          "authorizationUrl": {
-            "type": "string",
-            "title": "Authorizationurl"
-          },
-          "refreshUrl": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Refreshurl"
-          },
-          "scopes": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object",
-            "title": "Scopes"
-          }
-        },
-        "type": "object",
-        "required": [
-          "authorizationUrl",
-          "scopes"
-        ],
-        "title": "ImplicitOAuthFlow",
-        "description": "Defines configuration details for the OAuth 2.0 Implicit flow."
-      },
-      "In": {
-        "type": "string",
-        "enum": [
-          "cookie",
-          "header",
-          "query"
-        ],
-        "title": "In",
-        "description": "The location of the API key."
-      },
-      "Message": {
-        "properties": {
-          "contextId": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Contextid"
-          },
-          "extensions": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Extensions"
-          },
-          "kind": {
-            "type": "string",
-            "const": "message",
-            "title": "Kind",
-            "default": "message"
-          },
-          "messageId": {
-            "type": "string",
-            "title": "Messageid"
-          },
-          "metadata": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Metadata"
-          },
-          "parts": {
-            "items": {
-              "$ref": "#/components/schemas/Part"
-            },
-            "type": "array",
-            "title": "Parts"
-          },
-          "referenceTaskIds": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Referencetaskids"
-          },
-          "role": {
-            "$ref": "#/components/schemas/Role"
-          },
-          "taskId": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Taskid"
-          }
-        },
-        "type": "object",
-        "required": [
-          "messageId",
-          "parts",
-          "role"
-        ],
-        "title": "Message",
-        "description": "Represents a single message in the conversation between a user and an agent."
-      },
-      "MutualTLSSecurityScheme": {
-        "properties": {
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "type": {
-            "type": "string",
-            "const": "mutualTLS",
-            "title": "Type",
-            "default": "mutualTLS"
-          }
-        },
-        "type": "object",
-        "title": "MutualTLSSecurityScheme",
-        "description": "Defines a security scheme using mTLS authentication."
-      },
-      "OAuth2SecurityScheme-Input": {
-        "properties": {
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "flows": {
-            "$ref": "#/components/schemas/OAuthFlows"
-          },
-          "oauth2MetadataUrl": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Oauth2Metadataurl"
-          },
-          "type": {
-            "type": "string",
-            "const": "oauth2",
-            "title": "Type",
-            "default": "oauth2"
-          }
-        },
-        "type": "object",
-        "required": [
-          "flows"
-        ],
-        "title": "OAuth2SecurityScheme",
-        "description": "Defines a security scheme using OAuth 2.0."
-      },
-      "OAuth2SecurityScheme-Output": {
-        "properties": {
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "flows": {
-            "$ref": "#/components/schemas/OAuthFlows"
-          },
-          "oauth2MetadataUrl": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Oauth2Metadataurl"
-          },
-          "type": {
-            "type": "string",
-            "const": "oauth2",
-            "title": "Type",
-            "default": "oauth2"
-          }
-        },
-        "type": "object",
-        "required": [
-          "flows"
-        ],
-        "title": "OAuth2SecurityScheme",
-        "description": "Defines a security scheme using OAuth 2.0."
-      },
-      "OAuthFlows": {
-        "properties": {
-          "authorizationCode": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AuthorizationCodeOAuthFlow"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "clientCredentials": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ClientCredentialsOAuthFlow"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "implicit": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ImplicitOAuthFlow"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "password": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PasswordOAuthFlow"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "type": "object",
-        "title": "OAuthFlows",
-        "description": "Defines the configuration for the supported OAuth 2.0 flows."
-      },
-      "OpenIdConnectSecurityScheme": {
-        "properties": {
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "openIdConnectUrl": {
-            "type": "string",
-            "title": "Openidconnecturl"
-          },
-          "type": {
-            "type": "string",
-            "const": "openIdConnect",
-            "title": "Type",
-            "default": "openIdConnect"
-          }
-        },
-        "type": "object",
-        "required": [
-          "openIdConnectUrl"
-        ],
-        "title": "OpenIdConnectSecurityScheme",
-        "description": "Defines a security scheme using OpenID Connect."
       },
       "PaginatedResponse_AgentResponse_": {
         "properties": {
@@ -5091,53 +3991,6 @@
         ],
         "title": "PaginationMeta"
       },
-      "Part": {
-        "anyOf": [
-          {
-            "$ref": "#/components/schemas/TextPart"
-          },
-          {
-            "$ref": "#/components/schemas/FilePart"
-          },
-          {
-            "$ref": "#/components/schemas/DataPart"
-          }
-        ],
-        "title": "Part"
-      },
-      "PasswordOAuthFlow": {
-        "properties": {
-          "refreshUrl": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Refreshurl"
-          },
-          "scopes": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object",
-            "title": "Scopes"
-          },
-          "tokenUrl": {
-            "type": "string",
-            "title": "Tokenurl"
-          }
-        },
-        "type": "object",
-        "required": [
-          "scopes",
-          "tokenUrl"
-        ],
-        "title": "PasswordOAuthFlow",
-        "description": "Defines configuration details for the OAuth 2.0 Resource Owner Password flow."
-      },
       "RegisterHubRequest": {
         "properties": {
           "hub_id": {
@@ -5168,87 +4021,6 @@
           "user_id"
         ],
         "title": "RegisterHubResponse"
-      },
-      "Role": {
-        "type": "string",
-        "enum": [
-          "agent",
-          "user"
-        ],
-        "title": "Role",
-        "description": "Identifies the sender of the message. `user` for the client, `agent` for the service."
-      },
-      "SecurityScheme-Input": {
-        "anyOf": [
-          {
-            "$ref": "#/components/schemas/APIKeySecurityScheme"
-          },
-          {
-            "$ref": "#/components/schemas/HTTPAuthSecurityScheme"
-          },
-          {
-            "$ref": "#/components/schemas/OAuth2SecurityScheme-Input"
-          },
-          {
-            "$ref": "#/components/schemas/OpenIdConnectSecurityScheme"
-          },
-          {
-            "$ref": "#/components/schemas/MutualTLSSecurityScheme"
-          }
-        ],
-        "title": "SecurityScheme"
-      },
-      "SecurityScheme-Output": {
-        "anyOf": [
-          {
-            "$ref": "#/components/schemas/APIKeySecurityScheme"
-          },
-          {
-            "$ref": "#/components/schemas/HTTPAuthSecurityScheme"
-          },
-          {
-            "$ref": "#/components/schemas/OAuth2SecurityScheme-Output"
-          },
-          {
-            "$ref": "#/components/schemas/OpenIdConnectSecurityScheme"
-          },
-          {
-            "$ref": "#/components/schemas/MutualTLSSecurityScheme"
-          }
-        ],
-        "title": "SecurityScheme"
-      },
-      "TextPart": {
-        "properties": {
-          "kind": {
-            "type": "string",
-            "const": "text",
-            "title": "Kind",
-            "default": "text"
-          },
-          "metadata": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Metadata"
-          },
-          "text": {
-            "type": "string",
-            "title": "Text"
-          }
-        },
-        "type": "object",
-        "required": [
-          "text"
-        ],
-        "title": "TextPart",
-        "description": "Represents a text segment within a message or artifact."
       },
       "ValidationError": {
         "properties": {

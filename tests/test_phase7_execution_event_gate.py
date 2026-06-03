@@ -14,7 +14,10 @@ from execution.events import (
     emit_processing_status,
     run_event_notification_from_payload,
 )
-from execution.legacy_processing_status import SSEClientRequestIdResolver
+from execution.legacy_processing_status import (
+    LegacyProcessingStatusC3Adapter,
+    SSEClientRequestIdResolver,
+)
 
 NOW = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,6 +55,28 @@ async def test_app_shell_client_request_id_resolver_prefers_provided_id():
     db.resolve_client_request_id_for_message_id.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_legacy_processing_status_adapter_preserves_client_request_and_agents():
+    manager = AsyncMock()
+    agents = [{"agent_id": "agent-1", "agent_name": "Agent One"}]
+
+    await LegacyProcessingStatusC3Adapter(manager).emit_processing_status(
+        room_id="room-1",
+        status="processing",
+        message_id="msg-1",
+        client_request_id="cr-1",
+        agents=agents,
+    )
+
+    manager.send_processing_status.assert_awaited_once_with(
+        "room-1",
+        "processing",
+        "msg-1",
+        client_request_id="cr-1",
+        agents=agents,
+    )
+
+
 def test_execution_processing_status_call_sites_use_event_helper_or_compat_adapter():
     violations: list[str] = []
     for path in sorted((ROOT / "execution").rglob("*.py")):
@@ -67,7 +92,7 @@ def test_execution_processing_status_call_sites_use_event_helper_or_compat_adapt
                 violations.append(f"{rel}:{node.lineno}")
             if (
                 isinstance(node, ast.ImportFrom)
-                and node.module == "services.run_lifecycle_service"
+                and node.module == "execution.run_lifecycle_service"
             ):
                 violations.append(f"{rel}:{node.lineno} imports run_lifecycle_service")
     assert violations == []
@@ -501,7 +526,7 @@ def test_processing_status_delivery_translation_preserves_structured_details():
 
 
 def test_normalize_processing_status_accepts_string_and_enum_values():
-    from services.a2a_constants import SSEProcessingStatus
+    from common.a2a_constants import SSEProcessingStatus
 
     assert _normalize_processing_status("processing") == "processing"
     assert _normalize_processing_status(SSEProcessingStatus.COMPLETED) == "completed"

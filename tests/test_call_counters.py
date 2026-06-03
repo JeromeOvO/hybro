@@ -11,9 +11,9 @@ import pytest
 
 from hub_runtime_bridge.task_ownership import InMemoryHubTaskOwnershipStore
 from models.processing import ProcessingStatus
-from modules.agent_response_handler import AgentResponseHandler
-from modules.transports.relay import RelayTransport
-from services.a2a_service import A2AService
+from execution.dispatch.response_handler import AgentResponseHandler
+from execution.dispatch.transports.relay import RelayTransport
+from app_shell.a2a_runtime import A2AService
 
 # ===========================================================================
 # Helpers
@@ -52,7 +52,7 @@ def _make_relay_transport(
 
 def _make_dispatch_ctx(*, agent_id="agent-001", hub_id="hub-001"):
     """Build a minimal DispatchContext-like object for RelayTransport.dispatch."""
-    from modules.dispatch_middleware import DispatchContext
+    from execution.dispatch.dispatch_middleware import DispatchContext
 
     agent = MagicMock()
     agent.agent_id = agent_id
@@ -93,7 +93,7 @@ class TestA2AServiceRecordCall:
     @pytest.mark.asyncio
     async def test_records_success(self):
         svc = A2AService()
-        with patch("services.a2a_service.mongodb") as mock_db:
+        with patch("app_shell.a2a_runtime.mongodb") as mock_db:
             mock_db.increment_agent_call_count = AsyncMock()
             await svc._record_call("agent-001", success=True)
             mock_db.increment_agent_call_count.assert_awaited_once_with(
@@ -103,7 +103,7 @@ class TestA2AServiceRecordCall:
     @pytest.mark.asyncio
     async def test_records_failure(self):
         svc = A2AService()
-        with patch("services.a2a_service.mongodb") as mock_db:
+        with patch("app_shell.a2a_runtime.mongodb") as mock_db:
             mock_db.increment_agent_call_count = AsyncMock()
             await svc._record_call("agent-001", success=False)
             mock_db.increment_agent_call_count.assert_awaited_once_with(
@@ -113,7 +113,7 @@ class TestA2AServiceRecordCall:
     @pytest.mark.asyncio
     async def test_skips_none_agent_id(self):
         svc = A2AService()
-        with patch("services.a2a_service.mongodb") as mock_db:
+        with patch("app_shell.a2a_runtime.mongodb") as mock_db:
             mock_db.increment_agent_call_count = AsyncMock()
             await svc._record_call(None, success=True)
             mock_db.increment_agent_call_count.assert_not_awaited()
@@ -121,7 +121,7 @@ class TestA2AServiceRecordCall:
     @pytest.mark.asyncio
     async def test_skips_empty_agent_id(self):
         svc = A2AService()
-        with patch("services.a2a_service.mongodb") as mock_db:
+        with patch("app_shell.a2a_runtime.mongodb") as mock_db:
             mock_db.increment_agent_call_count = AsyncMock()
             await svc._record_call("", success=True)
             mock_db.increment_agent_call_count.assert_not_awaited()
@@ -129,7 +129,7 @@ class TestA2AServiceRecordCall:
     @pytest.mark.asyncio
     async def test_swallows_db_exception(self):
         svc = A2AService()
-        with patch("services.a2a_service.mongodb") as mock_db:
+        with patch("app_shell.a2a_runtime.mongodb") as mock_db:
             mock_db.increment_agent_call_count = AsyncMock(
                 side_effect=RuntimeError("DB down"),
             )

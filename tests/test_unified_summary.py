@@ -10,13 +10,13 @@ from models.room import CoordinatorAgentId
 @pytest.fixture
 def rmc():
     """Build a RoomMessageCenter with mocked dependencies."""
-    from modules.RoomMessageCenter import RoomMessageCenter
+    from execution.orchestration.room_message_center import RoomMessageCenter
 
     center = RoomMessageCenter.__new__(RoomMessageCenter)
     center.sse_manager = AsyncMock()
     center.database_service = AsyncMock()
     center.room_coordinator_service = AsyncMock()
-    center.room_services = AsyncMock()
+    center.room_runtime = AsyncMock()
     center.openai_service = AsyncMock()
     return center
 

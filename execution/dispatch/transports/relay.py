@@ -16,8 +16,8 @@ if TYPE_CHECKING:
     from execution.dispatch.dispatch_middleware import DispatchContext
     from execution.dispatch.response_handler import AgentResponseHandler
     from models.room import RoomAgentMessage
-    from services.database_service import DatabaseService
-    from services.sse_services import SSEManager
+    from app_shell.database_service import DatabaseService
+    from app_shell.delivery_runtime import SSEManager
 
 logger = get_logger(__name__)
 mongodb = None

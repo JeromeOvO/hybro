@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from services.agent_resolver_service import (
+from app_shell.agent_resolver_service import (
     AgentResolverService,
     ResolveResult,
     _HealthCache,
@@ -139,7 +139,7 @@ class TestResolve:
     @pytest.fixture(autouse=True)
     def _mock_capability_issues(self):
         with patch(
-            "services.agent_resolver_service.capability_issue_service"
+            "app_shell.agent_resolver_service.capability_issue_service"
         ) as mock_svc:
             mock_svc.get_excluded_agent_ids = AsyncMock(return_value=set())
             yield mock_svc
@@ -169,7 +169,7 @@ class TestResolve:
         resolver._sanitize_allowed_ids = AsyncMock(return_value=None)
         resolver.database_service.query_similar_agents = AsyncMock(return_value=[a1])
 
-        with patch("services.agent_resolver_service.settings") as mock_settings:
+        with patch("app_shell.agent_resolver_service.settings") as mock_settings:
             mock_settings.agent_health_check_enabled = False
             result = await resolver.resolve("test query")
 
@@ -184,7 +184,7 @@ class TestResolve:
             return_value=ResolveResult(agent=a1, tried_agents=["Alpha"])
         )
 
-        with patch("services.agent_resolver_service.settings") as mock_settings:
+        with patch("app_shell.agent_resolver_service.settings") as mock_settings:
             mock_settings.agent_health_check_enabled = True
             result = await resolver.resolve("test query")
 
@@ -202,7 +202,7 @@ class TestResolve:
         resolver._sanitize_allowed_ids = AsyncMock(return_value=None)
         resolver.database_service.query_similar_agents = AsyncMock(return_value=[a1])
 
-        with patch("services.agent_resolver_service.settings") as mock_settings:
+        with patch("app_shell.agent_resolver_service.settings") as mock_settings:
             mock_settings.agent_health_check_enabled = False
             result = await resolver.resolve("test query")
 

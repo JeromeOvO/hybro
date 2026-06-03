@@ -279,7 +279,7 @@ class TestAddSynthesisToHistory:
         """Synthesis text should be atomically pushed as a SUPERVISOR turn."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
 
-        from services.memory_service import RoomMemoryService
+        from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
@@ -304,7 +304,7 @@ class TestAddSynthesisToHistory:
         """Should return None when room document doesn't exist."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (False, False)
 
-        from services.memory_service import RoomMemoryService
+        from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
@@ -324,7 +324,7 @@ class TestAddSynthesisToHistory:
         """Should return None when DB persistence fails."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (False, True)
 
-        from services.memory_service import RoomMemoryService
+        from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
@@ -348,7 +348,7 @@ class TestSynthesisLLMEnrichment:
         """Long synthesis text should trigger background _enrich_turn_notes_background."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
 
-        from services.memory_service import RoomMemoryService
+        from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
@@ -378,7 +378,7 @@ class TestSynthesisLLMEnrichment:
         """Short synthesis text should NOT trigger background enrichment."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
 
-        from services.memory_service import RoomMemoryService
+        from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
@@ -423,7 +423,7 @@ class TestUpdateRoomSummary:
             "important_constraints": ["Must finish by Friday"],
         }
 
-        from services.memory_service import RoomMemoryService
+        from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
@@ -449,7 +449,7 @@ class TestUpdateRoomSummary:
             "LLM timeout"
         )
 
-        from services.memory_service import RoomMemoryService
+        from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
@@ -477,7 +477,7 @@ class TestUpdateRoomSummary:
             "important_constraints": [],
         }
 
-        from services.memory_service import RoomMemoryService
+        from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
@@ -511,7 +511,7 @@ class TestUpdateRoomSummary:
             "important_constraints": [],
         }
 
-        from services.memory_service import RoomMemoryService
+        from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
@@ -546,7 +546,7 @@ class TestUpdateRoomSummary:
             "important_constraints": [],
         }
 
-        from services.memory_service import RoomMemoryService
+        from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
         service.database_service = mock_db_service
@@ -574,19 +574,19 @@ class TestPromptCacheOptimization:
 
     def test_conversation_context_in_system_prompt(self):
         """conversation_context placeholder should be in the system prompt template."""
-        from services.room_supervisor_service import SUPERVISOR_SYSTEM_PROMPT
+        from execution.orchestration.room_supervisor_service import SUPERVISOR_SYSTEM_PROMPT
 
         assert "{conversation_context}" in SUPERVISOR_SYSTEM_PROMPT
 
     def test_conversation_context_not_in_user_prompt(self):
         """conversation_context placeholder should NOT be in the user prompt template."""
-        from services.room_supervisor_service import SUPERVISOR_USER_PROMPT
+        from execution.orchestration.room_supervisor_service import SUPERVISOR_USER_PROMPT
 
         assert "{conversation_context}" not in SUPERVISOR_USER_PROMPT
 
     def test_user_prompt_has_only_dynamic_fields(self):
         """User prompt should only contain fields that change per iteration."""
-        from services.room_supervisor_service import SUPERVISOR_USER_PROMPT
+        from execution.orchestration.room_supervisor_service import SUPERVISOR_USER_PROMPT
 
         assert "{message_text}" in SUPERVISOR_USER_PROMPT
         assert "{trajectory_summary}" in SUPERVISOR_USER_PROMPT
@@ -601,7 +601,7 @@ class TestPromptCacheOptimization:
     async def test_decide_next_includes_quoted_text_in_user_prompt(self):
         """decide_next() should include verbatim quoted text in the user prompt."""
         from models.supervisor import AgentProfile, RoomConfig, SupervisorTrajectory
-        from services.room_supervisor_service import RoomSupervisorService
+        from execution.orchestration.room_supervisor_service import RoomSupervisorService
 
         mock_openai = AsyncMock()
         service = RoomSupervisorService(openai_service=mock_openai)
@@ -649,7 +649,7 @@ class TestPromptCacheOptimization:
             RoomConfig,
             SupervisorTrajectory,
         )
-        from services.room_supervisor_service import RoomSupervisorService
+        from execution.orchestration.room_supervisor_service import RoomSupervisorService
 
         mock_openai = AsyncMock()
         service = RoomSupervisorService(openai_service=mock_openai)
@@ -699,7 +699,7 @@ class TestCompactionTrigger:
     )
     async def test_compaction_triggered_on_terminal_status(self, status):
         """Compaction should be awaited inline for all terminal statuses (§6.9)."""
-        from modules.RoomMessageCenter import RoomMessageCenter
+        from execution.orchestration.room_message_center import RoomMessageCenter
 
         rmc = RoomMessageCenter.__new__(RoomMessageCenter)
         rmc.database_service = AsyncMock()
@@ -772,7 +772,7 @@ class TestMaxContextCharsEnforcement:
             mock_settings.context_room_pct = 0.2
             mock_settings.context_history_pct = 0.6
             mock_settings.context_task_pct = 0.2
-            from services.context_assembly_service import ContextAssemblyService
+            from app_shell.context_assembly_service import ContextAssemblyService
 
             yield bind_assembly_facade(ContextAssemblyService())
 
@@ -842,7 +842,7 @@ class TestParseV2ActionCaseInsensitive:
 
     @pytest.fixture
     def service(self):
-        from services.room_supervisor_service import RoomSupervisorService
+        from execution.orchestration.room_supervisor_service import RoomSupervisorService
         mock_openai = MagicMock()
         return RoomSupervisorService(openai_service=mock_openai)
 
@@ -951,7 +951,7 @@ class TestParseV2ActionClarifySanitization:
 
     @pytest.fixture
     def service(self):
-        from services.room_supervisor_service import RoomSupervisorService
+        from execution.orchestration.room_supervisor_service import RoomSupervisorService
         mock_openai = MagicMock()
         return RoomSupervisorService(openai_service=mock_openai)
 
@@ -1098,18 +1098,18 @@ class TestHandleV2RunResultUnifiedSummary:
     def rmc(self):
         """Build a RoomMessageCenter with key collaborators mocked."""
         with (
-            patch("modules.RoomMessageCenter.db_service") as mock_db,
-            patch("modules.RoomMessageCenter.sse_manager") as mock_sse,
-            patch("modules.RoomMessageCenter.room_coordinator_service"),
-            patch("modules.RoomMessageCenter.room_services"),
-            patch("modules.RoomMessageCenter.notification_service"),
-            patch("modules.RoomMessageCenter.a2a_service"),
-            patch("modules.RoomMessageCenter.task_service"),
-            patch("modules.RoomMessageCenter.agent_resolver_service"),
-            patch("modules.RoomMessageCenter.room_memory_service"),
-            patch("modules.RoomMessageCenter.room_supervisor_service"),
-            patch("modules.RoomMessageCenter.rate_limit_service"),
-            patch("modules.RoomMessageCenter.debate_service"),
+            patch("execution.orchestration.room_message_center.db_service") as mock_db,
+            patch("execution.orchestration.room_message_center.sse_manager") as mock_sse,
+            patch("execution.orchestration.room_message_center.room_coordinator_service"),
+            patch("execution.orchestration.room_message_center.room_services"),
+            patch("execution.orchestration.room_message_center.notification_service"),
+            patch("execution.orchestration.room_message_center.a2a_service"),
+            patch("execution.orchestration.room_message_center.task_service"),
+            patch("execution.orchestration.room_message_center.agent_resolver_service"),
+            patch("execution.orchestration.room_message_center.room_memory_service"),
+            patch("execution.orchestration.room_message_center.room_supervisor_service"),
+            patch("execution.orchestration.room_message_center.rate_limit_service"),
+            patch("execution.orchestration.room_message_center.debate_service"),
         ):
             mock_db.get_room_user_message_by_message_id = AsyncMock(return_value=None)
             mock_db.update_room_user_message_by_message_id = AsyncMock()
@@ -1283,7 +1283,7 @@ class TestParseV2ActionMultiQuestion:
 
     @pytest.fixture
     def service(self):
-        from services.room_supervisor_service import RoomSupervisorService
+        from execution.orchestration.room_supervisor_service import RoomSupervisorService
         return RoomSupervisorService(
             openai_service=MagicMock(),
             database_service=MagicMock(),

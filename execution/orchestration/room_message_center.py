@@ -113,7 +113,7 @@ class RoomMessageCenter:
         cloud_health_cache_ttl: float = 30.0,
         cloud_health_check_timeout: float = 5.0,
     ):
-        self.room_services = room_services
+        self.room_runtime = room_services
         self.database_service = database_service
         self.sse_manager = sse_manager
         self.room_coordinator_service = room_coordinator_service
@@ -131,7 +131,7 @@ class RoomMessageCenter:
             else orphan_threshold_minutes
         )
         self.debate_rounds = debate_rounds
-        self.tsm = TaskStateManager(self.room_services, notification_service)
+        self.tsm = TaskStateManager(self.room_runtime, notification_service)
         self.agent_dispatcher = AgentDispatcher(
             agent_resolver=agent_resolver_service,
             database_service=self.database_service,
@@ -164,7 +164,7 @@ class RoomMessageCenter:
         # lazily on first use and builds the outbound transport in Execution.
         self.agent_message_processor = AgentMessageProcessor(
             sse_manager=self.sse_manager,
-            room_services=self.room_services,
+            room_services=self.room_runtime,
             database_service=self.database_service,
             transports={"direct": self.direct_transport},
             health_service=agent_health_service,
@@ -175,7 +175,7 @@ class RoomMessageCenter:
             tsm=self.tsm,
             sse_manager=self.sse_manager,
             a2a_service=a2a_service,
-            room_services=self.room_services,
+            room_services=self.room_runtime,
             room_memory_service=room_memory_service,
             database_service=self.database_service,
             debate_service=debate_service,
@@ -187,7 +187,7 @@ class RoomMessageCenter:
         )
         self.supervisor_executor = SupervisorExecutor(
             supervisor_service=room_supervisor_service,
-            room_services=self.room_services,
+            room_services=self.room_runtime,
             tsm=self.tsm,
             sse_manager=self.sse_manager,
             database_service=self.database_service,
@@ -678,7 +678,7 @@ class RoomMessageCenter:
         # agent messages — it generates them dynamically — so this query is
         # only reached for non-supervisor messages.
         query_response = (
-            await self.room_services.inquiry_agent_messages_by_related_message_id(
+            await self.room_runtime.inquiry_agent_messages_by_related_message_id(
                 RoomCenterAgentMessageRequest(related_message_id=room_user_message_id)
             )
         )

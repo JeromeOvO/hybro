@@ -19,14 +19,21 @@ class LegacyProcessingStatusC3Adapter:
         client_request_id: str | None = None,
         agents: list[dict] | None = None,
     ) -> None:
-        status_value = getattr(status, "value", status)
+        kwargs: dict[str, Any] = {}
+        if details is not None:
+            kwargs["details"] = details
+            kwargs["client_request_id"] = client_request_id
+            kwargs["agents"] = agents
+        else:
+            if client_request_id is not None:
+                kwargs["client_request_id"] = client_request_id
+            if agents is not None:
+                kwargs["agents"] = agents
         await self._sse_manager.send_processing_status(
             room_id,
-            status_value,
+            status,
             message_id,
-            details=details,
-            client_request_id=client_request_id,
-            agents=agents,
+            **kwargs,
         )
 
 

@@ -19,7 +19,6 @@ from models.quote import QuotedSnippet
 from models.room import Room, RoomAgentMessage, RoomUserMessage
 from models.run import NON_TERMINAL_RUN_STATE_VALUES
 from models.supervisor import TrajectoryStatus
-from models.task import BaseTask, MetaTask, TaskSession
 
 logger = logging.getLogger(__name__)
 
@@ -188,33 +187,6 @@ class MongoDB:
                 "MongoDB client is not connected. Please call connect() first."
             )
         return self.db.agents
-
-    @property
-    def base_tasks_collection(self):
-        """Get base tasks collection"""
-        if not self.client:
-            raise ConnectionError(
-                "MongoDB client is not connected. Please call connect() first."
-            )
-        return self.db.base_tasks
-
-    @property
-    def meta_tasks_collection(self):
-        """Get meta tasks collection"""
-        if not self.client:
-            raise ConnectionError(
-                "MongoDB client is not connected. Please call connect() first."
-            )
-        return self.db.meta_tasks
-
-    @property
-    def task_sessions_collection(self):
-        """Get task sessions collection"""
-        if not self.client:
-            raise ConnectionError(
-                "MongoDB client is not connected. Please call connect() first."
-            )
-        return self.db.task_sessions
 
     @property
     def chat_contexts_collection(self):
@@ -674,152 +646,6 @@ class MongoDB:
             {"$set": agent.db_dump(exclude_unset=True)},
         )
 
-        return result.modified_count > 0
-
-    # task management
-    async def add_base_task(self, base_task: BaseTask) -> str:
-        """
-        Add a base task to the database
-        """
-        result = await self.base_tasks_collection.insert_one(
-            base_task.model_dump(mode="json")
-        )
-        return str(result.inserted_id)
-
-    async def add_meta_task(self, meta_task: MetaTask) -> str:
-        """
-        Add a meta task to the database
-        """
-        result = await self.meta_tasks_collection.insert_one(
-            meta_task.model_dump(mode="json")
-        )
-        return str(result.inserted_id)
-
-    async def add_task_session(self, task_session: TaskSession) -> str:
-        """
-        Add a task session to the database
-        """
-        result = await self.task_sessions_collection.insert_one(
-            task_session.model_dump(mode="json")
-        )
-        return str(result.inserted_id)
-
-    async def delete_base_task_by_task_id(self, task_id: str) -> bool:
-        """
-        Delete a base task by task_id
-        """
-        result = await self.base_tasks_collection.delete_one({"task_id": task_id})
-        return result.deleted_count > 0
-
-    async def delete_meta_task_by_task_id(self, task_id: str) -> bool:
-        """
-        Delete a meta task by task_id
-        """
-        result = await self.meta_tasks_collection.delete_one({"task_id": task_id})
-        return result.deleted_count > 0
-
-    async def delete_task_session_by_session_id(self, session_id: str) -> bool:
-        """
-        Delete a task session by session_id
-        """
-        result = await self.task_sessions_collection.delete_one(
-            {"session_id": session_id}
-        )
-        return result.deleted_count > 0
-
-    async def get_base_task_by_task_id(self, task_id: str) -> BaseTask | None:
-        """
-        Get a base task by task_id
-        """
-        result = await self.base_tasks_collection.find_one({"task_id": task_id})
-        return BaseTask(**result) if result else None
-
-    async def get_meta_task_by_task_id(self, task_id: str) -> MetaTask | None:
-        """
-        Get a meta task by task_id
-        """
-        result = await self.meta_tasks_collection.find_one({"task_id": task_id})
-        return MetaTask(**result) if result else None
-
-    async def get_task_session_by_session_id(
-        self, session_id: str
-    ) -> TaskSession | None:
-        """
-        Get a task session by session_id
-        """
-        result = await self.task_sessions_collection.find_one(
-            {"session_id": session_id}
-        )
-        return TaskSession(**result) if result else None
-
-    async def get_task_sessions_by_user_name(self, user_name: str) -> list[TaskSession]:
-        """
-        Get all task sessions by user_name
-        """
-        cursor = self.task_sessions_collection.find({"user_name": user_name})
-        results = await cursor.to_list(length=None)
-        return [TaskSession(**task_session) for task_session in results]
-
-    async def get_all_task_sessions(self) -> list[TaskSession]:
-        """
-        Get all task sessions
-        """
-        cursor = self.task_sessions_collection.find()
-        results = await cursor.to_list(length=None)
-        return [TaskSession(**task_session) for task_session in results]
-
-    async def get_base_tasks_by_session_id(self, session_id: str) -> list[BaseTask]:
-        """
-        Get all base tasks by session_id
-        """
-        cursor = self.base_tasks_collection.find({"session_id": session_id})
-        results = await cursor.to_list(length=None)
-        return [BaseTask(**base_task) for base_task in results]
-
-    async def get_meta_tasks_by_parent_task_id(
-        self, parent_task_id: str
-    ) -> list[MetaTask]:
-        """
-        Get all meta tasks by parent_task_id
-        """
-        cursor = self.meta_tasks_collection.find({"parent_task_id": parent_task_id})
-        results = await cursor.to_list(length=None)
-        return [MetaTask(**meta_task) for meta_task in results]
-
-    async def update_base_task_by_task_id(
-        self, task_id: str, base_task: BaseTask
-    ) -> bool:
-        """
-        Update a base task by task_id
-        """
-        result = await self.base_tasks_collection.update_one(
-            {"task_id": task_id},
-            {"$set": base_task.model_dump(exclude_unset=True, mode="json")},
-        )
-        return result.modified_count > 0
-
-    async def update_meta_task_by_task_id(
-        self, task_id: str, meta_task: MetaTask
-    ) -> bool:
-        """
-        Update a meta task by task_id
-        """
-        result = await self.meta_tasks_collection.update_one(
-            {"task_id": task_id},
-            {"$set": meta_task.model_dump(exclude_unset=True, mode="json")},
-        )
-        return result.modified_count > 0
-
-    async def update_task_session_by_session_id(
-        self, session_id: str, task_session: TaskSession
-    ) -> bool:
-        """
-        Update a task session by session_id
-        """
-        result = await self.task_sessions_collection.update_one(
-            {"session_id": session_id},
-            {"$set": task_session.model_dump(exclude_unset=True, mode="json")},
-        )
         return result.modified_count > 0
 
     # chat context management

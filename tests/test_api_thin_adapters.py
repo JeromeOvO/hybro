@@ -6,7 +6,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import BackgroundTasks, Request
 from fastapi.routing import APIRoute
 
 FORBIDDEN_API_IMPORT_PREFIXES = (
@@ -430,10 +429,7 @@ def test_streaming_routes_record_sse_media_type_and_headers():
 
 def test_phase9_route_inventory_owners_resolve_to_real_symbols():
     routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
-    symbolic_owners = {
-        "fastapi.documentation",
-        "legacy_workflow_decommission_manifest",
-    }
+    symbolic_owners = {"fastapi.documentation"}
     missing: list[str] = []
 
     for route in routes:
@@ -470,10 +466,7 @@ def test_phase9_route_inventory_does_not_use_platform_implementation_owners():
 
 def test_phase9_route_inventory_owners_are_protocol_symbols():
     routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
-    symbolic_owners = {
-        "fastapi.documentation",
-        "legacy_workflow_decommission_manifest",
-    }
+    symbolic_owners = {"fastapi.documentation"}
     violations: list[str] = []
 
     for route in routes:
@@ -648,145 +641,9 @@ def test_viewset_route_adapter_does_not_manage_repository_construction_or_sessio
     )
 
 
-def test_legacy_workflow_routes_keep_public_shape_without_execution_dependencies():
-    from main import app
-
-    recorded_routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
-    legacy_keys = {
-        (
-            route["path"],
-            tuple(route["methods"]),
-            route["name"],
-        )
-        for route in recorded_routes
-        if route["owning_protocol"] == "legacy_workflow_decommission_manifest"
-    }
-
-    violations: list[str] = []
-    for route in app.routes:
-        if not isinstance(route, APIRoute):
-            continue
-        methods = tuple(
-            sorted(method for method in route.methods if method not in {"HEAD", "OPTIONS"})
-        )
-        key = (route.path, methods, route.name)
-        if key not in legacy_keys:
-            continue
-        query_params = [param.name for param in route.dependant.query_params]
-        body_params = [param.name for param in route.dependant.body_params]
-        dependencies = [
-            getattr(dependency.call, "__name__", repr(dependency.call))
-            for dependency in route.dependant.dependencies
-        ]
-        duplicate_dependencies = sorted(
-            name for name in set(dependencies) if dependencies.count(name) > 1
-        )
-        expected_body = (
-            ["req"]
-            if route.path.startswith("/api/v1/orchestrationCenter/")
-            and route.name != "process_room_user_message"
-            else []
-        )
-        if query_params or body_params != expected_body or duplicate_dependencies:
-            violations.append(
-                f"{route.path}: query={query_params} body={body_params} "
-                f"duplicate_deps={duplicate_dependencies}"
-            )
-
-    assert not violations, "Legacy 410 routes leak public params:\n" + "\n".join(
-        violations
-    )
-
-
-def test_legacy_workflow_post_routes_keep_orchestration_request_body_schema():
-    from main import app
-
-    openapi = app.openapi()
-    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
-    violations: list[str] = []
-    for route in routes:
-        if route["owning_protocol"] != "legacy_workflow_decommission_manifest":
-            continue
-        if route["module"] != "api_gateway.routes.orchestration_routes":
-            continue
-        if route["name"] == "process_room_user_message":
-            continue
-        operation = openapi["paths"][route["path"]]["post"]
-        request_body = operation.get("requestBody", {})
-        schema = (
-            request_body.get("content", {})
-            .get("application/json", {})
-            .get("schema", {})
-        )
-        if "OrchestrationRequest" not in json.dumps(schema):
-            violations.append(route["path"])
-
-    assert not violations, "Legacy orchestration routes lost body schema:\n" + "\n".join(
-        violations
-    )
-
-
-def test_legacy_workflow_routes_advertise_410_in_openapi():
-    from main import app
-
-    openapi = app.openapi()
-    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
-    legacy_routes = [
-        route
-        for route in routes
-        if route["owning_protocol"] == "legacy_workflow_decommission_manifest"
-    ]
-    violations: list[str] = []
-
-    for route in legacy_routes:
-        for method in route["methods"]:
-            responses = openapi["paths"][route["path"]][method.lower()]["responses"]
-            if "410" not in responses or set(responses) == {"200"}:
-                violations.append(f"{method} {route['path']}: {sorted(responses)}")
-
-    assert not violations, "Legacy routes do not advertise 410:\n" + "\n".join(
-        violations
-    )
-
-
-def test_legacy_workflow_routes_keep_only_expected_runtime_injection_params():
-    from main import app
-
-    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
-    legacy_names = {
-        route["name"]
-        for route in routes
-        if route["owning_protocol"] == "legacy_workflow_decommission_manifest"
-    }
-    forbidden_annotations = {Request, BackgroundTasks}
-    violations: list[str] = []
-
-    for route in app.routes:
-        if not isinstance(route, APIRoute) or route.name not in legacy_names:
-            continue
-        for name, param in inspect.signature(route.endpoint).parameters.items():
-            if name in route.path_format:
-                continue
-            if route.name == "process_room_user_message" and name in {
-                "request",
-                "background_tasks",
-            }:
-                continue
-            if name == "req":
-                continue
-            if param.annotation in forbidden_annotations:
-                violations.append(f"{route.path}: {name}")
-
-    assert not violations, "Legacy 410 routes keep unexpected runtime params:\n" + "\n".join(
-        violations
-    )
-
-
 def test_legacy_410_routes_are_not_bound_to_legacy_execution_centers_at_startup():
     source = Path("main.py").read_text()
     forbidden = (
-        "from modules.TaskCenter import TaskCenter",
-        "from modules.WorkflowCenter import workflow_center",
         "task.bind_task_dependencies(",
         "orchestration_center.bind_orchestration_dependencies(",
     )
@@ -1144,10 +1001,7 @@ def test_file_upload_route_uses_room_ownership_reader_protocol():
 def test_route_inventory_protocols_do_not_expose_broad_or_wildcard_shapes():
     from typing import Any
 
-    symbolic_owners = {
-        "fastapi.documentation",
-        "legacy_workflow_decommission_manifest",
-    }
+    symbolic_owners = {"fastapi.documentation"}
     route_symbols = set()
     for route in json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text()):
         route_symbols.add(route["owning_protocol"])
@@ -1251,7 +1105,7 @@ def test_health_route_delegates_to_health_check_protocol():
 
     assert "get_health_check" in source
     assert ".check(" in source
-    assert "services." not in source
+    assert "app_shell." not in source
     assert "settings." not in source
 
 

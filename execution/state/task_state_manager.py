@@ -6,7 +6,7 @@ developer must *actively opt out* — inverting the old failure mode where
 "forgot to persist" was the common bug.
 
 Terminal/interactive **notifications** are handled by
-``services.task_notification_service.notify_task_update`` (separate concern).
+``execution.dispatch.task_notifications.notify_task_update`` (separate concern).
 Non-terminal streaming progress notifications still use ``notify_task``.
 """
 
@@ -24,8 +24,8 @@ from models.request import RoomCenterAgentMessageRequest
 from models.room import RoomAgentMessage
 
 if TYPE_CHECKING:
-    from services.notification_service import NotificationService
-    from services.room_services import RoomServices
+    from app_shell.notification_service import NotificationService
+    from app_shell.room_runtime import RoomServices
 
 logger = get_logger(__name__)
 
@@ -75,7 +75,7 @@ class TaskStateManager:
         room_services: RoomServices,
         notification_service: NotificationService,
     ) -> None:
-        self.room_services = room_services
+        self.room_runtime = room_services
         self.notification_service = notification_service
 
     # ------------------------------------------------------------------
@@ -84,7 +84,7 @@ class TaskStateManager:
 
     async def persist_message(self, message: RoomAgentMessage) -> bool:
         """Persist a RoomAgentMessage to the database. Returns True on success."""
-        resp = await self.room_services.update_agent_message_by_message_id(
+        resp = await self.room_runtime.update_agent_message_by_message_id(
             RoomCenterAgentMessageRequest(
                 message_id=message.message_id, message=message
             )
@@ -130,7 +130,7 @@ class TaskStateManager:
         (e.g., ``persist=False`` for batch queue cleanup).
 
         Terminal/interactive notifications are the caller's responsibility
-        via ``services.task_notification_service.notify_task_update``.
+        via ``execution.dispatch.task_notifications.notify_task_update``.
 
         The terminal-state guard prevents overwriting a ``completed``,
         ``failed``, ``canceled``, or ``rejected`` status — making double-

@@ -19,9 +19,9 @@ from models.response import (
     ScopeResolutionError,
 )
 from models.room import Room
-from services.room_services import RoomServices
+from app_shell.room_runtime import RoomServices
 
-HITL_PATCH = "services.room_services.hitl_service"
+HITL_PATCH = "app_shell.room_runtime.hitl_service"
 
 
 @pytest.fixture
@@ -222,7 +222,7 @@ class TestPrePersistScopeValidation:
 
         mock_hitl = MagicMock()
         mock_hitl.get_pending_requests = AsyncMock(return_value=[])
-        with patch("services.hitl_service.hitl_service", mock_hitl):
+        with patch("app_shell.hitl_service.hitl_service", mock_hitl):
             result = await room_center.send_message_to_room(
                 request, target_group="room_team", mentioned_agent_ids=["ghost-agent"],
             )
@@ -250,7 +250,7 @@ class TestPrePersistScopeValidation:
 
         mock_hitl = MagicMock()
         mock_hitl.get_pending_requests = AsyncMock(return_value=[])
-        with patch("services.hitl_service.hitl_service", mock_hitl):
+        with patch("app_shell.hitl_service.hitl_service", mock_hitl):
             result = await room_center.send_message_to_room(
                 request, target_group="room_team", mentioned_agent_ids=None,
             )
@@ -279,7 +279,7 @@ class TestPrePersistScopeValidation:
 
         mock_hitl = MagicMock()
         mock_hitl.get_pending_requests = AsyncMock(return_value=[])
-        with patch("services.hitl_service.hitl_service", mock_hitl):
+        with patch("app_shell.hitl_service.hitl_service", mock_hitl):
             result = await room_center.send_message_to_room(
                 request, target_group="nonexistent-group", mentioned_agent_ids=None,
             )
@@ -441,7 +441,7 @@ class TestAllAgentsPostPersistMessageId:
 
         mock_hitl = MagicMock()
         mock_hitl.get_pending_requests = AsyncMock(return_value=[])
-        with patch("services.hitl_service.hitl_service", mock_hitl):
+        with patch("app_shell.hitl_service.hitl_service", mock_hitl):
             result = await room_center.send_message_to_room(
                 request, target_group="all_agents", mentioned_agent_ids=None,
             )
@@ -507,7 +507,7 @@ class TestClientRequestIdPropagation:
 
         mock_hitl = MagicMock()
         mock_hitl.get_pending_requests = AsyncMock(return_value=[])
-        with patch("services.hitl_service.hitl_service", mock_hitl):
+        with patch("app_shell.hitl_service.hitl_service", mock_hitl):
             await room_center.send_message_to_room(
                 request, target_group="all_agents", mentioned_agent_ids=None,
             )

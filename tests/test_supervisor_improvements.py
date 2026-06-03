@@ -21,8 +21,8 @@ from models.supervisor import (
     TrajectoryEntry,
     StepResult,
 )
-from modules.SupervisorExecutor import SupervisorExecutor
-from services.room_supervisor_service import RoomSupervisorService
+from execution.orchestration.supervisor_executor import SupervisorExecutor
+from execution.orchestration.room_supervisor_service import RoomSupervisorService
 
 # =============================================================================
 # Part 1a: Trajectory response preview (3000-char cap)
@@ -107,13 +107,13 @@ class TestQualityEvaluationPrompt:
     """Verify the system prompt includes quality evaluation instructions."""
 
     def test_system_prompt_contains_quality_evaluation_block(self):
-        from services.room_supervisor_service import SUPERVISOR_SYSTEM_PROMPT
+        from execution.orchestration.room_supervisor_service import SUPERVISOR_SYSTEM_PROMPT
 
         assert "QUALITY EVALUATION" in SUPERVISOR_SYSTEM_PROMPT
         assert "unsatisfactory" in SUPERVISOR_SYSTEM_PROMPT
 
     def test_system_prompt_mentions_re_delegation_criteria(self):
-        from services.room_supervisor_service import SUPERVISOR_SYSTEM_PROMPT
+        from execution.orchestration.room_supervisor_service import SUPERVISOR_SYSTEM_PROMPT
 
         assert "couldn't\n  find anything" in SUPERVISOR_SYSTEM_PROMPT or \
                "couldn't find anything" in SUPERVISOR_SYSTEM_PROMPT or \
@@ -130,7 +130,7 @@ def _make_executor() -> SupervisorExecutor:
     se = object.__new__(SupervisorExecutor)
     se.database_service = AsyncMock()
     se.sse_manager = AsyncMock()
-    se.room_services = MagicMock()
+    se.room_runtime = MagicMock()
     se.supervisor_service = AsyncMock()
     se.tsm = MagicMock()
     se.agent_dispatcher = MagicMock()
