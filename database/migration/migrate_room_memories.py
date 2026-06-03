@@ -39,6 +39,7 @@ import argparse
 import asyncio
 import os
 import re
+from copy import deepcopy
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -155,6 +156,7 @@ def migrate_turn(turn: dict[str, Any]) -> dict[str, Any]:
 
     Adds new fields while preserving existing ones.
     """
+    turn = deepcopy(turn)
     if turn.get("turn_id"):
         return turn
 
@@ -174,6 +176,13 @@ def migrate_turn(turn: dict[str, Any]) -> dict[str, Any]:
     return turn
 
 
+def _history_has_valid_turn_ids(history: list[dict[str, Any]]) -> bool:
+    return bool(history) and all(
+        isinstance(turn, dict) and bool(turn.get("turn_id"))
+        for turn in history
+    )
+
+
 def migrate_room_memory(doc: dict[str, Any]) -> dict[str, Any]:
     """
     Migrate a RoomMemory document to the new schema.
@@ -184,13 +193,24 @@ def migrate_room_memory(doc: dict[str, Any]) -> dict[str, Any]:
 
     memory_content = doc.get("memory_content", {})
     existing_history = memory_content.get("conversation_history", [])
+    direct_history = doc.get("conversation_history") or []
 
-    migrated_history = [migrate_turn(turn) for turn in existing_history]
+    if (
+        _history_has_valid_turn_ids(direct_history)
+        and len(direct_history) == len(existing_history)
+    ):
+        migrated_history = deepcopy(direct_history)
+    else:
+        migrated_history = [
+            migrate_turn(turn)
+            for turn in existing_history
+            if isinstance(turn, dict)
+        ]
 
     if migrated_history != existing_history:
         updates["memory_content.conversation_history"] = migrated_history
 
-    if not doc.get("conversation_history"):
+    if not direct_history:
         updates["conversation_history"] = migrated_history
 
     if not doc.get("room_summary"):
