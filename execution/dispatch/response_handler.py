@@ -113,6 +113,50 @@ class AgentResponseHandler:
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
         self._processing_status_emitter = processing_status_emitter
 
+    async def _resolve_client_request_id(self, e: AgentEvent) -> str | None:
+        explicit = e.client_request_id
+        if isinstance(explicit, str) and explicit.strip():
+            return explicit.strip()
+
+        message_id = e.message_id
+        if not isinstance(message_id, str) or not message_id.strip():
+            return None
+
+        resolve_from_message_id = getattr(
+            self._db, "resolve_client_request_id_for_message_id", None
+        )
+        if callable(resolve_from_message_id):
+            maybe_resolved = resolve_from_message_id(message_id)
+            resolved = (
+                await maybe_resolved if inspect.isawaitable(maybe_resolved) else maybe_resolved
+            )
+            if isinstance(resolved, str) and resolved.strip():
+                return resolved.strip()
+
+        get_agent_message = getattr(self._db, "get_room_agent_message_by_message_id", None)
+        resolve_from_agent_message = getattr(
+            self._db, "resolve_client_request_id_for_agent_message", None
+        )
+        if callable(get_agent_message) and callable(resolve_from_agent_message):
+            maybe_room_agent_message = get_agent_message(message_id)
+            room_agent_message = (
+                await maybe_room_agent_message
+                if inspect.isawaitable(maybe_room_agent_message)
+                else maybe_room_agent_message
+            )
+            if room_agent_message is None:
+                return None
+            maybe_resolved = resolve_from_agent_message(room_agent_message)
+            resolved = (
+                await maybe_resolved
+                if inspect.isawaitable(maybe_resolved)
+                else maybe_resolved
+            )
+            if isinstance(resolved, str) and resolved.strip():
+                return resolved.strip()
+
+        return None
+
     async def _terminate_slot(
         self,
         e: AgentEvent,
@@ -437,9 +481,10 @@ class AgentResponseHandler:
     # --- Non-terminal events ---
 
     async def _on_submitted(self, e: AgentEvent) -> None:
+        client_request_id = await self._resolve_client_request_id(e)
         kw: dict = {}
-        if e.client_request_id:
-            kw["client_request_id"] = e.client_request_id
+        if client_request_id:
+            kw["client_request_id"] = client_request_id
         await self._sse.send_task_submitted(
             room_id=e.room_id,
             message_id=e.message_id,
@@ -456,9 +501,10 @@ class AgentResponseHandler:
 
     async def _on_status(self, e: AgentEvent) -> None:
         if e.text:
+            client_request_id = await self._resolve_client_request_id(e)
             kw: dict = {}
-            if e.client_request_id:
-                kw["client_request_id"] = e.client_request_id
+            if client_request_id:
+                kw["client_request_id"] = client_request_id
             await self._sse.send_task_update(
                 room_id=e.room_id,
                 message_id=e.message_id,
@@ -526,7 +572,7 @@ class AgentResponseHandler:
             message_id=e.message_id,
             lifecycle_message_id=e.lifecycle_message_id,
             record_lifecycle=True,
-            client_request_id=e.client_request_id,
+            client_request_id=await self._resolve_client_request_id(e),
             details=e.details,
         )
 

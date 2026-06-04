@@ -912,6 +912,30 @@ class TestEmitHitlEvent:
         assert event.client_request_id == "cr-from-user-row"
         mock_hitl_db_service.resolve_client_request_id_for_message_id.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_emitted_hitl_events_include_related_message_id(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
+    ):
+        """HITL events should include related_message_id for frontend resume correlation."""
+        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._sse_manager = mock_hitl_sse_manager
+
+        await hitl_service._emit_hitl_event(
+            room_id=sample_hitl_request.room_id,
+            event_type=HITLEventType.INPUT_REQUESTED,
+            request=sample_hitl_request,
+        )
+        request_event = mock_hitl_sse_manager.emit.await_args.args[0]
+        assert request_event.related_message_id == sample_hitl_request.user_message_id
+
+        await hitl_service._emit_hitl_event(
+            room_id=sample_hitl_request.room_id,
+            event_type=HITLEventType.INPUT_RECEIVED,
+            request=sample_hitl_request,
+        )
+        response_event = mock_hitl_sse_manager.emit.await_args.args[0]
+        assert response_event.related_message_id == sample_hitl_request.user_message_id
+
 
 class TestRecoverStaleProcessing:
     @pytest.mark.asyncio

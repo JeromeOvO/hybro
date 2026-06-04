@@ -918,6 +918,7 @@ class HITLService:
                 or request.user_message_id
             ),
             "source": request.source,
+            "related_message_id": request.user_message_id,
         }
         get_user_message = getattr(
             self.database_service, "get_room_user_message_by_message_id", None
@@ -977,6 +978,7 @@ class HITLService:
                     group_id=request.group_id,
                     group_total=request.group_total,
                     group_index=request.group_index,
+                    related_message_id=data["related_message_id"],
                     client_request_id=data.get("client_request_id"),
                 )
             )
@@ -995,6 +997,7 @@ class HITLService:
                 message_id=data["message_id"],
                 source=source,
                 status=status_map.get(event_type, request_status),
+                related_message_id=data["related_message_id"],
                 error_message=error,
                 client_request_id=data.get("client_request_id"),
             )

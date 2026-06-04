@@ -142,6 +142,7 @@ async def emit_processing_status(
             room_id=room_id,
             message_id=frontend_message_id,
             status=status_value,
+            related_message_id=lifecycle_message_id,
             details=typed_details,
             client_request_id=resolved_client_request_id,
             agents=agents,

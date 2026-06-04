@@ -599,6 +599,23 @@ class TestSubmittedEvent:
         h._sse.send_task_submitted.assert_awaited_once()
         h._db.update_task_state_on_message.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_sends_sse_submitted_with_resolved_client_request_id(self):
+        db = MagicMock()
+        db.resolve_client_request_id_for_message_id = AsyncMock(
+            return_value="cr-001"
+        )
+        h = _make_handler(db=db)
+        event = AgentEvent(
+            kind="task_submitted", **_base_event(),
+            task_id="t-1", agent_name="Agent X",
+        )
+        await h.handle(event)
+
+        call_kwargs = h._sse.send_task_submitted.call_args.kwargs
+        assert call_kwargs["client_request_id"] == "cr-001"
+        db.resolve_client_request_id_for_message_id.assert_awaited_once_with("msg-001")
+
 
 class TestStatusUpdateEvent:
     @pytest.mark.asyncio
@@ -621,6 +638,22 @@ class TestStatusUpdateEvent:
         )
         await h.handle(event)
         h._sse.send_task_update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_sends_task_update_with_resolved_client_request_id(self):
+        db = MagicMock()
+        db.resolve_client_request_id_for_message_id = AsyncMock(
+            return_value="cr-002"
+        )
+        h = _make_handler(db=db)
+        event = AgentEvent(
+            kind="status_update", **_base_event(), text="still working",
+        )
+        await h.handle(event)
+
+        call_kwargs = h._sse.send_task_update.call_args.kwargs
+        assert call_kwargs["client_request_id"] == "cr-002"
+        db.resolve_client_request_id_for_message_id.assert_awaited_once_with("msg-001")
 
 
 class TestProcessingStatusEvent:
@@ -688,6 +721,35 @@ class TestProcessingStatusEvent:
 
         emitter.assert_not_awaited()
         h._sse.send_processing_status.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_processing_status_resolves_client_request_id_for_emitter(self):
+        db = MagicMock()
+        db.resolve_client_request_id_for_message_id = AsyncMock(
+            return_value="cr-processor"
+        )
+        h = _make_handler(db=db)
+        emitter = AsyncMock()
+        h.bind_execution_event_deps(emitter)
+        event = AgentEvent(
+            kind="processing_status", **_base_event(),
+            lifecycle_message_id="umsg-001",
+            state="completed", details="all done",
+        )
+
+        await h.handle(event)
+
+        emitter.assert_awaited_once_with(
+            room_id="room-001",
+            status="completed",
+            message_id="msg-001",
+            lifecycle_message_id="umsg-001",
+            record_lifecycle=True,
+            client_request_id="cr-processor",
+            details={"message": "all done"},
+            error_message=None,
+        )
+        db.resolve_client_request_id_for_message_id.assert_awaited_once_with("msg-001")
 
 
 # =============================================================================

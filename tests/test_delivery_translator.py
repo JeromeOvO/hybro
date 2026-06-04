@@ -27,6 +27,7 @@ def test_processing_status_translation_uses_final_frame_without_nested_timestamp
         status="awaiting_input",
         details={"reason": "hitl"},
         agent_id="agent-1",
+        related_message_id="umsg-1",
         client_request_id="cr-1",
         agents=[{"agent_id": "agent-1"}],
         trace_id="trace-1",
@@ -41,6 +42,7 @@ def test_processing_status_translation_uses_final_frame_without_nested_timestamp
             "message_id": "msg-1",
             "details": {"reason": "hitl"},
             "agent_id": "agent-1",
+            "related_message_id": "umsg-1",
             "client_request_id": "cr-1",
             "agents": [{"agent_id": "agent-1"}],
             "trace_id": "trace-1",
@@ -203,12 +205,13 @@ def test_hitl_request_translation_preserves_full_payload():
         choices=["a", "b"],
         agent_id="agent-1",
         agent_name="Agent",
-        source_step_id="step-1",
-        group_id="group-1",
-        group_total=2,
-        group_index=1,
-        client_request_id="cr-1",
-    )
+            source_step_id="step-1",
+            group_id="group-1",
+            group_total=2,
+            group_index=1,
+            related_message_id="umsg-1",
+            client_request_id="cr-1",
+        )
 
     frame = to_sse_frame(event, timestamp=NOW)
 
@@ -229,6 +232,7 @@ def test_hitl_request_translation_preserves_full_payload():
             "group_id": "group-1",
             "group_total": 2,
             "group_index": 1,
+            "related_message_id": "umsg-1",
             "client_request_id": "cr-1",
         },
     }
@@ -261,6 +265,7 @@ def test_hitl_status_translation_preserves_status_source_and_error():
         request_id="hitl-1",
         message_id="msg-1",
         source="agent",
+        related_message_id="umsg-1",
         status="error",
         error_message="expired",
         client_request_id="cr-1",
@@ -278,6 +283,7 @@ def test_hitl_status_translation_preserves_status_source_and_error():
             "source": "agent",
             "status": "error",
             "error_message": "expired",
+            "related_message_id": "umsg-1",
             "client_request_id": "cr-1",
         },
     }

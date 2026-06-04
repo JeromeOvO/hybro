@@ -51,6 +51,7 @@ class ProcessingStatusEvent(DeliveryEventBase):
     ]
     agent_id: str | None = None
     details: dict | None = None
+    related_message_id: str | None = None
     client_request_id: str | None = None
     agents: list[dict] | None = None
 
@@ -158,6 +159,7 @@ class HITLRequestEvent(DeliveryEventBase):
     group_id: str | None = None
     group_total: int | None = None
     group_index: int | None = None
+    related_message_id: str | None = None
     client_request_id: str | None = None
 
 
@@ -168,6 +170,7 @@ class HITLResolvedEvent(DeliveryEventBase):
     source: str
     status: str = "resolved"
     error_message: str | None = None
+    related_message_id: str | None = None
     client_request_id: str | None = None
 
 

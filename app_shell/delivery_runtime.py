@@ -257,6 +257,7 @@ class AppShellSSEManager:
         status: str,
         message_id: str = None,
         details: Any = None,
+        related_message_id: str | None = None,
         client_request_id: str | None = None,
         agents: list[dict] | None = None,
     ) -> None:
@@ -272,6 +273,7 @@ class AppShellSSEManager:
                     if isinstance(details, str)
                     else None
                 ),
+                related_message_id=related_message_id,
                 client_request_id=client_request_id,
                 agents=agents,
             )

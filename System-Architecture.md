@@ -593,6 +593,10 @@ Cancellation flow:
 In multi-worker mode, Redis Pub/Sub/KV and Mongo change streams are required so
 typed SSE frames and cancellation state cross worker boundaries.
 
+For turn-correlated execution paths, emitters should include `client_request_id`
+when available and resolve it from message lineage when the event source does not
+provide it directly.
+
 ## HITL Workflow
 
 HITL is used when an agent or supervisor needs user input before continuing.
@@ -605,6 +609,8 @@ Main responsibilities live in `app_shell.hitl_service` and execution adapters:
 - Accept user responses through HITL routes.
 - Resume paused continuation/orchestration paths.
 - Cancel stale or superseded HITL requests.
+- Emit HITL request/response frames with `related_message_id` for resume
+  correlation when available.
 
 `ExecutionFacade` exposes HITL operations through the `HITLManager` protocol so
 routes do not need to know app-shell runtime internals.
