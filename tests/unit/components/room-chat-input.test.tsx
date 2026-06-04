@@ -414,7 +414,12 @@ describe('RoomChatInput', () => {
       })
 
       fireEvent.click(screen.getByTestId('send-button'))
-      expect(onSubmit).toHaveBeenCalledWith('<@a-1|Alpha Agent>', undefined, undefined, undefined)
+      expect(onSubmit).toHaveBeenCalledWith(
+        '<@a-1|Alpha Agent>',
+        { mentioned_agent_ids: ['a-1'] },
+        undefined,
+        undefined,
+      )
     })
   })
 })

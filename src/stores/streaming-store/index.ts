@@ -7,6 +7,11 @@ import { mergeArtifacts, extractTextFromArtifacts } from '@/stores/message-store
 // 5 minutes is generous enough to cover slow streaming agents.
 const STALE_BUFFER_TTL_MS = 5 * 60_000
 
+export type StreamBufferMetadata = {
+  clientRequestId?: string
+  userMessageId?: string
+}
+
 /**
  * Ephemeral display buffer for a single streaming message.
  * Lives only in this store — never written to messageStore.
@@ -25,6 +30,8 @@ export interface StreamBuffer {
    * that belong to a different room.
    */
   roomId: string
+  clientRequestId?: string
+  userMessageId?: string
   /**
    * Monotonic timestamp (Date.now()) updated on every append and markComplete.
    * Used for TTL-based eviction of orphaned buffers (backend crash before
@@ -46,7 +53,13 @@ interface StreamingState {
    * Also evicts stale buffers (older than STALE_BUFFER_TTL_MS) whose
    * task_update was never received (e.g. backend crash mid-stream).
    */
-  append: (id: string, roomId: string, chunk: ArtifactData, isAppend: boolean) => void
+  append: (
+    id: string,
+    roomId: string,
+    chunk: ArtifactData,
+    isAppend: boolean,
+    metadata?: StreamBufferMetadata,
+  ) => void
 
   /** Mark the buffer complete after last_chunk=true arrives. */
   markComplete: (id: string) => void
@@ -56,6 +69,9 @@ interface StreamingState {
    * Called by the task_update SSE handler after writing the checkpoint to messageStore.
    */
   clear: (id: string) => void
+
+  /** Clear all buffers tagged with the given client_request_id. */
+  clearByClientRequestId: (clientRequestId: string) => void
 
   /**
    * Clear all buffers that belong to the given roomId.
@@ -78,7 +94,7 @@ interface StreamingState {
 export const useStreamingStore = create<StreamingState>()((set) => ({
   buffers: {},
 
-  append: (id, roomId, chunk, isAppend) => set((state) => {
+  append: (id, roomId, chunk, isAppend, metadata) => set((state) => {
     const now = Date.now()
 
     // Evict orphaned buffers — those not updated within STALE_BUFFER_TTL_MS.
@@ -115,6 +131,8 @@ export const useStreamingStore = create<StreamingState>()((set) => ({
           artifacts: nextArtifacts,
           isComplete: existing?.isComplete ?? false,
           roomId,
+          clientRequestId: metadata?.clientRequestId ?? existing?.clientRequestId,
+          userMessageId: metadata?.userMessageId ?? existing?.userMessageId,
           lastUpdatedAt: now,
         },
       },
@@ -137,6 +155,19 @@ export const useStreamingStore = create<StreamingState>()((set) => ({
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { [id]: _removed, ...rest } = state.buffers
     return { buffers: rest }
+  }),
+
+  clearByClientRequestId: (clientRequestId) => set((state) => {
+    const nextBuffers: Record<string, StreamBuffer> = {}
+    let changed = false
+    for (const [id, buf] of Object.entries(state.buffers)) {
+      if (buf.clientRequestId === clientRequestId) {
+        changed = true
+      } else {
+        nextBuffers[id] = buf
+      }
+    }
+    return changed ? { buffers: nextBuffers } : state
   }),
 
   clearRoom: (roomId) => set((state) => {

@@ -1,5 +1,5 @@
 import { banner } from '@/components/ui/banner'
-import type { SSEMessage, TaskState } from '@/lib/types/sse'
+import type { RoomSSEFrameMap, TaskState } from '@/lib/types/sse'
 import { isTerminalState, TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
 import { useStreamingStore } from '@/stores/streaming-store'
@@ -12,13 +12,13 @@ import type { SSEHandlerDeps } from '../types'
 
 export async function handleTaskUpdate(
   ctx: SSEHandlerDeps,
-  sseMessage: SSEMessage,
+  sseMessage: RoomSSEFrameMap['task_update'],
   correlation: CorrelationResult,
 ): Promise<void> {
   if (correlation.shouldDrop) return
   if (correlation.shouldBuffer && correlation.clientReqId) return
   console.log('📋 Task update via SSE:', sseMessage.data)
-  if (!sseMessage.data?.message_id) return
+  if (!sseMessage.data.message_id) return
 
   const messageId = sseMessage.data.message_id
   const status = sseMessage.data.status as TaskState
@@ -26,7 +26,7 @@ export async function handleTaskUpdate(
   if (!resolvedAgentName && sseMessage.data.agent_id) {
     resolvedAgentName = await ctx.getAgentName(sseMessage.data.agent_id)
   }
-  const taskTimestamp = sseMessage.data.created_at || sseMessage.timestamp
+  const taskTimestamp = sseMessage.timestamp
   const content = sseMessage.data.content || ''
 
   const taskFields = {
@@ -36,10 +36,10 @@ export async function handleTaskUpdate(
       ? (sseMessage.data.status_message || null) : undefined,
     taskRequiresInput: sseMessage.data.requires_input,
     taskRequiresAuth: sseMessage.data.requires_auth,
-    taskContent: sseMessage.data.task_content,
-    stepNumber: sseMessage.data.step_number,
-    totalSteps: sseMessage.data.total_steps,
-    relatedMessageId: sseMessage.data.related_message_id,
+    taskContent: sseMessage.data.task_content ?? undefined,
+    stepNumber: sseMessage.data.step_number ?? undefined,
+    totalSteps: sseMessage.data.total_steps ?? undefined,
+    relatedMessageId: sseMessage.data.related_message_id ?? undefined,
     timestamp: normalizeTimestampOrNow(taskTimestamp),
     taskCreatedAt: normalizeTimestampOrNow(taskTimestamp),
   }
@@ -52,8 +52,8 @@ export async function handleTaskUpdate(
     roomId: ctx.roomId,
     messageType: 'agent' as const,
     senderName: resolvedAgentName || 'Agent',
-    agentId: sseMessage.data.agent_id,
-    agentSource: ctx.getAgentSource(sseMessage.data.agent_id),
+    agentId: sseMessage.data.agent_id ?? undefined,
+    agentSource: ctx.getAgentSource(sseMessage.data.agent_id ?? undefined),
     clientRequestId: sseMessage.data.client_request_id,
     timestamp: existing?.timestamp ?? normalizeTimestampOrNow(taskTimestamp),
   }
@@ -84,6 +84,7 @@ export async function handleTaskUpdate(
         },
       },
       { type: 'stream_clear', messageId },
+      { type: 'stream_clear_client_request', clientRequestId: sseMessage.data.client_request_id },
     ])
     ctx.lifecycle.dismissPlaceholder()
 
@@ -91,8 +92,8 @@ export async function handleTaskUpdate(
       appendEvent(ctx.roomId, {
         kind: 'agent_completed',
         timestamp: sseMessage.timestamp,
-        agentId: sseMessage.data.agent_id,
-        agentName: resolvedAgentName,
+        agentId: sseMessage.data.agent_id ?? undefined,
+        agentName: resolvedAgentName ?? undefined,
         label: `${resolvedAgentName ?? 'Agent'} completed`,
       })
     } else if (
@@ -103,10 +104,10 @@ export async function handleTaskUpdate(
       appendEvent(ctx.roomId, {
         kind: 'agent_failed',
         timestamp: sseMessage.timestamp,
-        agentId: sseMessage.data.agent_id,
-        agentName: resolvedAgentName,
+        agentId: sseMessage.data.agent_id ?? undefined,
+        agentName: resolvedAgentName ?? undefined,
         label: `${resolvedAgentName ?? 'Agent'} failed`,
-        body: sseMessage.data.error,
+        body: sseMessage.data.error ?? undefined,
       })
     }
 

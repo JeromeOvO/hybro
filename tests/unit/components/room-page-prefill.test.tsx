@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { render, waitFor } from "@testing-library/react"
+import { cleanup, render, waitFor } from "@testing-library/react"
 import { useRoomUiStore } from "@/stores/room-ui-store"
 
 // --- Mocks ---
@@ -68,8 +68,22 @@ vi.mock("@/hooks/useGroupManagement", () => ({
 
 // Mock heavy child components to keep rendering fast
 vi.mock("@/components/room-page-shell", () => ({
-  RoomPageShell: ({ adapter }: { adapter: { externalValue?: string } }) => (
-    <div data-testid="shell" data-external-value={adapter.externalValue ?? ""} />
+  RoomPageShell: ({ adapter }: {
+    adapter: {
+      externalValue?: string
+      onSendMessage: (message: string, dispatch: { message_target_mode: 'saved_group', target_group_id: string }) => void
+    }
+  }) => (
+    <div data-testid="shell" data-external-value={adapter.externalValue ?? ""}>
+      <button
+        type="button"
+        data-testid="send-literal-mention"
+        onClick={() => adapter.onSendMessage(
+          "Send this literal <@agent-mentioned|Mentioned>",
+          { message_target_mode: 'saved_group', target_group_id: 'group-abc' },
+        )}
+      />
+    </div>
   ),
 }))
 vi.mock("@/components/require-auth", () => ({
@@ -85,6 +99,7 @@ vi.mock("@/components/room-default-agents-editor", () => ({
 let RoomChatPage: React.ComponentType
 
 beforeEach(async () => {
+  cleanup()
   vi.clearAllMocks()
   // Reset Zustand store
   useRoomUiStore.setState({ pendingRoomData: {} })
@@ -114,9 +129,10 @@ describe("Room page — prefill handoff consumer", () => {
     expect(useRoomUiStore.getState().pendingRoomData["room-abc"]).toBeUndefined()
   })
 
-  it("auto-sends when handoffMode is not set (default behavior)", async () => {
+  it("auto-sends when handoffMode is not set and final dispatch is persisted", async () => {
     useRoomUiStore.getState().setPendingRoomData("room-abc", {
       initialMessage: "Hello agents",
+      dispatch: { message_target_mode: "room_default" },
     })
 
     render(<RoomChatPage />)
@@ -124,6 +140,40 @@ describe("Room page — prefill handoff consumer", () => {
     await waitFor(() => {
       expect(mockSendUserMessage).toHaveBeenCalledOnce()
     })
-    expect(mockSendUserMessage.mock.calls[0][0]).toBe("Hello agents")
+    expect(mockSendUserMessage.mock.calls[0][0]).toEqual({
+      userInput: "Hello agents",
+      dispatch: { message_target_mode: "room_default" },
+      pendingAttachments: undefined,
+    })
+  })
+
+  it("blocks pending autosend when final dispatch is missing", async () => {
+    useRoomUiStore.getState().setPendingRoomData("room-abc", {
+      initialMessage: "Hello stale agents",
+      targetGroup: "all_agents",
+    })
+
+    render(<RoomChatPage />)
+
+    await waitFor(() => {
+      expect(useRoomUiStore.getState().pendingRoomData["room-abc"]).toBeUndefined()
+    })
+    expect(mockSendUserMessage).not.toHaveBeenCalled()
+  })
+
+  it("does not reparse literal mention text over the supplied room dispatch", async () => {
+    const { getByTestId } = render(<RoomChatPage />)
+
+    getByTestId("send-literal-mention").click()
+
+    await waitFor(() => {
+      expect(mockSendUserMessage).toHaveBeenCalledOnce()
+    })
+    expect(mockSendUserMessage.mock.calls[0][0]).toEqual({
+      userInput: "Send this literal <@agent-mentioned|Mentioned>",
+      quoteData: undefined,
+      pendingAttachments: undefined,
+      dispatch: { message_target_mode: 'saved_group', target_group_id: 'group-abc' },
+    })
   })
 })

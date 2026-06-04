@@ -6,6 +6,9 @@ import { selectComposerState } from '@/lib/selectors'
 import type { PendingHitl, ComposerState } from '@/lib/selectors/conversation-types'
 import { HitlResponseBar, type HitlPromptView } from './HitlResponseBar'
 import { RoomChatInput } from '@/components/room-chat-input'
+import type { MessageDispatchInput } from '@/lib/types/agent-group'
+import type { QuoteData } from '@/lib/types/quote'
+import type { PendingAttachment } from '@/lib/types/attachments'
 
 function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
   return {
@@ -25,7 +28,7 @@ function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
 
 export interface ComposerShellAdapter {
   roomId: string
-  onSendMessage: (...args: any[]) => void
+  onSendMessage: (message: string, dispatch: MessageDispatchInput, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => void
   onCancelProcessing: () => void
   onRespondToHitl: (hitlId: string, answer: string) => Promise<void>
   onChatModeChange?: (mode: any) => void

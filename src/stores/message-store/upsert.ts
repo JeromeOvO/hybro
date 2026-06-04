@@ -207,12 +207,7 @@ function artifactsEqual(
   if (a === b) return true
   if (!a || !b) return a === b
   if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) {
-    if (a[i].artifactId !== b[i].artifactId) return false
-    if (a[i].isStreaming !== b[i].isStreaming) return false
-    if ((a[i].parts?.length ?? 0) !== (b[i].parts?.length ?? 0)) return false
-  }
-  return true
+  return JSON.stringify(a) === JSON.stringify(b)
 }
 
 function processingLogsEqual(

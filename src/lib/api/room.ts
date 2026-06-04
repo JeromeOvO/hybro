@@ -7,10 +7,15 @@ import type {
 } from '@/lib/types/response'
 import type {
   RoomCenterRoomSettingRequest,
-  RoomCenterUserMessageRequest,
   RoomCenterRoomMessageRequest,
+  SendMessagePayload,
 } from '@/lib/types/request'
-import type { RoomMembershipWriteInput, MessageDispatchInput } from '@/lib/types/agent-group'
+import {
+  assertMessageDispatchInput,
+  isMentionDispatchInput,
+  type MessageDispatchInput,
+  type RoomMembershipWriteInput,
+} from '@/lib/types/agent-group'
 import type { RoomQuoteWire } from '@/lib/types/quote'
 
 import { getApiUrl } from '../utils'
@@ -209,30 +214,55 @@ export async function inquiryRoomMessagesByRoomId(
 }
 
 
-export async function SendMessage(
-  room_id: string,
-  user_input: string,
-  getToken?: () => Promise<string | null>,
-  user_id?: string,
-  user_name?: string,
-  target_group: string = "all_agents",
-  related_message_id?: string | null,
-  quoted_text?: string | null,
-  quoted_sender_name?: string | null,
-  attachments?: Array<{ file_id: string }>,
-  dispatch?: MessageDispatchInput,
-  clientRequestId?: string,
-  structuredQuote?: RoomQuoteWire | null,
-): Promise<RoomCenterUserMessageResponse> {
+export interface SendMessageParams {
+  roomId: string
+  userInput: string
+  getToken?: () => Promise<string | null>
+  userId?: string
+  userName?: string
+  relatedMessageId?: string | null
+  quotedText?: string | null
+  quotedSenderName?: string | null
+  attachments?: Array<{ file_id: string }>
+  dispatch: MessageDispatchInput
+  clientRequestId: string
+  structuredQuote?: RoomQuoteWire | null
+}
+
+type SendMessageRequestBody = SendMessagePayload & {
+  room_id: string
+  user_id: string
+  user_name: string
+  user_input: string
+  attachments?: Array<{ file_id: string }>
+}
+
+export async function SendMessage(params: SendMessageParams): Promise<RoomCenterUserMessageResponse> {
+  const {
+    roomId,
+    userInput,
+    getToken,
+    userId,
+    userName,
+    relatedMessageId,
+    quotedText,
+    quotedSenderName,
+    attachments,
+    dispatch,
+    clientRequestId,
+    structuredQuote,
+  } = params
+  assertMessageDispatchInput(dispatch)
+
   const message: Record<string, unknown> = {
-    room_id,
+    room_id: roomId,
     message_id: "",
     message_type: "user",
-    related_message_id: related_message_id || null,
+    related_message_id: relatedMessageId || null,
     message_content: {
-      message_text: user_input
+      message_text: userInput
     },
-    user_id: user_id || "",
+    user_id: userId || "",
     extend_info: null as Record<string, unknown> | null,
   }
 
@@ -242,36 +272,36 @@ export async function SendMessage(
       quoted_text: structuredQuote.text,
       quoted_sender_name: structuredQuote.sender_display_name ?? null,
     }
-  } else if (quoted_text) {
-    message.extend_info = { quoted_text, quoted_sender_name: quoted_sender_name || null }
+  } else if (quotedText) {
+    message.extend_info = { quoted_text: quotedText, quoted_sender_name: quotedSenderName || null }
   }
 
-  const requestData: Record<string, unknown> = {
-    room_id,
-    user_id: user_id || "",
-    user_name: user_name || "",
-    user_input,
-    target_group,
+  const baseRequestData = {
+    room_id: roomId,
+    user_id: userId || "",
+    user_name: userName || "",
+    user_input: userInput,
     message,
+    client_request_id: clientRequestId,
   }
 
-  // Overlay canonical dispatch fields when provided.
-  // mentioned_agent_ids and target_group are mutually exclusive on the wire —
-  // when a canonical MentionDispatchInput is present, drop legacy target_group.
-  if (dispatch) {
-    if ('mentioned_agent_ids' in dispatch) {
-      requestData.mentioned_agent_ids = dispatch.mentioned_agent_ids
-      delete requestData.target_group
-    } else {
-      requestData.message_target_mode = dispatch.message_target_mode
-      if ('target_group_id' in dispatch) {
-        requestData.target_group_id = dispatch.target_group_id
-      }
+  let requestData: SendMessageRequestBody
+  if (isMentionDispatchInput(dispatch)) {
+    requestData = {
+      ...baseRequestData,
+      mentioned_agent_ids: dispatch.mentioned_agent_ids,
     }
-  }
-
-  if (clientRequestId) {
-    requestData.client_request_id = clientRequestId
+  } else if (dispatch.message_target_mode === 'saved_group') {
+    requestData = {
+      ...baseRequestData,
+      message_target_mode: 'saved_group',
+      target_group_id: dispatch.target_group_id,
+    }
+  } else {
+    requestData = {
+      ...baseRequestData,
+      message_target_mode: dispatch.message_target_mode,
+    }
   }
 
   if (attachments && attachments.length > 0) {

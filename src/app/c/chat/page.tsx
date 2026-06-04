@@ -26,6 +26,7 @@ import type { Agent } from "@/lib/types/agent"
 import { UseCaseCard } from "@/components/use-case-card"
 import { useCaseTemplates } from "@/lib/use-case-templates"
 import type { UseCaseTemplate } from "@/lib/use-case-templates"
+import { isMentionDispatchInput, type MessageDispatchInput } from "@/lib/types/agent-group"
 
 export default function ChatPage() {
     return (
@@ -135,7 +136,7 @@ function ChatPageContent() {
         }))
     }, [gm.availableAgents])
 
-    const handleSubmit = async (value: string, _targetGroup?: string, _quote?: QuoteData | null, attachments?: PendingAttachment[]) => {
+    const handleSubmit = async (value: string, dispatch: MessageDispatchInput, _quote?: QuoteData | null, attachments?: PendingAttachment[]) => {
         if (!value.trim() && (!attachments || attachments.length === 0)) {
             banner.error("Please enter a message")
             return
@@ -155,7 +156,8 @@ function ChatPageContent() {
                 } : {}),
                 debateMode: chatModeToFlags(localChatMode).debateMode,
                 useSupervisor: chatModeToFlags(localChatMode).use_supervisor,
-                targetGroup: gm.selectedGroup,
+                dispatch,
+                targetGroup: isMentionDispatchInput(dispatch) ? undefined : gm.selectedGroup,
                 attachments,
             }
 

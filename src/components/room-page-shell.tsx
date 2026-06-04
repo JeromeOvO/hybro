@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import type { AgentGroup } from '@/lib/types/agent-group'
+import type { MessageDispatchInput } from '@/lib/types/agent-group'
 import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ChatMode } from '@/lib/types/chat-mode'
@@ -73,7 +74,7 @@ export interface QuoteState {
 export interface TimelineAdapter {
   roomId: string
   getToken?: () => Promise<string | null>
-  onSendMessage: (message: string, targetGroup?: string, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => void
+  onSendMessage: (message: string, dispatch: MessageDispatchInput, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => void
   onCancelProcessing: () => void
   onRespondToHitl: (hitlId: string, answer: string) => Promise<void>
   onChatModeChange: (mode: ChatMode) => void

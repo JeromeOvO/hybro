@@ -1,18 +1,19 @@
-import type { SSEConnectionStatus, SSEMessage } from '@/lib/types/sse'
+import type { AnySSEFrame, SSEConnectionStatus } from '@/lib/types/sse'
+import { hasSSEFrameEnvelope } from '@/lib/types/sse'
 import { getApiUrl } from '../utils'
 import { getClientAuthHeaders } from '../auth'
 
 const API_BASE_URL = getApiUrl('sse')
 
-// Re-export SSEMessage for convenience
-export type { SSEMessage }
+// Re-export parsed frame type for convenience
+export type { AnySSEFrame as SSEMessage }
 
 export type SSECloseReason = 'manual' | 'permanent-failure'
 
 export interface SSEConnectionOptions {
   roomId: string
   getToken?: () => Promise<string | null>
-  onMessage?: (message: SSEMessage) => void
+  onMessage?: (message: AnySSEFrame) => void
   onError?: (error: Event) => void
   onOpen?: (event: Event) => void
   onClose?: (reason: SSECloseReason) => void
@@ -156,13 +157,14 @@ export class SSEConnection {
 
         for (const data of messages) {
           try {
-            const message: SSEMessage = JSON.parse(data)
+            const parsed: unknown = JSON.parse(data)
 
-            if (message.type === 'heartbeat') {
+            if (!hasSSEFrameEnvelope(parsed)) {
+              console.debug('Ignoring SSE payload without final frame envelope:', parsed)
               continue
             }
 
-            this.options.onMessage?.(message)
+            this.options.onMessage?.(parsed)
           } catch (parseError) {
             console.error('Failed to parse SSE message:', parseError, data)
           }

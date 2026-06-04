@@ -108,19 +108,38 @@ describe('SSEConnection', () => {
       expect(onMessage).toHaveBeenCalledWith(testMessage)
     })
 
-    it('should silently ignore heartbeat messages', async () => {
+    it('should forward heartbeat frames because heartbeat has final data payload', async () => {
       const onMessage = vi.fn()
       const { instance } = await connectAndOpen({ onMessage })
 
-      instance.simulateMessage({
+      const heartbeat = {
         type: 'heartbeat',
         room_id: 'test-room',
         timestamp: new Date().toISOString(),
-      })
+        data: {},
+      }
+      instance.simulateMessage(heartbeat)
 
       await vi.advanceTimersByTimeAsync(0)
 
-      expect(onMessage).not.toHaveBeenCalled()
+      expect(onMessage).toHaveBeenCalledWith(heartbeat)
+    })
+
+    it('should ignore named SSE event metadata and use only parsed data.type', async () => {
+      const onMessage = vi.fn()
+      const { instance } = await connectAndOpen({ onMessage })
+
+      const frame = {
+        type: 'heartbeat',
+        room_id: 'test-room',
+        timestamp: new Date().toISOString(),
+        data: {},
+      }
+      instance.simulateRawData(`event: processing_status\ndata: ${JSON.stringify(frame)}\n\n`)
+
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(onMessage).toHaveBeenCalledWith(frame)
     })
 
     it('should handle malformed JSON gracefully', async () => {

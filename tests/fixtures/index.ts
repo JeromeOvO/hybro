@@ -130,14 +130,14 @@ export function createAgent(overrides: Partial<{
 
 export function createSSEMessage(
   type: SSEMessage['type'],
-  data: SSEMessage['data'] = {}
+  data: unknown = {}
 ): SSEMessage {
   return {
     type,
     room_id: 'room-1',
     timestamp: new Date().toISOString(),
     data,
-  }
+  } as SSEMessage
 }
 
 export function createTaskSubmittedSSE(
@@ -148,7 +148,10 @@ export function createTaskSubmittedSSE(
     message_id: messageId,
     task_id: `task-${messageId}`,
     agent_name: agentName,
+    agent_id: 'agent-1',
     status: 'submitted',
+    related_message_id: null,
+    client_request_id: 'req-1',
   })
 }
 
@@ -161,6 +164,7 @@ export function createTaskUpdateSSE(
     message_id: messageId,
     status,
     content,
+    client_request_id: 'req-1',
   })
 }
 
@@ -169,6 +173,9 @@ export function createProcessingStatusSSE(
 ): SSEMessage {
   return createSSEMessage('processing_status', {
     status,
+    message_id: `msg-${status}`,
+    client_request_id: 'req-1',
+    details: { message: status },
   })
 }
 
