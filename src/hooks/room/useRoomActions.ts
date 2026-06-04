@@ -5,10 +5,16 @@ import { cancelMessage } from '@/lib/api/sse'
 import { updateRoomAgentSet, updateRoomName, updateRoomExtendInfo } from '@/lib/api/room'
 import { ApiError } from '@/lib/api-client'
 import { banner } from '@/components/ui/banner'
-import { TASK_STATE } from '@/lib/types/sse'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { useMessageStore } from '@/stores/message-store'
 import type { ProcessingLifecycle } from './processing-lifecycle'
+import {
+  appendProcessingStatusLog,
+  clearProcessingStatusLogs,
+  ensureInitialProcessingStatusLog,
+  findProcessingStatusUserEntity,
+} from './processing-status-log'
+import { resolveClientRequestMessageId } from './sse-handlers/pending-turn-buffer'
 
 export function useRoomActions(
   roomId: string,
@@ -151,9 +157,21 @@ export function useRoomActions(
   const respondToHitlRequest = useCallback(async (requestId: string, userInput: string) => {
     const entityId = hitlRequestIndex.current.get(requestId)
     const store = useMessageStore.getState()
-    const entity = entityId ? store.entities[entityId] : undefined
-
-    const processingPlaceholderId = lifecycle.placeholderId(roomId)
+    const entity = entityId
+      ? store.entities[entityId]
+      : Object.values(store.entities).find((candidate) =>
+          candidate.roomId === roomId &&
+          candidate.messageType === 'agent' &&
+          candidate.hitlRequestId === requestId
+        )
+    if (!entityId && entity) {
+      hitlRequestIndex.current.set(requestId, entity.id)
+    }
+    const processingUserEntity = findProcessingStatusUserEntity(roomId, {
+      relatedMessageId: entity?.relatedMessageId,
+      clientRequestId: entity?.clientRequestId,
+      beforeTimestamp: entity?.timestamp,
+    })
 
     // Determine if this is the last unanswered question in its group
     const isGrouped = entity?.hitlGroupId != null
@@ -183,18 +201,20 @@ export function useRoomActions(
     // Only show processing placeholder after the LAST question in a group (or non-grouped)
     if (isLastInGroup) {
       lifecycle.resetPlaceholder()
-      store.upsertMessage({
-        id: processingPlaceholderId,
+      lifecycle.resetProcessingResolved()
+      lifecycle.setPendingRunEventAck(entity?.clientRequestId ?? null)
+      if (entity?.clientRequestId && processingUserEntity?.id) {
+        resolveClientRequestMessageId(entity.clientRequestId, processingUserEntity.id)
+      }
+      store.removeMessage(lifecycle.placeholderId(roomId))
+      ensureInitialProcessingStatusLog(roomId, processingUserEntity)
+      appendProcessingStatusLog(
         roomId,
-        messageType: 'agent',
-        content: '',
-        senderName: 'HYBRO AI',
-        taskStatus: TASK_STATE.WORKING,
-        taskContent: 'Processing your input...',
-        timestamp: new Date(Date.now() + 1).toISOString(),
-        isEphemeral: true,
-      }, 'optimistic')
-      lifecycle.startProcessing()
+        processingUserEntity,
+        'Processing your input...',
+        new Date(Date.now() + 1).toISOString(),
+      )
+      lifecycle.startProcessing(processingUserEntity?.id)
     }
 
     try {
@@ -232,7 +252,15 @@ export function useRoomActions(
         hitlRequestIndex.current.set(requestId, entityId)
       }
       if (isLastInGroup) {
-        store.removeMessage(processingPlaceholderId)
+        store.removeMessage(lifecycle.placeholderId(roomId))
+        clearProcessingStatusLogs(
+          roomId,
+          findProcessingStatusUserEntity(roomId, {
+            messageId: processingUserEntity?.id,
+            clientRequestId: entity?.clientRequestId,
+            latestWithLogs: true,
+          }),
+        )
         lifecycle.stopProcessing({ clearMessageId: false })
       }
 

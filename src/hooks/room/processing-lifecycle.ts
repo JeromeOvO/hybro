@@ -12,6 +12,9 @@ export interface ProcessingLifecycle {
   dismissPlaceholder(): void
   resetPlaceholder(): void
   isPlaceholderDismissed(): boolean
+  markProcessingResolved(): void
+  resetProcessingResolved(): void
+  isProcessingResolved(): boolean
   placeholderId(roomId: string): string
   armCancelTimeout(onTimeout: () => void, ms?: number): void
   disarmCancelTimeout(): void
@@ -30,6 +33,7 @@ export function createProcessingLifecycle(
   let disposed = false
   let currentProcessingMessageId: string | null = null
   let placeholderDismissed = false
+  let processingResolved = false
   let isProcessingGuard = false
   let pendingRunEventAckClientRequestId: string | null = null
   let cancelTimeout: ReturnType<typeof setTimeout> | null = null
@@ -120,6 +124,21 @@ export function createProcessingLifecycle(
       return placeholderDismissed
     },
 
+    markProcessingResolved() {
+      if (disposed) return
+      processingResolved = true
+    },
+
+    resetProcessingResolved() {
+      if (disposed) return
+      processingResolved = false
+    },
+
+    isProcessingResolved() {
+      if (disposed) return false
+      return processingResolved
+    },
+
     placeholderId(roomId: string) {
       return `processing-placeholder-${roomId}`
     },
@@ -169,6 +188,7 @@ export function createProcessingLifecycle(
       setZustandProcessing(false)
       currentProcessingMessageId = null
       placeholderDismissed = false
+      processingResolved = false
       isProcessingGuard = false
       pendingRunEventAckClientRequestId = null
       cancelTimedOut = false

@@ -4,10 +4,10 @@ import { banner } from '@/components/ui/banner'
 import type { QuoteData } from '@/lib/types/quote'
 import { MAX_QUOTE_TEXT_LENGTH } from '@/lib/types/quote'
 import type { MessageDispatchInput } from '@/lib/types/agent-group'
-import { TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ProcessingLifecycle } from './processing-lifecycle'
+import { createInitialProcessingStatusLog } from './processing-status-log'
 import { clearPendingSseForClientRequest } from './sse-handlers/pending-turn-buffer'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 
@@ -52,12 +52,13 @@ export function useSendMessage(
       attachments: pendingAttachments,
     })
 
-    // Reset placeholder dismissed flag so SSE processing_status events
-    // can manage the placeholder lifecycle. The flag will be set to true
-    // when SSE dismisses the placeholder (task_submitted or terminal status).
+    // Reset the transient processing lifecycle so SSE processing_status events
+    // can manage the current live turn.
     lifecycle.resetPlaceholder()
+    lifecycle.resetProcessingResolved()
+    lifecycle.setPendingRunEventAck(clientRequestId)
 
-    // Step 0: Add optimistic user anchor + processing placeholder immediately.
+    // Step 0: Add the optimistic user anchor with its live processing log immediately.
     // This prevents fast SSE events from attaching to the previous turn.
     const optimisticAttachments = pendingAttachments?.map(att => ({
       fileId: att.id,
@@ -67,35 +68,25 @@ export function useSendMessage(
       sizeBytes: att.file.size,
     }))
 
-    const processingPlaceholderId = lifecycle.placeholderId(roomId)
     const msgStoreSend = useMessageStore.getState()
-    msgStoreSend.upsertMany([
-      {
-        id: optimisticUserMessageId,
-        roomId,
-        messageType: 'user',
-        content: userInput,
-        senderName: userName,
-        userId,
-        timestamp: currentTime,
-        clientRequestId,
-        attachments: optimisticAttachments,
-        quotedText: quoteData?.content ?? undefined,
-        quotedSenderName: quoteData?.senderName ?? undefined,
-      },
-      {
-        id: processingPlaceholderId,
-        roomId,
-        messageType: 'agent',
-        content: '',
-        senderName: 'HYBRO AI',
-        taskStatus: TASK_STATE.WORKING,
-        taskContent: 'Processing your request\u2026',
-        timestamp: new Date(Date.now() + 1).toISOString(),
-        isEphemeral: true,
-        clientRequestId,
-      },
-    ], 'optimistic')
+    msgStoreSend.removeMessage(lifecycle.placeholderId(roomId))
+    msgStoreSend.upsertMessage({
+      id: optimisticUserMessageId,
+      roomId,
+      messageType: 'user',
+      content: userInput,
+      senderName: userName,
+      userId,
+      timestamp: currentTime,
+      clientRequestId,
+      attachments: optimisticAttachments,
+      quotedText: quoteData?.content ?? undefined,
+      quotedSenderName: quoteData?.senderName ?? undefined,
+      processingStatusLogs: [
+        createInitialProcessingStatusLog(new Date(Date.now() + 1).toISOString()),
+      ],
+    }, 'optimistic')
+    lifecycle.startProcessing(optimisticUserMessageId)
 
     useRoomUiStore.getState().markLocalSend(roomId)
 
@@ -229,6 +220,12 @@ export function useSendMessage(
       })
 
       useRoomUiStore.getState().setPendingTurnSkeleton(roomId)
+
+      // Set correlation before flushing buffered SSE. A fast terminal event
+      // can clear this state during the flush; do not rewrite it afterward.
+      lifecycle.setMessageId(messageId)
+      lifecycle.setPendingRunEventAck(clientRequestId)
+
       if (onPostMessageIdResolved) {
         await onPostMessageIdResolved(clientRequestId, messageId)
       }
@@ -243,15 +240,11 @@ export function useSendMessage(
         }
       }
 
-      // Store message ID for potential cancellation
-      lifecycle.setMessageId(messageId)
-      lifecycle.setPendingRunEventAck(clientRequestId)
-
       // Step 3: Processing is auto-triggered by backend when sendMessage completes.
-      // Only set processing state if SSE hasn't already dismissed the placeholder
+      // Only keep processing state if SSE hasn't already dismissed the live log
       // (race condition: fast agents can complete before the HTTP response returns).
       setSending(false)
-      if (!lifecycle.isPlaceholderDismissed()) {
+      if (!lifecycle.isProcessingResolved()) {
         lifecycle.startProcessing(messageId)
       } else {
         // SSE already handled the full lifecycle — just make sure ref is clean
@@ -263,7 +256,7 @@ export function useSendMessage(
       lifecycle.disarmCancelTimeout()
 
       console.log('📡 Message queued for processing, waiting for agent responses via SSE...',
-        lifecycle.isPlaceholderDismissed() ? '(SSE already completed during HTTP round-trip)' : '')
+        lifecycle.isProcessingResolved() ? '(SSE already completed during HTTP round-trip)' : '')
 
       if (!sseConnected) {
         console.log('⚠️ SSE not connected, processing will complete but updates may be delayed')

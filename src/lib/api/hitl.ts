@@ -20,6 +20,8 @@ export interface HitlPendingRequest {
   group_id?: string | null
   group_total?: number | null
   group_index?: number | null
+  related_message_id?: string | null
+  client_request_id?: string | null
 }
 
 export interface HitlRespondResponse {

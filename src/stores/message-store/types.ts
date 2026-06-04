@@ -18,6 +18,12 @@ export interface ArtifactData {
   isStreaming?: boolean
 }
 
+export interface ProcessingStatusLogEntry {
+  id: string
+  message: string
+  timestamp: string
+}
+
 /** Which pipeline last wrote this entity. */
 export type MessageSource = 'db' | 'sse' | 'optimistic'
 
@@ -101,6 +107,9 @@ export interface MessageEntity {
 
   /** Parsed from backend extend_info.summary_origin for summary-family agents. */
   summaryOrigin?: 'llm' | 'deterministic'
+
+  /** Transient in-memory processing_status detail log for the live turn. */
+  processingStatusLogs?: ProcessingStatusLogEntry[]
 }
 
 /**
@@ -150,4 +159,5 @@ export interface IncomingMessage {
   quoteId?: string
   turnTerminalStatus?: 'completed' | 'failed' | 'canceled'
   summaryOrigin?: 'llm' | 'deterministic'
+  processingStatusLogs?: ProcessingStatusLogEntry[]
 }

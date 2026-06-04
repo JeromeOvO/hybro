@@ -2,13 +2,14 @@
 
 import type { Ref, ReactNode } from 'react'
 import type { TurnViewModel, AgentResultViewModel } from '@/lib/room-timeline/types'
-import { getCollectingProgressLabel, getSupervisorStatusLine, getStripSourceResults } from '@/lib/room-timeline/turn-live-shell'
+import { getSupervisorStatusLine, getStripSourceResults } from '@/lib/room-timeline/turn-live-shell'
 import { getAgentTheme } from '@/lib/selectors/conversation-types'
 import { mapResultDisplayProps } from '@/lib/room-timeline/map-result-display'
 import { useResultStreamDisplay } from '@/hooks/useStreamBuffer'
 import { MarkdownContent } from '@/components/markdown-content'
 import { AgentCard } from './AgentCard'
 import { AgentResultContent } from './AgentResultContent'
+import { ProcessingStatusLog } from './ProcessingStatusLog'
 import { SynthesisContent, SynthesisContentFromStream } from './SynthesisContent'
 import { UserAnswerCard } from './UserAnswerCard'
 
@@ -19,29 +20,18 @@ interface FinalAnswerSurfaceProps {
   onOpenDetail?: (messageId: string) => void
 }
 
-function PrimaryShimmer({ label }: { label: string }) {
-  return (
-    <div
-      className="conversation-content-body conversation-card-shimmer relative rounded-xl border px-4 py-6 min-h-24"
-      style={{ borderColor: 'var(--conversation-border-subtle)' }}
-      aria-busy="true"
-      aria-label={label}
-    >
-      <div className="text-sm" style={{ color: 'var(--conversation-text-muted)' }}>
-        {label}
-      </div>
-    </div>
-  )
+function isProcessingStatusRunning(turn: TurnViewModel): boolean {
+  return turn.status === 'active' && turn.phase !== 'completed' && turn.finalAnswer.kind !== 'hitl'
 }
 
 function CollectingBlock({
-  supervisorStatus,
   phase,
-  turn,
+  processingStatusLogs,
+  isRunning,
 }: {
-  supervisorStatus: string | null
   phase?: TurnViewModel['phase']
-  turn: TurnViewModel
+  processingStatusLogs?: TurnViewModel['processingStatusLogs']
+  isRunning: boolean
 }) {
   const theme = getAgentTheme('supervisor_synthesis', 'HYBRO AI')
   const synthesizing = phase === 'synthesizing'
@@ -51,9 +41,6 @@ function CollectingBlock({
     isAnimated: true,
     ariaLabel: `HYBRO AI — ${synthesizing ? 'Synthesizing' : 'Working'}`,
   }
-  const bodyLabel =
-    supervisorStatus
-    ?? (synthesizing ? 'Synthesizing responses…' : getCollectingProgressLabel(turn))
 
   return (
     <>
@@ -65,7 +52,7 @@ function CollectingBlock({
         display={display}
         interactive={false}
       />
-      <PrimaryShimmer label={bodyLabel} />
+      <ProcessingStatusLog entries={processingStatusLogs ?? []} isRunning={isRunning} />
     </>
   )
 }
@@ -181,10 +168,10 @@ function DeterministicDoneBlock({
   )
 }
 
-function HitlPrimary({ turn }: { turn: TurnViewModel }) {
+function HitlPrimary({ turn, isRunning }: { turn: TurnViewModel; isRunning: boolean }) {
   const hitl = turn.finalAnswer.hitl
   if (!hitl || hitl.prompts.length === 0) {
-    return <PrimaryShimmer label="Waiting for clarification" />
+    return <ProcessingStatusLog entries={turn.processingStatusLogs} isRunning={isRunning} />
   }
 
   return (
@@ -256,18 +243,28 @@ export function FinalAnswerSurface({
   const summaryResult = turn.agentResults.find(r => r.isSummaryAgent)
   const realAgents = getStripSourceResults(turn)
   const { finalAnswer } = turn
+  const shouldShowProcessingLog = turn.processingStatusLogs.length > 0
+  const processingStatusRunning = isProcessingStatusRunning(turn)
+  let processingLogRenderedInBody = false
 
   let body: ReactNode = null
 
   switch (finalAnswer.kind) {
     case 'hitl':
-      body = <HitlPrimary turn={turn} />
+      body = <HitlPrimary turn={turn} isRunning={processingStatusRunning} />
       break
     case 'llm_synthesis':
       if (summaryResult) {
         body = <SynthesisBlock summaryResult={summaryResult} supervisorStatus={supervisorStatus} />
       } else {
-        body = <CollectingBlock supervisorStatus={supervisorStatus} phase={turn.phase} turn={turn} />
+        processingLogRenderedInBody = true
+        body = (
+          <CollectingBlock
+            phase={turn.phase}
+            processingStatusLogs={turn.processingStatusLogs}
+            isRunning={processingStatusRunning}
+          />
+        )
       }
       break
     case 'canceled':
@@ -289,20 +286,36 @@ export function FinalAnswerSurface({
       break
     case 'single': {
       const agent = realAgents[0]
-      body = agent ? (
-        <AgentResultContent
-          result={agent}
-          selected={agent.messageId === selectedAgentMessageId}
-          onOpenDetail={onOpenDetail}
-        />
-      ) : (
-        <CollectingBlock supervisorStatus={supervisorStatus} phase={turn.phase} turn={turn} />
-      )
+      if (agent) {
+        body = (
+          <AgentResultContent
+            result={agent}
+            selected={agent.messageId === selectedAgentMessageId}
+            onOpenDetail={onOpenDetail}
+          />
+        )
+      } else {
+        processingLogRenderedInBody = true
+        body = (
+          <CollectingBlock
+            phase={turn.phase}
+            processingStatusLogs={turn.processingStatusLogs}
+            isRunning={processingStatusRunning}
+          />
+        )
+      }
       break
     }
     case 'pending':
     default:
-      body = <CollectingBlock supervisorStatus={supervisorStatus} phase={turn.phase} turn={turn} />
+      processingLogRenderedInBody = true
+      body = (
+        <CollectingBlock
+          phase={turn.phase}
+          processingStatusLogs={turn.processingStatusLogs}
+          isRunning={processingStatusRunning}
+        />
+      )
       break
   }
 
@@ -315,6 +328,9 @@ export function FinalAnswerSurface({
       data-final-answer-kind={finalAnswer.kind}
       data-primary-stream-id={turn.primaryStreamMessageId ?? ''}
     >
+      {shouldShowProcessingLog && !processingLogRenderedInBody && (
+        <ProcessingStatusLog entries={turn.processingStatusLogs} isRunning={processingStatusRunning} />
+      )}
       {body}
     </div>
   )

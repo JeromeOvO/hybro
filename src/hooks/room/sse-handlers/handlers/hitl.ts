@@ -3,6 +3,7 @@ import { useMessageStore } from '@/stores/message-store'
 import { normalizeTimestampOrNow } from '@/lib/time'
 import { appendEvent } from '@/lib/room-timeline/event-log'
 import { resolveClientRequestMessageId } from '../pending-turn-buffer'
+import { findProcessingStatusUserEntity } from '../../processing-status-log'
 import type { CorrelationResult } from '../correlation'
 import type { SSEHandlerDeps } from '../types'
 
@@ -32,6 +33,39 @@ export async function handleHitlInputRequested(
 
   store.removeMessage(lifecycle.placeholderId(roomId))
   lifecycle.dismissPlaceholder()
+
+  const processingUser =
+    findProcessingStatusUserEntity(roomId, {
+      clientRequestId: correlation.clientReqId,
+      relatedMessageId: related_message_id,
+      latestWithLogs: true,
+    }) ??
+    findProcessingStatusUserEntity(roomId, {
+      messageId: lifecycle.getMessageId(),
+      latestWithLogs: true,
+    })
+  const activeClientRequestId = lifecycle.getPendingRunEventAck()
+  const lifecycleMessageId = lifecycle.getMessageId()
+  const eventMatchesActiveAck =
+    !!activeClientRequestId &&
+    !!correlation.clientReqId &&
+    activeClientRequestId === correlation.clientReqId
+  const userMatchesActiveAck =
+    !!activeClientRequestId &&
+    !!processingUser?.clientRequestId &&
+    activeClientRequestId === processingUser.clientRequestId
+  const userMatchesLifecycle =
+    !!lifecycleMessageId &&
+    processingUser?.id === lifecycleMessageId
+  const isCurrentTurnHitl =
+    eventMatchesActiveAck ||
+    userMatchesActiveAck ||
+    userMatchesLifecycle ||
+    (!activeClientRequestId && !lifecycleMessageId && !!processingUser)
+  if (isCurrentTurnHitl) {
+    lifecycle.markProcessingResolved()
+    lifecycle.stopProcessing({ clearMessageId: false })
+  }
 
   for (const [oldReqId, oldEntityId] of hitlRequestIndex.current) {
     if (oldEntityId === message_id && oldReqId !== request_id) {

@@ -6,6 +6,29 @@ import { hydrateRoomFromDb } from '@/lib/room-sync'
 import { useRoomSSE } from '../useRoomSSE'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 import { useRoomUiStore } from '@/stores/room-ui-store'
+import { useMessageStore } from '@/stores/message-store'
+import { allAgentsTerminalForUserMessage } from '@/lib/room-timeline/turn-agent-terminal'
+import { findProcessingStatusUserEntity } from './processing-status-log'
+
+function hasTerminalEvidenceForCurrentTurn(roomId: string, lifecycle: ProcessingLifecycle): boolean {
+  const userEntity = findProcessingStatusUserEntity(roomId, {
+    messageId: lifecycle.getMessageId(),
+    clientRequestId: lifecycle.getPendingRunEventAck(),
+    latestWithLogs: true,
+  })
+  const userMessageId = lifecycle.getMessageId() ?? userEntity?.id
+  if (!userMessageId) return false
+
+  const store = useMessageStore.getState()
+  if (store.roomId !== roomId) return false
+
+  const latestUser = store.entities[userMessageId] ?? userEntity
+  if (latestUser?.roomId === roomId && latestUser.messageType === 'user' && latestUser.turnTerminalStatus) {
+    return true
+  }
+
+  return allAgentsTerminalForUserMessage(store.entities, roomId, userMessageId)
+}
 
 export function useRoomSSEConnection(
   roomId: string,
@@ -94,10 +117,16 @@ export function useRoomSSEConnection(
       // Capture the current message ID before the async check so we can detect
       // if the user starts a new turn before the response comes back (race guard).
       const messageIdAtReconnect = lifecycle.getMessageId()
-      backendHasActiveLifecycle().then(hasActive => {
+      backendHasActiveLifecycle().then(async hasActive => {
         const { sending } = useRoomUiStore.getState().rooms[roomId] ?? {}
         if (hasActive === false && lifecycle.getMessageId() === messageIdAtReconnect && !sending) {
-          console.log('🔄 Reconnect: backend confirms no active runs — clearing stuck spinner')
+          await reconcileWithDb(roomId)
+          if (lifecycle.getMessageId() !== messageIdAtReconnect) return
+          if (!hasTerminalEvidenceForCurrentTurn(roomId, lifecycle)) {
+            console.log('🔄 Reconnect: backend has no active runs, but DB has no terminal turn yet — keeping processing log')
+            return
+          }
+          console.log('🔄 Reconnect: backend confirms no active runs and DB has terminal turn — stopping processing lifecycle')
           lifecycle.stopProcessing()
           lifecycle.clearSseDisconnection()
         }
@@ -112,10 +141,14 @@ export function useRoomSSEConnection(
       safetyTimer = setTimeout(async () => {
         const hasActiveLifecycle = await backendHasActiveLifecycle()
         if (hasActiveLifecycle === false) {
-          console.log('🔄 Safety-net: backend confirms processing ended — clearing stuck spinner')
+          await reconcileWithDb(roomId)
+          if (!hasTerminalEvidenceForCurrentTurn(roomId, lifecycle)) {
+            console.log('🔄 Safety-net: backend has no active runs, but DB has no terminal turn yet — keeping processing log')
+            return
+          }
+          console.log('🔄 Safety-net: backend confirms processing ended and DB has terminal turn — stopping processing lifecycle')
           lifecycle.stopProcessing()
           lifecycle.clearSseDisconnection()
-          reconcileWithDb(roomId)
         }
       }, 15_000)
     }

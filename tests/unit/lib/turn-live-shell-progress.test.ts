@@ -16,6 +16,7 @@ function makeTurn(overrides: Partial<TurnViewModel>): TurnViewModel {
     agentResults: [],
     activeAgentIds: [],
     isSupervisorTurn: true,
+    processingStatusLogs: [],
     displayMode: 'parallel_results',
     phase: 'completed',
     finalAnswer: { kind: 'failed', label: 'Failed' },

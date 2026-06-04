@@ -24,6 +24,9 @@ export function TurnRenderer({
   const userEntity = useMessageStore(s =>
     turn.userMessageId ? s.entities[turn.userMessageId] : undefined,
   )
+  const hasAssistantSurface =
+    turn.agentResults.length > 0 ||
+    turn.processingStatusLogs.length > 0
 
   return (
     <div className="conversation-turn">
@@ -37,7 +40,7 @@ export function TurnRenderer({
         </div>
       ) : null}
 
-      {turn.agentResults.length > 0 && (
+      {hasAssistantSurface && (
         <div className="conversation-body-frame conversation-turn-content flex flex-col">
           <TurnBody
             turn={turn}

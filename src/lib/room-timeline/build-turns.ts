@@ -243,6 +243,7 @@ function assembleTurn(
     isSupervisorTurn,
     supervisorStage,
     turnTerminalStatus: scaffold.userEntity?.turnTerminalStatus,
+    processingStatusLogs: scaffold.userEntity?.processingStatusLogs ?? [],
     displayMode: 'single_agent', // placeholder, set below
     finalAnswer: { kind: 'pending', label: 'Working' }, // placeholder
   }
@@ -522,6 +523,16 @@ export function deriveTurnPhase(turn: TurnViewModel): TurnPhase {
     && turn.agentResults.some(r => r.isEphemeral && isSynthesisGapEphemeral(r))
 
   if (summaryResult?.status === 'working' || inSynthesisGap) return 'synthesizing'
+  if (
+    turn.status === 'active'
+    && turn.processingStatusLogs.length > 0
+    && (
+      real.length === 0
+      || turn.agentResults.some(r => r.isEphemeral && r.status === 'working')
+    )
+  ) {
+    return 'collecting'
+  }
   if (real.some(r => r.status === 'working')) return 'collecting'
   if (turn.status === 'awaiting_input' || turn.finalAnswer.kind === 'hitl') return 'collecting'
   return 'answering'
@@ -770,6 +781,7 @@ function turnsAreEqual(a: TurnViewModel, b: TurnViewModel): boolean {
   if (a.phase !== b.phase) return false
   if (a.primaryStreamMessageId !== b.primaryStreamMessageId) return false
   if (a.turnTerminalStatus !== b.turnTerminalStatus) return false
+  if (!processingStatusLogsEqual(a.processingStatusLogs, b.processingStatusLogs)) return false
   if (a.finalAnswer.kind !== b.finalAnswer.kind) return false
   if (a.finalAnswer.primaryMessageId !== b.finalAnswer.primaryMessageId) return false
   if (a.finalAnswer.deterministicIntro !== b.finalAnswer.deterministicIntro) return false
@@ -811,5 +823,18 @@ function turnsAreEqual(a: TurnViewModel, b: TurnViewModel): boolean {
   if ((a.summary?.title ?? '') !== (b.summary?.title ?? '')) return false
   if ((a.summary?.body ?? '') !== (b.summary?.body ?? '')) return false
 
+  return true
+}
+
+function processingStatusLogsEqual(
+  a: TurnViewModel['processingStatusLogs'],
+  b: TurnViewModel['processingStatusLogs'],
+): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id) return false
+    if (a[i].message !== b[i].message) return false
+    if (a[i].timestamp !== b[i].timestamp) return false
+  }
   return true
 }

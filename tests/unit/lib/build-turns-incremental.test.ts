@@ -161,4 +161,33 @@ describe('buildTurnsIncremental', () => {
     expect(turnsFromIncremental[0].agentResults.length).toBe(turnsFromFull[0].agentResults.length)
     expect(turnsFromIncremental[0].status).toBe(turnsFromFull[0].status)
   })
+
+  it('rebuilds a turn when processing status logs change', () => {
+    const userV1 = makeUserEntity({
+      id: 'u1',
+      clientRequestId: 'cr-1',
+    })
+    const turnsV1 = buildTurns(entitiesToMap([userV1]), ['u1'], [])
+
+    const userV2 = {
+      ...userV1,
+      processingStatusLogs: [
+        {
+          id: 'log-1',
+          message: 'Dispatching agents',
+          timestamp: '2026-06-03T12:00:01.000Z',
+        },
+      ],
+    }
+
+    const turnsV2 = buildTurnsIncremental(
+      turnsV1,
+      entitiesToMap([userV2]),
+      ['u1'],
+      [],
+    )
+
+    expect(turnsV2[0]).not.toBe(turnsV1[0])
+    expect(turnsV2[0].processingStatusLogs).toHaveLength(1)
+  })
 })

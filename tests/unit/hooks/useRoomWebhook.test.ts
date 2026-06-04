@@ -12,7 +12,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { TASK_STATE, type SSEMessage } from '@/lib/types/sse'
-import { resetPendingTurnBufferForTests } from '@/hooks/room/sse-handlers/pending-turn-buffer'
+import {
+  resetPendingTurnBufferForTests,
+  resolveClientRequestMessageId,
+} from '@/hooks/room/sse-handlers/pending-turn-buffer'
 
 // Capture the onMessage callback passed to useRoomSSE
 let capturedOnMessage: ((msg: SSEMessage) => void) | undefined
@@ -621,4 +624,1022 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(entity.senderName).toBeTruthy()
     expect(entity.agentId).toBeUndefined()
   })
+
+  it('seeds the live user turn with Thinking log instead of creating an agent placeholder', async () => {
+    const { result } = await mountHook()
+    await waitFor(() => expect(result.current.room).toBeTruthy())
+
+    await act(async () => {
+      await result.current.sendUserMessage('Tell me a story')
+    })
+
+    const userEntity = useMessageStore
+      .getState()
+      .orderedIds
+      .map((id) => useMessageStore.getState().entities[id])
+      .find((entity) => entity?.messageType === 'user' && entity.content === 'Tell me a story')
+
+    expect(userEntity?.processingStatusLogs?.map((entry) => entry.message)).toEqual([
+      'Thinking...',
+    ])
+    expect(useMessageStore.getState().entities['processing-placeholder-room-1']).toBeUndefined()
+  })
+
+  it('records processing_status details on the user message and preserves them after terminal status', async () => {
+    const { resolveClientRequestMessageId } = await import('@/hooks/room/sse-handlers/pending-turn-buffer')
+    const { result } = await mountHook()
+    await waitFor(() => expect(result.current.room).toBeTruthy())
+
+    const latestClientRequestId = () =>
+      useMessageStore
+        .getState()
+        .orderedIds
+        .map((id) => useMessageStore.getState().entities[id])
+        .filter((entity) => entity?.messageType === 'user')
+        .at(-1)?.clientRequestId
+
+    await act(async () => {
+      await result.current.sendUserMessage('Analyze current project status')
+    })
+
+    const clientRequestId = latestClientRequestId()
+    expect(clientRequestId).toBeTruthy()
+    resolveClientRequestMessageId(clientRequestId!, 'msg-1')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'processing',
+          message_id: 'msg-1',
+          client_request_id: clientRequestId,
+          details: 'Dispatching agents',
+        },
+      }))
+    })
+
+    const userAfterFirstDetail = useMessageStore
+      .getState()
+      .orderedIds
+      .map((id) => useMessageStore.getState().entities[id])
+      .find((entity) => entity?.messageType === 'user' && entity.clientRequestId === clientRequestId)
+
+    expect(userAfterFirstDetail?.processingStatusLogs?.map((entry) => entry.message)).toEqual([
+      'Thinking...',
+      'Dispatching agents',
+    ])
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'processing',
+          message_id: 'msg-1',
+          client_request_id: clientRequestId,
+          details: 'Dispatching agents',
+        },
+      }))
+    })
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'processing',
+          message_id: 'msg-1',
+          client_request_id: clientRequestId,
+          details: 'Collecting agent results',
+        },
+      }))
+    })
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'processing',
+          message_id: 'msg-1',
+          client_request_id: clientRequestId,
+          details: 'Dispatching agents',
+        },
+      }))
+    })
+
+    const userBeforeTerminal = useMessageStore
+      .getState()
+      .orderedIds
+      .map((id) => useMessageStore.getState().entities[id])
+      .find((entity) => entity?.messageType === 'user' && entity.clientRequestId === clientRequestId)
+
+    expect(userBeforeTerminal?.processingStatusLogs?.map((entry) => entry.message)).toEqual([
+      'Thinking...',
+      'Dispatching agents',
+      'Collecting agent results',
+    ])
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'awaiting_input',
+          message_id: 'msg-1',
+          client_request_id: clientRequestId,
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities[userBeforeTerminal!.id].processingStatusLogs?.map((entry) => entry.message)).toEqual([
+      'Thinking...',
+      'Dispatching agents',
+      'Collecting agent results',
+    ])
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'processing',
+          message_id: 'msg-1',
+          client_request_id: clientRequestId,
+          details: 'Resuming after input',
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities[userBeforeTerminal!.id].processingStatusLogs?.map((entry) => entry.message)).toEqual([
+      'Thinking...',
+      'Dispatching agents',
+      'Collecting agent results',
+      'Resuming after input',
+    ])
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'completed',
+          message_id: 'msg-1',
+          client_request_id: clientRequestId,
+        },
+      }))
+    })
+
+    const userAfterTerminal = useMessageStore.getState().entities[userBeforeTerminal!.id]
+    expect(userAfterTerminal.processingStatusLogs?.map((entry) => entry.message)).toEqual([
+      'Thinking...',
+      'Dispatching agents',
+      'Collecting agent results',
+      'Resuming after input',
+    ])
+    expect(userAfterTerminal.turnTerminalStatus).toBe('completed')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'processing',
+          message_id: 'msg-1',
+          client_request_id: clientRequestId,
+          details: 'Late update after terminal',
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities[userBeforeTerminal!.id].processingStatusLogs?.map((entry) => entry.message)).toEqual([
+      'Thinking...',
+      'Dispatching agents',
+      'Collecting agent results',
+      'Resuming after input',
+    ])
+    expect(flags().processing).toBe(false)
+    expect(useMessageStore.getState().entities['processing-placeholder-room-1']).toBeUndefined()
+  })
+
+  it('preserves logs for a room-level terminal status when the user entity still has its optimistic id', async () => {
+    const { resolveClientRequestMessageId } = await import('@/hooks/room/sse-handlers/pending-turn-buffer')
+    const { result } = await mountHook()
+    await waitFor(() => expect(result.current.room).toBeTruthy())
+
+    const clientRequestId = 'req-fast-terminal'
+    const optimisticUserId = `cr:${clientRequestId}`
+    resolveClientRequestMessageId(clientRequestId, 'msg-fast-terminal')
+    useRoomUiStore.getState().setProcessing('room-1', true)
+    useMessageStore.getState().upsertMessage({
+      id: optimisticUserId,
+      roomId: 'room-1',
+      messageType: 'user',
+      content: 'Fast terminal race',
+      senderName: 'User',
+      timestamp: '2026-06-03T12:00:00.000Z',
+      clientRequestId,
+      processingStatusLogs: [
+        {
+          id: 'processing-log-1',
+          message: 'Dispatching agents',
+          timestamp: '2026-06-03T12:00:01.000Z',
+        },
+      ],
+    }, 'optimistic')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'completed',
+          message_id: 'msg-fast-terminal',
+          client_request_id: clientRequestId,
+        },
+      }))
+    })
+
+    const userAfterTerminal = useMessageStore.getState().entities[optimisticUserId]
+    expect(userAfterTerminal.processingStatusLogs?.map((entry) => entry.message)).toEqual([
+      'Dispatching agents',
+    ])
+    expect(userAfterTerminal.turnTerminalStatus).toBe('completed')
+    expect(flags().processing).toBe(false)
+  })
+
+  it('does not apply stale processing_status events to the newer active turn', async () => {
+    const { SendMessage } = await import('@/lib/api/room')
+    vi.mocked(SendMessage)
+      .mockResolvedValueOnce({ success: true, message_id: 'msg-old' })
+      .mockResolvedValueOnce({ success: true, message_id: 'msg-new' })
+
+    const { result } = await mountHook()
+    await waitFor(() => expect(result.current.room).toBeTruthy())
+
+    const latestUser = () =>
+      useMessageStore
+        .getState()
+        .orderedIds
+        .map((id) => useMessageStore.getState().entities[id])
+        .filter((entity) => entity?.messageType === 'user')
+        .at(-1)
+
+    await act(async () => {
+      await result.current.sendUserMessage('Old turn')
+    })
+    const oldUser = latestUser()
+    const oldClientRequestId = oldUser?.clientRequestId
+    expect(oldClientRequestId).toBeTruthy()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'completed',
+          message_id: 'msg-old',
+          client_request_id: oldClientRequestId,
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities['msg-old'].turnTerminalStatus).toBe('completed')
+
+    await act(async () => {
+      await result.current.sendUserMessage('New turn')
+    })
+    const newUser = latestUser()
+    const newClientRequestId = newUser?.clientRequestId
+    expect(newClientRequestId).toBeTruthy()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'run_event',
+        data: {
+          type: 'run_started',
+          correlation_id: newClientRequestId,
+        },
+      }))
+    })
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'completed',
+          message_id: 'msg-old',
+          client_request_id: oldClientRequestId,
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities['msg-new'].turnTerminalStatus).toBeUndefined()
+    expect(flags().processing).toBe(true)
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'processing',
+          message_id: 'msg-old',
+          client_request_id: oldClientRequestId,
+          details: 'Late old processing detail',
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities['msg-old'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
+      'Thinking...',
+    ])
+    expect(useMessageStore.getState().entities['msg-new'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
+      'Thinking...',
+    ])
+  })
+
+  it('does not append stale processing details to an inactive old turn', async () => {
+    const { result } = await mountHook()
+    await waitFor(() => expect(result.current.room).toBeTruthy())
+
+    useMessageStore.getState().upsertMessage({
+      id: 'msg-old',
+      roomId: 'room-1',
+      messageType: 'user',
+      content: 'Old turn',
+      senderName: 'Test',
+      timestamp: '2026-06-04T01:00:00.000Z',
+      clientRequestId: 'req-old-stale-detail',
+      processingStatusLogs: [],
+    }, 'optimistic')
+    useMessageStore.getState().upsertMessage({
+      id: 'msg-new',
+      roomId: 'room-1',
+      messageType: 'user',
+      content: 'New turn',
+      senderName: 'Test',
+      timestamp: '2026-06-04T01:00:01.000Z',
+      clientRequestId: 'req-new-active-detail',
+      processingStatusLogs: [
+        {
+          id: 'processing-log-new-0',
+          message: 'Thinking...',
+          timestamp: '2026-06-04T01:00:01.000Z',
+        },
+      ],
+    }, 'optimistic')
+    resolveClientRequestMessageId('req-new-active-detail', 'msg-new')
+    resolveClientRequestMessageId('req-old-stale-detail', 'msg-old')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'processing',
+          message_id: 'msg-new',
+          client_request_id: 'req-new-active-detail',
+        },
+      }))
+    })
+
+    expect(flags().processing).toBe(true)
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'processing',
+          message_id: 'msg-old',
+          client_request_id: 'req-old-stale-detail',
+          details: 'Late old detail',
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities['msg-old'].processingStatusLogs).toEqual([])
+    expect(useMessageStore.getState().entities['msg-new'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
+      'Thinking...',
+    ])
+  })
+
+  it('does not let per-agent processing_status overwrite the turn cancel target', async () => {
+    const { cancelMessage } = await import('@/lib/api/sse')
+    const { result } = await mountHook()
+    await waitFor(() => expect(result.current.room).toBeTruthy())
+
+    await act(async () => {
+      await result.current.sendUserMessage('Run with agent processing updates')
+    })
+    const userEntity = useMessageStore
+      .getState()
+      .orderedIds
+      .map((id) => useMessageStore.getState().entities[id])
+      .find((entity) => entity?.messageType === 'user')
+    const clientRequestId = userEntity?.clientRequestId
+    expect(clientRequestId).toBeTruthy()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'processing',
+          message_id: 'agent-task-1',
+          client_request_id: clientRequestId,
+          details: 'Agent task is working',
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities[userEntity!.id].processingStatusLogs?.map((entry) => entry.message)).toEqual([
+      'Thinking...',
+      'Agent task is working',
+    ])
+
+    await act(async () => {
+      await result.current.cancelProcessing()
+    })
+
+    expect(cancelMessage).toHaveBeenCalledWith('msg-1', expect.any(Function))
+  })
+
+  it('does not drop early processing logs for a new turn after a fast-terminal previous turn', async () => {
+    const { SendMessage } = await import('@/lib/api/room')
+    let resolveOldSend!: (value: { success: true; message_id: string }) => void
+    let resolveNewSend!: (value: { success: true; message_id: string }) => void
+    vi.mocked(SendMessage)
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveOldSend = resolve
+      }))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveNewSend = resolve
+      }))
+
+    const { result } = await mountHook()
+    await waitFor(() => expect(result.current.room).toBeTruthy())
+
+    const latestUser = () =>
+      useMessageStore
+        .getState()
+        .orderedIds
+        .map((id) => useMessageStore.getState().entities[id])
+        .filter((entity) => entity?.messageType === 'user')
+        .at(-1)
+
+    let oldSendPromise!: Promise<boolean>
+    await act(async () => {
+      oldSendPromise = result.current.sendUserMessage('Fast terminal turn')
+      await Promise.resolve()
+    })
+    const oldClientRequestId = latestUser()?.clientRequestId
+    expect(oldClientRequestId).toBeTruthy()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'completed',
+          message_id: 'msg-old',
+          client_request_id: oldClientRequestId,
+        },
+      }))
+    })
+
+    await act(async () => {
+      resolveOldSend({ success: true, message_id: 'msg-old' })
+      await oldSendPromise
+    })
+
+    let newSendPromise!: Promise<boolean>
+    await act(async () => {
+      newSendPromise = result.current.sendUserMessage('Next turn with early detail')
+      await Promise.resolve()
+    })
+    const newClientRequestId = latestUser()?.clientRequestId
+    expect(newClientRequestId).toBeTruthy()
+    expect(newClientRequestId).not.toBe(oldClientRequestId)
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'processing',
+          message_id: 'msg-new',
+          client_request_id: newClientRequestId,
+          details: 'Early next-turn detail',
+        },
+      }))
+    })
+
+    await act(async () => {
+      resolveNewSend({ success: true, message_id: 'msg-new' })
+      await newSendPromise
+    })
+
+    expect(useMessageStore.getState().entities['msg-new'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
+      'Thinking...',
+      'Early next-turn detail',
+    ])
+  })
+
+  it('keeps the send guard active when buffered task output flushes before room terminal status', async () => {
+    const { SendMessage } = await import('@/lib/api/room')
+    let resolveSend!: (value: { success: true; message_id: string }) => void
+    vi.mocked(SendMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveSend = resolve
+    }))
+
+    const { result } = await mountHook()
+    await waitFor(() => expect(result.current.room).toBeTruthy())
+
+    let sendPromise!: Promise<boolean>
+    await act(async () => {
+      sendPromise = result.current.sendUserMessage('Flush buffered output')
+      await Promise.resolve()
+    })
+
+    const userEntity = useMessageStore
+      .getState()
+      .orderedIds
+      .map((id) => useMessageStore.getState().entities[id])
+      .find((entity) => entity?.messageType === 'user' && entity.content === 'Flush buffered output')
+    const clientRequestId = userEntity?.clientRequestId
+    expect(clientRequestId).toBeTruthy()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_update',
+        data: {
+          status: TASK_STATE.COMPLETED,
+          message_id: 'agent-buffered-1',
+          client_request_id: clientRequestId,
+          agent_id: 'agent-1',
+          agent_name: 'Agent',
+          content: 'Completed agent output before send resolves',
+        },
+      }))
+    })
+
+    await act(async () => {
+      resolveSend({ success: true, message_id: 'msg-flush' })
+      await sendPromise
+    })
+
+    expect(flags().processing).toBe(true)
+    expect(useRoomUiStore.getState().rooms['room-1']?.sending).toBe(false)
+    expect(useMessageStore.getState().entities['msg-flush'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
+      'Thinking...',
+    ])
+
+    let secondSendResult: boolean | undefined
+    await act(async () => {
+      secondSendResult = await result.current.sendUserMessage('Should still be guarded')
+    })
+
+    expect(secondSendResult).toBe(false)
+    expect(vi.mocked(SendMessage)).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves the live processing log when buffered HITL input arrives before send resolves', async () => {
+    const { SendMessage } = await import('@/lib/api/room')
+    let resolveSend!: (value: { success: true; message_id: string }) => void
+    vi.mocked(SendMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveSend = resolve
+    }))
+
+    const { result } = await mountHook()
+    await waitFor(() => expect(result.current.room).toBeTruthy())
+
+    let sendPromise!: Promise<boolean>
+    await act(async () => {
+      sendPromise = result.current.sendUserMessage('Need HITL fast')
+      await Promise.resolve()
+    })
+
+    const userEntity = useMessageStore
+      .getState()
+      .orderedIds
+      .map((id) => useMessageStore.getState().entities[id])
+      .find((entity) => entity?.messageType === 'user' && entity.content === 'Need HITL fast')
+    const clientRequestId = userEntity?.clientRequestId
+    expect(clientRequestId).toBeTruthy()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'hitl_input_requested',
+        data: {
+          request_id: 'req-fast-hitl',
+          message_id: 'hitl-fast-1',
+          prompt: 'Which option?',
+          prompt_type: 'text',
+          agent_name: 'Agent',
+          related_message_id: userEntity!.id,
+          client_request_id: clientRequestId,
+        },
+      }))
+    })
+
+    await act(async () => {
+      resolveSend({ success: true, message_id: 'msg-fast-hitl' })
+      await sendPromise
+    })
+
+    expect(flags().processing).toBe(false)
+    expect(useMessageStore.getState().entities['msg-fast-hitl'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
+      'Thinking...',
+    ])
+
+    let secondSendResult: boolean | undefined
+    await act(async () => {
+      secondSendResult = await result.current.sendUserMessage('Allowed after HITL')
+    })
+    expect(secondSendResult).toBe(true)
+    expect(vi.mocked(SendMessage)).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not let stale terminal processing_status clear a newer unresolved send log', async () => {
+    const { SendMessage } = await import('@/lib/api/room')
+    vi.mocked(SendMessage)
+      .mockResolvedValueOnce({ success: true, message_id: 'msg-old' })
+
+    let resolveNewSend!: (value: { success: true; message_id: string }) => void
+    vi.mocked(SendMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveNewSend = resolve
+    }))
+
+    const { result } = await mountHook()
+    await waitFor(() => expect(result.current.room).toBeTruthy())
+
+    const latestUser = () =>
+      useMessageStore
+        .getState()
+        .orderedIds
+        .map((id) => useMessageStore.getState().entities[id])
+        .filter((entity) => entity?.messageType === 'user')
+        .at(-1)
+
+    await act(async () => {
+      await result.current.sendUserMessage('Old turn')
+    })
+    const oldClientRequestId = latestUser()?.clientRequestId
+    expect(oldClientRequestId).toBeTruthy()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'completed',
+          message_id: 'msg-old',
+          client_request_id: oldClientRequestId,
+        },
+      }))
+    })
+
+    let sendPromise!: Promise<boolean>
+    await act(async () => {
+      sendPromise = result.current.sendUserMessage('New unresolved turn')
+      await Promise.resolve()
+    })
+
+    const newOptimisticUser = latestUser()
+    expect(newOptimisticUser?.clientRequestId).toBeTruthy()
+    expect(newOptimisticUser?.processingStatusLogs?.map((entry) => entry.message)).toEqual(['Thinking...'])
+    expect(useMessageStore.getState().entities['processing-placeholder-room-1']).toBeUndefined()
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    })
+
+    expect(useMessageStore.getState().entities[newOptimisticUser!.id].processingStatusLogs?.map((entry) => entry.message)).toEqual(['Thinking...'])
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'awaiting_input',
+          message_id: 'msg-old',
+          client_request_id: oldClientRequestId,
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities[newOptimisticUser!.id].processingStatusLogs?.map((entry) => entry.message)).toEqual(['Thinking...'])
+    expect(flags().processing).toBe(true)
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'completed',
+          message_id: 'msg-old',
+          client_request_id: oldClientRequestId,
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities[newOptimisticUser!.id].processingStatusLogs?.map((entry) => entry.message)).toEqual(['Thinking...'])
+    expect(flags().processing).toBe(true)
+
+    await act(async () => {
+      resolveNewSend({ success: true, message_id: 'msg-new' })
+      await sendPromise
+    })
+
+    expect(useMessageStore.getState().entities['msg-new']).toBeDefined()
+    expect(useMessageStore.getState().entities['msg-new'].processingStatusLogs?.map((entry) => entry.message)).toEqual(['Thinking...'])
+  })
+
+  it('does not let stale processing_status clear a newer unresolved log when the old user lacks clientRequestId', async () => {
+    const { SendMessage } = await import('@/lib/api/room')
+    vi.mocked(SendMessage)
+      .mockResolvedValueOnce({ success: true, message_id: 'msg-old' })
+
+    let resolveNewSend!: (value: { success: true; message_id: string }) => void
+    vi.mocked(SendMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveNewSend = resolve
+    }))
+
+    const { result } = await mountHook()
+    await waitFor(() => expect(result.current.room).toBeTruthy())
+
+    const latestUser = () =>
+      useMessageStore
+        .getState()
+        .orderedIds
+        .map((id) => useMessageStore.getState().entities[id])
+        .filter((entity) => entity?.messageType === 'user')
+        .at(-1)
+
+    await act(async () => {
+      await result.current.sendUserMessage('Old legacy turn')
+    })
+    const oldUser = latestUser()
+    const oldClientRequestId = oldUser?.clientRequestId
+    expect(oldClientRequestId).toBeTruthy()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'completed',
+          message_id: 'msg-old',
+          client_request_id: oldClientRequestId,
+        },
+      }))
+    })
+
+    useMessageStore.getState().upsertMessage({
+      id: 'msg-old',
+      roomId: 'room-1',
+      messageType: 'user',
+      content: 'Old legacy turn',
+      senderName: 'User',
+      timestamp: useMessageStore.getState().entities['msg-old'].timestamp,
+      clientRequestId: null as unknown as string,
+    }, 'db')
+    expect(useMessageStore.getState().entities['msg-old'].clientRequestId).toBeNull()
+
+    let sendPromise!: Promise<boolean>
+    await act(async () => {
+      sendPromise = result.current.sendUserMessage('New unresolved turn')
+      await Promise.resolve()
+    })
+
+    const newOptimisticUser = latestUser()
+    expect(newOptimisticUser?.clientRequestId).toBeTruthy()
+    expect(newOptimisticUser?.processingStatusLogs?.map((entry) => entry.message)).toEqual(['Thinking...'])
+    expect(useMessageStore.getState().entities['processing-placeholder-room-1']).toBeUndefined()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'awaiting_input',
+          message_id: 'msg-old',
+          client_request_id: oldClientRequestId,
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities[newOptimisticUser!.id].processingStatusLogs?.map((entry) => entry.message)).toEqual(['Thinking...'])
+    expect(flags().processing).toBe(true)
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'completed',
+          message_id: 'msg-old',
+          client_request_id: oldClientRequestId,
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities[newOptimisticUser!.id].processingStatusLogs?.map((entry) => entry.message)).toEqual(['Thinking...'])
+    expect(flags().processing).toBe(true)
+
+    await act(async () => {
+      resolveNewSend({ success: true, message_id: 'msg-new' })
+      await sendPromise
+    })
+
+    expect(useMessageStore.getState().entities['msg-new']).toBeDefined()
+    expect(useMessageStore.getState().entities['msg-new'].processingStatusLogs?.map((entry) => entry.message)).toEqual(['Thinking...'])
+  })
+
+  it('does not let stale terminal processing_status with stale lifecycle id clear a newer unresolved log', async () => {
+    const { SendMessage } = await import('@/lib/api/room')
+    vi.mocked(SendMessage)
+      .mockResolvedValueOnce({ success: true, message_id: 'msg-old' })
+
+    let resolveNewSend!: (value: { success: true; message_id: string }) => void
+    vi.mocked(SendMessage).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveNewSend = resolve
+    }))
+
+    const { result } = await mountHook()
+    await waitFor(() => expect(result.current.room).toBeTruthy())
+
+    const latestUser = () =>
+      useMessageStore
+        .getState()
+        .orderedIds
+        .map((id) => useMessageStore.getState().entities[id])
+        .filter((entity) => entity?.messageType === 'user')
+        .at(-1)
+
+    await act(async () => {
+      await result.current.sendUserMessage('Old fast-terminal turn')
+    })
+    const oldClientRequestId = latestUser()?.clientRequestId
+    expect(oldClientRequestId).toBeTruthy()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'completed',
+          message_id: 'msg-old',
+          client_request_id: oldClientRequestId,
+        },
+      }))
+    })
+
+    useRoomUiStore.getState().setProcessing('room-1', true)
+    useMessageStore.getState().upsertMessage({
+      id: 'processing-placeholder-room-1',
+      roomId: 'room-1',
+      messageType: 'agent',
+      content: '',
+      senderName: 'HYBRO AI',
+      taskStatus: TASK_STATE.WORKING,
+      taskContent: 'Processing your request...',
+      timestamp: new Date().toISOString(),
+      isEphemeral: true,
+      clientRequestId: oldClientRequestId,
+    }, 'optimistic')
+
+    let sendPromise!: Promise<boolean>
+    await act(async () => {
+      sendPromise = result.current.sendUserMessage('New unresolved turn')
+      await Promise.resolve()
+    })
+
+    const newOptimisticUser = latestUser()
+    expect(newOptimisticUser?.processingStatusLogs?.map((entry) => entry.message)).toEqual(['Thinking...'])
+    expect(useMessageStore.getState().entities['processing-placeholder-room-1']).toBeUndefined()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'completed',
+          message_id: 'msg-old',
+          client_request_id: oldClientRequestId,
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities[newOptimisticUser!.id].processingStatusLogs?.map((entry) => entry.message)).toEqual(['Thinking...'])
+    expect(flags().processing).toBe(true)
+
+    await act(async () => {
+      resolveNewSend({ success: true, message_id: 'msg-new' })
+      await sendPromise
+    })
+
+    expect(useMessageStore.getState().entities['msg-new']).toBeDefined()
+    expect(useMessageStore.getState().entities['msg-new'].processingStatusLogs?.map((entry) => entry.message)).toEqual(['Thinking...'])
+  })
+
+  it.each(['failed', 'canceled', 'rejected', 'error', 'rate_limited'] as const)(
+    'preserves processing status logs on %s processing_status',
+    async (terminalStatus) => {
+      const { resolveClientRequestMessageId } = await import('@/hooks/room/sse-handlers/pending-turn-buffer')
+      const { result } = await mountHook()
+      await waitFor(() => expect(result.current.room).toBeTruthy())
+
+      const latestClientRequestId = () =>
+        useMessageStore
+          .getState()
+          .orderedIds
+          .map((id) => useMessageStore.getState().entities[id])
+          .filter((entity) => entity?.messageType === 'user')
+          .at(-1)?.clientRequestId
+
+      await act(async () => {
+        await result.current.sendUserMessage(`Trigger ${terminalStatus}`)
+      })
+
+      const clientRequestId = latestClientRequestId()
+      expect(clientRequestId).toBeTruthy()
+      resolveClientRequestMessageId(clientRequestId!, 'msg-1')
+
+      await act(async () => {
+        await capturedOnMessage!(makeSSEMessage({
+          type: 'processing_status',
+          data: {
+            status: 'processing',
+            message_id: 'msg-1',
+            client_request_id: clientRequestId,
+            details: 'Processing before terminal',
+          },
+        }))
+      })
+
+      const userBeforeTerminal = useMessageStore
+        .getState()
+        .orderedIds
+        .map((id) => useMessageStore.getState().entities[id])
+        .find((entity) => entity?.messageType === 'user' && entity.clientRequestId === clientRequestId)
+      expect(userBeforeTerminal?.processingStatusLogs).toHaveLength(2)
+      const userMessageId = userBeforeTerminal!.id
+
+      await act(async () => {
+        await capturedOnMessage!(makeSSEMessage({
+          type: 'processing_status',
+          data: {
+            status: terminalStatus,
+            message_id: userMessageId,
+            client_request_id: clientRequestId,
+          },
+        }))
+      })
+
+      const terminalUser = useMessageStore.getState().entities[userBeforeTerminal!.id]
+      expect(terminalUser.processingStatusLogs?.map((entry) => entry.message)).toEqual([
+        'Thinking...',
+        'Processing before terminal',
+      ])
+      expect(terminalUser.turnTerminalStatus).toBe(
+        terminalStatus === 'canceled' ? 'canceled' : 'failed',
+      )
+    },
+  )
+
+  it.each(['completed', 'failed', 'canceled', 'rejected', 'error', 'rate_limited'] as const)(
+    'does not clear processing status logs for per-agent %s processing_status events',
+    async (terminalStatus) => {
+      const { resolveClientRequestMessageId } = await import('@/hooks/room/sse-handlers/pending-turn-buffer')
+      const { result } = await mountHook()
+      await waitFor(() => expect(result.current.room).toBeTruthy())
+
+      const latestClientRequestId = () =>
+        useMessageStore
+          .getState()
+          .orderedIds
+          .map((id) => useMessageStore.getState().entities[id])
+          .filter((entity) => entity?.messageType === 'user')
+          .at(-1)?.clientRequestId
+
+      await act(async () => {
+        await result.current.sendUserMessage('Trigger per-agent terminal')
+      })
+
+      const clientRequestId = latestClientRequestId()
+      expect(clientRequestId).toBeTruthy()
+      resolveClientRequestMessageId(clientRequestId!, 'msg-1')
+
+      await act(async () => {
+        await capturedOnMessage!(makeSSEMessage({
+          type: 'processing_status',
+          data: {
+            status: 'processing',
+            message_id: 'msg-1',
+            client_request_id: clientRequestId,
+            details: 'Processing before agent terminal',
+          },
+        }))
+      })
+
+      const userBeforeAgentTerminal = useMessageStore
+        .getState()
+        .orderedIds
+        .map((id) => useMessageStore.getState().entities[id])
+        .find((entity) => entity?.messageType === 'user' && entity.clientRequestId === clientRequestId)
+      expect(userBeforeAgentTerminal?.processingStatusLogs).toHaveLength(2)
+
+      await act(async () => {
+        await capturedOnMessage!(makeSSEMessage({
+          type: 'processing_status',
+          data: {
+            status: terminalStatus,
+            message_id: 'agent-task-1',
+            client_request_id: clientRequestId,
+          },
+        }))
+      })
+
+      expect(useMessageStore.getState().entities[userBeforeAgentTerminal!.id].processingStatusLogs).toHaveLength(2)
+    },
+  )
 })
