@@ -13,7 +13,7 @@ function mkEvent(type: SSEMessage['type'], data: Record<string, unknown> = {}): 
     room_id: 'room-1',
     timestamp: new Date().toISOString(),
     data,
-  }
+  } as SSEMessage
 }
 
 describe('pending-turn-buffer', () => {

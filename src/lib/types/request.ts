@@ -404,6 +404,30 @@ export interface RoomCenterUserMessageRequest {
   message?: RoomUserMessage | null;
   client_request_id?: string | null;
 }
+
+type SendMessageBasePayload = {
+  message: unknown
+  client_request_id: string
+}
+
+export type SendMessagePayload = SendMessageBasePayload & (
+  | {
+      mentioned_agent_ids: [string, ...string[]]
+      message_target_mode?: never
+      target_group_id?: never
+    }
+  | {
+      message_target_mode: 'room_default' | 'all_agents'
+      mentioned_agent_ids?: never
+      target_group_id?: never
+    }
+  | {
+      message_target_mode: 'saved_group'
+      target_group_id: string
+      mentioned_agent_ids?: never
+    }
+)
+
 export interface RoomUserMessage {
   room_id: string;
   message_id: string;

@@ -15,12 +15,12 @@ import React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
-import type { SSEMessage } from '@/lib/types/sse'
+import type { AnySSEFrame } from '@/lib/types/sse'
 
-let capturedOnMessage: ((msg: SSEMessage) => void) | undefined
+let capturedOnMessage: ((msg: AnySSEFrame) => void) | undefined
 
 vi.mock('@/hooks/useRoomSSE', () => ({
-  useRoomSSE: vi.fn((opts: { onMessage?: (msg: SSEMessage) => void }) => {
+  useRoomSSE: vi.fn((opts: { onMessage?: (msg: AnySSEFrame) => void }) => {
     capturedOnMessage = opts.onMessage
     return { connected: true, connecting: false, error: null }
   }),
@@ -65,11 +65,12 @@ vi.mock('@/components/ui/banner', () => ({
   banner: { info: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }))
 
-function makeSSEMessage(overrides: Partial<SSEMessage>): SSEMessage {
+function makeSSEMessage(overrides: Partial<AnySSEFrame>): AnySSEFrame {
   return {
     type: 'heartbeat',
     room_id: 'room-1',
     timestamp: new Date().toISOString(),
+    data: {},
     ...overrides,
   }
 }
@@ -129,7 +130,7 @@ describe('useRoomWebhook double-send guard', () => {
 
     let firstResult: boolean | undefined
     await act(async () => {
-      firstResult = await result.current.sendUserMessage('Hello')
+      firstResult = await result.current.sendUserMessage({ userInput: 'Hello', dispatch: { message_target_mode: 'room_default' } })
     })
     expect(firstResult).toBe(true)
     expect(mockSendMessage).toHaveBeenCalledTimes(1)
@@ -137,7 +138,7 @@ describe('useRoomWebhook double-send guard', () => {
 
     let secondResult: boolean | undefined
     await act(async () => {
-      secondResult = await result.current.sendUserMessage('Second message')
+      secondResult = await result.current.sendUserMessage({ userInput: 'Second message', dispatch: { message_target_mode: 'room_default' } })
     })
     expect(secondResult).toBe(false)
     expect(mockSendMessage).toHaveBeenCalledTimes(1)
@@ -148,7 +149,7 @@ describe('useRoomWebhook double-send guard', () => {
     expect(capturedOnMessage).toBeDefined()
 
     await act(async () => {
-      await result.current.sendUserMessage('Hello')
+      await result.current.sendUserMessage({ userInput: 'Hello', dispatch: { message_target_mode: 'room_default' } })
     })
     expect(flags().processing).toBe(true)
     const clientRequestId = latestClientRequestId()
@@ -157,7 +158,7 @@ describe('useRoomWebhook double-send guard', () => {
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'processing_status',
-        data: { status: 'completed', message_id: 'msg-1', client_request_id: clientRequestId },
+        data: { status: 'completed', message_id: 'msg-1', client_request_id: clientRequestId, details: null },
       }))
     })
     expect(flags().processing).toBe(false)
@@ -166,7 +167,7 @@ describe('useRoomWebhook double-send guard', () => {
 
     let secondResult: boolean | undefined
     await act(async () => {
-      secondResult = await result.current.sendUserMessage('Follow up')
+      secondResult = await result.current.sendUserMessage({ userInput: 'Follow up', dispatch: { message_target_mode: 'room_default' } })
     })
     expect(secondResult).toBe(true)
     expect(mockSendMessage).toHaveBeenCalledTimes(2)
@@ -177,7 +178,7 @@ describe('useRoomWebhook double-send guard', () => {
     expect(capturedOnMessage).toBeDefined()
 
     await act(async () => {
-      await result.current.sendUserMessage('Hello')
+      await result.current.sendUserMessage({ userInput: 'Hello', dispatch: { message_target_mode: 'room_default' } })
     })
     expect(flags().processing).toBe(true)
     const clientRequestId = latestClientRequestId()
@@ -204,7 +205,7 @@ describe('useRoomWebhook double-send guard', () => {
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'processing_status',
-        data: { status: 'completed', message_id: 'msg-1', client_request_id: clientRequestId },
+        data: { status: 'completed', message_id: 'msg-1', client_request_id: clientRequestId, details: null },
       }))
     })
     expect(flags().processing).toBe(false)
@@ -213,7 +214,7 @@ describe('useRoomWebhook double-send guard', () => {
 
     let sendResult: boolean | undefined
     await act(async () => {
-      sendResult = await result.current.sendUserMessage('Another message')
+      sendResult = await result.current.sendUserMessage({ userInput: 'Another message', dispatch: { message_target_mode: 'room_default' } })
     })
     expect(sendResult).toBe(true)
   })

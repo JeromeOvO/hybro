@@ -13,11 +13,23 @@ import { useGroupManagement } from '@/hooks/useGroupManagement'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
-import { BUILTIN_GROUP_ROOM_TEAM, BUILTIN_GROUP_ALL_AGENTS, isBuiltinGroup } from '@/lib/types/agent-group'
+import {
+  BUILTIN_GROUP_ROOM_TEAM,
+  BUILTIN_GROUP_ALL_AGENTS,
+  isBuiltinGroup,
+  isMentionDispatchInput,
+} from '@/lib/types/agent-group'
 import type { MessageDispatchInput } from '@/lib/types/agent-group'
 import { updateRoomExtendInfo, inquiryRoomSetting, updateRoomAgentSet } from '@/lib/api/room'
 import type { ChatMode } from '@/lib/types/chat-mode'
 import { chatModeToFlags, flagsToChatMode } from '@/lib/types/chat-mode'
+
+function selectedGroupFromDispatch(dispatch: MessageDispatchInput | undefined): string | undefined {
+  if (!dispatch || isMentionDispatchInput(dispatch)) return undefined
+  if (dispatch.message_target_mode === 'room_default') return BUILTIN_GROUP_ROOM_TEAM
+  if (dispatch.message_target_mode === 'all_agents') return BUILTIN_GROUP_ALL_AGENTS
+  return dispatch.target_group_id
+}
 
 export default function RoomChatPage() {
   const params = useParams()
@@ -107,7 +119,8 @@ export default function RoomChatPage() {
 
       // Peek at pending room data for target group (don't consume yet)
       const pendingData = useRoomUiStore.getState().pendingRoomData[roomId]
-      const pendingGroup = pendingData?.targetGroup
+      const pendingGroup = selectedGroupFromDispatch(pendingData?.dispatch)
+        ?? pendingData?.targetGroup
 
       if (localStorageOverride) {
         gm.handleGroupChange(localStorageOverride)
@@ -139,29 +152,18 @@ export default function RoomChatPage() {
       return
     }
 
-    // Default (autosend) mode: existing behavior unchanged
     initialMessageSentRef.current = true
 
-    const targetGroup = pendingData.targetGroup || (
-      room.room_agent_set && Object.keys(room.room_agent_set).length > 0
-        ? BUILTIN_GROUP_ROOM_TEAM
-        : BUILTIN_GROUP_ALL_AGENTS
-    )
-
-    // Extract inline mentions so the backend uses canonical mention dispatch
-    // instead of the legacy parse that filters against room_agent_set.
-    let dispatch: MessageDispatchInput | undefined
-    const mentionPattern = /<@([^|]+)\|[^>]+>/g
-    const ids: string[] = []
-    let m: RegExpExecArray | null
-    while ((m = mentionPattern.exec(pendingData.initialMessage)) !== null) {
-      ids.push(m[1])
-    }
-    if (ids.length > 0) {
-      dispatch = { mentioned_agent_ids: ids }
+    if (!pendingData.dispatch) {
+      console.debug('Blocked pending room autosend without final MessageDispatchInput')
+      return
     }
 
-    sendUserMessage(pendingData.initialMessage, targetGroup, undefined, pendingData.attachments, dispatch).then((success) => {
+    sendUserMessage({
+      userInput: pendingData.initialMessage,
+      pendingAttachments: pendingData.attachments,
+      dispatch: pendingData.dispatch,
+    }).then((success) => {
       if (!success) {
         useRoomUiStore.getState().setPendingRoomData(roomId, pendingData)
         initialMessageSentRef.current = false
@@ -170,7 +172,7 @@ export default function RoomChatPage() {
   }, [room, loading, roomId, user?.id, sendUserMessage])
 
   // This function will be called when user clicks send button
-  const handleSendMessage = async (userInput: string, targetGroup?: string, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => {
+  const handleSendMessage = async (userInput: string, dispatchInput: MessageDispatchInput, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => {
     // Lazy-persist chat mode changes
     const baseline = confirmedChatModeRef.current ?? effectiveChatMode
     const modeChanged = room && effectiveChatMode !== baseline
@@ -205,8 +207,14 @@ export default function RoomChatPage() {
     }
 
     // Empty room + saved group override: pre-write room_agent_set before sending (Matrix B5)
-    const effectiveTarget = targetGroup || gm.selectedGroup || "all_agents"
-    if (roomAgentCount === 0 && !isBuiltinGroup(effectiveTarget)) {
+    const dispatchGroup = selectedGroupFromDispatch(dispatchInput)
+    const effectiveTarget = dispatchGroup || gm.selectedGroup || "all_agents"
+    if (
+      roomAgentCount === 0
+      && !isMentionDispatchInput(dispatchInput)
+      && dispatchInput.message_target_mode === 'saved_group'
+      && !isBuiltinGroup(effectiveTarget)
+    ) {
       try {
         const preWriteResult = await updateRoomAgentSet(
           roomId, {}, getToken,
@@ -219,7 +227,12 @@ export default function RoomChatPage() {
         // Refetch room so roomAgentCount updates and selector transitions to Room Default
         await refreshRoomSetting()
         gm.handleClearOverride()
-        await sendUserMessage(userInput, BUILTIN_GROUP_ROOM_TEAM, quoteData ?? undefined, attachments, { message_target_mode: "room_default" })
+        await sendUserMessage({
+          userInput,
+          quoteData: quoteData ?? undefined,
+          pendingAttachments: attachments,
+          dispatch: { message_target_mode: "room_default" },
+        })
         return
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Failed to set room agents')
@@ -227,21 +240,12 @@ export default function RoomChatPage() {
       }
     }
 
-    // When targetGroup is undefined the composer detected inline mentions —
-    // build a MentionDispatchInput so the backend uses canonical mention routing.
-    let dispatch: MessageDispatchInput | null = gm.resolvedTargetMode
-    if (!targetGroup) {
-      const mentionPattern = /<@([^|]+)\|[^>]+>/g
-      const ids: string[] = []
-      let m: RegExpExecArray | null
-      while ((m = mentionPattern.exec(userInput)) !== null) {
-        ids.push(m[1])
-      }
-      if (ids.length > 0) {
-        dispatch = { mentioned_agent_ids: ids }
-      }
-    }
-    await sendUserMessage(userInput, targetGroup || gm.selectedGroup || "all_agents", quoteData ?? undefined, attachments, dispatch ?? undefined)
+    await sendUserMessage({
+      userInput,
+      quoteData: quoteData ?? undefined,
+      pendingAttachments: attachments,
+      dispatch: dispatchInput,
+    })
   }
 
   // Open room default agents editor (prefetch agents)

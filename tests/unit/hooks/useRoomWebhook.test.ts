@@ -11,17 +11,19 @@ import React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
-import { TASK_STATE, type SSEMessage } from '@/lib/types/sse'
+import { useStreamingStore } from '@/stores/streaming-store'
+import { TASK_STATE, type AnySSEFrame } from '@/lib/types/sse'
 import {
+  flushPendingSseEvents,
   resetPendingTurnBufferForTests,
   resolveClientRequestMessageId,
 } from '@/hooks/room/sse-handlers/pending-turn-buffer'
 
 // Capture the onMessage callback passed to useRoomSSE
-let capturedOnMessage: ((msg: SSEMessage) => void) | undefined
+let capturedOnMessage: ((msg: AnySSEFrame) => void) | undefined
 
 vi.mock('@/hooks/useRoomSSE', () => ({
-  useRoomSSE: vi.fn((opts: { onMessage?: (msg: SSEMessage) => void }) => {
+  useRoomSSE: vi.fn((opts: { onMessage?: (msg: AnySSEFrame) => void }) => {
     capturedOnMessage = opts.onMessage
     return { connected: true, connecting: false, error: null }
   }),
@@ -63,11 +65,12 @@ vi.mock('@/components/ui/banner', () => ({
   banner: { info: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }))
 
-function makeSSEMessage(overrides: Partial<SSEMessage>): SSEMessage {
+function makeSSEMessage(overrides: Partial<AnySSEFrame>): AnySSEFrame {
   return {
     type: 'heartbeat',
     room_id: 'room-1',
     timestamp: new Date().toISOString(),
+    data: {},
     ...overrides,
   }
 }
@@ -84,13 +87,18 @@ function createWrapper() {
 const flags = (roomId = 'room-1') => useRoomUiStore.getState().getRoomFlags(roomId)
 
 describe('useRoomWebhook SSE message handling', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    const { SendMessage } = await import('@/lib/api/room')
+
     vi.clearAllMocks()
+    vi.mocked(SendMessage).mockReset()
+    vi.mocked(SendMessage).mockResolvedValue({ success: true, message_id: 'msg-1' })
     capturedOnMessage = undefined
     resetPendingTurnBufferForTests()
     useMessageStore.getState().clearRoom()
     useMessageStore.getState().setRoom('room-1')
     useMessageStore.getState().markDbSynced()
+    useStreamingStore.setState({ buffers: {} })
     useRoomUiStore.getState().resetAll()
   })
 
@@ -116,50 +124,85 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(capturedOnMessage).toBeDefined()
   })
 
-  it('should handle user_message by writing to message store', async () => {
+  it.each(['user_message', 'turn_event', 'hitl_input_requested', 'hitl_status_update'])(
+    'ignores legacy %s frames under the final room SSE contract',
+    async (legacyType) => {
     await mountHook()
     expect(capturedOnMessage).toBeDefined()
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
-        type: 'user_message',
+        type: legacyType,
         data: {
-          message_id: 'msg-u1',
+          message_id: `msg-${legacyType}`,
+          request_id: `req-${legacyType}`,
           content: 'Hello from SSE',
+          prompt: 'Input please',
+          prompt_type: 'text',
           user_id: 'user-42',
         },
       }))
     })
 
-    const entity = useMessageStore.getState().entities['msg-u1']
-    expect(entity).toBeDefined()
-    expect(entity.content).toBe('Hello from SSE')
-    expect(entity.messageType).toBe('user')
-  })
+    expect(useMessageStore.getState().entities[`msg-${legacyType}`]).toBeUndefined()
+    },
+  )
 
-  it('should preserve clientRequestId on user_message when provided', async () => {
+  it('handles connected frames with final connection_id without message store side effects', async () => {
     await mountHook()
     expect(capturedOnMessage).toBeDefined()
+    const countBefore = useMessageStore.getState().orderedIds.length
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
-        type: 'user_message',
+        type: 'connected',
         data: {
-          message_id: 'msg-u2',
-          content: 'Hello with correlation',
-          user_id: 'user-99',
-          client_request_id: 'req-user-msg-1',
+          connection_id: 'conn-room-1',
         },
       }))
     })
 
-    const entity = useMessageStore.getState().entities['msg-u2']
-    expect(entity).toBeDefined()
-    expect(entity.clientRequestId).toBe('req-user-msg-1')
+    expect(useMessageStore.getState().orderedIds.length).toBe(countBefore)
+  })
+
+  it('ignores malformed connected frames without connection_id', async () => {
+    await mountHook()
+    expect(capturedOnMessage).toBeDefined()
+    const countBefore = useMessageStore.getState().orderedIds.length
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'connected',
+        data: {
+          status: 'connected',
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().orderedIds.length).toBe(countBefore)
+  })
+
+  it('treats cancellation frames as debug-only events', async () => {
+    await mountHook()
+    expect(capturedOnMessage).toBeDefined()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    useRoomUiStore.getState().setCancelling('room-1', true)
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'cancellation',
+        data: { reason: 'server-notification' },
+      }))
+    })
+
+    expect(flags().cancelling).toBe(true)
   })
 
   it('should handle agent_response by finalizing streaming and writing to store', async () => {
     await mountHook()
+    resolveClientRequestMessageId('req-agent-response', 'msg-a1')
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
@@ -168,6 +211,7 @@ describe('useRoomWebhook SSE message handling', () => {
           message_id: 'msg-a1',
           content: 'Agent reply',
           agent_id: 'agent-1',
+          client_request_id: 'req-agent-response',
         },
       }))
     })
@@ -179,8 +223,95 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(entity.isEphemeral).toBe(false)
   })
 
+  it('streams agent_response_partial into the transient buffer with correlation metadata', async () => {
+    await mountHook()
+    resolveClientRequestMessageId('req-partial-response', 'user-partial-1')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'agent_response_partial',
+        data: {
+          message_id: 'agent-partial-1',
+          agent_id: 'agent-1',
+          content_delta: 'Partial text',
+          client_request_id: 'req-partial-response',
+        },
+      }))
+    })
+
+    const buffer = useStreamingStore.getState().buffers['req-partial-response']
+    expect(buffer.text).toBe('Partial text')
+    expect(buffer.clientRequestId).toBe('req-partial-response')
+    expect(buffer.userMessageId).toBe('user-partial-1')
+    expect(useMessageStore.getState().entities['agent-partial-1']).toBeUndefined()
+  })
+
+  it('buffers agent_response_partial until send resolves the client_request_id', async () => {
+    await mountHook()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'agent_response_partial',
+        data: {
+          message_id: 'agent-partial-buffered',
+          agent_id: 'agent-1',
+          content_delta: 'Buffered text',
+          client_request_id: 'req-partial-buffered',
+        },
+      }))
+    })
+
+    expect(useStreamingStore.getState().buffers['req-partial-buffered']).toBeUndefined()
+
+    await act(async () => {
+      await flushPendingSseEvents('req-partial-buffered', async (event) => {
+        await capturedOnMessage!(event)
+      }, 'user-buffered-1')
+    })
+
+    const buffer = useStreamingStore.getState().buffers['req-partial-buffered']
+    expect(buffer.text).toBe('Buffered text')
+    expect(buffer.clientRequestId).toBe('req-partial-buffered')
+    expect(buffer.userMessageId).toBe('user-buffered-1')
+  })
+
+  it('clears request-keyed partial buffers when final agent_response uses a different message_id', async () => {
+    await mountHook()
+    resolveClientRequestMessageId('req-partial-final', 'user-partial-final')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'agent_response_partial',
+        data: {
+          message_id: 'partial-msg-1',
+          agent_id: 'agent-1',
+          content_delta: 'Draft stream',
+          client_request_id: 'req-partial-final',
+        },
+      }))
+    })
+
+    expect(useStreamingStore.getState().buffers['req-partial-final']?.text).toBe('Draft stream')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'agent_response',
+        data: {
+          message_id: 'final-msg-1',
+          content: 'Final stream',
+          agent_id: 'agent-1',
+          client_request_id: 'req-partial-final',
+        },
+      }))
+    })
+
+    expect(useStreamingStore.getState().buffers['req-partial-final']).toBeUndefined()
+    expect(useMessageStore.getState().entities['final-msg-1']?.content).toBe('Final stream')
+  })
+
   it('marks an existing working agent as completed when final agent_response repeats streamed content', async () => {
     await mountHook()
+    resolveClientRequestMessageId('req-summary-response', 'summary-task-1')
 
     useMessageStore.getState().upsertMessage({
       id: 'summary-task-1',
@@ -191,6 +322,7 @@ describe('useRoomWebhook SSE message handling', () => {
       timestamp: new Date().toISOString(),
       agentId: 'summary-agent',
       taskStatus: TASK_STATE.WORKING,
+      clientRequestId: 'req-summary-response',
     }, 'sse')
 
     await act(async () => {
@@ -200,6 +332,7 @@ describe('useRoomWebhook SSE message handling', () => {
           message_id: 'summary-task-1',
           content: 'Summary text is already visible.',
           agent_id: 'summary-agent',
+          client_request_id: 'req-summary-response',
         },
       }))
     })
@@ -207,6 +340,324 @@ describe('useRoomWebhook SSE message handling', () => {
     const entity = useMessageStore.getState().entities['summary-task-1']
     expect(entity.content).toBe('Summary text is already visible.')
     expect(entity.taskStatus).toBe(TASK_STATE.COMPLETED)
+  })
+
+  it('clears request-keyed partial buffers when duplicate final repeats a completed task_update', async () => {
+    await mountHook()
+    resolveClientRequestMessageId('req-completed-duplicate-final', 'user-completed-duplicate-final')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'agent_response_partial',
+        data: {
+          message_id: 'partial-completed-duplicate-final',
+          agent_id: 'agent-1',
+          content_delta: 'Draft that should not linger',
+          client_request_id: 'req-completed-duplicate-final',
+        },
+      }))
+    })
+
+    expect(useStreamingStore.getState().buffers['req-completed-duplicate-final']?.text).toBe('Draft that should not linger')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_update',
+        data: {
+          message_id: 'completed-duplicate-final',
+          agent_id: 'agent-1',
+          agent_name: 'Research Agent',
+          status: TASK_STATE.COMPLETED,
+          content: 'Completed answer',
+          client_request_id: 'req-completed-duplicate-final',
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities['completed-duplicate-final']?.taskStatus).toBe(TASK_STATE.COMPLETED)
+    expect(useStreamingStore.getState().buffers['req-completed-duplicate-final']).toBeUndefined()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'agent_response_partial',
+        data: {
+          message_id: 'partial-completed-duplicate-final',
+          agent_id: 'agent-1',
+          content_delta: 'Late draft that should not linger',
+          client_request_id: 'req-completed-duplicate-final',
+        },
+      }))
+    })
+
+    expect(useStreamingStore.getState().buffers['req-completed-duplicate-final']?.text).toBe('Late draft that should not linger')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'agent_response',
+        data: {
+          message_id: 'completed-duplicate-final',
+          content: 'Completed answer',
+          agent_id: 'agent-1',
+          client_request_id: 'req-completed-duplicate-final',
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities['completed-duplicate-final']?.content).toBe('Completed answer')
+    expect(useStreamingStore.getState().buffers['req-completed-duplicate-final']).toBeUndefined()
+  })
+
+  it('persists a distinct final agent_response after task_submitted from the same agent', async () => {
+    await mountHook()
+    resolveClientRequestMessageId('req-task-then-response', 'user-task-root')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_submitted',
+        data: {
+          message_id: 'task-1',
+          agent_id: 'agent-1',
+          agent_name: 'Research Agent',
+          status: TASK_STATE.WORKING,
+          task_content: 'Searching',
+          client_request_id: 'req-task-then-response',
+        },
+      }))
+    })
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'agent_response',
+        data: {
+          message_id: 'response-1',
+          content: 'Final answer',
+          agent_id: 'agent-1',
+          client_request_id: 'req-task-then-response',
+        },
+      }))
+    })
+
+    const store = useMessageStore.getState()
+    expect(store.entities['task-1']).toBeDefined()
+    expect(store.entities['response-1']).toMatchObject({
+      content: 'Final answer',
+      messageType: 'agent',
+      agentId: 'agent-1',
+      taskStatus: TASK_STATE.COMPLETED,
+      isEphemeral: false,
+    })
+  })
+
+  it('lets final agent_response replace a completed task_update with the same message id', async () => {
+    await mountHook()
+    resolveClientRequestMessageId('req-task-final-rewrite', 'user-task-root')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_update',
+        data: {
+          message_id: 'agent-msg-1',
+          agent_id: 'agent-1',
+          agent_name: 'Research Agent',
+          status: TASK_STATE.COMPLETED,
+          content: 'Draft result',
+          client_request_id: 'req-task-final-rewrite',
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities['agent-msg-1']?.content).toBe('Draft result')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'agent_response',
+        data: {
+          message_id: 'agent-msg-1',
+          content: 'Final answer',
+          agent_id: 'agent-1',
+          client_request_id: 'req-task-final-rewrite',
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities['agent-msg-1']).toMatchObject({
+      content: 'Final answer',
+      messageType: 'agent',
+      agentId: 'agent-1',
+      taskStatus: TASK_STATE.COMPLETED,
+      isEphemeral: false,
+    })
+  })
+
+  it('lets same-text final agent_response remove stale task_update artifacts', async () => {
+    await mountHook()
+    resolveClientRequestMessageId('req-task-final-remove-artifact', 'user-task-root')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_update',
+        data: {
+          message_id: 'agent-msg-remove-artifact',
+          agent_id: 'agent-1',
+          agent_name: 'Research Agent',
+          status: TASK_STATE.COMPLETED,
+          content: 'Final answer',
+          client_request_id: 'req-task-final-remove-artifact',
+          parts: [
+            { kind: 'file', file: { uri: 'https://example.test/draft.pdf', mime_type: 'application/pdf', name: 'draft.pdf' } },
+          ],
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities['agent-msg-remove-artifact']?.artifacts).toHaveLength(1)
+    useMessageStore.getState().upsertMessage({
+      ...useMessageStore.getState().entities['agent-msg-remove-artifact'],
+      taskContent: '',
+    }, 'sse')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'agent_response',
+        data: {
+          message_id: 'agent-msg-remove-artifact',
+          content: 'Final answer',
+          agent_id: 'agent-1',
+          client_request_id: 'req-task-final-remove-artifact',
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities['agent-msg-remove-artifact']).toMatchObject({
+      content: 'Final answer',
+      artifacts: [],
+      taskStatus: TASK_STATE.COMPLETED,
+    })
+  })
+
+  it('lets same-text final agent_response replace task_update artifacts', async () => {
+    await mountHook()
+    resolveClientRequestMessageId('req-task-final-replace-artifact', 'user-task-root')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_update',
+        data: {
+          message_id: 'agent-msg-replace-artifact',
+          agent_id: 'agent-1',
+          agent_name: 'Research Agent',
+          status: TASK_STATE.COMPLETED,
+          content: 'Final answer',
+          client_request_id: 'req-task-final-replace-artifact',
+          parts: [
+            { kind: 'file', file: { uri: 'https://example.test/draft.pdf', mime_type: 'application/pdf', name: 'draft.pdf' } },
+          ],
+        },
+      }))
+    })
+
+    useMessageStore.getState().upsertMessage({
+      ...useMessageStore.getState().entities['agent-msg-replace-artifact'],
+      taskContent: '',
+    }, 'sse')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'agent_response',
+        data: {
+          message_id: 'agent-msg-replace-artifact',
+          content: 'Final answer',
+          agent_id: 'agent-1',
+          client_request_id: 'req-task-final-replace-artifact',
+          parts: [
+            { kind: 'file', file: { uri: 'https://example.test/final.pdf', mime_type: 'application/pdf', name: 'final.pdf' } },
+          ],
+        },
+      }))
+    })
+
+    const entity = useMessageStore.getState().entities['agent-msg-replace-artifact']
+    expect(entity.content).toBe('Final answer')
+    expect(entity.artifacts?.[0]?.parts).toEqual([
+      { kind: 'file', file: { uri: 'https://example.test/final.pdf', bytes: undefined, mime_type: 'application/pdf', name: 'final.pdf' }, text: undefined, data: undefined },
+    ])
+    expect(entity.taskStatus).toBe(TASK_STATE.COMPLETED)
+  })
+
+  it('applies parts-only final agent_response after same-id task_update content', async () => {
+    await mountHook()
+    resolveClientRequestMessageId('req-task-final-parts', 'user-task-root')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_update',
+        data: {
+          message_id: 'agent-msg-parts',
+          agent_id: 'agent-1',
+          agent_name: 'Research Agent',
+          status: TASK_STATE.COMPLETED,
+          content: 'Draft result',
+          client_request_id: 'req-task-final-parts',
+        },
+      }))
+    })
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'agent_response',
+        data: {
+          message_id: 'agent-msg-parts',
+          agent_id: 'agent-1',
+          client_request_id: 'req-task-final-parts',
+          parts: [
+            { kind: 'file', file: { uri: 'https://example.test/final.pdf', mime_type: 'application/pdf', name: 'final.pdf' } },
+          ],
+        },
+      }))
+    })
+
+    const entity = useMessageStore.getState().entities['agent-msg-parts']
+    expect(entity.content).toBe('')
+    expect(entity.artifacts?.[0]?.parts).toEqual([
+      { kind: 'file', file: { uri: 'https://example.test/final.pdf', bytes: undefined, mime_type: 'application/pdf', name: 'final.pdf' }, text: undefined, data: undefined },
+    ])
+    expect(entity.taskStatus).toBe(TASK_STATE.COMPLETED)
+  })
+
+  it('lets shorter final agent_response replace longer same-id task_update content', async () => {
+    await mountHook()
+    resolveClientRequestMessageId('req-task-final-shorter', 'user-task-root')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_update',
+        data: {
+          message_id: 'agent-msg-shorter',
+          agent_id: 'agent-1',
+          agent_name: 'Research Agent',
+          status: TASK_STATE.COMPLETED,
+          content: 'Final answer with draft tail',
+          client_request_id: 'req-task-final-shorter',
+        },
+      }))
+    })
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'agent_response',
+        data: {
+          message_id: 'agent-msg-shorter',
+          content: 'Final answer',
+          agent_id: 'agent-1',
+          client_request_id: 'req-task-final-shorter',
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities['agent-msg-shorter']).toMatchObject({
+      content: 'Final answer',
+      taskStatus: TASK_STATE.COMPLETED,
+    })
   })
 
   it('should handle heartbeat without side effects', async () => {
@@ -226,7 +677,7 @@ describe('useRoomWebhook SSE message handling', () => {
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'processing_status',
-        data: { status: 'processing', message_id: 'msg-1', client_request_id: 'req-missing-processing' },
+        data: { status: 'processing', message_id: 'msg-1', client_request_id: 'req-missing-processing', details: null },
       }))
     })
 
@@ -241,7 +692,7 @@ describe('useRoomWebhook SSE message handling', () => {
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'processing_status',
-        data: { status: 'completed', client_request_id: 'req-missing-completed' },
+        data: { status: 'completed', client_request_id: 'req-missing-completed', details: null },
       }))
     })
 
@@ -259,6 +710,36 @@ describe('useRoomWebhook SSE message handling', () => {
       }))
     })
 
+    expect(flags().processing).toBe(false)
+  })
+
+  it('drops processing_status with null message_id even when client_request_id is resolved', async () => {
+    await mountHook()
+    useMessageStore.getState().upsertMessage({
+      id: 'msg-null-processing-id',
+      roomId: 'room-1',
+      messageType: 'user',
+      content: 'Null message id should be ignored',
+      senderName: 'Test',
+      timestamp: '2026-06-04T01:00:00.000Z',
+      clientRequestId: 'req-null-processing-id',
+      processingStatusLogs: [],
+    }, 'optimistic')
+    resolveClientRequestMessageId('req-null-processing-id', 'msg-null-processing-id')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'processing',
+          message_id: null,
+          client_request_id: 'req-null-processing-id',
+          details: { message: 'Should not be appended' },
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities['msg-null-processing-id'].processingStatusLogs).toEqual([])
     expect(flags().processing).toBe(false)
   })
 
@@ -545,6 +1026,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'processing',
           message_id: 'msg-active-lifecycle',
           client_request_id: 'req-active-lifecycle',
+          details: null,
         },
       }))
     })
@@ -580,6 +1062,20 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(banner.error).toHaveBeenCalledWith('Something went wrong')
   })
 
+  it('handles malformed error SSE data without throwing', async () => {
+    const { banner } = await import('@/components/ui/banner')
+    await mountHook()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'error',
+        data: null,
+      }))
+    })
+
+    expect(banner.error).toHaveBeenCalledWith('Unknown error')
+  })
+
   it('should handle rate_limit_exceeded error with retry info', async () => {
     const { banner } = await import('@/components/ui/banner')
     await mountHook()
@@ -597,12 +1093,13 @@ describe('useRoomWebhook SSE message handling', () => {
 
     expect(banner.error).toHaveBeenCalledWith(
       'Rate limit exceeded',
-      { duration: 15000 }
+      { description: 'Retry after 2 minutes.', duration: 15000 }
     )
   })
 
   it('should handle agent_response without agent_id by using fallback sender name', async () => {
     await mountHook()
+    resolveClientRequestMessageId('req-no-agent-id', 'msg-no-agent-id')
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
@@ -610,6 +1107,7 @@ describe('useRoomWebhook SSE message handling', () => {
         data: {
           message_id: 'msg-no-agent-id',
           content: 'Response without agent id',
+          client_request_id: 'req-no-agent-id',
           // agent_id intentionally absent — simulates legacy hub or missing field
         },
       }))
@@ -630,7 +1128,7 @@ describe('useRoomWebhook SSE message handling', () => {
     await waitFor(() => expect(result.current.room).toBeTruthy())
 
     await act(async () => {
-      await result.current.sendUserMessage('Tell me a story')
+      await result.current.sendUserMessage({ userInput: 'Tell me a story', dispatch: { message_target_mode: 'room_default' } })
     })
 
     const userEntity = useMessageStore
@@ -659,7 +1157,7 @@ describe('useRoomWebhook SSE message handling', () => {
         .at(-1)?.clientRequestId
 
     await act(async () => {
-      await result.current.sendUserMessage('Analyze current project status')
+      await result.current.sendUserMessage({ userInput: 'Analyze current project status', dispatch: { message_target_mode: 'room_default' } })
     })
 
     const clientRequestId = latestClientRequestId()
@@ -673,7 +1171,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'processing',
           message_id: 'msg-1',
           client_request_id: clientRequestId,
-          details: 'Dispatching agents',
+          details: { message: 'Dispatching agents' },
         },
       }))
     })
@@ -696,7 +1194,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'processing',
           message_id: 'msg-1',
           client_request_id: clientRequestId,
-          details: 'Dispatching agents',
+          details: { message: 'Dispatching agents' },
         },
       }))
     })
@@ -708,7 +1206,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'processing',
           message_id: 'msg-1',
           client_request_id: clientRequestId,
-          details: 'Collecting agent results',
+          details: { message: 'Collecting agent results' },
         },
       }))
     })
@@ -720,7 +1218,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'processing',
           message_id: 'msg-1',
           client_request_id: clientRequestId,
-          details: 'Dispatching agents',
+          details: { message: 'Dispatching agents' },
         },
       }))
     })
@@ -744,6 +1242,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'awaiting_input',
           message_id: 'msg-1',
           client_request_id: clientRequestId,
+          details: null,
         },
       }))
     })
@@ -761,7 +1260,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'processing',
           message_id: 'msg-1',
           client_request_id: clientRequestId,
-          details: 'Resuming after input',
+          details: { message: 'Resuming after input' },
         },
       }))
     })
@@ -780,6 +1279,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'completed',
           message_id: 'msg-1',
           client_request_id: clientRequestId,
+          details: null,
         },
       }))
     })
@@ -800,7 +1300,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'processing',
           message_id: 'msg-1',
           client_request_id: clientRequestId,
-          details: 'Late update after terminal',
+          details: { message: 'Late update after terminal' },
         },
       }))
     })
@@ -822,7 +1322,7 @@ describe('useRoomWebhook SSE message handling', () => {
     await waitFor(() => expect(result.current.room).toBeTruthy())
 
     await act(async () => {
-      await result.current.sendUserMessage('Handle structured processing details')
+      await result.current.sendUserMessage({ userInput: 'Handle structured processing details', dispatch: { message_target_mode: 'room_default' } })
     })
 
     const clientRequestId = useMessageStore
@@ -905,6 +1405,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'completed',
           message_id: 'msg-fast-terminal',
           client_request_id: clientRequestId,
+          details: null,
         },
       }))
     })
@@ -935,7 +1436,7 @@ describe('useRoomWebhook SSE message handling', () => {
         .at(-1)
 
     await act(async () => {
-      await result.current.sendUserMessage('Old turn')
+      await result.current.sendUserMessage({ userInput: 'Old turn', dispatch: { message_target_mode: 'room_default' } })
     })
     const oldUser = latestUser()
     const oldClientRequestId = oldUser?.clientRequestId
@@ -948,6 +1449,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'completed',
           message_id: 'msg-old',
           client_request_id: oldClientRequestId,
+          details: null,
         },
       }))
     })
@@ -955,7 +1457,7 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(useMessageStore.getState().entities['msg-old'].turnTerminalStatus).toBe('completed')
 
     await act(async () => {
-      await result.current.sendUserMessage('New turn')
+      await result.current.sendUserMessage({ userInput: 'New turn', dispatch: { message_target_mode: 'room_default' } })
     })
     const newUser = latestUser()
     const newClientRequestId = newUser?.clientRequestId
@@ -978,6 +1480,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'completed',
           message_id: 'msg-old',
           client_request_id: oldClientRequestId,
+          details: null,
         },
       }))
     })
@@ -992,7 +1495,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'processing',
           message_id: 'msg-old',
           client_request_id: oldClientRequestId,
-          details: 'Late old processing detail',
+          details: { message: 'Late old processing detail' },
         },
       }))
     })
@@ -1045,6 +1548,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'processing',
           message_id: 'msg-new',
           client_request_id: 'req-new-active-detail',
+          details: null,
         },
       }))
     })
@@ -1058,7 +1562,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'processing',
           message_id: 'msg-old',
           client_request_id: 'req-old-stale-detail',
-          details: 'Late old detail',
+          details: { message: 'Late old detail' },
         },
       }))
     })
@@ -1075,7 +1579,7 @@ describe('useRoomWebhook SSE message handling', () => {
     await waitFor(() => expect(result.current.room).toBeTruthy())
 
     await act(async () => {
-      await result.current.sendUserMessage('Run with agent processing updates')
+      await result.current.sendUserMessage({ userInput: 'Run with agent processing updates', dispatch: { message_target_mode: 'room_default' } })
     })
     const userEntity = useMessageStore
       .getState()
@@ -1092,7 +1596,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'processing',
           message_id: 'agent-task-1',
           client_request_id: clientRequestId,
-          details: 'Agent task is working',
+          details: { message: 'Agent task is working' },
         },
       }))
     })
@@ -1134,7 +1638,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     let oldSendPromise!: Promise<boolean>
     await act(async () => {
-      oldSendPromise = result.current.sendUserMessage('Fast terminal turn')
+      oldSendPromise = result.current.sendUserMessage({ userInput: 'Fast terminal turn', dispatch: { message_target_mode: 'room_default' } })
       await Promise.resolve()
     })
     const oldClientRequestId = latestUser()?.clientRequestId
@@ -1147,6 +1651,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'completed',
           message_id: 'msg-old',
           client_request_id: oldClientRequestId,
+          details: null,
         },
       }))
     })
@@ -1158,7 +1663,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     let newSendPromise!: Promise<boolean>
     await act(async () => {
-      newSendPromise = result.current.sendUserMessage('Next turn with early detail')
+      newSendPromise = result.current.sendUserMessage({ userInput: 'Next turn with early detail', dispatch: { message_target_mode: 'room_default' } })
       await Promise.resolve()
     })
     const newClientRequestId = latestUser()?.clientRequestId
@@ -1172,7 +1677,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'processing',
           message_id: 'msg-new',
           client_request_id: newClientRequestId,
-          details: 'Early next-turn detail',
+          details: { message: 'Early next-turn detail' },
         },
       }))
     })
@@ -1200,7 +1705,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     let sendPromise!: Promise<boolean>
     await act(async () => {
-      sendPromise = result.current.sendUserMessage('Flush buffered output')
+      sendPromise = result.current.sendUserMessage({ userInput: 'Flush buffered output', dispatch: { message_target_mode: 'room_default' } })
       await Promise.resolve()
     })
 
@@ -1239,7 +1744,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     let secondSendResult: boolean | undefined
     await act(async () => {
-      secondSendResult = await result.current.sendUserMessage('Should still be guarded')
+      secondSendResult = await result.current.sendUserMessage({ userInput: 'Should still be guarded', dispatch: { message_target_mode: 'room_default' } })
     })
 
     expect(secondSendResult).toBe(false)
@@ -1258,7 +1763,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     let sendPromise!: Promise<boolean>
     await act(async () => {
-      sendPromise = result.current.sendUserMessage('Need HITL fast')
+      sendPromise = result.current.sendUserMessage({ userInput: 'Need HITL fast', dispatch: { message_target_mode: 'room_default' } })
       await Promise.resolve()
     })
 
@@ -1272,7 +1777,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
-        type: 'hitl_input_requested',
+        type: 'hitl_request',
         data: {
           request_id: 'req-fast-hitl',
           message_id: 'hitl-fast-1',
@@ -1297,7 +1802,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     let secondSendResult: boolean | undefined
     await act(async () => {
-      secondSendResult = await result.current.sendUserMessage('Allowed after HITL')
+      secondSendResult = await result.current.sendUserMessage({ userInput: 'Allowed after HITL', dispatch: { message_target_mode: 'room_default' } })
     })
     expect(secondSendResult).toBe(true)
     expect(vi.mocked(SendMessage)).toHaveBeenCalledTimes(2)
@@ -1325,7 +1830,7 @@ describe('useRoomWebhook SSE message handling', () => {
         .at(-1)
 
     await act(async () => {
-      await result.current.sendUserMessage('Old turn')
+      await result.current.sendUserMessage({ userInput: 'Old turn', dispatch: { message_target_mode: 'room_default' } })
     })
     const oldClientRequestId = latestUser()?.clientRequestId
     expect(oldClientRequestId).toBeTruthy()
@@ -1337,13 +1842,14 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'completed',
           message_id: 'msg-old',
           client_request_id: oldClientRequestId,
+          details: null,
         },
       }))
     })
 
     let sendPromise!: Promise<boolean>
     await act(async () => {
-      sendPromise = result.current.sendUserMessage('New unresolved turn')
+      sendPromise = result.current.sendUserMessage({ userInput: 'New unresolved turn', dispatch: { message_target_mode: 'room_default' } })
       await Promise.resolve()
     })
 
@@ -1365,6 +1871,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'awaiting_input',
           message_id: 'msg-old',
           client_request_id: oldClientRequestId,
+          details: null,
         },
       }))
     })
@@ -1379,6 +1886,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'completed',
           message_id: 'msg-old',
           client_request_id: oldClientRequestId,
+          details: null,
         },
       }))
     })
@@ -1417,7 +1925,7 @@ describe('useRoomWebhook SSE message handling', () => {
         .at(-1)
 
     await act(async () => {
-      await result.current.sendUserMessage('Old legacy turn')
+      await result.current.sendUserMessage({ userInput: 'Old legacy turn', dispatch: { message_target_mode: 'room_default' } })
     })
     const oldUser = latestUser()
     const oldClientRequestId = oldUser?.clientRequestId
@@ -1430,6 +1938,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'completed',
           message_id: 'msg-old',
           client_request_id: oldClientRequestId,
+          details: null,
         },
       }))
     })
@@ -1447,7 +1956,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     let sendPromise!: Promise<boolean>
     await act(async () => {
-      sendPromise = result.current.sendUserMessage('New unresolved turn')
+      sendPromise = result.current.sendUserMessage({ userInput: 'New unresolved turn', dispatch: { message_target_mode: 'room_default' } })
       await Promise.resolve()
     })
 
@@ -1463,6 +1972,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'awaiting_input',
           message_id: 'msg-old',
           client_request_id: oldClientRequestId,
+          details: null,
         },
       }))
     })
@@ -1477,6 +1987,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'completed',
           message_id: 'msg-old',
           client_request_id: oldClientRequestId,
+          details: null,
         },
       }))
     })
@@ -1515,7 +2026,7 @@ describe('useRoomWebhook SSE message handling', () => {
         .at(-1)
 
     await act(async () => {
-      await result.current.sendUserMessage('Old fast-terminal turn')
+      await result.current.sendUserMessage({ userInput: 'Old fast-terminal turn', dispatch: { message_target_mode: 'room_default' } })
     })
     const oldClientRequestId = latestUser()?.clientRequestId
     expect(oldClientRequestId).toBeTruthy()
@@ -1527,6 +2038,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'completed',
           message_id: 'msg-old',
           client_request_id: oldClientRequestId,
+          details: null,
         },
       }))
     })
@@ -1547,7 +2059,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     let sendPromise!: Promise<boolean>
     await act(async () => {
-      sendPromise = result.current.sendUserMessage('New unresolved turn')
+      sendPromise = result.current.sendUserMessage({ userInput: 'New unresolved turn', dispatch: { message_target_mode: 'room_default' } })
       await Promise.resolve()
     })
 
@@ -1562,6 +2074,7 @@ describe('useRoomWebhook SSE message handling', () => {
           status: 'completed',
           message_id: 'msg-old',
           client_request_id: oldClientRequestId,
+          details: null,
         },
       }))
     })
@@ -1594,7 +2107,7 @@ describe('useRoomWebhook SSE message handling', () => {
           .at(-1)?.clientRequestId
 
       await act(async () => {
-        await result.current.sendUserMessage(`Trigger ${terminalStatus}`)
+        await result.current.sendUserMessage({ userInput: `Trigger ${terminalStatus}`, dispatch: { message_target_mode: 'room_default' } })
       })
 
       const clientRequestId = latestClientRequestId()
@@ -1608,7 +2121,7 @@ describe('useRoomWebhook SSE message handling', () => {
             status: 'processing',
             message_id: 'msg-1',
             client_request_id: clientRequestId,
-            details: 'Processing before terminal',
+            details: { message: 'Processing before terminal' },
           },
         }))
       })
@@ -1628,6 +2141,7 @@ describe('useRoomWebhook SSE message handling', () => {
             status: terminalStatus,
             message_id: userMessageId,
             client_request_id: clientRequestId,
+            details: null,
           },
         }))
       })
@@ -1659,7 +2173,7 @@ describe('useRoomWebhook SSE message handling', () => {
           .at(-1)?.clientRequestId
 
       await act(async () => {
-        await result.current.sendUserMessage('Trigger per-agent terminal')
+        await result.current.sendUserMessage({ userInput: 'Trigger per-agent terminal', dispatch: { message_target_mode: 'room_default' } })
       })
 
       const clientRequestId = latestClientRequestId()
@@ -1673,7 +2187,7 @@ describe('useRoomWebhook SSE message handling', () => {
             status: 'processing',
             message_id: 'msg-1',
             client_request_id: clientRequestId,
-            details: 'Processing before agent terminal',
+            details: { message: 'Processing before agent terminal' },
           },
         }))
       })
@@ -1691,12 +2205,17 @@ describe('useRoomWebhook SSE message handling', () => {
           data: {
             status: terminalStatus,
             message_id: 'agent-task-1',
+            related_message_id: userBeforeAgentTerminal!.id,
             client_request_id: clientRequestId,
+            details: null,
           },
         }))
       })
 
-      expect(useMessageStore.getState().entities[userBeforeAgentTerminal!.id].processingStatusLogs).toHaveLength(2)
+      const userAfterAgentTerminal = useMessageStore.getState().entities[userBeforeAgentTerminal!.id]
+      expect(userAfterAgentTerminal.processingStatusLogs).toHaveLength(2)
+      expect(userAfterAgentTerminal.turnTerminalStatus).toBeUndefined()
+      expect(flags().processing).toBe(true)
     },
   )
 })

@@ -213,6 +213,22 @@ describe('clear', () => {
   })
 })
 
+// ── clearByClientRequestId ───────────────────────────────────
+
+describe('clearByClientRequestId', () => {
+  it('removes all buffers tagged with the client request id', () => {
+    useStreamingStore.getState().append('req-1', 'room-1', makeChunk('a'), false, { clientRequestId: 'req-1' })
+    useStreamingStore.getState().append('msg-2', 'room-1', makeChunk('b'), false, { clientRequestId: 'req-1' })
+    useStreamingStore.getState().append('msg-3', 'room-1', makeChunk('c'), false, { clientRequestId: 'req-3' })
+
+    useStreamingStore.getState().clearByClientRequestId('req-1')
+
+    expect(useStreamingStore.getState().buffers['req-1']).toBeUndefined()
+    expect(useStreamingStore.getState().buffers['msg-2']).toBeUndefined()
+    expect(useStreamingStore.getState().buffers['msg-3']).toBeDefined()
+  })
+})
+
 // ── clearRoom ─────────────────────────────────────────────────
 
 describe('clearRoom', () => {

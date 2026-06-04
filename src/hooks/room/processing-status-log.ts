@@ -102,6 +102,16 @@ export function normalizeProcessingDetails(details: unknown): string | undefined
   return typeof message === 'string' ? message.trim() || undefined : undefined
 }
 
+export function processingDetailsToLogMessage(
+  details: Record<string, unknown> | null | undefined,
+): string | undefined {
+  if (!details) return undefined
+  const message = details.message ?? details.status_message ?? details.stage ?? details.description
+  if (typeof message === 'string' && message.trim()) return message.trim()
+  const json = JSON.stringify(details)
+  return json === '{}' ? undefined : json
+}
+
 export function appendProcessingStatusLog(
   roomId: string,
   userEntity: MessageEntity | undefined,

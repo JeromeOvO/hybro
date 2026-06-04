@@ -90,17 +90,84 @@ export type RoomMembershipWriteInput =
   | { membership_seed_input: "all_current_agents"; seed_all_current_agents: true }
 
 export type TargetModeDispatchInput =
-  | { message_target_mode: "room_default" }
-  | { message_target_mode: "all_agents" }
-  | { message_target_mode: "saved_group"; target_group_id: string }
+  | {
+      message_target_mode: "room_default"
+      target_group_id?: never
+      mentioned_agent_ids?: never
+    }
+  | {
+      message_target_mode: "all_agents"
+      target_group_id?: never
+      mentioned_agent_ids?: never
+    }
+  | {
+      message_target_mode: "saved_group"
+      target_group_id: string
+      mentioned_agent_ids?: never
+    }
 
-export interface MentionDispatchInput {
-  mentioned_agent_ids: string[]
+export type MentionDispatchInput = {
+  mentioned_agent_ids: [string, ...string[]]
+  message_target_mode?: never
+  target_group_id?: never
 }
 
 export type MessageDispatchInput =
   | MentionDispatchInput
   | TargetModeDispatchInput
+
+export function isMentionDispatchInput(dispatch: MessageDispatchInput): dispatch is MentionDispatchInput {
+  return Array.isArray(dispatch.mentioned_agent_ids) && dispatch.mentioned_agent_ids.length > 0
+}
+
+export function isMessageDispatchInput(value: unknown): value is MessageDispatchInput {
+  if (!value || typeof value !== 'object') return false
+  const dispatch = value as {
+    mentioned_agent_ids?: unknown
+    message_target_mode?: unknown
+    target_group_id?: unknown
+  }
+  const keys = Object.keys(dispatch)
+  const hasMentions = 'mentioned_agent_ids' in dispatch
+  const hasMode = 'message_target_mode' in dispatch
+
+  if (hasMentions && hasMode) return false
+  if (hasMentions) {
+    if (!keys.every((key) => key === 'mentioned_agent_ids')) return false
+    return Array.isArray(dispatch.mentioned_agent_ids)
+      && dispatch.mentioned_agent_ids.length > 0
+      && dispatch.mentioned_agent_ids.every((id) => typeof id === 'string' && id.length > 0)
+      && !('target_group_id' in dispatch)
+  }
+  if (dispatch.message_target_mode === 'room_default' || dispatch.message_target_mode === 'all_agents') {
+    if (!keys.every((key) => key === 'message_target_mode')) return false
+    return !('mentioned_agent_ids' in dispatch) && !('target_group_id' in dispatch)
+  }
+  if (dispatch.message_target_mode === 'saved_group') {
+    if (!keys.every((key) => key === 'message_target_mode' || key === 'target_group_id')) return false
+    return typeof dispatch.target_group_id === 'string'
+      && dispatch.target_group_id.length > 0
+      && !('mentioned_agent_ids' in dispatch)
+  }
+  return false
+}
+
+export function assertMessageDispatchInput(value: unknown): asserts value is MessageDispatchInput {
+  if (!isMessageDispatchInput(value)) {
+    throw new Error('Invalid MessageDispatchInput')
+  }
+}
+
+export function resolveSelectedGroupDispatch(selectedGroup: string): TargetModeDispatchInput {
+  switch (selectedGroup) {
+    case BUILTIN_GROUP_ROOM_TEAM:
+      return { message_target_mode: "room_default" }
+    case BUILTIN_GROUP_ALL_AGENTS:
+      return { message_target_mode: "all_agents" }
+    default:
+      return { message_target_mode: "saved_group", target_group_id: selectedGroup }
+  }
+}
 
 // ── Dispatch result types ────────────────────────────────────────────────
 
@@ -192,23 +259,3 @@ export function getGroupDisplayName(group: AgentGroup, agentCount?: number): str
   }
   return group.name
 }
-
-// ── Legacy normalization helpers ─────────────────────────────────────────
-
-/**
- * Normalize a legacy `target_group` value into canonical MessageTargetMode.
- * Canonical fields always win; this is only used as fallback.
- */
-export function normalizeLegacyTargetGroup(
-  targetGroup: string,
-): TargetModeDispatchInput {
-  switch (targetGroup) {
-    case BUILTIN_GROUP_ROOM_TEAM:
-      return { message_target_mode: "room_default" }
-    case BUILTIN_GROUP_ALL_AGENTS:
-      return { message_target_mode: "all_agents" }
-    default:
-      return { message_target_mode: "saved_group", target_group_id: targetGroup }
-  }
-}
-

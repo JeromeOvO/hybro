@@ -229,7 +229,7 @@ export function useRoomActions(
 
       // AbortError (timeout) — the backend is still processing the supervisor
       // resume which can take 60-120s. Keep the optimistic state; the eventual
-      // hitl_status_update SSE will reconcile.
+      // hitl_response SSE will reconcile.
       if (err instanceof Error && err.name === 'AbortError') {
         console.log('HITL respond timed out — backend still processing, keeping optimistic state')
         return

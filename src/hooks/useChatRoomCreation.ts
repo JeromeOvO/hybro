@@ -6,8 +6,13 @@ import { banner } from "@/components/ui/banner"
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { Agent } from '@/lib/types/agent'
 import type { PendingAttachment } from '@/lib/types/attachments'
-import { isBuiltinGroup } from '@/lib/types/agent-group'
-import type { RoomMembershipWriteInput } from '@/lib/types/agent-group'
+import {
+  BUILTIN_GROUP_ALL_AGENTS,
+  isBuiltinGroup,
+  isMentionDispatchInput,
+  resolveSelectedGroupDispatch,
+} from '@/lib/types/agent-group'
+import type { MessageDispatchInput, RoomMembershipWriteInput } from '@/lib/types/agent-group'
 import { resolveTemplateAgents } from '@/lib/use-case-templates'
 import type { UseCaseTemplate } from '@/lib/use-case-templates'
 
@@ -25,6 +30,8 @@ interface CreateRoomOptions {
   debateMode?: boolean
   useSupervisor?: boolean
   roomName?: string
+  dispatch?: MessageDispatchInput
+  /** @deprecated Use dispatch instead. */
   targetGroup?: string
   attachments?: PendingAttachment[]
   membership?: RoomMembershipWriteInput
@@ -83,6 +90,7 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
       debateMode = false,
       useSupervisor = true,
       roomName: customRoomName,
+      dispatch: explicitDispatch,
       targetGroup,
       membership: explicitMembership,
     } = options
@@ -114,9 +122,27 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
 
       // Derive membership: Room Settings config (selectedAgents) takes priority,
       // then saved group selection, then empty snapshot.
+      const dispatch = explicitDispatch
+        ?? resolveSelectedGroupDispatch(targetGroup ?? BUILTIN_GROUP_ALL_AGENTS)
+      const handoffDispatch: MessageDispatchInput = explicitDispatch
+        ?? (selectedAgents.length > 0
+        ? { message_target_mode: 'room_default' }
+        : dispatch)
+      const handoffTargetGroup = !explicitDispatch && selectedAgents.length === 0 && !isMentionDispatchInput(dispatch)
+        ? targetGroup
+        : undefined
+
       let membership: RoomMembershipWriteInput | undefined = explicitMembership
-      if (!membership && selectedAgents.length === 0 && targetGroup && !isBuiltinGroup(targetGroup)) {
-        membership = { membership_seed_input: "saved_group", seed_group_id: targetGroup }
+      if (
+        !membership
+        && selectedAgents.length === 0
+        && !isMentionDispatchInput(dispatch)
+        && dispatch.message_target_mode === 'saved_group'
+      ) {
+        membership = { membership_seed_input: "saved_group", seed_group_id: dispatch.target_group_id }
+      }
+      if (!membership && selectedAgents.length === 0 && handoffTargetGroup && !isBuiltinGroup(handoffTargetGroup)) {
+        membership = { membership_seed_input: "saved_group", seed_group_id: handoffTargetGroup }
       }
 
       // Use custom room name if provided, otherwise auto-generate from message
@@ -154,12 +180,9 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
         // Clear the override when the room was seeded with an explicit snapshot:
         //  - saved group seeded → room has snapshot → default to Room Default (Locked Decision #4)
         //  - manual selectedAgents → room has snapshot → default to Room Default
-        const handoffTargetGroup =
-          membership?.membership_seed_input === "saved_group" || selectedAgents.length > 0
-            ? undefined
-            : targetGroup
         useRoomUiStore.getState().setPendingRoomData(roomId, {
           initialMessage: userMessage,
+          dispatch: handoffDispatch,
           targetGroup: handoffTargetGroup,
           attachments: options.attachments,
         })

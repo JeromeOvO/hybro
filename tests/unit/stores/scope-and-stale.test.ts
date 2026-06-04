@@ -1,24 +1,24 @@
 import { describe, it, expect } from 'vitest'
 import {
-  normalizeLegacyTargetGroup,
   BUILTIN_GROUP_ALL_AGENTS,
   BUILTIN_GROUP_ROOM_TEAM,
+  resolveSelectedGroupDispatch,
 } from '@/lib/types/agent-group'
 import type { StaleAgentRef } from '@/lib/types/agent-group'
 
-describe('normalizeLegacyTargetGroup', () => {
+describe('resolveSelectedGroupDispatch', () => {
   it('maps room_team sentinel to room_default mode', () => {
-    const result = normalizeLegacyTargetGroup(BUILTIN_GROUP_ROOM_TEAM)
+    const result = resolveSelectedGroupDispatch(BUILTIN_GROUP_ROOM_TEAM)
     expect(result).toEqual({ message_target_mode: 'room_default' })
   })
 
   it('maps all_agents sentinel to all_agents mode', () => {
-    const result = normalizeLegacyTargetGroup(BUILTIN_GROUP_ALL_AGENTS)
+    const result = resolveSelectedGroupDispatch(BUILTIN_GROUP_ALL_AGENTS)
     expect(result).toEqual({ message_target_mode: 'all_agents' })
   })
 
   it('maps arbitrary group ID to saved_group mode', () => {
-    const result = normalizeLegacyTargetGroup('grp-abc-123')
+    const result = resolveSelectedGroupDispatch('grp-abc-123')
     expect(result).toEqual({
       message_target_mode: 'saved_group',
       target_group_id: 'grp-abc-123',
@@ -119,17 +119,17 @@ describe('selectedGroup derivation', () => {
 
 describe('resolvedTargetMode from selectedGroup', () => {
   it('returns all_agents for all_agents selectedGroup', () => {
-    const mode = normalizeLegacyTargetGroup(BUILTIN_GROUP_ALL_AGENTS)
+    const mode = resolveSelectedGroupDispatch(BUILTIN_GROUP_ALL_AGENTS)
     expect(mode).toEqual({ message_target_mode: 'all_agents' })
   })
 
   it('returns room_default for room_team', () => {
-    const mode = normalizeLegacyTargetGroup(BUILTIN_GROUP_ROOM_TEAM)
+    const mode = resolveSelectedGroupDispatch(BUILTIN_GROUP_ROOM_TEAM)
     expect(mode).toEqual({ message_target_mode: 'room_default' })
   })
 
   it('returns saved_group for custom group ID', () => {
-    const mode = normalizeLegacyTargetGroup('grp-my-saved')
+    const mode = resolveSelectedGroupDispatch('grp-my-saved')
     expect(mode).toEqual({ message_target_mode: 'saved_group', target_group_id: 'grp-my-saved' })
   })
 })

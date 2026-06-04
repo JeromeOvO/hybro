@@ -8,8 +8,18 @@ import { useMessageStore } from '@/stores/message-store'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 import { createInitialProcessingStatusLog } from './processing-status-log'
-import { clearPendingSseForClientRequest } from './sse-handlers/pending-turn-buffer'
+import {
+  clearPendingSseForClientRequest,
+  resolveClientRequestMessageId,
+} from './sse-handlers/pending-turn-buffer'
 import { useRoomUiStore } from '@/stores/room-ui-store'
+
+export type SendUserMessageInput = {
+  userInput: string
+  quoteData?: QuoteData
+  pendingAttachments?: PendingAttachment[]
+  dispatch: MessageDispatchInput
+}
 
 export function useSendMessage(
   roomId: string,
@@ -25,13 +35,12 @@ export function useSendMessage(
   reconcileWithDb: (roomId: string) => Promise<void>,
   onPostMessageIdResolved?: (clientRequestId: string, messageId: string) => Promise<void>,
 ) {
-  const sendUserMessage = useCallback(async (
-    userInput: string,
-    targetGroup: string = "all_agents",
-    quoteData?: QuoteData,
-    pendingAttachments?: PendingAttachment[],
-    dispatch?: MessageDispatchInput,
-  ) => {
+  const sendUserMessage = useCallback(async ({
+    userInput,
+    quoteData,
+    pendingAttachments,
+    dispatch,
+  }: SendUserMessageInput) => {
     if (!userId || !userName || !room || sending || lifecycle.isSendGuardActive()) {
       console.warn('🚫 sendUserMessage blocked:', {
         userId: !userId,
@@ -41,6 +50,11 @@ export function useSendMessage(
         sendGuardActive: lifecycle.isSendGuardActive(),
         messageId: lifecycle.getMessageId(),
       })
+      return false
+    }
+
+    if (!dispatch) {
+      console.debug('Blocked send without final MessageDispatchInput')
       return false
     }
 
@@ -140,21 +154,20 @@ export function useSendMessage(
         : null
 
       // Step 1: Send user message to backend using unified SendMessage API
-      const createResponse = await SendMessage(
+      const createResponse = await SendMessage({
         roomId,
         userInput,
         getToken,
         userId,
         userName,
-        targetGroup,
-        structuredQuote ? null : (quoteData?.messageId ?? null),
-        structuredQuote ? null : (quoteData?.content ?? null),
-        structuredQuote ? null : (quoteData?.senderName ?? null),
-        uploadedAttachments,
+        relatedMessageId: structuredQuote ? null : (quoteData?.messageId ?? null),
+        quotedText: structuredQuote ? null : (quoteData?.content ?? null),
+        quotedSenderName: structuredQuote ? null : (quoteData?.senderName ?? null),
+        attachments: uploadedAttachments,
         dispatch,
         clientRequestId,
         structuredQuote,
-      )
+      })
 
       if (!createResponse.success) {
         throw new Error(`Failed to create user message: ${createResponse.error}`)
@@ -225,6 +238,7 @@ export function useSendMessage(
       // can clear this state during the flush; do not rewrite it afterward.
       lifecycle.setMessageId(messageId)
       lifecycle.setPendingRunEventAck(clientRequestId)
+      resolveClientRequestMessageId(clientRequestId, messageId)
 
       if (onPostMessageIdResolved) {
         await onPostMessageIdResolved(clientRequestId, messageId)

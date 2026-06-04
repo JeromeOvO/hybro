@@ -8,7 +8,7 @@ import type { Agent } from "@/lib/types/agent"
 import {
   BUILTIN_GROUP_ALL_AGENTS,
   BUILTIN_GROUP_ROOM_TEAM,
-  normalizeLegacyTargetGroup,
+  resolveSelectedGroupDispatch,
 } from "@/lib/types/agent-group"
 
 interface UseGroupManagementOptions {
@@ -217,7 +217,7 @@ export function useGroupManagement(
   }, [roomId])
 
   const resolvedTargetMode: TargetModeDispatchInput = useMemo(
-    () => normalizeLegacyTargetGroup(selectedGroup),
+    () => resolveSelectedGroupDispatch(selectedGroup),
     [selectedGroup],
   )
 

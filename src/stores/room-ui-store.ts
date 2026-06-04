@@ -1,10 +1,13 @@
 import { create } from 'zustand'
 import type { PendingAttachment } from '@/lib/types/attachments'
+import type { MessageDispatchInput } from '@/lib/types/agent-group'
 
 type RoomId = string
 
 interface PendingRoomData {
   initialMessage: string
+  dispatch?: MessageDispatchInput
+  /** @deprecated Use dispatch instead. */
   targetGroup?: string
   attachments?: PendingAttachment[]
   handoffMode?: "autosend" | "prefill"

@@ -1,12 +1,13 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { SSEConnection, SSEMessage } from '@/lib/api/sse'
+import { SSEConnection } from '@/lib/api/sse'
 import type { SSECloseReason } from '@/lib/api/sse'
+import type { AnySSEFrame } from '@/lib/types/sse'
 
 interface UseRoomSSEOptions {
   roomId: string
   enabled?: boolean
   getToken?: () => Promise<string | null>
-  onMessage?: (message: SSEMessage) => void
+  onMessage?: (message: AnySSEFrame) => void
   onConnectionChange?: (connected: boolean) => void
 }
 
@@ -35,7 +36,7 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
     getTokenRef.current = getToken
   }, [getToken])
 
-  const handleMessage = useCallback((message: SSEMessage) => {
+  const handleMessage = useCallback((message: AnySSEFrame) => {
     console.log('📨 SSE Hook received message:', message)
     onMessageRef.current?.(message)
   }, [])

@@ -15,13 +15,13 @@ import React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
-import type { SSEMessage } from '@/lib/types/sse'
+import type { AnySSEFrame } from '@/lib/types/sse'
 
-let capturedOnMessage: ((msg: SSEMessage) => void) | undefined
+let capturedOnMessage: ((msg: AnySSEFrame) => void) | undefined
 let mockSseConnected = true
 
 vi.mock('@/hooks/useRoomSSE', () => ({
-  useRoomSSE: vi.fn((opts: { onMessage?: (msg: SSEMessage) => void }) => {
+  useRoomSSE: vi.fn((opts: { onMessage?: (msg: AnySSEFrame) => void }) => {
     capturedOnMessage = opts.onMessage
     return { connected: mockSseConnected, connecting: false, error: null }
   }),
@@ -66,11 +66,12 @@ vi.mock('@/components/ui/banner', () => ({
   banner: { info: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }))
 
-function makeSSEMessage(overrides: Partial<SSEMessage>): SSEMessage {
+function makeSSEMessage(overrides: Partial<AnySSEFrame>): AnySSEFrame {
   return {
     type: 'heartbeat',
     room_id: 'room-1',
     timestamp: new Date().toISOString(),
+    data: {},
     ...overrides,
   }
 }
@@ -145,7 +146,7 @@ describe('Room lifecycle characterization tests', () => {
       // Establish processing state through normal flow
       mockSendMessage.mockResolvedValue({ success: true, message_id: 'msg-nav-1' })
       await act(async () => {
-        await result.current.sendUserMessage('Hello')
+        await result.current.sendUserMessage({ userInput: 'Hello', dispatch: { message_target_mode: 'room_default' } })
       })
       expect(flags('room-1').processing).toBe(true)
 
@@ -304,7 +305,7 @@ describe('Room lifecycle characterization tests', () => {
       })
 
       await act(async () => {
-        await result.current.sendUserMessage('Backend active run lag')
+        await result.current.sendUserMessage({ userInput: 'Backend active run lag', dispatch: { message_target_mode: 'room_default' } })
       })
 
       expect(useMessageStore.getState().entities['msg-active-run-lag'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
@@ -363,7 +364,7 @@ describe('Room lifecycle characterization tests', () => {
       })
 
       await act(async () => {
-        await result.current.sendUserMessage('Missed terminal turn')
+        await result.current.sendUserMessage({ userInput: 'Missed terminal turn', dispatch: { message_target_mode: 'room_default' } })
       })
 
       expect(useMessageStore.getState().entities['msg-missed-terminal'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
@@ -438,7 +439,7 @@ describe('Room lifecycle characterization tests', () => {
       // Send a message first to establish processing state
       mockSendMessage.mockResolvedValue({ success: true, message_id: 'msg-cancel-1' })
       await act(async () => {
-        await result.current.sendUserMessage('Hello')
+        await result.current.sendUserMessage({ userInput: 'Hello', dispatch: { message_target_mode: 'room_default' } })
       })
       expect(flags('room-1').processing).toBe(true)
 
@@ -473,7 +474,7 @@ describe('Room lifecycle characterization tests', () => {
       // Send + cancel
       mockSendMessage.mockResolvedValue({ success: true, message_id: 'msg-cancel-2' })
       await act(async () => {
-        await result.current.sendUserMessage('Test')
+        await result.current.sendUserMessage({ userInput: 'Test', dispatch: { message_target_mode: 'room_default' } })
       })
       const clientRequestId = latestClientRequestId('room-1')
       expect(clientRequestId).toBeTruthy()
@@ -490,7 +491,7 @@ describe('Room lifecycle characterization tests', () => {
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
           type: 'processing_status',
-          data: { status: 'canceled', message_id: 'msg-cancel-2', client_request_id: clientRequestId },
+          data: { status: 'canceled', message_id: 'msg-cancel-2', client_request_id: clientRequestId, details: null },
         }))
       })
 

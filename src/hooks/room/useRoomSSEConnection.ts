@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { MutableRefObject } from 'react'
-import type { SSEMessage } from '@/lib/types/sse'
+import type { AnySSEFrame } from '@/lib/types/sse'
 import { inquiryActiveRuns } from '@/lib/api/room'
 import { hydrateRoomFromDb } from '@/lib/room-sync'
 import { useRoomSSE } from '../useRoomSSE'
@@ -36,7 +36,7 @@ export function useRoomSSEConnection(
   sseEnabled: boolean,
   processing: boolean,
   lifecycle: ProcessingLifecycle,
-  handleSSEMessage: (message: SSEMessage) => void,
+  handleSSEMessage: (message: AnySSEFrame) => void,
   getAgentName: (agentId: string) => Promise<string>,
   getAgentSource: (agentId: string | undefined) => 'cloud' | 'hub' | undefined,
   hitlRequestIndex: MutableRefObject<Map<string, string>>,
