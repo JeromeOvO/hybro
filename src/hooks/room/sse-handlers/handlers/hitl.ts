@@ -1,24 +1,17 @@
-import type { SSEMessage, TaskState } from '@/lib/types/sse'
+import type { RoomSSEFrameMap, TaskState } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
 import { normalizeTimestampOrNow } from '@/lib/time'
 import { appendEvent } from '@/lib/room-timeline/event-log'
-import { resolveClientRequestMessageId } from '../pending-turn-buffer'
 import { findProcessingStatusUserEntity } from '../../processing-status-log'
 import type { CorrelationResult } from '../correlation'
 import type { SSEHandlerDeps } from '../types'
 
-export async function handleHitlInputRequested(
+export async function handleHitlRequest(
   ctx: SSEHandlerDeps,
-  sseMessage: SSEMessage,
+  sseMessage: RoomSSEFrameMap['hitl_request'],
   correlation: CorrelationResult,
 ): Promise<void> {
-  console.log('🔔 HITL input requested via SSE:', sseMessage.data)
-
-  if (correlation.clientReqId && sseMessage.data?.message_id) {
-    resolveClientRequestMessageId(correlation.clientReqId, sseMessage.data.message_id)
-  }
-
-  if (!sseMessage.data) return
+  console.log('🔔 HITL request via SSE:', sseMessage.data)
 
   const {
     request_id, message_id, prompt, prompt_type, choices,
@@ -85,22 +78,22 @@ export async function handleHitlInputRequested(
     content: prompt || '',
     senderName: resolvedAgentName || 'Agent',
     timestamp: normalizeTimestampOrNow(sseMessage.timestamp),
-    agentId: agent_id,
-    agentSource: ctx.getAgentSource(agent_id),
+    agentId: agent_id ?? undefined,
+    agentSource: ctx.getAgentSource(agent_id ?? undefined),
     taskStatus: 'input-required' as TaskState,
     hitlRequestId: request_id,
     hitlPrompt: prompt,
     hitlPromptType: (prompt_type as 'text' | 'choice' | 'confirmation') || 'text',
-    hitlChoices: choices,
-    hitlExpiresAt: expires_at,
+    hitlChoices: Array.isArray(choices) ? choices as string[] : null,
+    hitlExpiresAt: expires_at ?? undefined,
     hitlResolved: false,
     hitlUserAnswer: '',
     hitlGroupId: group_id ?? undefined,
     hitlGroupTotal: group_total ?? undefined,
     hitlGroupIndex: group_index ?? undefined,
-    stepNumber: step_number,
-    totalSteps: total_steps,
-    relatedMessageId: related_message_id,
+    stepNumber: step_number ?? undefined,
+    totalSteps: total_steps ?? undefined,
+    relatedMessageId: related_message_id ?? undefined,
     clientRequestId: sseMessage.data.client_request_id,
   }, 'sse')
   hitlRequestIndex.current.set(request_id, message_id)
@@ -108,19 +101,18 @@ export async function handleHitlInputRequested(
   appendEvent(roomId, {
     kind: 'hitl_requested',
     timestamp: sseMessage.timestamp,
-    agentId: agent_id,
+    agentId: agent_id ?? undefined,
     label: 'Input requested',
     hitlPayload: { prompt: prompt ?? '' },
   })
 }
 
-export function handleHitlStatusUpdate(
+export function handleHitlResponse(
   ctx: SSEHandlerDeps,
-  sseMessage: SSEMessage,
+  sseMessage: RoomSSEFrameMap['hitl_response'],
   correlation: CorrelationResult,
 ): void {
-  console.log('🔔 HITL status update via SSE:', sseMessage.data)
-  if (!sseMessage.data) return
+  console.log('🔔 HITL response via SSE:', sseMessage.data)
 
   const { request_id, status: hitlStatus, error_message } = sseMessage.data
   if (!request_id) return
@@ -131,7 +123,7 @@ export function handleHitlStatusUpdate(
   if (!entity) return
 
   if (entity.hitlRequestId && entity.hitlRequestId !== request_id) {
-    console.log('🔔 Skipping stale hitl_status_update for', request_id,
+    console.log('🔔 Skipping stale hitl_response for', request_id,
       '— entity now owns', entity.hitlRequestId)
     ctx.hitlRequestIndex.current.delete(request_id)
     return

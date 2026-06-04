@@ -1,6 +1,6 @@
 # Hybro Frontend Architecture
 
-> Last scanned: 2026-05-31
+> Last scanned: 2026-06-04
 >
 > Source of truth: current repository files under `src/`, `tests/`, and root config files. Historical design notes in `docs/` are not treated as current architecture.
 
@@ -17,10 +17,10 @@ The app talks to the backend through REST APIs and room-scoped Server-Sent Event
 
 | Area | Current count / source |
 |---|---|
-| Source files | 262 files under `src/` |
-| Test/support files | 98 files under `tests/` |
+| Source files | 263 files under `src/` |
+| Test/support files | 103 files under `tests/` |
 | App Router files | 28 files under `src/app/` |
-| Component files | 108 files under `src/components/` |
+| Component files | 109 files under `src/components/` |
 | shadcn/ui primitives | 27 files under `src/components/ui/` |
 | Conversation components | 17 files under `src/components/conversation/` |
 | Hooks | 41 files under `src/hooks/` |
@@ -344,7 +344,6 @@ src/hooks/room/sse-handlers/
 |-- artifacts.ts
 |-- types.ts
 `-- handlers/
-    |-- user-message.ts
     |-- agent-response.ts
     |-- processing-status.ts
     |-- task-submitted.ts
@@ -354,7 +353,20 @@ src/hooks/room/sse-handlers/
     `-- misc.ts
 ```
 
-`createSSEDispatcher` resolves correlation before dispatch. Events that need turn correlation may be buffered until the HTTP send path resolves a server message id. Processing status events without required correlation are dropped defensively.
+`src/lib/types/sse.ts` defines the final room SSE frame envelope as `{ type, room_id, timestamp, data }`. The handled room frame types are:
+
+- Connection/system: `connected`, `heartbeat`, `error`, `run_event`, `cancellation`.
+- Turn and task updates: `processing_status`, `task_submitted`, `task_update`, `artifact_update`.
+- Agent output: `agent_response_partial`, `agent_response`.
+- HITL and orchestration: `hitl_request`, `hitl_response`, `hub_agent_event`, `debate_round`.
+
+Legacy `user_message`, `turn_event`, `hitl_input_requested`, and `hitl_status_update` frames are not part of the handled room SSE contract. Unknown frame types are ignored after a debug log.
+
+`createSSEDispatcher` resolves correlation before dispatch. Turn-correlated events must include a non-empty `client_request_id`; events without it are dropped defensively. Events that can arrive before the HTTP send response resolves the optimistic user message are buffered by `client_request_id`, then flushed once `useSendMessage` maps the request id to the server message id.
+
+`processing_status` requires `message_id`, non-empty `client_request_id`, a known status, and `details` as either an object or `null`. Active statuses such as `queued`, `processing`, and `awaiting_input` keep the user turn active; terminal statuses mark the correlated user turn and clear the send guard only when they target the user message rather than a per-agent task. HITL resume can introduce a new backend `client_request_id`; in that case, a terminal frame with an agent-task `message_id` is accepted only when `related_message_id` points at the resolved user turn and the new request id differs from the user message's original request id.
+
+`agent_response_partial` text goes through `streaming-store` keyed by `client_request_id` so it can attach before the final response message id is known. Live `artifact_update` data also uses `streaming-store` with correlation metadata. Terminal `task_update` frames and final durable `agent_response` frames write to `message-store` and clear transient stream buffers for the correlated request and final message.
 
 Room DB synchronization lives under `src/lib/room-sync/`:
 
@@ -443,6 +455,16 @@ Other library modules:
 - `presigned-url.ts`: attachment URL helpers.
 - `selection-plain-text.ts`: quote/selection text extraction.
 - `streaming/display.ts`: streaming display helpers.
+
+### Send Message Routing
+
+`src/lib/api/room.ts` sends room messages with a required `client_request_id` and one canonical dispatch shape:
+
+- Mention dispatch: `mentioned_agent_ids` as a non-empty string tuple.
+- Room default or all agents: `message_target_mode` as `room_default` or `all_agents`.
+- Saved group: `message_target_mode: 'saved_group'` plus `target_group_id`.
+
+The frontend no longer emits the legacy `target_group` field. `src/lib/types/agent-group.ts` validates that mention routing and target-mode routing are mutually exclusive before the request is sent.
 
 ## 13. Portals
 

@@ -34,6 +34,8 @@ Recent history uses concise imperative subjects and conventional prefixes such a
 
 After code changes, update the relevant architecture documentation before handoff. At minimum, review `docs/System-Architecture.md` whenever a change affects routes, data flow, API integrations, SSE or streaming behavior, state management, module boundaries, authentication, or major UI workflows. Document the current behavior after the change, not the implementation journey. If no architecture document needs an update, mention that in the handoff summary.
 
+Do not add or commit `superpowers` planning docs in this repository. Any `superpowers/` or related folders should be removed before commit.
+
 ## Security & Configuration Tips
 
 Copy required environment keys from `.env.example` into `.env.local`; do not commit local secrets. Keep generated output such as `.next`, `coverage`, and `playwright-report` out of commits.

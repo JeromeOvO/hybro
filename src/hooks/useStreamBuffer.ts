@@ -12,8 +12,15 @@ import {
 import type { AgentResultViewModel } from '@/lib/room-timeline/types'
 
 /** Subscribe to a single message's stream buffer (avoids re-renders on unrelated chunks). */
-export function useStreamBuffer(messageId: string | undefined): StreamBuffer | undefined {
-  return useStreamingStore(s => (messageId ? s.buffers[messageId] : undefined))
+export function useStreamBuffer(
+  messageId: string | undefined,
+  clientRequestId?: string,
+): StreamBuffer | undefined {
+  return useStreamingStore((s) => {
+    if (messageId && s.buffers[messageId]) return s.buffers[messageId]
+    if (!clientRequestId) return undefined
+    return Object.values(s.buffers).find(buffer => buffer.clientRequestId === clientRequestId)
+  })
 }
 
 export interface ResultStreamDisplay {
@@ -25,9 +32,9 @@ export interface ResultStreamDisplay {
 
 /** Derived stream display fields for AgentResultViewModel-backed UI. */
 export function useResultStreamDisplay(
-  result: Pick<AgentResultViewModel, 'messageId' | 'content' | 'artifacts' | 'status'>,
+  result: Pick<AgentResultViewModel, 'messageId' | 'clientRequestId' | 'content' | 'artifacts' | 'status'>,
 ): ResultStreamDisplay {
-  const buffer = useStreamBuffer(result.messageId)
+  const buffer = useStreamBuffer(result.messageId, result.clientRequestId)
   return useMemo(
     () => ({
       buffer,

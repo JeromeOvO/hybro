@@ -12,8 +12,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import type { AgentGroup } from '@/lib/types/agent-group'
-import { BUILTIN_GROUP_ALL_AGENTS, BUILTIN_GROUP_ROOM_TEAM } from '@/lib/types/agent-group'
+import type { AgentGroup, MessageDispatchInput } from '@/lib/types/agent-group'
+import { BUILTIN_GROUP_ALL_AGENTS, BUILTIN_GROUP_ROOM_TEAM, resolveSelectedGroupDispatch } from '@/lib/types/agent-group'
 import { cn } from '@/lib/utils'
 import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
@@ -37,7 +37,7 @@ interface Agent {
 }
 
 interface RoomChatInputProps {
-  onSubmit: (message: string, targetGroup?: string, quote?: QuoteData | null, attachments?: PendingAttachment[]) => void
+  onSubmit: (message: string, dispatch: MessageDispatchInput, quote?: QuoteData | null, attachments?: PendingAttachment[]) => void
   /**
    * When true, the editor itself is disabled (read-only).
    * For normal sending-state control, prefer using disableSend.
@@ -840,10 +840,12 @@ export function RoomChatInput({
     }
 
     if (trimmedMessage || attachments.length > 0) {
-      const targetGroup = mentionedAgents.length > 0 ? undefined : (selectedGroup ?? undefined)
+      const dispatch: MessageDispatchInput = mentionedAgents.length > 0
+        ? { mentioned_agent_ids: [mentionedAgents[0].id, ...mentionedAgents.slice(1).map((agent) => agent.id)] }
+        : resolveSelectedGroupDispatch(selectedGroup ?? BUILTIN_GROUP_ALL_AGENTS)
       const submittedAttachments = attachments.length > 0 ? attachments : undefined
 
-      console.log('🚀 Submitting message (storage format):', trimmedMessage, 'targetGroup:', targetGroup, 'attachments:', attachments.length)
+      console.log('🚀 Submitting message (storage format):', trimmedMessage, 'dispatch:', dispatch, 'attachments:', attachments.length)
 
       setMessage('')
       setPlainTextLength(0)
@@ -861,7 +863,7 @@ export function RoomChatInput({
       // still be needed by the new-room handoff flow.  Instead,
       // sendUserMessage revokes them after the optimistic swap replaces
       // blob URLs with server URLs in the message store.
-      onSubmit(trimmedMessage, targetGroup, quote, submittedAttachments)
+      onSubmit(trimmedMessage, dispatch, quote, submittedAttachments)
     }
   }
 

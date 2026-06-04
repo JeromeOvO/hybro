@@ -137,7 +137,16 @@ describe('Room API', () => {
   })
 
   describe('SendMessage', () => {
-    it('should send a message with correct request structure', async () => {
+    const baseSendParams = {
+      roomId: 'room-1',
+      userInput: 'Hello',
+      userId: 'user-1',
+      userName: 'Test User',
+      clientRequestId: 'cr-uuid-123',
+      dispatch: { message_target_mode: 'room_default' as const },
+    }
+
+    it('sends room_default routing with client_request_id and no legacy routing field', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
         http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
@@ -150,22 +159,22 @@ describe('Room API', () => {
         })
       )
 
-      const result = await SendMessage(
-        'room-1', 'Hello, world!', undefined, 'user-1', 'Test User'
-      )
+      const result = await SendMessage(baseSendParams)
 
       expect(result.success).toBe(true)
       expect(result.message_id).toBe('msg-new')
       expect(capturedBody).toMatchObject({
         room_id: 'room-1',
-        user_input: 'Hello, world!',
+        user_input: 'Hello',
         user_id: 'user-1',
         user_name: 'Test User',
-        target_group: 'all_agents',
+        message_target_mode: 'room_default',
+        client_request_id: 'cr-uuid-123',
       })
+      expect(capturedBody).not.toHaveProperty('target_group')
     })
 
-    it('should include target_group in request body when specified', async () => {
+    it('sends all_agents routing with client_request_id and no legacy routing field', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
         http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
@@ -174,9 +183,18 @@ describe('Room API', () => {
         })
       )
 
-      await SendMessage('room-1', 'Hello!', undefined, 'user-1', 'Test User', 'room_team')
+      await SendMessage({
+        ...baseSendParams,
+        userInput: 'Hello all agents',
+        clientRequestId: 'cr-all-agents-123',
+        dispatch: { message_target_mode: 'all_agents' },
+      })
 
-      expect(capturedBody).toMatchObject({ target_group: 'room_team' })
+      expect(capturedBody).toHaveProperty('client_request_id', 'cr-all-agents-123')
+      expect(capturedBody).toHaveProperty('message_target_mode', 'all_agents')
+      expect(capturedBody).not.toHaveProperty('mentioned_agent_ids')
+      expect(capturedBody).not.toHaveProperty('target_group_id')
+      expect(capturedBody).not.toHaveProperty('target_group')
     })
 
     it('should include quoted text in extend_info', async () => {
@@ -188,10 +206,12 @@ describe('Room API', () => {
         })
       )
 
-      await SendMessage(
-        'room-1', 'Reply', undefined, 'user-1', 'Test User',
-        'all_agents', 'related-msg-1', 'Quoted text here'
-      )
+      await SendMessage({
+        ...baseSendParams,
+        userInput: 'Reply',
+        relatedMessageId: 'related-msg-1',
+        quotedText: 'Quoted text here',
+      })
 
       expect(capturedBody).not.toBeNull()
       const body = capturedBody as unknown as Record<string, unknown>
@@ -209,10 +229,13 @@ describe('Room API', () => {
         })
       )
 
-      await SendMessage(
-        'room-1', 'Reply', undefined, 'user-1', 'Test User',
-        'all_agents', 'related-msg-1', 'Quoted text here', 'Spec Agent',
-      )
+      await SendMessage({
+        ...baseSendParams,
+        userInput: 'Reply',
+        relatedMessageId: 'related-msg-1',
+        quotedText: 'Quoted text here',
+        quotedSenderName: 'Spec Agent',
+      })
 
       expect(capturedBody).not.toBeNull()
       const body = capturedBody as unknown as Record<string, unknown>
@@ -232,17 +255,19 @@ describe('Room API', () => {
         })
       )
 
-      await SendMessage(
-        'room-1', 'Get details', undefined, 'user-1', 'Test User',
-        'all_agents', null, null, undefined, undefined, undefined, undefined,
-        {
+      await SendMessage({
+        ...baseSendParams,
+        userInput: 'Get details',
+        relatedMessageId: null,
+        quotedText: null,
+        structuredQuote: {
           text: 'The highlighted content',
           source_message_id: 'agent-msg-42',
           source_kind: 'agent',
           sender_display_name: 'Research Agent',
           source_agent_id: 'agent-42',
         },
-      )
+      })
 
       expect(capturedBody).not.toBeNull()
       const body = capturedBody as unknown as Record<string, unknown>
@@ -270,11 +295,14 @@ describe('Room API', () => {
         })
       )
 
-      await SendMessage(
-        'room-1', 'Reply', undefined, 'user-1', 'Test User',
-        'all_agents', 'related-msg-1', 'Legacy quoted text', 'Agent Name',
-        undefined, undefined, undefined, null,
-      )
+      await SendMessage({
+        ...baseSendParams,
+        userInput: 'Reply',
+        relatedMessageId: 'related-msg-1',
+        quotedText: 'Legacy quoted text',
+        quotedSenderName: 'Agent Name',
+        structuredQuote: null,
+      })
 
       const body = capturedBody as unknown as Record<string, unknown>
       const message = body.message as Record<string, unknown>
@@ -283,7 +311,7 @@ describe('Room API', () => {
       expect(message.related_message_id).toBe('related-msg-1')
     })
 
-    it('should omit target_group when MentionDispatchInput is provided', async () => {
+    it('sends mentioned_agent_ids without message_target_mode or target_group_id', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
         http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
@@ -292,17 +320,21 @@ describe('Room API', () => {
         })
       )
 
-      await SendMessage(
-        'room-1', 'Hello @agent', undefined, 'user-1', 'Test User',
-        'all_agents', null, null, undefined, undefined,
-        { mentioned_agent_ids: ['agent-a', 'agent-b'] },
-      )
+      await SendMessage({
+        ...baseSendParams,
+        userInput: 'Hello @agent',
+        clientRequestId: 'cr-mention-123',
+        dispatch: { mentioned_agent_ids: ['agent-a', 'agent-b'] },
+      })
 
       expect(capturedBody).toHaveProperty('mentioned_agent_ids', ['agent-a', 'agent-b'])
+      expect(capturedBody).toHaveProperty('client_request_id', 'cr-mention-123')
+      expect(capturedBody).not.toHaveProperty('message_target_mode')
+      expect(capturedBody).not.toHaveProperty('target_group_id')
       expect(capturedBody).not.toHaveProperty('target_group')
     })
 
-    it('should keep target_group when TargetModeDispatchInput is provided', async () => {
+    it('sends saved_group routing without mentions or legacy routing field', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
         http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
@@ -311,68 +343,61 @@ describe('Room API', () => {
         })
       )
 
-      await SendMessage(
-        'room-1', 'Hello', undefined, 'user-1', 'Test User',
-        'room_team', null, null, undefined, undefined,
-        { message_target_mode: 'room_default' },
-      )
+      await SendMessage({
+        ...baseSendParams,
+        userInput: 'Hello saved group',
+        clientRequestId: 'cr-saved-group-123',
+        dispatch: { message_target_mode: 'saved_group', target_group_id: 'grp-123' },
+      })
 
-      expect(capturedBody).toHaveProperty('target_group', 'room_team')
-      expect(capturedBody).toHaveProperty('message_target_mode', 'room_default')
-      expect(capturedBody).not.toHaveProperty('mentioned_agent_ids')
-    })
-
-    it('should include client_request_id in request body when provided', async () => {
-      let capturedBody: Record<string, unknown> | null = null
-      server.use(
-        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
-          capturedBody = await request.json() as Record<string, unknown>
-          return HttpResponse.json({ success: true, message_id: 'msg-1' })
-        })
-      )
-
-      await SendMessage(
-        'room-1', 'Hello', undefined, 'user-1', 'Test User',
-        'all_agents', null, null, undefined, undefined, undefined,
-        'cr-uuid-123',
-      )
-
-      expect(capturedBody).toHaveProperty('client_request_id', 'cr-uuid-123')
-    })
-
-    it('should include client_request_id as undefined when not provided', async () => {
-      let capturedBody: Record<string, unknown> | null = null
-      server.use(
-        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
-          capturedBody = await request.json() as Record<string, unknown>
-          return HttpResponse.json({ success: true, message_id: 'msg-1' })
-        })
-      )
-
-      await SendMessage('room-1', 'Hello', undefined, 'user-1', 'Test User')
-
-      // client_request_id should not be present when not provided
-      expect(capturedBody!['client_request_id']).toBeUndefined()
-    })
-
-    it('should include target_group_id for saved_group dispatch', async () => {
-      let capturedBody: Record<string, unknown> | null = null
-      server.use(
-        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
-          capturedBody = await request.json() as Record<string, unknown>
-          return HttpResponse.json({ success: true, message_id: 'msg-1' })
-        })
-      )
-
-      await SendMessage(
-        'room-1', 'Hello', undefined, 'user-1', 'Test User',
-        'grp-123', null, null, undefined, undefined,
-        { message_target_mode: 'saved_group', target_group_id: 'grp-123' },
-      )
-
+      expect(capturedBody).toHaveProperty('client_request_id', 'cr-saved-group-123')
       expect(capturedBody).toHaveProperty('message_target_mode', 'saved_group')
       expect(capturedBody).toHaveProperty('target_group_id', 'grp-123')
-      expect(capturedBody).toHaveProperty('target_group', 'grp-123')
+      expect(capturedBody).not.toHaveProperty('mentioned_agent_ids')
+      expect(capturedBody).not.toHaveProperty('target_group')
+    })
+
+    it('rejects malformed dispatch with mentions and message_target_mode', async () => {
+      await expect(SendMessage({
+        ...baseSendParams,
+        userInput: 'Invalid mixed dispatch',
+        clientRequestId: 'cr-invalid-mixed',
+        dispatch: {
+          mentioned_agent_ids: ['agent-a'],
+          message_target_mode: 'all_agents',
+        } as never,
+      })).rejects.toThrow('Invalid MessageDispatchInput')
+    })
+
+    it('rejects empty mentioned_agent_ids', async () => {
+      await expect(SendMessage({
+        ...baseSendParams,
+        userInput: 'Invalid empty mentions',
+        clientRequestId: 'cr-invalid-empty-mentions',
+        dispatch: { mentioned_agent_ids: [] } as never,
+      })).rejects.toThrow('Invalid MessageDispatchInput')
+    })
+
+    it('rejects saved_group without target_group_id', async () => {
+      await expect(SendMessage({
+        ...baseSendParams,
+        userInput: 'Invalid saved group',
+        clientRequestId: 'cr-invalid-saved-group',
+        dispatch: { message_target_mode: 'saved_group' } as never,
+      })).rejects.toThrow('Invalid MessageDispatchInput')
+    })
+
+    it('rejects dispatch objects with extra legacy routing fields', async () => {
+      const legacyRoutingKey = 'target' + '_group'
+      await expect(SendMessage({
+        ...baseSendParams,
+        userInput: 'Invalid legacy extra field',
+        clientRequestId: 'cr-invalid-extra-field',
+        dispatch: {
+          message_target_mode: 'room_default',
+          [legacyRoutingKey]: 'all_agents',
+        } as never,
+      })).rejects.toThrow('Invalid MessageDispatchInput')
     })
   })
 
@@ -458,31 +483,40 @@ describe('Room API', () => {
   })
 
   describe('error handling', () => {
+    const errorSendParams = {
+      roomId: 'room-1',
+      userInput: 'Hello',
+      userId: 'user-1',
+      userName: 'Test User',
+      clientRequestId: 'cr-error-test',
+      dispatch: { message_target_mode: 'room_default' as const },
+    }
+
     it('should handle network errors', async () => {
       server.use(errorHandlers.networkError)
       await expect(
-        SendMessage('room-1', 'Hello', undefined, 'user-1', 'Test User')
+        SendMessage(errorSendParams)
       ).rejects.toThrow()
     })
 
     it('should handle server errors (500)', async () => {
       server.use(errorHandlers.serverError)
       await expect(
-        SendMessage('room-1', 'Hello', undefined, 'user-1', 'Test User')
+        SendMessage(errorSendParams)
       ).rejects.toThrow()
     })
 
     it('should handle auth errors (401)', async () => {
       server.use(errorHandlers.authError)
       await expect(
-        SendMessage('room-1', 'Hello', undefined, 'user-1', 'Test User')
+        SendMessage(errorSendParams)
       ).rejects.toThrow()
     })
 
     it('should handle rate limit errors (429)', async () => {
       server.use(errorHandlers.rateLimitError)
       await expect(
-        SendMessage('room-1', 'Hello', undefined, 'user-1', 'Test User')
+        SendMessage(errorSendParams)
       ).rejects.toThrow()
     })
   })

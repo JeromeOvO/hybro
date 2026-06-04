@@ -162,6 +162,7 @@ export interface AgentResultViewModel {
   agentName: string
   agentSource?: 'hub' | 'cloud'
   messageId: string
+  clientRequestId?: string
   status: 'completed' | 'failed' | 'awaiting_input' | 'working'
   content: string
   artifacts: ArtifactData[]

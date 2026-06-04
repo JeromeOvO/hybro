@@ -10,14 +10,17 @@ import React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
-import type { SSEMessage } from '@/lib/types/sse'
-import { resetPendingTurnBufferForTests } from '@/hooks/room/sse-handlers/pending-turn-buffer'
+import type { AnySSEFrame } from '@/lib/types/sse'
+import {
+  resetPendingTurnBufferForTests,
+  resolveClientRequestMessageId,
+} from '@/hooks/room/sse-handlers/pending-turn-buffer'
 
-let capturedOnMessage: ((msg: SSEMessage) => void) | undefined
+let capturedOnMessage: ((msg: AnySSEFrame) => void) | undefined
 let mockSseConnected = true
 
 vi.mock('@/hooks/useRoomSSE', () => ({
-  useRoomSSE: vi.fn((opts: { onMessage?: (msg: SSEMessage) => void }) => {
+  useRoomSSE: vi.fn((opts: { onMessage?: (msg: AnySSEFrame) => void }) => {
     capturedOnMessage = opts.onMessage
     return { connected: mockSseConnected, connecting: false, error: null }
   }),
@@ -57,21 +60,30 @@ vi.mock('@/components/ui/banner', () => ({
   banner: { info: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }))
 
-function makeSSEMessage(overrides: Partial<SSEMessage>): SSEMessage {
+function makeSSEMessage(overrides: Partial<AnySSEFrame>): AnySSEFrame {
   const type = overrides.type ?? 'heartbeat'
   const data = { ...(overrides.data as Record<string, unknown> | undefined) }
   if (
-    (type === 'hitl_input_requested' || type === 'hitl_status_update') &&
+    (type === 'hitl_request' || type === 'hitl_response') &&
     data.client_request_id == null
   ) {
     data.client_request_id = 'req-hitl-test-default'
+  }
+  if (
+    (type === 'hitl_request' || type === 'hitl_response') &&
+    typeof data.client_request_id === 'string'
+  ) {
+    resolveClientRequestMessageId(
+      data.client_request_id,
+      typeof data.related_message_id === 'string' ? data.related_message_id : 'user-hitl-test-default',
+    )
   }
   return {
     type,
     room_id: 'room-1',
     timestamp: new Date().toISOString(),
     ...overrides,
-    data: Object.keys(data).length > 0 ? data : overrides.data,
+    data: Object.keys(data).length > 0 ? data : (overrides.data ?? {}),
   }
 }
 
@@ -113,14 +125,14 @@ describe('useRoomWebhook HITL SSE handling', () => {
     )
   }
 
-  describe('hitl_input_requested', () => {
+  describe('hitl_request', () => {
     it('creates a message entity with HITL fields', async () => {
       await mountHook()
       expect(capturedOnMessage).toBeDefined()
 
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_input_requested',
+          type: 'hitl_request',
           data: {
             request_id: 'req-1',
             message_id: 'msg-hitl-1',
@@ -153,7 +165,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
 
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_input_requested',
+          type: 'hitl_request',
           data: {
             request_id: 'req-choice',
             message_id: 'msg-hitl-choice',
@@ -172,13 +184,13 @@ describe('useRoomWebhook HITL SSE handling', () => {
       expect(entity.hitlChoices).toEqual(['Option A', 'Option B'])
     })
 
-    it('ignores hitl_input_requested without request_id', async () => {
+    it('ignores hitl_request without request_id', async () => {
       await mountHook()
       const countBefore = useMessageStore.getState().orderedIds.length
 
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_input_requested',
+          type: 'hitl_request',
           data: {
             message_id: 'msg-no-req',
             content: 'test',
@@ -190,13 +202,13 @@ describe('useRoomWebhook HITL SSE handling', () => {
     })
   })
 
-  describe('hitl_status_update', () => {
+  describe('hitl_response', () => {
     async function setupHitlRequest() {
       await mountHook()
 
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_input_requested',
+          type: 'hitl_request',
           data: {
             request_id: 'req-status-1',
             message_id: 'msg-status-1',
@@ -218,7 +230,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
 
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_status_update',
+          type: 'hitl_response',
           data: {
             request_id: 'req-status-1',
             status: 'responded',
@@ -235,7 +247,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
 
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_status_update',
+          type: 'hitl_response',
           data: {
             request_id: 'req-status-1',
             status: 'expired',
@@ -255,7 +267,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
 
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_status_update',
+          type: 'hitl_response',
           data: {
             request_id: 'req-status-1',
             status: 'canceled',
@@ -269,12 +281,12 @@ describe('useRoomWebhook HITL SSE handling', () => {
       expect(entity.taskError).toBe('Request canceled')
     })
 
-    it('ignores hitl_status_update for unknown request_id', async () => {
+    it('ignores hitl_response for unknown request_id', async () => {
       await mountHook()
 
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_status_update',
+          type: 'hitl_response',
           data: {
             request_id: 'unknown-req',
             status: 'responded',
@@ -292,7 +304,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
 
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_status_update',
+          type: 'hitl_response',
           data: {
             request_id: 'req-status-1',
             status: 'error',
@@ -315,7 +327,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
       // Step 1: HITL request arrives
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_input_requested',
+          type: 'hitl_request',
           data: {
             request_id: 'req-full',
             message_id: 'msg-full',
@@ -348,10 +360,10 @@ describe('useRoomWebhook HITL SSE handling', () => {
       entity = useMessageStore.getState().entities['msg-full']
       expect(entity.hitlResolved).toBe(true)
 
-      // Step 3: Backend confirms via hitl_status_update
+      // Step 3: Backend confirms via hitl_response
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_status_update',
+          type: 'hitl_response',
           data: {
             request_id: 'req-full',
             status: 'responded',
@@ -369,7 +381,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
       // 1st HITL request on message_id 'msg-shared'
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_input_requested',
+          type: 'hitl_request',
           data: {
             request_id: 'req-old',
             message_id: 'msg-shared',
@@ -388,7 +400,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
       // 2nd HITL request reuses same message_id with a new request_id
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_input_requested',
+          type: 'hitl_request',
           data: {
             request_id: 'req-new',
             message_id: 'msg-shared',
@@ -408,7 +420,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
       // Stale status_update for 1st request arrives — should NOT hide the form
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_status_update',
+          type: 'hitl_response',
           data: {
             request_id: 'req-old',
             status: 'responded',
@@ -424,13 +436,13 @@ describe('useRoomWebhook HITL SSE handling', () => {
   })
 
   describe('expiry during user typing', () => {
-    it('hitl_status_update expired replaces form with error state', async () => {
+    it('hitl_response expired replaces form with error state', async () => {
       await mountHook()
 
       // HITL request arrives
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_input_requested',
+          type: 'hitl_request',
           data: {
             request_id: 'req-expire',
             message_id: 'msg-expire',
@@ -445,7 +457,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
       // User is "typing" (not yet submitted) when expiry arrives
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_status_update',
+          type: 'hitl_response',
           data: {
             request_id: 'req-expire',
             status: 'expired',
@@ -513,7 +525,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
       // for the reconnected request — if the index is missing, this would be a no-op.
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_status_update',
+          type: 'hitl_response',
           data: { request_id: 'req-reconnect', status: 'responded' },
         }))
       })
@@ -576,7 +588,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
       // Seed a HITL entity via SSE
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_input_requested',
+          type: 'hitl_request',
           data: {
             request_id: 'req-revert',
             message_id: 'msg-revert',
@@ -617,7 +629,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
       // Seed a HITL entity via SSE
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_input_requested',
+          type: 'hitl_request',
           data: {
             request_id: 'req-success',
             message_id: 'msg-success',
@@ -652,7 +664,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
 
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_input_requested',
+          type: 'hitl_request',
           data: {
             request_id: 'req-live-log',
             message_id: 'msg-live-log',
@@ -692,7 +704,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
 
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_input_requested',
+          type: 'hitl_request',
           data: {
             request_id: 'req-resume-terminal',
             message_id: 'msg-resume-terminal',
@@ -718,6 +730,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
             status: 'completed',
             message_id: 'user-hitl-resume',
             client_request_id: 'req-hitl-resume',
+            details: null,
           },
         }))
       })
@@ -770,13 +783,14 @@ describe('useRoomWebhook HITL SSE handling', () => {
             status: 'processing',
             message_id: 'msg-new',
             client_request_id: 'req-new-hitl',
+            details: { message: 'Working' },
           },
         }))
       })
 
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_input_requested',
+          type: 'hitl_request',
           data: {
             request_id: 'req-stale-hitl',
             message_id: 'hitl-stale',
@@ -790,6 +804,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
 
       expect(useMessageStore.getState().entities['msg-new'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
         'Thinking...',
+        'Working',
       ])
       expect(useRoomUiStore.getState().getRoomFlags('room-1').processing).toBe(true)
     })
@@ -823,7 +838,8 @@ describe('useRoomWebhook HITL SSE handling', () => {
         await hookResult.result.current.respondToHitlRequest('req-overlay-no-cr', 'yes')
       })
 
-      expect(useRoomUiStore.getState().getRoomFlags('room-1').processing).toBe(true)
+      useRoomUiStore.getState().setProcessing('room-1', true)
+      resolveClientRequestMessageId('req-new-after-overlay', 'user-overlay-root')
 
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
@@ -833,6 +849,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
             message_id: 'agent-task-after-overlay',
             related_message_id: 'user-overlay-root',
             client_request_id: 'req-new-after-overlay',
+            details: null,
           },
         }))
       })
@@ -860,7 +877,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
 
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_input_requested',
+          type: 'hitl_request',
           data: {
             request_id: 'req-hitl-new-client',
             message_id: 'msg-hitl-new-client',
@@ -878,6 +895,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
       })
 
       expect(useRoomUiStore.getState().getRoomFlags('room-1').processing).toBe(true)
+      resolveClientRequestMessageId('req-hitl-new-client-from-backend', 'user-hitl-new-client')
 
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
@@ -887,6 +905,7 @@ describe('useRoomWebhook HITL SSE handling', () => {
             message_id: 'agent-task-new-client',
             related_message_id: 'user-hitl-new-client',
             client_request_id: 'req-hitl-new-client-from-backend',
+            details: null,
           },
         }))
       })

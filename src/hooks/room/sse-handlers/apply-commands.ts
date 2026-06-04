@@ -7,6 +7,7 @@ export type RoomCommand =
   | { type: 'remove_message'; id: string }
   | { type: 'cancel_all_non_terminal'; roomId: string }
   | { type: 'stream_clear'; messageId: string }
+  | { type: 'stream_clear_client_request'; clientRequestId: string }
 
 /**
  * Apply store mutations synchronously in order.
@@ -31,6 +32,9 @@ export function applyRoomCommands(commands: readonly RoomCommand[]): void {
         break
       case 'stream_clear':
         streaming.clear(cmd.messageId)
+        break
+      case 'stream_clear_client_request':
+        streaming.clearByClientRequestId(cmd.clientRequestId)
         break
     }
   }

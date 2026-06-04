@@ -235,8 +235,12 @@ describe('useChatRoomCreation', () => {
       })
 
       const pending = useRoomUiStore.getState().pendingRoomData['room-store']
-      // Saved group seeded the room, so override is NOT carried over (Locked Decision #4)
-      expect(pending).toEqual({ initialMessage: 'Hello', targetGroup: undefined, attachments: undefined })
+      expect(pending).toEqual({
+        initialMessage: 'Hello',
+        dispatch: { message_target_mode: 'saved_group', target_group_id: 'g-1' },
+        targetGroup: 'g-1',
+        attachments: undefined,
+      })
     })
 
     it('should show error on API failure', async () => {
@@ -302,6 +306,7 @@ describe('useChatRoomCreation', () => {
 
       const pending = useRoomUiStore.getState().pendingRoomData['room-carry']
       expect(pending?.targetGroup).toBe('all_agents')
+      expect(pending?.dispatch).toEqual({ message_target_mode: 'all_agents' })
     })
 
     it('should prefer selectedAgents over saved group seed', async () => {
@@ -323,6 +328,90 @@ describe('useChatRoomCreation', () => {
       expect(membershipArg).toBeUndefined()
       const roomAgentSet = mockCreateNewRoom.mock.calls[0][4]
       expect(Object.keys(roomAgentSet)).toContain('agent-1')
+      const pending = useRoomUiStore.getState().pendingRoomData['room-manual']
+      expect(pending?.dispatch).toEqual({ message_target_mode: 'room_default' })
+      expect(pending?.targetGroup).toBeUndefined()
+    })
+
+    it('should preserve explicit mention dispatch when selectedAgents seed the room', async () => {
+      mockCreateNewRoom.mockResolvedValue({
+        success: true,
+        room: { room_id: 'room-manual-mention' },
+      })
+
+      const { result } = renderHook(() => useChatRoomCreation(defaultProps))
+
+      await act(async () => {
+        await result.current.createRoomWithMessage('Hello <@agent-mentioned|Mentioned>', {
+          selectedAgents: [mockAgent],
+          dispatch: { mentioned_agent_ids: ['agent-mentioned'] },
+          targetGroup: 'group-abc',
+        })
+      })
+
+      const membershipArg = mockCreateNewRoom.mock.calls[0][7]
+      expect(membershipArg).toBeUndefined()
+      const roomAgentSet = mockCreateNewRoom.mock.calls[0][4]
+      expect(Object.keys(roomAgentSet)).toContain('agent-1')
+      const pending = useRoomUiStore.getState().pendingRoomData['room-manual-mention']
+      expect(pending).toEqual({
+        initialMessage: 'Hello <@agent-mentioned|Mentioned>',
+        dispatch: { mentioned_agent_ids: ['agent-mentioned'] },
+        targetGroup: undefined,
+        attachments: undefined,
+      })
+    })
+
+    it('should not seed or persist targetGroup when explicit dispatch uses mentions', async () => {
+      mockCreateNewRoom.mockResolvedValue({
+        success: true,
+        room: { room_id: 'room-mention' },
+      })
+
+      const { result } = renderHook(() => useChatRoomCreation(defaultProps))
+
+      await act(async () => {
+        await result.current.createRoomWithMessage('Hello <@agent-mentioned|Mentioned>', {
+          dispatch: { mentioned_agent_ids: ['agent-mentioned'] },
+          targetGroup: 'group-abc',
+        })
+      })
+
+      const membershipArg = mockCreateNewRoom.mock.calls[0][7]
+      expect(membershipArg).toBeUndefined()
+      const pending = useRoomUiStore.getState().pendingRoomData['room-mention']
+      expect(pending).toEqual({
+        initialMessage: 'Hello <@agent-mentioned|Mentioned>',
+        dispatch: { mentioned_agent_ids: ['agent-mentioned'] },
+        targetGroup: undefined,
+        attachments: undefined,
+      })
+    })
+
+    it('should not seed targetGroup when explicit non-mention dispatch is provided', async () => {
+      mockCreateNewRoom.mockResolvedValue({
+        success: true,
+        room: { room_id: 'room-explicit-all' },
+      })
+
+      const { result } = renderHook(() => useChatRoomCreation(defaultProps))
+
+      await act(async () => {
+        await result.current.createRoomWithMessage('Hello everyone', {
+          dispatch: { message_target_mode: 'all_agents' },
+          targetGroup: 'group-abc',
+        })
+      })
+
+      const membershipArg = mockCreateNewRoom.mock.calls[0][7]
+      expect(membershipArg).toBeUndefined()
+      const pending = useRoomUiStore.getState().pendingRoomData['room-explicit-all']
+      expect(pending).toEqual({
+        initialMessage: 'Hello everyone',
+        dispatch: { message_target_mode: 'all_agents' },
+        targetGroup: undefined,
+        attachments: undefined,
+      })
     })
 
     it('should return null when API returns success=false (line 142)', async () => {

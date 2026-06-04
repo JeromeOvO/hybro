@@ -1,31 +1,38 @@
 import { banner } from '@/components/ui/banner'
-import type { SSEMessage, ProcessingStatus } from '@/lib/types/sse'
+import type { ProcessingStatus, ProcessingStatusData, RoomSSEFrameMap } from '@/lib/types/sse'
 import { PROCESSING_STATUS, isProcessingDone, TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
 import type { MessageEntity } from '@/stores/message-store/types'
 import {
   appendProcessingStatusLog,
   findProcessingStatusUserEntity,
-  normalizeProcessingDetails,
+  processingDetailsToLogMessage,
 } from '../../processing-status-log'
-import { getResolvedMessageId, resolveClientRequestMessageId } from '../pending-turn-buffer'
+import { getResolvedMessageId } from '../pending-turn-buffer'
 import type { CorrelationResult } from '../correlation'
 import type { SSEHandlerDeps } from '../types'
 
 function isTurnLevelTerminalProcessingStatus(
   sseMessageId: string | undefined,
-  relatedMessageId: string | undefined,
   lifecycleMessageId: string | null,
   resolvedMessageId: string | undefined,
   userEntity: MessageEntity | undefined,
+  relatedMessageId: string | null | undefined,
+  clientRequestId: string | null | undefined,
 ): boolean {
   if (!sseMessageId) return true
-  if (relatedMessageId && userEntity?.id === relatedMessageId) return true
-  if (relatedMessageId && lifecycleMessageId && relatedMessageId === lifecycleMessageId) return true
-  if (relatedMessageId && resolvedMessageId && relatedMessageId === resolvedMessageId) return true
   if (lifecycleMessageId && sseMessageId === lifecycleMessageId) return true
   if (resolvedMessageId && sseMessageId === resolvedMessageId) return true
   if (userEntity?.id === sseMessageId) return true
+  // HITL resume can introduce a new backend request id while pointing back to the original user turn.
+  if (
+    relatedMessageId &&
+    userEntity?.id === relatedMessageId &&
+    resolvedMessageId === userEntity.id &&
+    userEntity.clientRequestId !== clientRequestId
+  ) {
+    return true
+  }
   return false
 }
 
@@ -85,21 +92,53 @@ function scheduleTerminalReconcile(
   }, delayMs)
 }
 
+const PROCESSING_STATUS_VALUES = new Set<string>(Object.values(PROCESSING_STATUS))
+
+function hasValidProcessingDetails(
+  details: unknown,
+): details is Record<string, unknown> | null {
+  return details === null || (typeof details === 'object' && !Array.isArray(details))
+}
+
+function isProcessingStatusData(data: unknown): data is ProcessingStatusData {
+  if (!data || typeof data !== 'object') return false
+  const value = data as Record<string, unknown>
+  if (!Object.prototype.hasOwnProperty.call(value, 'message_id')) return false
+  if (typeof value.message_id !== 'string' || value.message_id.length === 0) return false
+  if (typeof value.client_request_id !== 'string' || value.client_request_id.length === 0) return false
+  if (typeof value.status !== 'string' || !PROCESSING_STATUS_VALUES.has(value.status)) return false
+  if (!Object.prototype.hasOwnProperty.call(value, 'details')) return false
+  return hasValidProcessingDetails(value.details)
+}
+
 export function handleProcessingStatus(
   ctx: SSEHandlerDeps,
-  sseMessage: SSEMessage,
+  sseMessage: RoomSSEFrameMap['processing_status'],
   correlation: CorrelationResult,
 ): void {
   console.log('⚙️ Processing status update:', sseMessage.data?.status, {
     client_request_id: sseMessage.data?.client_request_id,
   })
-  if (!sseMessage.data?.status) return
+  if (!isProcessingStatusData(sseMessage.data)) {
+    const details = sseMessage.data && typeof sseMessage.data === 'object'
+      ? (sseMessage.data as Record<string, unknown>).details
+      : undefined
+    const message = details === undefined
+      ? 'Ignoring processing_status without required object/null details:'
+      : 'Ignoring invalid processing_status data:'
+    console.debug(message, details ?? sseMessage.data)
+    return
+  }
 
   const status = sseMessage.data.status
   const store = useMessageStore.getState()
   const { roomId, lifecycle } = ctx
 
-  if (status === PROCESSING_STATUS.PROCESSING) {
+  if (
+    status === PROCESSING_STATUS.QUEUED
+    || status === PROCESSING_STATUS.PROCESSING
+    || status === PROCESSING_STATUS.AWAITING_INPUT
+  ) {
     console.log('[SSE] PROCESSING event received', {
       status,
       details: sseMessage.data.details,
@@ -117,14 +156,11 @@ export function handleProcessingStatus(
 
     const lifecycleMessageId = lifecycle.getMessageId()
     const realMessageId = sseMessage.data.message_id as string | undefined
-    const relatedMessageId = sseMessage.data.related_message_id as string | undefined
+    const relatedMessageId = (sseMessage.data as { related_message_id?: string | null }).related_message_id ?? undefined
     const existingUserForEventId = findProcessingStatusUserEntity(roomId, {
       messageId: realMessageId,
       relatedMessageId,
     })
-    if (correlation.clientReqId && existingUserForEventId) {
-      resolveClientRequestMessageId(correlation.clientReqId, existingUserForEventId.id)
-    }
 
     const resolvedClientMessageId = correlation.clientReqId
       ? getResolvedMessageId(correlation.clientReqId)
@@ -162,42 +198,12 @@ export function handleProcessingStatus(
     appendProcessingStatusLog(
       roomId,
       processingUserEntity,
-      sseMessage.data.details,
+      processingDetailsToLogMessage(sseMessage.data.details),
       sseMessage.timestamp,
       'sse',
     )
 
     lifecycle.startProcessing(processingUserEntity?.id ?? lifecycleMessageId ?? userMsgId)
-    return
-  }
-
-  if (status === PROCESSING_STATUS.AWAITING_INPUT) {
-    console.log('⏸️ [SSE] awaiting_input — clearing lifecycle without terminal stamp')
-    const lifecycleMessageId = lifecycle.getMessageId()
-    const awaitingMessageId = (sseMessage.data.message_id as string | undefined) ?? lifecycleMessageId
-    const relatedMessageId = sseMessage.data.related_message_id as string | undefined
-    const awaitingUser = findProcessingStatusUserEntity(roomId, {
-      messageId: awaitingMessageId,
-      clientRequestId: correlation.clientReqId,
-      relatedMessageId,
-      preferClientRequestId: true,
-    })
-    if (!isCurrentProcessingUser(
-      roomId,
-      lifecycleMessageId,
-      awaitingUser,
-      lifecycle,
-      correlation.clientReqId,
-      relatedMessageId,
-    )) {
-      return
-    }
-    lifecycle.markProcessingResolved()
-    lifecycle.stopProcessing({ clearMessageId: false })
-    ctx.setCancelling(false)
-    lifecycle.disarmCancelTimeout()
-    store.removeMessage(lifecycle.placeholderId(roomId))
-    lifecycle.dismissPlaceholder()
     return
   }
 
@@ -207,7 +213,7 @@ export function handleProcessingStatus(
 
   const lifecycleMessageId = lifecycle.getMessageId()
   const sseMessageId = sseMessage.data.message_id as string | undefined
-  const relatedMessageId = sseMessage.data.related_message_id as string | undefined
+  const relatedMessageId = (sseMessage.data as { related_message_id?: string | null }).related_message_id ?? undefined
   const resolvedClientMessageId = correlation.clientReqId
     ? getResolvedMessageId(correlation.clientReqId)
     : undefined
@@ -225,10 +231,11 @@ export function handleProcessingStatus(
     hasTurnMessageReference &&
     !isTurnLevelTerminalProcessingStatus(
       sseMessageId,
-      relatedMessageId,
       lifecycleMessageId,
       resolvedClientMessageId,
       terminalUser,
+      relatedMessageId,
+      correlation.clientReqId,
     )
   ) {
     console.log('🚫 [SSE] Ignoring per-agent processing_status — terminal id is not the user message', {
@@ -285,7 +292,7 @@ export function handleProcessingStatus(
         }, 'optimistic')
         store.cancelAllNonTerminal(roomId)
       } else if (status === PROCESSING_STATUS.FAILED) {
-        banner.error(`Processing failed: ${normalizeProcessingDetails(sseMessage.data.details) ?? 'Unknown error'}`)
+        banner.error(`Processing failed: ${processingDetailsToLogMessage(sseMessage.data.details) ?? 'Unknown error'}`)
       } else if (status === PROCESSING_STATUS.RATE_LIMITED) {
         console.log('Rate limit reached, processing stopped')
       }
