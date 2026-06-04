@@ -5,12 +5,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-
-from models.supervisor import RunStatus, SupervisorRunResult, SupervisorTrajectory
-from execution.orchestration.room_message_center import RoomMessageCenter
 from app_shell.delivery_runtime import SSEManager
+from common.dto import RunEventNotification
+from execution.orchestration.room_message_center import RoomMessageCenter
+from models.supervisor import RunStatus, SupervisorRunResult, SupervisorTrajectory
 from tests.delivery_adapter_fakes import make_bound_manager
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 async def _next_sse_type(conn) -> tuple[str, dict]:
@@ -74,17 +75,16 @@ def _bind_test_processing_emitter(
                 details=details,
             )
             if payload:
-                await manager.broadcast_to_room(
-                    room_id,
-                    "run_event",
-                    {
-                        "event_id": payload.get("event_id"),
-                        "run_id": payload.get("run_id"),
-                        "seq": payload.get("seq"),
-                        "type": payload.get("type"),
-                        "payload": payload.get("payload") or {},
-                        "correlation_id": client_request_id,
-                    },
+                await manager._emit_event(
+                    RunEventNotification(
+                        room_id=room_id,
+                        event_id=payload.get("event_id"),
+                        run_id=payload.get("run_id"),
+                        seq=payload.get("seq"),
+                        run_event_type=payload.get("type"),
+                        payload=payload.get("payload") or {},
+                        correlation_id=client_request_id,
+                    )
                 )
         await manager.send_processing_status(
             room_id,
@@ -101,7 +101,7 @@ def _bind_test_processing_emitter(
 async def test_golden_send_message_processing_status_order(monkeypatch):
     import app_shell.room_runtime as room_services
     from common.a2a_constants import SSEProcessingStatus
-    from execution.run_lifecycle_service import record_and_maybe_broadcast_run_event
+    from execution.events import emit_processing_status
 
     manager = make_bound_manager()
     conn = await manager.add_connection("room-1")
@@ -113,28 +113,27 @@ async def test_golden_send_message_processing_status_order(monkeypatch):
         "payload": {},
     }
     record = AsyncMock(side_effect=[payload, None])
-    helper_spy = AsyncMock(wraps=record_and_maybe_broadcast_run_event)
+    resolver = SimpleNamespace(
+        resolve_client_request_id=AsyncMock(return_value="cr-1")
+    )
+    run_lifecycle = SimpleNamespace(record_processing_status=record)
 
     monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
-    monkeypatch.setattr(
-        "execution.run_lifecycle_service.run_command_handler.record_processing_status",
-        record,
-    )
-    monkeypatch.setattr(room_services, "sse_manager", manager)
-    monkeypatch.setattr(
-        room_services,
-        "record_and_maybe_broadcast_run_event",
-        helper_spy,
-        raising=False,
-    )
 
     svc = object.__new__(room_services.RoomServices)
+    svc._processing_status_emitter = lambda **kwargs: emit_processing_status(
+        **kwargs,
+        run_lifecycle=run_lifecycle,
+        event_publisher=manager._facade.event_publisher,
+        run_event_enabled=lambda: True,
+        client_request_id_resolver=resolver,
+    )
     await svc._send_processing_status("room-1", "msg-1", "cr-1")
 
     first_type, first_data = await _next_sse_type(conn)
     second_type, second_data = await _next_sse_type(conn)
 
-    assert helper_spy.await_count == 1
+    assert record.await_count == 1
     assert first_type == "run_event"
     assert first_data["event_id"] == "evt-1"
     assert first_data["correlation_id"] == "cr-1"
@@ -304,8 +303,8 @@ async def test_golden_clarifying_soft_complete_is_transport_only(monkeypatch):
 async def test_golden_clarify_resume_retry_failure_completed_is_transport_only(
     monkeypatch,
 ):
-    from models.supervisor import AgentProfile, RoomConfig
     from execution.orchestration.room_supervisor_service import SupervisorPlanningError
+    from models.supervisor import AgentProfile, RoomConfig
 
     manager = make_bound_manager()
     conn = await manager.add_connection("room-1")

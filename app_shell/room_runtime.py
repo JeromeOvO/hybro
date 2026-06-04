@@ -70,7 +70,6 @@ from app_shell.agent_service import agent_service
 from app_shell.database_service import db_service
 from app_shell.memory_service import room_memory_service
 from app_shell.openai_service import openai_service
-from execution.run_lifecycle_service import record_and_maybe_broadcast_run_event
 from app_shell.delivery_runtime import sse_manager
 from app_shell.task_service import task_service
 
@@ -1801,6 +1800,7 @@ class RoomServices:
         is_debate_mode: bool,
         room_memory: "RoomMemory | None",
         token: CancellationToken | None = None,
+        explicit_mentions: list[dict] | None = None,
     ) -> ParseResult:
         """Prepare extend_info for supervisor execution.
 
@@ -1829,6 +1829,7 @@ class RoomServices:
         room_config = RoomConfig(
             is_debate_mode=is_debate_mode,
             room_agent_set=selected_agent_set,
+            explicit_mentions=explicit_mentions or [],
         )
 
         # Build budget-aware context via ContextAssemblyService (§11.1)
@@ -1869,6 +1870,7 @@ class RoomServices:
             "agent_registry": agent_dicts,
             "room_config": room_config.model_dump(mode="json"),
             "conversation_context": conversation_context,
+            "explicit_mentions": explicit_mentions or [],
         }
         await self.database_service.update_room_user_message_by_message_id(
             user_message.message_id, user_message
@@ -1898,6 +1900,7 @@ class RoomServices:
         selected_agent_set: dict,
         is_debate_mode: bool,
         room_memory: "RoomMemory | None",
+        explicit_mentions: list[dict] | None = None,
     ) -> bool:
         """Check whether a pending CLARIFY can be resumed and prepare extend_info.
 
@@ -1988,6 +1991,7 @@ class RoomServices:
         room_config = RoomConfig(
             is_debate_mode=is_debate_mode,
             room_agent_set=selected_agent_set,
+            explicit_mentions=explicit_mentions or [],
         )
 
         # Build budget-aware context via ContextAssemblyService (§11.1)
@@ -2033,6 +2037,7 @@ class RoomServices:
             "agent_registry": [p.model_dump(mode="json") for p in agent_registry],
             "room_config": room_config.model_dump(mode="json"),
             "conversation_context": conversation_context,
+            "explicit_mentions": explicit_mentions or [],
         }
         await self.database_service.update_room_user_message_by_message_id(
             user_message.message_id, user_message
@@ -2073,6 +2078,7 @@ class RoomServices:
         conversation_context: str | None = None,
         token: CancellationToken | None = None,
         client_request_id: str | None = None,
+        explicit_mentions: list[dict] | None = None,
     ) -> ParseResult:
         """
         Parse user message
@@ -2085,6 +2091,7 @@ class RoomServices:
             is_debate_mode: Whether to use debate mode
             auto_assign_agents: If True (Auto mode), LLM will auto-assign agents
             agents: Full Agent objects for detailed LLM context (optional)
+            explicit_mentions: Canonical agent mentions to include as routing intent
 
         Returns:
             ParseResult with ``success`` and ``canceled`` flags.  The caller
@@ -2128,6 +2135,7 @@ class RoomServices:
                 auto_assign_agents,
                 agents,
                 conversation_context=conversation_context,
+                explicit_mentions=explicit_mentions,
             )
 
         logger.info(f"LLM Parsed result: {parsed_result}")
@@ -2222,7 +2230,7 @@ class RoomServices:
         # - canonical mentioned_agent_ids: validated via shared helper
         # - room_team / saved_group: validated via shared helper
         # - all_agents: LLM-driven, cannot pre-validate (persists first)
-        # - legacy inline mentions: best-effort, not covered (persists first)
+        # - inline text mentions: best-effort, not covered (persists first)
         pre_resolved_mentions: list[dict] | None = None
         pre_resolved_scope: tuple[dict, bool, list] | None = None
 
@@ -2284,49 +2292,73 @@ class RoomServices:
             return memory_response
 
         # ── Dispatch using pre-resolved scope ─────────────────────────────
-        # Canonical mention dispatch: reuse pre-validated mention list.
+        # In non-supervisor rooms, explicit mentions are hard routing. In
+        # supervisor rooms, mentions are strong intent signals for the planner.
         if pre_resolved_mentions:
-            if (
-                use_supervisor
-                and isinstance(room.extend_info, dict)
-                and room.extend_info.get("pending_clarification_message_id")
-            ):
-                await self._clear_pending_clarification(room)
-            return await self._handle_mentions_flow(
-                request, user_message, pre_resolved_mentions
-            )
+            if use_supervisor:
+                selected_agent_set = {
+                    mention["agent_id"]: mention["agent_name"]
+                    for mention in pre_resolved_mentions
+                }
+                agents = []
+                for mention in pre_resolved_mentions:
+                    agent = await self.database_service.get_agent_by_agent_id(
+                        mention["agent_id"]
+                    )
+                    if agent is not None:
+                        agents.append(agent)
+                auto_assign = False
+            else:
+                return await self._handle_mentions_flow(
+                    request, user_message, pre_resolved_mentions
+                )
 
-        # Legacy fallback: parse inline <@id|name> mentions from message text.
-        # This runs AFTER persistence — legacy inline mentions are best-effort
-        # and do not get reject-before-persist protection.
+        # Parse inline <@id|name> mentions from message text when the caller did
+        # not provide canonical mentioned_agent_ids. This runs AFTER persistence,
+        # so inline mentions are best-effort and do not get reject-before-persist
+        # protection.
         #
-        # When target_group is "all_agents", the room_agent_set may be empty
-        # (e.g. newly created rooms from the homepage).  In that case, resolve
-        # mentions against all active agents so inline @-mentions are honoured
-        # regardless of room membership.
-        if target_group == "all_agents":
-            all_agents = await self.database_service.get_all_active_agents(
-                user_id=request.user_id,
-            )
-            effective_agent_set = {
-                a.agent_id: a.agent_card.name for a in (all_agents or [])
-            }
-        else:
-            effective_agent_set = room.room_agent_set
+        if pre_resolved_mentions is None:
+            # When target_group is "all_agents", the room_agent_set may be empty
+            # (e.g. newly created rooms from the homepage).  In that case, resolve
+            # mentions against all active agents so inline @-mentions are honoured
+            # regardless of room membership.
+            if target_group == "all_agents":
+                all_agents = await self.database_service.get_all_active_agents(
+                    user_id=request.user_id,
+                )
+                effective_agent_set = {
+                    a.agent_id: a.agent_card.name for a in (all_agents or [])
+                }
+            else:
+                effective_agent_set = room.room_agent_set
 
-        mentions = self.parse_agent_mentions(message_text, effective_agent_set)
+            mentions = self.parse_agent_mentions(message_text, effective_agent_set)
 
-        if mentions:
-            if (
-                use_supervisor
-                and isinstance(room.extend_info, dict)
-                and room.extend_info.get("pending_clarification_message_id")
-            ):
-                await self._clear_pending_clarification(room)
-            return await self._handle_mentions_flow(request, user_message, mentions)
+            if mentions:
+                if use_supervisor:
+                    pre_resolved_mentions = mentions
+                    selected_agent_set = {
+                        mention["agent_id"]: mention["agent_name"]
+                        for mention in mentions
+                    }
+                    agents = []
+                    for mention in mentions:
+                        agent = await self.database_service.get_agent_by_agent_id(
+                            mention["agent_id"]
+                        )
+                        if agent is not None:
+                            agents.append(agent)
+                    auto_assign = False
+                else:
+                    return await self._handle_mentions_flow(
+                        request, user_message, mentions
+                    )
 
         # Target scope dispatch: reuse pre-resolved scope or run all_agents LLM.
-        if target_group == "all_agents":
+        if pre_resolved_mentions and use_supervisor:
+            pass
+        elif target_group == "all_agents":
             required_modes = self._derive_required_input_modes(user_message)
             selection_result = await self._resolve_explicit_target_scope(
                 room, message_text, target_group, is_debate_mode,
@@ -2417,6 +2449,7 @@ class RoomServices:
                     selected_agent_set=selected_agent_set,
                     is_debate_mode=is_debate_mode,
                     room_memory=room_memory,
+                    explicit_mentions=pre_resolved_mentions,
                 )
 
             if clarify_resume_prepared:
@@ -2431,6 +2464,7 @@ class RoomServices:
                     is_debate_mode=is_debate_mode,
                     room_memory=room_memory,
                     token=token,
+                    explicit_mentions=pre_resolved_mentions,
                 )
         else:
             parse_result = await self.parse_user_message(
@@ -2446,6 +2480,7 @@ class RoomServices:
                 conversation_context=conversation_context,
                 token=token,
                 client_request_id=client_request_id,
+                explicit_mentions=pre_resolved_mentions,
             )
 
         if not parse_result.success:
@@ -2619,36 +2654,27 @@ class RoomServices:
                 lifecycle_message_id=message_id,
                 record_lifecycle=record_lifecycle,
                 client_request_id=client_request_id,
-                details=details if isinstance(details, dict) else None,
-                legacy_details=details if isinstance(details, str) else None,
+                details=(
+                    details
+                    if isinstance(details, dict)
+                    else {"message": details}
+                    if isinstance(details, str)
+                    else None
+                ),
                 error_message=(
                     details
                     if isinstance(details, str)
-                    and status_value in {SSEProcessingStatus.FAILED.value, SSEProcessingStatus.CANCELED.value}
+                    and status_value
+                    in {
+                        SSEProcessingStatus.FAILED.value,
+                        SSEProcessingStatus.CANCELED.value,
+                    }
                     else None
                 ),
             )
             return
 
-        transport = getattr(self, "sse_manager", sse_manager)
-        if record_lifecycle:
-            await record_and_maybe_broadcast_run_event(
-                room_id,
-                status,
-                message_id,
-                client_request_id=client_request_id,
-                details=details,
-                sse=transport,
-            )
-        send_kwargs = {"client_request_id": client_request_id}
-        if details is not None:
-            send_kwargs["details"] = details
-        await transport.send_processing_status(
-            room_id,
-            status_value,
-            message_id,
-            **send_kwargs,
-        )
+        raise RuntimeError("Room runtime execution event dependencies not bound")
 
     async def _initialize_room_memory(
         self, request: RoomCenterUserMessageRequest, user_message: RoomUserMessage
@@ -2997,96 +3023,6 @@ class RoomServices:
             error=None,
             status_code=200,
         )
-
-    async def create_and_parse_user_message(
-        self, request: RoomCenterUserMessageRequest
-    ) -> RoomCenterUserMessageResponse:
-        """Send user message and handle @agent parsing with context grouping"""
-
-        if request.room_id is None:
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="Room id is required",
-                status_code=400,
-            )
-
-        room_id = request.room_id
-        message = request.message
-        if message is None:
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="Message is required",
-                status_code=400,
-            )
-
-        size_err = self._check_message_text_length(message)
-        if size_err:
-            return size_err
-
-        # Resolve attachments before persistence
-        att_err = await self._resolve_and_apply_attachments(request, message)
-        if att_err is not None:
-            return att_err
-
-        # Save user message
-        message.client_request_id = (
-            request.client_request_id
-            if isinstance(getattr(request, "client_request_id", None), str)
-            else None
-        )
-        add_message_success = await self.database_service.add_room_user_message(message)
-        if not add_message_success:
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="Failed to add message",
-                status_code=500,
-            )
-
-        # Initialize or update room memory
-        room_memory_initialize_or_update_response = (
-            await self.room_memory_service.initialize_or_update_room_memory(
-                RoomCenterMemoryRequest(
-                    room_id=room_id,
-                    message_id=message.message_id,
-                    memory_content=message.message_content.message_text,
-                    attachments=message.message_content.attachments,
-                )
-            )
-        )
-        if not room_memory_initialize_or_update_response.success:
-            return RoomCenterUserMessageResponse(
-                message_id=message.message_id,
-                message=message,
-                success=False,
-                error="Failed to initialize or update room memory",
-                status_code=500,
-            )
-
-        # Get room information
-        room = await self.database_service.get_room_by_room_id(room_id)
-        if not room:
-            return RoomCenterUserMessageResponse(
-                message_id=message.message_id,
-                message=message,
-                success=True,
-                error="Room not found, but message saved",
-                status_code=200,
-            )
-
-        # Parse @agent mentions and deterministically fan out messages to each mention
-        mentions = self.parse_agent_mentions(
-            message.message_content.message_text, room.room_agent_set
-        )
-        mention_response = await self.parse_user_message_with_mentions(
-            room, message, mentions
-        )
-        return mention_response
 
     async def parse_user_message_with_mentions(
         self,
@@ -4285,11 +4221,6 @@ class AppShellRoomCenter:
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
         return self._require_room_services().update_room_extend_info(request)
-
-    def create_and_parse_user_message(
-        self, request: RoomCenterUserMessageRequest
-    ) -> RoomCenterUserMessageResponse:
-        return self._require_room_services().create_and_parse_user_message(request)
 
     def inquiry_room_messages_by_room_id(
         self, request: RoomCenterRoomMessageRequest

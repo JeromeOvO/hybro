@@ -1211,28 +1211,6 @@
       "POST"
     ],
     "module": "api_gateway.routes.room_routes",
-    "name": "create_and_parse_user_message",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
-    "path": "/api/v1/roomCenter/createAndParseUserMessage",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.room_routes",
     "name": "create_new_room",
     "openapi_response_codes": [
       "200"

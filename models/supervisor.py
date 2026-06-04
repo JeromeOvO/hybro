@@ -59,6 +59,7 @@ class RoomConfig(BaseModel):
 
     is_debate_mode: bool = False
     room_agent_set: dict[str, str] = Field(default_factory=dict)
+    explicit_mentions: list[dict] = Field(default_factory=list)
 
 
 # =========================================================================

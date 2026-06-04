@@ -130,7 +130,6 @@ async def test_emit_processing_status_translates_local_and_fanout_with_metrics()
             "status": "processing",
             "message_id": "msg-1",
             "details": None,
-            "timestamp": NOW.isoformat(),
         },
     }
     assert transport.frames == [("room-1", frame)]
@@ -201,26 +200,6 @@ async def test_fanout_failure_is_dead_lettered_without_raising():
 
     assert len(bus.dead_letters) == 1
     assert publisher.dead_letters[0]["failure_stage"] == "sse_fanout"
-
-
-@pytest.mark.asyncio
-async def test_legacy_frame_path_preserves_frame_and_dedups_terminal_status():
-    transport = FakeTransport()
-    bus = FakeBus()
-    dedup = FakeDeduplicator(result=True)
-    publisher = make_publisher(transport=transport, bus=bus, dedup=dedup)
-    frame = {
-        "type": "processing_status",
-        "room_id": "room-1",
-        "timestamp": NOW.isoformat(),
-        "data": {"message_id": "msg-1", "status": "completed", "details": "done"},
-    }
-
-    await publisher._emit_legacy_frame("room-1", frame)
-
-    assert transport.frames == [("room-1", frame)]
-    assert bus.sse == [("room-1", frame)]
-    assert dedup.calls == [("room-1", "msg-1", "completed")]
 
 
 @pytest.mark.asyncio
@@ -347,7 +326,7 @@ async def test_remote_internal_event_restores_trace_context_and_rejects_mismatch
 
 
 @pytest.mark.asyncio
-async def test_trace_context_is_added_to_typed_frames_but_not_legacy_frames():
+async def test_trace_context_is_added_to_typed_frames():
     transport = FakeTransport()
     bus = FakeBus()
     publisher = make_publisher(transport=transport, bus=bus)
@@ -356,13 +335,8 @@ async def test_trace_context_is_added_to_typed_frames_but_not_legacy_frames():
         await publisher.emit(
             ProcessingStatusEvent(room_id="room-1", message_id="msg-1", status="processing")
         )
-        await publisher._emit_legacy_frame(
-            "room-1",
-            {"type": "custom", "room_id": "room-1", "data": {}},
-        )
 
     assert transport.frames[0][1]["data"]["trace_id"] == "trace-123"
-    assert "trace_id" not in transport.frames[1][1]["data"]
 
 
 @pytest.mark.asyncio

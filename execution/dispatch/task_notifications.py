@@ -37,7 +37,6 @@ from common.utils.a2a_helpers import (
     task_has_visible_content,
 )
 from common.utils.logger import get_logger
-from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
 
 if TYPE_CHECKING:
     from app_shell.database_service import DatabaseService
@@ -45,6 +44,17 @@ if TYPE_CHECKING:
     from app_shell.delivery_runtime import SSEManager
 
 logger = get_logger(__name__)
+
+ProcessingStatusEmitter = Callable[..., Awaitable[dict[str, Any] | None]]
+_processing_status_emitter: ProcessingStatusEmitter | None = None
+
+
+def bind_processing_status_emitter(
+    processing_status_emitter: ProcessingStatusEmitter,
+) -> None:
+    global _processing_status_emitter
+
+    _processing_status_emitter = processing_status_emitter
 
 
 class TaskNotificationAdapter:
@@ -109,6 +119,8 @@ async def _notify_task_update_impl(
     user_id: str,
     error: str | None = None,
     parts: list[dict] | None = None,
+    emit_processing_status: bool = False,
+    processing_status_emitter: ProcessingStatusEmitter | None = None,
 ) -> bool:
     """Shared core: idempotency check, DB read, backfill, SSE emission.
 
@@ -398,16 +410,45 @@ async def _notify_task_update_impl(
         client_request_id=client_request_id,
     )
 
-    logger.info("Sent SSE notification for task %s state %s", message_id, state)
+    processing_status = _map_task_state_to_processing_status(state)
+    if emit_processing_status and processing_status is not None:
+        status_details = None
+        detail_text = resolved_error or status_message
+        if detail_text:
+            status_details = {"message": detail_text}
+        emitter = processing_status_emitter or _processing_status_emitter
+        if emitter is None:
+            logger.warning(
+                "notify_task_update: processing status emitter is not bound; "
+                "skipping processing_status for %s",
+                message_id,
+            )
+        else:
+            status_value = processing_status.value
+            error_message = (
+                detail_text
+                if detail_text
+                and status_value
+                in {
+                    SSEProcessingStatus.FAILED.value,
+                    SSEProcessingStatus.CANCELED.value,
+                    SSEProcessingStatus.REJECTED.value,
+                    SSEProcessingStatus.ERROR.value,
+                }
+                else None
+            )
+            await emitter(
+                room_id=room_id,
+                status=processing_status,
+                message_id=message_id,
+                lifecycle_message_id=message_id,
+                record_lifecycle=True,
+                client_request_id=client_request_id,
+                details=status_details,
+                error_message=error_message,
+            )
 
-    mapped_status = _map_task_state_to_processing_status(state)
-    if mapped_status is not None:
-        await LegacyProcessingStatusC3Adapter(sse).emit_processing_status(
-            room_id=room_id,
-            status=mapped_status,
-            message_id=message_id,
-            client_request_id=client_request_id,
-        )
+    logger.info("Sent SSE notification for task %s state %s", message_id, state)
 
     return True
 
@@ -447,6 +488,7 @@ async def notify_task_update(
         user_id=user_id,
         error=error,
         parts=parts,
+        emit_processing_status=True,
     )
 
 

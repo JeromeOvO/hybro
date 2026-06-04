@@ -200,7 +200,7 @@ Key components:
   idempotent claims, per-room locks, cancellation tokens, routing between
   queue and supervisor modes, and terminal processing status.
 - `QueueExecutor`: sequentially processes pre-created agent messages for
-  non-supervisor flows, mention flows, and legacy routing.
+  non-supervisor flows and explicit non-supervisor mention flows.
 - `SupervisorExecutor`: adaptive supervisor loop for rooms with
   `extend_info.use_supervisor`.
 - `AgentMessageProcessor`: transport router shared by queue and supervisor
@@ -246,6 +246,17 @@ App-shell adapters such as `app_shell.context_assembly_service`,
 ### `delivery`
 
 `delivery.DeliveryFacade` owns SSE delivery and cross-instance event fan-out.
+Backend modules emit typed `common.dto.DeliveryEvent` objects; Delivery is the
+only layer that translates those DTOs into frontend room SSE frames. The wire
+shape is always:
+
+```json
+{"type": "event_name", "timestamp": "ISO-8601", "room_id": "room-id", "data": {}}
+```
+
+`ProcessingStatusEvent` supports the final status set (`queued`, `processing`,
+`awaiting_input`, `completed`, `failed`, `canceled`, `rejected`,
+`rate_limited`, `error`) and carries `details` as `dict | null`.
 
 It is composed from:
 
@@ -258,7 +269,9 @@ It is composed from:
 
 `app_shell.delivery_runtime.sse_manager` is the route-facing delivery manager
 bound to the Delivery facade during startup. Routes call the manager, while the
-runtime implementation lives in `delivery`.
+runtime implementation lives in `delivery`. Delivery never calls back into
+Execution or app-shell business services; lifecycle recording happens before
+typed delivery events are emitted.
 
 ### `platform_module`
 
@@ -359,7 +372,7 @@ others are thin adapters over canonical facades.
 Examples:
 
 - `app_shell.room_runtime`: room send-message preparation, target resolution,
-  attachment resolution, supervisor preparation, and legacy parsing.
+  attachment resolution, supervisor preparation, and message parsing.
 - `app_shell.agent_service`: route-facing adapter over `AgentFacade`.
 - `app_shell.database_service`: app-shell database facade over
   `database.mongodb` and Pinecone.
@@ -573,12 +586,12 @@ Cancellation flow:
 2. `ExecutionFacade.cancel` persists cancellation in MongoDB.
 3. Delivery/SSE cancellation state is updated and broadcast.
 4. Pending HITL requests for the message are cancelled.
-5. A terminal `canceled` processing status is emitted.
+5. A terminal typed `ProcessingStatusEvent(status="canceled")` is emitted.
 6. Best-effort remote agent task cleanup is attempted.
 7. Executors observe cancellation tokens at checkpoints and stop gracefully.
 
 In multi-worker mode, Redis Pub/Sub/KV and Mongo change streams are required so
-SSE frames and cancellation state cross worker boundaries.
+typed SSE frames and cancellation state cross worker boundaries.
 
 ## HITL Workflow
 
@@ -639,7 +652,7 @@ Multi-worker production:
 - Gunicorn-style multi-worker startup is allowed only when Redis-dependent
   services are connected.
 - `check_multi_worker_safety` fails startup if Redis Pub/Sub, Redis KV, relay
-  streams, legacy Redis service, or cancellation change streams are missing.
+  streams, app-shell Redis runtime, or cancellation change streams are missing.
 
 This guard exists because without Redis:
 

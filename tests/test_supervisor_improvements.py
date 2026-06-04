@@ -142,9 +142,11 @@ def _make_executor() -> SupervisorExecutor:
     se._emitted_status_details = []
 
     async def emit_processing_status(**kwargs):
-        detail = kwargs.get("details") or kwargs.get("legacy_details")
+        detail = kwargs.get("details")
         if detail:
-            se._emitted_status_details.append(detail)
+            se._emitted_status_details.append(
+                detail.get("message") if isinstance(detail, dict) else detail
+            )
 
     se.bind_execution_event_deps(emit_processing_status)
     return se

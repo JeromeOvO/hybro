@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -90,6 +90,53 @@ class TestCallSupervisorLlmJson:
 
         with pytest.raises(json.JSONDecodeError):
             await openai_svc.call_supervisor_llm_json("system", "user")
+
+
+class TestParseUserMessageByLlm:
+    @pytest.mark.asyncio
+    async def test_includes_explicit_mentions_as_structured_routing_context(
+        self, openai_svc
+    ):
+        openai_svc.client.chat.completions.create.return_value = _chat_completion(
+            """
+            {
+              "message_type": "AUTO_ASSIGNED",
+              "original_text": "please help",
+              "needs_decomposition": false,
+              "task_steps": [
+                {
+                  "step_id": "step_1",
+                  "agent_id": "agent-1",
+                  "agent_name": "Agent One",
+                  "task_content": "please help",
+                  "dependencies": []
+                }
+              ]
+            }
+            """
+        )
+
+        result = await openai_svc.parse_user_message_by_llm(
+            "please help",
+            selected_agent_set={"agent-1": "Agent One"},
+            auto_assign_agents=True,
+            explicit_mentions=[
+                {
+                    "agent_id": "agent-1",
+                    "agent_name": "Agent One",
+                    "mention_text": "<@agent-1|Agent One>",
+                }
+            ],
+        )
+
+        assert result["task_steps"][0]["agent_id"] == "agent-1"
+        messages = openai_svc.client.chat.completions.create.await_args.kwargs[
+            "messages"
+        ]
+        user_prompt = messages[1]["content"]
+        assert "Explicit mention routing intent" in user_prompt
+        assert "Treat them as strong routing intent" in user_prompt
+        assert "Agent One (ID: agent-1) via <@agent-1|Agent One>" in user_prompt
 
 
 # ---------------------------------------------------------------------------

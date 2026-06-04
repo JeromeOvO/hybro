@@ -576,18 +576,6 @@
     "methods": [
       "POST"
     ],
-    "name": "create_and_parse_user_message",
-    "path": "/api/v1/roomCenter/createAndParseUserMessage",
-    "tags": [
-      "room"
-    ]
-  },
-  {
-    "declared_owner": "api.room_center",
-    "endpoint_module": "api.room_center",
-    "methods": [
-      "POST"
-    ],
     "name": "create_new_room",
     "path": "/api/v1/roomCenter/createNewRoom",
     "tags": [

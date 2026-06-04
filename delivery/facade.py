@@ -1,5 +1,6 @@
 from typing import Any
 
+from common.dto import DeliveryEvent
 from common.protocols import EventPublisher, RedisKV, SSETransport
 from delivery.config import DeliveryConfig, DeliveryStartupPolicy
 
@@ -7,9 +8,6 @@ from delivery.config import DeliveryConfig, DeliveryStartupPolicy
 class DeliveryCompatibility:
     def __init__(self, facade: "DeliveryFacade") -> None:
         self._facade = facade
-
-    async def emit_legacy_frame(self, room_id: str, frame: dict) -> None:
-        await self._facade.emit_legacy_frame(room_id, frame)
 
     async def open_connection(self, room_id: str) -> Any:
         return await self._facade.open_connection(room_id)
@@ -142,8 +140,8 @@ class DeliveryFacade:
     def broker_connected(self) -> bool:
         return self.delivery_pubsub_connected
 
-    async def emit_legacy_frame(self, room_id: str, frame: dict) -> None:
-        await self._event_publisher._emit_legacy_frame(room_id, frame)
+    async def emit(self, event: DeliveryEvent) -> None:
+        await self._event_publisher.emit(event)
 
     async def open_connection(self, room_id: str) -> Any:
         return await self._sse_transport.open_connection(room_id)

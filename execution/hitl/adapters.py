@@ -11,18 +11,12 @@ class DatabaseHITLPersistenceAdapter:
         return getattr(self._database_service, name)
 
 
-class LegacyHITLDeliveryAdapter:
-    def __init__(self, sse_manager) -> None:
-        self._sse_manager = sse_manager
+class HITLDeliveryAdapter:
+    def __init__(self, event_publisher) -> None:
+        self._event_publisher = event_publisher
 
-    async def emit_hitl_event(
-        self,
-        *,
-        room_id: str,
-        message_type: str,
-        payload: dict[str, Any],
-    ) -> None:
-        await self._sse_manager.broadcast_to_room(room_id, message_type, payload)
+    async def emit(self, event) -> None:
+        await self._event_publisher.emit(event)
 
 
 class A2AHITLContinuationAdapter:
@@ -74,6 +68,6 @@ class HITLTaskNotificationAdapter:
 __all__ = [
     "A2AHITLContinuationAdapter",
     "DatabaseHITLPersistenceAdapter",
+    "HITLDeliveryAdapter",
     "HITLTaskNotificationAdapter",
-    "LegacyHITLDeliveryAdapter",
 ]

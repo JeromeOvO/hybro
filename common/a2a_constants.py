@@ -49,6 +49,7 @@ NON_TERMINAL_STATES = PENDING_STATES | INTERACTIVE_STATES
 
 
 class SSEProcessingStatus(str, Enum):
+    QUEUED = "queued"
     PROCESSING = "processing"
     COMPLETED = "completed"
     CANCELED = "canceled"

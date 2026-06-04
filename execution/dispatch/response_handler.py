@@ -12,7 +12,6 @@ from typing import Any, Protocol
 from a2a_adapter.task_status import coerce_task_state
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
-from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
 
 
 class _DatabaseServiceLike(Protocol):
@@ -341,7 +340,11 @@ class AgentResponseHandler:
                 task_id=e.task_id,
                 context_id=e.context_id,
             )
-        await self._notify(e, coerce_task_state(state))
+        await self._notify(
+            e,
+            coerce_task_state(state),
+            emit_processing_status=state != "input-required",
+        )
 
         # For async transports (relay, webhook) the queue has already moved
         # to PAUSED before this callback fires, so QueueExecutor never sees
@@ -505,6 +508,7 @@ class AgentResponseHandler:
                         state=_state_enum,
                         room_id=e.room_id,
                         user_id=e.user_id or "",
+                        emit_processing_status=False,
                     )
             except (ValueError, KeyError):
                 # e.state is not a valid TaskState value — skip
@@ -539,27 +543,31 @@ class AgentResponseHandler:
         client_request_id: str | None = None,
         details=None,
     ) -> None:
-        legacy_details = details if isinstance(details, str) else None
-        structured_details = details if isinstance(details, dict) else None
-        if self._processing_status_emitter is not None:
-            await self._processing_status_emitter(
-                room_id=room_id,
-                status=status,
-                message_id=message_id,
-                lifecycle_message_id=lifecycle_message_id,
-                record_lifecycle=record_lifecycle,
-                client_request_id=client_request_id,
-                details=structured_details,
-                legacy_details=legacy_details,
-                error_message=legacy_details,
+        if self._processing_status_emitter is None:
+            raise RuntimeError(
+                "AgentResponseHandler execution event dependencies not bound"
             )
-            return
-        await LegacyProcessingStatusC3Adapter(self._sse).emit_processing_status(
+        status_value = status.value if hasattr(status, "value") else str(status)
+        await self._processing_status_emitter(
             room_id=room_id,
             status=status,
             message_id=message_id,
-            details=details,
+            lifecycle_message_id=lifecycle_message_id,
+            record_lifecycle=record_lifecycle,
             client_request_id=client_request_id,
+            details=(
+                details
+                if isinstance(details, dict)
+                else {"message": details}
+                if isinstance(details, str)
+                else None
+            ),
+            error_message=(
+                details
+                if isinstance(details, str)
+                and status_value in {"failed", "canceled", "rejected", "error"}
+                else None
+            ),
         )
 
     async def notify_task_update(
@@ -570,6 +578,7 @@ class AgentResponseHandler:
         user_id: str,
         error: str | None = None,
         parts: list[dict] | None = None,
+        emit_processing_status: bool = True,
     ) -> bool:
         """Handler-owned task notification — delegates to shared impl.
 
@@ -589,6 +598,8 @@ class AgentResponseHandler:
             user_id=user_id,
             error=error,
             parts=parts,
+            emit_processing_status=emit_processing_status,
+            processing_status_emitter=self._processing_status_emitter,
         )
 
     async def _notify(
@@ -596,6 +607,7 @@ class AgentResponseHandler:
         e: AgentEvent,
         state: Any,
         error: str | None = None,
+        emit_processing_status: bool = True,
     ) -> None:
         await self.notify_task_update(
             message_id=e.message_id,
@@ -604,6 +616,7 @@ class AgentResponseHandler:
             user_id=e.user_id or "",
             error=error,
             parts=e.parts,
+            emit_processing_status=emit_processing_status,
         )
 
     async def _resume_orchestration(

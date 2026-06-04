@@ -18,7 +18,6 @@ from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
 from execution.dispatch.response_handler import AgentResponseHandler
 from execution.dispatch.transports.direct import DirectTransport
-from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
 from execution.orchestration.queue_executor import QueueExecutor, QueueResult
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from execution.state.task_state_manager import TaskStateManager
@@ -243,28 +242,29 @@ class RoomMessageCenter:
         details=None,
         agents: list[dict] | None = None,
     ) -> None:
-        legacy_details = details if isinstance(details, str) else None
-        structured_details = details if isinstance(details, dict) else None
-        if getattr(self, "_processing_status_emitter", None) is not None:
-            await self._processing_status_emitter(
-                room_id=room_id,
-                status=status,
-                message_id=message_id,
-                lifecycle_message_id=lifecycle_message_id or message_id,
-                record_lifecycle=record_lifecycle,
-                client_request_id=client_request_id,
-                details=structured_details,
-                legacy_details=legacy_details,
-                error_message=legacy_details,
-                agents=agents,
-            )
-            return
-        await LegacyProcessingStatusC3Adapter(self.sse_manager).emit_processing_status(
+        if getattr(self, "_processing_status_emitter", None) is None:
+            raise RuntimeError("RoomMessageCenter execution event dependencies not bound")
+        status_value = status.value if hasattr(status, "value") else str(status)
+        await self._processing_status_emitter(
             room_id=room_id,
             status=status,
             message_id=message_id,
-            details=details,
+            lifecycle_message_id=lifecycle_message_id or message_id,
+            record_lifecycle=record_lifecycle,
             client_request_id=client_request_id,
+            details=(
+                details
+                if isinstance(details, dict)
+                else {"message": details}
+                if isinstance(details, str)
+                else None
+            ),
+            error_message=(
+                details
+                if isinstance(details, str)
+                and status_value in {"failed", "canceled", "rejected", "error"}
+                else None
+            ),
             agents=agents,
         )
 
@@ -671,12 +671,12 @@ class RoomMessageCenter:
                 token=token,
             )
 
-        # --- QueueExecutor path (legacy routing, @mentions, etc.) ---
-        # Query pre-created agent messages.  Both the legacy parse path and
-        # the @mentions flow create RoomAgentMessage records during Phase 1
-        # (send_message_to_room).  The supervisor loop does NOT pre-create
-        # agent messages — it generates them dynamically — so this query is
-        # only reached for non-supervisor messages.
+        # --- QueueExecutor path (non-supervisor routing and mentions) ---
+        # Query pre-created agent messages. Non-supervisor room-default
+        # routing and explicit mention flows create RoomAgentMessage records
+        # during Phase 1 (send_message_to_room). The supervisor loop does NOT
+        # pre-create agent messages — it generates them dynamically — so this
+        # query is only reached for non-supervisor messages.
         query_response = (
             await self.room_runtime.inquiry_agent_messages_by_related_message_id(
                 RoomCenterAgentMessageRequest(related_message_id=room_user_message_id)

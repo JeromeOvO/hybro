@@ -2,7 +2,6 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.params import Depends as DependsParam
-from fastapi.responses import JSONResponse
 
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from app_shell.bound import AgentSelectionSuggester, RoomCenterRouteOwner
@@ -296,24 +295,6 @@ async def update_room_extend_info(
     return room_center_response
 
 
-@router.post("/roomCenter/createAndParseUserMessage", deprecated=True)
-async def create_and_parse_user_message(
-    request: Request,
-    user: ClerkUser = Depends(get_current_user),
-):
-    """
-    **Deprecated.** Message creation and processing now go through sendMessage.
-    This endpoint returns HTTP 410 Gone before parsing the request body.
-    """
-    return JSONResponse(
-        status_code=410,
-        content={
-            "success": False,
-            "error": "This endpoint is deprecated. Use /roomCenter/sendMessage.",
-        },
-    )
-
-
 @router.post("/roomCenter/inquiryRoomMessagesByRoomId")
 async def inquiry_room_messages(
     request: Request,
@@ -361,10 +342,36 @@ async def send_message(
             status_code=400,
         )
 
-    # Canonical field takes precedence; legacy target_group is fallback only.
+    if "target_group" in request_data:
+        return RoomCenterUserMessageResponse(
+            message_id=None,
+            message=None,
+            success=False,
+            error="target_group is no longer supported; use message_target_mode and target_group_id",
+            status_code=400,
+        )
+
     message_target_mode = request_data.get("message_target_mode")
     target_group_id = request_data.get("target_group_id")
     mentioned_agent_ids = request_data.get("mentioned_agent_ids")
+    has_target_group_id = "target_group_id" in request_data
+
+    if mentioned_agent_ids is not None:
+        if (
+            not isinstance(mentioned_agent_ids, list)
+            or not all(
+                isinstance(agent_id, str) and agent_id.strip()
+                for agent_id in mentioned_agent_ids
+            )
+        ):
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="mentioned_agent_ids must be a list of non-empty strings",
+                status_code=400,
+            )
+        mentioned_agent_ids = [agent_id.strip() for agent_id in mentioned_agent_ids]
 
     # Reject mixed payloads: mentions + target mode should not coexist.
     if mentioned_agent_ids and message_target_mode is not None:
@@ -376,19 +383,71 @@ async def send_message(
 
     if message_target_mode is not None:
         if message_target_mode == "saved_group":
-            if not target_group_id:
+            if not isinstance(target_group_id, str) or not target_group_id.strip():
                 return RoomCenterUserMessageResponse(
                     message_id=None, message=None, success=False,
                     error="target_group_id is required when message_target_mode is saved_group",
                     status_code=400,
                 )
+            target_group_id = target_group_id.strip()
+            if target_group_id in {"room_team", "all_agents"}:
+                return RoomCenterUserMessageResponse(
+                    message_id=None,
+                    message=None,
+                    success=False,
+                    error="target_group_id cannot be a reserved target group",
+                    status_code=400,
+                )
             target_group = target_group_id
         elif message_target_mode == "room_default":
+            if has_target_group_id:
+                return RoomCenterUserMessageResponse(
+                    message_id=None,
+                    message=None,
+                    success=False,
+                    error="target_group_id is only supported when message_target_mode is saved_group",
+                    status_code=400,
+                )
             target_group = "room_team"
+        elif message_target_mode == "all_agents":
+            if has_target_group_id:
+                return RoomCenterUserMessageResponse(
+                    message_id=None,
+                    message=None,
+                    success=False,
+                    error="target_group_id is only supported when message_target_mode is saved_group",
+                    status_code=400,
+                )
+            target_group = "all_agents"
         else:
-            target_group = message_target_mode
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=(
+                    "message_target_mode must be one of: room_default, "
+                    "all_agents, saved_group"
+                ),
+                status_code=400,
+            )
+    elif mentioned_agent_ids:
+        if has_target_group_id:
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="target_group_id is only supported when message_target_mode is saved_group",
+                status_code=400,
+            )
+        target_group = "room_team"
     else:
-        target_group = request_data.get("target_group", "room_team")
+        return RoomCenterUserMessageResponse(
+            message_id=None,
+            message=None,
+            success=False,
+            error="message_target_mode is required when mentioned_agent_ids is not provided",
+            status_code=400,
+        )
 
     await verify_room_ownership(room_id, user)
 

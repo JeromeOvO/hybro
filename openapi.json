@@ -953,7 +953,7 @@
           "room"
         ],
         "summary": "Inquiry Active Runs",
-        "description": "List non-terminal orchestration runs for a room \u2014 same auth as inquiryRoomSetting.",
+        "description": "List non-terminal orchestration runs for a room — same auth as inquiryRoomSetting.",
         "operationId": "inquiry_active_runs_api_v1_roomCenter_inquiryActiveRuns_post",
         "responses": {
           "200": {
@@ -1044,27 +1044,6 @@
             }
           }
         }
-      }
-    },
-    "/api/v1/roomCenter/createAndParseUserMessage": {
-      "post": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Create And Parse User Message",
-        "description": "**Deprecated.** Message creation and processing now go through sendMessage.\nThis endpoint returns HTTP 410 Gone before parsing the request body.",
-        "operationId": "create_and_parse_user_message_api_v1_roomCenter_createAndParseUserMessage_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        },
-        "deprecated": true
       }
     },
     "/api/v1/roomCenter/inquiryRoomMessagesByRoomId": {
@@ -1687,6 +1666,16 @@
               }
             }
           },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Rate limit exceeded",
             "content": {
@@ -1703,16 +1692,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DiscoveryErrorResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -1809,22 +1788,22 @@
               }
             }
           },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/APIKeyErrorResponse"
-                }
-              }
-            }
-          },
           "422": {
             "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyErrorResponse"
                 }
               }
             }
@@ -1882,22 +1861,22 @@
               }
             }
           },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/APIKeyErrorResponse"
-                }
-              }
-            }
-          },
           "422": {
             "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyErrorResponse"
                 }
               }
             }
@@ -3532,8 +3511,8 @@
             "anyOf": [
               {
                 "type": "integer",
-                "maximum": 100.0,
-                "minimum": 1.0
+                "maximum": 100,
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -3615,8 +3594,8 @@
             "anyOf": [
               {
                 "type": "integer",
-                "maximum": 100.0,
-                "minimum": 1.0
+                "maximum": 100,
+                "minimum": 1
               },
               {
                 "type": "null"

@@ -17,6 +17,7 @@ import re
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
+from common.dto import HITLRequestEvent, HITLResolvedEvent
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from execution.hitl.exceptions import (
@@ -95,6 +96,7 @@ class HITLService:
         # Lazy imports to avoid circular dependencies at module load time.
         # Resolved on first method call.
         self._db_service = None
+        self._delivery = None
         self._sse_manager = None
         self._a2a_service = None
         self._continuation = continuation
@@ -107,10 +109,14 @@ class HITLService:
         return self._db_service
 
     @property
-    def sse_manager(self):
-        if self._sse_manager is None:
+    def delivery(self):
+        if self._delivery is not None:
+            return self._delivery
+        legacy_test_delivery = getattr(self, "_sse_manager", None)
+        if legacy_test_delivery is not None and hasattr(legacy_test_delivery, "emit"):
+            return legacy_test_delivery
+        if self._delivery is None:
             raise RuntimeError("HITL delivery port has not been bound")
-        return self._sse_manager
 
     @property
     def a2a_service(self):
@@ -924,7 +930,11 @@ class HITLService:
                 if inspect.isawaitable(maybe_user_message)
                 else maybe_user_message
             )
-        client_request_id = user_message.client_request_id if user_message else None
+        client_request_id = (
+            user_message.client_request_id
+            if user_message and isinstance(user_message.client_request_id, str)
+            else None
+        )
         if client_request_id:
             data["client_request_id"] = client_request_id
         else:
@@ -947,35 +957,55 @@ class HITLService:
                     if isinstance(resolved, str) and resolved.strip():
                         data["client_request_id"] = resolved.strip()
 
-        if event_type == HITLEventType.INPUT_REQUESTED:
-            message_type = "hitl_input_requested"
-            data.update({
-                "prompt": request.prompt,
-                "prompt_type": request.prompt_type,
-                "choices": request.choices,
-                "agent_id": request.agent_id,
-                "agent_name": request.agent_name,
-                "source_step_id": request.source_step_id,
-            })
-            if request.group_id is not None:
-                data["group_id"] = request.group_id
-                data["group_total"] = request.group_total
-                data["group_index"] = request.group_index
-        else:
-            message_type = "hitl_status_update"
-            _status_map = {
-                HITLEventType.INPUT_RECEIVED: HITLStatus.RESPONDED.value,
-                HITLEventType.INPUT_EXPIRED: HITLStatus.EXPIRED.value,
-                HITLEventType.INPUT_CANCELED: HITLStatus.CANCELED.value,
-                HITLEventType.ERROR: "error",
-            }
-            data["status"] = _status_map.get(event_type, request.status)
-            if error:
-                data["error_message"] = error
+        source = getattr(request.source, "value", request.source)
+        prompt_type = getattr(request.prompt_type, "value", request.prompt_type)
+        request_status = getattr(request.status, "value", request.status)
 
-        await self.sse_manager.broadcast_to_room(
-            room_id, message_type, data
+        if event_type == HITLEventType.INPUT_REQUESTED:
+            await self._emit_delivery_event(
+                HITLRequestEvent(
+                    room_id=room_id,
+                    request_id=request.request_id,
+                    message_id=data["message_id"],
+                    source=source,
+                    prompt=request.prompt,
+                    prompt_type=prompt_type,
+                    choices=request.choices,
+                    agent_id=request.agent_id,
+                    agent_name=request.agent_name,
+                    source_step_id=request.source_step_id,
+                    group_id=request.group_id,
+                    group_total=request.group_total,
+                    group_index=request.group_index,
+                    client_request_id=data.get("client_request_id"),
+                )
+            )
+            return
+
+        status_map = {
+            HITLEventType.INPUT_RECEIVED: HITLStatus.RESPONDED.value,
+            HITLEventType.INPUT_EXPIRED: HITLStatus.EXPIRED.value,
+            HITLEventType.INPUT_CANCELED: HITLStatus.CANCELED.value,
+            HITLEventType.ERROR: "error",
+        }
+        await self._emit_delivery_event(
+            HITLResolvedEvent(
+                room_id=room_id,
+                request_id=request.request_id,
+                message_id=data["message_id"],
+                source=source,
+                status=status_map.get(event_type, request_status),
+                error_message=error,
+                client_request_id=data.get("client_request_id"),
+            )
         )
+
+    async def _emit_delivery_event(
+        self, event: HITLRequestEvent | HITLResolvedEvent
+    ) -> None:
+        result = self.delivery.emit(event)
+        if inspect.isawaitable(result):
+            await result
 
 
 class BoundHITLServiceProxy:

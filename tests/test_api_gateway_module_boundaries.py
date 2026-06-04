@@ -142,7 +142,6 @@ def test_room_route_owner_protocol_covers_room_route_calls():
         "update_room_agent_set",
         "update_room_name",
         "update_room_extend_info",
-        "create_and_parse_user_message",
         "send_message",
     }
 
