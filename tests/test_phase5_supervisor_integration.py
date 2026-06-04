@@ -44,6 +44,10 @@ from models.supervisor import (
 # =========================================================================
 
 
+async def _noop_processing_status_emitter(**_kwargs):
+    return None
+
+
 class BoundRoomMemoryFacade:
     def __init__(self, service):
         self.service = service
@@ -707,6 +711,7 @@ class TestCompactionTrigger:
         rmc.sse_manager.remove_token = MagicMock()
         rmc.sse_manager.clear_cancellation = MagicMock()
         rmc.room_coordinator_service = AsyncMock()
+        rmc._processing_status_emitter = _noop_processing_status_emitter
 
         rmc._trigger_compaction_safe = AsyncMock()
         rmc._update_room_summary_safe = AsyncMock()
@@ -1122,6 +1127,7 @@ class TestHandleV2RunResultUnifiedSummary:
             rmc._emit_unified_summary = AsyncMock()
             rmc._emit_deterministic_digest = AsyncMock()
             rmc._trigger_compaction_safe = AsyncMock()
+            rmc._processing_status_emitter = _noop_processing_status_emitter
             yield rmc
 
     @pytest.fixture

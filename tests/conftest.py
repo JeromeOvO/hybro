@@ -511,7 +511,6 @@ def mock_room_center():
     mock.update_room_agent_set = AsyncMock()
     mock.update_room_name = AsyncMock()
     mock.update_room_extend_info = AsyncMock()
-    mock.create_and_parse_user_message = AsyncMock()
     mock.inquiry_room_messages_by_room_id = AsyncMock()
     mock.send_message_to_room = AsyncMock()
     return mock

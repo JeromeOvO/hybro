@@ -161,7 +161,7 @@ class TestRoomLifecycleFlow:
                     req3.json = AsyncMock(return_value={
                         "room_id": room_id,
                         "message": user_msg.model_dump(),
-                        "target_group": "room_team",
+                        "message_target_mode": "room_default",
                         "client_request_id": "c7c9a000-0000-4000-8000-000000000003",
                     })
                     bg = MagicMock()
@@ -223,6 +223,7 @@ class TestRoomLifecycleFlow:
             req.json = AsyncMock(return_value={
                 "room_id": "guarded-room",
                 "message": {"message_text": "x"},
+                "message_target_mode": "room_default",
                 "client_request_id": "c7c9a000-0000-4000-8000-000000000004",
             })
             with pytest.raises(HTTPException) as exc:
@@ -407,12 +408,12 @@ class TestHITLFlow:
         )
         mock_db.cas_update_hitl_request = AsyncMock(return_value=True)
 
-        mock_sse = MagicMock()
-        mock_sse.broadcast_to_room = AsyncMock()
+        mock_delivery = MagicMock()
+        mock_delivery.emit = AsyncMock()
 
         svc = HITLService()
         svc._db_service = mock_db
-        svc._sse_manager = mock_sse
+        svc._delivery = mock_delivery
 
         # Step 1: request_input
         created = await svc.request_input(
@@ -423,7 +424,7 @@ class TestHITLFlow:
         )
         assert created is not None
         assert created.status == HITLStatus.PENDING
-        mock_sse.broadcast_to_room.assert_called()
+        mock_delivery.emit.assert_awaited_once()
 
         # Step 2: get_pending_requests
         pending = await svc.get_pending_requests(room_id)

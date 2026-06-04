@@ -384,21 +384,35 @@ class TestNotifyTaskUpdate:
             _setup_db_mock(db, msg=msg)
             _setup_notif_mock(notif)
             _setup_sse_mock(sse)
+            emitter = AsyncMock()
+            from execution.dispatch import task_notifications as task_notifications_mod
 
-            result = await notify_task_update(
-                message_id="msg-1",
-                state=TaskState.input_required,
-                room_id="room-1",
-                user_id="user-1",
-            )
+            with patch.object(
+                task_notifications_mod,
+                "_processing_status_emitter",
+                emitter,
+            ):
+                result = await notify_task_update(
+                    message_id="msg-1",
+                    state=TaskState.input_required,
+                    room_id="room-1",
+                    user_id="user-1",
+                )
 
             assert result is True
             mock_st.assert_called_once()
             call_kw = notif.send_task_update.call_args.kwargs
             assert call_kw["requires_input"] is True
             assert call_kw["status_message"] == "Please provide input"
-            sse.send_processing_status.assert_awaited_once_with(
-                "room-1", SSEProcessingStatus.AWAITING_INPUT, "msg-1",
+            emitter.assert_awaited_once_with(
+                room_id="room-1",
+                status=SSEProcessingStatus.AWAITING_INPUT,
+                message_id="msg-1",
+                lifecycle_message_id="msg-1",
+                record_lifecycle=True,
+                client_request_id=None,
+                details={"message": "Please provide input"},
+                error_message=None,
             )
 
     # --------------------------------------------------------------------- #
@@ -486,32 +500,58 @@ class TestNotifyTaskUpdate:
         ):
             _setup_notif_mock(notif)
             _setup_sse_mock(sse)
+            emitter = AsyncMock()
+            from execution.dispatch import task_notifications as task_notifications_mod
 
             # --- completed -> lifecycle completed emitted
             _setup_db_mock(db, msg=msg_completed)
-            await notify_task_update(
-                message_id="msg-1",
-                state=TaskState.completed,
+            with patch.object(
+                task_notifications_mod,
+                "_processing_status_emitter",
+                emitter,
+            ):
+                await notify_task_update(
+                    message_id="msg-1",
+                    state=TaskState.completed,
+                    room_id="room-1",
+                    user_id="user-1",
+                )
+            emitter.assert_awaited_once_with(
                 room_id="room-1",
-                user_id="user-1",
-            )
-            sse.send_processing_status.assert_awaited_once_with(
-                "room-1", SSEProcessingStatus.COMPLETED, "msg-1",
+                status=SSEProcessingStatus.COMPLETED,
+                message_id="msg-1",
+                lifecycle_message_id="msg-1",
+                record_lifecycle=True,
+                client_request_id=None,
+                details={"message": "Need input"},
+                error_message=None,
             )
 
-            sse.send_processing_status.reset_mock()
+            emitter.reset_mock()
             notif.send_task_update.reset_mock()
 
             # --- input_required -> lifecycle awaiting_input emitted
             _setup_db_mock(db, msg=msg_input)
-            await notify_task_update(
-                message_id="msg-1",
-                state=TaskState.input_required,
+            with patch.object(
+                task_notifications_mod,
+                "_processing_status_emitter",
+                emitter,
+            ):
+                await notify_task_update(
+                    message_id="msg-1",
+                    state=TaskState.input_required,
+                    room_id="room-1",
+                    user_id="user-1",
+                )
+            emitter.assert_awaited_once_with(
                 room_id="room-1",
-                user_id="user-1",
-            )
-            sse.send_processing_status.assert_awaited_once_with(
-                "room-1", SSEProcessingStatus.AWAITING_INPUT, "msg-1",
+                status=SSEProcessingStatus.AWAITING_INPUT,
+                message_id="msg-1",
+                lifecycle_message_id="msg-1",
+                record_lifecycle=True,
+                client_request_id=None,
+                details={"message": "Need input"},
+                error_message=None,
             )
 
     # --------------------------------------------------------------------- #

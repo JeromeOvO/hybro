@@ -658,6 +658,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
         auto_assign_agents: bool = False,
         agents: list[Agent] = None,
         conversation_context: str | None = None,
+        explicit_mentions: list[dict] | None = None,
     ) -> dict:
         """
         Parse user message using LLM with intelligent task decomposition.
@@ -673,6 +674,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
             is_debate_mode: Whether to use debate mode
             auto_assign_agents: If True (Auto mode), LLM will assign agents from pool
                                If False (Curated mode), only assign if @mentioned
+            explicit_mentions: Canonical agent mentions to include as routing intent
 
         Debate mode: Skip decomposition, generate linear chain
         """
@@ -981,11 +983,15 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
                 Recent conversation history:
                 {conversation_context}
                 """
+        explicit_mentions_section = self._format_explicit_mentions_for_prompt(
+            explicit_mentions
+        )
 
         user_prompt = f"""Analyze this message and decide how to route it:
 
                 Current date/time: {datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")}
                 {context_section}
+                {explicit_mentions_section}
                 Available agents in room:
                 {agent_list if agent_list else "None"}
 
@@ -1031,6 +1037,24 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
         except Exception as e:
             logger.error(f"LLM parsing failed: {e}")
             raise
+
+    @staticmethod
+    def _format_explicit_mentions_for_prompt(
+        explicit_mentions: list[dict] | None,
+    ) -> str:
+        if not explicit_mentions:
+            return ""
+        lines = [
+            "Explicit mention routing intent:",
+            "The user explicitly mentioned these agents. Treat them as strong routing intent.",
+            "Use them unless unavailable, unsafe, or clearly irrelevant. You may add other agents only if the task requires it.",
+        ]
+        for mention in explicit_mentions:
+            agent_id = mention.get("agent_id", "unknown")
+            agent_name = mention.get("agent_name", "Unknown")
+            mention_text = mention.get("mention_text", "<mention>")
+            lines.append(f"- {agent_name} (ID: {agent_id}) via {mention_text}")
+        return "\n".join(lines)
 
     # =========================================================================
     # Supervisor LLM Methods

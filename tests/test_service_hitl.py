@@ -54,6 +54,7 @@ def hitl_service():
     service = HITLService()
     # Reset lazy-loaded dependencies
     service._db_service = None
+    service._delivery = None
     service._sse_manager = None
     service._a2a_service = None
     return service
@@ -86,9 +87,9 @@ def mock_hitl_db_service():
 
 @pytest.fixture
 def mock_hitl_sse_manager():
-    """Create mock SSE manager for HITL events."""
+    """Create mock typed delivery port for HITL events."""
     mock = MagicMock()
-    mock.broadcast_to_room = AsyncMock()
+    mock.emit = AsyncMock()
     return mock
 
 
@@ -202,10 +203,10 @@ class TestRequestInput:
             agent_name="TestAgent",
         )
         
-        mock_hitl_sse_manager.broadcast_to_room.assert_called_once()
-        call_args = mock_hitl_sse_manager.broadcast_to_room.call_args
-        assert call_args[0][0] == "room-123"
-        assert call_args[0][1] == "hitl_input_requested"
+        mock_hitl_sse_manager.emit.assert_awaited_once()
+        event = mock_hitl_sse_manager.emit.await_args.args[0]
+        assert event.room_id == "room-123"
+        assert event.event_type == "hitl_request"
 
     @pytest.mark.asyncio
     async def test_returns_none_when_max_rounds_exceeded(
@@ -421,7 +422,7 @@ class TestCancelRequest:
             status=HITLStatus.CANCELED.value,
         )
         mock_hitl_db_service.update_hitl_request.assert_not_called()
-        mock_hitl_sse_manager.broadcast_to_room.assert_awaited_once()
+        mock_hitl_sse_manager.emit.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_cancel_does_not_clear_or_emit_when_pending_cas_loses(
@@ -440,7 +441,7 @@ class TestCancelRequest:
 
         mock_hitl_db_service.get_and_clear_continuation_on_message.assert_not_awaited()
         mock_hitl_db_service.get_and_clear_continuation_on_user_message.assert_not_awaited()
-        mock_hitl_sse_manager.broadcast_to_room.assert_not_awaited()
+        mock_hitl_sse_manager.emit.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_emits_cancel_event(
@@ -458,9 +459,10 @@ class TestCancelRequest:
             room_id=sample_hitl_request.room_id,
         )
         
-        mock_hitl_sse_manager.broadcast_to_room.assert_called_once()
-        call_args = mock_hitl_sse_manager.broadcast_to_room.call_args
-        assert call_args[0][1] == "hitl_status_update"
+        mock_hitl_sse_manager.emit.assert_awaited_once()
+        event = mock_hitl_sse_manager.emit.await_args.args[0]
+        assert event.event_type == "hitl_resolved"
+        assert event.status == HITLStatus.CANCELED.value
 
 
 class TestCancelRequestsForMessage:
@@ -804,16 +806,14 @@ class TestEmitHitlEvent:
             request=sample_hitl_request,
         )
         
-        mock_hitl_sse_manager.broadcast_to_room.assert_called_once()
-        call_args = mock_hitl_sse_manager.broadcast_to_room.call_args
-        
-        assert call_args[0][0] == sample_hitl_request.room_id
-        assert call_args[0][1] == "hitl_input_requested"
-        
-        data = call_args[0][2]
-        assert data["request_id"] == sample_hitl_request.request_id
-        assert data["prompt"] == sample_hitl_request.prompt
-        assert data["source"] == sample_hitl_request.source
+        mock_hitl_sse_manager.emit.assert_awaited_once()
+        event = mock_hitl_sse_manager.emit.await_args.args[0]
+
+        assert event.room_id == sample_hitl_request.room_id
+        assert event.event_type == "hitl_request"
+        assert event.request_id == sample_hitl_request.request_id
+        assert event.prompt == sample_hitl_request.prompt
+        assert event.source == sample_hitl_request.source
 
     @pytest.mark.asyncio
     async def test_emits_status_update_event(
@@ -829,11 +829,9 @@ class TestEmitHitlEvent:
             request=sample_hitl_request,
         )
         
-        call_args = mock_hitl_sse_manager.broadcast_to_room.call_args
-        assert call_args[0][1] == "hitl_status_update"
-        
-        data = call_args[0][2]
-        assert data["status"] == HITLStatus.RESPONDED.value
+        event = mock_hitl_sse_manager.emit.await_args.args[0]
+        assert event.event_type == "hitl_resolved"
+        assert event.status == HITLStatus.RESPONDED.value
 
     @pytest.mark.asyncio
     async def test_includes_error_message_on_error_event(
@@ -850,9 +848,8 @@ class TestEmitHitlEvent:
             error="Something went wrong",
         )
         
-        call_args = mock_hitl_sse_manager.broadcast_to_room.call_args
-        data = call_args[0][2]
-        assert data["error_message"] == "Something went wrong"
+        event = mock_hitl_sse_manager.emit.await_args.args[0]
+        assert event.error_message == "Something went wrong"
 
     @pytest.mark.asyncio
     async def test_resolves_client_request_id_from_message_id_when_user_row_missing(
@@ -878,9 +875,9 @@ class TestEmitHitlEvent:
             request=req,
         )
 
-        data = mock_hitl_sse_manager.broadcast_to_room.call_args[0][2]
-        assert data["message_id"] == "test-agent-msg-001"
-        assert data["client_request_id"] == "cr-resolved-via-message-id"
+        event = mock_hitl_sse_manager.emit.await_args.args[0]
+        assert event.message_id == "test-agent-msg-001"
+        assert event.client_request_id == "cr-resolved-via-message-id"
         mock_hitl_db_service.resolve_client_request_id_for_message_id.assert_called_once_with(
             "test-agent-msg-001"
         )
@@ -911,8 +908,8 @@ class TestEmitHitlEvent:
             request=req,
         )
 
-        data = mock_hitl_sse_manager.broadcast_to_room.call_args[0][2]
-        assert data["client_request_id"] == "cr-from-user-row"
+        event = mock_hitl_sse_manager.emit.await_args.args[0]
+        assert event.client_request_id == "cr-from-user-row"
         mock_hitl_db_service.resolve_client_request_id_for_message_id.assert_not_called()
 
 

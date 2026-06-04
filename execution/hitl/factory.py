@@ -14,7 +14,7 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
     dependency_attrs = {
         "database_service": "_db_service",
         "db_service": "_db_service",
-        "sse_manager": "_sse_manager",
+        "delivery": "_delivery",
         "a2a_service": "_a2a_service",
         "continuation": "_continuation",
         "task_notifications": "_task_notifications",

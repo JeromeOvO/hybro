@@ -5,6 +5,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+class FakeEventPublisher:
+    def __init__(self, calls: list[str] | None = None) -> None:
+        self.events = []
+        self._calls = calls
+
+    async def emit(self, event) -> None:
+        if self._calls is not None:
+            self._calls.append("emit")
+        self.events.append(event)
+
+
 @pytest.mark.asyncio
 async def test_record_processing_status_skips_when_dual_write_disabled(monkeypatch):
     monkeypatch.setenv("FEATURE_RUN_DUAL_WRITE", "0")
@@ -114,7 +125,7 @@ async def test_bind_run_lifecycle_service_uses_injected_handler(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_record_and_maybe_broadcast_run_event_records_before_broadcast(monkeypatch):
+async def test_record_and_maybe_emit_run_event_records_before_emit(monkeypatch):
     monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
     import execution.run_lifecycle_service as mod
 
@@ -131,28 +142,26 @@ async def test_record_and_maybe_broadcast_run_event_records_before_broadcast(mon
         calls.append("record")
         return payload
 
-    class FakeSSE:
-        async def broadcast_to_room(self, *args, **kwargs):
-            calls.append("broadcast")
-
     monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
     monkeypatch.setattr(mod.run_command_handler, "record_processing_status", fake_record)
+    event_publisher = FakeEventPublisher(calls)
 
-    result = await mod.record_and_maybe_broadcast_run_event(
+    result = await mod.record_and_maybe_emit_run_event(
         "room-1",
         "processing",
         "msg-1",
         client_request_id="cr-1",
         details="starting",
-        sse=FakeSSE(),
+        event_publisher=event_publisher,
     )
 
     assert result is payload
-    assert calls == ["record", "broadcast"]
+    assert calls == ["record", "emit"]
+    assert event_publisher.events[0].event_type == "run_event"
 
 
 @pytest.mark.asyncio
-async def test_record_and_maybe_broadcast_run_event_uses_provided_sse(monkeypatch):
+async def test_record_and_maybe_emit_run_event_uses_event_publisher(monkeypatch):
     monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
     import execution.run_lifecycle_service as mod
 
@@ -163,8 +172,7 @@ async def test_record_and_maybe_broadcast_run_event_uses_provided_sse(monkeypatc
         "type": "RUN_STARTED",
         "payload": {"status": "processing"},
     }
-    sse = MagicMock()
-    sse.broadcast_to_room = AsyncMock()
+    event_publisher = FakeEventPublisher()
 
     monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
     monkeypatch.setattr(
@@ -173,29 +181,25 @@ async def test_record_and_maybe_broadcast_run_event_uses_provided_sse(monkeypatc
         AsyncMock(return_value=payload),
     )
 
-    await mod.record_and_maybe_broadcast_run_event(
+    await mod.record_and_maybe_emit_run_event(
         "room-1",
         "processing",
         "msg-1",
         client_request_id="cr-1",
-        sse=sse,
+        event_publisher=event_publisher,
     )
 
-    sse.broadcast_to_room.assert_awaited_once_with(
-        "room-1",
-        "run_event",
-        {
-            "event_id": "evt-1",
-            "run_id": "msg-1",
-            "seq": 2,
-            "type": "RUN_STARTED",
-            "payload": {"status": "processing"},
-            "correlation_id": "cr-1",
-        },
-    )
+    event = event_publisher.events[0]
+    assert event.event_type == "run_event"
+    assert event.event_id == "evt-1"
+    assert event.run_id == "msg-1"
+    assert event.seq == 2
+    assert event.run_event_type == "RUN_STARTED"
+    assert event.payload == {"status": "processing"}
+    assert event.correlation_id == "cr-1"
 
 
-def test_build_run_event_sse_payload_includes_correlation_id():
+def test_build_run_event_payload_includes_correlation_id():
     import execution.run_lifecycle_service as mod
 
     payload = {
@@ -206,7 +210,7 @@ def test_build_run_event_sse_payload_includes_correlation_id():
         "payload": {"status": "processing"},
     }
 
-    assert mod.build_run_event_sse_payload(
+    assert mod.build_run_event_payload(
         payload, client_request_id="cr-1"
     ) == {
         "event_id": "evt-1",
@@ -219,13 +223,12 @@ def test_build_run_event_sse_payload_includes_correlation_id():
 
 
 @pytest.mark.asyncio
-async def test_record_and_maybe_broadcast_run_event_skips_when_flag_disabled(monkeypatch):
+async def test_record_and_maybe_emit_run_event_skips_when_flag_disabled(monkeypatch):
     monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
     import execution.run_lifecycle_service as mod
 
     payload = {"event_id": "evt-1", "run_id": "msg-1", "seq": 1, "type": "RUN_STARTED"}
-    sse = MagicMock()
-    sse.broadcast_to_room = AsyncMock()
+    event_publisher = FakeEventPublisher()
     monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "0")
     monkeypatch.setattr(
         mod.run_command_handler,
@@ -233,20 +236,19 @@ async def test_record_and_maybe_broadcast_run_event_skips_when_flag_disabled(mon
         AsyncMock(return_value=payload),
     )
 
-    await mod.record_and_maybe_broadcast_run_event(
-        "room-1", "processing", "msg-1", sse=sse
+    await mod.record_and_maybe_emit_run_event(
+        "room-1", "processing", "msg-1", event_publisher=event_publisher
     )
 
-    sse.broadcast_to_room.assert_not_awaited()
+    assert event_publisher.events == []
 
 
 @pytest.mark.asyncio
-async def test_record_and_maybe_broadcast_run_event_skips_when_payload_none(monkeypatch):
+async def test_record_and_maybe_emit_run_event_skips_when_payload_none(monkeypatch):
     monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
     import execution.run_lifecycle_service as mod
 
-    sse = MagicMock()
-    sse.broadcast_to_room = AsyncMock()
+    event_publisher = FakeEventPublisher()
     monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
     monkeypatch.setattr(
         mod.run_command_handler,
@@ -254,11 +256,11 @@ async def test_record_and_maybe_broadcast_run_event_skips_when_payload_none(monk
         AsyncMock(return_value=None),
     )
 
-    await mod.record_and_maybe_broadcast_run_event(
-        "room-1", "completed", "msg-1", sse=sse
+    await mod.record_and_maybe_emit_run_event(
+        "room-1", "completed", "msg-1", event_publisher=event_publisher
     )
 
-    sse.broadcast_to_room.assert_not_awaited()
+    assert event_publisher.events == []
 
 
 @pytest.mark.asyncio
@@ -267,8 +269,7 @@ async def test_duplicate_terminal_payload_none_does_not_emit_second_run_event(mo
     import execution.run_lifecycle_service as mod
 
     payload = {"event_id": "evt-1", "run_id": "msg-1", "seq": 3, "type": "RUN_COMPLETED"}
-    sse = MagicMock()
-    sse.broadcast_to_room = AsyncMock()
+    event_publisher = FakeEventPublisher()
     monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
     monkeypatch.setattr(
         mod.run_command_handler,
@@ -276,41 +277,40 @@ async def test_duplicate_terminal_payload_none_does_not_emit_second_run_event(mo
         AsyncMock(side_effect=[payload, None]),
     )
 
-    await mod.record_and_maybe_broadcast_run_event(
-        "room-1", "completed", "msg-1", sse=sse
+    await mod.record_and_maybe_emit_run_event(
+        "room-1", "completed", "msg-1", event_publisher=event_publisher
     )
-    await mod.record_and_maybe_broadcast_run_event(
-        "room-1", "completed", "msg-1", sse=sse
+    await mod.record_and_maybe_emit_run_event(
+        "room-1", "completed", "msg-1", event_publisher=event_publisher
     )
 
-    sse.broadcast_to_room.assert_awaited_once()
+    assert len(event_publisher.events) == 1
 
 
 @pytest.mark.asyncio
-async def test_broadcast_run_event_payload_does_not_record(monkeypatch):
+async def test_emit_run_event_payload_does_not_record(monkeypatch):
     import execution.run_lifecycle_service as mod
 
     payload = {"event_id": "evt-1", "run_id": "msg-1", "seq": 3, "type": "RUN_FAILED"}
-    sse = MagicMock()
-    sse.broadcast_to_room = AsyncMock()
+    event_publisher = FakeEventPublisher()
     record = AsyncMock()
     monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
     monkeypatch.setattr(mod.run_command_handler, "record_processing_status", record)
 
-    await mod.broadcast_run_event_payload(
-        "room-1", payload, client_request_id="cr-1", sse=sse
+    await mod.emit_run_event_payload(
+        "room-1", payload, client_request_id="cr-1", event_publisher=event_publisher
     )
 
     record.assert_not_awaited()
-    sse.broadcast_to_room.assert_awaited_once()
+    assert len(event_publisher.events) == 1
 
 
 @pytest.mark.asyncio
-async def test_broadcast_run_event_payload_requires_explicit_sse(monkeypatch):
+async def test_emit_run_event_payload_requires_explicit_event_publisher(monkeypatch):
     import execution.run_lifecycle_service as mod
 
     payload = {"event_id": "evt-1", "run_id": "msg-1", "seq": 3, "type": "RUN_FAILED"}
     monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
 
     with pytest.raises(TypeError):
-        await mod.broadcast_run_event_payload("room-1", payload)
+        await mod.emit_run_event_payload("room-1", payload)

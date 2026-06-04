@@ -9,6 +9,7 @@ Tests cover:
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
+import json
 
 import pytest
 from fastapi import HTTPException
@@ -83,6 +84,30 @@ class TestStreamRoomMessages:
 
         assert exc_info.value.status_code == 403
         deps["sse_manager"].add_connection.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stream_starts_with_final_connected_frame(
+        self, mock_user, mock_sse_manager, sample_room
+    ):
+        mock_connection = MagicMock()
+        mock_connection.connection_id = "conn-123"
+        mock_connection.is_active = False
+        mock_connection.get_message = AsyncMock(return_value=None)
+        mock_sse_manager.add_connection.return_value = mock_connection
+
+        with patch(PATCH["sse.sse_manager"], mock_sse_manager):
+            response = await stream_room_messages(sample_room.room_id, mock_user)
+
+        first_event = await anext(response.body_iterator)
+        frame = json.loads(first_event.removeprefix("data: ").strip())
+
+        assert frame == {
+            "type": "connected",
+            "room_id": sample_room.room_id,
+            "timestamp": frame["timestamp"],
+            "data": {"connection_id": "conn-123"},
+        }
+        assert isinstance(frame["timestamp"], str)
 
 
 # =============================================================================

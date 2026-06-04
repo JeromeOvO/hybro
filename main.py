@@ -383,12 +383,10 @@ async def lifespan(app: FastAPI):
             )
             from execution.hitl.adapters import (
                 A2AHITLContinuationAdapter,
+                HITLDeliveryAdapter,
                 HITLTaskNotificationAdapter,
             )
-            from execution.legacy_processing_status import (
-                LegacyProcessingStatusC3Adapter,
-                SSEClientRequestIdResolver,
-            )
+            from execution.client_request_id import SSEClientRequestIdResolver
             from execution.orchestration.factory import (
                 create_room_message_center,
             )
@@ -412,6 +410,7 @@ async def lifespan(app: FastAPI):
             from execution.run_lifecycle_service import bind_run_lifecycle_service
             from execution.dispatch.task_notifications import (
                 _notify_task_update_impl,
+                bind_processing_status_emitter as bind_task_processing_status_emitter,
                 notify_task_update,
             )
             room_center.bind_room_dependencies(
@@ -436,7 +435,7 @@ async def lifespan(app: FastAPI):
             bind_hitl_service(
                 create_hitl_service(
                     database_service=_db_svc,
-                    sse_manager=sse_manager,
+                    delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
                     a2a_service=a2a_service,
                     continuation=A2AHITLContinuationAdapter(
                         a2a_service,
@@ -451,16 +450,10 @@ async def lifespan(app: FastAPI):
                 command_handler=run_command_handler,
                 runs_collection=mongodb.runs_collection,
             )
-            legacy_processing_status_publisher = LegacyProcessingStatusC3Adapter(
-                sse_manager=sse_manager,
-            )
             app_shell_client_request_id_resolver = SSEClientRequestIdResolver(
                 db_service=_db_svc,
             )
             app.state.execution_run_lifecycle = run_lifecycle
-            app.state.execution_legacy_processing_status_publisher = (
-                legacy_processing_status_publisher
-            )
             app.state.execution_client_request_id_resolver = (
                 app_shell_client_request_id_resolver
             )
@@ -533,9 +526,11 @@ async def lifespan(app: FastAPI):
                     db=_db_svc,
                     sse=sse_manager,
                     room_message_center=execution_room_message_center,
+                    hitl_coordinator=hitl_service,
                     notification_service=notification_service,
                     task_notification_impl=_notify_task_update_impl,
                 )
+                handler.bind_execution_event_deps(emit_room_processing_status)
                 return WebhookTransport(
                     response_handler=handler,
                     db=_db_svc,
@@ -561,7 +556,6 @@ async def lifespan(app: FastAPI):
                 ),
                 agent_response_handler=execution_room_message_center.agent_response_handler,
                 event_publisher=_delivery_deps.event_publisher,
-                legacy_processing_status_publisher=legacy_processing_status_publisher,
                 run_event_enabled=run_event_sse_enabled,
                 client_request_id_resolver=app_shell_client_request_id_resolver,
             )
@@ -586,11 +580,11 @@ async def lifespan(app: FastAPI):
                     **kwargs,
                     run_lifecycle=run_lifecycle,
                     event_publisher=_delivery_deps.event_publisher,
-                    legacy_processing_status_publisher=legacy_processing_status_publisher,
                     run_event_enabled=run_event_sse_enabled,
                     client_request_id_resolver=app_shell_client_request_id_resolver,
                 )
 
+            bind_task_processing_status_emitter(emit_room_processing_status)
             room_runtime.bind_hitl_pending_checker(hitl_service.get_pending_requests)
             room_runtime.bind_active_run_reader(read_room_active_runs)
             room_runtime.bind_execution_event_deps(
@@ -791,10 +785,9 @@ async def lifespan(app: FastAPI):
                     lifecycle_message_id=message_id,
                     record_lifecycle=False,
                     client_request_id=client_request_id,
-                    legacy_details=details,
+                    details={"message": details} if details else None,
                     run_lifecycle=run_lifecycle,
                     event_publisher=_delivery_deps.event_publisher,
-                    legacy_processing_status_publisher=legacy_processing_status_publisher,
                     run_event_enabled=run_event_sse_enabled,
                     client_request_id_resolver=app_shell_client_request_id_resolver,
                 )

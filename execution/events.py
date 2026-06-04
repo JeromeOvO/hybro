@@ -8,7 +8,6 @@ from common.dto import ProcessingStatusEvent, RunEventNotification
 from common.protocols import EventPublisher
 from execution.ports import (
     ClientRequestIdResolver,
-    LegacyProcessingStatusPublisher,
     ProcessingStatusLike,
     RunLifecyclePort,
 )
@@ -18,9 +17,13 @@ logger = logging.getLogger(__name__)
 SUPPORTED_TYPED_PROCESSING_STATUSES = {
     "queued",
     "processing",
+    "awaiting_input",
     "completed",
     "failed",
     "canceled",
+    "rejected",
+    "rate_limited",
+    "error",
 }
 
 
@@ -35,10 +38,6 @@ def _normalize_processing_status(status: ProcessingStatusLike) -> str:
     return value
 
 
-def _is_legacy_processing_status(status: ProcessingStatusLike) -> bool:
-    return _processing_status_value(status) not in SUPPORTED_TYPED_PROCESSING_STATUSES
-
-
 def _typed_processing_status_details(
     details: dict[str, Any] | None,
     error_message: str | None,
@@ -48,25 +47,6 @@ def _typed_processing_status_details(
     if error_message:
         return {"message": error_message}
     return None
-
-
-def _legacy_processing_status_details(
-    details: dict[str, Any] | None,
-    legacy_details: str | None,
-    error_message: str | None,
-) -> dict[str, Any] | str | None:
-    if details is not None:
-        return details
-    if legacy_details is not None:
-        return legacy_details
-    return error_message
-
-
-def _requires_legacy_processing_status_frame(
-    status: ProcessingStatusLike,
-    legacy_details: str | None,
-) -> bool:
-    return _is_legacy_processing_status(status) or legacy_details is not None
 
 
 def _require_payload_field(payload: dict[str, Any], key: str) -> Any:
@@ -122,25 +102,18 @@ async def emit_processing_status(
     message_id: str | None,
     run_lifecycle: RunLifecyclePort,
     event_publisher: EventPublisher,
-    legacy_processing_status_publisher: LegacyProcessingStatusPublisher,
     run_event_enabled: Callable[[], bool],
     client_request_id_resolver: ClientRequestIdResolver,
     lifecycle_message_id: str | None = None,
     record_lifecycle: bool = True,
     client_request_id: str | None = None,
     details: dict[str, Any] | None = None,
-    legacy_details: str | None = None,
     error_message: str | None = None,
     agents: list[dict] | None = None,
 ) -> dict[str, Any] | None:
-    status_value = _processing_status_value(status)
-    uses_legacy_frame = _requires_legacy_processing_status_frame(
-        status,
-        legacy_details,
-    )
-    frontend_message_id = (
-        None if uses_legacy_frame else _require_frontend_message_id(message_id)
-    )
+    status_value = _normalize_processing_status(status)
+    frontend_message_id = _require_frontend_message_id(message_id)
+    typed_details = _typed_processing_status_details(details, error_message)
     payload = None
     if record_lifecycle:
         payload = await run_lifecycle.record_processing_status(
@@ -148,7 +121,7 @@ async def emit_processing_status(
             status_value,
             lifecycle_message_id or message_id,
             client_request_id=client_request_id,
-            details=details,
+            details=typed_details,
             error_message=error_message,
         )
     resolved_client_request_id = await _resolve_processing_status_client_request_id(
@@ -164,26 +137,12 @@ async def emit_processing_status(
                 correlation_id=client_request_id,
             )
         )
-    if uses_legacy_frame:
-        await legacy_processing_status_publisher.emit_processing_status(
-            room_id=room_id,
-            status=status_value,
-            message_id=message_id,
-            details=_legacy_processing_status_details(
-                details,
-                legacy_details,
-                error_message,
-            ),
-            client_request_id=resolved_client_request_id,
-            agents=agents,
-        )
-        return payload
     await event_publisher.emit(
         ProcessingStatusEvent(
             room_id=room_id,
             message_id=frontend_message_id,
-            status=_normalize_processing_status(status),
-            details=_typed_processing_status_details(details, error_message),
+            status=status_value,
+            details=typed_details,
             client_request_id=resolved_client_request_id,
             agents=agents,
         )

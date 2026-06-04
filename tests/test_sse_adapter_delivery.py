@@ -8,15 +8,29 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app_shell.delivery_runtime import SSEManager
-from tests.delivery_adapter_fakes import FakeDeliveryCompat, FakeDeliveryFacade
+from tests.delivery_adapter_fakes import (
+    FakeDeliveryCompat,
+    FakeDeliveryFacade,
+    FakeEventPublisher,
+)
 
 NOW = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
 FAIL_FAST = re.escape("SSEManager.bind_facade() not called - startup incomplete")
 
 
-def _bind(manager: SSEManager, compat: FakeDeliveryCompat | None = None) -> FakeDeliveryCompat:
+def _bind(
+    manager: SSEManager,
+    compat: FakeDeliveryCompat | None = None,
+    event_publisher: FakeEventPublisher | None = None,
+) -> FakeDeliveryCompat:
     compat = compat or FakeDeliveryCompat()
-    manager.bind_facade(FakeDeliveryFacade(compat=compat, instance_id="worker-bound"))
+    manager.bind_facade(
+        FakeDeliveryFacade(
+            compat=compat,
+            instance_id="worker-bound",
+            event_publisher=event_publisher,
+        )
+    )
     return compat
 
 
@@ -44,8 +58,6 @@ async def test_async_public_methods_fail_fast_before_bind():
     with pytest.raises(RuntimeError, match=FAIL_FAST):
         await manager.add_connection("room-1")
     with pytest.raises(RuntimeError, match=FAIL_FAST):
-        await manager.broadcast_to_room("room-1", "custom", {})
-    with pytest.raises(RuntimeError, match=FAIL_FAST):
         await manager.start_event_broker(None)
     with pytest.raises(RuntimeError, match=FAIL_FAST):
         await manager.start_redis_service(None)
@@ -71,28 +83,7 @@ async def test_bind_unbind_and_rebind_delegates_to_current_facade():
 
 
 @pytest.mark.asyncio
-async def test_broadcast_to_room_builds_legacy_frame(monkeypatch):
-    monkeypatch.setattr("app_shell.delivery_runtime.utcnow", lambda: NOW)
-    manager = SSEManager()
-    compat = _bind(manager)
-
-    await manager.broadcast_to_room("room-1", "run_event", {"event_id": "evt-1"})
-
-    assert compat.frames == [
-        (
-            "room-1",
-            {
-                "type": "run_event",
-                "timestamp": NOW.isoformat(),
-                "room_id": "room-1",
-                "data": {"event_id": "evt-1"},
-            },
-        )
-    ]
-
-
-@pytest.mark.asyncio
-async def test_send_processing_status_preserves_legacy_payload_and_skips_recording(
+async def test_send_processing_status_emits_typed_event_and_skips_recording(
     monkeypatch,
 ):
     monkeypatch.setattr("app_shell.delivery_runtime.utcnow", lambda: NOW)
@@ -105,42 +96,39 @@ async def test_send_processing_status_preserves_legacy_payload_and_skips_recordi
         record,
     )
     manager = SSEManager()
-    compat = _bind(manager)
-    connection = await manager.add_connection("room-1")
+    fake_publisher = FakeEventPublisher()
+    compat = _bind(manager, event_publisher=fake_publisher)
 
     await manager.send_processing_status(
         "room-1",
         "rate_limited",
         "msg-1",
-        details="legacy string",
+        details={"message": "typed detail"},
         client_request_id="cr-1",
         agents=[{"agent_id": "a1"}],
     )
 
     record.assert_not_awaited()
-    frame = await _queued_frame(connection)
-    expected = {
-        "type": "processing_status",
-        "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
-        "data": {
-            "status": "rate_limited",
-            "message_id": "msg-1",
-            "details": "legacy string",
-            "timestamp": NOW.isoformat(),
-            "client_request_id": "cr-1",
-            "agents": [{"agent_id": "a1"}],
-        },
-    }
-    assert frame == expected
-    assert compat.frames == [("room-1", expected)]
+    assert [frame_type for frame_type, _data in compat.frames] == [
+        "processing_status"
+    ]
+    assert len(fake_publisher.events) == 1
+    event = fake_publisher.events[0]
+    assert event.event_type == "processing_status"
+    assert event.room_id == "room-1"
+    assert event.message_id == "msg-1"
+    assert event.status == "rate_limited"
+    assert event.details == {"message": "typed detail"}
+    assert event.client_request_id == "cr-1"
+    assert event.agents == [{"agent_id": "a1"}]
 
 
 @pytest.mark.asyncio
-async def test_legacy_send_methods_have_golden_frame_shapes(monkeypatch):
+async def test_send_methods_emit_typed_events(monkeypatch):
     monkeypatch.setattr("app_shell.delivery_runtime.utcnow", lambda: NOW)
     manager = SSEManager()
-    compat = _bind(manager)
+    fake_publisher = FakeEventPublisher()
+    compat = _bind(manager, event_publisher=fake_publisher)
 
     await manager.send_agent_response(
         "room-1",
@@ -205,120 +193,36 @@ async def test_legacy_send_methods_have_golden_frame_shapes(monkeypatch):
         system_requests_used=3,
         system_requests_limit=4,
     )
-    await manager.send_user_message("room-1", "msg-7", "user-1", "hi")
-
-    frames = [frame for _room_id, frame in compat.frames]
-    assert frames == [
-        {
-            "type": "agent_response",
-            "timestamp": NOW.isoformat(),
-            "room_id": "room-1",
-            "data": {
-                "message_id": "msg-1",
-                "agent_id": "agent-1",
-                "content": "hello",
-                "related_message_id": "root",
-                "timestamp": NOW.isoformat(),
-                "client_request_id": "cr-1",
-                "parts": [{"type": "text"}],
-            },
-        },
-        {
-            "type": "artifact_update",
-            "timestamp": NOW.isoformat(),
-            "room_id": "room-1",
-            "data": {
-                "message_id": "msg-2",
-                "agent_id": "agent-1",
-                "artifact": {"kind": "file"},
-                "append": True,
-                "last_chunk": True,
-                "timestamp": NOW.isoformat(),
-                "client_request_id": "cr-2",
-            },
-        },
-        {
-            "type": "task_submitted",
-            "timestamp": NOW.isoformat(),
-            "room_id": "room-1",
-            "data": {
-                "message_id": "msg-3",
-                "task_id": "task-1",
-                "agent_name": "Agent",
-                "agent_id": "agent-1",
-                "status": "working",
-                "related_message_id": "root",
-                "created_at": "created",
-                "step_number": 1,
-                "total_steps": 2,
-                "task_content": "do work",
-                "timestamp": NOW.isoformat(),
-                "client_request_id": "cr-3",
-            },
-        },
-        {
-            "type": "task_update",
-            "timestamp": NOW.isoformat(),
-            "room_id": "room-1",
-            "data": {
-                "message_id": "msg-4",
-                "status": "input_required",
-                "content": "content",
-                "error": "error",
-                "requires_input": True,
-                "requires_auth": True,
-                "status_message": "waiting",
-                "agent_name": "Agent",
-                "agent_id": "agent-1",
-                "related_message_id": "root",
-                "created_at": "created",
-                "step_number": 2,
-                "total_steps": 2,
-                "task_content": "do work",
-                "timestamp": NOW.isoformat(),
-                "client_request_id": "cr-4",
-                "parts": [{"type": "text"}],
-            },
-        },
-        {
-            "type": "error",
-            "timestamp": NOW.isoformat(),
-            "room_id": "room-1",
-            "data": {
-                "error": "boom",
-                "message_id": "msg-5",
-                "timestamp": NOW.isoformat(),
-            },
-        },
-        {
-            "type": "error",
-            "timestamp": NOW.isoformat(),
-            "room_id": "room-1",
-            "data": {
-                "error": "slow down",
-                "error_type": "rate_limit_exceeded",
-                "message_id": "msg-6",
-                "agent_id": "agent-1",
-                "retry_after_seconds": 5,
-                "user_requests_used": 1,
-                "user_requests_limit": 2,
-                "system_requests_used": 3,
-                "system_requests_limit": 4,
-                "timestamp": NOW.isoformat(),
-            },
-        },
-        {
-            "type": "user_message",
-            "timestamp": NOW.isoformat(),
-            "room_id": "room-1",
-            "data": {
-                "message_id": "msg-7",
-                "user_id": "user-1",
-                "content": "hi",
-                "timestamp": NOW.isoformat(),
-            },
-        },
+    assert [frame_type for frame_type, _data in compat.frames] == [
+        "agent_response",
+        "artifact_update",
+        "task_submitted",
+        "task_update",
+        "error",
+        "error",
     ]
+    events = fake_publisher.events
+    assert [event.event_type for event in events] == [
+        "agent_message_final",
+        "artifact_update",
+        "task_submitted",
+        "task_update",
+        "error",
+        "error",
+    ]
+    assert events[0].content == {
+        "content": "hello",
+        "related_message_id": "root",
+        "client_request_id": "cr-1",
+        "parts": [{"type": "text"}],
+    }
+    assert events[1].client_request_id == "cr-2"
+    assert events[2].created_at == "created"
+    assert events[3].status == "input_required"
+    assert events[3].created_at == "created"
+    assert events[4].error == "boom"
+    assert events[5].error_type == "rate_limit_exceeded"
+    assert events[5].retry_after_seconds == 5
 
 
 @pytest.mark.asyncio

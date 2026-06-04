@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from enum import Enum
 from typing import Any, Protocol
 
-from common.dto import RunInfo
+from common.dto import HITLRequestEvent, HITLResolvedEvent, RunInfo
 
 ProcessingStatusLike = str | Enum
 
@@ -152,13 +152,7 @@ class AgentResponseHandlerPort(Protocol):
 
 
 class HITLDeliveryPort(Protocol):
-    async def emit_hitl_event(
-        self,
-        *,
-        room_id: str,
-        message_type: str,
-        payload: dict[str, Any],
-    ) -> None: ...
+    async def emit(self, event: HITLRequestEvent | HITLResolvedEvent) -> None: ...
 
 
 class AgentDispatchPort(Protocol):
@@ -194,19 +188,6 @@ class AgentTaskCleanupPort(Protocol):
         *,
         room_id: str,
         message_id: str,
-    ) -> None: ...
-
-
-class LegacyProcessingStatusPublisher(Protocol):
-    async def emit_processing_status(
-        self,
-        *,
-        room_id: str,
-        status: ProcessingStatusLike,
-        message_id: str | None,
-        details: dict[str, Any] | str | None = None,
-        client_request_id: str | None = None,
-        agents: list[dict] | None = None,
     ) -> None: ...
 
 
