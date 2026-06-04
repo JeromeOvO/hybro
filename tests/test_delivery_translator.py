@@ -179,7 +179,7 @@ def test_hitl_request_translation():
     )
 
     assert to_sse_frame(event, timestamp=NOW) == {
-        "type": "hitl_input_requested",
+        "type": "hitl_request",
         "timestamp": NOW.isoformat(),
         "room_id": "room-1",
         "data": {
@@ -213,7 +213,7 @@ def test_hitl_request_translation_preserves_full_payload():
     frame = to_sse_frame(event, timestamp=NOW)
 
     assert frame == {
-        "type": "hitl_input_requested",
+        "type": "hitl_request",
         "timestamp": NOW.isoformat(),
         "room_id": "room-1",
         "data": {
@@ -243,7 +243,7 @@ def test_hitl_resolved_translation():
     )
 
     assert to_sse_frame(event, timestamp=NOW) == {
-        "type": "hitl_status_update",
+        "type": "hitl_response",
         "timestamp": NOW.isoformat(),
         "room_id": "room-1",
         "data": {
@@ -269,7 +269,7 @@ def test_hitl_status_translation_preserves_status_source_and_error():
     frame = to_sse_frame(event, timestamp=NOW)
 
     assert frame == {
-        "type": "hitl_status_update",
+        "type": "hitl_response",
         "timestamp": NOW.isoformat(),
         "room_id": "room-1",
         "data": {

@@ -153,7 +153,7 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         _add_optional(data, "group_index", event.group_index)
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_trace_id(data, event.trace_id)
-        return _frame(event.room_id, "hitl_input_requested", data, frame_timestamp)
+        return _frame(event.room_id, "hitl_request", data, frame_timestamp)
 
     if isinstance(event, HITLResolvedEvent):
         data = {
@@ -165,7 +165,7 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         _add_optional(data, "error_message", event.error_message)
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_trace_id(data, event.trace_id)
-        return _frame(event.room_id, "hitl_status_update", data, frame_timestamp)
+        return _frame(event.room_id, "hitl_response", data, frame_timestamp)
 
     if isinstance(event, HubAgentEvent):
         data = {
