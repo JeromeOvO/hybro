@@ -815,6 +815,63 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(useMessageStore.getState().entities['processing-placeholder-room-1']).toBeUndefined()
   })
 
+  it('normalizes structured processing_status details before appending logs or showing failure banners', async () => {
+    const { banner } = await import('@/components/ui/banner')
+    const { resolveClientRequestMessageId } = await import('@/hooks/room/sse-handlers/pending-turn-buffer')
+    const { result } = await mountHook()
+    await waitFor(() => expect(result.current.room).toBeTruthy())
+
+    await act(async () => {
+      await result.current.sendUserMessage('Handle structured processing details')
+    })
+
+    const clientRequestId = useMessageStore
+      .getState()
+      .orderedIds
+      .map((id) => useMessageStore.getState().entities[id])
+      .filter((entity) => entity?.messageType === 'user')
+      .at(-1)?.clientRequestId
+    expect(clientRequestId).toBeTruthy()
+    resolveClientRequestMessageId(clientRequestId!, 'msg-structured-details')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'processing',
+          message_id: 'msg-structured-details',
+          client_request_id: clientRequestId,
+          details: { message: 'Planning next action...' },
+        },
+      }))
+    })
+
+    const userEntity = useMessageStore
+      .getState()
+      .orderedIds
+      .map((id) => useMessageStore.getState().entities[id])
+      .find((entity) => entity?.messageType === 'user' && entity.clientRequestId === clientRequestId)
+
+    expect(userEntity?.processingStatusLogs?.map((entry) => entry.message)).toEqual([
+      'Thinking...',
+      'Planning next action...',
+    ])
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'failed',
+          message_id: 'msg-structured-details',
+          client_request_id: clientRequestId,
+          details: { message: 'Backend failed cleanly' },
+        },
+      }))
+    })
+
+    expect(banner.error).toHaveBeenCalledWith('Processing failed: Backend failed cleanly')
+  })
+
   it('preserves logs for a room-level terminal status when the user entity still has its optimistic id', async () => {
     const { resolveClientRequestMessageId } = await import('@/hooks/room/sse-handlers/pending-turn-buffer')
     const { result } = await mountHook()

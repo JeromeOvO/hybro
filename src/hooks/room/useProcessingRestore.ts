@@ -30,10 +30,9 @@ export function useProcessingRestore(
     const store = useMessageStore.getState()
     if (store.roomId !== roomId) return
 
-    // Once SSE has dismissed live processing UI (via task_submitted or
-    // processing_status done), never re-add it — the restore effect is only
-    // for page-load recovery.
-    if (lifecycle.isPlaceholderDismissed()) return
+    // Once SSE has resolved the live processing lifecycle, never re-add it —
+    // the restore effect is only for page-load recovery.
+    if (lifecycle.isProcessingResolved()) return
 
     const activeRuns = room.active_runs ?? []
     const activeRunTriggerMessageId =
@@ -98,6 +97,7 @@ export function useProcessingRestore(
       // behind by missed terminal SSE without deleting per-turn update history.
       // But don't wipe it if a message send is still in flight (the SSE events
       // haven't arrived yet).
+      if (lifecycle.isPlaceholderDismissed()) return
       const { sending } = useRoomUiStore.getState().rooms[roomId] ?? {}
       if (sending) return
       if (lifecycle.getPendingRunEventAck()) return

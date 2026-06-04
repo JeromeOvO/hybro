@@ -17,7 +17,7 @@ export interface SSEMessage {
     content?: string
     related_message_id?: string
     status?: string // "processing", "completed", "canceled", "failed", "rate_limited"
-    details?: string
+    details?: string | Record<string, unknown>
     // Error-specific fields
     error?: string
     error_type?: string // "rate_limit_exceeded"

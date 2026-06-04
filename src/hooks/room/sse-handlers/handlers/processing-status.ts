@@ -2,40 +2,15 @@ import { banner } from '@/components/ui/banner'
 import type { SSEMessage, ProcessingStatus } from '@/lib/types/sse'
 import { PROCESSING_STATUS, isProcessingDone, TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
-import type { MessageEntity, ProcessingStatusLogEntry } from '@/stores/message-store/types'
+import type { MessageEntity } from '@/stores/message-store/types'
+import {
+  appendProcessingStatusLog,
+  findProcessingStatusUserEntity,
+  normalizeProcessingDetails,
+} from '../../processing-status-log'
 import { getResolvedMessageId, resolveClientRequestMessageId } from '../pending-turn-buffer'
 import type { CorrelationResult } from '../correlation'
 import type { SSEHandlerDeps } from '../types'
-
-function findProcessingUserEntity(
-  roomId: string,
-  messageId: string | null | undefined,
-  clientRequestId: string | null | undefined,
-  relatedMessageId?: string | null,
-): MessageEntity | undefined {
-  const store = useMessageStore.getState()
-  if (clientRequestId) {
-    const correlated = store.orderedIds
-      .map((id) => store.entities[id])
-      .find((entity) =>
-        entity?.roomId === roomId &&
-        entity.messageType === 'user' &&
-        entity.clientRequestId === clientRequestId
-      )
-    if (correlated) return correlated
-  }
-
-  if (relatedMessageId) {
-    const related = store.entities[relatedMessageId]
-    if (related?.roomId === roomId && related.messageType === 'user') return related
-  }
-
-  if (!messageId) return undefined
-
-  const direct = store.entities[messageId]
-  if (direct?.roomId === roomId && direct.messageType === 'user') return direct
-  return undefined
-}
 
 function isTurnLevelTerminalProcessingStatus(
   sseMessageId: string | undefined,
@@ -52,45 +27,6 @@ function isTurnLevelTerminalProcessingStatus(
   if (resolvedMessageId && sseMessageId === resolvedMessageId) return true
   if (userEntity?.id === sseMessageId) return true
   return false
-}
-
-function upsertProcessingLogs(
-  roomId: string,
-  userEntity: MessageEntity | undefined,
-  logs: ProcessingStatusLogEntry[],
-): void {
-  if (!userEntity) return
-  useMessageStore.getState().upsertMessage({
-    id: userEntity.id,
-    roomId,
-    messageType: 'user',
-    content: userEntity.content,
-    senderName: userEntity.senderName,
-    timestamp: userEntity.timestamp,
-    processingStatusLogs: logs,
-  }, 'sse')
-}
-
-function appendProcessingLog(
-  roomId: string,
-  userEntity: MessageEntity | undefined,
-  message: string | undefined,
-  timestamp: string,
-): void {
-  const trimmed = message?.trim()
-  if (!trimmed || !userEntity) return
-
-  const existing = userEntity.processingStatusLogs ?? []
-  if (existing.some((entry) => entry.message === trimmed)) return
-
-  upsertProcessingLogs(roomId, userEntity, [
-    ...existing,
-    {
-      id: `processing-log-${timestamp}-${existing.length}`,
-      message: trimmed,
-      timestamp,
-    },
-  ])
 }
 
 function isCurrentProcessingUser(
@@ -182,12 +118,10 @@ export function handleProcessingStatus(
     const lifecycleMessageId = lifecycle.getMessageId()
     const realMessageId = sseMessage.data.message_id as string | undefined
     const relatedMessageId = sseMessage.data.related_message_id as string | undefined
-    const existingUserForEventId = findProcessingUserEntity(
-      roomId,
-      realMessageId,
-      undefined,
+    const existingUserForEventId = findProcessingStatusUserEntity(roomId, {
+      messageId: realMessageId,
       relatedMessageId,
-    )
+    })
     if (correlation.clientReqId && existingUserForEventId) {
       resolveClientRequestMessageId(correlation.clientReqId, existingUserForEventId.id)
     }
@@ -200,12 +134,12 @@ export function handleProcessingStatus(
       relatedMessageId ??
       (sseMessage.data.message_id as string | undefined) ??
       lifecycleMessageId
-    const processingUserEntity = findProcessingUserEntity(
-      roomId,
-      userMsgId,
-      correlation.clientReqId,
+    const processingUserEntity = findProcessingStatusUserEntity(roomId, {
+      messageId: userMsgId,
+      clientRequestId: correlation.clientReqId,
       relatedMessageId,
-    )
+      preferClientRequestId: true,
+    })
     if (processingUserEntity?.turnTerminalStatus) {
       console.log('[SSE PROCESSING] skipping placeholder/log — turn already terminal', {
         turnTerminalStatus: processingUserEntity.turnTerminalStatus,
@@ -225,11 +159,12 @@ export function handleProcessingStatus(
       return
     }
 
-    appendProcessingLog(
+    appendProcessingStatusLog(
       roomId,
       processingUserEntity,
       sseMessage.data.details,
       sseMessage.timestamp,
+      'sse',
     )
 
     lifecycle.startProcessing(processingUserEntity?.id ?? lifecycleMessageId ?? userMsgId)
@@ -241,12 +176,12 @@ export function handleProcessingStatus(
     const lifecycleMessageId = lifecycle.getMessageId()
     const awaitingMessageId = (sseMessage.data.message_id as string | undefined) ?? lifecycleMessageId
     const relatedMessageId = sseMessage.data.related_message_id as string | undefined
-    const awaitingUser = findProcessingUserEntity(
-      roomId,
-      awaitingMessageId,
-      correlation.clientReqId,
+    const awaitingUser = findProcessingStatusUserEntity(roomId, {
+      messageId: awaitingMessageId,
+      clientRequestId: correlation.clientReqId,
       relatedMessageId,
-    )
+      preferClientRequestId: true,
+    })
     if (!isCurrentProcessingUser(
       roomId,
       lifecycleMessageId,
@@ -277,12 +212,12 @@ export function handleProcessingStatus(
     ? getResolvedMessageId(correlation.clientReqId)
     : undefined
   const terminalUserMsgId = resolvedClientMessageId ?? relatedMessageId ?? sseMessageId ?? lifecycleMessageId
-  const terminalUser = findProcessingUserEntity(
-    roomId,
-    terminalUserMsgId,
-    correlation.clientReqId,
+  const terminalUser = findProcessingStatusUserEntity(roomId, {
+    messageId: terminalUserMsgId,
+    clientRequestId: correlation.clientReqId,
     relatedMessageId,
-  )
+    preferClientRequestId: true,
+  })
   const hasTurnMessageReference =
     !!lifecycleMessageId || !!resolvedClientMessageId || !!terminalUser
 
@@ -350,7 +285,7 @@ export function handleProcessingStatus(
         }, 'optimistic')
         store.cancelAllNonTerminal(roomId)
       } else if (status === PROCESSING_STATUS.FAILED) {
-        banner.error(`Processing failed: ${sseMessage.data.details || 'Unknown error'}`)
+        banner.error(`Processing failed: ${normalizeProcessingDetails(sseMessage.data.details) ?? 'Unknown error'}`)
       } else if (status === PROCESSING_STATUS.RATE_LIMITED) {
         console.log('Rate limit reached, processing stopped')
       }

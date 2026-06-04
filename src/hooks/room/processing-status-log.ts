@@ -1,5 +1,5 @@
 import { useMessageStore } from '@/stores/message-store'
-import type { MessageEntity, ProcessingStatusLogEntry } from '@/stores/message-store/types'
+import type { MessageEntity, MessageSource, ProcessingStatusLogEntry } from '@/stores/message-store/types'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 
 export const INITIAL_PROCESSING_STATUS_MESSAGE = 'Thinking...'
@@ -30,9 +30,26 @@ export function findProcessingStatusUserEntity(
     relatedMessageId?: string | null
     beforeTimestamp?: string | null
     latestWithLogs?: boolean
+    preferClientRequestId?: boolean
   },
 ): MessageEntity | undefined {
   const store = useMessageStore.getState()
+  const findByClientRequestId = () => {
+    if (!options.clientRequestId) return undefined
+    return store.orderedIds
+      .map((id) => store.entities[id])
+      .find((entity) =>
+        entity?.roomId === roomId &&
+        entity.messageType === 'user' &&
+        entity.clientRequestId === options.clientRequestId
+      )
+  }
+
+  if (options.preferClientRequestId) {
+    const correlated = findByClientRequestId()
+    if (correlated) return correlated
+  }
+
   if (options.messageId) {
     const direct = store.entities[options.messageId]
     if (direct?.roomId === roomId && direct.messageType === 'user') return direct
@@ -43,14 +60,8 @@ export function findProcessingStatusUserEntity(
     if (related?.roomId === roomId && related.messageType === 'user') return related
   }
 
-  if (options.clientRequestId) {
-    const correlated = store.orderedIds
-      .map((id) => store.entities[id])
-      .find((entity) =>
-        entity?.roomId === roomId &&
-        entity.messageType === 'user' &&
-        entity.clientRequestId === options.clientRequestId
-      )
+  if (!options.preferClientRequestId) {
+    const correlated = findByClientRequestId()
     if (correlated) return correlated
   }
 
@@ -83,13 +94,22 @@ export function findProcessingStatusUserEntity(
   return undefined
 }
 
+export function normalizeProcessingDetails(details: unknown): string | undefined {
+  if (typeof details === 'string') return details.trim() || undefined
+  if (!details || typeof details !== 'object') return undefined
+
+  const message = (details as { message?: unknown }).message
+  return typeof message === 'string' ? message.trim() || undefined : undefined
+}
+
 export function appendProcessingStatusLog(
   roomId: string,
   userEntity: MessageEntity | undefined,
-  message: string | undefined,
+  message: unknown,
   timestamp = new Date().toISOString(),
+  source: MessageSource = 'optimistic',
 ): void {
-  const trimmed = message?.trim()
+  const trimmed = normalizeProcessingDetails(message)
   if (!trimmed || !userEntity) return
 
   const latestUserEntity = useMessageStore.getState().entities[userEntity.id] ?? userEntity
@@ -111,7 +131,7 @@ export function appendProcessingStatusLog(
         timestamp,
       },
     ],
-  }, 'optimistic')
+  }, source)
 }
 
 export function clearProcessingStatusLogs(
