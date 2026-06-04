@@ -4,6 +4,8 @@ import json
 from typing import Any
 
 from common.utils.cancellation import CancellationToken
+from common.utils.time import utcnow
+from delivery.translator import to_sse_frame
 from app_shell.delivery_runtime import SSEConnection, SSEManager
 
 TERMINAL_STATUSES = {
@@ -29,13 +31,6 @@ class FakeDeliveryCompat:
         self.change_stream_connected = True
         self.delivery_kv_connected = False
         self.delivery_pubsub_connected = False
-
-    async def emit_legacy_frame(self, room_id: str, frame: dict) -> None:
-        if not await self._should_deliver(room_id, frame):
-            return
-        self.frames.append((room_id, frame))
-        for connection in self.room_connections.get(room_id, {}).values():
-            await connection.queue.put(json.dumps(frame))
 
     async def open_connection(self, room_id: str) -> SSEConnection:
         if self.draining:
@@ -170,15 +165,41 @@ class FakeDeliveryCompat:
         return True
 
 
+class FakeEventPublisher:
+    def __init__(self, compat: FakeDeliveryCompat | None = None) -> None:
+        self.compat = compat
+        self.events = []
+
+    async def emit(self, event) -> None:
+        self.events.append(event)
+        if self.compat is None:
+            return
+        frame = to_sse_frame(event, timestamp=utcnow())
+        room_id = frame["room_id"]
+        if not await self.compat._should_deliver(room_id, frame):
+            return
+        self.compat.frames.append((frame["type"], frame["data"]))
+        connections = list(self.compat.room_connections.get(room_id, {}).values())
+        for connection in connections:
+            await connection.queue.put(json.dumps(frame))
+
+
 class FakeDeliveryFacade:
     def __init__(
         self,
         *,
         compat: FakeDeliveryCompat | None = None,
         instance_id: str = "test-worker",
+        event_publisher: FakeEventPublisher | None = None,
     ) -> None:
         self.compat = compat or FakeDeliveryCompat()
         self.instance_id = instance_id
+        self.event_publisher = event_publisher or FakeEventPublisher(self.compat)
+        if getattr(self.event_publisher, "compat", None) is None:
+            self.event_publisher.compat = self.compat
+
+    async def emit(self, event) -> None:
+        await self.event_publisher.emit(event)
 
 
 def make_bound_manager(
@@ -186,10 +207,16 @@ def make_bound_manager(
     compat: FakeDeliveryCompat | None = None,
     redis_service: Any | None = None,
     instance_id: str = "test-worker",
+    event_publisher: FakeEventPublisher | None = None,
 ) -> SSEManager:
     if compat is None:
         compat = FakeDeliveryCompat(redis_service=redis_service)
     manager = SSEManager()
-    manager.bind_facade(FakeDeliveryFacade(compat=compat, instance_id=instance_id))
+    manager.bind_facade(
+        FakeDeliveryFacade(
+            compat=compat,
+            instance_id=instance_id,
+            event_publisher=event_publisher,
+        )
+    )
     return manager
-

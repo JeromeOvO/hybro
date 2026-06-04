@@ -2,6 +2,7 @@ from a2a.types import TaskState
 
 from common.a2a_constants import (
     CommonTaskState,
+    PROCESSING_DONE_STATUSES,
     SSEProcessingStatus,
     get_retry_after_seconds,
     is_failure_state,
@@ -33,5 +34,7 @@ def test_common_a2a_retry_policy_matches_legacy_contract():
 
 
 def test_processing_status_values_are_shared_strings():
+    assert SSEProcessingStatus.QUEUED.value == "queued"
     assert SSEProcessingStatus.COMPLETED.value == "completed"
     assert SSEProcessingStatus.AWAITING_INPUT.value == "awaiting_input"
+    assert SSEProcessingStatus.QUEUED not in PROCESSING_DONE_STATUSES

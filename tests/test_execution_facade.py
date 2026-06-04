@@ -54,9 +54,6 @@ def _make_facade(**overrides):
     )
     agent_response_handler = SimpleNamespace(handle=AsyncMock())
     event_publisher = SimpleNamespace(emit=AsyncMock())
-    legacy_processing_status_publisher = SimpleNamespace(
-        emit_processing_status=AsyncMock(),
-    )
     client_request_id_resolver = SimpleNamespace(
         resolve_client_request_id=AsyncMock(side_effect=lambda _, provided: provided),
     )
@@ -72,7 +69,6 @@ def _make_facade(**overrides):
         "agent_task_cleanup": agent_task_cleanup,
         "agent_response_handler": agent_response_handler,
         "event_publisher": event_publisher,
-        "legacy_processing_status_publisher": legacy_processing_status_publisher,
         "run_event_enabled": lambda: False,
         "client_request_id_resolver": client_request_id_resolver,
         "task_factory": RecordingTaskFactory(),

@@ -12,7 +12,6 @@ from typing import Any, Protocol
 from a2a_adapter.task_status import coerce_task_state
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
-from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
 
 
 class _DatabaseServiceLike(Protocol):
@@ -113,6 +112,50 @@ class AgentResponseHandler:
 
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
         self._processing_status_emitter = processing_status_emitter
+
+    async def _resolve_client_request_id(self, e: AgentEvent) -> str | None:
+        explicit = e.client_request_id
+        if isinstance(explicit, str) and explicit.strip():
+            return explicit.strip()
+
+        message_id = e.message_id
+        if not isinstance(message_id, str) or not message_id.strip():
+            return None
+
+        resolve_from_message_id = getattr(
+            self._db, "resolve_client_request_id_for_message_id", None
+        )
+        if callable(resolve_from_message_id):
+            maybe_resolved = resolve_from_message_id(message_id)
+            resolved = (
+                await maybe_resolved if inspect.isawaitable(maybe_resolved) else maybe_resolved
+            )
+            if isinstance(resolved, str) and resolved.strip():
+                return resolved.strip()
+
+        get_agent_message = getattr(self._db, "get_room_agent_message_by_message_id", None)
+        resolve_from_agent_message = getattr(
+            self._db, "resolve_client_request_id_for_agent_message", None
+        )
+        if callable(get_agent_message) and callable(resolve_from_agent_message):
+            maybe_room_agent_message = get_agent_message(message_id)
+            room_agent_message = (
+                await maybe_room_agent_message
+                if inspect.isawaitable(maybe_room_agent_message)
+                else maybe_room_agent_message
+            )
+            if room_agent_message is None:
+                return None
+            maybe_resolved = resolve_from_agent_message(room_agent_message)
+            resolved = (
+                await maybe_resolved
+                if inspect.isawaitable(maybe_resolved)
+                else maybe_resolved
+            )
+            if isinstance(resolved, str) and resolved.strip():
+                return resolved.strip()
+
+        return None
 
     async def _terminate_slot(
         self,
@@ -341,7 +384,11 @@ class AgentResponseHandler:
                 task_id=e.task_id,
                 context_id=e.context_id,
             )
-        await self._notify(e, coerce_task_state(state))
+        await self._notify(
+            e,
+            coerce_task_state(state),
+            emit_processing_status=state != "input-required",
+        )
 
         # For async transports (relay, webhook) the queue has already moved
         # to PAUSED before this callback fires, so QueueExecutor never sees
@@ -434,9 +481,10 @@ class AgentResponseHandler:
     # --- Non-terminal events ---
 
     async def _on_submitted(self, e: AgentEvent) -> None:
+        client_request_id = await self._resolve_client_request_id(e)
         kw: dict = {}
-        if e.client_request_id:
-            kw["client_request_id"] = e.client_request_id
+        if client_request_id:
+            kw["client_request_id"] = client_request_id
         await self._sse.send_task_submitted(
             room_id=e.room_id,
             message_id=e.message_id,
@@ -453,9 +501,10 @@ class AgentResponseHandler:
 
     async def _on_status(self, e: AgentEvent) -> None:
         if e.text:
+            client_request_id = await self._resolve_client_request_id(e)
             kw: dict = {}
-            if e.client_request_id:
-                kw["client_request_id"] = e.client_request_id
+            if client_request_id:
+                kw["client_request_id"] = client_request_id
             await self._sse.send_task_update(
                 room_id=e.room_id,
                 message_id=e.message_id,
@@ -505,6 +554,7 @@ class AgentResponseHandler:
                         state=_state_enum,
                         room_id=e.room_id,
                         user_id=e.user_id or "",
+                        emit_processing_status=False,
                     )
             except (ValueError, KeyError):
                 # e.state is not a valid TaskState value — skip
@@ -522,7 +572,7 @@ class AgentResponseHandler:
             message_id=e.message_id,
             lifecycle_message_id=e.lifecycle_message_id,
             record_lifecycle=True,
-            client_request_id=e.client_request_id,
+            client_request_id=await self._resolve_client_request_id(e),
             details=e.details,
         )
 
@@ -539,27 +589,31 @@ class AgentResponseHandler:
         client_request_id: str | None = None,
         details=None,
     ) -> None:
-        legacy_details = details if isinstance(details, str) else None
-        structured_details = details if isinstance(details, dict) else None
-        if self._processing_status_emitter is not None:
-            await self._processing_status_emitter(
-                room_id=room_id,
-                status=status,
-                message_id=message_id,
-                lifecycle_message_id=lifecycle_message_id,
-                record_lifecycle=record_lifecycle,
-                client_request_id=client_request_id,
-                details=structured_details,
-                legacy_details=legacy_details,
-                error_message=legacy_details,
+        if self._processing_status_emitter is None:
+            raise RuntimeError(
+                "AgentResponseHandler execution event dependencies not bound"
             )
-            return
-        await LegacyProcessingStatusC3Adapter(self._sse).emit_processing_status(
+        status_value = status.value if hasattr(status, "value") else str(status)
+        await self._processing_status_emitter(
             room_id=room_id,
             status=status,
             message_id=message_id,
-            details=details,
+            lifecycle_message_id=lifecycle_message_id,
+            record_lifecycle=record_lifecycle,
             client_request_id=client_request_id,
+            details=(
+                details
+                if isinstance(details, dict)
+                else {"message": details}
+                if isinstance(details, str)
+                else None
+            ),
+            error_message=(
+                details
+                if isinstance(details, str)
+                and status_value in {"failed", "canceled", "rejected", "error"}
+                else None
+            ),
         )
 
     async def notify_task_update(
@@ -570,6 +624,7 @@ class AgentResponseHandler:
         user_id: str,
         error: str | None = None,
         parts: list[dict] | None = None,
+        emit_processing_status: bool = True,
     ) -> bool:
         """Handler-owned task notification — delegates to shared impl.
 
@@ -589,6 +644,8 @@ class AgentResponseHandler:
             user_id=user_id,
             error=error,
             parts=parts,
+            emit_processing_status=emit_processing_status,
+            processing_status_emitter=self._processing_status_emitter,
         )
 
     async def _notify(
@@ -596,6 +653,7 @@ class AgentResponseHandler:
         e: AgentEvent,
         state: Any,
         error: str | None = None,
+        emit_processing_status: bool = True,
     ) -> None:
         await self.notify_task_update(
             message_id=e.message_id,
@@ -604,6 +662,7 @@ class AgentResponseHandler:
             user_id=e.user_id or "",
             error=error,
             parts=e.parts,
+            emit_processing_status=emit_processing_status,
         )
 
     async def _resume_orchestration(

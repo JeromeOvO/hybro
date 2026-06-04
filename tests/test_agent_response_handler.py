@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from execution.dispatch.response_handler import AgentResponseHandler
 from execution.dispatch.agent_event import AgentEvent
+from execution.dispatch.response_handler import AgentResponseHandler
 
 # =============================================================================
 # Fixtures
@@ -88,7 +88,7 @@ def test_processing_status_callback_has_no_required_post_emit_business_side_effe
     assert emit_lines
     last_emit = max(emit_lines)
     forbidden_after_emit = {
-        "record_and_maybe_broadcast_run_event",
+        "record_and_maybe_emit_run_event",
         "update_task_state_on_message",
         "accumulate_artifact_on_message",
         "resume_queue_from_continuation",
@@ -441,6 +441,7 @@ class TestInteractiveEvent:
 
     @pytest.mark.asyncio
     async def test_creates_hitl_request_for_async_interactive_continuation(self):
+        mock_impl = AsyncMock(return_value=True)
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=True)
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
@@ -457,7 +458,11 @@ class TestInteractiveEvent:
         hitl = SimpleNamespace(
             request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
         )
-        h = _make_handler(db=db, hitl_coordinator=hitl)
+        h = _make_handler(
+            db=db,
+            hitl_coordinator=hitl,
+            task_notification_impl=mock_impl,
+        )
         event = AgentEvent(
             kind="interactive", **_base_event(),
             text="need input", state="input-required",
@@ -466,12 +471,12 @@ class TestInteractiveEvent:
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
 
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(
-                "execution.dispatch.response_handler.AgentResponseHandler._notify",
-                AsyncMock(return_value=True),
-            )
-            await h.handle(event)
+        await h.handle(event)
+
+        mock_impl.assert_awaited_once()
+        task_update_call = mock_impl.call_args.kwargs
+        assert task_update_call["message_id"] == "msg-001"
+        assert task_update_call["emit_processing_status"] is False
 
         hitl.request_input.assert_awaited_once_with(
             room_id="room-001",
@@ -493,7 +498,6 @@ class TestInteractiveEvent:
             record_lifecycle=True,
             client_request_id=None,
             details=None,
-            legacy_details=None,
             error_message=None,
         )
         h._sse.send_processing_status.assert_not_awaited()
@@ -595,6 +599,23 @@ class TestSubmittedEvent:
         h._sse.send_task_submitted.assert_awaited_once()
         h._db.update_task_state_on_message.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_sends_sse_submitted_with_resolved_client_request_id(self):
+        db = MagicMock()
+        db.resolve_client_request_id_for_message_id = AsyncMock(
+            return_value="cr-001"
+        )
+        h = _make_handler(db=db)
+        event = AgentEvent(
+            kind="task_submitted", **_base_event(),
+            task_id="t-1", agent_name="Agent X",
+        )
+        await h.handle(event)
+
+        call_kwargs = h._sse.send_task_submitted.call_args.kwargs
+        assert call_kwargs["client_request_id"] == "cr-001"
+        db.resolve_client_request_id_for_message_id.assert_awaited_once_with("msg-001")
+
 
 class TestStatusUpdateEvent:
     @pytest.mark.asyncio
@@ -618,25 +639,46 @@ class TestStatusUpdateEvent:
         await h.handle(event)
         h._sse.send_task_update.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_sends_task_update_with_resolved_client_request_id(self):
+        db = MagicMock()
+        db.resolve_client_request_id_for_message_id = AsyncMock(
+            return_value="cr-002"
+        )
+        h = _make_handler(db=db)
+        event = AgentEvent(
+            kind="status_update", **_base_event(), text="still working",
+        )
+        await h.handle(event)
+
+        call_kwargs = h._sse.send_task_update.call_args.kwargs
+        assert call_kwargs["client_request_id"] == "cr-002"
+        db.resolve_client_request_id_for_message_id.assert_awaited_once_with("msg-001")
+
 
 class TestProcessingStatusEvent:
     @pytest.mark.asyncio
     async def test_sends_processing_status_with_lifecycle_id(self):
         h = _make_handler()
+        emitter = AsyncMock()
+        h.bind_execution_event_deps(emitter)
         event = AgentEvent(
             kind="processing_status", **_base_event(),
             lifecycle_message_id="umsg-001",
             state="completed", details="all done",
         )
         await h.handle(event)
-        h._sse.send_processing_status.assert_awaited_once_with(
-            "room-001",
-            "completed",
-            "msg-001",
-            details="all done",
+        emitter.assert_awaited_once_with(
+            room_id="room-001",
+            status="completed",
+            message_id="msg-001",
+            lifecycle_message_id="umsg-001",
+            record_lifecycle=True,
             client_request_id=None,
-            agents=None,
+            details={"message": "all done"},
+            error_message=None,
         )
+        h._sse.send_processing_status.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_records_when_lifecycle_message_id_is_explicit(self):
@@ -660,9 +702,8 @@ class TestProcessingStatusEvent:
             lifecycle_message_id="umsg-001",
             record_lifecycle=True,
             client_request_id="cr-1",
-            details=None,
-            legacy_details="all done",
-            error_message="all done",
+            details={"message": "all done"},
+            error_message=None,
         )
         h._sse.send_processing_status.assert_not_awaited()
 
@@ -680,6 +721,35 @@ class TestProcessingStatusEvent:
 
         emitter.assert_not_awaited()
         h._sse.send_processing_status.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_processing_status_resolves_client_request_id_for_emitter(self):
+        db = MagicMock()
+        db.resolve_client_request_id_for_message_id = AsyncMock(
+            return_value="cr-processor"
+        )
+        h = _make_handler(db=db)
+        emitter = AsyncMock()
+        h.bind_execution_event_deps(emitter)
+        event = AgentEvent(
+            kind="processing_status", **_base_event(),
+            lifecycle_message_id="umsg-001",
+            state="completed", details="all done",
+        )
+
+        await h.handle(event)
+
+        emitter.assert_awaited_once_with(
+            room_id="room-001",
+            status="completed",
+            message_id="msg-001",
+            lifecycle_message_id="umsg-001",
+            record_lifecycle=True,
+            client_request_id="cr-processor",
+            details={"message": "all done"},
+            error_message=None,
+        )
+        db.resolve_client_request_id_for_message_id.assert_awaited_once_with("msg-001")
 
 
 # =============================================================================
@@ -759,6 +829,8 @@ class TestHandlerNotifyTaskUpdate:
     async def test_delegates_to_shared_impl(self):
         mock_impl = AsyncMock(return_value=True)
         h = _make_handler(task_notification_impl=mock_impl)
+        emitter = AsyncMock()
+        h.bind_execution_event_deps(emitter)
 
         result = await h.notify_task_update(
             message_id="msg-001",
@@ -776,6 +848,35 @@ class TestHandlerNotifyTaskUpdate:
         assert call_args[0][0] is h._db
         # Third positional arg is the handler's sse instance
         assert call_args[0][2] is h._sse
+        assert call_args.kwargs["emit_processing_status"] is True
+        assert call_args.kwargs["processing_status_emitter"] is emitter
+
+    @pytest.mark.asyncio
+    async def test_processing_status_terminal_close_out_does_not_duplicate_emit(self):
+        mock_impl = AsyncMock(return_value=True)
+        h = _make_handler(task_notification_impl=mock_impl)
+        emitter = AsyncMock()
+        h.bind_execution_event_deps(emitter)
+        event = AgentEvent(
+            kind="processing_status", **_base_event(),
+            lifecycle_message_id="umsg-001",
+            state="completed",
+        )
+
+        await h.handle(event)
+
+        call_args = mock_impl.call_args
+        assert call_args.kwargs["emit_processing_status"] is False
+        emitter.assert_awaited_once_with(
+            room_id="room-001",
+            status="completed",
+            message_id="msg-001",
+            lifecycle_message_id="umsg-001",
+            record_lifecycle=True,
+            client_request_id=None,
+            details=None,
+            error_message=None,
+        )
 
     @pytest.mark.asyncio
     async def test_notify_helper_delegates_to_method(self):
@@ -796,3 +897,4 @@ class TestHandlerNotifyTaskUpdate:
         assert call_kw["message_id"] == "msg-001"
         assert call_kw["room_id"] == "room-001"
         assert call_kw["parts"] == [{"kind": "text"}]
+        assert call_kw["emit_processing_status"] is True

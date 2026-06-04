@@ -52,6 +52,9 @@ SUPERVISOR_SYSTEM_PROMPT = """You are a Supervisor coordinating specialist agent
 ## Available Agents
 {agent_registry}
 
+## Explicit Mentions
+{explicit_mentions}
+
 ## Your Job
 Decide the NEXT action. You will be called repeatedly — once after each agent responds.
 Output ONLY valid JSON matching the schema below.
@@ -253,6 +256,26 @@ class RoomSupervisorService:
             )
         return "\n".join(lines)
 
+    @staticmethod
+    def _format_explicit_mentions(explicit_mentions: list[dict]) -> str:
+        if not explicit_mentions:
+            return "No explicit agent mentions."
+        lines = [
+            "The user explicitly mentioned these agents:",
+            *[
+                f"- {mention.get('agent_name', 'Unknown')} "
+                f"(ID: {mention.get('agent_id', 'unknown')}) via "
+                f"{mention.get('mention_text', '<mention>')}"
+                for mention in explicit_mentions
+            ],
+            "",
+            "Treat explicit mentions as strong routing intent. Use the mentioned "
+            "agents unless they are unavailable, unsafe, or clearly irrelevant. "
+            "You may add other agents only if the task requires it. If you do "
+            "not use a mentioned agent, explain why.",
+        ]
+        return "\n".join(lines)
+
     # =========================================================================
     # Adaptive loop — decide_next / synthesize
     # =========================================================================
@@ -279,10 +302,14 @@ class RoomSupervisorService:
         """
         try:
             agent_registry_str = self._format_agent_registry(agent_registry)
+            explicit_mentions = self._format_explicit_mentions(
+                room_config.explicit_mentions
+            )
             system_prompt = SUPERVISOR_SYSTEM_PROMPT.format(
                 agent_registry=agent_registry_str,
                 max_steps=max_steps,
                 conversation_context=conversation_context or "No prior conversation.",
+                explicit_mentions=explicit_mentions,
             )
 
             debate_note = ""

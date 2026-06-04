@@ -25,7 +25,6 @@ from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
-from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
 from execution.state.task_state_manager import TaskStateManager
 from models.processing import ProcessingResult, ProcessingStatus
 from models.room import RoomAgentMessage
@@ -136,27 +135,29 @@ class QueueExecutor:
         client_request_id: str | None = None,
         details=None,
     ) -> None:
-        legacy_details = details if isinstance(details, str) else None
-        structured_details = details if isinstance(details, dict) else None
-        if self._processing_status_emitter is not None:
-            await self._processing_status_emitter(
-                room_id=room_id,
-                status=status,
-                message_id=message_id,
-                lifecycle_message_id=lifecycle_message_id or message_id,
-                record_lifecycle=record_lifecycle,
-                client_request_id=client_request_id,
-                details=structured_details,
-                legacy_details=legacy_details,
-                error_message=legacy_details,
-            )
-            return
-        await LegacyProcessingStatusC3Adapter(self.sse_manager).emit_processing_status(
+        if self._processing_status_emitter is None:
+            raise RuntimeError("QueueExecutor execution event dependencies not bound")
+        status_value = status.value if hasattr(status, "value") else str(status)
+        await self._processing_status_emitter(
             room_id=room_id,
             status=status,
             message_id=message_id,
-            details=details,
+            lifecycle_message_id=lifecycle_message_id or message_id,
+            record_lifecycle=record_lifecycle,
             client_request_id=client_request_id,
+            details=(
+                details
+                if isinstance(details, dict)
+                else {"message": details}
+                if isinstance(details, str)
+                else None
+            ),
+            error_message=(
+                details
+                if isinstance(details, str)
+                and status_value in {"failed", "canceled", "rejected", "error"}
+                else None
+            ),
         )
 
     # ------------------------------------------------------------------

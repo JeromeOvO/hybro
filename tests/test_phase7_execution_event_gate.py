@@ -8,15 +8,11 @@ import pytest
 
 from common.dto import ProcessingStatusEvent, RunEventNotification
 from delivery.translator import to_sse_frame
+from execution.client_request_id import SSEClientRequestIdResolver
 from execution.events import (
-    _is_legacy_processing_status,
     _normalize_processing_status,
     emit_processing_status,
     run_event_notification_from_payload,
-)
-from execution.legacy_processing_status import (
-    LegacyProcessingStatusC3Adapter,
-    SSEClientRequestIdResolver,
 )
 
 NOW = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
@@ -55,29 +51,7 @@ async def test_app_shell_client_request_id_resolver_prefers_provided_id():
     db.resolve_client_request_id_for_message_id.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_legacy_processing_status_adapter_preserves_client_request_and_agents():
-    manager = AsyncMock()
-    agents = [{"agent_id": "agent-1", "agent_name": "Agent One"}]
-
-    await LegacyProcessingStatusC3Adapter(manager).emit_processing_status(
-        room_id="room-1",
-        status="processing",
-        message_id="msg-1",
-        client_request_id="cr-1",
-        agents=agents,
-    )
-
-    manager.send_processing_status.assert_awaited_once_with(
-        "room-1",
-        "processing",
-        "msg-1",
-        client_request_id="cr-1",
-        agents=agents,
-    )
-
-
-def test_execution_processing_status_call_sites_use_event_helper_or_compat_adapter():
+def test_execution_processing_status_call_sites_use_event_helper():
     violations: list[str] = []
     for path in sorted((ROOT / "execution").rglob("*.py")):
         rel = path.relative_to(ROOT).as_posix()
@@ -87,7 +61,6 @@ def test_execution_processing_status_call_sites_use_event_helper_or_compat_adapt
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "send_processing_status"
-                and rel != "execution/legacy_processing_status.py"
             ):
                 violations.append(f"{rel}:{node.lineno}")
             if (
@@ -96,6 +69,34 @@ def test_execution_processing_status_call_sites_use_event_helper_or_compat_adapt
             ):
                 violations.append(f"{rel}:{node.lineno} imports run_lifecycle_service")
     assert violations == []
+
+
+def test_webhook_response_handler_binds_hitl_and_processing_status_deps():
+    tree = ast.parse((ROOT / "main.py").read_text(), filename="main.py")
+    factory = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "create_webhook_transport"
+    )
+    handler_call = next(
+        node
+        for node in ast.walk(factory)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "AgentResponseHandler"
+    )
+    kwargs = {kw.arg: ast.unparse(kw.value) for kw in handler_call.keywords}
+
+    assert kwargs["hitl_coordinator"] == "hitl_service"
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and ast.unparse(node.func.value) == "handler"
+        and node.func.attr == "bind_execution_event_deps"
+        and node.args
+        and ast.unparse(node.args[0]) == "emit_room_processing_status"
+        for node in ast.walk(factory)
+    )
 
 
 def _qualified_function_names(path: Path) -> set[str]:
@@ -136,6 +137,8 @@ def test_execution_event_manifest_covers_status_helpers_and_hub_ingress():
         assert entry["status_source"]
         assert "lifecycle" in entry["lifecycle_id_source"]
         assert entry["frontend_transport"]
+        assert "legacy" not in entry["frontend_transport"].lower()
+        assert "compatibility" not in entry["frontend_transport"].lower()
         assert entry["function"] in _qualified_function_names(ROOT / entry["path"])
 
     expected = {
@@ -164,7 +167,6 @@ async def test_emit_processing_status_records_run_event_then_processing_status()
         "payload": {"state": "processing"},
     }
     publisher = AsyncMock()
-    compat = AsyncMock()
     resolver = make_client_request_id_resolver()
 
     await emit_processing_status(
@@ -174,13 +176,11 @@ async def test_emit_processing_status_records_run_event_then_processing_status()
         client_request_id="cr-1",
         run_lifecycle=lifecycle,
         event_publisher=publisher,
-        legacy_processing_status_publisher=compat,
         run_event_enabled=lambda: True,
         client_request_id_resolver=resolver,
     )
 
     lifecycle.record_processing_status.assert_awaited_once()
-    compat.emit_processing_status.assert_not_awaited()
     assert [call.args[0].event_type for call in publisher.emit.await_args_list] == [
         "run_event",
         "processing_status",
@@ -188,10 +188,9 @@ async def test_emit_processing_status_records_run_event_then_processing_status()
 
 
 @pytest.mark.asyncio
-async def test_emit_processing_status_routes_awaiting_input_to_compat_frame():
+async def test_emit_processing_status_routes_awaiting_input_to_typed_event():
     lifecycle = AsyncMock()
     publisher = AsyncMock()
-    compat = AsyncMock()
     resolver = make_client_request_id_resolver()
 
     await emit_processing_status(
@@ -201,46 +200,79 @@ async def test_emit_processing_status_routes_awaiting_input_to_compat_frame():
         details={"prompt": "Need input"},
         run_lifecycle=lifecycle,
         event_publisher=publisher,
-        legacy_processing_status_publisher=compat,
         run_event_enabled=lambda: False,
         client_request_id_resolver=resolver,
     )
 
     lifecycle.record_processing_status.assert_awaited_once()
-    publisher.emit.assert_not_awaited()
-    compat.emit_processing_status.assert_awaited_once()
+    event = publisher.emit.await_args.args[0]
+    assert isinstance(event, ProcessingStatusEvent)
+    assert event.status == "awaiting_input"
+    assert event.details == {"prompt": "Need input"}
 
 
 @pytest.mark.asyncio
-async def test_emit_processing_status_preserves_error_message_details_as_legacy_string():
+async def test_emit_processing_status_uses_typed_event_for_all_final_statuses():
+    publisher = AsyncMock()
+    run_lifecycle = AsyncMock()
+    run_lifecycle.record_processing_status.return_value = None
+    resolver = AsyncMock()
+    resolver.resolve_client_request_id.return_value = "cr-1"
+
+    statuses = [
+        "queued",
+        "processing",
+        "awaiting_input",
+        "completed",
+        "failed",
+        "canceled",
+        "rejected",
+        "rate_limited",
+        "error",
+    ]
+    for status in statuses:
+        await emit_processing_status(
+            room_id="room-1",
+            status=status,
+            message_id="msg-1",
+            run_lifecycle=run_lifecycle,
+            event_publisher=publisher,
+            run_event_enabled=lambda: False,
+            client_request_id_resolver=resolver,
+            details={"status": status},
+        )
+
+    emitted = [call.args[0] for call in publisher.emit.await_args_list]
+    assert [event.status for event in emitted] == statuses
+
+
+@pytest.mark.asyncio
+async def test_emit_processing_status_rejects_removed_details_parameter():
     lifecycle = AsyncMock()
     publisher = AsyncMock()
-    compat = AsyncMock()
     resolver = make_client_request_id_resolver()
+    removed_kwarg = "legacy" + "_details"
 
-    await emit_processing_status(
-        room_id="room-1",
-        status="failed",
-        message_id="msg-1",
-        legacy_details="agent failed",
-        error_message="agent failed",
-        run_lifecycle=lifecycle,
-        event_publisher=publisher,
-        legacy_processing_status_publisher=compat,
-        run_event_enabled=lambda: False,
-        client_request_id_resolver=resolver,
-    )
+    with pytest.raises(TypeError):
+        await emit_processing_status(
+            room_id="room-1",
+            status="failed",
+            message_id="msg-1",
+            error_message="agent failed",
+            run_lifecycle=lifecycle,
+            event_publisher=publisher,
+            run_event_enabled=lambda: False,
+            client_request_id_resolver=resolver,
+            **{removed_kwarg: "agent failed"},
+        )
 
     publisher.emit.assert_not_awaited()
-    compat.emit_processing_status.assert_awaited_once()
-    assert compat.emit_processing_status.await_args.kwargs["details"] == "agent failed"
 
 
 @pytest.mark.asyncio
 async def test_emit_processing_status_resolves_client_request_id_when_omitted():
     lifecycle = AsyncMock()
     publisher = AsyncMock()
-    compat = AsyncMock()
     resolver = make_client_request_id_resolver()
 
     await emit_processing_status(
@@ -249,7 +281,6 @@ async def test_emit_processing_status_resolves_client_request_id_when_omitted():
         message_id="msg-1",
         run_lifecycle=lifecycle,
         event_publisher=publisher,
-        legacy_processing_status_publisher=compat,
         run_event_enabled=lambda: False,
         client_request_id_resolver=resolver,
     )
@@ -270,7 +301,6 @@ async def test_emit_processing_status_keeps_run_event_correlation_explicit_only(
         "payload": {"state": "processing"},
     }
     publisher = AsyncMock()
-    compat = AsyncMock()
     resolver = make_client_request_id_resolver()
 
     await emit_processing_status(
@@ -280,7 +310,6 @@ async def test_emit_processing_status_keeps_run_event_correlation_explicit_only(
         client_request_id=None,
         run_lifecycle=lifecycle,
         event_publisher=publisher,
-        legacy_processing_status_publisher=compat,
         run_event_enabled=lambda: True,
         client_request_id_resolver=resolver,
     )
@@ -294,7 +323,6 @@ async def test_emit_processing_status_keeps_run_event_correlation_explicit_only(
 async def test_emit_processing_status_resolver_failure_does_not_skip_lifecycle():
     lifecycle = AsyncMock()
     publisher = AsyncMock()
-    compat = AsyncMock()
     resolver = AsyncMock()
     resolver.resolve_client_request_id.side_effect = RuntimeError("db down")
 
@@ -305,7 +333,6 @@ async def test_emit_processing_status_resolver_failure_does_not_skip_lifecycle()
         client_request_id=None,
         run_lifecycle=lifecycle,
         event_publisher=publisher,
-        legacy_processing_status_publisher=compat,
         run_event_enabled=lambda: False,
         client_request_id_resolver=resolver,
     )
@@ -327,7 +354,6 @@ async def test_emit_processing_status_separates_frontend_and_lifecycle_ids():
         "payload": {},
     }
     publisher = AsyncMock()
-    compat = AsyncMock()
     resolver = make_client_request_id_resolver()
 
     await emit_processing_status(
@@ -337,7 +363,6 @@ async def test_emit_processing_status_separates_frontend_and_lifecycle_ids():
         lifecycle_message_id="user-msg-1",
         run_lifecycle=lifecycle,
         event_publisher=publisher,
-        legacy_processing_status_publisher=compat,
         run_event_enabled=lambda: False,
         client_request_id_resolver=resolver,
     )
@@ -349,10 +374,9 @@ async def test_emit_processing_status_separates_frontend_and_lifecycle_ids():
 
 
 @pytest.mark.asyncio
-async def test_emit_processing_status_can_skip_lifecycle_for_legacy_send_only_paths():
+async def test_emit_processing_status_can_skip_lifecycle_for_frontend_only_paths():
     lifecycle = AsyncMock()
     publisher = AsyncMock()
-    compat = AsyncMock()
     resolver = make_client_request_id_resolver()
 
     await emit_processing_status(
@@ -363,7 +387,6 @@ async def test_emit_processing_status_can_skip_lifecycle_for_legacy_send_only_pa
         record_lifecycle=False,
         run_lifecycle=lifecycle,
         event_publisher=publisher,
-        legacy_processing_status_publisher=compat,
         run_event_enabled=lambda: True,
         client_request_id_resolver=resolver,
     )
@@ -377,7 +400,6 @@ async def test_emit_processing_status_keeps_typed_frame_when_lifecycle_noops():
     lifecycle = AsyncMock()
     lifecycle.record_processing_status.return_value = None
     publisher = AsyncMock()
-    compat = AsyncMock()
     resolver = make_client_request_id_resolver()
 
     result = await emit_processing_status(
@@ -387,7 +409,6 @@ async def test_emit_processing_status_keeps_typed_frame_when_lifecycle_noops():
         record_lifecycle=True,
         run_lifecycle=lifecycle,
         event_publisher=publisher,
-        legacy_processing_status_publisher=compat,
         run_event_enabled=lambda: True,
         client_request_id_resolver=resolver,
     )
@@ -396,15 +417,13 @@ async def test_emit_processing_status_keeps_typed_frame_when_lifecycle_noops():
     lifecycle.record_processing_status.assert_awaited_once()
     publisher.emit.assert_awaited_once()
     assert publisher.emit.await_args.args[0].event_type == "processing_status"
-    compat.emit_processing_status.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_emit_processing_status_keeps_legacy_frame_when_lifecycle_noops():
+async def test_emit_processing_status_keeps_typed_final_status_when_lifecycle_noops():
     lifecycle = AsyncMock()
     lifecycle.record_processing_status.return_value = None
     publisher = AsyncMock()
-    compat = AsyncMock()
     resolver = make_client_request_id_resolver()
 
     result = await emit_processing_status(
@@ -414,15 +433,14 @@ async def test_emit_processing_status_keeps_legacy_frame_when_lifecycle_noops():
         record_lifecycle=True,
         run_lifecycle=lifecycle,
         event_publisher=publisher,
-        legacy_processing_status_publisher=compat,
         run_event_enabled=lambda: True,
         client_request_id_resolver=resolver,
     )
 
     assert result is None
     lifecycle.record_processing_status.assert_awaited_once()
-    publisher.emit.assert_not_awaited()
-    compat.emit_processing_status.assert_awaited_once()
+    publisher.emit.assert_awaited_once()
+    assert publisher.emit.await_args.args[0].status == "awaiting_input"
 
 
 def test_run_event_notification_from_payload_maps_legacy_payload():
@@ -486,7 +504,7 @@ def test_run_event_delivery_translation_preserves_null_correlation_key():
     assert sse["data"]["correlation_id"] is None
 
 
-def test_processing_status_delivery_translation_preserves_legacy_sse_shape():
+def test_processing_status_delivery_translation_preserves_final_sse_shape():
     event = ProcessingStatusEvent(
         room_id="room-1",
         message_id="msg-1",
@@ -501,7 +519,7 @@ def test_processing_status_delivery_translation_preserves_legacy_sse_shape():
     assert sse["data"]["message_id"] == "msg-1"
     assert "details" in sse["data"]
     assert sse["data"]["details"] is None
-    assert isinstance(sse["data"]["timestamp"], str)
+    assert "timestamp" not in sse["data"]
     assert sse["data"]["client_request_id"] == "cr-1"
     assert sse["data"]["agents"] == [
         {"agent_id": "agent-1", "agent_name": "Agent One"}
@@ -520,7 +538,7 @@ def test_processing_status_delivery_translation_preserves_structured_details():
     sse = to_sse_frame(event, timestamp=NOW)
     assert sse["type"] == "processing_status"
     assert sse["data"]["details"] == {"message": "agent failed"}
-    assert "timestamp" in sse["data"]
+    assert "timestamp" not in sse["data"]
     assert "client_request_id" not in sse["data"]
     assert "agents" not in sse["data"]
 
@@ -529,13 +547,14 @@ def test_normalize_processing_status_accepts_string_and_enum_values():
     from common.a2a_constants import SSEProcessingStatus
 
     assert _normalize_processing_status("processing") == "processing"
+    assert _normalize_processing_status("awaiting_input") == "awaiting_input"
+    assert _normalize_processing_status("rate_limited") == "rate_limited"
     assert _normalize_processing_status(SSEProcessingStatus.COMPLETED) == "completed"
 
 
-def test_unsupported_processing_status_stays_on_compat_path():
-    assert _is_legacy_processing_status("awaiting_input") is True
+def test_unsupported_processing_status_is_rejected():
     with pytest.raises(ValueError):
-        _normalize_processing_status("awaiting_input")
+        _normalize_processing_status("not-a-status")
 
 
 def test_run_event_notification_from_payload_rejects_missing_required_fields():
@@ -563,7 +582,6 @@ async def test_emit_processing_status_rejects_missing_frontend_message_id_for_ty
             lifecycle_message_id="run-1",
             run_lifecycle=lifecycle,
             event_publisher=publisher,
-            legacy_processing_status_publisher=AsyncMock(),
             run_event_enabled=lambda: False,
             client_request_id_resolver=make_client_request_id_resolver(),
         )

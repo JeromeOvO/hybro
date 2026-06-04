@@ -43,7 +43,7 @@ class InterruptKind(str, Enum):
 class HITLEventType(str, Enum):
     """Events in the human-in-the-loop lifecycle."""
 
-    INPUT_REQUESTED = "hitl_input_requested"
+    INPUT_REQUESTED = "hitl_request"
     INPUT_RECEIVED = "hitl_input_received"
     INPUT_EXPIRED = "hitl_input_expired"
     INPUT_CANCELED = "hitl_input_canceled"

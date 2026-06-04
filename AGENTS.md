@@ -25,6 +25,7 @@ Pytest is configured in `pyproject.toml` with `tests/` as the test root, `test_*
 ## Architecture Documentation
 
 After completing code changes, update architecture documentation. Use `System-Architecture.md` for system-level changes and `docs/` for module-specific decisions, migrations, or design notes.
+Do not commit `docs/superpowers/` or superpowers planning documents unless explicitly requested.
 
 ## Commit & Pull Request Guidelines
 

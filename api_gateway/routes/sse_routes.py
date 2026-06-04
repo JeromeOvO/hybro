@@ -103,8 +103,8 @@ async def stream_room_messages(
             connected_message = {
                 "type": "connected",
                 "room_id": room_id,
-                "connection_id": connection.connection_id,
                 "timestamp": utcnow().isoformat(),
+                "data": {"connection_id": connection.connection_id},
             }
             yield f"data: {json.dumps(connected_message)}\n\n"
 

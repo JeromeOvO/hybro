@@ -6,6 +6,15 @@ from enum import Enum
 from typing import Any, Protocol
 from uuid import uuid4
 
+from common.dto import (
+    AgentMessageFinal,
+    ArtifactUpdateEvent,
+    DeliveryEvent,
+    ErrorEvent,
+    ProcessingStatusEvent,
+    TaskSubmittedEvent,
+    TaskUpdateEvent,
+)
 from common.utils.cancellation import CancellationToken
 from common.utils.time import utcnow
 
@@ -15,7 +24,6 @@ def _enum_value(value: Any) -> Any:
 
 
 class _DeliveryCompat(Protocol):
-    async def emit_legacy_frame(self, room_id: str, frame: dict) -> None: ...
     async def open_connection(self, room_id: str) -> Any: ...
     async def remove_connection(self, room_id: str, connection_id: str) -> None: ...
     def get_room_status(self, room_id: str) -> dict: ...
@@ -49,7 +57,9 @@ class _DeliveryCompat(Protocol):
 
 class _DeliveryFacadeLike(Protocol):
     compat: _DeliveryCompat
+    event_publisher: Any
     instance_id: str
+    async def emit(self, event: DeliveryEvent) -> None: ...
 
 
 class SSEConnection:
@@ -84,6 +94,7 @@ class SSEConnection:
                     "type": "heartbeat",
                     "timestamp": utcnow().isoformat(),
                     "room_id": self.room_id,
+                    "data": {},
                 }
             )
 
@@ -154,31 +165,10 @@ class AppShellSSEManager:
     async def remove_connection(self, room_id: str, connection_id: str) -> None:
         await self._compat().remove_connection(room_id, connection_id)
 
-    async def broadcast_to_room(self, room_id: str, message_type: str, data: Any) -> None:
-        await self._emit_frame(room_id, message_type, data)
-
-    async def _emit_frame(self, room_id: str, message_type: str, data: Any) -> None:
-        frame = {
-            "type": message_type,
-            "timestamp": utcnow().isoformat(),
-            "room_id": room_id,
-            "data": data,
-        }
-        await self._compat().emit_legacy_frame(room_id, frame)
-
-    async def send_user_message(
-        self, room_id: str, message_id: str, user_id: str, content: str
-    ) -> None:
-        await self.broadcast_to_room(
-            room_id,
-            "user_message",
-            {
-                "message_id": message_id,
-                "user_id": user_id,
-                "content": content,
-                "timestamp": utcnow().isoformat(),
-            },
-        )
+    async def _emit_event(self, event: DeliveryEvent) -> None:
+        if self._facade is None:
+            raise RuntimeError("SSEManager.bind_facade() not called - startup incomplete")
+        await self._facade.emit(event)
 
     async def send_agent_response(
         self,
@@ -190,24 +180,26 @@ class AppShellSSEManager:
         parts: list[dict] | None = None,
         client_request_id: str | None = None,
     ) -> None:
-        data = {
-            "message_id": message_id,
-            "agent_id": agent_id,
+        content_payload = {
             "content": content,
             "related_message_id": related_message_id,
-            "timestamp": utcnow().isoformat(),
         }
         if client_request_id:
-            data["client_request_id"] = client_request_id
+            content_payload["client_request_id"] = client_request_id
         if parts:
-            data["parts"] = parts
-        await self.broadcast_to_room(room_id, "agent_response", data)
+            content_payload["parts"] = parts
+        await self._emit_event(
+            AgentMessageFinal(
+                room_id=room_id,
+                message_id=message_id,
+                agent_id=agent_id,
+                content=content_payload,
+            )
+        )
 
     async def send_error(self, room_id: str, error: str, message_id: str = None) -> None:
-        await self.broadcast_to_room(
-            room_id,
-            "error",
-            {"error": error, "message_id": message_id, "timestamp": utcnow().isoformat()},
+        await self._emit_event(
+            ErrorEvent(room_id=room_id, error=error, message_id=message_id)
         )
 
     async def send_rate_limit_error(
@@ -222,21 +214,19 @@ class AppShellSSEManager:
         system_requests_used: int = 0,
         system_requests_limit: int | None = None,
     ) -> None:
-        await self.broadcast_to_room(
-            room_id,
-            "error",
-            {
-                "error": reason,
-                "error_type": "rate_limit_exceeded",
-                "message_id": message_id,
-                "agent_id": agent_id,
-                "retry_after_seconds": retry_after_seconds,
-                "user_requests_used": user_requests_used,
-                "user_requests_limit": user_requests_limit,
-                "system_requests_used": system_requests_used,
-                "system_requests_limit": system_requests_limit,
-                "timestamp": utcnow().isoformat(),
-            },
+        await self._emit_event(
+            ErrorEvent(
+                room_id=room_id,
+                error=reason,
+                error_type="rate_limit_exceeded",
+                message_id=message_id,
+                agent_id=agent_id,
+                retry_after_seconds=retry_after_seconds,
+                user_requests_used=user_requests_used,
+                user_requests_limit=user_requests_limit,
+                system_requests_used=system_requests_used,
+                system_requests_limit=system_requests_limit,
+            )
         )
 
     async def send_artifact_update(
@@ -249,17 +239,17 @@ class AppShellSSEManager:
         last_chunk: bool = False,
         client_request_id: str | None = None,
     ) -> None:
-        data = {
-            "message_id": message_id,
-            "agent_id": agent_id,
-            "artifact": artifact,
-            "append": append,
-            "last_chunk": last_chunk,
-            "timestamp": utcnow().isoformat(),
-        }
-        if client_request_id:
-            data["client_request_id"] = client_request_id
-        await self.broadcast_to_room(room_id, "artifact_update", data)
+        await self._emit_event(
+            ArtifactUpdateEvent(
+                room_id=room_id,
+                message_id=message_id,
+                agent_id=agent_id,
+                artifact=artifact,
+                append=append,
+                last_chunk=last_chunk,
+                client_request_id=client_request_id,
+            )
+        )
 
     async def send_processing_status(
         self,
@@ -267,20 +257,27 @@ class AppShellSSEManager:
         status: str,
         message_id: str = None,
         details: Any = None,
+        related_message_id: str | None = None,
         client_request_id: str | None = None,
         agents: list[dict] | None = None,
     ) -> None:
-        data = {
-            "status": _enum_value(status),
-            "message_id": message_id,
-            "details": details,
-            "timestamp": utcnow().isoformat(),
-        }
-        if client_request_id:
-            data["client_request_id"] = client_request_id
-        if agents is not None:
-            data["agents"] = agents
-        await self.broadcast_to_room(room_id, "processing_status", data)
+        await self._emit_event(
+            ProcessingStatusEvent(
+                room_id=room_id,
+                message_id=message_id,
+                status=_enum_value(status),
+                details=(
+                    details
+                    if isinstance(details, dict)
+                    else {"message": details}
+                    if isinstance(details, str)
+                    else None
+                ),
+                related_message_id=related_message_id,
+                client_request_id=client_request_id,
+                agents=agents,
+            )
+        )
 
     async def send_task_submitted(
         self,
@@ -297,22 +294,22 @@ class AppShellSSEManager:
         task_content: str | None = None,
         client_request_id: str | None = None,
     ) -> None:
-        data = {
-            "message_id": message_id,
-            "task_id": task_id,
-            "agent_name": agent_name,
-            "agent_id": agent_id,
-            "status": _enum_value(status),
-            "related_message_id": related_message_id,
-            "created_at": created_at,
-            "step_number": step_number,
-            "total_steps": total_steps,
-            "task_content": task_content,
-            "timestamp": utcnow().isoformat(),
-        }
-        if client_request_id:
-            data["client_request_id"] = client_request_id
-        await self.broadcast_to_room(room_id, "task_submitted", data)
+        await self._emit_event(
+            TaskSubmittedEvent(
+                room_id=room_id,
+                message_id=message_id,
+                task_id=task_id,
+                agent_name=agent_name,
+                agent_id=agent_id,
+                status=_enum_value(status),
+                related_message_id=related_message_id,
+                created_at=created_at,
+                step_number=step_number,
+                total_steps=total_steps,
+                task_content=task_content,
+                client_request_id=client_request_id,
+            )
+        )
 
     async def send_task_update(
         self,
@@ -334,28 +331,27 @@ class AppShellSSEManager:
         parts: list[dict] | None = None,
         client_request_id: str | None = None,
     ) -> None:
-        data = {
-            "message_id": message_id,
-            "status": _enum_value(status),
-            "content": content,
-            "error": error,
-            "requires_input": requires_input,
-            "requires_auth": requires_auth,
-            "status_message": status_message,
-            "agent_name": agent_name,
-            "agent_id": agent_id,
-            "related_message_id": related_message_id,
-            "created_at": created_at,
-            "step_number": step_number,
-            "total_steps": total_steps,
-            "task_content": task_content,
-            "timestamp": utcnow().isoformat(),
-        }
-        if client_request_id:
-            data["client_request_id"] = client_request_id
-        if parts:
-            data["parts"] = parts
-        await self.broadcast_to_room(room_id, "task_update", data)
+        await self._emit_event(
+            TaskUpdateEvent(
+                room_id=room_id,
+                message_id=message_id,
+                status=_enum_value(status),
+                content=content,
+                error=error,
+                requires_input=requires_input,
+                requires_auth=requires_auth,
+                status_message=status_message,
+                agent_name=agent_name,
+                agent_id=agent_id,
+                related_message_id=related_message_id,
+                created_at=created_at,
+                step_number=step_number,
+                total_steps=total_steps,
+                task_content=task_content,
+                parts=parts,
+                client_request_id=client_request_id,
+            )
+        )
 
     def get_room_status(self, room_id: str) -> dict:
         return self._compat().get_room_status(room_id)

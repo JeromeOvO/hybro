@@ -637,8 +637,9 @@ class EventPublisher(Protocol):
     - In particular: run_command_handler.record_processing_status() must execute
       before emit("processing_status", ...).
     - EventPublisher is a pure delivery pipe — it NEVER calls back into business components.
-    - EventPublisher/Delivery MUST preserve legacy terminal `ProcessingStatusEvent`
-      deduplication: duplicate `completed`, `failed`, or `canceled`
+    - EventPublisher/Delivery MUST preserve terminal `ProcessingStatusEvent`
+      deduplication: duplicate `completed`, `failed`, `canceled`, `rejected`,
+      `rate_limited`, or `error`
       processing-status frames for the same `(room_id, message_id)` are
       suppressed through the shared L1/Redis or equivalent dedup layer.
     """
@@ -699,16 +700,21 @@ class DeliveryEventBase(BaseModel):
 class ProcessingStatusEvent(DeliveryEventBase):
     event_type: Literal["processing_status"] = "processing_status"
     message_id: str
-    status: Literal["queued", "processing", "completed", "failed", "canceled"]
+    status: Literal[
+        "queued",
+        "processing",
+        "awaiting_input",
+        "completed",
+        "failed",
+        "canceled",
+        "rejected",
+        "rate_limited",
+        "error",
+    ]
     agent_id: str | None = None
     details: dict | None = None
     client_request_id: str | None = None
     agents: list[dict] | None = None
-
-# Legacy frontend statuses outside this Literal, currently including
-# awaiting_input, rejected, rate_limited, and error, stay on the Delivery
-# compatibility processing-status frame until the DTO/translator is explicitly
-# widened in a frontend-coordinated migration.
 
 class RunEventNotification(DeliveryEventBase):
     event_type: Literal["run_event"] = "run_event"
@@ -739,15 +745,23 @@ class CancellationEvent(DeliveryEventBase):
 class HITLRequestEvent(DeliveryEventBase):
     event_type: Literal["hitl_request"] = "hitl_request"
     request_id: str
+    message_id: str
+    source: str
     prompt: str
     prompt_type: str
-    source: str
-    message_id: str
+    choices: list[str] | None = None
+    agent_id: str | None = None
+    agent_name: str | None = None
+    client_request_id: str | None = None
 
 class HITLResolvedEvent(DeliveryEventBase):
     event_type: Literal["hitl_resolved"] = "hitl_resolved"
     request_id: str
     message_id: str
+    source: str
+    status: str = "resolved"
+    error_message: str | None = None
+    client_request_id: str | None = None
 
 class HubAgentEvent(DeliveryEventBase):
     """Frontend-visible: UI rendering of hub agent activity."""
@@ -781,20 +795,20 @@ DeliveryEvent = Annotated[
 - `emit()` is frontend-visible delivery only. Internal module-to-module dispatch is handled
   exclusively by `emit_internal()`.
 - `RunEventNotification` SSE frames always include `correlation_id`, using `None` when no
-  correlation id is available, matching the legacy wire shape.
+  correlation id is available.
 - Trace ids are preserved only when explicit: typed SSE frames use `frame["data"]["trace_id"]`,
-  Redis fan-out envelopes use top-level `envelope["trace_id"]`, and legacy raw-frame delivery
-  does not mutate the delivered frame to inject a trace id.
+  and Redis fan-out envelopes use top-level `envelope["trace_id"]`.
 
-**Phase 6 compatibility seam:**
+**Final Delivery/SSE seam:**
 - `app_shell/delivery_runtime.py` is now the C3 migration adapter. Startup binds
   it to `DeliveryFacade`; before binding, public methods fail fast.
-- Legacy SSE methods not represented in `DeliveryEvent` use
-  `DeliveryFacade.compat.emit_legacy_frame()`, which is the only adapter-visible path to
-  `EventPublisherImpl._emit_legacy_frame()`.
-- Legacy `send_processing_status()` stays on the raw-frame path so it can preserve legacy
-  statuses such as `rejected`, `rate_limited`, `error`, and `awaiting_input`, plus string
-  `details`. Terminal dedup still happens inside Delivery.
+- Backend modules emit typed `DeliveryEvent` DTOs. Delivery translates every frontend-visible
+  event into the room SSE frame shape `{type, timestamp, room_id, data}`.
+- `delivery.translator` is the only DTO-to-wire translation point. Backend-internal
+  `event_type` discriminators are not sent as the outer SSE protocol.
+- `ProcessingStatusEvent` supports every final frontend status, and `details` is always
+  `dict | None`.
+- Terminal dedup still happens inside Delivery.
 - Redis room subscriptions are bounded by `DeliveryConfig`: default
   `redis_room_subscription_production_limit=40`,
   `redis_subscription_reserved_connections=10`, and `redis_max_connections=50`. Deployments
@@ -802,10 +816,8 @@ DeliveryEvent = Annotated[
   Delivery config together, or implement multiplexed Pub/Sub first.
 - Delivery does not resolve `client_request_id` from the database, does not call
   `record_processing_status()`, and does not evaluate `run_event_sse_enabled()`.
-- Phase 7a callers preserve the old run-event branch by calling
-  `record_and_maybe_broadcast_run_event()` / `RunLifecycleService.record_processing_status()`
-  before legacy processing-status delivery. Phase 7b migrates those callers to typed
-  `RunEventNotification`.
+- Execution callers preserve frontend-visible ordering by recording lifecycle state first,
+  emitting optional `RunEventNotification`, then emitting `ProcessingStatusEvent`.
 
 **Internal Domain Events (N8 fix):**
 
@@ -1465,14 +1477,14 @@ class RunLifecyclePort(Protocol):
     ) -> dict | None: ...
 ```
 
-Phase 7b keeps `record_processing_status()` narrow and legacy-compatible:
-`message_id` may be `None` for send-only/compatibility paths, typed frontend
-details stay structured as `details: dict[str, Any] | None`, and legacy failure
-text flows through the separate `error_message` argument so implementers do not
-collapse lifecycle failure text back into typed frontend `details`.
+Phase 7b keeps `record_processing_status()` narrow:
+`message_id` may be `None` for lifecycle-only paths, typed frontend details stay
+structured as `details: dict[str, Any] | None`, and failure text flows through
+the separate `error_message` argument so implementers do not collapse lifecycle
+failure text back into typed frontend `details`.
 `ProcessingStatusLike` is the shared Phase 7b status input type for raw strings
 and enum-like values such as `SSEProcessingStatus`; Execution normalizes it to a
-plain string before calling lifecycle persistence or legacy delivery adapters.
+plain string before calling lifecycle persistence or typed Delivery emitters.
 
 ### 5.3 What Does NOT Get a Protocol (Direct Import)
 
@@ -1504,25 +1516,17 @@ Orchestrator: agent response arrives
     └─ 3. event_publisher.emit(ProcessingStatusEvent(room_id, message_id, "completed", ...))
            → Delivery translates to SSE frame → delivers to clients
 
-Phase 6 uses the legacy `sse_manager.broadcast_to_room(..., "run_event", ...)` path for
-step 2 until Phase 7b migrates callers to typed `RunEventNotification`. Delivery NEVER calls
-run_command_handler. It is a pure pipe.
+Delivery NEVER calls run_command_handler. It is a pure pipe.
 ```
 
-Phase 7b preserves the Phase 7a / legacy frontend-visible ordering:
+Phase 7b preserves the frontend-visible ordering:
 `record_processing_status()` → optional `RunEventNotification` →
 `ProcessingStatusEvent`. Changing this order would require a separate
-frontend-coordinated migration. Processing statuses not accepted by
-`ProcessingStatusEvent` (`awaiting_input`, `rejected`, `rate_limited`, `error`)
-must use a documented Delivery compatibility frame until the DTO/translator is
-explicitly widened.
-Phase 7b reaches that compatibility frame through an explicit Execution-local
-port backed by the bound Phase 6 C3 adapter; `DeliveryDeps` does not expose
-`DeliveryFacade.compat`.
-Supported statuses may also remain on that compatibility frame when the current
-frontend payload uses legacy raw string `details`; Phase 7b must not silently
-convert those strings into structured `dict` details without a coordinated DTO
-and frontend migration.
+frontend-coordinated migration. `ProcessingStatusEvent` accepts all final
+statuses (`queued`, `processing`, `awaiting_input`, `completed`, `failed`,
+`canceled`, `rejected`, `rate_limited`, `error`). Callers pass structured
+`details: dict | None`; human-readable failure text belongs in lifecycle
+records or `error_message` inputs that are normalized before frontend delivery.
 
 ### 5.5 In-Flight Task Tracking (fix 2.10)
 
@@ -2121,20 +2125,16 @@ Rules:
 > assumes the post-Phase-6/7a prerequisite where SSE no longer calls
 > `run_command_handler`.
 >
-> **Current status (2026-05-17):** Phase 7a is complete. The remaining Phase 7 work is
-> Phase 7b, the Execution module rewrite, and is planned in
-> `docs/superpowers/plans/2026-05-17-phase-7-execution-module.md`. Phase 7b must start
-> from a branch where Phase 6 Delivery extraction has landed, because the remaining
-> Execution migration emits typed `RunEventNotification` / `ProcessingStatusEvent`
-> events for supported statuses and documented compatibility frames for unsupported
-> legacy statuses, preserving the Phase 7a wire order.
-> Phase 7b does not fully deliver the target `execution/repository/` package or
-> full lifecycle-command port; those remain follow-up target-architecture work.
+> **Current status (2026-06-04):** The room SSE core path uses typed
+> `DeliveryEvent` DTOs end to end. Execution emits optional
+> `RunEventNotification` and `ProcessingStatusEvent` objects after lifecycle
+> recording, and Delivery translates those DTOs to the final `{type, timestamp,
+> room_id, data}` SSE frame.
 
 **Phase 7a (week 1-2): Execution caller migration — "record-then-emit"**
-- Modify all Execution callers to explicitly call `record_processing_status()` THEN `sse_manager.send_*()` (separating the record from the send)
-- `RunLifecycleService.record_processing_status()` returns the optional run-event payload so callers can preserve legacy `run_event` SSE ordering before processing-status delivery.
-- Phase 7a golden and manifest tests prove `record_processing_status()` -> legacy `run_event` broadcast -> processing-status delivery ordering.
+- Modify all Execution callers to explicitly call `record_processing_status()` before typed Delivery emit.
+- `RunLifecycleService.record_processing_status()` returns the optional run-event payload so callers can preserve `run_event` SSE ordering before processing-status delivery.
+- Golden and manifest tests prove `record_processing_status()` -> typed `RunEventNotification` -> typed `ProcessingStatusEvent` ordering.
 - This works against the post-Phase-7a SSE manager, which is delivery/dedup only;
   lifecycle writes live in `execution/run_command_handler.py`.
 
@@ -2155,7 +2155,7 @@ Rules:
 **Phase 7b (week 3-4): Execution internal rewrite**
 - `execution/facade.py` with full orchestrator, HITL, dispatch
 - Internal Protocol seams: HITLCoordinator, AgentDispatchPort, RunLifecyclePort
-- Callers now emit via the Execution helper: optional `RunEventNotification`, then `ProcessingStatusEvent` or a documented compatibility frame for unsupported legacy statuses
+- Callers now emit via the Execution helper: optional `RunEventNotification`, then `ProcessingStatusEvent`
 - `_heal_diverged_runs_on_startup` preserved
 - Room-level locking preserved
 - Shadow mode on high-risk endpoints (sendMessage, hitl/resolve)
@@ -3010,5 +3010,5 @@ Current `_enrich_hub_fields` joins `agents × hubs` to set `hub_owner_id` and `i
 | 2026-05-05 | Added §19 Potential Future Protocol Additions | Documents hardest-to-retrofit seams; validates module boundaries accommodate them |
 | 2026-05-17 | Phase 6 Delivery extracted behind C3 `sse_manager` adapter | Delivery owns SSE transport, Redis fan-out, cancellation, dedup, translation, and internal event dispatch; app shell binds facade during startup |
 | 2026-05-17 | Phase 6 tracing uses contextvars/task names, not OpenTelemetry links | Implemented helper preserves explicit trace ids without synthesizing ids; OTel span links remain future work |
-| 2026-05-17 | Legacy raw SSE frames isolated behind `DeliveryFacade.compat.emit_legacy_frame()` | Keeps unsupported legacy event shapes working until Phase 7b migrates callers to typed `DeliveryEvent` DTOs |
+| 2026-06-04 | Temporary raw-frame isolation removed from active Delivery architecture | Room SSE production emitters use typed `DeliveryEvent` DTOs translated by Delivery |
 | 2026-05-17 | Main app shell no longer owns concrete DAL or legacy SSE broker construction | `container.py` owns concrete DAL/Delivery wiring; health uses explicit Delivery KV/PubSub and legacy RedisService fields |

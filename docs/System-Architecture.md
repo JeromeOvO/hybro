@@ -30,7 +30,7 @@ flowchart TD
     APIGateway --> Execution[execution facade]
     APIGateway --> Platform[platform facade]
 
-    Execution --> RoomServices[services.room_services]
+    Execution --> RoomServices[app_shell.room_runtime]
     Execution --> RoomMessageCenter[execution.orchestration.RoomMessageCenter]
     RoomMessageCenter --> QueueExecutor[QueueExecutor]
     RoomMessageCenter --> SupervisorExecutor[SupervisorExecutor]
@@ -67,11 +67,11 @@ Startup has three practical phases:
    - Connect MongoDB through `database.mongodb.mongodb`.
    - Connect Pinecone through `database.pinecone_db.pinecone_db`.
    - Build DAL/facade objects from `container.py`.
-   - Bind route modules and legacy singleton adapters.
+   - Bind route modules and app-shell runtime adapters.
 
 2. Runtime guard and background services:
-   - Start Delivery/SSE infrastructure.
-   - Start legacy Redis services when `REDIS_URL` is configured.
+   - Start Delivery/SSE runtime.
+   - Start app-shell Redis runtime services when `REDIS_URL` is configured.
    - Enforce multi-worker safety with `check_multi_worker_safety`.
    - Start background jobs after the guard passes.
 
@@ -96,9 +96,8 @@ groups around protocol interfaces from `common.protocols`:
 - `ExecutionDeps`
 - `HubDeps`
 
-The codebase is gradually moving toward facade/protocol boundaries. Many current
-entry points still pass through compatibility adapters in `services/` and
-`modules/`, but the preferred direction is:
+The codebase is built around facade/protocol boundaries. Some current entry
+points still pass through app-shell adapters, but the preferred direction is:
 
 ```text
 route -> protocol/facade -> repository/DAL -> external service
@@ -107,16 +106,16 @@ route -> protocol/facade -> repository/DAL -> external service
 The current compatibility shape is:
 
 ```text
-route -> legacy center/service -> facade -> repository/DAL
+route -> app-shell route owner -> facade -> repository/DAL
 ```
 
 Examples:
 
-- `modules.RoomCenter` delegates to `services.room_services`, which is bound to
+- `app_shell.room_runtime.AppShellRoomCenter` delegates to `app_shell.room_runtime`, which is bound to
   `room.RoomFacade`.
-- `modules.AgentCenter` delegates to `services.agent_service`, which is bound to
+- `app_shell.agent_runtime.AppShellAgentCenter` delegates to `app_shell.agent_service`, which is bound to
   `agent.AgentFacade`.
-- `services.relay_service` keeps legacy relay imports working while delegating
+- `app_shell.relay_service` exposes relay route behavior while delegating
   runtime behavior into `hub_runtime_bridge.HubFacade`.
 
 ## Major Code Areas
@@ -172,8 +171,8 @@ concrete singleton services.
 - Merge hub liveness into agent status when hub agents are involved.
 
 Mongo persistence is implemented by `agent.repository.mongo.AgentMongoRepository`.
-Older route/service paths still access this through `services.agent_service` and
-`modules.AgentCenter`.
+Route-facing app-shell owners access this through `app_shell.agent_service` and
+`app_shell.agent_runtime.AppShellAgentCenter`.
 
 ### `room`
 
@@ -201,8 +200,8 @@ Key components:
   idempotent claims, per-room locks, cancellation tokens, routing between
   queue and supervisor modes, and terminal processing status.
 - `QueueExecutor`: sequentially processes pre-created agent messages for
-  non-supervisor flows, mention flows, and legacy routing.
-- `SupervisorExecutor`: adaptive V2 supervisor loop for rooms with
+  non-supervisor flows and explicit non-supervisor mention flows.
+- `SupervisorExecutor`: adaptive supervisor loop for rooms with
   `extend_info.use_supervisor`.
 - `AgentMessageProcessor`: transport router shared by queue and supervisor
   execution. It builds the A2A message, runs dispatch middleware, selects
@@ -240,13 +239,24 @@ The facade uses:
 - `LLMGatewayImpl` for summary/turn-note generation.
 - `RoomHistoryReader` from `room.RoomFacade` for source message history.
 
-Legacy services such as `services.context_assembly_service`,
-`services.memory_search_service`, `services.compaction_service`, and
-`services.memory_service` are bound to this facade in `main.py`.
+App-shell adapters such as `app_shell.context_assembly_service`,
+`app_shell.memory_search_service`, `app_shell.compaction_service`, and
+`app_shell.memory_service` are bound to this facade in `main.py`.
 
 ### `delivery`
 
 `delivery.DeliveryFacade` owns SSE delivery and cross-instance event fan-out.
+Backend modules emit typed `common.dto.DeliveryEvent` objects; Delivery is the
+only layer that translates those DTOs into frontend room SSE frames. The wire
+shape is always:
+
+```json
+{"type": "event_name", "timestamp": "ISO-8601", "room_id": "room-id", "data": {}}
+```
+
+`ProcessingStatusEvent` supports the final status set (`queued`, `processing`,
+`awaiting_input`, `completed`, `failed`, `canceled`, `rejected`,
+`rate_limited`, `error`) and carries `details` as `dict | null`.
 
 It is composed from:
 
@@ -257,9 +267,11 @@ It is composed from:
   and Redis KV when available.
 - `TerminalStatusDeduplicator`: prevents duplicate terminal status frames.
 
-`services.sse_services.sse_manager` is a compatibility manager bound to the
-Delivery facade during startup. Routes still call the manager, while the runtime
-implementation lives in `delivery`.
+`app_shell.delivery_runtime.sse_manager` is the route-facing delivery manager
+bound to the Delivery facade during startup. Routes call the manager, while the
+runtime implementation lives in `delivery`. Delivery never calls back into
+Execution or app-shell business services; lifecycle recording happens before
+typed delivery events are emitted.
 
 ### `platform_module`
 
@@ -282,7 +294,7 @@ This module is used by:
 ### `hub_runtime_bridge` and Relay
 
 `hub_runtime_bridge.HubFacade` is the current runtime owner for hub-connected
-local agents. `services.relay_service.RelayService` is a compatibility surface
+local agents. `app_shell.relay_service.RelayService` is the app-shell surface
 that constructs and delegates to the hub facade.
 
 Hub relay responsibilities:
@@ -322,8 +334,9 @@ Execution transports call this layer rather than building A2A payloads inline.
 - `dal.redis`: Redis KV, Pub/Sub, and related support.
 - `dal.s3`: object storage adapter.
 
-`database.mongodb.MongoDB` is the legacy concrete Mongo service and still owns
-many collection helpers, indexes, and compatibility methods used by `services`.
+`database.mongodb.MongoDB` is the concrete Mongo service and still owns many
+collection helpers, indexes, and compatibility methods used by app-shell
+runtimes.
 
 Important Mongo collections include:
 
@@ -350,29 +363,25 @@ Important Mongo collections include:
 Pinecone is used for agent matching and context memory search. S3 is used for
 file uploads and converted binary artifacts.
 
-### `services` and `modules`
+### `app_shell`
 
-`services` contains legacy service singletons and compatibility adapters. Some
-services still contain business logic directly, while others are now thin
-facade adapters.
+`app_shell` contains route-facing runtime adapters and process-level service
+facades. Some app-shell modules still contain business logic directly, while
+others are thin adapters over canonical facades.
 
 Examples:
 
-- `services.room_services`: room send-message preparation, target resolution,
-  attachment resolution, supervisor preparation, and legacy parsing.
-- `services.agent_service`: legacy API adapter over `AgentFacade`.
-- `services.database_service`: legacy database facade over `database.mongodb`
+- `app_shell.room_runtime`: room send-message preparation, target resolution,
+  attachment resolution, supervisor preparation, and message parsing.
+- `app_shell.agent_service`: route-facing adapter over `AgentFacade`.
+- `app_shell.database_service`: app-shell database facade over `database.mongodb`
   and Pinecone.
-- `services.relay_service`: compatibility relay surface over
+- `app_shell.relay_service`: relay route surface over
   `hub_runtime_bridge`.
-- `services.task_notification_service`: terminal task update notifications.
-- `services.hitl_service`: HITL lifecycle and response handling.
+- `execution.dispatch.task_notifications`: terminal task update notifications.
+- `app_shell.hitl_service`: HITL lifecycle and response handling.
 
-`modules` contains older "center" classes used by route bindings. These are
-kept for compatibility while the codebase moves toward direct facade/protocol
-dependencies.
-
-### `jobs` and `infrastructure`
+### `jobs` and App-Shell Infrastructure
 
 Background jobs start only after infrastructure and multi-worker safety checks
 pass:
@@ -381,11 +390,11 @@ pass:
   and run watchdog events.
 - `compaction_sweep`: runs context memory compaction for eligible rooms.
 - `orphaned_upload_cleaner`: removes uploaded files that were never attached.
-- `agent_health_service`: periodic health/liveness support for agents.
+- `app_shell.agent_health_service`: periodic health/liveness support for agents.
 
-`infrastructure` contains Redis services, leader election, room locks, relay
-streams, and event broker support. Leader election prevents duplicate job
-execution in multi-worker deployments.
+App-shell Redis runtime modules contain Redis services, leader election, room
+locks, relay streams, and event broker support. Leader election prevents
+duplicate job execution in multi-worker deployments.
 
 ## Core Workflow: Frontend Room Message
 
@@ -409,8 +418,8 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - schedules `ExecutionFacade.start_orchestration` as a FastAPI background
      task if orchestration should start.
 
-4. `ExecutionFacade.execute` delegates to `RoomCenter.send_message_to_room`,
-   which reaches `services.room_services.send_message_to_room`.
+4. `ExecutionFacade.execute` delegates to `AppShellRoomCenter.send_message_to_room`,
+   which reaches `app_shell.room_runtime.RoomServices.send_message_to_room`.
 
 5. `RoomServices.send_message_to_room`:
    - validates the request and message size,
@@ -425,9 +434,9 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
      - explicit mentions,
      - room default/saved group,
      - all-agent matching,
-     - supervisor V2 if `room.extend_info.use_supervisor` is true,
+     - supervisor if `room.extend_info.use_supervisor` is true,
    - either creates initial agent messages or marks the user message with
-     supervisor V2 preparation data.
+     supervisor preparation data.
 
 6. `ExecutionFacade.start_orchestration` builds an `OrchestrationRequest` and
    calls `RoomMessageCenter.process_room_user_message`.
@@ -439,7 +448,7 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - loads quoted context when present,
    - creates or reuses a cancellation token,
    - chooses one of two execution paths:
-     - Supervisor V2 path for `extend_info.supervisor_v2`.
+     - Supervisor path for `extend_info.supervisor`.
      - Queue path for pre-created agent messages.
 
 8. Queue path:
@@ -449,7 +458,7 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
      `AgentMessageProcessor` for transport selection and dispatch.
    - On success, emit unified summary and terminal `completed` status.
 
-9. Supervisor V2 path:
+9. Supervisor path:
    - Build agent registry and room config.
    - Assemble room/conversation context.
    - Run the adaptive `SupervisorExecutor` loop.
@@ -464,7 +473,7 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
     - handles final responses, errors, cancellations, and HITL states,
     - emits SSE updates through `sse_manager`/Delivery,
     - delegates terminal task notifications through
-      `services.task_notification_service`.
+      `execution.dispatch.task_notifications`.
 
 ## Agent Dispatch Workflow
 
@@ -582,13 +591,13 @@ Cancellation flow:
 7. Executors observe cancellation tokens at checkpoints and stop gracefully.
 
 In multi-worker mode, Redis Pub/Sub/KV and Mongo change streams are required so
-SSE frames and cancellation state cross worker boundaries.
+typed SSE frames and cancellation state cross worker boundaries.
 
 ## HITL Workflow
 
 HITL is used when an agent or supervisor needs user input before continuing.
 
-Main responsibilities live in `services.hitl_service` and execution adapters:
+Main responsibilities live in `app_shell.hitl_service` and execution adapters:
 
 - Create HITL requests.
 - Broadcast input-required state.
@@ -598,7 +607,7 @@ Main responsibilities live in `services.hitl_service` and execution adapters:
 - Cancel stale or superseded HITL requests.
 
 `ExecutionFacade` exposes HITL operations through the `HITLManager` protocol so
-routes do not need to know the legacy service internals.
+routes do not need to know app-shell runtime internals.
 
 ## Context Memory Workflow
 
@@ -643,7 +652,7 @@ Multi-worker production:
 - Gunicorn-style multi-worker startup is allowed only when Redis-dependent
   services are connected.
 - `check_multi_worker_safety` fails startup if Redis Pub/Sub, Redis KV, relay
-  streams, legacy Redis service, or cancellation change streams are missing.
+  streams, app-shell Redis runtime, or cancellation change streams are missing.
 
 This guard exists because without Redis:
 
@@ -681,9 +690,8 @@ The current codebase has a mixed architecture:
 
 - Newer modules use explicit facades, protocol interfaces, DTOs, and container
   construction.
-- Older modules still use singleton services and "center" classes.
-- `services.database_service` and `database.mongodb` still expose broad legacy
-  APIs.
+- Some app-shell modules still use singleton-style process runtime objects.
+- `app_shell.database_service` and `database.mongodb` still expose broad APIs.
 - Some route modules bind dependencies via module-level globals during startup.
 - Compatibility layers are intentionally kept so the repo can migrate in phases
   without breaking existing route behavior.
@@ -694,8 +702,8 @@ When making new changes, prefer the newer shape:
 route -> protocol/facade -> repository/DAL -> external service
 ```
 
-Avoid adding new direct dependencies on broad legacy singletons unless the
-surrounding module already requires that compatibility path.
+Avoid adding new direct dependencies on broad app-shell runtime singletons
+unless the surrounding module already requires that path.
 
 ## Testing and Verification
 
@@ -716,11 +724,10 @@ Focused tests are organized by module and workflow:
 - `tests/test_room_*`: room facade and room membership.
 - `tests/test_context_memory_*`: memory projection, assembly, compaction, search.
 - `tests/test_delivery_*`: SSE, event bus, cancellation, delivery protocols.
-- `tests/test_execution_*` and `tests/test_module_*`: execution orchestration.
+- `tests/test_execution_*` and related orchestration tests: execution flows.
 - `tests/test_hub_runtime_bridge_*`: hub relay behavior.
 - `tests/test_platform_*`: gateway, files, rate limits, platform protocols.
-- `tests/test_service_*`: legacy service compatibility and behavior.
+- `tests/test_service_*`: app-shell runtime compatibility and behavior.
 
 For architecture-sensitive changes, run the closest focused tests first, then
 the full suite before merging.
-

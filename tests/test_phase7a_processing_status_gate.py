@@ -191,10 +191,6 @@ def _discover_calls() -> list[ProcessingStatusCall]:
     calls: list[ProcessingStatusCall] = []
     for path in _production_files():
         rel_path = path.relative_to(ROOT).as_posix()
-        if rel_path in {
-            "execution/legacy_processing_status.py",
-        }:
-            continue
         tree = ast.parse(path.read_text(), filename=rel_path)
         parents = _build_parents(tree)
         for node in ast.walk(tree):
@@ -235,7 +231,7 @@ def _discover_calls() -> list[ProcessingStatusCall]:
                         _arg_or_kw(node, 2, "client_request_id")
                     )
                     details_expression = None
-                    delivery_expression = "self.sse_manager"
+                    delivery_expression = "self._processing_status_emitter"
                 else:
                     status_expression = _unparse(_arg_or_kw(node, 1, "status"))
                     sse_message_id_expression = _unparse(
@@ -245,7 +241,7 @@ def _discover_calls() -> list[ProcessingStatusCall]:
                         _keyword(node, "client_request_id")
                     )
                     details_expression = _unparse(_keyword(node, "details"))
-                    delivery_expression = "self.sse_manager"
+                    delivery_expression = "self._processing_status_emitter"
                 emitter_kind = call_name
             else:
                 continue
@@ -299,7 +295,7 @@ def _assert_lifecycle_helper_matches(
         ), f"{entry['call_id']} disables lifecycle recording"
         return
 
-    helper = _find_prior_awaited_helper(item, "record_and_maybe_broadcast_run_event")
+    helper = _find_prior_awaited_helper(item, "record_and_maybe_emit_run_event")
     if (
         helper is None
         and item.path == "app_shell/room_runtime.py"
@@ -313,7 +309,7 @@ def _assert_lifecycle_helper_matches(
             for child in stmt.body:
                 helper = _direct_awaited_call(
                     child,
-                    name="record_and_maybe_broadcast_run_event",
+                    name="record_and_maybe_emit_run_event",
                 )
                 if helper is not None:
                     break
@@ -331,7 +327,10 @@ def _assert_lifecycle_helper_matches(
         _unparse(_keyword(helper, "client_request_id")),
         entry["client_request_id_expression"],
     )
-    assert _expr_equal(_unparse(_keyword(helper, "sse")), entry["delivery_expression"])
+    assert _expr_equal(
+        _unparse(_keyword(helper, "event_publisher")),
+        entry["run_event_delivery_expression"],
+    )
 
 
 def _assert_no_prior_lifecycle_work(item: ProcessingStatusCall, call_id: str) -> None:
@@ -342,10 +341,12 @@ def _assert_no_prior_lifecycle_work(item: ProcessingStatusCall, call_id: str) ->
         ), f"{call_id} transport-only helper call must pass record_lifecycle=False"
         return
 
-    helper = _find_prior_awaited_helper(item, "record_and_maybe_broadcast_run_event")
-    broadcast = _find_prior_awaited_helper(item, "broadcast_run_event_payload")
+    helper = _find_prior_awaited_helper(item, "record_and_maybe_emit_run_event")
+    run_event_emit = _find_prior_awaited_helper(item, "emit_run_event_payload")
     assert helper is None, f"{call_id} is transport-only but has lifecycle helper"
-    assert broadcast is None, f"{call_id} is transport-only but has run_event broadcast"
+    assert run_event_emit is None, (
+        f"{call_id} is transport-only but has run_event emit"
+    )
 
 
 def _assert_pre_recorded_payload(item: ProcessingStatusCall, entry: dict[str, Any]) -> None:
@@ -438,25 +439,28 @@ def _assert_pre_recorded_payload(item: ProcessingStatusCall, entry: dict[str, An
         f"{entry['call_id']} payload None guard must occur before metric increment"
     )
 
-    broadcast_index: int | None = None
-    broadcast: ast.Call | None = None
+    emit_index: int | None = None
+    emit_call: ast.Call | None = None
     for idx, stmt in enumerate(prior):
-        candidate = _direct_awaited_call(stmt, name="broadcast_run_event_payload")
+        candidate = _direct_awaited_call(stmt, name="emit_run_event_payload")
         if candidate is not None:
-            broadcast_index = idx
-            broadcast = candidate
+            emit_index = idx
+            emit_call = candidate
             break
-    assert broadcast is not None and broadcast_index is not None, (
-        f"{entry['call_id']} missing run_event payload broadcast"
+    assert emit_call is not None and emit_index is not None, (
+        f"{entry['call_id']} missing run_event payload emit"
     )
-    assert guard_index < broadcast_index, (
-        f"{entry['call_id']} payload None guard must occur before run_event broadcast"
+    assert guard_index < emit_index, (
+        f"{entry['call_id']} payload None guard must occur before run_event emit"
     )
     assert _expr_equal(
-        _call_expression(broadcast),
-        entry["run_event_broadcast_expression"],
+        _call_expression(emit_call),
+        entry["run_event_emit_expression"],
     )
-    assert _expr_equal(_unparse(_keyword(broadcast, "sse")), entry["delivery_expression"])
+    assert _expr_equal(
+        _unparse(_keyword(emit_call, "event_publisher")),
+        entry["run_event_delivery_expression"],
+    )
 
 
 def test_production_processing_status_callers_are_manifest_covered() -> None:
@@ -537,7 +541,7 @@ def test_lifecycle_helper_must_be_direct_prior_sibling_statement() -> None:
     source = """
 async def send(flag):
     if flag:
-        await record_and_maybe_broadcast_run_event("room", "completed", "msg", sse=sse)
+        await record_and_maybe_emit_run_event("room", "completed", "msg", event_publisher=event_publisher)
     await sse.send_processing_status("room", "completed", "msg")
 """
     tree = ast.parse(source)
@@ -565,7 +569,7 @@ async def send(flag):
     )
 
     assert _find_prior_awaited_helper(
-        item, "record_and_maybe_broadcast_run_event"
+        item, "record_and_maybe_emit_run_event"
     ) is None
 
 
@@ -605,11 +609,12 @@ def _pre_recorded_entry() -> dict[str, Any]:
         ),
         "payload_variable": "payload",
         "payload_none_guard": "if payload is None: continue",
-        "run_event_broadcast_expression": (
-            "broadcast_run_event_payload("
-            "room_id, payload, client_request_id=client_request_id, sse=sse_manager)"
+        "run_event_emit_expression": (
+            "emit_run_event_payload("
+            "room_id, payload, client_request_id=client_request_id, event_publisher=event_publisher)"
         ),
         "delivery_expression": "sse_manager",
+        "run_event_delivery_expression": "event_publisher",
     }
 
 
@@ -625,11 +630,11 @@ async def fail_stale_runs():
         if payload is None:
             continue
         increment_counter("run_watchdog_forced_failure_total")
-        await broadcast_run_event_payload(
+        await emit_run_event_payload(
             room_id,
             payload,
             client_request_id=client_request_id,
-            sse=sse_manager,
+            event_publisher=event_publisher,
         )
         await sse_manager.send_processing_status(
             room_id,
@@ -656,11 +661,11 @@ async def fail_stale_runs():
         if payload is None:
             continue
         increment_counter("run_watchdog_forced_failure_total")
-        await broadcast_run_event_payload(
+        await emit_run_event_payload(
             room_id,
             payload,
             client_request_id=client_request_id,
-            sse=sse_manager,
+            event_publisher=event_publisher,
         )
         await sse_manager.send_processing_status(
             room_id,
@@ -677,7 +682,7 @@ async def fail_stale_runs():
         _assert_pre_recorded_payload(item, entry)
 
 
-def test_pre_recorded_payload_requires_guard_before_metric_and_broadcast() -> None:
+def test_pre_recorded_payload_requires_guard_before_metric_and_emit() -> None:
     source = """
 async def fail_stale_runs():
     for doc in docs:
@@ -689,11 +694,11 @@ async def fail_stale_runs():
         increment_counter("run_watchdog_forced_failure_total")
         if payload is None:
             continue
-        await broadcast_run_event_payload(
+        await emit_run_event_payload(
             room_id,
             payload,
             client_request_id=client_request_id,
-            sse=sse_manager,
+            event_publisher=event_publisher,
         )
         await sse_manager.send_processing_status(
             room_id,
@@ -759,11 +764,11 @@ def test_sse_manager_processing_status_has_no_run_lifecycle_side_effects() -> No
             raise AssertionError(
                 f"send_processing_status still records lifecycle at line {node.lineno}"
             )
-        if isinstance(node, ast.Call) and _call_name(node) == "broadcast_to_room":
+        if isinstance(node, ast.Call) and _call_name(node) == "emit_to_room":
             event_type = _arg_or_kw(node, 1, "message_type")
             if isinstance(event_type, ast.Constant) and event_type.value == "run_event":
                 raise AssertionError(
-                    f"send_processing_status still broadcasts run_event at line {node.lineno}"
+                    f"send_processing_status still emits run_event at line {node.lineno}"
                 )
         if isinstance(node, ast.Call) and _call_name(node) == "run_event_sse_enabled":
             raise AssertionError(

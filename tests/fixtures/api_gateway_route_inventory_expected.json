@@ -1005,26 +1005,6 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/roomCenter/createAndParseUserMessage",
-    "methods": [
-      "POST"
-    ],
-    "name": "create_and_parse_user_message",
-    "endpoint_module": "api_gateway.routes.room_routes",
-    "declared_owner": "api_gateway.routes.room_routes",
-    "tags": [
-      "room"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_current_user"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "include_in_schema": true
-  },
-  {
     "path": "/api/v1/roomCenter/createNewRoom",
     "methods": [
       "POST"

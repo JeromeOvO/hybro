@@ -237,9 +237,6 @@ class RoomCenterRouteOwner(Protocol):
     async def update_room_extend_info(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse: ...
-    async def create_and_parse_user_message(
-        self, request: RoomCenterUserMessageRequest
-    ) -> RoomCenterUserMessageResponse: ...
     async def send_message(
         self, request: RoomCenterUserMessageRequest
     ) -> RoomCenterUserMessageResponse: ...
