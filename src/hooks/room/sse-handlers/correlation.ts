@@ -3,6 +3,7 @@ import type { ProcessingLifecycle } from '../processing-lifecycle'
 import {
   enqueuePendingSseEvent,
   getResolvedMessageId,
+  resolveClientRequestMessageId,
 } from './pending-turn-buffer'
 
 /** Events that require client_request_id (or compat fallback) to apply. */
@@ -42,7 +43,24 @@ export function resolveSseCorrelation(
 
   const clientReqId = sseMessage.data?.client_request_id as string | undefined
   if (clientReqId) {
-    const shouldBuffer = !getResolvedMessageId(clientReqId)
+    const resolvedMessageId = getResolvedMessageId(clientReqId)
+    if (resolvedMessageId) {
+      return { clientReqId, shouldBuffer: false, shouldDrop: false }
+    }
+
+    const messageId = sseMessage.data?.message_id as string | undefined
+    const relatedMessageId = sseMessage.data?.related_message_id as string | undefined
+    const lifecycleMessageId = lifecycle.getMessageId()
+    if (messageId && lifecycleMessageId && messageId === lifecycleMessageId) {
+      resolveClientRequestMessageId(clientReqId, messageId)
+      return { clientReqId, shouldBuffer: false, shouldDrop: false }
+    }
+    if (relatedMessageId && lifecycleMessageId && relatedMessageId === lifecycleMessageId) {
+      resolveClientRequestMessageId(clientReqId, relatedMessageId)
+      return { clientReqId, shouldBuffer: false, shouldDrop: false }
+    }
+
+    const shouldBuffer = true
     return { clientReqId, shouldBuffer, shouldDrop: false }
   }
 

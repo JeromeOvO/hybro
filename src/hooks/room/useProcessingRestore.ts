@@ -1,9 +1,10 @@
 import { useEffect } from 'react'
 import type { ProcessingLifecycle } from './processing-lifecycle'
+import { ensureInitialProcessingStatusLog } from './processing-status-log'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { allAgentsTerminalForUserMessage } from '@/lib/room-timeline/turn-agent-terminal'
-import { TASK_STATE, isTerminalState } from '@/lib/types/sse'
+import { isTerminalState } from '@/lib/types/sse'
 import { isStale } from '@/lib/time'
 
 interface ProcessingSnapshotRoom {
@@ -29,9 +30,9 @@ export function useProcessingRestore(
     const store = useMessageStore.getState()
     if (store.roomId !== roomId) return
 
-    // Once SSE has dismissed the placeholder (via task_submitted or processing_status done),
-    // never re-add it — the restore effect is only for page-load recovery.
-    if (lifecycle.isPlaceholderDismissed()) return
+    // Once SSE has resolved the live processing lifecycle, never re-add it —
+    // the restore effect is only for page-load recovery.
+    if (lifecycle.isProcessingResolved()) return
 
     const activeRuns = room.active_runs ?? []
     const activeRunTriggerMessageId =
@@ -58,7 +59,7 @@ export function useProcessingRestore(
         return
       }
 
-      console.log('🔄 Restoring processing placeholder for message:', lifecycleMessageId)
+      console.log('🔄 Restoring processing log for message:', lifecycleMessageId)
 
       // Some active runs are proactive and may not be anchored to a user message.
       if (!lifecycleMessageId) {
@@ -70,11 +71,11 @@ export function useProcessingRestore(
       const PLACEHOLDER_STALE_MS = 2 * 60 * 1000
       const triggerMsg = store.entities[lifecycleMessageId]
       if (!triggerMsg) {
-        console.log('🔄 Skipping placeholder - processing trigger message not in hydrated store')
+        console.log('🔄 Skipping processing log - processing trigger message not in hydrated store')
         return
       }
       if (isStale(triggerMsg.timestamp, PLACEHOLDER_STALE_MS)) {
-        console.log('🔄 Skipping placeholder - processing message is stale (>2min)')
+        console.log('🔄 Skipping processing log - processing message is stale (>2min)')
         return
       }
 
@@ -84,35 +85,22 @@ export function useProcessingRestore(
       )
 
       if (hasTaskEntities) {
-        console.log('🔄 Skipping placeholder - tasks already exist')
+        console.log('🔄 Skipping processing log - tasks already exist')
         return
       }
 
-      // Check if placeholder already exists
-      const placeholderId = lifecycle.placeholderId(roomId)
-      if (store.entities[placeholderId]) return
-
-      // Restore placeholder via normalized store
-      store.upsertMessage({
-        id: placeholderId,
-        roomId,
-        messageType: 'agent',
-        content: '',
-        senderName: 'HYBRO AI',
-        taskStatus: TASK_STATE.WORKING,
-        taskContent: 'Processing your request\u2026',
-        timestamp: new Date().toISOString(),
-        isEphemeral: true,
-      }, 'optimistic')
-
+      store.removeMessage(lifecycle.placeholderId(roomId))
+      ensureInitialProcessingStatusLog(roomId, triggerMsg)
       lifecycle.startProcessing(lifecycleMessageId)
     } else {
-      // Backend truth says no active processing — aggressively clean up any
-      // stale local spinner/placeholder left behind by missed terminal SSE.
+      // Backend truth says no active processing — clean up lifecycle state left
+      // behind by missed terminal SSE without deleting per-turn update history.
       // But don't wipe it if a message send is still in flight (the SSE events
       // haven't arrived yet).
+      if (lifecycle.isPlaceholderDismissed()) return
       const { sending } = useRoomUiStore.getState().rooms[roomId] ?? {}
       if (sending) return
+      if (lifecycle.getPendingRunEventAck()) return
       store.removeMessage(lifecycle.placeholderId(roomId))
       lifecycle.stopProcessing()
     }

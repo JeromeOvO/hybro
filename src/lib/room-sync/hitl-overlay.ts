@@ -46,6 +46,8 @@ export async function overlayPendingHitlRequests(
       hitlGroupId: req.group_id ?? undefined,
       hitlGroupTotal: req.group_total ?? undefined,
       hitlGroupIndex: req.group_index ?? undefined,
+      relatedMessageId: req.related_message_id ?? undefined,
+      clientRequestId: req.client_request_id ?? undefined,
     }, 'sse')
     deps.hitlRequestIndex.current.set(req.request_id, req.message_id)
   }

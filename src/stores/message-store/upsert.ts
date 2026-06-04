@@ -1,6 +1,6 @@
 import { isTerminalState } from '@/lib/types/sse'
 import { resolveDisplayType } from './resolve-display-type'
-import type { MessageEntity, IncomingMessage, MessageSource, ArtifactData } from './types'
+import type { MessageEntity, IncomingMessage, MessageSource, ArtifactData, ProcessingStatusLogEntry } from './types'
 
 /**
  * Core upsert logic, extracted so it can be used by both single and batch writes.
@@ -128,6 +128,7 @@ function mergeIncoming(
       attachments: incoming.attachments,
       turnTerminalStatus: incoming.turnTerminalStatus,
       summaryOrigin: incoming.summaryOrigin,
+      processingStatusLogs: incoming.processingStatusLogs,
       quotedText: incoming.quotedText,
       quotedSenderName: incoming.quotedSenderName,
       quoteId: incoming.quoteId,
@@ -172,6 +173,7 @@ function mergeIncoming(
     attachments: incoming.attachments !== undefined ? incoming.attachments : existing.attachments,
     turnTerminalStatus: incoming.turnTerminalStatus !== undefined ? incoming.turnTerminalStatus : existing.turnTerminalStatus,
     summaryOrigin: incoming.summaryOrigin !== undefined ? incoming.summaryOrigin : existing.summaryOrigin,
+    processingStatusLogs: incoming.processingStatusLogs !== undefined ? incoming.processingStatusLogs : existing.processingStatusLogs,
     quotedText: incoming.quotedText !== undefined ? incoming.quotedText : existing.quotedText,
     quotedSenderName: incoming.quotedSenderName !== undefined ? incoming.quotedSenderName : existing.quotedSenderName,
     quoteId: incoming.quoteId !== undefined ? incoming.quoteId : existing.quoteId,
@@ -209,6 +211,21 @@ function artifactsEqual(
     if (a[i].artifactId !== b[i].artifactId) return false
     if (a[i].isStreaming !== b[i].isStreaming) return false
     if ((a[i].parts?.length ?? 0) !== (b[i].parts?.length ?? 0)) return false
+  }
+  return true
+}
+
+function processingLogsEqual(
+  a: ProcessingStatusLogEntry[] | undefined,
+  b: ProcessingStatusLogEntry[] | undefined,
+): boolean {
+  if (a === b) return true
+  if (!a || !b) return a === b
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id) return false
+    if (a[i].message !== b[i].message) return false
+    if (a[i].timestamp !== b[i].timestamp) return false
   }
   return true
 }
@@ -251,6 +268,7 @@ export function isNoOpUpdate(
     existing.attachments       === coalesce(incoming.attachments, existing.attachments) &&
     existing.turnTerminalStatus === coalesce(incoming.turnTerminalStatus, existing.turnTerminalStatus) &&
     existing.summaryOrigin === coalesce(incoming.summaryOrigin, existing.summaryOrigin) &&
+    processingLogsEqual(existing.processingStatusLogs, coalesce(incoming.processingStatusLogs, existing.processingStatusLogs)) &&
     existing.quoteId === coalesce(incoming.quoteId, existing.quoteId)
   )
 }

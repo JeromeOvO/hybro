@@ -1,4 +1,4 @@
-import type { ArtifactData } from '@/stores/message-store/types'
+import type { ArtifactData, ProcessingStatusLogEntry } from '@/stores/message-store/types'
 import type { AttachmentData } from '@/lib/types/attachments'
 
 // ── Turn-level status ──────────────────────────────────────────
@@ -56,6 +56,8 @@ export interface TurnViewModel {
   primaryMessageId?: string
   /** Room-level terminal signal from user entity (processing_status SSE). */
   turnTerminalStatus?: 'completed' | 'failed' | 'canceled'
+  /** Transient room-level processing status details shown while the turn is live. */
+  processingStatusLogs: ProcessingStatusLogEntry[]
   /** V3: unified final-answer slot (§17). */
   finalAnswer: FinalAnswerViewModel
 }

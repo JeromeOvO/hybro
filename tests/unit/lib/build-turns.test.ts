@@ -1182,4 +1182,92 @@ describe('primaryStreamMessageId', () => {
     expect(turns[0].primaryStreamMessageId).toBe('a1')
     expect(turns[0].primaryMessageId).toBe('a1')
   })
+
+  it('derives processing status logs from the user message onto the turn', () => {
+    const user = makeUserEntity({
+      id: 'u-processing',
+      processingStatusLogs: [
+        {
+          id: 'processing-log-1',
+          message: 'Dispatching agents',
+          timestamp: '2026-06-03T12:00:01.000Z',
+        },
+        {
+          id: 'processing-log-2',
+          message: 'Collecting results',
+          timestamp: '2026-06-03T12:00:02.000Z',
+        },
+      ],
+    })
+
+    const turns = buildTurns(entitiesToMap([user]), ['u-processing'], [])
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0].processingStatusLogs.map((entry) => entry.message)).toEqual([
+      'Dispatching agents',
+      'Collecting results',
+    ])
+  })
+
+  it('keeps processing logs while preserving ephemeral placeholder suppression', () => {
+    const user = makeUserEntity({
+      id: 'u1',
+      clientRequestId: 'cr-1',
+      processingStatusLogs: [
+        {
+          id: 'log-1',
+          message: 'Dispatching agents',
+          timestamp: '2026-06-03T12:00:01.000Z',
+        },
+      ],
+    })
+    const placeholder = makeEntity({
+      id: 'placeholder-1',
+      isEphemeral: true,
+      clientRequestId: 'cr-1',
+      taskStatus: 'working',
+      taskContent: 'Dispatching agents',
+    })
+    const realAgent = makeAgentEntity({
+      id: 'a1',
+      clientRequestId: 'cr-1',
+      taskStatus: 'working',
+      content: '',
+    })
+
+    const turns = buildTurns(
+      entitiesToMap([user, placeholder, realAgent]),
+      ['u1', 'placeholder-1', 'a1'],
+      [],
+    )
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0].agentResults).toHaveLength(1)
+    expect(turns[0].agentResults[0].messageId).toBe('a1')
+    expect(turns[0].processingStatusLogs).toHaveLength(1)
+  })
+
+  it('keeps an early processing-log placeholder turn in collecting phase', () => {
+    const user = makeUserEntity({
+      id: 'u-early',
+      clientRequestId: 'cr-early',
+      processingStatusLogs: [
+        {
+          id: 'log-early',
+          message: 'Dispatching agents',
+          timestamp: '2026-06-03T12:00:01.000Z',
+        },
+      ],
+    })
+
+    const turns = buildTurns(
+      entitiesToMap([user]),
+      ['u-early'],
+      [],
+    )
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0].phase).toBe('collecting')
+    expect(turns[0].processingStatusLogs).toHaveLength(1)
+  })
 })

@@ -199,15 +199,15 @@ describe('Room lifecycle characterization tests', () => {
 
       await mountAndWaitForRoom()
 
-      const placeholderId = `processing-placeholder-room-1`
       await waitFor(() => {
-        const entity = useMessageStore.getState().entities[placeholderId]
-        expect(entity).toBeDefined()
+        const entity = useMessageStore.getState().entities['msg-processing-1']
+        expect(entity?.processingStatusLogs?.map((entry) => entry.message)).toEqual(['Thinking...'])
       })
+      expect(useMessageStore.getState().entities['processing-placeholder-room-1']).toBeUndefined()
       expect(flags('room-1').processing).toBe(true)
     })
 
-    it('upserts placeholder when room has active run trigger', async () => {
+    it('seeds processing log when room has active run trigger', async () => {
       const { inquiryRoomMessagesByRoomId } = await import('@/lib/api/room')
       vi.mocked(inquiryRoomMessagesByRoomId).mockResolvedValueOnce({
         success: true,
@@ -230,16 +230,12 @@ describe('Room lifecycle characterization tests', () => {
 
       await mountAndWaitForRoom()
 
-      // Should have a processing placeholder
-      const placeholderId = `processing-placeholder-room-1`
       await waitFor(() => {
-        const entity = useMessageStore.getState().entities[placeholderId]
-        expect(entity).toBeDefined()
+        const entity = useMessageStore.getState().entities['msg-processing-1']
+        expect(entity?.processingStatusLogs?.map((entry) => entry.message)).toEqual(['Thinking...'])
       })
 
-      const entity = useMessageStore.getState().entities[placeholderId]
-      expect(entity.taskContent).toBe('Processing your request\u2026')
-      expect(entity.isEphemeral).toBe(true)
+      expect(useMessageStore.getState().entities['processing-placeholder-room-1']).toBeUndefined()
       expect(flags('room-1').processing).toBe(true)
     })
 
@@ -288,6 +284,106 @@ describe('Room lifecycle characterization tests', () => {
   // ── Test 3: SSE disconnect/reconnect ──
 
   describe('SSE disconnect/reconnect', () => {
+    it('keeps live processing logs when active runs are empty but DB has no terminal turn yet', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const { inquiryActiveRuns, inquiryRoomMessagesByRoomId } = await import('@/lib/api/room')
+      vi.mocked(inquiryActiveRuns).mockResolvedValue({ success: true, active_runs: [] })
+
+      const { result } = await mountAndWaitForRoom()
+      mockSendMessage.mockResolvedValue({ success: true, message_id: 'msg-active-run-lag' })
+      vi.mocked(inquiryRoomMessagesByRoomId).mockResolvedValueOnce({
+        success: true,
+        message_list: [{
+          room_id: 'room-1',
+          message_id: 'msg-active-run-lag',
+          message_type: 'user',
+          user_id: 'u1',
+          message_created_at: '2026-06-04T01:00:00.000Z',
+          message_content: { message_text: 'Backend active run lag' },
+        }] as any,
+      })
+
+      await act(async () => {
+        await result.current.sendUserMessage('Backend active run lag')
+      })
+
+      expect(useMessageStore.getState().entities['msg-active-run-lag'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
+        'Thinking...',
+      ])
+      expect(flags('room-1').processing).toBe(true)
+
+      await act(async () => {
+        vi.advanceTimersByTime(15_000)
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(flags('room-1').processing).toBe(true)
+      expect(useMessageStore.getState().entities['msg-active-run-lag'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
+        'Thinking...',
+      ])
+    })
+
+    it('preserves live processing logs when backend says active runs ended after a missed terminal SSE', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const { inquiryActiveRuns, inquiryRoomMessagesByRoomId } = await import('@/lib/api/room')
+      vi.mocked(inquiryActiveRuns).mockResolvedValue({ success: true, active_runs: [] })
+
+      const { result } = await mountAndWaitForRoom()
+      mockSendMessage.mockResolvedValue({ success: true, message_id: 'msg-missed-terminal' })
+      vi.mocked(inquiryRoomMessagesByRoomId).mockResolvedValueOnce({
+        success: true,
+        message_list: [
+          {
+            room_id: 'room-1',
+            message_id: 'msg-missed-terminal',
+            message_type: 'user',
+            user_id: 'u1',
+            message_created_at: '2026-06-04T01:00:00.000Z',
+            message_content: { message_text: 'Missed terminal turn' },
+          },
+          {
+            room_id: 'room-1',
+            message_id: 'agent-missed-terminal',
+            message_type: 'agent',
+            agent_id: 'agent-1',
+            related_message_id: 'msg-missed-terminal',
+            message_created_at: '2026-06-04T01:00:01.000Z',
+            task_updated_at: '2026-06-04T01:00:01.000Z',
+            task_content: 'Answering',
+            message_content: {
+              message_text: 'Done',
+              message_task: {
+                status: { state: 'completed' },
+                metadata: { agent_id: 'agent-1' },
+              },
+            },
+          },
+        ] as any,
+      })
+
+      await act(async () => {
+        await result.current.sendUserMessage('Missed terminal turn')
+      })
+
+      expect(useMessageStore.getState().entities['msg-missed-terminal'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
+        'Thinking...',
+      ])
+      expect(flags('room-1').processing).toBe(true)
+
+      await act(async () => {
+        vi.advanceTimersByTime(15_000)
+        await Promise.resolve()
+      })
+
+      await waitFor(() => {
+        expect(flags('room-1').processing).toBe(false)
+      })
+      expect(useMessageStore.getState().entities['msg-missed-terminal'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
+        'Thinking...',
+      ])
+    })
+
     it('restores pending HITL requests on SSE reconnect', async () => {
       const { fetchPendingHitlRequests } = await import('@/lib/api/hitl')
       const mockFetch = vi.mocked(fetchPendingHitlRequests)
