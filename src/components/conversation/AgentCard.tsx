@@ -109,14 +109,19 @@ export function AgentCard({
     !compact && display.isAnimated && 'conversation-card-shimmer',
   )
   const style = {
-    backgroundColor: theme.cardBg,
+    backgroundColor: selected
+      ? 'hsl(var(--color-primary) / 0.12)'
+      : theme.cardBg,
     borderColor: selected
-      ? 'rgba(34, 211, 238, 0.45)'
+      ? 'hsl(var(--color-primary) / 0.55)'
       : display.tone === 'danger'
         ? 'var(--conversation-danger-border)'
         : display.tone === 'warning'
           ? '#854d0e'
           : theme.cardBg,
+    boxShadow: selected
+      ? '0 0 0 1px hsl(var(--color-primary) / 0.28)'
+      : 'none',
   }
   const content = (
     <>
