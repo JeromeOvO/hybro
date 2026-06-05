@@ -702,11 +702,12 @@
 }
 
 .conversation-detail-agent-header {
+  position: relative;
   width: 100%;
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: calc(var(--conversation-sticky-top) + 12px) 22px 14px;
+  padding: calc(var(--conversation-sticky-top) + 12px) 54px 14px 22px;
 }
 
 .conversation-detail-agent-avatar {
@@ -814,6 +815,10 @@
 }
 
 .conversation-detail-close-button {
+  position: absolute;
+  top: calc(var(--conversation-sticky-top) + 10px);
+  right: 16px;
+  z-index: 2;
   display: inline-flex;
   height: 24px;
   width: 24px;
@@ -822,6 +827,7 @@
   justify-content: center;
   border-radius: 6px;
   color: var(--conversation-text-muted);
+  background: rgba(255, 255, 255, 0.04);
   transition: color 150ms ease, background-color 150ms ease;
 }
 
