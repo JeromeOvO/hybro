@@ -32,13 +32,13 @@ from models.room import RoomAgentMessage
 if TYPE_CHECKING:
     from app_shell.rate_limit_service import RateLimitService
 
-    from execution.dispatch.response_handler import AgentResponseHandler
     from app_shell.a2a_runtime import A2AService
     from app_shell.database_service import DatabaseService
     from app_shell.debate_service import DebateService
+    from app_shell.delivery_runtime import SSEManager
     from app_shell.memory_service import RoomMemoryService
     from app_shell.room_runtime import RoomServices
-    from app_shell.delivery_runtime import SSEManager
+    from execution.dispatch.response_handler import AgentResponseHandler
 
 logger = get_logger(__name__)
 

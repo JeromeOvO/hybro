@@ -21,14 +21,14 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
-from common.dto import MemorySearchResult as DtoMemorySearchResult
-from common.utils.time import utcnow
-from models.memory import ContentType, ConversationTurn, TurnRepresentation, TurnRole
-from models.search import MemorySearchResult, MemorySourceType
 from app_shell.memory_search_service import (
     MemorySearchService,
     _cosine_similarity,
 )
+from common.dto import MemorySearchResult as DtoMemorySearchResult
+from common.utils.time import utcnow
+from models.memory import ContentType, ConversationTurn, TurnRepresentation, TurnRole
+from models.search import MemorySearchResult, MemorySourceType
 
 
 class BoundMemorySearchFacade:
@@ -218,6 +218,8 @@ def service():
     svc = MemorySearchService()
     svc.openai_service = MagicMock()
     svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
+    svc.embedding_service = MagicMock()
+    svc.embedding_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
     svc._index_available = True
     return bind_memory_search_facade(svc)
 
@@ -872,6 +874,8 @@ class TestVectorSearchPineconeNotFound:
         svc = MemorySearchService()
         svc.openai_service = MagicMock()
         svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
+        svc.embedding_service = MagicMock()
+        svc.embedding_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
         svc._index_available = None
         return bind_memory_search_facade(svc)
 
@@ -922,6 +926,24 @@ class TestVectorSearchPineconeNotFound:
         assert service._index_available is None
 
 
+@pytest.mark.asyncio
+async def test_vector_search_uses_bound_embedding_service(service):
+    service.embedding_service = MagicMock()
+    service.embedding_service.get_embedding = AsyncMock(return_value=[0.2] * 1536)
+    service.openai_service.get_embedding = AsyncMock(side_effect=AssertionError("legacy"))
+    service._index_available = True
+    mock_index = MagicMock()
+    mock_index.query.return_value = MagicMock(matches=[])
+    service.pinecone = MagicMock()
+    service.pinecone.get_index = MagicMock(return_value=mock_index)
+
+    result = await service._vector_search("query", "room-1")
+
+    assert result == []
+    service.embedding_service.get_embedding.assert_awaited_once_with("query")
+    service.openai_service.get_embedding.assert_not_called()
+
+
 # =========================================================================
 # Test: Index availability check caches result and skips embedding calls
 # =========================================================================
@@ -936,6 +958,8 @@ class TestIndexAvailabilityCheck:
         svc = MemorySearchService()
         svc.openai_service = MagicMock()
         svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
+        svc.embedding_service = MagicMock()
+        svc.embedding_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
         svc._index_available = None
         return bind_memory_search_facade(svc)
 
@@ -1056,6 +1080,8 @@ class TestWritePathPineconeNotFound:
         svc = MemorySearchService()
         svc.openai_service = MagicMock()
         svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
+        svc.embedding_service = MagicMock()
+        svc.embedding_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
         svc._index_available = True
         return bind_memory_search_facade(svc)
 

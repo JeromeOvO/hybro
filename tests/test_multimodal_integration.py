@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from models.room import UserAttachment
 from app_shell.room_runtime import RoomServices
+from models.room import UserAttachment
 
 
 @pytest.fixture

@@ -1,17 +1,18 @@
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from app_shell.database_service import db_service
+from common.dto import ChatContextGenerationInput
 from common.utils.context_utils import (
     add_turn_to_history,
 )
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from llm_gateway.errors import LLMServiceNotBoundError
 from models.error import SessionIdRequiredError
 from models.memory import ChatContext, ContextData, MemoryContent, RoomMemory
 from models.request import ChatMemoryRequest, RoomCenterMemoryRequest
 from models.response import ChatMemoryResponse, RoomCenterMemoryResponse
-from app_shell.database_service import db_service
-from app_shell.openai_service import openai_service
 
 if TYPE_CHECKING:
     from models.supervisor import SupervisorTrajectory
@@ -23,7 +24,10 @@ logger = get_logger(__name__)
 class ChatMemoryService:
     def __init__(self):
         self.database_service = db_service  # Use singleton
-        self.openai_service = openai_service  # Use singleton
+        self.room_memory_llm_service = None
+
+    def bind_room_memory_llm_service(self, service) -> None:
+        self.room_memory_llm_service = service
 
     # Chat Contexts
     async def create_chat_context(
@@ -130,8 +134,14 @@ class ChatMemoryService:
                 status_code=500,
             )
 
-        new_context_data = await self.openai_service.generate_chat_context(
-            request.user_input, request.agent_response, chat_context.context_data
+        if self.room_memory_llm_service is None:
+            raise LLMServiceNotBoundError("RoomMemoryLLMService is not bound")
+        new_context_data = await self.room_memory_llm_service.generate_chat_context(
+            ChatContextGenerationInput(
+                user_input=request.user_input,
+                agent_response=request.agent_response,
+                existing_context=chat_context.context_data.context_content,
+            )
         )
 
         try:
@@ -205,9 +215,12 @@ class ChatMemoryService:
 class RoomMemoryService:
     def __init__(self):
         self.database_service = db_service  # Use singleton
-        self.openai_service = openai_service  # Use singleton
+        self.turn_notes_llm_provider = None
         self._facade = None
         self._bound = False
+
+    def bind_turn_notes_llm_provider(self, provider) -> None:
+        self.turn_notes_llm_provider = provider
 
     def bind_facade(self, facade) -> None:
         self._facade = facade
@@ -460,8 +473,11 @@ class RoomMemoryService:
         try:
             from common.utils.context_utils import extract_turn_notes_llm
 
+            if self.turn_notes_llm_provider is None:
+                raise LLMServiceNotBoundError("Turn notes LLM provider is not bound")
             enriched_notes = await extract_turn_notes_llm(
-                content, provider=self.openai_service
+                content,
+                provider=self.turn_notes_llm_provider,
             )
             if enriched_notes and enriched_notes != heuristic_notes:
                 await self.database_service.update_turn_notes(

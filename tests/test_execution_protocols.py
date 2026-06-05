@@ -256,8 +256,9 @@ def test_execution_scaffold_adapters_are_available():
     db = object()
     hitl = create_hitl_service(database_service=db)
     assert hitl._db_service is db
-    runtime = create_room_message_center(database_service=db)
+    runtime = create_room_message_center(database_service=db, debate_rounds=7)
     assert runtime.database_service is db
+    assert runtime.debate_rounds == 7
     assert isinstance(room_message_center, BoundRoomMessageCenterProxy)
 
 
@@ -279,20 +280,22 @@ def test_room_message_center_factory_propagates_overrides_to_children():
             "rate_limit_service",
             "room_supervisor_service",
             "room_coordinator_service",
-            "openai_service",
+            "summary_service",
             "hitl_coordinator",
             "task_notifications",
         ]
     }
-    runtime = create_room_message_center(**deps)
+    runtime = create_room_message_center(**deps, debate_rounds=5)
 
     assert runtime.database_service is deps["database_service"]
     assert runtime.sse_manager is deps["sse_manager"]
     assert runtime.room_runtime is deps["room_services"]
-    assert runtime.openai_service is deps["openai_service"]
+    assert runtime.summary_service is deps["summary_service"]
     assert runtime.tsm.room_runtime is deps["room_services"]
     assert runtime.tsm.notification_service is deps["notification_service"]
     assert runtime.agent_dispatcher.database_service is deps["database_service"]
+    assert runtime.debate_rounds == 5
+    assert runtime.supervisor_executor.debate_rounds == 5
     assert runtime.agent_dispatcher.agent_resolver is deps["agent_resolver_service"]
     assert runtime.agent_response_handler._db is deps["database_service"]
     assert runtime.agent_response_handler._sse is deps["sse_manager"]
@@ -328,7 +331,7 @@ def test_room_message_center_factory_owns_default_dependency_wiring():
         "database_service": MagicMock(),
         "sse_manager": MagicMock(),
         "room_coordinator_service": MagicMock(),
-        "openai_service": MagicMock(),
+        "summary_service": MagicMock(),
         "notification_service": MagicMock(),
         "agent_resolver_service": MagicMock(),
         "a2a_service": MagicMock(),
@@ -338,11 +341,12 @@ def test_room_message_center_factory_owns_default_dependency_wiring():
         "rate_limit_service": MagicMock(),
         "room_supervisor_service": MagicMock(),
     }
-    runtime = create_room_message_center(**deps)
+    runtime = create_room_message_center(**deps, debate_rounds=6)
 
     assert runtime.database_service is deps["database_service"]
     assert runtime.sse_manager is deps["sse_manager"]
     assert runtime.room_runtime is deps["room_services"]
+    assert runtime.debate_rounds == 6
 
 
 def test_room_message_center_constructor_requires_explicit_dependencies():

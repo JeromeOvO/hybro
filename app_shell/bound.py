@@ -187,11 +187,6 @@ class AgentSelectionSuggester(Protocol):
 
 
 @runtime_checkable
-class EmbeddingProvider(Protocol):
-    async def get_embedding(self, text: str) -> list[float] | None: ...
-
-
-@runtime_checkable
 class VectorIndex(Protocol):
     def upsert(self, vectors: list[dict[str, JsonValue]]) -> VectorIndexResult: ...
     def delete(self, ids: list[str]) -> VectorIndexResult: ...
@@ -255,7 +250,6 @@ __all__ = [
     "AgentLivenessChecker",
     "AgentLookup",
     "AgentSelectionSuggester",
-    "EmbeddingProvider",
     "InspectionCenter",
     "LegacyMemoryCenter",
     "RoomCenterRouteOwner",

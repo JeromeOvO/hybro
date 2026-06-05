@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app_shell.room_membership_source import LegacyRoomMembershipSeedSource
 from common.dto import (
     AgentInfo,
     MembershipSeed,
@@ -21,7 +22,6 @@ from room.translators import (
     saved_user_message_from_doc,
     user_message_doc_from_input,
 )
-from app_shell.room_membership_source import LegacyRoomMembershipSeedSource
 
 
 def test_room_translator_maps_legacy_fields_and_defaults_provenance():

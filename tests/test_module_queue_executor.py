@@ -16,8 +16,12 @@ import pytest
 from a2a.types import TaskState
 
 from common.utils.cancellation import CancellationToken
+from execution.orchestration.queue_executor import (
+    QueueExecutor,
+    QueueProcessingResult,
+    QueueResult,
+)
 from models.processing import ProcessingResult, ProcessingStatus
-from execution.orchestration.queue_executor import QueueExecutor, QueueProcessingResult, QueueResult
 
 # =============================================================================
 # QueueResult Tests

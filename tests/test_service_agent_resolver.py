@@ -16,6 +16,8 @@ from app_shell.agent_resolver_service import (
     ResolveResult,
     _HealthCache,
 )
+from llm_gateway.errors import LLMModelRoutingError, LLMServiceNotBoundError
+from models.agent import AgentStatus
 
 # =============================================================================
 # _HealthCache Tests
@@ -67,7 +69,7 @@ class TestPickFirstHealthy:
     def resolver(self):
         svc = object.__new__(AgentResolverService)
         svc.database_service = MagicMock()
-        svc.openai_service = MagicMock()
+        svc.agent_selection_service = None
         svc._health_cache = _HealthCache(ttl=60.0)
         return svc
 
@@ -122,6 +124,49 @@ class TestPickFirstHealthy:
         assert len(result.tried_agents) == 2
 
 
+@pytest.mark.asyncio
+async def test_reorder_by_llm_uses_bound_agent_selection_service():
+    svc = object.__new__(AgentResolverService)
+    svc.agent_selection_service = MagicMock()
+    svc.agent_selection_service.select_best_agent_for_task = AsyncMock(
+        return_value="a2"
+    )
+    a1 = _make_agent("a1", "Alpha")
+    a2 = _make_agent("a2", "Beta")
+    a1.agent_status = a2.agent_status = AgentStatus.active
+
+    result = await svc._reorder_by_llm("query", [a1, a2])
+
+    assert result == [a2, a1]
+    svc.agent_selection_service.select_best_agent_for_task.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reorder_by_llm_raises_when_agent_selection_service_unbound():
+    svc = object.__new__(AgentResolverService)
+    svc.agent_selection_service = None
+    a1 = _make_agent("a1", "Alpha")
+    a2 = _make_agent("a2", "Beta")
+
+    with pytest.raises(LLMServiceNotBoundError):
+        await svc._reorder_by_llm("query", [a1, a2])
+
+
+@pytest.mark.asyncio
+async def test_reorder_by_llm_propagates_routing_errors():
+    svc = object.__new__(AgentResolverService)
+    svc.agent_selection_service = MagicMock()
+    svc.agent_selection_service.select_best_agent_for_task = AsyncMock(
+        side_effect=LLMModelRoutingError("unregistered model")
+    )
+    a1 = _make_agent("a1", "Alpha")
+    a2 = _make_agent("a2", "Beta")
+    a1.agent_status = a2.agent_status = AgentStatus.active
+
+    with pytest.raises(LLMModelRoutingError):
+        await svc._reorder_by_llm("query", [a1, a2])
+
+
 # =============================================================================
 # resolve Tests
 # =============================================================================
@@ -132,7 +177,7 @@ class TestResolve:
     def resolver(self):
         svc = object.__new__(AgentResolverService)
         svc.database_service = MagicMock()
-        svc.openai_service = MagicMock()
+        svc.agent_selection_service = None
         svc._health_cache = _HealthCache(ttl=60.0)
         return svc
 

@@ -520,7 +520,7 @@
     "status_code": 201,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.EmbeddingProvider",
+      "common.protocols.EmbeddingServiceProtocol",
       "app_shell.bound.VectorIndex"
     ]
   },
@@ -548,7 +548,7 @@
     "status_code": 204,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.EmbeddingProvider",
+      "common.protocols.EmbeddingServiceProtocol",
       "app_shell.bound.VectorIndex"
     ]
   },
@@ -600,7 +600,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.EmbeddingProvider",
+      "common.protocols.EmbeddingServiceProtocol",
       "app_shell.bound.VectorIndex"
     ]
   },
@@ -628,7 +628,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.EmbeddingProvider",
+      "common.protocols.EmbeddingServiceProtocol",
       "app_shell.bound.VectorIndex"
     ]
   },

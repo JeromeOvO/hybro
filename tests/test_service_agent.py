@@ -15,6 +15,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app_shell.agent_service import (
+    AgentService,
+    _agent_info_to_legacy_agent,
+    is_local_agent_url,
+    normalize_agent_url,
+)
 from common.dto.agent import AgentInfo
 from models.agent import Agent, AgentStatus
 from models.error import (
@@ -22,12 +28,6 @@ from models.error import (
 )
 from models.request import AgentCenterRequest
 from models.response import AgentCenterResponse
-from app_shell.agent_service import (
-    AgentService,
-    _agent_info_to_legacy_agent,
-    is_local_agent_url,
-    normalize_agent_url,
-)
 
 # =============================================================================
 # URL Normalization Tests

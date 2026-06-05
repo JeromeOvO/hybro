@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from common.protocols import LLMProvider, MemoryRepository
+from common.protocols import LLMStructuredGateway, MemoryRepository
 from common.utils.logger import get_logger
 from context_memory.config import ContextMemoryLLMConfig
 
@@ -54,7 +54,7 @@ def build_summary_prompt(synthesis_text: str) -> str:
 async def update_room_summary(
     *,
     repository: MemoryRepository,
-    llm_provider: LLMProvider,
+    llm_provider: LLMStructuredGateway,
     llm_config: ContextMemoryLLMConfig,
     room_id: str,
     synthesis_text: str,

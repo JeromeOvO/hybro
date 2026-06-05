@@ -24,7 +24,10 @@ from fastapi import HTTPException
 from api import webhooks
 from execution.dispatch.agent_event import AgentEvent
 from execution.dispatch.response_handler import AgentResponseHandler
-from execution.dispatch.transports.webhook import WebhookTransport, parse_stream_response
+from execution.dispatch.transports.webhook import (
+    WebhookTransport,
+    parse_stream_response,
+)
 
 # =============================================================================
 # parse_stream_response Tests (pure function)

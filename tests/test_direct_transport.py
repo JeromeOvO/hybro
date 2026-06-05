@@ -19,10 +19,10 @@ from a2a.types import (
     TextPart,
 )
 
+from execution.dispatch.transports.direct import DirectTransport, MessageStreamingState
 from models.error import A2AServiceError
 from models.processing import ProcessingContext, ProcessingStatus
 from models.room import MessageContent, RoomAgentMessage
-from execution.dispatch.transports.direct import DirectTransport, MessageStreamingState
 
 # =============================================================================
 # _parse_sync_fallback_response Tests

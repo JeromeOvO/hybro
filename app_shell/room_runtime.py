@@ -21,7 +21,22 @@ from a2a.types import (
     TextPart,
 )
 
-from common.dto import CreateRoomRequest, MembershipSeed, RoomInfo
+from app_shell.a2a_runtime import a2a_service
+from app_shell.agent_selection_service import agent_selection_service
+from app_shell.agent_service import agent_service
+from app_shell.database_service import db_service
+from app_shell.delivery_runtime import sse_manager
+from app_shell.memory_service import room_memory_service
+from app_shell.task_service import task_service
+from common.a2a_constants import SSEProcessingStatus, is_terminal_state
+from common.dto import (
+    AgentRoutingCandidate,
+    CreateRoomRequest,
+    ExplicitAgentMention,
+    MembershipSeed,
+    ParsedUserMessageRequest,
+    RoomInfo,
+)
 from common.utils.cancellation import CancellationToken
 from common.utils.context_utils import (
     build_context_for_agent,
@@ -30,6 +45,7 @@ from common.utils.context_utils import (
 )
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
+from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import AgentStatus
 from models.file_upload import MAX_ATTACHMENTS_PER_MESSAGE
 from models.memory import MemoryContent, RoomMemory
@@ -63,15 +79,6 @@ from models.room import (
     UserAttachment,
 )
 from models.room_services_models import ParseResult
-from common.a2a_constants import SSEProcessingStatus, is_terminal_state
-from app_shell.a2a_runtime import a2a_service
-from app_shell.agent_selection_service import agent_selection_service
-from app_shell.agent_service import agent_service
-from app_shell.database_service import db_service
-from app_shell.memory_service import room_memory_service
-from app_shell.openai_service import openai_service
-from app_shell.delivery_runtime import sse_manager
-from app_shell.task_service import task_service
 
 logger = get_logger(__name__)
 
@@ -109,6 +116,25 @@ def _human_size(size_bytes: int) -> str:
         return f"{size_bytes / (1024 * 1024):.1f}MB"
 
 
+def _agent_to_routing_candidate(agent) -> AgentRoutingCandidate:
+    card = agent.agent_card
+    capabilities = card.capabilities if isinstance(card.capabilities, dict) else {}
+    skills = []
+    if isinstance(card.skills, list):
+        for skill in card.skills:
+            if isinstance(skill, dict):
+                skills.append(str(skill.get("name") or skill.get("id") or "Unknown"))
+            else:
+                skills.append(str(getattr(skill, "name", None) or skill))
+    return AgentRoutingCandidate(
+        agent_id=str(agent.agent_id),
+        name=str(card.name),
+        description=str(card.description or ""),
+        capabilities=capabilities,
+        skills=skills,
+    )
+
+
 def build_turn_content(
     message_text: str, attachments: list[UserAttachment] | None
 ) -> str:
@@ -130,10 +156,11 @@ class _ResolvedAttachments:
 
 
 class RoomServices:
-    def __init__(self):
+    def __init__(self, debate_rounds: int = 2):
         self.database_service = db_service  # Use singleton
         self.agent_service = agent_service  # Use singleton
-        self.openai_service = openai_service  # Use singleton
+        self.message_parser_service = None
+        self.debate_rounds = debate_rounds
         self.a2a_service = a2a_service  # Use singleton
         # Note: room_memory_service will be set after it's defined below
 
@@ -162,6 +189,12 @@ class RoomServices:
 
     def bind_context_memory(self, memory_manager) -> None:
         self._context_memory_manager = memory_manager
+
+    def bind_message_parser_service(self, service) -> None:
+        self.message_parser_service = service
+
+    def bind_debate_rounds(self, debate_rounds: int) -> None:
+        self.debate_rounds = debate_rounds
 
     def bind_active_run_reader(
         self,
@@ -1813,8 +1846,8 @@ class RoomServices:
         Agent messages are created one at a time inside
         ``SupervisorExecutor._dispatch_targets``.
         """
-        from models.supervisor import RoomConfig
         from app_shell.context_assembly_service import context_assembly_service
+        from models.supervisor import RoomConfig
 
         if token and token.is_cancelled:
             logger.info(
@@ -2128,14 +2161,28 @@ class RoomServices:
             logger.info("Direct chat mode: skipping LLM parsing for single agent")
         else:
             # Parse user message with full agent details for better LLM assignment
-            parsed_result = await self.openai_service.parse_user_message_by_llm(
-                message_text,
-                selected_agent_set,
-                is_debate_mode,
-                auto_assign_agents,
-                agents,
-                conversation_context=conversation_context,
-                explicit_mentions=explicit_mentions,
+            if self.message_parser_service is None:
+                raise LLMServiceNotBoundError("MessageParserLLMService is not bound")
+            parsed_result = await self.message_parser_service.parse_user_message(
+                ParsedUserMessageRequest(
+                    message_text=message_text,
+                    selected_agents=selected_agent_set,
+                    is_debate_mode=is_debate_mode,
+                    auto_assign_agents=auto_assign_agents,
+                    agents=[
+                        _agent_to_routing_candidate(agent) for agent in agents
+                    ],
+                    conversation_context=conversation_context,
+                    explicit_mentions=[
+                        ExplicitAgentMention(
+                            agent_id=str(mention.get("agent_id", "")),
+                            agent_name=str(mention.get("agent_name", "")),
+                            mention_text=mention.get("mention_text"),
+                        )
+                        for mention in (explicit_mentions or [])
+                    ],
+                    debate_rounds=self.debate_rounds,
+                )
             )
 
         logger.info(f"LLM Parsed result: {parsed_result}")

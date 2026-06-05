@@ -64,7 +64,9 @@ from api_gateway.routes import (
 )
 from api_gateway.viewsets import agent as agent_viewset
 from api_gateway.viewsets import base as viewset
+from app_shell.agent_health_service import agent_health_service
 from app_shell.api_key_auth import MongoAPIKeyAuthenticator
+from app_shell.delivery_runtime import sse_manager
 from app_shell.health_check import AppShellHealthCheck, HealthCheck
 from app_shell.viewset import AppShellViewSetRepositoryProvider
 from common.api_key_auth import bind_api_key_authenticator
@@ -80,8 +82,6 @@ from jobs.cleanup_orphaned_uploads import (
 from jobs.compaction_sweep import CompactionSweepDeps, compaction_sweep
 from jobs.constants import ALL_JOB_NAMES
 from jobs.stale_task_checker import StaleTaskCheckerDeps, stale_task_checker
-from app_shell.agent_health_service import agent_health_service
-from app_shell.delivery_runtime import sse_manager
 
 load_dotenv()
 bind_auth_config(
@@ -222,6 +222,39 @@ async def lifespan(app: FastAPI):
         if mongodb.client is not None:
             from a2a_adapter import AgentCardResolverImpl, AgentTransportImpl
             from a2a_adapter import artifact_storage as a2a_artifact_storage
+            from app_shell.agent_capability_issue_service import (
+                CapabilityIssueExclusionReader,
+                capability_issue_service,
+            )
+            from app_shell.agent_matcher import agent_matcher
+            from app_shell.agent_resolver_service import agent_resolver_service
+            from app_shell.agent_runtime import AppShellAgentCenter
+            from app_shell.agent_selection_service import agent_selection_service
+            from app_shell.agent_service import agent_service
+            from app_shell.bedrock_service import bedrock_service
+            from app_shell.compaction_service import compaction_service
+            from app_shell.context_assembly_service import context_assembly_service
+            from app_shell.context_memory_runtime import AppShellMemoryCenter
+            from app_shell.debate_service import debate_service
+            from app_shell.gemini_service import gemini_service
+            from app_shell.inspection_runtime import AppShellInspectionCenter
+            from app_shell.memory_search_service import memory_search_service
+            from app_shell.memory_service import (
+                chat_memory_service,
+                room_memory_service,
+            )
+            from app_shell.notification_service import notification_service
+            from app_shell.openai_service import openai_service
+            from app_shell.room_coordinator_service import room_coordinator_service
+            from app_shell.room_membership_source import LegacyRoomMembershipSeedSource
+            from app_shell.room_runtime import (
+                AppShellRoomCenter,
+                build_turn_content,
+                room_runtime,
+                room_services,
+            )
+            from app_shell.s3_service import s3_service
+            from app_shell.task_service import task_service
             from common.utils.a2a_helpers import bind_a2a_artifact_storage
             from container import (
                 create_agent_deps,
@@ -243,43 +276,26 @@ async def lifespan(app: FastAPI):
                 create_room_deps,
                 create_vector_dal,
             )
-            from app_shell.agent_runtime import AppShellAgentCenter
-            from app_shell.context_memory_runtime import AppShellMemoryCenter
-            from app_shell.inspection_runtime import AppShellInspectionCenter
-            from app_shell.room_runtime import AppShellRoomCenter
             from context_memory.config import ContextMemoryLLMConfig
             from database.mongodb import get_db
             from database.repository import Repository
-            from llm_gateway import LLMGatewayImpl, ModelRegistryImpl
-            from platform_module.rate_limit import PlatformAgentRateLimiter
-            from app_shell.agent_capability_issue_service import (
-                CapabilityIssueExclusionReader,
-                capability_issue_service,
-            )
-            from app_shell.agent_matcher import agent_matcher
-            from app_shell.agent_resolver_service import agent_resolver_service
-            from app_shell.agent_selection_service import agent_selection_service
-            from app_shell.agent_service import agent_service
-            from app_shell.compaction_service import compaction_service
-            from app_shell.context_assembly_service import context_assembly_service
-            from app_shell.debate_service import debate_service
-            from app_shell.memory_search_service import memory_search_service
-            from app_shell.memory_service import room_memory_service
-            from app_shell.notification_service import notification_service
-            from app_shell.openai_service import openai_service
-            from app_shell.room_coordinator_service import room_coordinator_service
-            from app_shell.room_membership_source import LegacyRoomMembershipSeedSource
-            from app_shell.room_runtime import (
-                build_turn_content,
-                room_runtime,
-                room_services,
-            )
             from execution.orchestration.room_supervisor_service import (
                 SupervisorPlanningError,
                 room_supervisor_service,
             )
-            from app_shell.s3_service import s3_service
-            from app_shell.task_service import task_service
+            from llm_gateway import LLMGatewayImpl, ModelRegistryImpl
+            from llm_gateway.config import LLMGatewayConfig
+            from llm_gateway.services import (
+                AgentSelectionLLMService,
+                DebateLLMService,
+                DiscoveryLLMService,
+                EmbeddingLLMService,
+                MessageParserLLMService,
+                RoomMemoryLLMService,
+                SummaryLLMService,
+                SupervisorLLMService,
+            )
+            from platform_module.rate_limit import PlatformAgentRateLimiter
 
             a2a_artifact_storage.bind_a2a_storage_dependencies(
                 storage_service=s3_service,
@@ -297,11 +313,6 @@ async def lifespan(app: FastAPI):
                     create_repository=Repository,
                 ),
             )
-            agent_viewset.bind_agent_viewset_dependencies(
-                embedding_source=openai_service,
-                vector_index_service=pinecone_db,
-            )
-
             class AppShellAgentAvatarManager:
                 def __init__(self, storage, agent_store) -> None:
                     self._storage = storage
@@ -368,14 +379,30 @@ async def lifespan(app: FastAPI):
             app.state.delivery_deps = _delivery_deps
 
             from a2a_adapter.task_status import coerce_task_state
+            from app_shell.a2a_runtime import a2a_service
+            from app_shell.database_service import db_service as _db_svc
+            from app_shell.hitl_service import (
+                bind_hitl_service,
+                create_hitl_service,
+                hitl_service,
+            )
+            from common.observability.run_metrics import increment_counter
             from execution.cancellation import (
                 AgentTaskCleanupAdapter,
                 CancellationStateC3Adapter,
                 HITLMessageCancellationAdapter,
                 MongoCancellationStoreAdapter,
             )
+            from execution.client_request_id import SSEClientRequestIdResolver
             from execution.dispatch.response_handler import AgentResponseHandler
-            from execution.dispatch.task_notifications import TaskNotificationAdapter
+            from execution.dispatch.task_notifications import (
+                TaskNotificationAdapter,
+                _notify_task_update_impl,
+                notify_task_update,
+            )
+            from execution.dispatch.task_notifications import (
+                bind_processing_status_emitter as bind_task_processing_status_emitter,
+            )
             from execution.dispatch.transports.webhook import WebhookTransport
             from execution.events import (
                 emit_processing_status,
@@ -386,33 +413,19 @@ async def lifespan(app: FastAPI):
                 HITLDeliveryAdapter,
                 HITLTaskNotificationAdapter,
             )
-            from execution.client_request_id import SSEClientRequestIdResolver
             from execution.orchestration.factory import (
                 create_room_message_center,
             )
             from execution.orchestration.factory import (
                 room_message_center as execution_room_message_center,
             )
-            from execution.run_lifecycle import RunLifecycleAdapter
-            from execution.run_queries import RunQueryAdapter
-            from app_shell.a2a_runtime import a2a_service
-            from app_shell.database_service import db_service as _db_svc
-            from app_shell.hitl_service import (
-                bind_hitl_service,
-                create_hitl_service,
-                hitl_service,
-            )
-            from common.observability.run_metrics import increment_counter
             from execution.run_command_handler import (
                 RunCommandHandler,
                 run_event_sse_enabled,
             )
+            from execution.run_lifecycle import RunLifecycleAdapter
             from execution.run_lifecycle_service import bind_run_lifecycle_service
-            from execution.dispatch.task_notifications import (
-                _notify_task_update_impl,
-                bind_processing_status_emitter as bind_task_processing_status_emitter,
-                notify_task_update,
-            )
+            from execution.run_queries import RunQueryAdapter
             room_center.bind_room_dependencies(
                 center=AppShellRoomCenter(),
                 database_service=_db_svc,
@@ -459,7 +472,59 @@ async def lifespan(app: FastAPI):
             )
 
             model_registry = ModelRegistryImpl()
-            llm_provider = LLMGatewayImpl(model_registry=model_registry)
+            llm_gateway_config = LLMGatewayConfig.from_settings(settings)
+            llm_provider = LLMGatewayImpl(
+                model_registry=model_registry,
+                config=llm_gateway_config,
+            )
+            supervisor_llm_service = SupervisorLLMService(
+                llm_provider=llm_provider,
+                default_model=llm_gateway_config.default_supervisor_model,
+            )
+            embedding_llm_service = EmbeddingLLMService(llm_provider=llm_provider)
+            discovery_llm_service = DiscoveryLLMService(
+                llm_provider=llm_provider,
+                max_expansion_words=settings.discovery_query_expansion_threshold,
+            )
+            summary_llm_service = SummaryLLMService(llm_provider=llm_provider)
+            agent_selection_llm_service = AgentSelectionLLMService(
+                llm_provider=llm_provider
+            )
+            debate_llm_service = DebateLLMService(llm_provider=llm_provider)
+            message_parser_llm_service = MessageParserLLMService(
+                llm_provider=llm_provider
+            )
+            room_memory_llm_service = RoomMemoryLLMService(llm_provider=llm_provider)
+            _db_svc.bind_embedding_service(embedding_llm_service)
+            openai_service.bind_llm_gateway(
+                llm_provider,
+                llm_gateway_config,
+                discovery_query_expansion_threshold=(
+                    settings.discovery_query_expansion_threshold
+                ),
+                debate_rounds=settings.debate_rounds,
+            )
+            gemini_service.bind_llm_gateway(llm_provider)
+            bedrock_service.bind_llm_services(
+                supervisor_service=supervisor_llm_service,
+                llm_provider=llm_provider,
+                llm_gateway_config=llm_gateway_config,
+            )
+            room_supervisor_service.bind_supervisor_service(supervisor_llm_service)
+            room_memory_service.bind_turn_notes_llm_provider(llm_provider)
+            chat_memory_service.bind_room_memory_llm_service(room_memory_llm_service)
+            room_runtime.bind_message_parser_service(message_parser_llm_service)
+            room_runtime.bind_debate_rounds(settings.debate_rounds)
+            agent_resolver_service.bind_agent_selection_service(
+                agent_selection_llm_service
+            )
+            memory_search_service.bind_embedding_service(embedding_llm_service)
+            room_coordinator_service.bind_summary_service(summary_llm_service)
+            openai_service._debate_service = debate_llm_service
+            agent_viewset.bind_agent_viewset_dependencies(
+                embedding_source=embedding_llm_service,
+                vector_index_service=pinecone_db,
+            )
             agent_card_resolver = AgentCardResolverImpl()
             _agent_deps = create_agent_deps(
                 mongo=mongo_dal,
@@ -491,7 +556,7 @@ async def lifespan(app: FastAPI):
                     database_service=_db_svc,
                     sse_manager=sse_manager,
                     room_coordinator_service=room_coordinator_service,
-                    openai_service=openai_service,
+                    summary_service=summary_llm_service,
                     notification_service=notification_service,
                     agent_resolver_service=agent_resolver_service,
                     a2a_service=a2a_service,
@@ -618,7 +683,7 @@ async def lifespan(app: FastAPI):
                 agent_card_resolver=agent_card_resolver,
                 object_storage=object_storage,
                 content_storage_repository=context_memory_facade.content_repository,
-                discovery_query_expander=openai_service,
+                discovery_query_expander=discovery_llm_service,
                 logger=logger,
             )
             platform_facade = create_platform_facade(
@@ -844,18 +909,18 @@ async def lifespan(app: FastAPI):
         await orphaned_upload_cleaner.start()
 
         # Initialize relay service
-        from app_shell.execution_runtime import get_bound_room_message_center
-        from app_shell.room_lock import RedisRoomDistributedLock
-        from execution.facade import hub_agent_response_internal_to_agent_event
         from app_shell.agent_liveness_service import (
             bind_agent_liveness_deps,
             check_and_sync_liveness,
         )
         from app_shell.database_service import db_service as _db_svc
+        from app_shell.execution_runtime import get_bound_room_message_center
         from app_shell.relay_service import (
             RelayHubLivenessReader,
             init_relay_service,
         )
+        from app_shell.room_lock import RedisRoomDistributedLock
+        from execution.facade import hub_agent_response_internal_to_agent_event
         _rmc = get_bound_room_message_center()
         _rmc.set_room_distributed_lock(RedisRoomDistributedLock(_redis_service))
         _relay_svc = init_relay_service(

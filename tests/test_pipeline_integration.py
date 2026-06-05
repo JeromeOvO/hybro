@@ -16,9 +16,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from a2a.types import AgentCapabilities, AgentCard
 
-from models.agent import Agent, AgentStatus
-from models.room import MessageContent, RoomUserMessage, UserAttachment
-from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
 from app_shell.agent_matcher import (
     MatchedAgent,
     MatchResult,
@@ -28,6 +25,9 @@ from app_shell.agent_matcher import (
 from app_shell.agent_selection_service import AgentSelectionService, RoutingStrategy
 from app_shell.debate_service import debate_service
 from app_shell.room_runtime import DispatchStrategy, RoomServices, resolve_strategy
+from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
+from models.agent import Agent, AgentStatus
+from models.room import MessageContent, RoomUserMessage, UserAttachment
 
 # ---- Test Helpers ----
 

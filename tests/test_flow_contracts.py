@@ -321,8 +321,8 @@ class TestAgentLifecycleFlow:
     @pytest.mark.asyncio
     async def test_private_agent_visibility(self, flow_user):
         """Private agent: owner sees it, others get 404."""
-        from models.request import AgentCenterRequest
         from app_shell.agent_service import AgentService
+        from models.request import AgentCenterRequest
 
         agent_id = "private-flow-001"
 
@@ -604,8 +604,8 @@ class TestErrorHandlingFlow:
 
     @pytest.mark.asyncio
     async def test_graceful_db_error_handling(self):
-        from models.request import AgentCenterRequest
         from app_shell.agent_service import AgentService
+        from models.request import AgentCenterRequest
 
         svc = AgentService()
         facade = MagicMock()

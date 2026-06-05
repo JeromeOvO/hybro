@@ -1,6 +1,6 @@
 import os
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 PINECONE_INDEX_NAME_DEFAULT = "agentmatch"
@@ -31,8 +31,10 @@ class Settings(BaseSettings):
     lead_ai_model: str = "gpt-5-mini"
     classifier_ai_model: str = "gpt-5-mini"
     embedding_model: str = "text-embedding-3-small"
+    supervisor_model: str | None = None
 
     google_api_key: str = ""
+    gemini_api_key: str = ""
     gemini_model_name: str = "gemini-2.0-flash"
     gemini_embedding_model_name: str = "gemini-embedding-exp-03-07"
 
@@ -238,6 +240,12 @@ class Settings(BaseSettings):
         if v is None:
             return frozenset()
         return frozenset(str(status).strip().lower() for status in v)
+
+    @model_validator(mode="after")
+    def apply_gemini_api_key_fallback(self):
+        if not str(self.google_api_key or "").strip():
+            self.google_api_key = self.gemini_api_key or os.getenv("GEMINI_API_KEY", "")
+        return self
 
 
 settings = Settings()

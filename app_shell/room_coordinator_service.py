@@ -5,13 +5,14 @@ from uuid import uuid4
 
 from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
 
+from app_shell.database_service import db_service
+from app_shell.delivery_runtime import sse_manager
+from common.dto import RoomMessageSummary
 from common.utils.a2a_helpers import extract_agent_text_from_room_message
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from llm_gateway.errors import LLMServiceNotBoundError
 from models.room import CoordinatorAgentId, MessageContent, Room, RoomAgentMessage
-from app_shell.database_service import db_service
-from app_shell.openai_service import openai_service
-from app_shell.delivery_runtime import sse_manager
 
 logger = get_logger(__name__)
 
@@ -33,8 +34,11 @@ class RoomCoordinatorService:
 
     def __init__(self) -> None:
         self.database_service = db_service
-        self.openai_service = openai_service
+        self.summary_service = None
         self.sse_manager = sse_manager
+
+    def bind_summary_service(self, service) -> None:
+        self.summary_service = service
 
     async def on_room_user_message_completed(
         self,
@@ -195,9 +199,21 @@ class RoomCoordinatorService:
                 client_request_id=summary_client_request_id,
             )
 
-            summary_text = await self.openai_service.summarize_agent_responses(
-                agent_responses, mode=summary_mode, user_question=user_question_text
-            )
+            summary_service = getattr(self, "summary_service", None)
+            if summary_service is None:
+                raise LLMServiceNotBoundError("SummaryLLMService is not bound")
+            summary_inputs = [
+                _room_message_summary_from_item(item) for item in agent_responses
+            ]
+            chunks = [
+                chunk
+                async for chunk in summary_service.summarize_agent_responses_stream(
+                    summary_inputs,
+                    mode=summary_mode,
+                    user_question=user_question_text,
+                )
+            ]
+            summary_text = "".join(chunks)
 
             if not summary_text:
                 # Dismiss the working indicator by sending a completed-empty update
@@ -215,6 +231,8 @@ class RoomCoordinatorService:
                 message_id=summary_message_id,
             )
 
+        except LLMServiceNotBoundError:
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.error(
                 "RoomCoordinatorService: Failed to coordinate room %s user message %s: %s",
@@ -393,3 +411,13 @@ class RoomCoordinatorService:
 
 
 room_coordinator_service = RoomCoordinatorService()
+
+
+def _room_message_summary_from_item(item) -> RoomMessageSummary:
+    if isinstance(item, RoomMessageSummary):
+        return item
+    return RoomMessageSummary(
+        agent_id=item.get("agent_id"),
+        agent_name=item.get("agent_name", "Unknown Agent"),
+        message=item.get("message", ""),
+    )

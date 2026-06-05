@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any, Protocol, TypeVar
 
+from common.dto import LLMStructuredResponse
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 
@@ -25,13 +26,16 @@ TMemoryContent = TypeVar("TMemoryContent", bound=MemoryContentLike)
 
 
 class TurnNotesLLMProvider(Protocol):
-    async def call_supervisor_llm_json(
+    async def generate_structured(
         self,
+        messages: list[dict],
         *,
-        system_prompt: str,
-        user_prompt: str,
-        model: str,
-    ) -> dict | None: ...
+        schema: dict | None = None,
+        json_mode: bool = False,
+        model: str | None = None,
+        timeout_seconds: float | None = None,
+        **kwargs: Any,
+    ) -> LLMStructuredResponse | dict[str, Any]: ...
 
 
 class ContextTurn(Protocol):
@@ -239,10 +243,10 @@ async def extract_turn_notes_llm(
             '- "one_liner": a single sentence summary (max 100 chars)\n\n'
             f"Turn content:\n{content[:3000]}"
         )
-        result = await provider.call_supervisor_llm_json(
+        result = await _generate_turn_notes_json(
+            provider,
             system_prompt="Extract structured notes. Respond with valid JSON only.",
             user_prompt=prompt,
-            model="gpt-4o-mini",
         )
         if isinstance(result, dict):
             return {
@@ -255,6 +259,37 @@ async def extract_turn_notes_llm(
         logger.debug("extract_turn_notes_llm failed, using heuristic: %s", e)
 
     return extract_turn_notes(content)
+
+
+async def _generate_turn_notes_json(
+    provider: TurnNotesLLMProvider,
+    *,
+    system_prompt: str,
+    user_prompt: str,
+) -> dict[str, Any] | None:
+    generate_structured = getattr(provider, "generate_structured", None)
+    if generate_structured is not None:
+        response = await generate_structured(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            schema=None,
+            json_mode=True,
+            model="context_memory_legacy_json_model",
+        )
+        if isinstance(response, dict):
+            return response
+        return response.data
+
+    legacy_json = getattr(provider, "call_supervisor_llm_json", None)
+    if legacy_json is not None:
+        return await legacy_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model="context_memory_legacy_json_model",
+        )
+    return None
 
 
 def clean_mention_format(

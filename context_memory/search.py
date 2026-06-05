@@ -8,7 +8,7 @@ from datetime import datetime
 
 from common.dto import MemorySearchResult, VectorRecord
 from common.errors import VectorIndexUnavailableError
-from common.protocols import ContentStorageRepository, LLMProvider, VectorDAL
+from common.protocols import ContentStorageRepository, LLMEmbeddingGateway, VectorDAL
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from context_memory.config import MemorySearchConfig
@@ -34,7 +34,7 @@ async def search_memory(
     query: str,
     limit: int,
     vector: VectorDAL,
-    llm_provider: LLMProvider,
+    llm_provider: LLMEmbeddingGateway,
     content_repository: ContentStorageRepository,
     config: MemorySearchConfig,
 ) -> tuple[list[MemorySearchResult], dict]:
@@ -150,7 +150,7 @@ async def vector_search(
     room_id: str,
     query: str,
     vector: VectorDAL,
-    llm_provider: LLMProvider,
+    llm_provider: LLMEmbeddingGateway,
     config: MemorySearchConfig,
 ) -> list[SearchRankingRecord]:
     embedding = await llm_provider.embed(query)
@@ -336,7 +336,7 @@ async def index_turn_for_search(
     room_id: str,
     turn_doc: dict,
     vector: VectorDAL,
-    llm_provider: LLMProvider,
+    llm_provider: LLMEmbeddingGateway,
     config: MemorySearchConfig,
 ) -> bool:
     content = turn_doc.get("content") or ""

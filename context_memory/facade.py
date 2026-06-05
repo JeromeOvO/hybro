@@ -15,7 +15,7 @@ from common.dto import (
 from common.observability import NoopTracingProvider
 from common.protocols import (
     ContentStorageRepository,
-    LLMProvider,
+    LLMGateway,
     MemoryRepository,
     RoomHistoryReader,
     VectorDAL,
@@ -50,7 +50,7 @@ class ContextMemoryFacade:
         content_repository: ContentStorageRepository,
         room_history_reader: RoomHistoryReader,
         vector: VectorDAL,
-        llm_provider: LLMProvider,
+        llm_provider: LLMGateway,
         id_factory: Callable[[], str],
         now: Callable[[], datetime],
         token_budget: TokenBudgetConfig | None = None,

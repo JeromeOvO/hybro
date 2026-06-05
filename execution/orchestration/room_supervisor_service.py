@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from common.utils.logger import get_logger
+from llm_gateway.errors import LLMModelRoutingError, LLMServiceNotBoundError
 from models.supervisor import (
     ActionType,
     AgentProfile,
@@ -22,9 +23,8 @@ from models.supervisor import (
 )
 
 if TYPE_CHECKING:
-    from app_shell.bedrock_service import BedrockService
     from app_shell.database_service import DatabaseService
-    from app_shell.openai_service import OpenAIService
+    from llm_gateway.services import SupervisorLLMService
 
 logger = get_logger(__name__)
 
@@ -210,23 +210,13 @@ class RoomSupervisorService:
 
     def __init__(
         self,
-        openai_service: OpenAIService | None = None,
-        bedrock_service: BedrockService | None = None,
+        openai_service: object | None = None,
+        supervisor_service: SupervisorLLMService | None = None,
+        bedrock_service: object | None = None,
         database_service: DatabaseService | None = None,
     ):
-        if openai_service is None:
-            from app_shell.openai_service import openai_service as _openai_service
-
-            self._openai_service = _openai_service
-        else:
-            self._openai_service = openai_service
-
-        if bedrock_service is None:
-            from app_shell.bedrock_service import bedrock_service as _bedrock_service
-
-            self._bedrock_service = _bedrock_service
-        else:
-            self._bedrock_service = bedrock_service
+        _ = openai_service, bedrock_service
+        self._supervisor_service = supervisor_service
 
         if database_service is None:
             from app_shell.database_service import db_service
@@ -234,6 +224,11 @@ class RoomSupervisorService:
             self._database_service = db_service
         else:
             self._database_service = database_service
+
+    def bind_supervisor_service(
+        self, supervisor_service: SupervisorLLMService
+    ) -> None:
+        self._supervisor_service = supervisor_service
 
     # =========================================================================
     # Agent registry formatting
@@ -386,6 +381,10 @@ class RoomSupervisorService:
 
             return action
 
+        except LLMServiceNotBoundError:
+            raise
+        except LLMModelRoutingError:
+            raise
         except Exception as e:
             logger.warning("Supervisor decide_next failed: %s", e)
             if not trajectory.entries:
@@ -448,6 +447,10 @@ class RoomSupervisorService:
                     "synthesis_length": total,
                 },
             )
+        except LLMServiceNotBoundError:
+            raise
+        except LLMModelRoutingError:
+            raise
         except Exception as e:
             logger.error("Supervisor synthesis stream failed: %s", e)
             fallback = self._fallback_synthesis(trajectory)
@@ -840,7 +843,7 @@ class RoomSupervisorService:
         return "\n\n".join(lines)
 
     # =========================================================================
-    # LLM Helpers (delegate to openai_service)
+    # LLM Helpers
     # =========================================================================
 
     async def _call_supervisor_llm(
@@ -850,22 +853,15 @@ class RoomSupervisorService:
     ) -> dict:
         """Call the Supervisor LLM and return JSON response.
 
-        Routes to either Bedrock (Claude Opus 4.6) or OpenAI (gpt-4o-mini)
-        based on the USE_BEDROCK_SUPERVISOR feature flag.
+        Routes through the focused supervisor LLM service. Model/provider routing
+        is owned by llm_gateway.
         """
-        from common.config.settings import settings
-
-        if settings.use_bedrock_supervisor:
-            return await self._bedrock_service.call_claude_json(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                model=settings.bedrock_supervisor_model,
-            )
-        else:
-            return await self._openai_service.call_supervisor_llm_json(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-            )
+        if self._supervisor_service is None:
+            raise LLMServiceNotBoundError("SupervisorLLMService is not bound")
+        return await self._supervisor_service.call_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
 
     async def _call_supervisor_llm_text(
         self,
@@ -874,8 +870,7 @@ class RoomSupervisorService:
     ) -> str:
         """Call the Supervisor LLM and return text response (for synthesis).
 
-        Routes to either Bedrock (Claude Opus 4.6) or OpenAI (gpt-4o-mini)
-        based on the USE_BEDROCK_SUPERVISOR feature flag.
+        Routes through the focused supervisor LLM service.
         """
         parts: list[str] = []
         async for token in self._supervisor_llm_text_stream(
@@ -890,20 +885,13 @@ class RoomSupervisorService:
         system_prompt: str,
         user_prompt: str,
     ):
-        """Return async iterator of Supervisor LLM text (Bedrock or OpenAI)."""
-        from common.config.settings import settings
-
-        if settings.use_bedrock_supervisor:
-            return self._bedrock_service.call_claude_text_stream(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                model=settings.bedrock_supervisor_model,
-            )
-        return self._openai_service.call_supervisor_llm_text_stream(
+        """Return async iterator of supervisor LLM text."""
+        if self._supervisor_service is None:
+            raise LLMServiceNotBoundError("SupervisorLLMService is not bound")
+        return self._supervisor_service.call_text_stream(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
-
 
 # Singleton instance
 room_supervisor_service = RoomSupervisorService()

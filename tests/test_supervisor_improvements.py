@@ -9,20 +9,20 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from execution.orchestration.room_supervisor_service import RoomSupervisorService
+from execution.orchestration.supervisor_executor import SupervisorExecutor
 from models.supervisor import (
     ActionType,
     AgentProfile,
     DelegateTarget,
     RoomConfig,
     RunStatus,
+    StepResult,
     StepStatus,
     SupervisorAction,
     SupervisorTrajectory,
     TrajectoryEntry,
-    StepResult,
 )
-from execution.orchestration.supervisor_executor import SupervisorExecutor
-from execution.orchestration.room_supervisor_service import RoomSupervisorService
 
 # =============================================================================
 # Part 1a: Trajectory response preview (3000-char cap)
@@ -107,13 +107,17 @@ class TestQualityEvaluationPrompt:
     """Verify the system prompt includes quality evaluation instructions."""
 
     def test_system_prompt_contains_quality_evaluation_block(self):
-        from execution.orchestration.room_supervisor_service import SUPERVISOR_SYSTEM_PROMPT
+        from execution.orchestration.room_supervisor_service import (
+            SUPERVISOR_SYSTEM_PROMPT,
+        )
 
         assert "QUALITY EVALUATION" in SUPERVISOR_SYSTEM_PROMPT
         assert "unsatisfactory" in SUPERVISOR_SYSTEM_PROMPT
 
     def test_system_prompt_mentions_re_delegation_criteria(self):
-        from execution.orchestration.room_supervisor_service import SUPERVISOR_SYSTEM_PROMPT
+        from execution.orchestration.room_supervisor_service import (
+            SUPERVISOR_SYSTEM_PROMPT,
+        )
 
         assert "couldn't\n  find anything" in SUPERVISOR_SYSTEM_PROMPT or \
                "couldn't find anything" in SUPERVISOR_SYSTEM_PROMPT or \

@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from models.room import RoomAgentMessage
 from execution.dispatch.agent_dispatcher import AgentDispatcher
+from models.room import RoomAgentMessage
 
 
 def _make_dispatcher():

@@ -13,11 +13,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from a2a.types import AgentCapabilities, AgentCard, Message
 
+from execution.dispatch.dispatch_middleware import DispatchChain, DispatchContext
+from execution.dispatch.middleware.hub_transport import HubTransportMiddleware
 from models.agent import Agent, AgentStatus
 from models.processing import ProcessingResult, ProcessingStatus
 from models.room import MessageContent, RoomAgentMessage
-from execution.dispatch.dispatch_middleware import DispatchChain, DispatchContext
-from execution.dispatch.middleware.hub_transport import HubTransportMiddleware
 
 # ===========================================================================
 # Helpers

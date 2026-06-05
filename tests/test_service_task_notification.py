@@ -9,8 +9,8 @@ import pytest
 from a2a.types import Artifact, Part, Task, TaskState, TaskStatus, TextPart
 
 from common.a2a_constants import SSEProcessingStatus
-from models.room import MessageContent, Room, RoomAgentMessage
 from execution.dispatch.task_notifications import notify_task_update
+from models.room import MessageContent, Room, RoomAgentMessage
 
 FROZEN_TIME = datetime(2026, 1, 15, 12, 0, 0)
 

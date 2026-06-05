@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from execution.orchestration.supervisor_executor import SupervisorExecutor
 from models.supervisor import (
     ActionType,
     AgentProfile,
@@ -22,13 +23,12 @@ from models.supervisor import (
     DelegateTarget,
     RoomConfig,
     RunStatus,
+    StepResult,
     StepStatus,
     SupervisorAction,
     SupervisorRunResult,
     SupervisorTrajectory,
-    StepResult,
 )
-from execution.orchestration.supervisor_executor import SupervisorExecutor
 
 _ROOT = Path(__file__).resolve().parents[1]
 

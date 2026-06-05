@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from app_shell.agent_service import agent_service
 from models.request import AgentCenterRequest
 from models.response import AgentCenterResponse
-from app_shell.agent_service import agent_service
 
 
 class AppShellAgentCenter:

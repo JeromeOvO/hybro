@@ -12,15 +12,15 @@ Covers:
 
 from datetime import UTC, datetime
 
+from execution.orchestration.room_supervisor_service import RoomSupervisorService
 from models.supervisor import (
     ActionType,
     DelegateTarget,
+    StepResult,
     SupervisorAction,
     SupervisorTrajectory,
     TrajectoryEntry,
-    StepResult,
 )
-from execution.orchestration.room_supervisor_service import RoomSupervisorService
 
 
 def _make_service() -> RoomSupervisorService:

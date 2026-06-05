@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from hub_runtime_bridge.task_ownership import InMemoryHubTaskOwnershipStore
-from models.processing import ProcessingStatus
+from app_shell.a2a_runtime import A2AService
 from execution.dispatch.response_handler import AgentResponseHandler
 from execution.dispatch.transports.relay import RelayTransport
-from app_shell.a2a_runtime import A2AService
+from hub_runtime_bridge.task_ownership import InMemoryHubTaskOwnershipStore
+from models.processing import ProcessingStatus
 
 # ===========================================================================
 # Helpers

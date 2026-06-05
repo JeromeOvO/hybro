@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from a2a_adapter.task_status import build_completed_text_task
 from common.a2a_constants import CommonTaskState, SSEProcessingStatus, is_terminal_state
+from common.dto import RoomMessageSummary
 from common.protocols import RoomDistributedLock
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
@@ -21,6 +22,7 @@ from execution.dispatch.transports.direct import DirectTransport
 from execution.orchestration.queue_executor import QueueExecutor, QueueResult
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from execution.state.task_state_manager import TaskStateManager
+from llm_gateway.errors import LLMServiceNotBoundError
 from models.request import OrchestrationRequest, RoomCenterAgentMessageRequest
 from models.response import OrchestrationResponse
 from models.room import CoordinatorAgentId
@@ -42,7 +44,7 @@ room_memory_service = None
 notification_service = None
 rate_limit_service = None
 room_coordinator_service = None
-openai_service = None
+summary_service = None
 room_services = None
 room_supervisor_service = None
 sse_manager = None
@@ -54,6 +56,16 @@ build_turn_content = None
 SupervisorPlanningError = RuntimeError
 
 logger = get_logger(__name__)
+
+
+def _room_message_summary_from_item(item) -> RoomMessageSummary:
+    if isinstance(item, RoomMessageSummary):
+        return item
+    return RoomMessageSummary(
+        agent_id=item.get("agent_id"),
+        agent_name=item.get("agent_name", "Unknown Agent"),
+        message=item.get("message", ""),
+    )
 
 
 class _RoomMessageCenterSettings:
@@ -87,7 +99,7 @@ class RoomMessageCenter:
         database_service,
         sse_manager,
         room_coordinator_service,
-        openai_service,
+        summary_service=None,
         notification_service,
         agent_resolver_service,
         a2a_service,
@@ -108,7 +120,7 @@ class RoomMessageCenter:
         build_turn_content_func=None,
         supervisor_planning_error_cls=RuntimeError,
         orphan_threshold_minutes: int | None = None,
-        debate_rounds: int = 1,
+        debate_rounds: int = 2,
         cloud_health_cache_ttl: float = 30.0,
         cloud_health_check_timeout: float = 5.0,
     ):
@@ -116,7 +128,7 @@ class RoomMessageCenter:
         self.database_service = database_service
         self.sse_manager = sse_manager
         self.room_coordinator_service = room_coordinator_service
-        self.openai_service = openai_service
+        self.summary_service = summary_service
         self.task_notifications = task_notifications
         self.room_memory_service = room_memory_service
         self.context_assembly_service = context_assembly_service
@@ -1695,7 +1707,7 @@ class RoomMessageCenter:
         the same multi-target DELEGATE are paused.
         """
         from common.utils.time import utcnow
-        from models.supervisor import StepStatus, StepResult
+        from models.supervisor import StepResult, StepStatus
 
         for entry in trajectory.entries:
             for idx, result in enumerate(entry.results):
@@ -2489,7 +2501,10 @@ class RoomMessageCenter:
             else:
                 # Collect agent responses
                 if trajectory_responses:
-                    agent_responses = trajectory_responses
+                    agent_responses = [
+                        _room_message_summary_from_item(item)
+                        for item in trajectory_responses
+                    ]
                 else:
                     agent_messages = await self.room_coordinator_service._collect_agent_messages_for_user_message(
                         user_message_id
@@ -2521,10 +2536,13 @@ class RoomMessageCenter:
                             agent_name = await self.database_service.get_agent_name_by_agent_id(
                                 msg.agent_id
                             )
-                            agent_responses.append({
-                                "agent_name": agent_name or msg.agent_id,
-                                "message": text,
-                            })
+                            agent_responses.append(
+                                RoomMessageSummary(
+                                    agent_id=msg.agent_id,
+                                    agent_name=agent_name or msg.agent_id,
+                                    message=text,
+                                )
+                            )
 
                 # Skip summary entirely when fewer than 2 agents responded
                 if len(agent_responses) < 2:
@@ -2536,10 +2554,12 @@ class RoomMessageCenter:
                 )
 
                 mode = "debate" if is_debate else "non_debate"
+                if self.summary_service is None:
+                    raise LLMServiceNotBoundError("SummaryLLMService is not bound")
                 content = await self._stream_summary_content(
                     room_id,
                     summary_message_id,
-                    self.openai_service.summarize_agent_responses_stream(
+                    self.summary_service.summarize_agent_responses_stream(
                         agent_responses,
                         mode=mode,
                         user_question=user_question_text,
@@ -2596,6 +2616,8 @@ class RoomMessageCenter:
                 client_request_id=summary_client_request_id,
             )
 
+        except LLMServiceNotBoundError:
+            raise
         except Exception as exc:
             logger.error(
                 "RoomMessageCenter: _emit_unified_summary failed for room %s "

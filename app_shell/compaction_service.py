@@ -10,6 +10,7 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6 for design details.
 
 import os
 
+from app_shell.database_service import db_service
 from common.utils.context_utils import estimate_tokens
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -23,7 +24,6 @@ from platform_module.content_storage import (
     ContentExpiredError,
     hash_content,
 )
-from app_shell.database_service import db_service
 
 logger = get_logger(__name__)
 
