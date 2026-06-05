@@ -6,8 +6,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from models.api_key import APIKey
-from models.hub import HubAgentSync, RelayToHubEvent
 from app_shell.agent_liveness_service import (
     bind_agent_liveness_deps,
     check_and_sync_liveness,
@@ -17,6 +15,8 @@ from app_shell.relay_service import (
     RelayHubLivenessReader,
     RelayService,
 )
+from models.api_key import APIKey
+from models.hub import HubAgentSync, RelayToHubEvent
 from tests.conftest import FROZEN_TIME
 
 # ===========================================================================
@@ -246,9 +246,11 @@ class TestGetHubStatusLiveness:
         """get_hub_status reports online even if MongoDB says offline,
         because is_hub_alive checks Redis directly."""
         mongo = _make_mongo()
-        mongo.get_hubs_by_user = AsyncMock(return_value=[
-            {"hub_id": "hub-1", "is_online": False, "last_connected_at": None},
-        ])
+        mongo.get_hubs_by_user = AsyncMock(
+            return_value=[
+                {"hub_id": "hub-1", "is_online": False, "last_connected_at": None},
+            ]
+        )
         mongo.count_hub_agents = AsyncMock(return_value=(2, 1))
         streams = _make_streams()
         streams.is_hub_alive = AsyncMock(return_value=True)
@@ -262,9 +264,11 @@ class TestGetHubStatusLiveness:
         """get_hub_status reports offline when Redis key is absent,
         even if MongoDB still says online (stale)."""
         mongo = _make_mongo()
-        mongo.get_hubs_by_user = AsyncMock(return_value=[
-            {"hub_id": "hub-1", "is_online": True, "last_connected_at": None},
-        ])
+        mongo.get_hubs_by_user = AsyncMock(
+            return_value=[
+                {"hub_id": "hub-1", "is_online": True, "last_connected_at": None},
+            ]
+        )
         mongo.count_hub_agents = AsyncMock(return_value=(0, 3))
         streams = _make_streams()
         streams.is_hub_alive = AsyncMock(return_value=False)
@@ -277,9 +281,11 @@ class TestGetHubStatusLiveness:
     async def test_no_side_effects_on_read_path(self):
         """get_hub_status must NOT call mark_hub_agents_offline (read-only)."""
         mongo = _make_mongo()
-        mongo.get_hubs_by_user = AsyncMock(return_value=[
-            {"hub_id": "hub-1", "is_online": True, "last_connected_at": None},
-        ])
+        mongo.get_hubs_by_user = AsyncMock(
+            return_value=[
+                {"hub_id": "hub-1", "is_online": True, "last_connected_at": None},
+            ]
+        )
         mongo.count_hub_agents = AsyncMock(return_value=(0, 0))
         streams = _make_streams()
         streams.is_hub_alive = AsyncMock(return_value=False)
@@ -304,9 +310,11 @@ class TestHeartbeatCheckConnectionIdGuard:
         streams.is_hub_alive = AsyncMock(return_value=False)
 
         online_cursor = MagicMock()
-        online_cursor.to_list = AsyncMock(return_value=[
-            {"hub_id": "hub-stale", "connection_id": "conn-old-123"},
-        ])
+        online_cursor.to_list = AsyncMock(
+            return_value=[
+                {"hub_id": "hub-stale", "connection_id": "conn-old-123"},
+            ]
+        )
         offline_cursor = MagicMock()
         offline_cursor.to_list = AsyncMock(return_value=[])
 
@@ -323,7 +331,9 @@ class TestHeartbeatCheckConnectionIdGuard:
         await svc._do_heartbeat_check(stale_threshold=90)
 
         mongo.update_hub_status_if_current.assert_awaited_with(
-            "hub-stale", connection_id="conn-old-123", is_online=False,
+            "hub-stale",
+            connection_id="conn-old-123",
+            is_online=False,
         )
         writer.mark_hub_agents_offline.assert_awaited_once_with("hub-stale")
 
@@ -335,9 +345,11 @@ class TestHeartbeatCheckConnectionIdGuard:
         streams.is_hub_alive = AsyncMock(return_value=False)
 
         online_cursor = MagicMock()
-        online_cursor.to_list = AsyncMock(return_value=[
-            {"hub_id": "hub-race", "connection_id": "conn-old"},
-        ])
+        online_cursor.to_list = AsyncMock(
+            return_value=[
+                {"hub_id": "hub-race", "connection_id": "conn-old"},
+            ]
+        )
         offline_cursor = MagicMock()
         offline_cursor.to_list = AsyncMock(return_value=[])
 
@@ -354,15 +366,53 @@ class TestHeartbeatCheckConnectionIdGuard:
         mongo.update_hub_status_if_current.assert_awaited_once()
         mongo.agents_collection.update_many.assert_not_awaited()
 
+    async def test_pass1_signals_disconnect_when_guard_fails_without_agent_offline_write(
+        self,
+    ):
+        mongo = _make_mongo()
+        mongo.update_hub_status_if_current = AsyncMock(return_value=False)
+        streams = _make_streams()
+        streams.is_hub_alive = AsyncMock(return_value=False)
+
+        online_cursor = MagicMock()
+        online_cursor.to_list = AsyncMock(
+            return_value=[
+                {"hub_id": "hub-race", "connection_id": "conn-old"},
+            ]
+        )
+        offline_cursor = MagicMock()
+        offline_cursor.to_list = AsyncMock(return_value=[])
+
+        def find_router(query, projection):
+            if query.get("is_online") is True:
+                return online_cursor
+            return offline_cursor
+
+        mongo.hubs_collection.find = MagicMock(side_effect=find_router)
+        svc = _make_service(mongo=mongo, streams=streams)
+        writer = _make_writer()
+        svc.bind_agent_registry_writer(writer)
+        disconnect = asyncio.Event()
+        svc._hub_disconnect_events["hub-race"] = disconnect
+
+        await svc._do_heartbeat_check(stale_threshold=90)
+
+        assert disconnect.is_set()
+        mongo.update_hub_status_if_current.assert_awaited_once()
+        writer.mark_hub_agents_offline.assert_not_awaited()
+        mongo.agents_collection.update_many.assert_not_awaited()
+
     async def test_pass1_logs_expiry_with_connection_and_local_context(self, caplog):
         mongo = _make_mongo()
         streams = _make_streams()
         streams.is_hub_alive = AsyncMock(return_value=False)
 
         online_cursor = MagicMock()
-        online_cursor.to_list = AsyncMock(return_value=[
-            {"hub_id": "hub-stale", "connection_id": "conn-old-123"},
-        ])
+        online_cursor.to_list = AsyncMock(
+            return_value=[
+                {"hub_id": "hub-stale", "connection_id": "conn-old-123"},
+            ]
+        )
         offline_cursor = MagicMock()
         offline_cursor.to_list = AsyncMock(return_value=[])
 
@@ -467,9 +517,7 @@ class TestHeartbeatSelfHeal:
         online_cursor = MagicMock()
         online_cursor.to_list = AsyncMock(return_value=[])  # no stale online hubs
         offline_cursor = MagicMock()
-        offline_cursor.to_list = AsyncMock(
-            return_value=[{"hub_id": "hub-recovering"}]
-        )
+        offline_cursor.to_list = AsyncMock(return_value=[{"hub_id": "hub-recovering"}])
 
         def find_router(query, projection):
             if query.get("is_online") is True:
@@ -492,9 +540,7 @@ class TestHeartbeatSelfHeal:
         online_cursor = MagicMock()
         online_cursor.to_list = AsyncMock(return_value=[])
         offline_cursor = MagicMock()
-        offline_cursor.to_list = AsyncMock(
-            return_value=[{"hub_id": "hub-dead"}]
-        )
+        offline_cursor.to_list = AsyncMock(return_value=[{"hub_id": "hub-dead"}])
 
         def find_router(query, projection):
             if query.get("is_online") is True:
@@ -540,7 +586,9 @@ class TestMarkHubAgentsOfflineGuard:
         await svc.mark_hub_agents_offline("hub-1", connection_id="conn-123")
 
         mongo.update_hub_status_if_current.assert_awaited_with(
-            "hub-1", connection_id="conn-123", is_online=False,
+            "hub-1",
+            connection_id="conn-123",
+            is_online=False,
         )
         writer.mark_hub_agents_offline.assert_awaited_once_with("hub-1")
         mongo.agents_collection.update_many.assert_not_awaited()

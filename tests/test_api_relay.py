@@ -15,7 +15,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app_shell.relay_service import (
+    RelayService,
+    _LegacyPublishSink,
+    _RelayPublishAuthorizationReader,
+    init_relay_service,
+)
+from common.dto import HubDispatchCommand
 from common.dto.agent import SyncedHubAgent
+from execution.dispatch.agent_event import AgentEvent
+from execution.dispatch.response_handler import AgentResponseHandler
+from execution.dispatch.transports.relay import RelayTransport
 from models.api_key import APIKey
 from models.hub import (
     HubAgentSync,
@@ -24,15 +34,6 @@ from models.hub import (
     RelayToHubEvent,
 )
 from models.room import MessageContent, Room, RoomAgentMessage
-from execution.dispatch.agent_event import AgentEvent
-from execution.dispatch.response_handler import AgentResponseHandler
-from execution.dispatch.transports.relay import RelayTransport
-from app_shell.relay_service import (
-    RelayService,
-    _LegacyPublishSink,
-    _RelayPublishAuthorizationReader,
-    init_relay_service,
-)
 from tests.conftest import FROZEN_TIME
 
 # ===========================================================================
@@ -86,7 +87,9 @@ def _make_relay_service(
         db_service = MagicMock()
         db_service.get_room_by_room_id = AsyncMock(return_value=None)
         db_service.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
-        db_service.update_room_agent_message_by_message_id = AsyncMock(return_value=True)
+        db_service.update_room_agent_message_by_message_id = AsyncMock(
+            return_value=True
+        )
         db_service.update_task_state_on_message = AsyncMock(return_value=True)
         db_service.is_message_cancelled = AsyncMock(return_value=False)
         db_service.ai_service.get_embedding = AsyncMock(return_value=[0.0] * 128)
@@ -309,9 +312,7 @@ async def test_relay_publish_authorization_walks_agent_parent_chain_to_root_user
         related_message_id="umsg-root",
         message_content=MessageContent(message_text=""),
     )
-    db.get_room_agent_message_by_message_id = AsyncMock(
-        side_effect=[msg, parent]
-    )
+    db.get_room_agent_message_by_message_id = AsyncMock(side_effect=[msg, parent])
     db.get_room_user_message_by_message_id = AsyncMock(
         side_effect=[None, MagicMock(message_type="user")]
     )
@@ -483,7 +484,10 @@ class TestRelayServiceAgentSync:
         svc.bind_agent_registry_writer(writer)
 
         synced = await svc.sync_agents(
-            "hub-001", [], _make_api_key(), prune_missing=True,
+            "hub-001",
+            [],
+            _make_api_key(),
+            prune_missing=True,
         )
 
         assert synced == []
@@ -500,7 +504,10 @@ class TestRelayServiceAgentSync:
         svc.bind_agent_registry_writer(writer)
 
         synced = await svc.sync_agents(
-            "hub-001", [], _make_api_key(), prune_missing=False,
+            "hub-001",
+            [],
+            _make_api_key(),
+            prune_missing=False,
         )
 
         assert synced == []
@@ -712,6 +719,35 @@ async def test_reply_to_relay_task_uses_in_memory_live_queue_without_streams():
     assert event["reply_text"] == "yes"
 
 
+@pytest.mark.asyncio
+async def test_send_to_hub_uses_in_memory_live_queue_without_streams():
+    import asyncio
+
+    svc = _make_relay_service()
+    q = asyncio.Queue()
+    svc._hub_queues["hub-001"] = q
+
+    result = await svc.send_to_hub(
+        HubDispatchCommand(
+            hub_id="hub-001",
+            agent_id="agent-1",
+            local_agent_id="local-1",
+            room_id="room-1",
+            user_message_id="user-msg-1",
+            agent_message_id="agent-msg-1",
+            payload={"text": "hello"},
+            task_id="task-1",
+        )
+    )
+
+    event = await q.get()
+    assert result.accepted is True
+    assert event["type"] == "user_message"
+    assert event["task_id"] == "task-1"
+    assert event["agent_message_id"] == "agent-msg-1"
+    assert event["message"] == {"text": "hello"}
+
+
 # ===========================================================================
 # RelayService — Publish
 # ===========================================================================
@@ -731,7 +767,9 @@ class TestRelayServicePublish:
     @pytest.mark.asyncio
     async def test_publish_rejects_wrong_room_owner(self):
         mongo = MagicMock()
-        mongo.get_hub = AsyncMock(return_value={"hub_id": "hub-001", "user_id": "user-A"})
+        mongo.get_hub = AsyncMock(
+            return_value={"hub_id": "hub-001", "user_id": "user-A"}
+        )
         db_service = MagicMock()
         room = Room(
             room_id="room-1",
@@ -773,7 +811,9 @@ class TestRelayServicePublish:
         db_service.get_room_agent_message_by_message_id = AsyncMock(
             return_value=agent_msg
         )
-        db_service.update_room_agent_message_by_message_id = AsyncMock(return_value=True)
+        db_service.update_room_agent_message_by_message_id = AsyncMock(
+            return_value=True
+        )
         db_service.update_task_state_on_message = AsyncMock(return_value=True)
         db_service.is_message_cancelled = AsyncMock(return_value=False)
         agent_mock = MagicMock()
@@ -823,6 +863,8 @@ class TestRelayServiceStatus:
         result = await svc.get_hub_status("user-001")
         assert len(result) == 1
         assert result[0].hub_id == "hub-001"
+        assert result[0].is_online is False
+        assert result[0].last_connected_at is None
         assert result[0].agent_count == 4
         assert result[0].active_agent_count == 3
         assert result[0].inactive_agent_count == 1
