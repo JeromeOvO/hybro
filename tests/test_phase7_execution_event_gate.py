@@ -108,7 +108,7 @@ def _qualified_function_names(path: Path) -> set[str]:
 
     names: set[str] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
         owner = parent.get(node)
         if isinstance(owner, ast.ClassDef):
@@ -143,10 +143,22 @@ def test_execution_event_manifest_covers_status_helpers_and_hub_ingress():
 
     expected = {
         ("execution/events.py", "emit_processing_status"),
-        ("execution/dispatch/response_handler.py", "AgentResponseHandler._emit_processing_status"),
-        ("execution/orchestration/queue_executor.py", "QueueExecutor._emit_processing_status"),
-        ("execution/orchestration/room_message_center.py", "RoomMessageCenter._emit_processing_status"),
-        ("execution/orchestration/supervisor_executor.py", "SupervisorExecutor._emit_processing_status"),
+        (
+            "execution/dispatch/response_handler.py",
+            "AgentResponseHandler._emit_processing_status",
+        ),
+        (
+            "execution/orchestration/queue_executor.py",
+            "QueueExecutor._emit_processing_status",
+        ),
+        (
+            "execution/orchestration/room_message_center.py",
+            "RoomMessageCenter._emit_processing_status",
+        ),
+        (
+            "execution/orchestration/supervisor_executor.py",
+            "SupervisorExecutor._emit_processing_status",
+        ),
         ("execution/facade.py", "hub_agent_response_internal_to_agent_event"),
     }
     actual = {(entry["path"], entry["function"]) for entry in manifest}
@@ -314,7 +326,9 @@ async def test_emit_processing_status_keeps_run_event_correlation_explicit_only(
         client_request_id_resolver=resolver,
     )
 
-    run_event, processing_status = [call.args[0] for call in publisher.emit.await_args_list]
+    run_event, processing_status = [
+        call.args[0] for call in publisher.emit.await_args_list
+    ]
     assert run_event.correlation_id is None
     assert processing_status.client_request_id == "resolved-msg-1"
 
@@ -338,7 +352,10 @@ async def test_emit_processing_status_resolver_failure_does_not_skip_lifecycle()
     )
 
     lifecycle.record_processing_status.assert_awaited_once()
-    assert lifecycle.record_processing_status.await_args.kwargs["client_request_id"] is None
+    assert (
+        lifecycle.record_processing_status.await_args.kwargs["client_request_id"]
+        is None
+    )
     event = publisher.emit.await_args.args[0]
     assert event.client_request_id is None
 
@@ -521,9 +538,7 @@ def test_processing_status_delivery_translation_preserves_final_sse_shape():
     assert sse["data"]["details"] is None
     assert "timestamp" not in sse["data"]
     assert sse["data"]["client_request_id"] == "cr-1"
-    assert sse["data"]["agents"] == [
-        {"agent_id": "agent-1", "agent_name": "Agent One"}
-    ]
+    assert sse["data"]["agents"] == [{"agent_id": "agent-1", "agent_name": "Agent One"}]
 
 
 def test_processing_status_delivery_translation_preserves_structured_details():

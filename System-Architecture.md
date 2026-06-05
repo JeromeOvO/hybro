@@ -167,6 +167,9 @@ OpenAI, Google GenAI, or Bedrock runtime SDKs. The public gateway layer resolves
 logical model names through `ModelRegistryImpl`, applies centralized retry and
 timeout policy through `LLMGatewayConfig`, and exposes text, structured JSON,
 embedding, and streaming operations through protocols in `common.protocols`.
+`LLMGatewayConfig.from_settings()` reads typed `LLM_GATEWAY_*` policy fields;
+`ModelRegistryImpl` remains responsible for mapping logical routes to concrete
+provider model IDs.
 
 Focused workflow services under `llm_gateway/services/` wrap prompt workflows
 without importing domain models:

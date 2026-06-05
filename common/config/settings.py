@@ -38,6 +38,19 @@ class Settings(BaseSettings):
     gemini_model_name: str = "gemini-2.0-flash"
     gemini_embedding_model_name: str = "gemini-embedding-exp-03-07"
 
+    # LLM gateway routing and runtime policy
+    llm_gateway_max_attempts: int = 2
+    llm_gateway_retry_backoff_seconds: float = 0.2
+    llm_gateway_request_timeout_seconds: float = 60.0
+    llm_gateway_stream_timeout_seconds: float = 120.0
+    llm_gateway_supervisor_json_timeout_seconds: float = 30.0
+    llm_gateway_supervisor_text_timeout_seconds: float = 90.0
+    llm_gateway_supervisor_stream_timeout_seconds: float = 90.0
+    llm_gateway_bedrock_request_timeout_seconds: float = 45.0
+    llm_gateway_default_generation_model: str = "lead_ai_model"
+    llm_gateway_default_embedding_model: str = "embedding_model"
+    llm_gateway_default_supervisor_model: str = "supervisor_model"
+
     log_level: str = "INFO"
     log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     log_path: str = "logs/app.log"
@@ -184,7 +197,9 @@ class Settings(BaseSettings):
     )
     memory_search_max_results: int = 10  # Max results to return
     memory_search_max_snippet_chars: int = 500  # Max chars per snippet
-    memory_search_index_name: str = MEMORY_SEARCH_INDEX_NAME_DEFAULT  # Pinecone index for memory
+    memory_search_index_name: str = (
+        MEMORY_SEARCH_INDEX_NAME_DEFAULT  # Pinecone index for memory
+    )
 
     # AWS S3 (file uploads and binary content storage)
     s3_bucket_name: str = ""
@@ -236,7 +251,9 @@ class Settings(BaseSettings):
     @classmethod
     def parse_terminal_processing_statuses(cls, v):
         if isinstance(v, str):
-            return frozenset(status.strip().lower() for status in v.split(",") if status.strip())
+            return frozenset(
+                status.strip().lower() for status in v.split(",") if status.strip()
+            )
         if v is None:
             return frozenset()
         return frozenset(str(status).strip().lower() for status in v)

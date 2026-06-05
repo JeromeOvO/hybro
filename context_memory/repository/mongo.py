@@ -69,9 +69,7 @@ class MemoryMongoRepository:
     async def get_room_memory_by_memory_id(self, memory_id: str) -> dict | None:
         return await self._memories.find_one({"memory_id": memory_id})
 
-    async def update_room_memory_by_room_id(
-        self, room_id: str, updates: dict
-    ) -> bool:
+    async def update_room_memory_by_room_id(self, room_id: str, updates: dict) -> bool:
         doc = await self._memories.find_one_and_update(
             {"room_id": room_id},
             {"$set": _sanitize_update(updates)},
@@ -104,7 +102,9 @@ class MemoryMongoRepository:
         if max_turns <= 0:
             return False, False
         max_summary_chars = max(max_summary_chars, 10)
-        doc = await self._push_turn(room_id, turn, max_turns, summary_stub, max_summary_chars)
+        doc = await self._push_turn(
+            room_id, turn, max_turns, summary_stub, max_summary_chars
+        )
         matched = doc is not None
         # The append pipeline always changes a matched room by adding the new turn.
         # That keeps the legacy modified/matched tuple semantics equivalent here.
@@ -154,8 +154,15 @@ class MemoryMongoRepository:
         self, room_id: str, turn_id: str, turn_notes: dict
     ) -> bool:
         legacy_ok = await self._memories.update_one(
-            {"room_id": room_id, "memory_content.conversation_history.turn_id": turn_id},
-            {"$set": {"memory_content.conversation_history.$[turn].turn_notes": turn_notes}},
+            {
+                "room_id": room_id,
+                "memory_content.conversation_history.turn_id": turn_id,
+            },
+            {
+                "$set": {
+                    "memory_content.conversation_history.$[turn].turn_notes": turn_notes
+                }
+            },
             array_filters=[{"turn.turn_id": turn_id}],
         )
         direct_ok = await self._memories.update_one(
@@ -181,9 +188,7 @@ class MemoryMongoRepository:
     ) -> bool:
         update: dict[str, Any] = {"$set": {"room_summary": room_summary}}
         if new_facts:
-            update["$push"] = {
-                "room_facts": {"$each": new_facts, "$slice": -max_facts}
-            }
+            update["$push"] = {"room_facts": {"$each": new_facts, "$slice": -max_facts}}
         return await self._memories.update_one({"room_id": room_id}, update)
 
     async def compact_turns_bulk(
@@ -210,7 +215,7 @@ class MemoryMongoRepository:
                 _compact_turns_pipeline(compacted_turns),
             )
         except Exception as exc:
-            if isinstance(exc, (TypeError, AttributeError, ValueError)):
+            if isinstance(exc, TypeError | AttributeError | ValueError):
                 raise
             logger.exception(
                 "Failed to compact turns atomically",
@@ -320,9 +325,7 @@ class ContentStorageMongoRepository:
             "document_id", document_id
         )
 
-    async def get_content_by_turn_id(
-        self, room_id: str, turn_id: str
-    ) -> dict | None:
+    async def get_content_by_turn_id(self, room_id: str, turn_id: str) -> dict | None:
         return await self._content.find_one({"room_id": room_id, "turn_id": turn_id})
 
     async def delete_content_by_turn_id(self, room_id: str, turn_id: str) -> bool:
@@ -379,9 +382,7 @@ class ContentStorageMongoRepository:
             limit=limit,
         )
 
-    async def hydrate_turn_notes(
-        self, room_id: str, turn_ids: list[str]
-    ) -> list[dict]:
+    async def hydrate_turn_notes(self, room_id: str, turn_ids: list[str]) -> list[dict]:
         if not turn_ids:
             return []
         return await self._content.find(
@@ -416,8 +417,7 @@ def _history_contains_turn(doc: dict, turn_id: str) -> bool:
         doc.get("conversation_history") or [],
     ):
         if any(
-            isinstance(turn, dict) and turn.get("turn_id") == turn_id
-            for turn in path
+            isinstance(turn, dict) and turn.get("turn_id") == turn_id for turn in path
         ):
             return True
     return False

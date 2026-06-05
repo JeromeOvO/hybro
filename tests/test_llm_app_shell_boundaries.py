@@ -68,7 +68,7 @@ def test_bedrock_compatibility_adapter_does_not_own_provider_transport():
         "bedrock-runtime",
         "invoke_model(",
         "invoke_model_with_response_stream",
-        "globals()[\"settings\"]",
+        'globals()["settings"]',
     ]
     present = [snippet for snippet in forbidden if snippet in source]
     assert not present, (
@@ -80,7 +80,11 @@ def test_bedrock_compatibility_adapter_does_not_own_provider_transport():
 def test_llm_gateway_services_import_boundary():
     services_path = Path("llm_gateway/services")
     assert services_path.exists(), "llm_gateway/services package must exist"
-    allowed_roots = set(sys.stdlib_module_names) | {"__future__", "common", "llm_gateway"}
+    allowed_roots = set(sys.stdlib_module_names) | {
+        "__future__",
+        "common",
+        "llm_gateway",
+    }
     forbidden_roots = {
         "models",
         "app_shell",
@@ -121,7 +125,7 @@ def test_provider_hint_is_not_public_protocol_or_service_api():
     for path in paths:
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                 arg_names = [arg.arg for arg in node.args.args + node.args.kwonlyargs]
                 assert "provider_hint" not in arg_names, (
                     f"{path}:{node.name} exposes provider_hint publicly"
