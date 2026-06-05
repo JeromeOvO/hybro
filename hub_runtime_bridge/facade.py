@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any
 
 from common.dto import (
@@ -13,6 +14,7 @@ from common.dto import (
     HubReplyCommand,
     OfflineHubFailureCommand,
 )
+from common.protocols import AgentRegistryWriter
 from common.utils.time import utcnow
 from hub_runtime_bridge.config import HubRuntimeBridgeConfig
 from hub_runtime_bridge.deps import HubRuntimeBridgeDeps
@@ -20,6 +22,7 @@ from hub_runtime_bridge.hub_response_journal import (
     InMemoryHubResponseJournal,
     MongoHubResponseJournal,
 )
+from hub_runtime_bridge.internal_response_router import HubInternalResponseRouter
 from hub_runtime_bridge.repository.mongo import HubMongoRepository
 from hub_runtime_bridge.service.agent_sync import HubAgentSyncService
 from hub_runtime_bridge.service.hub_connection import HubConnectionService
@@ -39,8 +42,16 @@ from hub_runtime_bridge.task_ownership import (
 from hub_runtime_bridge.transport.offline_queue import OfflineQueue
 
 
+@dataclass(frozen=True)
+class HubStreamLivenessEvent:
+    hub_id: str
+    connection_id: str | None
+
+
 class HubFacade:
-    def __init__(self, deps: HubRuntimeBridgeDeps | None = None, **legacy_deps: Any) -> None:
+    def __init__(
+        self, deps: HubRuntimeBridgeDeps | None = None, **legacy_deps: Any
+    ) -> None:
         if deps is None:
             config = legacy_deps.pop("config", None) or HubRuntimeBridgeConfig()
             mongo = legacy_deps.get("mongo")
@@ -87,6 +98,10 @@ class HubFacade:
         self._liveness_cache: dict[str, bool] = {}
         self._dispatcher = None
         self._replay_worker: HubResponseReplayWorker | None = None
+        self._started = False
+        self._replay_worker_restart_task: Any | None = None
+        self._replay_worker_restart_old_workers: list[HubResponseReplayWorker] = []
+        self._replay_worker_generation = 0
         self.ownership_lease_maintainer = (
             OwnershipLeaseMaintainer(
                 task_runner=deps.task_runner,
@@ -98,30 +113,14 @@ class HubFacade:
             else None
         )
 
-        self._liveness = HubLivenessService(
-            repository=deps.hub_repository,
-            streams=deps.streams,
-            local_is_connected=lambda hub_id: hub_id in self._queues,
-        )
-        self._connection = (
-            HubConnectionService(
-                repository=deps.hub_repository,
-                liveness_reader=self._liveness,
-                status_reader=deps.hub_agent_status_reader,
-            )
-            if deps.hub_repository
-            else None
-        )
+        self._liveness = self._build_liveness_service()
+        self._connection = self._build_connection_service()
         self._relay = HubRelayService(
             push_event=self._push_event_dict,
             offline_failure_port=deps.offline_failure_port,
             call_counter=deps.agent_call_counter,
         )
-        self._sync = (
-            HubAgentSyncService(writer=deps.agent_registry_writer, streams=deps.streams)
-            if deps.agent_registry_writer
-            else None
-        )
+        self._sync = self._build_sync_service()
         self._publish = HubPublishService(
             journal=deps.hub_response_journal,
             event_publisher=deps.event_publisher,
@@ -130,7 +129,81 @@ class HubFacade:
             worker_id=deps.worker_id,
         )
 
+    def _build_liveness_service(self) -> HubLivenessService:
+        return HubLivenessService(
+            repository=self.deps.hub_repository,
+            streams=self.deps.streams,
+            local_is_connected=lambda hub_id: hub_id in self._queues,
+        )
+
+    def _build_sync_service(self) -> HubAgentSyncService | None:
+        if self.deps.agent_registry_writer is None:
+            return None
+        return HubAgentSyncService(
+            writer=self.deps.agent_registry_writer,
+            streams=self.deps.streams,
+        )
+
+    def _build_connection_service(self) -> HubConnectionService | None:
+        if self.deps.hub_repository is None:
+            return None
+        return HubConnectionService(
+            repository=self.deps.hub_repository,
+            liveness_reader=self._liveness,
+            status_reader=self.deps.hub_agent_status_reader,
+        )
+
+    def _build_replay_worker(self) -> HubResponseReplayWorker | None:
+        if self.deps.hub_response_journal is None or self._dispatcher is None:
+            return None
+        return HubResponseReplayWorker(
+            journal=self.deps.hub_response_journal,
+            dispatcher=self._dispatcher,
+            worker_id=self.deps.worker_id,
+            batch_size=self.deps.config.replay_batch_size,
+            interval_seconds=self.deps.config.replay_interval_seconds,
+            task_runner=self.deps.task_runner,
+            ownership_store=self.deps.task_ownership_store,
+        )
+
+    @property
+    def worker_id(self) -> str:
+        return self.deps.worker_id
+
+    @property
+    def task_ownership_store(self) -> Any | None:
+        return self.deps.task_ownership_store
+
+    @property
+    def ownership_maintainer(self) -> OwnershipLeaseMaintainer | None:
+        return self.ownership_lease_maintainer
+
+    @property
+    def internal_response_dispatcher(self) -> Any | None:
+        return self._dispatcher
+
+    def bind_streams(self, streams: Any) -> None:
+        self.deps.streams = streams
+        self._liveness = self._build_liveness_service()
+        self._connection = self._build_connection_service()
+        self._sync = self._build_sync_service()
+
+    def bind_agent_registry_writer(self, writer: AgentRegistryWriter) -> None:
+        self.deps.agent_registry_writer = writer
+        self._sync = self._build_sync_service()
+
+    def bind_internal_response_sink(self, sink: Any) -> HubInternalResponseRouter:
+        router = HubInternalResponseRouter(
+            sink=sink,
+            journal=self.deps.hub_response_journal,
+            ownership_store=self.deps.task_ownership_store,
+            worker_id=self.deps.worker_id,
+        )
+        self.bind_internal_response_dispatcher(router)
+        return router
+
     async def start(self) -> None:
+        self._started = True
         if self.deps.hub_response_journal:
             await self.deps.hub_response_journal.ensure_indexes()
         if self.deps.task_ownership_store:
@@ -138,18 +211,24 @@ class HubFacade:
         if self.ownership_lease_maintainer:
             await self.ownership_lease_maintainer.start()
         if self.deps.hub_response_journal and self._dispatcher:
-            self._replay_worker = HubResponseReplayWorker(
-                journal=self.deps.hub_response_journal,
-                dispatcher=self._dispatcher,
-                worker_id=self.deps.worker_id,
-                batch_size=self.deps.config.replay_batch_size,
-                interval_seconds=self.deps.config.replay_interval_seconds,
-                task_runner=self.deps.task_runner,
-                ownership_store=self.deps.task_ownership_store,
-            )
+            self._replay_worker_generation += 1
+            self._replay_worker = self._build_replay_worker()
             await self._replay_worker.start()
 
     async def stop(self) -> None:
+        self._started = False
+        self._replay_worker_generation += 1
+        restart_task = self._replay_worker_restart_task
+        self._replay_worker_restart_task = None
+        old_restart_workers = list(self._replay_worker_restart_old_workers)
+        self._replay_worker_restart_old_workers = []
+        if restart_task is not None:
+            cancel = getattr(restart_task, "cancel", None)
+            if callable(cancel):
+                cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await restart_task
+        await self._stop_replay_workers(old_restart_workers)
         if self._replay_worker:
             await self._replay_worker.stop()
             self._replay_worker = None
@@ -164,8 +243,102 @@ class HubFacade:
         return None
 
     def bind_internal_response_dispatcher(self, dispatcher: Any) -> None:
+        old_worker = self._replay_worker
         self._dispatcher = dispatcher
         self._publish.bind_internal_response_dispatcher(dispatcher)
+        self._replay_worker_generation += 1
+        generation = self._replay_worker_generation
+        if not self._started:
+            return
+        new_worker = self._build_replay_worker()
+        self._replay_worker = new_worker
+        restart_task = self._replay_worker_restart_task
+        old_workers = list(self._replay_worker_restart_old_workers)
+        if restart_task is not None:
+            cancel = getattr(restart_task, "cancel", None)
+            if callable(cancel):
+                cancel()
+        if old_worker is not None:
+            old_workers.append(old_worker)
+        self._replay_worker_restart_old_workers = old_workers
+        self._replay_worker_restart_task = self.deps.task_runner(
+            self._restart_replay_worker(old_workers, new_worker, generation)
+        )
+
+    async def _restart_replay_worker(
+        self,
+        old_workers: list[HubResponseReplayWorker],
+        new_worker: HubResponseReplayWorker | None,
+        generation: int,
+    ) -> None:
+        try:
+            await self._stop_replay_workers(old_workers)
+            if (
+                new_worker is not None
+                and self._started
+                and generation == self._replay_worker_generation
+            ):
+                await new_worker.start()
+        finally:
+            if generation == self._replay_worker_generation:
+                self._replay_worker_restart_task = None
+                self._replay_worker_restart_old_workers = []
+
+    async def _stop_replay_workers(
+        self,
+        workers: list[HubResponseReplayWorker],
+    ) -> None:
+        seen: set[int] = set()
+        for worker in workers:
+            identity = id(worker)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            await worker.stop()
+
+    async def sweep_stream_liveness(self) -> list[HubStreamLivenessEvent]:
+        repository = self.deps.hub_repository
+        streams = self.deps.streams
+        if repository is None or streams is None:
+            return []
+
+        stale_hubs: list[HubStreamLivenessEvent] = []
+        for doc in await repository.list_online_hubs_for_liveness():
+            hub_id = doc["hub_id"]
+            if await streams.is_hub_alive(hub_id):
+                continue
+
+            connection_id = doc.get("connection_id")
+            if connection_id and hasattr(repository, "update_hub_status_if_current"):
+                updated = await repository.update_hub_status_if_current(
+                    hub_id,
+                    connection_id=connection_id,
+                    is_online=False,
+                )
+            else:
+                await repository.update_hub_status(hub_id, is_online=False)
+                updated = True
+
+            stale_hubs.append(
+                HubStreamLivenessEvent(
+                    hub_id=hub_id,
+                    connection_id=connection_id,
+                )
+            )
+
+            if updated:
+                if self.deps.agent_registry_writer is None:
+                    raise RuntimeError("AgentRegistryWriter is not bound")
+                await self.deps.agent_registry_writer.mark_hub_agents_offline(hub_id)
+                self._liveness_cache[hub_id] = False
+
+        for doc in await repository.list_offline_hubs_for_recovery(100):
+            hub_id = doc["hub_id"]
+            if await streams.is_hub_alive(hub_id):
+                await repository.update_hub_status(hub_id, is_online=True)
+                self._liveness_cache[hub_id] = True
+
+        return stale_hubs
 
     async def register_hub(self, hub_id: str, owner_id: str, **kwargs) -> HubInfo:
         if not self._connection:
@@ -223,7 +396,10 @@ class HubFacade:
                         entries = read_task.result()
                         await self.deps.streams.record_heartbeat(hub_id)
                         if not entries:
-                            yield {"type": "heartbeat", "timestamp": utcnow().isoformat()}
+                            yield {
+                                "type": "heartbeat",
+                                "timestamp": utcnow().isoformat(),
+                            }
                             continue
                         for entry_id, payload in entries:
                             payload["_stream_id"] = entry_id
@@ -268,11 +444,19 @@ class HubFacade:
         if "owner_id" not in payload and self.deps.hub_repository:
             hub = await self.deps.hub_repository.get_by_id(hub_id)
             if hub:
-                payload = {**payload, "owner_id": hub.get("user_id") or hub.get("owner_id")}
+                payload = {
+                    **payload,
+                    "owner_id": hub.get("user_id") or hub.get("owner_id"),
+                }
         await self._publish.publish_from_hub(hub_id, payload)
 
     async def sync_agents(
-        self, hub_id: str, agents: list[Any], owner_id: str, *, prune_missing: bool = True
+        self,
+        hub_id: str,
+        agents: list[Any],
+        owner_id: str,
+        *,
+        prune_missing: bool = True,
     ) -> list[dict]:
         if not self._sync:
             return []
@@ -286,7 +470,9 @@ class HubFacade:
     async def hub_status_for_user(self, owner_id: str) -> list[Any]:
         return await self.list_hubs(owner_id)
 
-    async def record_hub_heartbeat(self, hub_id: str, owner_id: str | None = None) -> None:
+    async def record_hub_heartbeat(
+        self, hub_id: str, owner_id: str | None = None
+    ) -> None:
         if self.deps.streams:
             await self.deps.streams.record_heartbeat(hub_id)
         self._liveness_cache[hub_id] = True

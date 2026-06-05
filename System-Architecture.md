@@ -293,9 +293,12 @@ This module is used by:
 
 ### `hub_runtime_bridge` and Relay
 
-`hub_runtime_bridge.HubFacade` is the current runtime owner for hub-connected
-local agents. `app_shell.relay_service.RelayService` is the app-shell surface
-that constructs and delegates to the hub facade.
+`hub_runtime_bridge.HubFacade` owns hub connection management, relay dispatch,
+agent sync, liveness, offline queue behavior, task ownership, and internal hub
+response routing. `app_shell.relay_service.RelayService` remains as a
+compatibility adapter for legacy route imports and APIKey/request adaptation; it
+delegates Hub behavior through facade public methods and does not construct Hub
+repositories or inspect `HubRuntimeBridgeDeps`.
 
 Hub relay responsibilities:
 
@@ -377,7 +380,10 @@ Examples:
 - `app_shell.database_service`: app-shell database facade over
   `database.mongodb` and Pinecone.
 - `app_shell.relay_service`: relay route surface over
-  `hub_runtime_bridge`.
+  `hub_runtime_bridge`. It may still host temporary adapters to legacy
+  database/response-handler surfaces, but Hub-owned liveness, stream binding,
+  agent sync, ownership, and internal response router setup are handled by
+  `HubFacade`.
 - `execution.dispatch.task_notifications`: terminal task update notifications.
 - `app_shell.hitl_service`: HITL lifecycle and response handling.
 
