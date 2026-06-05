@@ -172,7 +172,7 @@ export function AgentCard({
     return (
       <button
         type="button"
-        aria-label={`Open ${agentName} response`}
+        aria-label={`${selected ? 'Close' : 'Open'} ${agentName} response`}
         data-selected={selected ? 'true' : undefined}
         className={className}
         style={style}

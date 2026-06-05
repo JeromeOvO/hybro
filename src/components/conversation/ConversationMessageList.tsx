@@ -154,8 +154,13 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
   }, [])
 
   const handleOpenAgentDetail = useCallback((messageId: string) => {
-    useRoomUiStore.getState().openAgentDetail(roomId, messageId)
-  }, [roomId])
+    const store = useRoomUiStore.getState()
+    if (selectedAgentMessageId === messageId) {
+      store.closeAgentDetail(roomId)
+      return
+    }
+    store.openAgentDetail(roomId, messageId)
+  }, [roomId, selectedAgentMessageId])
 
   return (
     <div className="relative h-full bg-background">
