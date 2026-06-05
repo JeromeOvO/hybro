@@ -2,7 +2,9 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from common.file_upload_constants import MAX_INLINE_CONVERSIONS_PER_MESSAGE
+from common.file_upload_constants import (  # noqa: F401 - legacy model re-export
+    MAX_INLINE_CONVERSIONS_PER_MESSAGE,
+)
 from common.utils.time import utcnow
 
 IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}

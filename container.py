@@ -7,6 +7,12 @@ from typing import Any
 from uuid import uuid4
 
 from agent import AgentFacade, AgentMongoRepository
+from common.config.settings import (
+    get_memory_search_index_name,
+    get_pinecone_index_name,
+    settings,
+)
+from common.observability import MetricsCollector, traced_create_task
 from common.protocols import (
     AgentCallCounter,
     AgentCardResolver,
@@ -21,17 +27,17 @@ from common.protocols import (
     EventPublisher,
     ExecutionEngine,
     GatewayDiscoveryProvider,
+    HITLManager,
     HubAgentResponseSink,
     HubDispatchPolicy,
     HubDispatchPort,
     HubLivenessReader,
     HubManagement,
-    HITLManager,
     LLMProvider,
     MemoryManager,
     MemoryProjector,
-    MongoCollection,
     MemoryRepository,
+    MongoCollection,
     MongoDAL,
     ObjectStorageDAL,
     RedisKV,
@@ -45,13 +51,7 @@ from common.protocols import (
     SSETransport,
     VectorDAL,
 )
-from common.observability import MetricsCollector, traced_create_task
 from common.utils.time import utcnow
-from config.settings import (
-    get_memory_search_index_name,
-    get_pinecone_index_name,
-    settings,
-)
 from context_memory import (
     ContentStorageMongoRepository,
     ContextMemoryFacade,
@@ -71,10 +71,13 @@ from delivery.sse.cancellation_watcher import CancellationWatcher
 from delivery.sse.deduplication import TerminalStatusDeduplicator
 from delivery.sse.manager import SSETransportImpl
 from delivery.types import TaskRunner
-from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
 from platform_module import PlatformConfig, PlatformDeps, PlatformFacade
-from platform_module.adapters import MongoFileMetadataRepository, RateLimitCollectionAdapter
+from platform_module.adapters import (
+    MongoFileMetadataRepository,
+    RateLimitCollectionAdapter,
+)
 from platform_module.deps import DiscoveryQueryExpander, LoggerLike
+from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
 
 
 @dataclass(frozen=True)
@@ -388,7 +391,9 @@ def create_hub_facade(**kwargs: Any):
 
 def create_hub_deps(facade: Any) -> HubDeps:
     from hub_runtime_bridge.dispatch_adapter import HubDispatchAdapter
-    from hub_runtime_bridge.service.dispatch_policy import HubDispatchPolicy as HubPolicy
+    from hub_runtime_bridge.service.dispatch_policy import (
+        HubDispatchPolicy as HubPolicy,
+    )
 
     return HubDeps(
         hub_management=facade,

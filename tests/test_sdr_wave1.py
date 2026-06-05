@@ -3,14 +3,12 @@ Tests for SDR Wave 1 fixes: idempotency guard (2.5), semaphore (2.13), CORS (2.1
 """
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from models.request import OrchestrationRequest
-from models.response import OrchestrationResponse
-
 
 # =============================================================================
 # Fix 1 (SDR 2.5): Idempotency claim tests
@@ -66,7 +64,7 @@ class TestClaimOrReclaimUserMessage:
         db._room_user_messages_collection = mock_collection
         type(db).room_user_messages_collection = property(lambda self: self._room_user_messages_collection)
 
-        threshold = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        threshold = datetime(2026, 1, 1, tzinfo=UTC)
         result = await db.claim_or_reclaim_user_message("m1", threshold)
         assert result is True
 
@@ -87,7 +85,7 @@ class TestClaimOrReclaimUserMessage:
         db._room_user_messages_collection = mock_collection
         type(db).room_user_messages_collection = property(lambda self: self._room_user_messages_collection)
 
-        threshold = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        threshold = datetime(2026, 1, 1, tzinfo=UTC)
         result = await db.claim_or_reclaim_user_message("m1", threshold)
         assert result is False
 
@@ -98,7 +96,7 @@ class TestIdempotencyGuardInRoomMessageCenter:
     @pytest.mark.asyncio
     async def test_normal_claim_rejected_returns_409(self):
         """Second call with same message_id should return 409."""
-        from modules.RoomMessageCenter import RoomMessageCenter
+        from execution.orchestration.room_message_center import RoomMessageCenter
 
         rmc = object.__new__(RoomMessageCenter)
         rmc.database_service = MagicMock()
@@ -119,7 +117,7 @@ class TestIdempotencyGuardInRoomMessageCenter:
     @pytest.mark.asyncio
     async def test_recovery_uses_reclaim(self):
         """Recovery path with is_recovery=True should use claim_or_reclaim."""
-        from modules.RoomMessageCenter import RoomMessageCenter
+        from execution.orchestration.room_message_center import RoomMessageCenter
 
         rmc = object.__new__(RoomMessageCenter)
         rmc.database_service = MagicMock()
@@ -141,8 +139,8 @@ class TestIdempotencyGuardInRoomMessageCenter:
     @pytest.mark.asyncio
     async def test_recovery_threshold_uses_orphan_threshold(self):
         """Recovery reclaim threshold must use orphan_threshold_minutes, not processing_status_expiry_minutes."""
-        from modules.RoomMessageCenter import RoomMessageCenter
         from common.utils.time import utcnow as real_utcnow
+        from execution.orchestration.room_message_center import RoomMessageCenter
 
         rmc = object.__new__(RoomMessageCenter)
         rmc.database_service = MagicMock()
@@ -156,7 +154,7 @@ class TestIdempotencyGuardInRoomMessageCenter:
             is_recovery=True,
         )
 
-        with patch("modules.RoomMessageCenter.settings") as mock_settings:
+        with patch("execution.orchestration.room_message_center.settings") as mock_settings:
             mock_settings.orphan_threshold_minutes = 2
             mock_settings.processing_status_expiry_minutes = 30
             await rmc.process_room_user_message(request)
@@ -180,7 +178,7 @@ class TestStaleTaskCheckerSemaphore:
     """Tests for bounded recovery scheduling."""
 
     def test_recovery_semaphore_exists_with_correct_value(self):
-        from jobs.stale_task_checker import StaleTaskChecker, MAX_CONCURRENT_RECOVERIES
+        from jobs.stale_task_checker import MAX_CONCURRENT_RECOVERIES, StaleTaskChecker
 
         checker = StaleTaskChecker()
         assert hasattr(checker, "_recovery_semaphore")
@@ -397,8 +395,9 @@ class TestCORSConfiguration:
 
     def test_cors_returns_explicit_methods_and_headers(self):
         """OPTIONS preflight should return specific allow_methods and allow_headers."""
-        from main import app
         from fastapi.testclient import TestClient
+
+        from main import app
 
         # Patch auth dependency to avoid Clerk calls
         with patch("common.auth.get_current_user", return_value=MagicMock()):

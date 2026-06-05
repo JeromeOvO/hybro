@@ -1,3 +1,3 @@
-from execution.hitl.service import HITLService, MAX_HITL_ROUNDS
+from execution.hitl.service import MAX_HITL_ROUNDS, HITLService
 
 __all__ = ["HITLService", "MAX_HITL_ROUNDS"]

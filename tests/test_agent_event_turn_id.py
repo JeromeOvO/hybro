@@ -1,5 +1,4 @@
-import pytest
-from modules.agent_event import AgentEvent
+from execution.dispatch.agent_event import AgentEvent
 
 
 def test_agent_event_accepts_turn_id():

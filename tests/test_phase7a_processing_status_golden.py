@@ -1,13 +1,17 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from modules.RoomMessageCenter import RoomMessageCenter
-from models.supervisor_v2 import RunStatus, SupervisorRunResult, SupervisorTrajectory
-from services.sse_services import SSEManager
+from app_shell.delivery_runtime import SSEManager
+from common.dto import RunEventNotification
+from execution.orchestration.room_message_center import RoomMessageCenter
+from models.supervisor import RunStatus, SupervisorRunResult, SupervisorTrajectory
 from tests.delivery_adapter_fakes import make_bound_manager
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 async def _next_sse_type(conn) -> tuple[str, dict]:
@@ -23,7 +27,7 @@ async def _drain_sse(conn) -> list[tuple[str, dict]]:
     return items
 
 
-def _make_rmc_for_v2_result(manager: SSEManager) -> RoomMessageCenter:
+def _make_rmc_for_supervisor_result(manager: SSEManager) -> RoomMessageCenter:
     rmc = object.__new__(RoomMessageCenter)
     rmc.sse_manager = manager
     rmc.database_service = SimpleNamespace(
@@ -71,17 +75,16 @@ def _bind_test_processing_emitter(
                 details=details,
             )
             if payload:
-                await manager.broadcast_to_room(
-                    room_id,
-                    "run_event",
-                    {
-                        "event_id": payload.get("event_id"),
-                        "run_id": payload.get("run_id"),
-                        "seq": payload.get("seq"),
-                        "type": payload.get("type"),
-                        "payload": payload.get("payload") or {},
-                        "correlation_id": client_request_id,
-                    },
+                await manager._emit_event(
+                    RunEventNotification(
+                        room_id=room_id,
+                        event_id=payload.get("event_id"),
+                        run_id=payload.get("run_id"),
+                        seq=payload.get("seq"),
+                        run_event_type=payload.get("type"),
+                        payload=payload.get("payload") or {},
+                        correlation_id=client_request_id,
+                    )
                 )
         await manager.send_processing_status(
             room_id,
@@ -96,9 +99,9 @@ def _bind_test_processing_emitter(
 
 @pytest.mark.asyncio
 async def test_golden_send_message_processing_status_order(monkeypatch):
-    import services.room_services as room_services
-    from services.a2a_constants import SSEProcessingStatus
-    from services.run_lifecycle_service import record_and_maybe_broadcast_run_event
+    import app_shell.room_runtime as room_services
+    from common.a2a_constants import SSEProcessingStatus
+    from execution.events import emit_processing_status
 
     manager = make_bound_manager()
     conn = await manager.add_connection("room-1")
@@ -110,28 +113,27 @@ async def test_golden_send_message_processing_status_order(monkeypatch):
         "payload": {},
     }
     record = AsyncMock(side_effect=[payload, None])
-    helper_spy = AsyncMock(wraps=record_and_maybe_broadcast_run_event)
+    resolver = SimpleNamespace(
+        resolve_client_request_id=AsyncMock(return_value="cr-1")
+    )
+    run_lifecycle = SimpleNamespace(record_processing_status=record)
 
     monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
-    monkeypatch.setattr(
-        "services.run_lifecycle_service.run_command_handler.record_processing_status",
-        record,
-    )
-    monkeypatch.setattr(room_services, "sse_manager", manager)
-    monkeypatch.setattr(
-        room_services,
-        "record_and_maybe_broadcast_run_event",
-        helper_spy,
-        raising=False,
-    )
 
     svc = object.__new__(room_services.RoomServices)
+    svc._processing_status_emitter = lambda **kwargs: emit_processing_status(
+        **kwargs,
+        run_lifecycle=run_lifecycle,
+        event_publisher=manager._facade.event_publisher,
+        run_event_enabled=lambda: True,
+        client_request_id_resolver=resolver,
+    )
     await svc._send_processing_status("room-1", "msg-1", "cr-1")
 
     first_type, first_data = await _next_sse_type(conn)
     second_type, second_data = await _next_sse_type(conn)
 
-    assert helper_spy.await_count == 1
+    assert record.await_count == 1
     assert first_type == "run_event"
     assert first_data["event_id"] == "evt-1"
     assert first_data["correlation_id"] == "cr-1"
@@ -177,7 +179,7 @@ async def test_golden_hitl_resolve_resume_completion_order(monkeypatch):
     rmc._log_room_memory_stats = AsyncMock()
 
     result = await rmc._resume_continuation_locked(
-        {"supervisor_v2": False, "room_id": "room-1"},
+        {"supervisor": False, "room_id": "room-1"},
         "agent-msg-1",
         "answer",
     )
@@ -209,15 +211,15 @@ async def test_golden_duplicate_terminal_root_completion_suppressed(monkeypatch)
 
     monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
 
-    rmc = _make_rmc_for_v2_result(manager)
+    rmc = _make_rmc_for_supervisor_result(manager)
     _bind_test_processing_emitter(rmc, manager, record)
     result = SupervisorRunResult(
         status=RunStatus.COMPLETED,
         trajectory=SupervisorTrajectory(),
     )
 
-    await rmc._handle_v2_run_result(result, "room-1", "msg-1")
-    await rmc._handle_v2_run_result(result, "room-1", "msg-1")
+    await rmc._handle_supervisor_run_result(result, "room-1", "msg-1")
+    await rmc._handle_supervisor_run_result(result, "room-1", "msg-1")
 
     frames = await _drain_sse(conn)
     assert [kind for kind, _data in frames] == ["run_event", "processing_status"]
@@ -252,12 +254,12 @@ async def test_golden_duplicate_terminal_suppressed_across_redis_l2(monkeypatch)
         status=RunStatus.COMPLETED,
         trajectory=SupervisorTrajectory(),
     )
-    first_rmc = _make_rmc_for_v2_result(first_manager)
-    second_rmc = _make_rmc_for_v2_result(second_manager)
+    first_rmc = _make_rmc_for_supervisor_result(first_manager)
+    second_rmc = _make_rmc_for_supervisor_result(second_manager)
     _bind_test_processing_emitter(first_rmc, first_manager, record)
     _bind_test_processing_emitter(second_rmc, second_manager, record)
-    await first_rmc._handle_v2_run_result(result, "room-1", "msg-1")
-    await second_rmc._handle_v2_run_result(result, "room-1", "msg-1")
+    await first_rmc._handle_supervisor_run_result(result, "room-1", "msg-1")
+    await second_rmc._handle_supervisor_run_result(result, "room-1", "msg-1")
 
     first_frames = await _drain_sse(first_conn)
     second_frames = await _drain_sse(second_conn)
@@ -277,7 +279,7 @@ async def test_golden_clarifying_soft_complete_is_transport_only(monkeypatch):
     lifecycle = AsyncMock()
 
     turn_appender = SimpleNamespace(append=AsyncMock())
-    rmc = _make_rmc_for_v2_result(manager)
+    rmc = _make_rmc_for_supervisor_result(manager)
     _bind_test_processing_emitter(rmc, manager, lifecycle)
     rmc._turn_event_appender = turn_appender
     result = SupervisorRunResult(
@@ -286,7 +288,7 @@ async def test_golden_clarifying_soft_complete_is_transport_only(monkeypatch):
         clarification_question="Which account should I use?",
     )
 
-    await rmc._handle_v2_run_result(result, "room-1", "msg-1")
+    await rmc._handle_supervisor_run_result(result, "room-1", "msg-1")
 
     frames = await _drain_sse(conn)
     assert [kind for kind, _data in frames] == ["processing_status"]
@@ -301,8 +303,8 @@ async def test_golden_clarifying_soft_complete_is_transport_only(monkeypatch):
 async def test_golden_clarify_resume_retry_failure_completed_is_transport_only(
     monkeypatch,
 ):
-    from models.supervisor_v2 import AgentProfile, RoomConfig
-    from services.room_supervisor_service import SupervisorPlanningError
+    from execution.orchestration.room_supervisor_service import SupervisorPlanningError
+    from models.supervisor import AgentProfile, RoomConfig
 
     manager = make_bound_manager()
     conn = await manager.add_connection("room-1")
@@ -316,14 +318,14 @@ async def test_golden_clarify_resume_retry_failure_completed_is_transport_only(
                 AgentProfile(agent_id="agent-1", agent_name="Agent").model_dump()
             ],
             "room_config": RoomConfig().model_dump(),
-            "supervisor_v2_clarify_resume": True,
+            "supervisor_clarify_resume": True,
             "resumed_trajectory": trajectory.model_dump(mode="json"),
             "clarify_original_message_id": "original-msg",
         },
         message_content=SimpleNamespace(message_text="Use account A", attachments=None),
     )
     original_msg = SimpleNamespace(extend_info={"supervisor_trajectory": {}})
-    rmc = _make_rmc_for_v2_result(manager)
+    rmc = _make_rmc_for_supervisor_result(manager)
     _bind_test_processing_emitter(rmc, manager, lifecycle)
     rmc.database_service.get_room_user_message_by_message_id = AsyncMock(
         return_value=original_msg
@@ -335,7 +337,7 @@ async def test_golden_clarify_resume_retry_failure_completed_is_transport_only(
     rmc._persist_failed_trajectory = AsyncMock()
     rmc._log_room_memory_stats = AsyncMock()
 
-    response = await rmc._process_supervisor_v2(
+    response = await rmc._process_supervisor(
         user_message=user_message,
         room_id="room-1",
         room_user_message_id="retry-msg",
@@ -352,11 +354,18 @@ async def test_golden_clarify_resume_retry_failure_completed_is_transport_only(
     lifecycle.assert_not_awaited()
 
 
-def test_clarifying_post_emit_turn_event_appender_remains_in_handoff_doc():
-    doc = (
-        "docs/superpowers/plans/"
-        "2026-05-16-phase-7a-delivery-extraction-handoff.md"
-    )
-    text = open(doc, encoding="utf-8").read()
+def test_clarifying_path_emits_turn_completed_via_turn_event_appender():
+    """CLARIFYING must append turn_completed before completed processing_status."""
+    text = (
+        ROOT / "execution/orchestration/room_message_center.py"
+    ).read_text(encoding="utf-8")
     assert "RunStatus.CLARIFYING" in text
-    assert 'turn_event_appender.append("turn_completed"' in text
+    assert "_turn_event_appender.append" in text
+    assert '"turn_completed"' in text
+    # turn_completed for CLARIFYING must precede COMPLETED processing_status emit.
+    clarifying = text.split("case RunStatus.CLARIFYING:")[1].split("case RunStatus.")[0]
+    assert "turn_completed" in clarifying
+    assert "SSEProcessingStatus.COMPLETED" in clarifying
+    assert clarifying.index("turn_completed") < clarifying.index(
+        "SSEProcessingStatus.COMPLETED"
+    )

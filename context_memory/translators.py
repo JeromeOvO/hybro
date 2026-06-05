@@ -13,7 +13,6 @@ from common.dto import (
     UserMemory,
 )
 from common.utils.context_utils import estimate_tokens
-
 from context_memory.models import (
     AssemblyResult,
     ContentReferenceData,

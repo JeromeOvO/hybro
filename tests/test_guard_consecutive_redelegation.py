@@ -10,17 +10,17 @@ Covers:
 - Consecutive failure guard — strips agents that keep failing
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from models.supervisor_v2 import (
+from models.supervisor import (
     ActionType,
     DelegateTarget,
     SupervisorAction,
     SupervisorTrajectory,
     TrajectoryEntry,
-    V2StepResult,
+    StepResult,
 )
-from services.room_supervisor_service import RoomSupervisorService
+from execution.orchestration.room_supervisor_service import RoomSupervisorService
 
 
 def _make_service() -> RoomSupervisorService:
@@ -33,7 +33,7 @@ def _target(agent_id: str, name: str, task: str = "do something") -> DelegateTar
 
 def _entry_with_successes(agent_ids: list[str]) -> TrajectoryEntry:
     """Create a trajectory entry that delegated to the given agents, all successful."""
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     return TrajectoryEntry(
         step_number=1,
         action=SupervisorAction(
@@ -42,7 +42,7 @@ def _entry_with_successes(agent_ids: list[str]) -> TrajectoryEntry:
             targets=[_target(aid, f"Agent-{aid}") for aid in agent_ids],
         ),
         results=[
-            V2StepResult(
+            StepResult(
                 step_number=1,
                 agent_id=aid,
                 agent_name=f"Agent-{aid}",
@@ -59,7 +59,7 @@ def _entry_with_successes(agent_ids: list[str]) -> TrajectoryEntry:
 
 def _entry_with_failures(agent_ids: list[str]) -> TrajectoryEntry:
     """Create a trajectory entry that delegated to the given agents, all failed."""
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     return TrajectoryEntry(
         step_number=1,
         action=SupervisorAction(
@@ -68,7 +68,7 @@ def _entry_with_failures(agent_ids: list[str]) -> TrajectoryEntry:
             targets=[_target(aid, f"Agent-{aid}") for aid in agent_ids],
         ),
         results=[
-            V2StepResult(
+            StepResult(
                 step_number=1,
                 agent_id=aid,
                 agent_name=f"Agent-{aid}",
@@ -228,7 +228,7 @@ class TestGuardTrajectoryBreaks:
 
     def test_non_delegate_entry_breaks_chain(self):
         svc = _make_service()
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         action = SupervisorAction(
             action=ActionType.DELEGATE,
             reasoning="go",
@@ -340,7 +340,7 @@ class TestFailureAndSuccessGuardsCombined:
                 _target("C", "Charlie"),
             ],
         )
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         mixed_entry = TrajectoryEntry(
             step_number=1,
             action=SupervisorAction(
@@ -352,11 +352,11 @@ class TestFailureAndSuccessGuardsCombined:
                 ],
             ),
             results=[
-                V2StepResult(
+                StepResult(
                     step_number=1, agent_id="A", agent_name="Alpha",
                     task="test", response_text="err", success=False,
                 ),
-                V2StepResult(
+                StepResult(
                     step_number=1, agent_id="B", agent_name="Bravo",
                     task="test", response_text="ok", success=True,
                 ),

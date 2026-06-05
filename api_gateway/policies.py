@@ -30,11 +30,6 @@ ROUTE_POLICIES: dict[str, RoutePolicy] = {
     "hub": RoutePolicy(auth="clerk-route-level", tags=("hub",)),
     "inspection": RoutePolicy(auth="clerk-global", tags=("inspection",)),
     "memory": RoutePolicy(auth="clerk-global", tags=("memory",)),
-    "orchestration": RoutePolicy(
-        auth="clerk-global",
-        tags=("orchestration",),
-        deprecated=True,
-    ),
     "platform_gateway": RoutePolicy(
         auth="api-key-route-level",
         tags=("gateway",),
@@ -49,7 +44,6 @@ ROUTE_POLICIES: dict[str, RoutePolicy] = {
     ),
     "room": RoutePolicy(auth="clerk-route-level", tags=("room",)),
     "sse": RoutePolicy(auth="query-token-supported", tags=("sse",)),
-    "task": RoutePolicy(auth="clerk-global", tags=("task",), deprecated=True),
     "webhook": RoutePolicy(auth="bearer-token-route-level", tags=("webhooks",)),
 }
 

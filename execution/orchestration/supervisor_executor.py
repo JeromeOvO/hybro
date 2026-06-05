@@ -1,4 +1,4 @@
-"""SupervisorExecutor — adaptive step-at-a-time orchestration (V2).
+"""SupervisorExecutor — adaptive step-at-a-time orchestration.
 
 The sole orchestration executor for supervisor-enabled rooms (``use_supervisor``).
 ``QueueExecutor`` continues to serve non-supervisor rooms and fast-path cases
@@ -11,7 +11,7 @@ Responsibilities:
 - Enforce cancellation, rate limits, and step budget
 - Dispatch concurrent targets via ``asyncio.gather``
 
-See docs/SUPERVISOR_V2_DESIGN.md §6.2–§6.3 for design details.
+See System-Architecture.md for design details.
 """
 
 from __future__ import annotations
@@ -21,12 +21,15 @@ import os
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from common.a2a_constants import SSEProcessingStatus
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from models.hitl import InterruptKind
 from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
-from models.supervisor_v2 import (
+from models.hitl import InterruptKind
+from models.processing import ProcessingStatus
+from models.room import CoordinatorAgentId
+from models.supervisor import (
     ActionType,
     AgentProfile,
     DelegateTarget,
@@ -38,17 +41,21 @@ from models.supervisor_v2 import (
     SupervisorTrajectory,
     TrajectoryEntry,
     TrajectoryStatus,
-    V2StepResult,
+    StepResult,
 )
-from models.processing import ProcessingStatus
-from models.room import CoordinatorAgentId
-from common.a2a_constants import SSEProcessingStatus
-from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
 
 if TYPE_CHECKING:
+    from app_shell.rate_limit_service import RateLimitService
+
     from execution.dispatch.agent_dispatcher import AgentDispatcher
     from execution.dispatch.agent_message_processor import AgentMessageProcessor
     from execution.state.task_state_manager import TaskStateManager
+    from app_shell.database_service import DatabaseService
+    from app_shell.memory_service import RoomMemoryService
+    from app_shell.room_coordinator_service import RoomCoordinatorService
+    from app_shell.room_runtime import RoomServices
+    from execution.orchestration.room_supervisor_service import RoomSupervisorService
+    from app_shell.delivery_runtime import SSEManager
 
 logger = get_logger(__name__)
 
@@ -83,7 +90,7 @@ class SupervisorExecutor:
         debate_rounds: int | None = None,
     ) -> None:
         self.supervisor_service = supervisor_service
-        self.room_services = room_services
+        self.room_runtime = room_services
         self.tsm = tsm
         self.sse_manager = sse_manager
         self.database_service = database_service
@@ -114,29 +121,55 @@ class SupervisorExecutor:
         details=None,
         agents: list[dict] | None = None,
     ) -> None:
-        legacy_details = details if isinstance(details, str) else None
-        structured_details = details if isinstance(details, dict) else None
-        if self._processing_status_emitter is not None:
-            await self._processing_status_emitter(
-                room_id=room_id,
-                status=status,
-                message_id=message_id,
-                lifecycle_message_id=lifecycle_message_id or message_id,
-                record_lifecycle=record_lifecycle,
-                client_request_id=client_request_id,
-                details=structured_details,
-                legacy_details=legacy_details,
-                error_message=legacy_details,
-                agents=agents,
-            )
-            return
-        await LegacyProcessingStatusC3Adapter(self.sse_manager).emit_processing_status(
+        if self._processing_status_emitter is None:
+            raise RuntimeError("SupervisorExecutor execution event dependencies not bound")
+        status_value = status.value if hasattr(status, "value") else str(status)
+        await self._processing_status_emitter(
             room_id=room_id,
             status=status,
             message_id=message_id,
-            details=details,
+            lifecycle_message_id=lifecycle_message_id or message_id,
+            record_lifecycle=record_lifecycle,
             client_request_id=client_request_id,
+            details=(
+                details
+                if isinstance(details, dict)
+                else {"message": details}
+                if isinstance(details, str)
+                else None
+            ),
+            error_message=(
+                details
+                if isinstance(details, str)
+                and status_value in {"failed", "canceled", "rejected", "error"}
+                else None
+            ),
             agents=agents,
+        )
+
+    async def _stream_supervisor_synthesis(
+        self,
+        *,
+        room_id: str,
+        user_message_id: str,
+        trajectory: SupervisorTrajectory,
+        synthesis_instruction: str,
+        client_request_id: str | None,
+    ) -> str:
+        """Run supervisor LLM synthesis with live artifact_update streaming."""
+        from common.utils.summary_streaming import stream_summary_to_sse
+
+        summary_message_id = f"summary-{user_message_id}"
+        return await stream_summary_to_sse(
+            self.sse_manager,
+            room_id=room_id,
+            message_id=summary_message_id,
+            agent_id=CoordinatorAgentId.SUMMARY,
+            token_stream=self.supervisor_service.synthesize_stream(
+                trajectory=trajectory,
+                synthesis_instruction=synthesis_instruction,
+            ),
+            client_request_id=client_request_id,
         )
 
     # ------------------------------------------------------------------
@@ -342,7 +375,7 @@ class SupervisorExecutor:
                         ),
                         started_at=utcnow(),
                         completed_at=utcnow(),
-                        results=[V2StepResult(
+                        results=[StepResult(
                             step_number=step_number + 1,
                             agent_id=next_id,
                             agent_name=next_id,
@@ -388,13 +421,30 @@ class SupervisorExecutor:
                 # Fix: if any result across all entries is still PAUSED, update
                 # the continuation for each remaining PAUSED agent (so it
                 # carries the now-partially-resolved trajectory) and pause again.
-                all_still_paused: list[V2StepResult] = [
+                all_still_paused: list[StepResult] = [
                     r
                     for entry in trajectory.entries
                     for r in entry.results
                     if r.status == StepStatus.PAUSED
                     and r.paused_message_id
                 ]
+                if all_still_paused:
+                    # Reconcile against DB: a relay agent may have completed
+                    # before its continuation was saved (race between webhook
+                    # response and _save_interrupted_state during concurrent
+                    # dispatch). Check actual DB state and upgrade if terminal.
+                    await self._reconcile_paused_results(
+                        all_still_paused, trajectory, room_id
+                    )
+                    # Re-check after reconciliation
+                    all_still_paused = [
+                        r
+                        for entry in trajectory.entries
+                        for r in entry.results
+                        if r.status == StepStatus.PAUSED
+                        and r.paused_message_id
+                    ]
+
                 if all_still_paused:
                     logger.info(
                         "supervisor_resume_still_paused",
@@ -441,6 +491,7 @@ class SupervisorExecutor:
                     room_config=room_config,
                     trajectory=trajectory,
                     conversation_context=conversation_context,
+                    quoted_text=quoted_text,
                     max_steps=self.MAX_STEPS,
                 )
                 try:
@@ -648,7 +699,6 @@ class SupervisorExecutor:
                     # SSE: notify frontend of delegation stage
                     if not (token and token.is_cancelled):
                         try:
-                            agent_names = [t.agent_name for t in action.targets]
                             await self._emit_processing_status(
                                 room_id=room_id,
                                 status=SSEProcessingStatus.PROCESSING,
@@ -868,6 +918,11 @@ class SupervisorExecutor:
                             ),
                         )
 
+                    client_req_id = (
+                        await self.database_service.resolve_client_request_id_for_message_id(
+                            user_message_id
+                        )
+                    )
                     # SSE: notify frontend of synthesis stage
                     if not (token and token.is_cancelled):
                         try:
@@ -882,9 +937,6 @@ class SupervisorExecutor:
                             logger.debug("SSE stage notification failed (synthesizing)", exc_info=True)
                         try:
                             summary_message_id = f"summary-{user_message_id}"
-                            client_req_id = await self.database_service.resolve_client_request_id_for_message_id(
-                                user_message_id
-                            )
                             await self.sse_manager.send_task_submitted(
                                 room_id=room_id,
                                 message_id=summary_message_id,
@@ -900,9 +952,12 @@ class SupervisorExecutor:
                         except Exception:
                             logger.debug("SSE summary working card failed", exc_info=True)
 
-                    synth_coro = self.supervisor_service.synthesize_v2(
+                    synth_coro = self._stream_supervisor_synthesis(
+                        room_id=room_id,
+                        user_message_id=user_message_id,
                         trajectory=trajectory,
                         synthesis_instruction=action.synthesis_instruction or "",
+                        client_request_id=client_req_id,
                     )
                     try:
                         synthesis = (
@@ -940,7 +995,7 @@ class SupervisorExecutor:
                     trajectory.status = TrajectoryStatus.AWAITING_INPUT
 
                     from models.hitl import HITLPromptType
-                    from models.supervisor_v2 import ClarifyQuestion
+                    from models.supervisor import ClarifyQuestion
                     if self.hitl_coordinator is None:
                         raise RuntimeError("HITL coordinator has not been bound")
 
@@ -965,14 +1020,17 @@ class SupervisorExecutor:
                     created_messages: list[str] = []
                     created_request_ids: list[str] = []
 
-                    async def _cleanup_clarify_artifacts() -> None:
+                    async def _cleanup_clarify_artifacts(
+                        request_ids: list[str] = created_request_ids,
+                        message_ids: list[str] = created_messages,
+                    ) -> None:
                         """Cancel HITL requests and delete agent messages created in this CLARIFY."""
-                        for rid in created_request_ids:
+                        for rid in request_ids:
                             try:
                                 await self.hitl_coordinator.cancel_request(rid, room_id)
                             except Exception:
                                 logger.warning("Failed to cancel orphaned HITL request %s", rid)
-                        for mid in created_messages:
+                        for mid in message_ids:
                             try:
                                 await self.database_service.delete_room_agent_message_by_message_id(mid)
                             except Exception:
@@ -986,7 +1044,7 @@ class SupervisorExecutor:
                             except ValueError:
                                 pass
 
-                        hitl_agent_message = self.room_services.create_agent_message(
+                        hitl_agent_message = self.room_runtime.create_agent_message(
                             room_id=room_id,
                             related_message_id=user_message_id,
                             agent_id="supervisor_hitl",
@@ -1123,6 +1181,11 @@ class SupervisorExecutor:
                         status=RunStatus.FAILED, trajectory=trajectory
                     ),
                 )
+            budget_client_req_id = (
+                await self.database_service.resolve_client_request_id_for_message_id(
+                    user_message_id
+                )
+            )
             # SSE: notify frontend of budget-exhaustion synthesis
             if not (token and token.is_cancelled):
                 try:
@@ -1137,9 +1200,6 @@ class SupervisorExecutor:
                     logger.debug("SSE stage notification failed (budget synthesis)", exc_info=True)
                 try:
                     summary_message_id = f"summary-{user_message_id}"
-                    client_req_id = await self.database_service.resolve_client_request_id_for_message_id(
-                        user_message_id
-                    )
                     await self.sse_manager.send_task_submitted(
                         room_id=room_id,
                         message_id=summary_message_id,
@@ -1150,14 +1210,17 @@ class SupervisorExecutor:
                         related_message_id=user_message_id,
                         created_at=utcnow().isoformat(),
                         task_content="Summarizing agent responses\u2026",
-                        client_request_id=client_req_id,
+                        client_request_id=budget_client_req_id,
                     )
                 except Exception:
                     logger.debug("SSE summary working card failed (budget)", exc_info=True)
 
-            budget_synth_coro = self.supervisor_service.synthesize_v2(
+            budget_synth_coro = self._stream_supervisor_synthesis(
+                room_id=room_id,
+                user_message_id=user_message_id,
                 trajectory=trajectory,
                 synthesis_instruction="Budget exhausted. Synthesize available results.",
+                client_request_id=budget_client_req_id,
             )
             try:
                 synthesis = (
@@ -1204,11 +1267,11 @@ class SupervisorExecutor:
         token: CancellationToken | None,
         request_user_id: str | None,
         quoted_text: str | None,
-    ) -> list[V2StepResult]:
+    ) -> list[StepResult]:
         """Dispatch one or more agents, concurrently if multiple targets."""
         valid_ids = {a.agent_id for a in agent_registry}
 
-        async def dispatch_one(target: DelegateTarget) -> V2StepResult:
+        async def dispatch_one(target: DelegateTarget) -> StepResult:
             try:
                 # Validate agent_id against registry before any DB writes
                 if target.agent_id not in valid_ids:
@@ -1217,7 +1280,7 @@ class SupervisorExecutor:
                         target.agent_id,
                         valid_ids,
                     )
-                    return V2StepResult(
+                    return StepResult(
                         step_number=step_number,
                         agent_id=target.agent_id,
                         agent_name=target.agent_name,
@@ -1260,7 +1323,7 @@ class SupervisorExecutor:
                         "dispatch_one: agent %s not found or inactive",
                         target.agent_id,
                     )
-                    return V2StepResult(
+                    return StepResult(
                         step_number=step_number,
                         agent_id=target.agent_id,
                         agent_name=target.agent_name,
@@ -1280,7 +1343,7 @@ class SupervisorExecutor:
                         rate_limit_system=agent.rate_limit_system_per_hour,
                     )
                     if not rate_result.allowed:
-                        return V2StepResult(
+                        return StepResult(
                             step_number=step_number,
                             agent_id=target.agent_id,
                             agent_name=target.agent_name,
@@ -1292,7 +1355,7 @@ class SupervisorExecutor:
                         )
 
                 # Create RoomAgentMessage only after validation passes
-                message = self.room_services.create_agent_message(
+                message = self.room_runtime.create_agent_message(
                     room_id=room_id,
                     related_message_id=user_message_id,
                     agent_id=target.agent_id,
@@ -1351,7 +1414,7 @@ class SupervisorExecutor:
                     ProcessingStatus.PAUSED,
                     ProcessingStatus.RELAY_DISPATCHED,
                 ):
-                    return V2StepResult(
+                    return StepResult(
                         step_number=step_number,
                         agent_id=target.agent_id,
                         agent_name=target.agent_name,
@@ -1364,7 +1427,7 @@ class SupervisorExecutor:
                     )
 
                 if result.status == ProcessingStatus.AWAITING_INPUT:
-                    return V2StepResult(
+                    return StepResult(
                         step_number=step_number,
                         agent_id=target.agent_id,
                         agent_name=target.agent_name,
@@ -1386,7 +1449,7 @@ class SupervisorExecutor:
                     )
 
                 is_success = result.status == ProcessingStatus.SUCCESS
-                step_result = V2StepResult(
+                step_result = StepResult(
                     step_number=step_number,
                     agent_id=target.agent_id,
                     agent_name=target.agent_name,
@@ -1427,7 +1490,7 @@ class SupervisorExecutor:
                 logger.exception(
                     "dispatch_one failed for agent %s: %s", target.agent_id, e
                 )
-                return V2StepResult(
+                return StepResult(
                     step_number=step_number,
                     agent_id=target.agent_id,
                     agent_name=target.agent_name,
@@ -1465,7 +1528,7 @@ class SupervisorExecutor:
                         return [work.result()]
                     except Exception:
                         pass
-                return [V2StepResult(
+                return [StepResult(
                     step_number=step_number,
                     agent_id=targets[0].agent_id,
                     agent_name=targets[0].agent_name,
@@ -1506,7 +1569,7 @@ class SupervisorExecutor:
             # All tasks completed normally.
             raw_results = all_work.result()
             return [
-                r if isinstance(r, V2StepResult) else V2StepResult(
+                r if isinstance(r, StepResult) else StepResult(
                     step_number=step_number,
                     agent_id=targets[i].agent_id,
                     agent_name=targets[i].agent_name,
@@ -1527,7 +1590,7 @@ class SupervisorExecutor:
         except (asyncio.CancelledError, Exception):
             pass
 
-        results: list[V2StepResult] = []
+        results: list[StepResult] = []
         completed_ids: set[str] = set()
         for task in tasks:
             if task.done() and not task.cancelled():
@@ -1541,7 +1604,7 @@ class SupervisorExecutor:
                 task.cancel()
         for t in targets:
             if t.agent_id not in completed_ids:
-                results.append(V2StepResult(
+                results.append(StepResult(
                     step_number=step_number,
                     agent_id=t.agent_id,
                     agent_name=t.agent_name,
@@ -1676,6 +1739,91 @@ class SupervisorExecutor:
             return cached_user_message
 
     # ------------------------------------------------------------------
+    # Reconcile PAUSED results against actual DB state
+    # ------------------------------------------------------------------
+
+    async def _reconcile_paused_results(
+        self,
+        paused_results: list[StepResult],
+        trajectory: SupervisorTrajectory,
+        room_id: str,
+    ) -> None:
+        """Upgrade PAUSED trajectory entries whose agent messages are already terminal in DB.
+
+        This handles the race condition where a relay agent completes (via webhook)
+        before the supervisor has saved the continuation. In that case the response
+        handler's resume attempt finds no continuation and is a no-op, leaving the
+        trajectory entry permanently PAUSED. This method detects and corrects that.
+        """
+        _TERMINAL = {"completed", "failed", "canceled", "rejected"}
+
+        for pr in paused_results:
+            msg_id = pr.agent_message_id or pr.paused_message_id
+            if not msg_id:
+                continue
+            msg = await self.database_service.get_room_agent_message_by_message_id(msg_id)
+            if not msg:
+                continue
+            if msg.last_notified_state not in _TERMINAL:
+                continue
+
+            is_success = msg.last_notified_state == "completed"
+            response_text = ""
+            if msg.message_content and msg.message_content.message_text:
+                response_text = msg.message_content.message_text
+
+            for entry in trajectory.entries:
+                for idx, result in enumerate(entry.results):
+                    if (
+                        result.status == StepStatus.PAUSED
+                        and result.agent_message_id == msg_id
+                    ):
+                        entry.results[idx] = StepResult(
+                            step_number=entry.step_number,
+                            agent_id=result.agent_id,
+                            agent_name=result.agent_name,
+                            task=result.task,
+                            response_text=response_text,
+                            success=is_success,
+                            status=StepStatus.SUCCESS if is_success else StepStatus.FAILED,
+                            error_message=None if is_success else "Agent task failed",
+                            agent_message_id=msg_id,
+                            completed_at=utcnow(),
+                        )
+                        if entry.completed_at is None:
+                            still_paused = any(
+                                r.status == StepStatus.PAUSED
+                                for r in entry.results
+                            )
+                            if not still_paused:
+                                entry.completed_at = utcnow()
+                        break
+                else:
+                    continue
+                break
+
+            if is_success and response_text:
+                await self.room_memory_service.add_agent_response_to_memory(
+                    room_id=room_id,
+                    agent_id=pr.agent_id,
+                    agent_name=pr.agent_name or "Agent",
+                    response_text=response_text,
+                    was_successful=True,
+                    message_id=msg_id,
+                )
+
+            logger.info(
+                "supervisor_reconciled_paused_result",
+                extra={
+                    "room_id": room_id,
+                    "agent_message_id": msg_id,
+                    "agent_name": pr.agent_name,
+                    "resolved_state": msg.last_notified_state,
+                    "trajectory_id": trajectory.trajectory_id,
+                },
+            )
+
+    # ------------------------------------------------------------------
     # Unified interrupt state persistence
     # ------------------------------------------------------------------
 
@@ -1694,7 +1842,7 @@ class SupervisorExecutor:
         quoted_text: str | None = None,
         hitl_request_id: str | None = None,
         # For PUSH_NOTIFICATION / HITL_AGENT: list of paused results
-        paused_results: list[V2StepResult] | None = None,
+        paused_results: list[StepResult] | None = None,
         # For HITL_AGENT / HITL_SUPERVISOR: single message_id
         message_id: str | None = None,
     ) -> bool:
@@ -1707,7 +1855,7 @@ class SupervisorExecutor:
         Returns True if saved successfully.
         """
         interrupted_state = {
-            "supervisor_v2": True,
+            "supervisor": True,
             "interrupt_kind": kind.value,
             "trajectory": trajectory.model_dump(mode="json"),
             "room_id": room_id,

@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from common.utils.time import utcnow
 
 if TYPE_CHECKING:
-    from models.supervisor_v2 import SupervisorTrajectory
+    pass
 
 
 class SessionContext(BaseModel):
@@ -26,7 +26,7 @@ class SessionContext(BaseModel):
 
     Created when user sends message → Destroyed after all agents respond.
 
-    NOTE: There is no SupervisorPlan — V2 uses an adaptive loop.
+    NOTE: There is no SupervisorPlan — uses an adaptive loop.
     The trajectory (all actions + results so far) is the single source of truth.
     It lives in user_message.extend_info.supervisor_trajectory (SupervisorTrajectory).
 
@@ -42,12 +42,12 @@ class SessionContext(BaseModel):
     user_message_id: str
     created_at: datetime = Field(default_factory=utcnow)
 
-    # Supervisor V2 state (if multi-agent)
+    # Supervisor state (if multi-agent)
     # The trajectory is the single source of truth for the adaptive loop.
     supervisor_trajectory: Any | None = None  # Actually SupervisorTrajectory
 
     # Snapshot of room history passed to the supervisor LLM prompt.
-    # Built once in _prepare_for_supervisor_v2() and FROZEN for the loop duration.
+    # Built once in _prepare_for_supervisor() and FROZEN for the loop duration.
     # Agent results written during the loop are NOT reflected here — they come
     # through trajectory_summary in the supervisor prompt instead.
     conversation_context: str | None = None

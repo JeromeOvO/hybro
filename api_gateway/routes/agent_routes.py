@@ -1,15 +1,22 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
-from fastapi.params import Depends as DependsParam
 from uuid import uuid4
 
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
+from fastapi.params import Depends as DependsParam
+
+from api_gateway.registry import mark_declared_owner as _mark_declared_owner
+from api_gateway.viewsets.agent import AgentViewSet
 from app_shell.bound import (
     AgentCapabilityIssueStore,
     AgentCenterRouteOwner,
     AgentLivenessChecker,
     AgentLookup,
 )
-from api_gateway.viewsets.agent import AgentViewSet
-from common.auth import ClerkUser, get_current_user, get_optional_user, resolve_provider_name
+from common.auth import (
+    ClerkUser,
+    get_current_user,
+    get_optional_user,
+    resolve_provider_name,
+)
 from common.protocols import AgentAvatarManager
 from models.agent import IssueStatus
 from models.request import AgentCenterRequest, AgentSettingsUpdateRequest
@@ -548,7 +555,5 @@ async def get_agent_list_with_conditions(
         agent_center_response, ["agent_url", "agent_card.url"]
     )
 
-
-from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 
 _mark_declared_owner(router, __name__)

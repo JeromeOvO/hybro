@@ -5,7 +5,7 @@
     "role": "central_record_then_emit_helper",
     "status_source": "status argument",
     "lifecycle_id_source": "lifecycle_message_id or message_id when record_lifecycle is true",
-    "frontend_transport": "typed or legacy compatibility frame",
+    "frontend_transport": "typed DeliveryEvent frame",
     "lifecycle_required_for_frontend_emit": true
   },
   {

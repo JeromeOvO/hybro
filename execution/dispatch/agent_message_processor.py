@@ -5,7 +5,7 @@ Extracted from ``QueueExecutor._process_single_message`` so that both
 agent messages without duplicating code.
 
 Contains zero orchestration logic — only the mechanics of:
-1. Building the A2A message via ``room_services.process_agent_message``
+1. Building the A2A message via ``room_runtime.process_agent_message``
 2. Running the DispatchChain (pre-dispatch middleware)
 3. Looking up the selected transport and calling ``transport.dispatch()``
 4. Running post-dispatch middleware
@@ -18,14 +18,17 @@ from typing import TYPE_CHECKING
 
 from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
+from execution.dispatch.dispatch_middleware import DispatchChain, DispatchContext
 from models.processing import ProcessingResult, ProcessingStatus
 from models.request import RoomCenterAgentMessageRequest
 from models.room import RoomAgentMessage
-from execution.dispatch.dispatch_middleware import DispatchChain, DispatchContext
 
 if TYPE_CHECKING:
-    from models.agent import Agent
     from execution.dispatch.transports.base import AgentTransport
+    from models.agent import Agent
+    from app_shell.database_service import DatabaseService
+    from app_shell.room_runtime import RoomServices
+    from app_shell.delivery_runtime import SSEManager
 
 logger = get_logger(__name__)
 
@@ -52,7 +55,7 @@ class AgentMessageProcessor:
         cloud_health_check_timeout: float = 5.0,
     ) -> None:
         self.sse_manager = sse_manager
-        self.room_services = room_services
+        self.room_runtime = room_services
         self.database_service = database_service
         self.transports = dict(transports)
         self._relay_service_explicit = relay_service
@@ -160,10 +163,11 @@ class AgentMessageProcessor:
 
         room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
 
-        process_response = await self.room_services.process_agent_message(
+        process_response = await self.room_runtime.process_agent_message(
             RoomCenterAgentMessageRequest(message=current_message),
             room_memory=room_memory,
             quoted_text=quoted_text,
+            orchestration_user_message_id=user_message_id,
         )
 
         if not process_response.success:

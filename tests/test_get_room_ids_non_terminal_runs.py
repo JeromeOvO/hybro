@@ -33,7 +33,7 @@ async def test_mongodb_get_room_ids_with_non_terminal_runs_filters_and_strings()
 
 @pytest.mark.asyncio
 async def test_database_service_get_room_ids_with_non_terminal_runs_delegates():
-    from services.database_service import DatabaseService
+    from app_shell.database_service import DatabaseService
 
     svc = object.__new__(DatabaseService)
     svc.mongo = MagicMock()
@@ -47,7 +47,7 @@ async def test_database_service_get_room_ids_with_non_terminal_runs_delegates():
 
 @pytest.mark.asyncio
 async def test_database_service_get_room_ids_returns_empty_on_error():
-    from services.database_service import DatabaseService
+    from app_shell.database_service import DatabaseService
 
     svc = object.__new__(DatabaseService)
     svc.mongo = MagicMock()
@@ -55,6 +55,6 @@ async def test_database_service_get_room_ids_returns_empty_on_error():
         side_effect=RuntimeError("db down")
     )
 
-    with patch("services.database_service.logger"):
+    with patch("app_shell.database_service.logger"):
         out = await svc.get_room_ids_with_non_terminal_runs()
     assert out == []

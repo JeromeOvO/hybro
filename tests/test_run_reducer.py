@@ -3,7 +3,11 @@
 import pytest
 
 from models.run import RunEventType, RunState
-from services.run_reducer import RunTransitionError, ensure_transition_allowed, next_state_for_terminal_event
+from execution.run_reducer import (
+    RunTransitionError,
+    ensure_transition_allowed,
+    next_state_for_terminal_event,
+)
 
 
 def test_same_state_allowed():

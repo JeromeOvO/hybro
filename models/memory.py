@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
+from common.utils.context_utils import bind_context_turn_factory
 from common.utils.time import utcnow
 from models.compaction import ContentReference
 
@@ -86,7 +87,7 @@ class ChatContext(BaseModel):
     """
     A ChatContext represents a chat context between a user and the multi-agent system.
     It tracks session metadata like creation time, user info, and context content.
-    Multiple ChatContext objects can belong to one TaskSession during a conversation.
+    Multiple ChatContext objects can belong to one conversation session.
     """
 
     memory_id: str
@@ -201,9 +202,6 @@ class ConversationTurn(BaseModel):
         elif self.role == TurnRole.SUPERVISOR:
             return "Supervisor"
         return "Unknown"
-
-
-from common.utils.context_utils import bind_context_turn_factory
 
 bind_context_turn_factory(ConversationTurn)
 

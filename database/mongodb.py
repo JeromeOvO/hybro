@@ -8,17 +8,17 @@ from a2a.types import AgentCard, TaskState
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
+from common.config.settings import settings
 from common.utils.a2a_helpers import sanitize_artifact_parts as _sanitize_parts
 from common.utils.time import utcnow
-from config.settings import settings
 from models.agent import AGENT_CARD_HUB_NO_OVERWRITE, Agent
 from models.agent_group import AgentGroup
 from models.api_key import APIKey
 from models.memory import ChatContext, RoomMemory
+from models.quote import QuotedSnippet
 from models.room import Room, RoomAgentMessage, RoomUserMessage
 from models.run import NON_TERMINAL_RUN_STATE_VALUES
-from models.supervisor_v2 import TrajectoryStatus
-from models.task import BaseTask, MetaTask, TaskSession
+from models.supervisor import TrajectoryStatus
 
 logger = logging.getLogger(__name__)
 
@@ -189,33 +189,6 @@ class MongoDB:
         return self.db.agents
 
     @property
-    def base_tasks_collection(self):
-        """Get base tasks collection"""
-        if not self.client:
-            raise ConnectionError(
-                "MongoDB client is not connected. Please call connect() first."
-            )
-        return self.db.base_tasks
-
-    @property
-    def meta_tasks_collection(self):
-        """Get meta tasks collection"""
-        if not self.client:
-            raise ConnectionError(
-                "MongoDB client is not connected. Please call connect() first."
-            )
-        return self.db.meta_tasks
-
-    @property
-    def task_sessions_collection(self):
-        """Get task sessions collection"""
-        if not self.client:
-            raise ConnectionError(
-                "MongoDB client is not connected. Please call connect() first."
-            )
-        return self.db.task_sessions
-
-    @property
     def chat_contexts_collection(self):
         """Get chat contexts collection"""
         if not self.client:
@@ -250,6 +223,15 @@ class MongoDB:
                 "MongoDB client is not connected. Please call connect() first."
             )
         return self.db.room_agent_messages
+
+    @property
+    def room_quotes_collection(self):
+        """Persisted quoted text snapshots (QUOTE_REPLY)."""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.room_quotes
 
     @property
     def room_memories_collection(self):
@@ -666,152 +648,6 @@ class MongoDB:
 
         return result.modified_count > 0
 
-    # task management
-    async def add_base_task(self, base_task: BaseTask) -> str:
-        """
-        Add a base task to the database
-        """
-        result = await self.base_tasks_collection.insert_one(
-            base_task.model_dump(mode="json")
-        )
-        return str(result.inserted_id)
-
-    async def add_meta_task(self, meta_task: MetaTask) -> str:
-        """
-        Add a meta task to the database
-        """
-        result = await self.meta_tasks_collection.insert_one(
-            meta_task.model_dump(mode="json")
-        )
-        return str(result.inserted_id)
-
-    async def add_task_session(self, task_session: TaskSession) -> str:
-        """
-        Add a task session to the database
-        """
-        result = await self.task_sessions_collection.insert_one(
-            task_session.model_dump(mode="json")
-        )
-        return str(result.inserted_id)
-
-    async def delete_base_task_by_task_id(self, task_id: str) -> bool:
-        """
-        Delete a base task by task_id
-        """
-        result = await self.base_tasks_collection.delete_one({"task_id": task_id})
-        return result.deleted_count > 0
-
-    async def delete_meta_task_by_task_id(self, task_id: str) -> bool:
-        """
-        Delete a meta task by task_id
-        """
-        result = await self.meta_tasks_collection.delete_one({"task_id": task_id})
-        return result.deleted_count > 0
-
-    async def delete_task_session_by_session_id(self, session_id: str) -> bool:
-        """
-        Delete a task session by session_id
-        """
-        result = await self.task_sessions_collection.delete_one(
-            {"session_id": session_id}
-        )
-        return result.deleted_count > 0
-
-    async def get_base_task_by_task_id(self, task_id: str) -> BaseTask | None:
-        """
-        Get a base task by task_id
-        """
-        result = await self.base_tasks_collection.find_one({"task_id": task_id})
-        return BaseTask(**result) if result else None
-
-    async def get_meta_task_by_task_id(self, task_id: str) -> MetaTask | None:
-        """
-        Get a meta task by task_id
-        """
-        result = await self.meta_tasks_collection.find_one({"task_id": task_id})
-        return MetaTask(**result) if result else None
-
-    async def get_task_session_by_session_id(
-        self, session_id: str
-    ) -> TaskSession | None:
-        """
-        Get a task session by session_id
-        """
-        result = await self.task_sessions_collection.find_one(
-            {"session_id": session_id}
-        )
-        return TaskSession(**result) if result else None
-
-    async def get_task_sessions_by_user_name(self, user_name: str) -> list[TaskSession]:
-        """
-        Get all task sessions by user_name
-        """
-        cursor = self.task_sessions_collection.find({"user_name": user_name})
-        results = await cursor.to_list(length=None)
-        return [TaskSession(**task_session) for task_session in results]
-
-    async def get_all_task_sessions(self) -> list[TaskSession]:
-        """
-        Get all task sessions
-        """
-        cursor = self.task_sessions_collection.find()
-        results = await cursor.to_list(length=None)
-        return [TaskSession(**task_session) for task_session in results]
-
-    async def get_base_tasks_by_session_id(self, session_id: str) -> list[BaseTask]:
-        """
-        Get all base tasks by session_id
-        """
-        cursor = self.base_tasks_collection.find({"session_id": session_id})
-        results = await cursor.to_list(length=None)
-        return [BaseTask(**base_task) for base_task in results]
-
-    async def get_meta_tasks_by_parent_task_id(
-        self, parent_task_id: str
-    ) -> list[MetaTask]:
-        """
-        Get all meta tasks by parent_task_id
-        """
-        cursor = self.meta_tasks_collection.find({"parent_task_id": parent_task_id})
-        results = await cursor.to_list(length=None)
-        return [MetaTask(**meta_task) for meta_task in results]
-
-    async def update_base_task_by_task_id(
-        self, task_id: str, base_task: BaseTask
-    ) -> bool:
-        """
-        Update a base task by task_id
-        """
-        result = await self.base_tasks_collection.update_one(
-            {"task_id": task_id},
-            {"$set": base_task.model_dump(exclude_unset=True, mode="json")},
-        )
-        return result.modified_count > 0
-
-    async def update_meta_task_by_task_id(
-        self, task_id: str, meta_task: MetaTask
-    ) -> bool:
-        """
-        Update a meta task by task_id
-        """
-        result = await self.meta_tasks_collection.update_one(
-            {"task_id": task_id},
-            {"$set": meta_task.model_dump(exclude_unset=True, mode="json")},
-        )
-        return result.modified_count > 0
-
-    async def update_task_session_by_session_id(
-        self, session_id: str, task_session: TaskSession
-    ) -> bool:
-        """
-        Update a task session by session_id
-        """
-        result = await self.task_sessions_collection.update_one(
-            {"session_id": session_id},
-            {"$set": task_session.model_dump(exclude_unset=True, mode="json")},
-        )
-        return result.modified_count > 0
-
     # chat context management
     async def add_chat_context(self, chat_context: ChatContext) -> str:
         """
@@ -988,10 +824,28 @@ class MongoDB:
         """
         Add a room user message to the database
         """
-        doc = room_user_message.model_dump(mode="json")
+        doc = room_user_message.model_dump(mode="json", exclude={"quote"})
         self._strip_file_urls(doc)
         result = await self.room_user_messages_collection.insert_one(doc)
         return str(result.inserted_id)
+
+    async def insert_quoted_snippet(self, snippet: QuotedSnippet) -> str:
+        """Insert a quoted snippet; returns quote_id."""
+        doc = snippet.model_dump(mode="json")
+        await self.room_quotes_collection.insert_one(doc)
+        return snippet.quote_id
+
+    async def get_quoted_snippet_by_id(self, quote_id: str) -> QuotedSnippet | None:
+        doc = await self.room_quotes_collection.find_one({"quote_id": quote_id})
+        return QuotedSnippet.model_validate(doc) if doc else None
+
+    async def delete_quoted_snippet_by_id(self, quote_id: str) -> bool:
+        result = await self.room_quotes_collection.delete_one({"quote_id": quote_id})
+        return result.deleted_count > 0
+
+    async def delete_room_quotes_by_room_id(self, room_id: str) -> int:
+        result = await self.room_quotes_collection.delete_many({"room_id": room_id})
+        return int(result.deleted_count)
 
     async def get_room_user_messages_by_room_id(
         self, room_id: str
@@ -2256,7 +2110,7 @@ class MongoDB:
         docs = await self.room_user_messages_collection.find(
             {
                 "extend_info.supervisor_trajectory.status": TrajectoryStatus.RUNNING,
-                "extend_info.supervisor_v2": True,
+                "extend_info.supervisor": True,
                 "message_created_at": {"$lt": threshold},
             },
             {"message_id": 1, "room_id": 1, "_id": 0},
@@ -2705,6 +2559,23 @@ class MongoDB:
             logger.info("Run lifecycle indexes created on runs/run_events")
         except Exception as e:
             logger.error("Error creating run lifecycle indexes: %s", e)
+
+    async def create_room_quotes_indexes(self) -> None:
+        """Create indexes for room_quotes collection (QUOTE_REPLY)."""
+        try:
+            coll = self.room_quotes_collection
+            await coll.create_index(
+                "quote_id",
+                unique=True,
+                name="quote_id_unique",
+            )
+            await coll.create_index(
+                "room_id",
+                name="room_id_lookup",
+            )
+            logger.info("Room quotes indexes created on room_quotes")
+        except Exception as e:
+            logger.error("Error creating room quotes indexes: %s", e)
 
 mongodb = MongoDB()
 

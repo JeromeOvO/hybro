@@ -2,19 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 
-from common.errors import VectorIndexUnavailableError
 from common.dto import VectorSearchResult
+from common.errors import VectorIndexUnavailableError
 from context_memory import search
 from context_memory.config import MemorySearchConfig
 from context_memory.models import SearchRankingRecord
 
-
-NOW = datetime.now(timezone.utc)
+NOW = datetime.now(UTC)
 
 
 class FakeLLM:

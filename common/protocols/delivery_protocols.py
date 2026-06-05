@@ -1,6 +1,7 @@
-from typing import AsyncIterator, Callable, Protocol, runtime_checkable
+from collections.abc import AsyncIterator, Callable
+from typing import Protocol, runtime_checkable
 
-from common.dto import DeliveryEvent, InternalEvent, SSEEvent
+from common.dto import DeliveryEvent, InternalEvent
 
 
 @runtime_checkable

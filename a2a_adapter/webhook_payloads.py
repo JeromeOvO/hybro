@@ -7,13 +7,14 @@ from typing import Any
 from a2a.types import (
     Artifact,
     Message,
+    Part,
     Task,
     TaskArtifactUpdateEvent,
     TaskState,
     TaskStatus,
     TaskStatusUpdateEvent,
+    TextPart,
 )
-
 
 _PROTO_STATE_MAP: dict[str, str] = {
     "TASK_STATE_SUBMITTED": "submitted",
@@ -73,6 +74,68 @@ def _is_proto_format(data: dict[str, Any]) -> bool:
     return False
 
 
+def _extract_text_from_message_dict(message: Any) -> str:
+    """Best-effort text extraction from a (possibly proto-shaped) message dict.
+
+    Handles both v0.x (``parts``) and v1.x proto (``content``) part lists and
+    ignores role/kind discriminator differences.
+    """
+    if not isinstance(message, dict):
+        return ""
+    parts = message.get("parts") or message.get("content") or []
+    if not isinstance(parts, list):
+        return ""
+    texts: list[str] = []
+    for part in parts:
+        if isinstance(part, dict):
+            text = part.get("text")
+            if isinstance(text, str) and text:
+                texts.append(text)
+    return "".join(texts)
+
+
+def _task_from_status_update_dict(raw: dict[str, Any], message_id: str) -> Task:
+    """Build a Task from a status-update payload that failed strict validation.
+
+    v1.x (proto/gRPC) agents send push notifications whose ``statusUpdate``
+    envelope (notably an embedded agent ``message``) does not validate against
+    the v0.x Pydantic ``TaskStatusUpdateEvent`` model. Extract the state and
+    any response text defensively so the terminal ``completed`` signal is not
+    lost (which would otherwise stall the task until the stale-task poller).
+    """
+    raw = raw if isinstance(raw, dict) else {}
+    status = raw.get("status") if isinstance(raw.get("status"), dict) else {}
+
+    state_value = status.get("state") or "working"
+    if isinstance(state_value, str):
+        state_value = _PROTO_STATE_MAP.get(state_value, state_value)
+    try:
+        state = TaskState(state_value)
+    except ValueError:
+        state = TaskState.working
+
+    task_id = raw.get("task_id") or raw.get("taskId") or message_id
+    context_id = raw.get("context_id") or raw.get("contextId") or ""
+
+    text = _extract_text_from_message_dict(status.get("message"))
+    artifacts = None
+    if text:
+        artifacts = [
+            Artifact(
+                artifact_id=str(uuid.uuid4()),
+                name="response",
+                parts=[Part(root=TextPart(text=text))],
+            )
+        ]
+
+    return Task(
+        id=task_id,
+        context_id=context_id,
+        status=TaskStatus(state=state),
+        artifacts=artifacts,
+    )
+
+
 def parse_stream_response_payload(payload: dict[str, Any], message_id: str) -> Task:
     """Parse A2A StreamResponse variants into an SDK Task."""
     if "task" in payload:
@@ -85,7 +148,16 @@ def parse_stream_response_payload(payload: dict[str, Any], message_id: str) -> T
         raw = payload.get("statusUpdate") or payload.get("status_update")
         if _is_proto_format(raw):
             raw = _normalize_proto_payload(raw)
-        status_event = TaskStatusUpdateEvent.model_validate(raw)
+        try:
+            status_event = TaskStatusUpdateEvent.model_validate(raw)
+        except ValueError:
+            # pydantic ValidationError subclasses ValueError. v1.x (proto/gRPC)
+            # agents emit status updates whose embedded
+            # agent ``message`` (``ROLE_AGENT`` role, ``content`` parts, no
+            # ``kind`` discriminator) does not validate against the v0.x
+            # Pydantic model. Rather than reject the (often terminal) signal
+            # with HTTP 400, rebuild the Task from the fields we need.
+            return _task_from_status_update_dict(raw, message_id)
         return Task(
             id=status_event.task_id,
             context_id=status_event.context_id,

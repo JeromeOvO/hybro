@@ -32,11 +32,10 @@ from a2a_adapter.task_requests import (
     is_jsonrpc_error_response,
 )
 from a2a_adapter.task_status import build_task_status
-
 from common.a2a_constants import (
-    CommonTaskState,
     INTERACTIVE_STATES,
     TERMINAL_STATES,
+    CommonTaskState,
     SyntheticTaskId,
     is_failure_state,
     is_terminal_state,
@@ -50,17 +49,17 @@ from common.utils.a2a_helpers import (
 )
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
-from models.processing import ProcessingContext, ProcessingResult, ProcessingStatus
-from models.room import RoomAgentMessage
-from models.error import A2AServiceError
 from execution.dispatch.agent_event import AgentEvent
 from execution.dispatch.dispatch_middleware import DispatchContext
+from execution.dispatch.transports.base import AgentTransport
 from execution.state.task_state_manager import (
     TaskStateManager,
     get_task,
     state_str,
 )
-from execution.dispatch.transports.base import AgentTransport
+from models.error import A2AServiceError
+from models.processing import ProcessingContext, ProcessingResult, ProcessingStatus
+from models.room import RoomAgentMessage
 
 logger = get_logger(__name__)
 
@@ -1228,7 +1227,9 @@ class DirectTransport(AgentTransport):
                 "status": state_value,
             }
             if is_terminal_state(state) and result.artifacts:
-                from common.utils.a2a_helpers import extract_parts_from_artifacts as _epfa
+                from common.utils.a2a_helpers import (
+                    extract_parts_from_artifacts as _epfa,
+                )
 
                 extracted_task = _epfa(result.artifacts)
                 if extracted_task.text:

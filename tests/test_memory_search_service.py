@@ -16,16 +16,16 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §8 for design specification.
 
 import asyncio
 import math
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+
 import pytest
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
-from uuid import uuid4
 
 from common.dto import MemorySearchResult as DtoMemorySearchResult
 from common.utils.time import utcnow
-from models.memory import ConversationTurn, ContentType, TurnRepresentation, TurnRole
+from models.memory import ContentType, ConversationTurn, TurnRepresentation, TurnRole
 from models.search import MemorySearchResult, MemorySourceType
-from services.memory_search_service import (
+from app_shell.memory_search_service import (
     MemorySearchService,
     _cosine_similarity,
 )
@@ -225,7 +225,7 @@ def service():
 @pytest.fixture
 def sample_vector_results():
     """Sample results from vector search."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return [
         MemorySearchResult(
             turn_id="turn-1",
@@ -257,7 +257,7 @@ def sample_vector_results():
 @pytest.fixture
 def sample_keyword_results():
     """Sample results from keyword search."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return [
         MemorySearchResult(
             turn_id="turn-2",
@@ -408,7 +408,7 @@ class TestTemporalDecay:
     """Tests for _apply_temporal_decay."""
 
     def test_recent_result_decays_less(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         results = [
             MemorySearchResult(
                 turn_id="recent", room_id="r",
@@ -427,7 +427,7 @@ class TestTemporalDecay:
         assert recent.combined_score > old.combined_score
 
     def test_half_life_halves_score(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         results = [
             MemorySearchResult(
                 turn_id="t", room_id="r",
@@ -441,7 +441,7 @@ class TestTemporalDecay:
         assert decayed[0].temporal_decay_factor == pytest.approx(0.5, rel=0.01)
 
     def test_zero_age_no_decay(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         results = [
             MemorySearchResult(
                 turn_id="t", room_id="r",
@@ -476,7 +476,7 @@ class TestTemporalDecay:
 
     def test_decay_re_sorts_results(self):
         """An older result with higher base score may rank below a newer lower-score result."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         results = [
             MemorySearchResult(
                 turn_id="high-old", room_id="r",
@@ -767,7 +767,7 @@ class TestSearchPipeline:
                 turn_id=f"t{i}", room_id="room-1",
                 source_type=MemorySourceType.TURN, content="",
                 vector_score=float(i) / 10,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
             )
             for i in range(10)
         ]
@@ -868,7 +868,7 @@ class TestVectorSearchPineconeNotFound:
 
     @pytest.fixture
     def service(self):
-        from services.memory_search_service import MemorySearchService
+        from app_shell.memory_search_service import MemorySearchService
         svc = MemorySearchService()
         svc.openai_service = MagicMock()
         svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
@@ -932,7 +932,7 @@ class TestIndexAvailabilityCheck:
 
     @pytest.fixture
     def service(self):
-        from services.memory_search_service import MemorySearchService
+        from app_shell.memory_search_service import MemorySearchService
         svc = MemorySearchService()
         svc.openai_service = MagicMock()
         svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
@@ -1052,7 +1052,7 @@ class TestWritePathPineconeNotFound:
 
     @pytest.fixture
     def service(self):
-        from services.memory_search_service import MemorySearchService
+        from app_shell.memory_search_service import MemorySearchService
         svc = MemorySearchService()
         svc.openai_service = MagicMock()
         svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
@@ -1062,6 +1062,7 @@ class TestWritePathPineconeNotFound:
     @pytest.mark.asyncio
     async def test_index_turn_returns_false_on_not_found(self, service):
         from pinecone.exceptions import NotFoundException
+
         from models.memory import ConversationTurn
 
         mock_index = MagicMock()

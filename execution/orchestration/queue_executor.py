@@ -20,18 +20,25 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from a2a_adapter.task_status import coerce_task_state
+from common.a2a_constants import SSEProcessingStatus
 from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
-from models.room import RoomAgentMessage
 from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
 from execution.state.task_state_manager import TaskStateManager
 from models.processing import ProcessingResult, ProcessingStatus
-from common.a2a_constants import SSEProcessingStatus
-from execution.legacy_processing_status import LegacyProcessingStatusC3Adapter
+from models.room import RoomAgentMessage
 
 if TYPE_CHECKING:
+    from app_shell.rate_limit_service import RateLimitService
+
     from execution.dispatch.response_handler import AgentResponseHandler
+    from app_shell.a2a_runtime import A2AService
+    from app_shell.database_service import DatabaseService
+    from app_shell.debate_service import DebateService
+    from app_shell.memory_service import RoomMemoryService
+    from app_shell.room_runtime import RoomServices
+    from app_shell.delivery_runtime import SSEManager
 
 logger = get_logger(__name__)
 
@@ -101,7 +108,7 @@ class QueueExecutor:
         self.tsm = tsm
         self.sse_manager = sse_manager
         self.a2a_service = a2a_service
-        self.room_services = room_services
+        self.room_runtime = room_services
         self.room_memory_service = room_memory_service
         self.database_service = database_service
         self.debate_service = debate_service
@@ -128,27 +135,29 @@ class QueueExecutor:
         client_request_id: str | None = None,
         details=None,
     ) -> None:
-        legacy_details = details if isinstance(details, str) else None
-        structured_details = details if isinstance(details, dict) else None
-        if self._processing_status_emitter is not None:
-            await self._processing_status_emitter(
-                room_id=room_id,
-                status=status,
-                message_id=message_id,
-                lifecycle_message_id=lifecycle_message_id or message_id,
-                record_lifecycle=record_lifecycle,
-                client_request_id=client_request_id,
-                details=structured_details,
-                legacy_details=legacy_details,
-                error_message=legacy_details,
-            )
-            return
-        await LegacyProcessingStatusC3Adapter(self.sse_manager).emit_processing_status(
+        if self._processing_status_emitter is None:
+            raise RuntimeError("QueueExecutor execution event dependencies not bound")
+        status_value = status.value if hasattr(status, "value") else str(status)
+        await self._processing_status_emitter(
             room_id=room_id,
             status=status,
             message_id=message_id,
-            details=details,
+            lifecycle_message_id=lifecycle_message_id or message_id,
+            record_lifecycle=record_lifecycle,
             client_request_id=client_request_id,
+            details=(
+                details
+                if isinstance(details, dict)
+                else {"message": details}
+                if isinstance(details, str)
+                else None
+            ),
+            error_message=(
+                details
+                if isinstance(details, str)
+                and status_value in {"failed", "canceled", "rejected", "error"}
+                else None
+            ),
         )
 
     # ------------------------------------------------------------------
@@ -791,6 +800,28 @@ class QueueExecutor:
             )
             return ResumeResult(success=False)
 
+        quoted_text_resume: str | None = None
+        um_resume = await self.database_service.get_room_user_message_by_message_id(
+            user_message_id
+        )
+        if um_resume:
+            from execution.orchestration.turn_context import (
+                TurnQuoteMissingError,
+                load_turn_context,
+            )
+
+            try:
+                tc = await load_turn_context(self.database_service, um_resume)
+                quoted_text_resume = tc.quoted_text
+            except TurnQuoteMissingError:
+                logger.error(
+                    "QueueExecutor: missing quoted snippet for turn %s on resume",
+                    user_message_id,
+                )
+                return ResumeResult(success=False)
+            if quoted_text_resume is None and isinstance(um_resume.extend_info, dict):
+                quoted_text_resume = um_resume.extend_info.get("quoted_text")
+
         if task_result_text:
             current_agent_id = continuation.get("current_agent_id")
             current_agent_name = continuation.get("current_agent_name", "Agent")
@@ -814,6 +845,7 @@ class QueueExecutor:
                 user_message_id,
                 token=token,
                 request_user_id=request_user_id,
+                quoted_text=quoted_text_resume,
             )
 
             if queue_processing_result.result == QueueResult.PAUSED:

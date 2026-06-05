@@ -52,6 +52,7 @@ class SSEConnection:
                 "type": "heartbeat",
                 "timestamp": self._now().isoformat(),
                 "room_id": self.room_id,
+                "data": {},
             }
 
     async def get_message(self, timeout: float | None = None) -> str:

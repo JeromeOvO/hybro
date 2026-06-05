@@ -17,21 +17,18 @@ from uuid import uuid4
 import pytest
 
 from common.utils.context_utils import (
-    LLM_TURN_NOTES_THRESHOLD,
     add_turn_to_history,
-    extract_turn_notes,
     estimate_tokens,
 )
 from models.compaction import CompactionResult
 from models.memory import (
-    ConversationTurn,
     ContentType,
+    ConversationTurn,
     MemoryContent,
     RoomMemory,
     TurnRepresentation,
     TurnRole,
 )
-
 
 # =============================================================================
 # Fixtures
@@ -236,7 +233,7 @@ class TestMemorySearchHydration:
     @pytest.mark.asyncio
     async def test_hydrates_empty_content_from_turn_notes(self, mock_compaction_config):
         from models.search import MemorySearchResult, MemorySourceType
-        from services.memory_search_service import MemorySearchService
+        from app_shell.memory_search_service import MemorySearchService
 
         service = MemorySearchService()
 
@@ -266,7 +263,7 @@ class TestMemorySearchHydration:
         mock_coll = MagicMock()
         mock_coll.find.return_value = _mock_cursor()
 
-        with patch("services.memory_search_service.mongodb") as mock_mongodb:
+        with patch("app_shell.memory_search_service.mongodb") as mock_mongodb:
             mock_mongodb.conversation_content_collection = mock_coll
             await service._hydrate_results_from_storage(results, "room_1")
 
@@ -276,7 +273,7 @@ class TestMemorySearchHydration:
     @pytest.mark.asyncio
     async def test_skips_results_that_already_have_content(self, mock_compaction_config):
         from models.search import MemorySearchResult, MemorySourceType
-        from services.memory_search_service import MemorySearchService
+        from app_shell.memory_search_service import MemorySearchService
 
         service = MemorySearchService()
 
@@ -295,7 +292,7 @@ class TestMemorySearchHydration:
 
         mock_coll = MagicMock()
 
-        with patch("services.memory_search_service.mongodb") as mock_mongodb:
+        with patch("app_shell.memory_search_service.mongodb") as mock_mongodb:
             mock_mongodb.conversation_content_collection = mock_coll
             await service._hydrate_results_from_storage(results, "room_1")
 
@@ -356,7 +353,7 @@ class TestLegacyTokenFallback:
     """Tests that estimated_tokens_full=0 falls back to estimate_tokens()."""
 
     def test_select_turns_within_budget_handles_zero_tokens(self, mock_compaction_config):
-        from services.context_assembly_service import ContextAssemblyService
+        from app_shell.context_assembly_service import ContextAssemblyService
 
         mock_compaction_config.context_model_window = 32000
         mock_compaction_config.context_system_prompt_tokens = 2000
@@ -397,7 +394,7 @@ class TestSearchToContextIntegration:
 
     def test_search_results_appear_in_supervisor_context(self, mock_compaction_config):
         from models.search import MemorySearchResult, MemorySourceType
-        from services.context_assembly_service import ContextAssemblyService
+        from app_shell.context_assembly_service import ContextAssemblyService
 
         mock_compaction_config.context_model_window = 32000
         mock_compaction_config.context_system_prompt_tokens = 2000
@@ -409,7 +406,9 @@ class TestSearchToContextIntegration:
 
         class Facade:
             def assemble_supervisor_context_from_memory(self, room_memory_doc, current_task, **kwargs):
-                from context_memory.assembly import assemble_supervisor_context_from_memory
+                from context_memory.assembly import (
+                    assemble_supervisor_context_from_memory,
+                )
 
                 return assemble_supervisor_context_from_memory(
                     room_memory_doc,

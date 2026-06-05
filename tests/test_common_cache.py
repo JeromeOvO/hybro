@@ -10,8 +10,9 @@ Tests cover:
 """
 
 import time
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from common.utils.in_memory_cache import InMemoryCache
 

@@ -3,10 +3,11 @@ from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
-from common.types import Task
 from pydantic import BaseModel, Field, field_validator
 
+from common.types import Task
 from common.utils.time import utcnow
+from models.quote import UserQuoteCreatePayload
 
 
 class CoordinatorAgentId(StrEnum):
@@ -61,6 +62,16 @@ class Room(BaseModel):
 
     extend_info: Any | None = None
     processing_message_id: str | None = None
+
+    @field_validator("extend_info", mode="before")
+    @classmethod
+    def _ensure_mutable_dict(cls, v):
+        """Defensive: convert FrozenDict to a plain dict so downstream code can mutate."""
+        if v is None:
+            return v
+        if type(v) is not dict and isinstance(v, dict):
+            return dict(v)
+        return v
 
 
 class Message(BaseModel):
@@ -128,17 +139,43 @@ class RoomMessage(Message):
     task_updated_at: datetime | None = None
     # Task description being processed (only set for agent messages with tasks)
     task_content: str | None = None
+    # Arbitrary metadata (quoted text, dispatch strategy, etc.)
+    extend_info: Any | None = None
 
 
 class RoomUserMessage(RoomMessage):
     message_type: str = "user"
     extend_info: Any | None = None
     processing_claimed_at: datetime | None = None
+    quote_id: str | None = None
+    # Ephemeral: present only on inbound API; stripped before Mongo insert (see mongodb.add_room_user_message).
+    quote: UserQuoteCreatePayload | None = None
+
+    @field_validator("extend_info", mode="before")
+    @classmethod
+    def _ensure_mutable_dict(cls, v):
+        """Defensive: convert FrozenDict to a plain dict so downstream code can mutate."""
+        if v is None:
+            return v
+        if type(v) is not dict and isinstance(v, dict):
+            return dict(v)
+        return v
 
 
 class RoomAgentMessage(RoomMessage):
     message_type: str = "agent"
     extend_info: Any | None = None
+
+    @field_validator("extend_info", mode="before")
+    @classmethod
+    def _ensure_mutable_dict(cls, v):
+        """Defensive: convert FrozenDict to a plain dict so downstream code can mutate."""
+        if v is None:
+            return v
+        if type(v) is not dict and isinstance(v, dict):
+            return dict(v)
+        return v
+
     # Task tracking fields (consolidated from a2a_tasks collection)
     # Note: message_id is used as the primary key for task lookups (webhook URL, etc.)
     # The following fields are set when task tracking is enabled for this message:

@@ -3,12 +3,12 @@
 Delegates all business logic to ``WebhookTransport.handle_webhook()``.
 """
 
-from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.params import Depends as DependsParam
 
+from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from app_shell.bound import WebhookTransport, WebhookTransportFactory
 from common.utils.logger import get_logger
 
@@ -63,7 +63,5 @@ async def handle_a2a_webhook(
     transport = _resolve_dependency(transport, get_webhook_transport)
     return await transport.handle_webhook(message_id, payload, token)
 
-
-from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 
 _mark_declared_owner(router, __name__)

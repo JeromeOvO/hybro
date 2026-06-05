@@ -13,10 +13,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from common.utils.logger import get_logger
+from execution.state.task_state_manager import get_task
 from models.agent import Agent
 from models.dispatcher import AssignResult
 from models.room import RoomAgentMessage
-from execution.state.task_state_manager import get_task
+
+if TYPE_CHECKING:
+    from app_shell.agent_resolver_service import AgentResolverService
+    from app_shell.database_service import DatabaseService
 
 logger = get_logger(__name__)
 

@@ -5,7 +5,13 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
-from common.dto import AssembledContext, CompactionResult, MemorySearchResult, RoomMemoryInfo, UserMemory
+from common.dto import (
+    AssembledContext,
+    CompactionResult,
+    MemorySearchResult,
+    RoomMemoryInfo,
+    UserMemory,
+)
 from common.observability import NoopTracingProvider
 from common.protocols import (
     ContentStorageRepository,
@@ -15,7 +21,6 @@ from common.protocols import (
     VectorDAL,
 )
 from common.utils.logger import get_logger
-
 from context_memory import assembly, compaction, projection, search, summary
 from context_memory.config import (
     CompactionConfig,
@@ -226,6 +231,7 @@ class ContextMemoryFacade:
         agent_name: str | None = None,
         room_awareness: str | None = None,
         quoted_text: str | None = None,
+        agent_task: str | None = None,
         include_system_instruction: bool = True,
     ) -> AssembledContext:
         return assembly.assemble_agent_execution_context_from_memory(
@@ -236,6 +242,7 @@ class ContextMemoryFacade:
             agent_name=agent_name,
             room_awareness=room_awareness,
             quoted_text=quoted_text,
+            agent_task=agent_task,
             include_system_instruction=include_system_instruction,
         )
 

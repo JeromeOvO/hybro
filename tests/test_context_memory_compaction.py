@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -8,8 +8,7 @@ from context_memory import compaction
 from context_memory.config import CompactionConfig
 from context_memory.content_storage import ContentExpiredError, make_document_id
 
-
-NOW = datetime(2026, 5, 13, tzinfo=timezone.utc)
+NOW = datetime(2026, 5, 13, tzinfo=UTC)
 
 
 def now():
@@ -319,7 +318,7 @@ async def test_expand_turn_content_compact_turn_rejects_expired_document():
         content_type="text",
         content_hash="hash",
         stored_at=NOW,
-        expires_at=datetime(2026, 5, 12, tzinfo=timezone.utc),
+        expires_at=datetime(2026, 5, 12, tzinfo=UTC),
     )
 
     with pytest.raises(ContentExpiredError):

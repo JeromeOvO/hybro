@@ -1,12 +1,11 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from delivery.sse.connection import SSEConnection
 
-
-NOW = datetime(2026, 5, 17, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
 
 
 def fixed_now():
@@ -127,6 +126,7 @@ async def test_timeout_returns_heartbeat_frame():
         "type": "heartbeat",
         "timestamp": NOW.isoformat(),
         "room_id": "room-1",
+        "data": {},
     }
 
 
@@ -145,6 +145,7 @@ async def test_get_message_serializes_heartbeat_on_timeout():
         "type": "heartbeat",
         "timestamp": NOW.isoformat(),
         "room_id": "room-1",
+        "data": {},
     }
 
 

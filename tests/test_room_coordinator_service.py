@@ -17,7 +17,6 @@ import pytest
 
 from models.room import Room
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -37,7 +36,7 @@ def _make_room(debate_mode: bool = False) -> Room:
 @pytest.fixture
 def coordinator():
     """Build a RoomCoordinatorService with all external dependencies mocked."""
-    from services.room_coordinator_service import RoomCoordinatorService
+    from app_shell.room_coordinator_service import RoomCoordinatorService
 
     svc = RoomCoordinatorService.__new__(RoomCoordinatorService)
     svc.database_service = AsyncMock()

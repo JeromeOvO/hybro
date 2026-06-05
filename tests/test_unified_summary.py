@@ -1,6 +1,6 @@
 """Tests for RoomMessageCenter._emit_unified_summary."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -10,20 +10,19 @@ from models.room import CoordinatorAgentId
 @pytest.fixture
 def rmc():
     """Build a RoomMessageCenter with mocked dependencies."""
-    from modules.RoomMessageCenter import RoomMessageCenter
+    from execution.orchestration.room_message_center import RoomMessageCenter
 
     center = RoomMessageCenter.__new__(RoomMessageCenter)
     center.sse_manager = AsyncMock()
     center.database_service = AsyncMock()
     center.room_coordinator_service = AsyncMock()
-    center.room_services = AsyncMock()
+    center.room_runtime = AsyncMock()
     center.openai_service = AsyncMock()
     return center
 
 
 def _make_agent_message(agent_id, text, *, completed=True, extend_info=None):
     """Build a minimal RoomAgentMessage-like object for testing."""
-    from unittest.mock import MagicMock
     from a2a.types import TaskState
 
     msg = MagicMock()
@@ -114,12 +113,14 @@ class TestEmitUnifiedSummary:
 
     @pytest.mark.asyncio
     async def test_openai_fallback_with_trajectory(self, rmc):
-        """When no synthesis_text, uses OpenAI with trajectory_responses."""
+        """When no synthesis_text, streams OpenAI summary via artifact_update."""
         rmc.database_service.upsert_room_agent_message = AsyncMock(return_value=True)
         rmc.database_service.get_room_user_message_by_message_id = AsyncMock(return_value=None)
-        rmc.openai_service.summarize_agent_responses = AsyncMock(
-            return_value="OpenAI summary."
-        )
+
+        async def mock_stream(agent_responses, mode="non_debate", user_question=None):
+            yield "OpenAI summary."
+
+        rmc.openai_service.summarize_agent_responses_stream = mock_stream
 
         await rmc._emit_unified_summary(
             room_id="room-1",
@@ -131,14 +132,8 @@ class TestEmitUnifiedSummary:
             is_debate=True,
         )
 
-        rmc.openai_service.summarize_agent_responses.assert_awaited_once_with(
-            [
-                {"agent_name": "A", "message": "text A"},
-                {"agent_name": "B", "message": "text B"},
-            ],
-            mode="debate",
-            user_question=None,
-        )
+        rmc.sse_manager.send_artifact_update.assert_awaited()
+        assert rmc.sse_manager.send_artifact_update.await_count >= 2
         saved_msg = rmc.database_service.upsert_room_agent_message.call_args[0][0]
         assert saved_msg.extend_info["summary_origin"] == "coordinator"
         assert saved_msg.extend_info["summary_type"] == "debate"
@@ -227,9 +222,10 @@ class TestEmitUnifiedSummary:
         rmc.database_service.get_agent_name_by_agent_id = AsyncMock(
             side_effect=["Agent A", "Agent B"]
         )
-        rmc.openai_service.summarize_agent_responses = AsyncMock(
-            return_value="Combined summary."
-        )
+        async def mock_stream(agent_responses, mode="non_debate", user_question=None):
+            yield "Combined summary."
+
+        rmc.openai_service.summarize_agent_responses_stream = mock_stream
         rmc.database_service.upsert_room_agent_message = AsyncMock(return_value=True)
         rmc.database_service.get_room_user_message_by_message_id = AsyncMock(
             return_value=None
@@ -240,8 +236,7 @@ class TestEmitUnifiedSummary:
             user_message_id="msg-1",
         )
 
-        # OpenAI called with both responses
-        rmc.openai_service.summarize_agent_responses.assert_awaited_once()
+        rmc.sse_manager.send_artifact_update.assert_awaited()
         # Placeholder SSE emitted
         rmc.sse_manager.send_task_submitted.assert_awaited_once()
         # Summary persisted
@@ -252,7 +247,8 @@ class TestEmitUnifiedSummary:
     @pytest.mark.asyncio
     async def test_openai_returns_empty_emits_failed(self, rmc):
         """When OpenAI returns empty content, the working card is dismissed with failed status."""
-        rmc.openai_service.summarize_agent_responses = AsyncMock(return_value="")
+
+        rmc._stream_summary_content = AsyncMock(return_value="")
 
         await rmc._emit_unified_summary(
             room_id="room-1",

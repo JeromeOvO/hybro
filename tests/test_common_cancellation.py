@@ -7,10 +7,10 @@ Tests cover:
 """
 
 import asyncio
+
 import pytest
 
-from common.utils.cancellation import CancellationToken, CancellationError
-
+from common.utils.cancellation import CancellationError, CancellationToken
 
 # =============================================================================
 # CancellationError Tests

@@ -1,4 +1,4 @@
-"""Tests for services.task_notification_service.notify_task_update."""
+"""Tests for execution.dispatch.task_notifications.notify_task_update."""
 
 from __future__ import annotations
 
@@ -8,19 +8,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from a2a.types import Artifact, Part, Task, TaskState, TaskStatus, TextPart
 
+from common.a2a_constants import SSEProcessingStatus
 from models.room import MessageContent, Room, RoomAgentMessage
-from services.a2a_constants import SSEProcessingStatus
-from services.task_notification_service import notify_task_update
+from execution.dispatch.task_notifications import notify_task_update
 
 FROZEN_TIME = datetime(2026, 1, 15, 12, 0, 0)
 
-PATCH_DB = "services.database_service.db_service"
-PATCH_NOTIF = "services.notification_service.notification_service"
-PATCH_SSE = "services.sse_services.sse_manager"
-PATCH_EXTRACT_ERR = "services.task_notification_service.extract_error_message"
-PATCH_EXTRACT_STATUS = "services.task_notification_service.extract_status_message"
-PATCH_HAS_VISIBLE = "services.task_notification_service.task_has_visible_content"
-PATCH_SLEEP = "services.task_notification_service.asyncio.sleep"
+PATCH_DB = "app_shell.database_service.db_service"
+PATCH_NOTIF = "app_shell.notification_service.notification_service"
+PATCH_SSE = "app_shell.delivery_runtime.sse_manager"
+PATCH_EXTRACT_ERR = "execution.dispatch.task_notifications.extract_error_message"
+PATCH_EXTRACT_STATUS = "execution.dispatch.task_notifications.extract_status_message"
+PATCH_HAS_VISIBLE = "execution.dispatch.task_notifications.task_has_visible_content"
+PATCH_SLEEP = "execution.dispatch.task_notifications.asyncio.sleep"
 PATCH_EXTRACT_PARTS = "common.utils.a2a_helpers.extract_parts_from_artifacts"
 PATCH_CONVERT_S3 = "common.utils.a2a_helpers.convert_inline_bytes_to_s3"
 
@@ -344,7 +344,7 @@ class TestNotifyTaskUpdate:
             patch(PATCH_SSE) as sse,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
             patch(PATCH_EXTRACT_PARTS, return_value=extracted) as mock_ep,
-            patch(PATCH_EXTRACT_ERR, return_value="Agent error") as mock_err,
+            patch(PATCH_EXTRACT_ERR, return_value="Agent error"),
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
         ):
             _setup_db_mock(db, msg=msg)
@@ -384,21 +384,35 @@ class TestNotifyTaskUpdate:
             _setup_db_mock(db, msg=msg)
             _setup_notif_mock(notif)
             _setup_sse_mock(sse)
+            emitter = AsyncMock()
+            from execution.dispatch import task_notifications as task_notifications_mod
 
-            result = await notify_task_update(
-                message_id="msg-1",
-                state=TaskState.input_required,
-                room_id="room-1",
-                user_id="user-1",
-            )
+            with patch.object(
+                task_notifications_mod,
+                "_processing_status_emitter",
+                emitter,
+            ):
+                result = await notify_task_update(
+                    message_id="msg-1",
+                    state=TaskState.input_required,
+                    room_id="room-1",
+                    user_id="user-1",
+                )
 
             assert result is True
             mock_st.assert_called_once()
             call_kw = notif.send_task_update.call_args.kwargs
             assert call_kw["requires_input"] is True
             assert call_kw["status_message"] == "Please provide input"
-            sse.send_processing_status.assert_awaited_once_with(
-                "room-1", SSEProcessingStatus.AWAITING_INPUT, "msg-1",
+            emitter.assert_awaited_once_with(
+                room_id="room-1",
+                status=SSEProcessingStatus.AWAITING_INPUT,
+                message_id="msg-1",
+                lifecycle_message_id="msg-1",
+                record_lifecycle=True,
+                client_request_id=None,
+                details={"message": "Please provide input"},
+                error_message=None,
             )
 
     # --------------------------------------------------------------------- #
@@ -486,32 +500,58 @@ class TestNotifyTaskUpdate:
         ):
             _setup_notif_mock(notif)
             _setup_sse_mock(sse)
+            emitter = AsyncMock()
+            from execution.dispatch import task_notifications as task_notifications_mod
 
             # --- completed -> lifecycle completed emitted
             _setup_db_mock(db, msg=msg_completed)
-            await notify_task_update(
-                message_id="msg-1",
-                state=TaskState.completed,
+            with patch.object(
+                task_notifications_mod,
+                "_processing_status_emitter",
+                emitter,
+            ):
+                await notify_task_update(
+                    message_id="msg-1",
+                    state=TaskState.completed,
+                    room_id="room-1",
+                    user_id="user-1",
+                )
+            emitter.assert_awaited_once_with(
                 room_id="room-1",
-                user_id="user-1",
-            )
-            sse.send_processing_status.assert_awaited_once_with(
-                "room-1", SSEProcessingStatus.COMPLETED, "msg-1",
+                status=SSEProcessingStatus.COMPLETED,
+                message_id="msg-1",
+                lifecycle_message_id="msg-1",
+                record_lifecycle=True,
+                client_request_id=None,
+                details={"message": "Need input"},
+                error_message=None,
             )
 
-            sse.send_processing_status.reset_mock()
+            emitter.reset_mock()
             notif.send_task_update.reset_mock()
 
             # --- input_required -> lifecycle awaiting_input emitted
             _setup_db_mock(db, msg=msg_input)
-            await notify_task_update(
-                message_id="msg-1",
-                state=TaskState.input_required,
+            with patch.object(
+                task_notifications_mod,
+                "_processing_status_emitter",
+                emitter,
+            ):
+                await notify_task_update(
+                    message_id="msg-1",
+                    state=TaskState.input_required,
+                    room_id="room-1",
+                    user_id="user-1",
+                )
+            emitter.assert_awaited_once_with(
                 room_id="room-1",
-                user_id="user-1",
-            )
-            sse.send_processing_status.assert_awaited_once_with(
-                "room-1", SSEProcessingStatus.AWAITING_INPUT, "msg-1",
+                status=SSEProcessingStatus.AWAITING_INPUT,
+                message_id="msg-1",
+                lifecycle_message_id="msg-1",
+                record_lifecycle=True,
+                client_request_id=None,
+                details={"message": "Need input"},
+                error_message=None,
             )
 
     # --------------------------------------------------------------------- #

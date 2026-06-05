@@ -8,11 +8,12 @@ Covers:
 - Scope: all_agents + debate bypasses LLM selector
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modules.SupervisorExecutor import SupervisorExecutor
-from models.supervisor_v2 import (
+import pytest
+
+from common.utils.time import utcnow
+from models.supervisor import (
     ActionType,
     AgentProfile,
     DelegateTarget,
@@ -20,13 +21,11 @@ from models.supervisor_v2 import (
     RunStatus,
     StepStatus,
     SupervisorAction,
-    SupervisorRunResult,
     SupervisorTrajectory,
     TrajectoryEntry,
-    V2StepResult,
+    StepResult,
 )
-from common.utils.time import utcnow
-
+from execution.orchestration.supervisor_executor import SupervisorExecutor
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -46,7 +45,7 @@ def _make_supervisor_executor() -> SupervisorExecutor:
     se.database_service = AsyncMock()
     se.sse_manager = AsyncMock()
     se.sse_manager.send_processing_status = AsyncMock()
-    se.room_services = MagicMock()
+    se.room_runtime = MagicMock()
     se.supervisor_service = MagicMock()
     se.tsm = MagicMock()
     se.agent_dispatcher = MagicMock()
@@ -75,7 +74,7 @@ def _make_delegate_entry(
         started_at=utcnow(),
         completed_at=utcnow(),
         results=[
-            V2StepResult(
+            StepResult(
                 step_number=step,
                 agent_id=agent_id,
                 agent_name=agent_name,
@@ -94,7 +93,7 @@ def _make_delegate_entry(
 
 
 class TestSnapshotDebateAgents:
-    @patch("modules.SupervisorExecutor.settings")
+    @patch("execution.orchestration.supervisor_executor.settings")
     def test_initialized_once(self, mock_settings):
         mock_settings.debate_rounds = 1
         registry = [
@@ -113,7 +112,7 @@ class TestSnapshotDebateAgents:
         ids2 = SupervisorExecutor._snapshot_debate_agents(registry, trajectory)
         assert ids2 == ["a1", "a2"]
 
-    @patch("modules.SupervisorExecutor.settings")
+    @patch("execution.orchestration.supervisor_executor.settings")
     def test_multi_round_snapshot(self, mock_settings):
         """With debate_rounds=2, each agent appears twice in the snapshot."""
         mock_settings.debate_rounds = 2
@@ -225,7 +224,7 @@ class TestGetRemainingDebateAgentIds:
             started_at=utcnow(),
             completed_at=utcnow(),
             results=[
-                V2StepResult(
+                StepResult(
                     step_number=2,
                     agent_id="a2",
                     agent_name="a2",
@@ -365,7 +364,7 @@ class TestCollectPriorDebateResponses:
 # =========================================================================
 
 
-@patch("modules.SupervisorExecutor.settings", MagicMock(debate_rounds=1))
+@patch("execution.orchestration.supervisor_executor.settings", MagicMock(debate_rounds=1))
 class TestSequentialDebateDispatch:
     """Integration tests that run the full executor loop with mocked dispatch."""
 
@@ -387,7 +386,7 @@ class TestSequentialDebateDispatch:
 
         async def fake_dispatch(targets, **kwargs):
             dispatch_calls.append([t.agent_id for t in targets])
-            return [V2StepResult(
+            return [StepResult(
                 step_number=kwargs.get("step_number", 1),
                 agent_id=targets[0].agent_id,
                 agent_name=targets[0].agent_name,
@@ -425,7 +424,7 @@ class TestSequentialDebateDispatch:
         agents = [_make_agent_profile("a1", "Alpha")]
 
         async def fake_dispatch(targets, **kwargs):
-            return [V2StepResult(
+            return [StepResult(
                 step_number=1,
                 agent_id="a1",
                 agent_name="Alpha",
@@ -459,7 +458,7 @@ class TestSequentialDebateDispatch:
         async def fake_dispatch(targets, **kwargs):
             nonlocal dispatch_count
             dispatch_count += 1
-            return [V2StepResult(
+            return [StepResult(
                 step_number=dispatch_count,
                 agent_id=targets[0].agent_id,
                 agent_name=targets[0].agent_name,
@@ -501,7 +500,7 @@ class TestSequentialDebateDispatch:
 
         async def fake_dispatch(targets, **kwargs):
             dispatch_ids.append(targets[0].agent_id)
-            return [V2StepResult(
+            return [StepResult(
                 step_number=kwargs.get("step_number", 1),
                 agent_id=targets[0].agent_id,
                 agent_name=targets[0].agent_name,
@@ -555,7 +554,7 @@ class TestSequentialDebateDispatch:
 # =========================================================================
 
 
-@patch("modules.SupervisorExecutor.settings", MagicMock(debate_rounds=1))
+@patch("execution.orchestration.supervisor_executor.settings", MagicMock(debate_rounds=1))
 class TestDebateResume:
     @pytest.fixture
     def se(self):
@@ -580,7 +579,7 @@ class TestDebateResume:
 
         async def fake_dispatch(targets, **kwargs):
             dispatch_ids.append(targets[0].agent_id)
-            return [V2StepResult(
+            return [StepResult(
                 step_number=kwargs.get("step_number", 1),
                 agent_id=targets[0].agent_id,
                 agent_name=targets[0].agent_name,
@@ -678,7 +677,7 @@ class TestDebateResume:
 
         async def fake_dispatch(targets, **kwargs):
             dispatch_ids.append(targets[0].agent_id)
-            return [V2StepResult(
+            return [StepResult(
                 step_number=kwargs.get("step_number", 1),
                 agent_id=targets[0].agent_id,
                 agent_name=targets[0].agent_name,
@@ -770,7 +769,7 @@ class TestResumePreservesDebateParticipants:
 
         is_debate_mode = True
 
-        # Simulate the preservation logic from RoomMessageCenter._resume_supervisor_v2
+        # Simulate the preservation logic from RoomMessageCenter._resume_supervisor
         if trajectory.debate_agent_ids and is_debate_mode:
             current_ids = {a.agent_id for a in current_registry}
             missing_ids = [

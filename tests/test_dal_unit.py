@@ -1,8 +1,8 @@
+import inspect
 from types import SimpleNamespace
 from typing import get_type_hints
 from unittest.mock import AsyncMock, MagicMock
 
-import inspect
 import pytest
 
 from common.dto import VectorRecord
@@ -647,6 +647,7 @@ async def test_object_storage_dal_impl_uses_aioboto3_session_directly():
 @pytest.mark.asyncio
 async def test_object_storage_dal_get_text_returns_none_for_missing_key():
     from botocore.exceptions import ClientError
+
     from dal.s3.client import ObjectStorageDALImpl
 
     client = AsyncMock()

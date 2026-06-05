@@ -10,24 +10,23 @@ Tests cover:
 
 import ast
 import asyncio
-import pytest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from a2a.types import TaskState
-from common.a2a_constants import CommonTaskState
-from modules.RoomMessageCenter import RoomMessageCenter
-from models.supervisor_v2 import (
+
+from common.a2a_constants import CommonTaskState, SSEProcessingStatus
+from models.supervisor import (
+    ActionType,
+    StepStatus,
+    SupervisorAction,
     SupervisorTrajectory,
     TrajectoryEntry,
-    SupervisorAction,
-    ActionType,
-    V2StepResult,
-    StepStatus,
+    StepResult,
 )
-from common.a2a_constants import SSEProcessingStatus
-
+from execution.orchestration.room_message_center import RoomMessageCenter
 
 # =============================================================================
 # _validate_room_message_request Tests
@@ -157,7 +156,7 @@ def _make_trajectory_with_paused(agent_id="a1", agent_name="Agent1", msg_id="msg
             targets=[{"agent_id": agent_id, "agent_name": agent_name, "task": "do stuff"}],
         ),
         results=[
-            V2StepResult(
+            StepResult(
                 step_number=1,
                 agent_id=agent_id,
                 agent_name=agent_name,
@@ -566,12 +565,12 @@ def test_failed_room_lock_notifies_non_terminal_tasks_before_failed_processing_s
     )
 
 
-def test_supervisor_v2_prep_missing_notifies_before_failed_processing_status():
+def test_supervisor_prep_missing_notifies_before_failed_processing_status():
     _assert_before(
         "_process_room_user_message_locked",
         "_notify_all_non_terminal_tasks_failed",
         (),
-        ("Supervisor-enabled room missing V2 preparation data",),
+        ("Supervisor-enabled room missing supervisor preparation data",),
     )
 
 
@@ -637,19 +636,19 @@ def test_root_queue_completion_appends_turn_completed_before_completed_processin
     )
 
 
-def test_supervisor_v2_corrupted_data_notifies_before_failed_processing_status():
+def test_supervisor_corrupted_data_notifies_before_failed_processing_status():
     _assert_before(
-        "_process_supervisor_v2",
+        "_process_supervisor",
         "_notify_all_non_terminal_tasks_failed",
         (),
-        ("V2 supervisor data corrupted or incomplete",),
+        ("supervisor data corrupted or incomplete",),
     )
 
 
-def test_supervisor_v2_clarify_resume_failed_has_no_required_post_emit_side_effects():
-    fn = _function_node("_process_supervisor_v2")
+def test_supervisor_clarify_resume_failed_has_no_required_post_emit_side_effects():
+    fn = _function_node("_process_supervisor")
     send_line = _call_line(
-        "_process_supervisor_v2",
+        "_process_supervisor",
         "_emit_processing_status",
         "Clarify resume failed",
     )
@@ -679,102 +678,102 @@ def test_supervisor_v2_clarify_resume_failed_has_no_required_post_emit_side_effe
     assert not post_emit_calls
 
 
-def test_supervisor_v2_planning_failure_notifies_before_failed_processing_status():
+def test_supervisor_planning_failure_notifies_before_failed_processing_status():
     _assert_before(
-        "_process_supervisor_v2",
+        "_process_supervisor",
         "_notify_all_non_terminal_tasks_failed",
         (),
         ("Supervisor planning failed",),
     )
 
 
-def test_supervisor_v2_execution_failure_notifies_before_failed_processing_status():
+def test_supervisor_execution_failure_notifies_before_failed_processing_status():
     _assert_before(
-        "_process_supervisor_v2",
+        "_process_supervisor",
         "_notify_all_non_terminal_tasks_failed",
         (),
         ("Supervisor execution failed unexpectedly",),
     )
 
 
-def test_supervisor_v2_resume_deserialization_failure_notifies_before_failed_status():
+def test_supervisor_resume_deserialization_failure_notifies_before_failed_status():
     _assert_before(
-        "_resume_supervisor_v2",
+        "_resume_supervisor",
         "_notify_all_non_terminal_tasks_failed",
         (),
-        ("V2 resume: corrupted trajectory data",),
+        ("Supervisor resume: corrupted trajectory data",),
     )
 
 
-def test_supervisor_v2_resume_room_lookup_failure_notifies_before_failed_status():
+def test_supervisor_resume_room_lookup_failure_notifies_before_failed_status():
     _assert_before(
-        "_resume_supervisor_v2",
+        "_resume_supervisor",
         "_notify_all_non_terminal_tasks_failed",
         (),
-        ("V2 resume: room not found",),
+        ("Supervisor resume: room not found",),
     )
 
 
-def test_supervisor_v2_resume_executor_failure_notifies_before_failed_status():
+def test_supervisor_resume_executor_failure_notifies_before_failed_status():
     _assert_before(
-        "_resume_supervisor_v2",
+        "_resume_supervisor",
         "_notify_all_non_terminal_tasks_failed",
         (),
-        ("V2 resume: executor failed",),
+        ("Supervisor resume: executor failed",),
     )
 
 
-def test_supervisor_v2_resume_canceled_appends_and_notifies_before_canceled_status():
+def test_supervisor_resume_canceled_appends_and_notifies_before_canceled_status():
     _assert_before(
-        "_resume_supervisor_v2",
+        "_resume_supervisor",
         "append",
         ("turn_canceled",),
         ("SSEProcessingStatus.CANCELED",),
     )
     _assert_before(
-        "_resume_supervisor_v2",
+        "_resume_supervisor",
         "_notify_all_non_terminal_tasks_failed",
         (),
         ("SSEProcessingStatus.CANCELED",),
     )
 
 
-def test_supervisor_v2_completed_appends_turn_completed_before_completed_processing_status():
+def test_supervisor_completed_appends_turn_completed_before_completed_processing_status():
     _assert_before(
-        "_handle_v2_run_result",
+        "_handle_supervisor_run_result",
         "append",
         ("turn_completed",),
         ("SSEProcessingStatus.COMPLETED",),
     )
 
 
-def test_supervisor_v2_canceled_appends_and_notifies_before_terminal_status():
+def test_supervisor_canceled_appends_and_notifies_before_terminal_status():
     _assert_before(
-        "_handle_v2_run_result",
+        "_handle_supervisor_run_result",
         "append",
         ("turn_canceled",),
         ("SSEProcessingStatus.CANCELED",),
     )
     _assert_before(
-        "_handle_v2_run_result",
+        "_handle_supervisor_run_result",
         "_notify_all_non_terminal_tasks_failed",
         (),
         ("SSEProcessingStatus.CANCELED",),
     )
 
 
-def test_supervisor_v2_failed_appends_and_notifies_before_terminal_status():
+def test_supervisor_failed_appends_and_notifies_before_terminal_status():
     _assert_before(
-        "_handle_v2_run_result",
+        "_handle_supervisor_run_result",
         "append",
         ("turn_failed",),
-        ("V2 supervisor execution failed",),
+        ("supervisor execution failed",),
     )
     _assert_before(
-        "_handle_v2_run_result",
+        "_handle_supervisor_run_result",
         "_notify_all_non_terminal_tasks_failed",
         (),
-        ("V2 supervisor execution failed",),
+        ("supervisor execution failed",),
     )
 
 
@@ -793,22 +792,22 @@ def test_v1_resume_completion_side_effects_complete_before_completed_processing_
     )
 
 
-def test_supervisor_v2_terminal_post_loop_side_effects_complete_before_terminal_status_or_are_best_effort():
+def test_supervisor_terminal_post_loop_side_effects_complete_before_terminal_status_or_are_best_effort():
     integration_line = _call_line(
-        "_handle_v2_run_result",
-        "_run_v2_terminal_post_loop_integration",
+        "_handle_supervisor_run_result",
+        "_run_supervisor_terminal_post_loop_integration",
     )
     first_terminal_emit = min(
-        _call_line("_handle_v2_run_result", "_emit_processing_status", "SSEProcessingStatus.COMPLETED"),
-        _call_line("_handle_v2_run_result", "_emit_processing_status", "SSEProcessingStatus.CANCELED"),
-        _call_line("_handle_v2_run_result", "_emit_processing_status", "V2 supervisor execution failed"),
+        _call_line("_handle_supervisor_run_result", "_emit_processing_status", "SSEProcessingStatus.COMPLETED"),
+        _call_line("_handle_supervisor_run_result", "_emit_processing_status", "SSEProcessingStatus.CANCELED"),
+        _call_line("_handle_supervisor_run_result", "_emit_processing_status", "supervisor execution failed"),
     )
     assert integration_line < first_terminal_emit
 
 
 def test_clarifying_soft_complete_appends_turn_completed_before_frontend_completed_status():
     _assert_before(
-        "_handle_v2_run_result",
+        "_handle_supervisor_run_result",
         "append",
         ("turn_completed",),
         ("SSEProcessingStatus.COMPLETED",),

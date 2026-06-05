@@ -1,21 +1,20 @@
 """
-Unit tests for SSE services (sse_services.py).
+Unit tests for SSE services (sse_app_shell.py).
 
 Tests cover:
 - SSEConnection: send_message, get_message (with timeout/heartbeat), close
 - SSEManager: cancel_message/is_cancelled/clear_cancellation lifecycle
 - SSEManager: CancellationToken creation and pre-signalling
-- SSEManager: add_connection/remove_connection/broadcast_to_room
+- SSEManager: add_connection/remove_connection and typed delivery helpers
 """
 
-import asyncio
 import json
-import pytest
 from unittest.mock import AsyncMock
 
-from services.sse_services import SSEConnection, SSEManager
-from tests.delivery_adapter_fakes import make_bound_manager
+import pytest
 
+from app_shell.delivery_runtime import SSEConnection
+from tests.delivery_adapter_fakes import make_bound_manager
 
 # =============================================================================
 # SSEConnection Tests
@@ -89,7 +88,7 @@ class TestSSEManagerCancellation:
 
     def test_clear_also_removes_token(self):
         mgr = make_bound_manager()
-        token = mgr.create_token("msg-1")
+        mgr.create_token("msg-1")
         mgr.clear_cancellation("msg-1")
         assert mgr.get_token("msg-1") is None
 
@@ -148,23 +147,23 @@ class TestSSEManagerConnections:
         assert "room-1" not in mgr.room_connections
 
     @pytest.mark.asyncio
-    async def test_broadcast_delivers_to_all_connections(self):
+    async def test_typed_helper_delivers_to_all_connections(self):
         mgr = make_bound_manager()
         c1 = await mgr.add_connection("room-1")
         c2 = await mgr.add_connection("room-1")
 
-        await mgr.broadcast_to_room("room-1", "update", {"x": 1})
+        await mgr.send_processing_status("room-1", "processing", "msg-1")
 
         for conn in [c1, c2]:
             msg = await conn.queue.get()
             parsed = json.loads(msg)
-            assert parsed["type"] == "update"
-            assert parsed["data"] == {"x": 1}
+            assert parsed["type"] == "processing_status"
+            assert parsed["data"]["message_id"] == "msg-1"
 
     @pytest.mark.asyncio
-    async def test_broadcast_to_empty_room_is_noop(self):
+    async def test_typed_helper_to_empty_room_is_noop(self):
         mgr = make_bound_manager()
-        await mgr.broadcast_to_room("nonexistent", "event", {})
+        await mgr.send_processing_status("nonexistent", "processing", "msg-1")
 
 
 # =============================================================================
@@ -206,7 +205,7 @@ class TestSendProcessingStatusClientRequestId:
 
     @pytest.mark.asyncio
     async def test_send_processing_status_does_not_record_or_emit_run_event(self, monkeypatch):
-        import services.run_command_handler as handler_mod
+        import execution.run_command_handler as handler_mod
 
         mgr = make_bound_manager()
         conn = await mgr.add_connection("room-1")

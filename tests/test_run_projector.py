@@ -1,8 +1,8 @@
 """Unit tests for processing_message_id projector (§N.1)."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from services.run_projector import compute_processing_message_id_mirror
+from execution.run_projector import compute_processing_message_id_mirror
 
 
 def test_mirror_empty_runs():
@@ -15,7 +15,7 @@ def test_mirror_single_run():
             {
                 "run_id": "a",
                 "trigger_message_id": "msg-a",
-                "created_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+                "created_at": datetime(2025, 1, 1, tzinfo=UTC),
             }
         ]
     )
@@ -26,12 +26,12 @@ def test_mirror_earliest_created_wins():
     r1 = {
         "run_id": "later",
         "trigger_message_id": "msg-late",
-        "created_at": datetime(2025, 1, 2, tzinfo=timezone.utc),
+        "created_at": datetime(2025, 1, 2, tzinfo=UTC),
     }
     r0 = {
         "run_id": "earlier",
         "trigger_message_id": "msg-early",
-        "created_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+        "created_at": datetime(2025, 1, 1, tzinfo=UTC),
     }
     assert compute_processing_message_id_mirror([r1, r0]) == "msg-early"
     assert compute_processing_message_id_mirror([r0, r1]) == "msg-early"

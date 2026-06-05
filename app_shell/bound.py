@@ -6,6 +6,7 @@ from types import TracebackType
 from typing import Protocol, TypeAlias, runtime_checkable
 
 from pydantic import BaseModel
+
 from models.agent import Agent, AgentCapabilityIssue, IssueStatus
 from models.request import (
     AgentCenterRequest,
@@ -26,7 +27,6 @@ from models.response import (
     RoomCenterRoomSettingResponse,
     RoomCenterUserMessageResponse,
 )
-
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
@@ -99,7 +99,7 @@ class ViewSetRepositoryFactory(Protocol):
         *,
         collection_name: str,
         db: ViewSetDatabase,
-        pinecone: "VectorIndex | None",
+        pinecone: VectorIndex | None,
         pk_field: str = "_id",
     ) -> ViewSetRepository: ...
 
@@ -198,16 +198,6 @@ class VectorIndex(Protocol):
 
 
 @runtime_checkable
-class LegacyWorkflowCenter(Protocol):
-    pass
-
-
-@runtime_checkable
-class LegacyTaskCenter(Protocol):
-    pass
-
-
-@runtime_checkable
 class LegacyMemoryCenter(Protocol):
     async def add_chat_context(self, request: ChatMemoryRequest) -> ChatMemoryResponse: ...
     async def get_chat_context_by_session_id(
@@ -247,9 +237,6 @@ class RoomCenterRouteOwner(Protocol):
     async def update_room_extend_info(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse: ...
-    async def create_and_parse_user_message(
-        self, request: RoomCenterUserMessageRequest
-    ) -> RoomCenterUserMessageResponse: ...
     async def send_message(
         self, request: RoomCenterUserMessageRequest
     ) -> RoomCenterUserMessageResponse: ...
@@ -271,8 +258,6 @@ __all__ = [
     "EmbeddingProvider",
     "InspectionCenter",
     "LegacyMemoryCenter",
-    "LegacyTaskCenter",
-    "LegacyWorkflowCenter",
     "RoomCenterRouteOwner",
     "SSEManagerRouteOwner",
     "VectorIndex",

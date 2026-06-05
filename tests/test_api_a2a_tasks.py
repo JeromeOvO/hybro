@@ -8,20 +8,17 @@ Tests cover:
 - Authorization checks
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-
 from fastapi import HTTPException
-
-from a2a.types import Task, TaskStatus, TaskState
-from tests.conftest import PATCH
 
 from api.a2a_tasks import (
     get_task_status,
     list_room_tasks,
     list_user_pending_tasks,
 )
-
+from tests.conftest import PATCH
 
 # =============================================================================
 # Get Task Status Tests

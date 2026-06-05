@@ -13,12 +13,10 @@ from api_gateway.routes import (
     hub_routes,
     inspection_routes,
     memory_routes,
-    orchestration_routes,
     platform_gateway_routes,
     relay_routes,
     room_routes,
     sse_routes,
-    task_routes,
     webhook_routes,
 )
 from common.auth import get_current_user
@@ -38,19 +36,9 @@ def build_api_gateway_router() -> APIRouter:
         tags=["memory"],
         dependencies=[Depends(get_current_user)],
     )
-    gateway_router.include_router(
-        orchestration_routes.router,
-        tags=["orchestration"],
-        dependencies=[Depends(get_current_user)],
-    )
     gateway_router.include_router(room_routes.router, tags=["room"])
     gateway_router.include_router(hitl_routes.router, tags=["hitl"])
     gateway_router.include_router(hub_routes.router, tags=["hub"])
-    gateway_router.include_router(
-        task_routes.router,
-        tags=["task"],
-        dependencies=[Depends(get_current_user)],
-    )
     gateway_router.include_router(sse_routes.router, tags=["sse"])
     gateway_router.include_router(agent_group_routes.router, tags=["agent_group"])
     gateway_router.include_router(files_routes.router, tags=["files"])

@@ -9,13 +9,13 @@ Tests cover:
 """
 
 import ast
-import pytest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from modules.SupervisorExecutor import SupervisorExecutor
-from models.supervisor_v2 import (
+import pytest
+
+from models.supervisor import (
     ActionType,
     AgentProfile,
     ClarifyQuestion,
@@ -26,8 +26,9 @@ from models.supervisor_v2 import (
     SupervisorAction,
     SupervisorRunResult,
     SupervisorTrajectory,
-    V2StepResult,
+    StepResult,
 )
+from execution.orchestration.supervisor_executor import SupervisorExecutor
 
 _ROOT = Path(__file__).resolve().parents[1]
 
@@ -36,7 +37,7 @@ def _make_supervisor_executor():
     se = object.__new__(SupervisorExecutor)
     se.database_service = AsyncMock()
     se.sse_manager = MagicMock()
-    se.room_services = MagicMock()
+    se.room_runtime = MagicMock()
     se.supervisor_service = MagicMock()
     se.tsm = MagicMock()
     se.agent_dispatcher = MagicMock()
@@ -191,8 +192,10 @@ class TestClarifyCleanupCompensation:
     async def test_cancels_requests_when_save_interrupted_state_fails(self, se):
         """If all questions are created but continuation save fails,
         all HITL requests and messages must be cleaned up."""
-        from models.supervisor_v2 import (
-            SupervisorAction, ActionType, ClarifyQuestion,
+        from models.supervisor import (
+            ActionType,
+            ClarifyQuestion,
+            SupervisorAction,
         )
 
         req_a = MagicMock()
@@ -205,7 +208,7 @@ class TestClarifyCleanupCompensation:
         hitl_mock.cancel_request = AsyncMock()
 
         agent_msg = MagicMock(message_id="msg-agent-1")
-        se.room_services.create_agent_message.return_value = agent_msg
+        se.room_runtime.create_agent_message.return_value = agent_msg
         se.database_service.add_room_agent_message = AsyncMock()
         se.database_service.delete_room_agent_message_by_message_id = AsyncMock()
 
@@ -241,8 +244,10 @@ class TestClarifyCleanupCompensation:
     async def test_cancels_prior_requests_when_request_input_returns_none(self, se):
         """If request_input returns None mid-group (e.g. max rounds),
         previously created requests must be canceled."""
-        from models.supervisor_v2 import (
-            SupervisorAction, ActionType, ClarifyQuestion,
+        from models.supervisor import (
+            ActionType,
+            ClarifyQuestion,
+            SupervisorAction,
         )
 
         req_a = MagicMock()
@@ -253,7 +258,7 @@ class TestClarifyCleanupCompensation:
         hitl_mock.cancel_request = AsyncMock()
 
         agent_msg = MagicMock(message_id="msg-agent-1")
-        se.room_services.create_agent_message.return_value = agent_msg
+        se.room_runtime.create_agent_message.return_value = agent_msg
         se.database_service.add_room_agent_message = AsyncMock()
         se.database_service.delete_room_agent_message_by_message_id = AsyncMock()
 
@@ -360,7 +365,7 @@ class TestProcessingStatusLifecycleOrder:
         )
         se._dispatch_targets = AsyncMock(
             return_value=[
-                V2StepResult(
+                StepResult(
                     step_number=1,
                     agent_id="agent-1",
                     agent_name="Agent",
@@ -413,7 +418,7 @@ class TestProcessingStatusLifecycleOrder:
                 questions=[ClarifyQuestion(prompt="Which account?")],
             )
         )
-        se.room_services.create_agent_message.return_value = SimpleNamespace(
+        se.room_runtime.create_agent_message.return_value = SimpleNamespace(
             message_id="hitl-agent-msg"
         )
         se.database_service.resolve_client_request_id_for_message_id = AsyncMock(

@@ -2,7 +2,6 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from common.types import AgentCard, Task
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -10,10 +9,16 @@ from pydantic import (
     field_validator,
 )
 
+from common.types import AgentCard, Task
 from models.agent import Agent, AgentStatus, coerce_legacy_agent_card
 from models.memory import ChatContext, RoomMemory
-from models.room import Room, RoomAgentMessage, RoomMessage, RoomUserMessage, UserAttachment
-from models.task import BaseTask, MetaTask, TaskSession
+from models.room import (
+    Room,
+    RoomAgentMessage,
+    RoomMessage,
+    RoomUserMessage,
+    UserAttachment,
+)
 
 
 class PaginationParams(BaseModel):
@@ -87,7 +92,7 @@ class AgentTaskRequest(BaseModel):
             # Try to convert to string or use as-is
             try:
                 text = str(self.input_data)
-            except:
+            except Exception:
                 # Use generic text if conversion fails
                 text = f"Processing step {self.step_id}"
 
@@ -210,23 +215,6 @@ class AgentSettingsUpdateRequest(BaseModel):
     agent_status: AgentStatus | None = None
     is_public: bool | None = None
     model_config = ConfigDict(use_enum_values=True)
-
-
-class TaskCenterRequest(BaseModel):
-    task_id: str | None = None
-    user_name: str | None = None
-    parent_task_id: str | None = None
-    session_id: str | None = None
-    agent_id: str | None = None
-    meta_task: MetaTask | None = None
-    base_task: BaseTask | None = None
-    task_session: TaskSession | None = None
-    task: Task | None = None
-    message: Any | None = None
-    user_input: str | None = None
-    execution_order: int = 0
-    depends_on_tasks: list[str] | None = None
-    context_from_previous: dict[str, Any] | None = None
 
 
 class ChatRequest(BaseModel):

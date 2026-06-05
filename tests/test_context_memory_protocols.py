@@ -2,6 +2,7 @@ import ast
 import inspect
 import sys
 import tomllib
+from datetime import UTC
 from pathlib import Path
 
 import pytest
@@ -165,7 +166,7 @@ class FakeLLM:
 
 
 def _facade():
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from context_memory import ContextMemoryFacade
 
@@ -176,7 +177,7 @@ def _facade():
         vector=FakeVector(),
         llm_provider=FakeLLM(),
         id_factory=lambda: "id-1",
-        now=lambda: datetime.now(timezone.utc),
+        now=lambda: datetime.now(UTC),
     )
 
 
@@ -205,7 +206,9 @@ def test_context_memory_exports_are_stable():
     from context_memory.repository import (
         ContentStorageMongoRepository as RepoContentStorageMongoRepository,
     )
-    from context_memory.repository import MemoryMongoRepository as RepoMemoryMongoRepository
+    from context_memory.repository import (
+        MemoryMongoRepository as RepoMemoryMongoRepository,
+    )
 
     assert ContextMemoryFacade.__name__ == "ContextMemoryFacade"
     assert MemoryMongoRepository is RepoMemoryMongoRepository
@@ -312,8 +315,9 @@ def test_context_memory_config_defaults_read_common_settings(monkeypatch):
 
 def test_context_memory_setting_helper_does_not_swallow_import_failures(monkeypatch):
     import builtins
+    import importlib
 
-    from context_memory import config
+    context_memory_config = importlib.import_module("context_memory.config")
 
     real_import = builtins.__import__
 
@@ -325,11 +329,11 @@ def test_context_memory_setting_helper_does_not_swallow_import_failures(monkeypa
     monkeypatch.setattr(builtins, "__import__", failing_import)
 
     with pytest.raises(RuntimeError, match="settings validation failed"):
-        config._setting("context_model_window", 128000)
+        context_memory_config._setting("context_model_window", 128000)
 
 
 def test_room_delete_has_no_stale_direct_context_memory_cleanup():
-    from services.room_services import RoomServices
+    from app_shell.room_runtime import RoomServices
 
     source = inspect.getsource(RoomServices.delete_room_by_room_id)
 
@@ -338,7 +342,7 @@ def test_room_delete_has_no_stale_direct_context_memory_cleanup():
 
 
 def test_room_delete_logs_when_context_memory_cleanup_is_unbound():
-    from services.room_services import RoomServices
+    from app_shell.room_runtime import RoomServices
 
     source = inspect.getsource(RoomServices._cleanup_context_memory_for_room)
 
@@ -389,11 +393,11 @@ def test_context_memory_import_boundary():
 
 def test_non_protocol_helper_call_boundary():
     allowed_call_sites = {
-        "services/context_assembly_service.py": {
+        "app_shell/context_assembly_service.py": {
             "assemble_supervisor_context_from_memory",
             "assemble_agent_execution_context_from_memory",
         },
-        "services/memory_service.py": {
+        "app_shell/memory_service.py": {
             "legacy_create_room_memory",
             "legacy_get_room_memory_by_room_id",
             "legacy_get_room_memory_by_memory_id",
@@ -406,12 +410,12 @@ def test_non_protocol_helper_call_boundary():
             "add_synthesis_to_history",
             "update_room_summary",
         },
-        "services/memory_search_service.py": {
+        "app_shell/memory_search_service.py": {
             "legacy_search",
             "index_turn_for_search",
             "delete_room_index",
         },
-        "services/compaction_service.py": {
+        "app_shell/compaction_service.py": {
             "should_compact",
             "compact_if_needed",
             "compact_room_memory",

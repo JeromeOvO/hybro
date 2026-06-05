@@ -17,15 +17,14 @@ from pydantic import BaseModel, Field
 
 from common.utils.time import utcnow
 
-
 # ---------------------------------------------------------------------------
-# InterruptKind — routing key for _resume_supervisor_v2()
+# InterruptKind — routing key for _resume_supervisor()
 # ---------------------------------------------------------------------------
 
 
 class InterruptKind(str, Enum):
     """The interrupt_kind field in every continuation payload is the single
-    routing signal for _resume_supervisor_v2().
+    routing signal for _resume_supervisor().
 
     Backward compatibility: if the field is absent (legacy push-notification
     continuations saved before this design), assume PUSH_NOTIFICATION.
@@ -44,7 +43,7 @@ class InterruptKind(str, Enum):
 class HITLEventType(str, Enum):
     """Events in the human-in-the-loop lifecycle."""
 
-    INPUT_REQUESTED = "hitl_input_requested"
+    INPUT_REQUESTED = "hitl_request"
     INPUT_RECEIVED = "hitl_input_received"
     INPUT_EXPIRED = "hitl_input_expired"
     INPUT_CANCELED = "hitl_input_canceled"

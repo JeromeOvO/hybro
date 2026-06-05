@@ -9,17 +9,16 @@ Tests cover:
 - Internal errors (500)
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from fastapi import HTTPException
 
-from api.discovery import discover_agents, DiscoveryRequest
+from api.discovery import DiscoveryRequest, discover_agents
 from common.errors import PlatformRouteError
 from models.api_key import APIKey
 from models.response import DiscoveryResponse
-from tests.conftest import PATCH, FROZEN_TIME
-
+from tests.conftest import FROZEN_TIME
 
 # =============================================================================
 # Discovery Endpoint Tests

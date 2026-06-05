@@ -97,19 +97,6 @@ class EventPublisherImpl:
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
 
-    async def _emit_legacy_frame(self, room_id: str, frame: dict) -> None:
-        if not await self._should_deliver_legacy(room_id, frame):
-            self._increment(
-                "hybro_delivery_events_deduplicated_total",
-                {"event_type": "processing_status"},
-            )
-            return
-        self._increment(
-            "hybro_delivery_events_emitted_total",
-            {"event_type": frame.get("type", "unknown")},
-        )
-        await self._deliver_frontend(room_id, frame, frame, "legacy_fanout")
-
     async def handle_remote_internal_event(self, envelope: dict[str, Any]) -> None:
         if envelope.get("origin") == self.instance_id:
             return
@@ -151,21 +138,6 @@ class EventPublisherImpl:
                 status=event.status,
             )
         return True
-
-    async def _should_deliver_legacy(self, room_id: str, frame: dict) -> bool:
-        if frame.get("type") != "processing_status":
-            return True
-        data = frame.get("data")
-        if not isinstance(data, dict):
-            return True
-        status = data.get("status")
-        if not isinstance(status, str) or status not in self.config.terminal_processing_statuses:
-            return True
-        return await self.deduplicator.should_deliver(
-            room_id=room_id,
-            message_id=data.get("message_id"),
-            status=status,
-        )
 
     def _schedule_internal_handlers(self, event: InternalEvent) -> None:
         if self._stopping:

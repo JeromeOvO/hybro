@@ -38,9 +38,20 @@ class DeliveryEventBase(FrozenDTO):
 class ProcessingStatusEvent(DeliveryEventBase):
     event_type: Literal["processing_status"] = "processing_status"
     message_id: str
-    status: Literal["queued", "processing", "completed", "failed", "canceled"]
+    status: Literal[
+        "queued",
+        "processing",
+        "awaiting_input",
+        "completed",
+        "failed",
+        "canceled",
+        "rejected",
+        "rate_limited",
+        "error",
+    ]
     agent_id: str | None = None
     details: dict | None = None
+    related_message_id: str | None = None
     client_request_id: str | None = None
     agents: list[dict] | None = None
 
@@ -69,6 +80,65 @@ class AgentMessageFinal(DeliveryEventBase):
     content: dict = Field(default_factory=dict)
 
 
+class TaskSubmittedEvent(DeliveryEventBase):
+    event_type: Literal["task_submitted"] = "task_submitted"
+    message_id: str
+    task_id: str
+    agent_name: str
+    agent_id: str | None = None
+    status: str = "working"
+    related_message_id: str | None = None
+    created_at: str | None = None
+    step_number: int | None = None
+    total_steps: int | None = None
+    task_content: str | None = None
+    client_request_id: str | None = None
+
+
+class TaskUpdateEvent(DeliveryEventBase):
+    event_type: Literal["task_update"] = "task_update"
+    message_id: str
+    status: str
+    content: str | None = None
+    error: str | None = None
+    requires_input: bool = False
+    requires_auth: bool = False
+    status_message: str | None = None
+    agent_name: str | None = None
+    agent_id: str | None = None
+    related_message_id: str | None = None
+    created_at: str | None = None
+    step_number: int | None = None
+    total_steps: int | None = None
+    task_content: str | None = None
+    parts: list[dict] | None = None
+    client_request_id: str | None = None
+
+
+class ArtifactUpdateEvent(DeliveryEventBase):
+    event_type: Literal["artifact_update"] = "artifact_update"
+    message_id: str
+    agent_id: str
+    artifact: Any
+    append: bool = False
+    last_chunk: bool = False
+    client_request_id: str | None = None
+
+
+class ErrorEvent(DeliveryEventBase):
+    event_type: Literal["error"] = "error"
+    error: str
+    error_type: str | None = None
+    message_id: str | None = None
+    agent_id: str | None = None
+    retry_after_seconds: int | None = None
+    user_requests_used: int | None = None
+    user_requests_limit: int | None = None
+    system_requests_used: int | None = None
+    system_requests_limit: int | None = None
+    client_request_id: str | None = None
+
+
 class CancellationEvent(DeliveryEventBase):
     event_type: Literal["cancellation"] = "cancellation"
     message_id: str
@@ -78,16 +148,30 @@ class CancellationEvent(DeliveryEventBase):
 class HITLRequestEvent(DeliveryEventBase):
     event_type: Literal["hitl_request"] = "hitl_request"
     request_id: str
+    message_id: str
+    source: str
     prompt: str
     prompt_type: str
-    source: str
-    message_id: str
+    choices: list[str] | None = None
+    agent_id: str | None = None
+    agent_name: str | None = None
+    source_step_id: str | None = None
+    group_id: str | None = None
+    group_total: int | None = None
+    group_index: int | None = None
+    related_message_id: str | None = None
+    client_request_id: str | None = None
 
 
 class HITLResolvedEvent(DeliveryEventBase):
     event_type: Literal["hitl_resolved"] = "hitl_resolved"
     request_id: str
     message_id: str
+    source: str
+    status: str = "resolved"
+    error_message: str | None = None
+    related_message_id: str | None = None
+    client_request_id: str | None = None
 
 
 class HubAgentEvent(DeliveryEventBase):
@@ -111,6 +195,10 @@ DeliveryEvent = Annotated[
     | RunEventNotification
     | AgentMessagePartial
     | AgentMessageFinal
+    | TaskSubmittedEvent
+    | TaskUpdateEvent
+    | ArtifactUpdateEvent
+    | ErrorEvent
     | CancellationEvent
     | HITLRequestEvent
     | HITLResolvedEvent
@@ -123,11 +211,13 @@ DeliveryEvent = Annotated[
 __all__ = [
     "AgentMessageFinal",
     "AgentMessagePartial",
+    "ArtifactUpdateEvent",
     "CancellationEvent",
     "DebateRoundEvent",
     "DeliveryEnvelope",
     "DeliveryEvent",
     "DeliveryEventBase",
+    "ErrorEvent",
     "HITLRequestEvent",
     "HITLResolvedEvent",
     "HubAgentEvent",
@@ -135,4 +225,6 @@ __all__ = [
     "ProcessingStatusEvent",
     "RunEventNotification",
     "SSEEvent",
+    "TaskSubmittedEvent",
+    "TaskUpdateEvent",
 ]

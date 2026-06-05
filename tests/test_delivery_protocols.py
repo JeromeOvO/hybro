@@ -11,25 +11,6 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_delivery_compatibility_emits_legacy_frame_through_facade_api():
-    from delivery.facade import DeliveryCompatibility
-
-    class Facade:
-        def __init__(self) -> None:
-            self.calls = []
-
-        async def emit_legacy_frame(self, room_id: str, frame: dict) -> None:
-            self.calls.append((room_id, frame))
-
-    facade = Facade()
-    compat = DeliveryCompatibility(facade)
-
-    await compat.emit_legacy_frame("room-1", {"type": "processing"})
-
-    assert facade.calls == [("room-1", {"type": "processing"})]
-
-
-@pytest.mark.asyncio
 async def test_delivery_compatibility_uses_only_facade_public_api():
     import inspect
 
@@ -45,9 +26,6 @@ async def test_delivery_compatibility_uses_only_facade_public_api():
 
         def __init__(self) -> None:
             self.calls = []
-
-        async def emit_legacy_frame(self, room_id: str, frame: dict) -> None:
-            self.calls.append(("emit_legacy_frame", room_id, frame))
 
         async def open_connection(self, room_id: str):
             self.calls.append(("open_connection", room_id))
@@ -232,7 +210,7 @@ def test_delivery_package_skeleton_and_config_exports():
     assert policy.allow_degraded_change_stream is False
 
     assert issubclass(RoomSubscriptionLimitExceeded, RuntimeError)
-    assert hasattr(TaskRunner, "__call__")
+    assert callable(TaskRunner)
 
 
 @pytest.mark.parametrize(
@@ -545,10 +523,6 @@ class _FakeTransport(_LifecycleComponent):
 class _FakePublisher(_LifecycleComponent):
     def __init__(self, calls: list[str]):
         super().__init__("publisher", calls)
-        self.legacy_frames: list[tuple[str, dict]] = []
-
-    async def _emit_legacy_frame(self, room_id: str, frame: dict):
-        self.legacy_frames.append((room_id, frame))
 
 
 class _FakeBus(_LifecycleComponent):
@@ -615,9 +589,6 @@ async def test_delivery_facade_lifecycle_health_and_compatibility():
     assert facade.redis_connected is True
     assert facade.broker_connected is True
 
-    frame = {"type": "custom"}
-    await facade.compat.emit_legacy_frame("room-1", frame)
-    assert publisher.legacy_frames == [("room-1", frame)]
     assert await facade.compat.open_connection("room-1") == "connection"
     assert transport.compat_calls == [("open_connection", "room-1")]
 
@@ -644,23 +615,6 @@ async def test_delivery_facade_refresh_health_handles_ping_failure():
     assert bus.health_refreshed is True
     assert facade.delivery_kv_connected is False
     assert facade.delivery_pubsub_connected is False
-
-
-def test_legacy_frame_private_helper_call_sites():
-    allowed = Path("delivery/facade.py")
-    call_sites = []
-    for root in [Path("delivery"), Path("services")]:
-        for path in _python_files(root):
-            tree = ast.parse(path.read_text(), filename=str(path))
-            for node in ast.walk(tree):
-                if (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "_emit_legacy_frame"
-                ):
-                    call_sites.append(path)
-
-    assert call_sites == [allowed]
 
 
 def test_container_delivery_factories_and_config_mapping():
@@ -797,10 +751,9 @@ def test_main_does_not_construct_legacy_sse_broker():
     forbidden_names = {"create_event_broker", "RedisBroker"}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module:
-            assert node.module != "infrastructure.brokers"
-            assert not node.module.startswith("infrastructure.brokers.")
+            assert node.module.split(".", 1)[0] != "infrastructure"
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                assert not alias.name.startswith("infrastructure.brokers")
+                assert alias.name.split(".", 1)[0] != "infrastructure"
         elif isinstance(node, ast.Name):
             assert node.id not in forbidden_names

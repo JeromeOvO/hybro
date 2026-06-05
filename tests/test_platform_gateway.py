@@ -8,6 +8,7 @@ from common.dto import (
     AgentStreamEvent,
     AgentTaskResult,
 )
+from common.errors.platform import GatewayPlatformError
 from platform_module import PlatformConfig, PlatformDeps
 
 
@@ -552,7 +553,7 @@ async def test_send_records_agent_call_counter_success_and_failure():
         agent_call_counter=failure_counter,
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(GatewayPlatformError):
         await failure_gateway.send_message("agent-1", {"text": "hi"}, "owner-1")
 
     assert failure_counter.calls == [("agent-1", False)]
@@ -833,7 +834,7 @@ async def test_stream_records_agent_call_counter_failure():
     )
 
     stream = gateway.stream_message("agent-1", {"text": "hi"}, "owner-1")
-    with pytest.raises(Exception):
+    with pytest.raises(GatewayPlatformError):
         [event async for event in stream]
 
     assert call_counter.calls == [("agent-1", False)]

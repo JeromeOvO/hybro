@@ -1,10 +1,9 @@
-from datetime import datetime, timezone
 import inspect
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
-from common.errors import AppError, NotFoundError, ValidationError
 from common.dto import (
     AgentCardSnapshot,
     AgentInfo,
@@ -37,21 +36,22 @@ from common.dto import (
     RoomCreationParams,
     RoomMembership,
     RoomSummary,
-    SSEEvent,
     SortOrder,
+    SSEEvent,
     WorkflowState,
 )
+from common.errors import AppError, NotFoundError, ValidationError
 
 
 def test_frozen_dto_is_immutable():
     agent = AgentInfo(agent_id="a1", name="Agent", status="active")
 
-    with pytest.raises(Exception):
+    with pytest.raises(PydanticValidationError):
         agent.name = "Changed"
 
 
 def test_phase0_dtos_can_be_instantiated():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     AgentInfo(agent_id="a1", name="Agent", status="active")
     AgentCardSnapshot(agent_id="a1", url="http://agent", name="Agent", raw_card={})
@@ -208,11 +208,11 @@ def test_settings_class_loads_from_env(monkeypatch):
     assert settings.mongodb_db_name == "phase0_test_db"
 
 
-def test_legacy_settings_singleton_is_common_singleton():
+def test_common_settings_package_exports_settings_singleton():
     from common.config import settings as common_settings
-    from config.settings import settings as legacy_settings
+    from common.config.settings import settings as exported_settings
 
-    assert legacy_settings is common_settings
+    assert exported_settings is common_settings
 
 
 def test_error_hierarchy():

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import inspect
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from room.facade import RoomFacade
 
@@ -27,7 +27,7 @@ async def test_room_facade_cancellation_reader_uses_repository_cancel_store() ->
         agent_registry=None,
         membership_source=None,
         id_factory=lambda: "id",
-        now=lambda: datetime.now(timezone.utc),
+        now=lambda: datetime.now(UTC),
     )
 
     assert await facade.is_message_cancelled("msg-1") is True

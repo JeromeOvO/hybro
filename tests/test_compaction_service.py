@@ -12,35 +12,33 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6 for design specification.
 """
 
 import asyncio
+from datetime import datetime
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 import pytest
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
 
 from common.dto import CompactionResult as DtoCompactionResult
 from common.utils.time import utcnow
 from models.compaction import (
     ContentReference,
     StorageType,
-    StoredContent,
 )
 from models.memory import (
-    ConversationTurn,
     ContentType,
+    ConversationTurn,
     MemoryContent,
     RoomMemory,
     TurnRepresentation,
     TurnRole,
 )
-from services.compaction_service import (
-    CompactionService,
-)
 from platform_module.content_storage import (
     ContentExpiredError,
     hash_content,
 )
-
+from app_shell.compaction_service import (
+    CompactionService,
+)
 
 # =============================================================================
 # Test Fixtures
@@ -60,7 +58,7 @@ class BoundContentStorageFacade:
         content_type: str,
         turn_notes: dict | None = None,
     ) -> str:
-        from config.settings import settings
+        from common.config.settings import settings
 
         content_hash = hash_content(content)
         now = utcnow()
@@ -172,7 +170,7 @@ class BoundCompactionFacade:
 
     async def should_compact(self, room_id: str) -> bool:
         from models.context_config import compaction_config
-        from services import compaction_service as compaction_module
+        from app_shell import compaction_service as compaction_module
 
         config = compaction_config
         if not config.enabled:
@@ -199,7 +197,7 @@ class BoundCompactionFacade:
         room_memory_doc: dict | RoomMemory | None = None,
     ):
         from models.context_config import compaction_config
-        from services import compaction_service as compaction_module
+        from app_shell import compaction_service as compaction_module
 
         config = compaction_config
         if not config.enabled:
@@ -353,7 +351,7 @@ def mock_settings():
 @pytest.fixture
 def mock_content_settings():
     """Mock settings for content storage."""
-    with patch("config.settings.settings") as mock:
+    with patch("common.config.settings.settings") as mock:
         mock.compaction_content_ttl_days = 0
         yield mock
 
@@ -480,7 +478,7 @@ class TestCompactionService:
     def mock_memory_search(self):
         """Auto-mock memory_search_service.index_turn_for_search for all compaction tests."""
         with patch(
-            "services.memory_search_service.memory_search_service"
+            "app_shell.memory_search_service.memory_search_service"
         ) as mock:
             mock.index_turn_for_search = AsyncMock(return_value=True)
             yield mock
@@ -910,7 +908,7 @@ class TestCompactionRoundTrip:
 
     @pytest.fixture(autouse=True)
     def mock_memory_search(self):
-        with patch("services.memory_search_service.memory_search_service") as mock:
+        with patch("app_shell.memory_search_service.memory_search_service") as mock:
             mock.index_turn_for_search = AsyncMock(return_value=True)
             yield mock
 
@@ -1069,7 +1067,7 @@ class TestTokenSavings:
 
     @pytest.fixture(autouse=True)
     def mock_memory_search(self):
-        with patch("services.memory_search_service.memory_search_service") as mock:
+        with patch("app_shell.memory_search_service.memory_search_service") as mock:
             mock.index_turn_for_search = AsyncMock(return_value=True)
             yield mock
 
@@ -1141,7 +1139,7 @@ class TestErrorHandling:
 
     @pytest.fixture(autouse=True)
     def mock_memory_search(self):
-        with patch("services.memory_search_service.memory_search_service") as mock:
+        with patch("app_shell.memory_search_service.memory_search_service") as mock:
             mock.index_turn_for_search = AsyncMock(return_value=True)
             yield mock
 
@@ -1402,7 +1400,7 @@ class TestWriteBackPath:
 
     @pytest.fixture(autouse=True)
     def mock_memory_search(self):
-        with patch("services.memory_search_service.memory_search_service") as mock:
+        with patch("app_shell.memory_search_service.memory_search_service") as mock:
             mock.index_turn_for_search = AsyncMock(return_value=True)
             yield mock
 
@@ -1523,7 +1521,7 @@ class TestCompactTurnEviction:
         the summary should contain the brief_summary + pointer, not
         '[content unavailable]'.
         """
-        from common.utils.context_utils import add_turn_to_history, MAX_HISTORY_TURNS
+        from common.utils.context_utils import MAX_HISTORY_TURNS, add_turn_to_history
 
         memory = MemoryContent()
 

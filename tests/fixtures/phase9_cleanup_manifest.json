@@ -1,52 +1,104 @@
 {
   "blocked_cleanup": [
     {
-      "blocked_by": "legacy_workflow_decommission",
-      "deletion_blockers": [
-        "30 test files still exercise legacy module compatibility paths.",
-        "2 runtime files still bind or import legacy module compatibility paths.",
-        "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
-      ],
-      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "modules",
-      "reason": "Package remains shipped only as compatibility import shims for legacy test and app-shell binding paths until legacy workflow decommission readiness evidence permits removal."
+      "path": "app_shell/a2a_runtime.py",
+      "contract": "legacy_import_boundary",
+      "reason": "App-shell A2A runtime still uses database.mongodb directly pending DAL injection."
     },
     {
-      "blocked_by": "legacy_workflow_decommission",
-      "deletion_blockers": [
-        "49 test files still exercise legacy service compatibility paths.",
-        "9 runtime files still bind or import legacy services.",
-        "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
-      ],
-      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "services",
-      "reason": "Package remains shipped for legacy service-level compatibility tests and app-shell binding paths until legacy workflow decommission readiness evidence permits removal."
+      "path": "app_shell/agent_capability_issue_service.py",
+      "contract": "legacy_import_boundary",
+      "reason": "App-shell agent capability issue runtime still uses database.mongodb directly pending DAL injection."
     },
     {
-      "blocked_by": "legacy_workflow_decommission",
-      "deletion_blockers": [
-        "3 test files still verify legacy config compatibility.",
-        "18 runtime files still import config.settings compatibility paths.",
-        "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
-      ],
-      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "config",
-      "reason": "Package remains shipped for compatibility with legacy startup, scripts, and tests until remaining legacy workflow package removal is safe."
+      "path": "app_shell/agent_health_service.py",
+      "contract": "legacy_import_boundary",
+      "reason": "App-shell agent health runtime still uses database.mongodb directly pending DAL injection."
     },
     {
-      "blocked_by": "legacy_workflow_decommission",
-      "deletion_blockers": [
-        "5 test files still verify legacy infrastructure compatibility.",
-        "1 runtime files still import legacy infrastructure compatibility paths.",
-        "Legacy workflow decommission readiness is false; no route traffic, live-code reference, collection backup, or rollback evidence has been supplied."
-      ],
-      "expiry_task": "Task 8: Delete Legacy Shims And Old Code",
-      "owner": "phase-9-platform-api-cleanup",
-      "path": "infrastructure",
-      "reason": "Package remains shipped for legacy infrastructure compatibility paths until remaining legacy workflow and app-shell references can be removed."
+      "path": "app_shell/database_service.py",
+      "contract": "legacy_import_boundary",
+      "reason": "App-shell database service is the retained Mongo/Pinecone facade pending DAL migration."
+    },
+    {
+      "path": "app_shell/domain_alias_service.py",
+      "contract": "legacy_import_boundary",
+      "reason": "App-shell domain alias runtime still uses database.mongodb directly pending DAL injection."
+    },
+    {
+      "path": "app_shell/memory_search_service.py",
+      "contract": "legacy_import_boundary",
+      "reason": "App-shell memory search runtime still uses database.mongodb directly pending DAL injection."
+    },
+    {
+      "path": "app_shell/room_runtime.py",
+      "contract": "legacy_import_boundary",
+      "reason": "App-shell room runtime still uses database.mongodb directly pending DAL injection."
+    },
+    {
+      "path": "app_shell/a2a_runtime.py",
+      "contract": "sdk_confinement",
+      "reason": "A2A client runtime owns direct SDK interaction."
+    },
+    {
+      "path": "app_shell/agent_health_service.py",
+      "contract": "sdk_confinement",
+      "reason": "Agent health runtime fetches and parses A2A cards."
+    },
+    {
+      "path": "app_shell/agent_resolver_service.py",
+      "contract": "sdk_confinement",
+      "reason": "Agent resolver runtime uses A2A card constants."
+    },
+    {
+      "path": "app_shell/agent_service.py",
+      "contract": "sdk_confinement",
+      "reason": "Agent app-shell runtime exposes A2A card models."
+    },
+    {
+      "path": "app_shell/database_service.py",
+      "contract": "sdk_confinement",
+      "reason": "Database app-shell facade persists A2A card models."
+    },
+    {
+      "path": "app_shell/gemini_service.py",
+      "contract": "sdk_confinement",
+      "reason": "Gemini runtime maps A2A message/task models."
+    },
+    {
+      "path": "app_shell/inspection_runtime.py",
+      "contract": "sdk_confinement",
+      "reason": "Inspection runtime validates A2A client connectivity."
+    },
+    {
+      "path": "app_shell/notification_service.py",
+      "contract": "sdk_confinement",
+      "reason": "Notification runtime handles A2A card payloads."
+    },
+    {
+      "path": "app_shell/openai_service.py",
+      "contract": "sdk_confinement",
+      "reason": "OpenAI runtime maps A2A message roles."
+    },
+    {
+      "path": "app_shell/relay_service.py",
+      "contract": "sdk_confinement",
+      "reason": "Relay runtime publishes A2A card payloads."
+    },
+    {
+      "path": "app_shell/room_coordinator_service.py",
+      "contract": "sdk_confinement",
+      "reason": "Room coordinator runtime maps A2A message/task models."
+    },
+    {
+      "path": "app_shell/room_runtime.py",
+      "contract": "sdk_confinement",
+      "reason": "Room runtime handles A2A task and message models."
+    },
+    {
+      "path": "app_shell/task_service.py",
+      "contract": "sdk_confinement",
+      "reason": "Task runtime owns A2A task query models."
     }
   ],
   "content_storage_callers": [
@@ -60,219 +112,55 @@
       ]
     }
   ],
-  "legacy_workflow_decommission": {
-    "evidence": [
-      {
-        "classification": "blocked_decommission_readiness",
-        "owner": "project-owner",
-        "reason": "No Phase 0d/8 evidence in this repository proves legacy workflow routes or collections have zero active frontend traffic. Keep compatibility routes blocked/deprecated until the project owner supplies traffic/readiness evidence and a migration/rollback note.",
-        "required_before_delete": [
-          "route traffic evidence for legacy workflow endpoints",
-          "live-code reference scan covering frontend and deployed workers",
-          "collection backup and rollback plan"
-        ]
-      }
-    ],
-    "ready": false
-  },
+  "app_shell_runtime_blockers": [],
   "package_removal_checklist": [
     {
-      "package": "modules",
-      "py_files": 26,
-      "runtime_import_files": [
-        "main.py",
-        "services/debate_service.py"
-      ],
-      "runtime_blockers": [
-        "main.py imports legacy module compatibility objects during app-shell startup binding."
-      ],
-      "status": "blocked",
-      "test_import_files": [
-        "tests/test_agent_event_turn_id.py",
-        "tests/test_agent_response_handler.py",
-        "tests/test_api_relay.py",
-        "tests/test_api_room_center.py",
-        "tests/test_api_webhooks.py",
-        "tests/test_call_counters.py",
-        "tests/test_debate_dispatcher.py",
-        "tests/test_deterministic_digest.py",
-        "tests/test_direct_transport.py",
-        "tests/test_dispatch_middleware.py",
-        "tests/test_distributed_room_lock.py",
-        "tests/test_distributed_room_lock_integration.py",
-        "tests/test_module_agent_dispatcher.py",
-        "tests/test_module_queue_executor.py",
-        "tests/test_module_room_message_center.py",
-        "tests/test_module_supervisor_executor.py",
-        "tests/test_module_task_state.py",
-        "tests/test_module_workflow_center.py",
-        "tests/test_multimodal_errors.py",
-        "tests/test_p2_modules_services.py",
-        "tests/test_phase5_supervisor_integration.py",
-        "tests/test_phase7a_processing_status_golden.py",
-        "tests/test_pipeline_integration.py",
-        "tests/test_sdr_wave1.py",
-        "tests/test_service_agent.py",
-        "tests/test_supervisor_debate_sequential.py",
-        "tests/test_supervisor_v2_improvements.py",
-        "tests/test_transport_parity.py",
-        "tests/test_turn_id_passthrough.py",
-        "tests/test_unified_summary.py"
-      ],
-      "test_blockers": [
-        "30 test files under tests/ still import modules.* compatibility paths."
-      ],
-      "required_before_remove": [
-        "Migrate remaining tests to Agent, Room, Execution, Delivery, HubRuntimeBridge, or Platform public APIs.",
-        "Remove main.py legacy module binding imports after legacy workflow decommission readiness is supplied.",
-        "Delete modules from pyproject.toml only after full test and route inventory verification."
-      ]
-    },
-    {
-      "package": "services",
-      "py_files": 36,
-      "runtime_import_files": [
-        "main.py",
-        "modules/AgentCenter.py",
-        "modules/InspectionCenter.py",
-        "modules/MemoryCenter.py",
-        "modules/RoomCenter.py",
-        "modules/TaskCenter.py",
-        "modules/WorkflowCenter.py",
-        "scripts/backfill_domain_aliases.py",
-        "scripts/reupsert_agents_pinecone.py"
-      ],
-      "runtime_blockers": [
-        "main.py imports legacy service compatibility objects during app-shell startup and shutdown binding."
-      ],
-      "status": "blocked",
-      "test_import_files": [
-        "tests/delivery_adapter_fakes.py",
-        "tests/test_a2a_service_webhook_fallback.py",
-        "tests/test_agent_matcher.py",
-        "tests/test_agent_selection_service_facade.py",
-        "tests/test_api_relay.py",
-        "tests/test_call_counters.py",
-        "tests/test_compaction_service.py",
-        "tests/test_context_assembly_service.py",
-        "tests/test_context_memory_adapters.py",
-        "tests/test_context_memory_bugfixes.py",
-        "tests/test_context_memory_protocols.py",
-        "tests/test_create_and_parse.py",
-        "tests/test_dual_source_attachments.py",
-        "tests/test_flow_contracts.py",
-        "tests/test_get_room_ids_non_terminal_runs.py",
-        "tests/test_guard_consecutive_redelegation.py",
-        "tests/test_heal_head_from_events.py",
-        "tests/test_heartbeat_fixes.py",
-        "tests/test_memory_search_service.py",
-        "tests/test_message_retrieval.py",
-        "tests/test_mode_negotiation.py",
-        "tests/test_multimodal_errors.py",
-        "tests/test_multimodal_integration.py",
-        "tests/test_p2_modules_services.py",
-        "tests/test_phase5_supervisor_integration.py",
-        "tests/test_phase7_execution_event_gate.py",
-        "tests/test_phase7a_processing_status_golden.py",
-        "tests/test_pipeline_integration.py",
-        "tests/test_room_coordinator_service.py",
-        "tests/test_room_membership.py",
-        "tests/test_run_lifecycle_service.py",
-        "tests/test_run_projector.py",
-        "tests/test_run_reducer.py",
-        "tests/test_scope_validation.py",
-        "tests/test_service_agent.py",
-        "tests/test_service_agent_resolver.py",
-        "tests/test_service_bedrock.py",
-        "tests/test_service_database.py",
-        "tests/test_service_hitl.py",
-        "tests/test_service_notification.py",
-        "tests/test_service_openai.py",
-        "tests/test_service_room.py",
-        "tests/test_service_sse.py",
-        "tests/test_service_task_notification.py",
-        "tests/test_sse_adapter_delivery.py",
-        "tests/test_supervisor_bedrock_routing.py",
-        "tests/test_supervisor_v2_improvements.py",
-        "tests/test_turn_annotation.py",
-        "tests/test_turn_id_passthrough.py"
-      ],
-      "test_blockers": [
-        "49 test files under tests/ still import services.* compatibility paths."
-      ],
-      "required_before_remove": [
-        "Migrate remaining service tests to module facades, Platform, DAL, Delivery, Execution, HubRuntimeBridge, or Common protocol behavior.",
-        "Remove main.py legacy service binding imports after legacy workflow decommission readiness is supplied.",
-        "Delete services from pyproject.toml only after full test and route inventory verification."
-      ]
-    },
-    {
       "package": "config",
-      "py_files": 2,
-      "runtime_import_files": [
-        "container.py",
-        "database/mongodb.py",
-        "infrastructure/brokers/__init__.py",
-        "infrastructure/brokers/redis_broker.py",
-        "infrastructure/redis_service.py",
-        "main.py",
-        "scripts/_discovery_client.py",
-        "services/a2a_service.py",
-        "services/agent_capability_issue_service.py",
-        "services/agent_health_service.py",
-        "services/agent_liveness_service.py",
-        "services/agent_resolver_service.py",
-        "services/bedrock_service.py",
-        "services/database_service.py",
-        "services/openai_service.py",
-        "services/relay_service.py",
-        "services/room_supervisor_service.py",
-        "services/s3_service.py"
-      ],
-      "runtime_blockers": [
-        "main.py, container.py, scripts, database compatibility paths, services compatibility paths, and infrastructure compatibility paths still import config.settings."
-      ],
-      "status": "blocked",
-      "test_import_files": [
-        "tests/test_common_foundation.py",
-        "tests/test_compaction_service.py",
-        "tests/test_phase0_common.py"
-      ],
-      "test_blockers": [
-        "3 test files still verify legacy config.settings compatibility."
-      ],
-      "required_before_remove": [
-        "Move remaining app-shell, script, and database compatibility imports to common.config or injected scalar config.",
-        "Migrate legacy config tests to common.config where behavior is still required.",
-        "Delete config from pyproject.toml only after compatibility imports are gone."
-      ]
+      "py_files": 0,
+      "runtime_import_files": [],
+      "runtime_blockers": [],
+      "status": "removed",
+      "test_import_files": [],
+      "test_blockers": [],
+      "required_before_remove": []
     },
     {
       "package": "infrastructure",
-      "py_files": 7,
-      "runtime_import_files": [
-        "main.py"
-      ],
-      "runtime_blockers": [
-        "Legacy infrastructure broker compatibility paths still import config.settings."
-      ],
-      "status": "blocked",
-      "test_import_files": [
-        "tests/test_distributed_room_lock_integration.py",
-        "tests/test_leader_election.py",
-        "tests/test_redis_service.py",
-        "tests/test_relay_streams.py",
-        "tests/test_sse_event_broker.py"
-      ],
-      "test_blockers": [
-        "5 test files still verify infrastructure compatibility."
-      ],
-      "required_before_remove": [
-        "Move remaining infrastructure broker callers to DAL, Delivery, or app-shell composition points.",
-        "Migrate tests away from infrastructure.* compatibility imports.",
-        "Delete infrastructure from pyproject.toml only after no runtime or test imports remain."
-      ]
+      "py_files": 0,
+      "runtime_import_files": [],
+      "runtime_blockers": [],
+      "status": "removed",
+      "test_import_files": [],
+      "test_blockers": [],
+      "required_before_remove": []
+    },
+    {
+      "package": "modules",
+      "py_files": 0,
+      "runtime_import_files": [],
+      "runtime_blockers": [],
+      "status": "removed",
+      "test_import_files": [],
+      "test_blockers": [],
+      "required_before_remove": []
+    },
+    {
+      "package": "services",
+      "py_files": 0,
+      "runtime_import_files": [],
+      "runtime_blockers": [],
+      "status": "removed",
+      "test_import_files": [],
+      "test_blockers": [],
+      "required_before_remove": []
     }
   ],
-  "safe_to_delete": []
+  "safe_to_delete": [
+    "config",
+    "infrastructure",
+    "modules",
+    "services",
+    "scripts/backfill_domain_aliases.py",
+    "scripts/reupsert_agents_pinecone.py"
+  ]
 }

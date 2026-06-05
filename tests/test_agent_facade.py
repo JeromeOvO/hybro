@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import hashlib
+from datetime import UTC, datetime
 
 import pytest
 
-from common.dto.agent import AgentCardSnapshot, HubAgentDescriptor
 from common.dto import VectorSearchResult
+from common.dto.agent import AgentCardSnapshot, HubAgentDescriptor
 
 
 def test_url_normalization_strips_well_known_paths_and_default_ports():
@@ -188,7 +188,7 @@ def test_translators_build_registration_hub_docs_and_order_results():
         registration_doc_from_card,
     )
 
-    now = datetime(2026, 5, 10, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 10, tzinfo=UTC)
     card = AgentCardSnapshot(
         agent_id="snapshot",
         name="Writer",
@@ -243,7 +243,7 @@ def test_translators_build_registration_hub_docs_and_order_results():
 
 @pytest.mark.asyncio
 async def test_facade_sync_hub_agents_enriches_existing_and_upserts_new_agents():
-    existing_hash = hashlib.sha256("Existing description".encode()).hexdigest()
+    existing_hash = hashlib.sha256(b"Existing description").hexdigest()
     facade, repo, vector, llm, hub = _facade_with_docs(
         [
             {
@@ -318,7 +318,7 @@ async def test_facade_sync_hub_agents_enriches_existing_and_upserts_new_agents()
     assert llm.embedded == ["Local description"]
     assert vector.upserts[0][1][0].id == "new-agent"
     assert await repo.get_indexed_description_hash("new-agent") == hashlib.sha256(
-        "Local description".encode()
+        b"Local description"
     ).hexdigest()
 
 
@@ -1066,7 +1066,7 @@ async def test_facade_uses_async_hub_liveness_reader():
         agent_index="a2a-agents",
         hub_liveness=hub,
         id_factory=lambda: "new-agent",
-        now=lambda: datetime(2026, 5, 10, tzinfo=timezone.utc),
+        now=lambda: datetime(2026, 5, 10, tzinfo=UTC),
     )
 
     info = await facade.get_agent("hub")
@@ -1321,7 +1321,7 @@ class FakeExclusionReader:
 def _facade_with_docs(
     docs: list[dict],
     *,
-    hub_online: dict[str, bool] | None = {},
+    hub_online: dict[str, bool] | None = None,
     resolved_card: AgentCardSnapshot | None = None,
     vector: FakeVector | None = None,
     gateway_base_url: str | None = None,
@@ -1330,6 +1330,7 @@ def _facade_with_docs(
     from agent import AgentFacade
 
     repo = FakeRepository(docs)
+    hub_online = hub_online or {}
     hub = FakeHubLiveness(hub_online) if hub_online is not None else None
     vector = vector or FakeVector()
     llm = FakeLLM()
@@ -1345,7 +1346,7 @@ def _facade_with_docs(
             exclusion_reader=exclusion_reader,
             gateway_base_url=gateway_base_url,
             id_factory=lambda: "new-agent",
-            now=lambda: datetime(2026, 5, 10, tzinfo=timezone.utc),
+            now=lambda: datetime(2026, 5, 10, tzinfo=UTC),
         ),
         repo,
         vector,

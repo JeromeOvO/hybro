@@ -1,9 +1,12 @@
-import pytest
 from unittest.mock import MagicMock
+
 from common.utils.a2a_helpers import (
-    ExtractedParts, extract_parts, extract_parts_from_artifacts,
-    get_text_from_message, extract_text_from_artifacts,
+    extract_parts,
+    extract_parts_from_artifacts,
+    extract_text_from_artifacts,
+    get_text_from_message,
 )
+
 
 def _make_text_part(text):
     part = MagicMock()
@@ -78,14 +81,17 @@ class TestExtractPartsFromArtifacts:
         assert result.text == "content"
 
     def test_multiple_artifacts(self):
-        a1 = MagicMock(); a1.parts = [_make_text_part("a")]
-        a2 = MagicMock(); a2.parts = [_make_text_part("b"), _make_file_part()]
+        a1 = MagicMock()
+        a1.parts = [_make_text_part("a")]
+        a2 = MagicMock()
+        a2.parts = [_make_text_part("b"), _make_file_part()]
         result = extract_parts_from_artifacts([a1, a2])
         assert result.text == "ab"
         assert len(result.file_parts) == 1
 
     def test_empty_artifact(self):
-        artifact = MagicMock(); artifact.parts = None
+        artifact = MagicMock()
+        artifact.parts = None
         result = extract_parts_from_artifacts([artifact])
         assert result.text == ""
 
@@ -99,7 +105,8 @@ class TestBackwardCompat:
         assert get_text_from_message(msg) == "hello"
 
     def test_extract_text_from_artifacts_none_when_empty(self):
-        artifact = MagicMock(); artifact.parts = []
+        artifact = MagicMock()
+        artifact.parts = []
         assert extract_text_from_artifacts([artifact]) is None
 
     def test_extract_text_from_artifacts_text(self):

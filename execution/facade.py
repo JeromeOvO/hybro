@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from common.dto import (
     ExecutionAck,
@@ -15,8 +15,8 @@ from common.dto import (
 )
 from common.observability import traced_create_task
 from common.protocols import EventPublisher
-from execution.dispatch.agent_event import AgentEvent
 from common.utils.logger import get_logger
+from execution.dispatch.agent_event import AgentEvent
 from execution.events import emit_processing_status
 from execution.hitl.translators import (
     hitl_cancel_none_to_success,
@@ -30,7 +30,6 @@ from execution.ports import (
     CancellationStorePort,
     ClientRequestIdResolver,
     HITLMessageCancellationPort,
-    LegacyProcessingStatusPublisher,
     RunEventEnabled,
     RunLifecyclePort,
     RunReadPort,
@@ -38,6 +37,9 @@ from execution.ports import (
 )
 from execution.translators import room_response_to_execution_ack
 from models.request import OrchestrationRequest, RoomCenterUserMessageRequest
+
+if TYPE_CHECKING:
+    from models.response import OrchestrationResponse
 
 logger = get_logger(__name__)
 
@@ -338,7 +340,6 @@ class ExecutionFacade:
         agent_task_cleanup: AgentTaskCleanupPort,
         agent_response_handler: AgentResponseHandlerPort,
         event_publisher: EventPublisher,
-        legacy_processing_status_publisher: LegacyProcessingStatusPublisher,
         run_event_enabled: RunEventEnabled,
         client_request_id_resolver: ClientRequestIdResolver,
         task_factory: TaskFactory = traced_create_task,
@@ -354,7 +355,6 @@ class ExecutionFacade:
         self._agent_task_cleanup = agent_task_cleanup
         self._agent_response_handler = agent_response_handler
         self._event_publisher = event_publisher
-        self._legacy_processing_status_publisher = legacy_processing_status_publisher
         self._run_event_enabled = run_event_enabled
         self._client_request_id_resolver = client_request_id_resolver
         self._task_factory = task_factory
@@ -470,7 +470,6 @@ class ExecutionFacade:
             lifecycle_message_id=message_id,
             run_lifecycle=self._run_lifecycle,
             event_publisher=self._event_publisher,
-            legacy_processing_status_publisher=self._legacy_processing_status_publisher,
             run_event_enabled=self._run_event_enabled,
             client_request_id_resolver=self._client_request_id_resolver,
         )
@@ -516,7 +515,6 @@ class ExecutionFacade:
                     lifecycle_message_id=message_id,
                     run_lifecycle=self._run_lifecycle,
                     event_publisher=self._event_publisher,
-                    legacy_processing_status_publisher=self._legacy_processing_status_publisher,
                     run_event_enabled=self._run_event_enabled,
                     client_request_id_resolver=self._client_request_id_resolver,
                     client_request_id=metadata.get("client_request_id"),

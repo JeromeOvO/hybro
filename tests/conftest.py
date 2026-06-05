@@ -9,26 +9,32 @@ This module provides:
 - Centralized patch targets for maintainability
 """
 
-import pytest
 from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from a2a.types import AgentCard, AgentSkill, AgentCapabilities, Task, TaskStatus, TaskState
-
-from common.auth import ClerkUser, get_current_user, get_optional_user
-from models.agent import Agent, AgentStatus
-from models.room import Room, RoomUserMessage, RoomAgentMessage, MessageContent
-from models.memory import (
-    RoomMemory,
-    MemoryContent,
-    ConversationTurn,
-    TurnRole,
-    TurnRepresentation,
-    ContentType,
+import pytest
+from a2a.types import (
+    AgentCapabilities,
+    AgentCard,
+    AgentSkill,
+    Task,
+    TaskState,
+    TaskStatus,
 )
-from models.hitl import HITLRequest, HITLStatus, HITLPromptType
 
+from common.auth import ClerkUser
+from models.agent import Agent, AgentStatus
+from models.hitl import HITLPromptType, HITLRequest, HITLStatus
+from models.memory import (
+    ContentType,
+    ConversationTurn,
+    MemoryContent,
+    RoomMemory,
+    TurnRepresentation,
+    TurnRole,
+)
+from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 
 FROZEN_TIME = datetime(2026, 1, 15, 12, 0, 0)
 
@@ -50,7 +56,7 @@ PATCH = {
     "sse.mongodb": "api.sse.mongodb",
     "a2a_tasks.db_service": "api.a2a_tasks.db_service",
     "agent_selection_service": "api.room_center.agent_selection_service",
-    "hitl_service_singleton": "services.hitl_service.hitl_service",
+    "hitl_service_singleton": "app_shell.hitl_service.hitl_service",
     # Webhook endpoints
     "webhooks.db_service": "api.webhooks.db_service",
     "webhooks.sse_manager": "api.webhooks.sse_manager",
@@ -59,14 +65,11 @@ PATCH = {
     # Discovery endpoints
     "discovery.discovery_service": "api.discovery.discovery_service",
     "discovery.discovery_rate_limit_service": "api.discovery.discovery_rate_limit_service",
-    # Orchestration center
-    "orchestration.room_message_center": "api.orchestration_center.room_message_center",
-    "orchestration.workflow_center": "api.orchestration_center.workflow_center",
     # File upload / S3
     "files.room_ownership_reader": "api.files.room_ownership_reader",
-    "s3_service": "services.s3_service.s3_service",
-    "room_services.mongodb": "services.room_services.mongodb",
-    "room_services.s3_service": "services.room_services.s3_service",
+    "s3_service": "app_shell.s3_service.s3_service",
+    "room_runtime.mongodb": "app_shell.room_runtime.mongodb",
+    "room_runtime.s3_service": "app_shell.room_runtime.s3_service",
     # Gateway endpoints
     "gateway.gateway_service": "api.gateway.gateway_service",
     "gateway.gateway_rate_limit_service": "api.gateway.gateway_rate_limit_service",
@@ -508,7 +511,6 @@ def mock_room_center():
     mock.update_room_agent_set = AsyncMock()
     mock.update_room_name = AsyncMock()
     mock.update_room_extend_info = AsyncMock()
-    mock.create_and_parse_user_message = AsyncMock()
     mock.inquiry_room_messages_by_room_id = AsyncMock()
     mock.send_message_to_room = AsyncMock()
     return mock
@@ -522,7 +524,7 @@ def mock_room_center():
 @pytest.fixture
 def mock_settings():
     """Create mock settings for tests."""
-    with patch("config.settings.settings") as mock:
+    with patch("common.config.settings.settings") as mock:
         mock.clerk_secret_key = "test_secret_key"
         mock.mongodb_uri = "mongodb://localhost:27017"
         mock.mongodb_database = "test_db"
@@ -588,6 +590,7 @@ def patch_sse_deps(mock_db_service, mock_sse_manager, mock_mongodb, mock_hitl_se
 def patch_room_center_deps(mock_db_service, mock_room_center):
     """Patch all room center endpoint dependencies at once."""
     from contextlib import ExitStack
+
     from common.dto import ExecutionAck
     with ExitStack() as stack:
         stack.enter_context(patch(PATCH["room_center.db_service"], mock_db_service))

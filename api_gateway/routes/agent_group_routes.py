@@ -1,16 +1,17 @@
-from __future__ import annotations
-
 """
 Agent Group API Endpoints
 
 Provides CRUD operations for user-created agent groups.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.params import Depends as DependsParam
 
+from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from app_shell.database_service import AgentGroupStore
 from common.auth import ClerkUser, get_current_user
 from models.agent_group import (
@@ -308,7 +309,5 @@ async def delete_agent_group(
             "status_code": 500,
         }
 
-
-from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 
 _mark_declared_owner(router, __name__)

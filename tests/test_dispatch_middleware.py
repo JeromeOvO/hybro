@@ -16,8 +16,8 @@ from a2a.types import AgentCapabilities, AgentCard, Message
 from models.agent import Agent, AgentStatus
 from models.processing import ProcessingResult, ProcessingStatus
 from models.room import MessageContent, RoomAgentMessage
-from modules.dispatch_middleware import DispatchChain, DispatchContext
-from modules.middleware.hub_transport import HubTransportMiddleware
+from execution.dispatch.dispatch_middleware import DispatchChain, DispatchContext
+from execution.dispatch.middleware.hub_transport import HubTransportMiddleware
 
 # ===========================================================================
 # Helpers
@@ -234,7 +234,7 @@ class TestHubTransportMiddleware:
 
 class TestAMPRelayDispatch:
     def test_bind_relay_service_builds_execution_owned_relay_transport(self):
-        from modules.AgentMessageProcessor import AgentMessageProcessor
+        from execution.dispatch.agent_message_processor import AgentMessageProcessor
 
         response_handler = MagicMock()
         direct_transport = MagicMock()
@@ -261,7 +261,7 @@ class TestAMPRelayDispatch:
 
     @pytest.mark.asyncio
     async def test_relay_transport_returns_relay_dispatched(self):
-        from modules.AgentMessageProcessor import AgentMessageProcessor
+        from execution.dispatch.agent_message_processor import AgentMessageProcessor
 
         relay_svc = MagicMock()
         relay_svc.push_to_hub = AsyncMock(return_value=True)
@@ -269,12 +269,12 @@ class TestAMPRelayDispatch:
 
         chain = DispatchChain([HubTransportMiddleware(relay_svc)])
 
-        room_services = MagicMock()
+        room_runtime = MagicMock()
         process_resp = MagicMock()
         process_resp.success = True
         process_resp.a2a_message = MagicMock(spec=Message)
         process_resp.a2a_message.model_dump = MagicMock(return_value={})
-        room_services.process_agent_message = AsyncMock(return_value=process_resp)
+        room_runtime.process_agent_message = AsyncMock(return_value=process_resp)
 
         db_service = MagicMock()
         db_service.get_room_memory_by_room_id = AsyncMock(return_value=None)
@@ -286,7 +286,7 @@ class TestAMPRelayDispatch:
 
         amp = AgentMessageProcessor(
             sse_manager=MagicMock(),
-            room_services=room_services,
+            room_services=room_runtime,
             database_service=db_service,
             transports={"direct": MagicMock(), "relay": relay_transport_mock},
             relay_service=relay_svc,
@@ -310,15 +310,15 @@ class TestAMPRelayDispatch:
 
     @pytest.mark.asyncio
     async def test_cloud_agent_uses_direct_path(self):
-        from modules.AgentMessageProcessor import AgentMessageProcessor
+        from execution.dispatch.agent_message_processor import AgentMessageProcessor
 
         chain = DispatchChain()
 
-        room_services = MagicMock()
+        room_runtime = MagicMock()
         process_resp = MagicMock()
         process_resp.success = True
         process_resp.a2a_message = MagicMock(spec=Message)
-        room_services.process_agent_message = AsyncMock(return_value=process_resp)
+        room_runtime.process_agent_message = AsyncMock(return_value=process_resp)
 
         db_service = MagicMock()
         db_service.get_room_memory_by_room_id = AsyncMock(return_value=None)
@@ -330,7 +330,7 @@ class TestAMPRelayDispatch:
 
         amp = AgentMessageProcessor(
             sse_manager=MagicMock(),
-            room_services=room_services,
+            room_services=room_runtime,
             database_service=db_service,
             transports={"direct": dt},
             dispatch_chain=chain,

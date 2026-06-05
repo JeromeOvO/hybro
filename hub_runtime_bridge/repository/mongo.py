@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from datetime import datetime
-import inspect
 from typing import Any
 
 from common.utils.time import utcnow

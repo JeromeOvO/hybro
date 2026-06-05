@@ -9,20 +9,28 @@ Covers:
 - _resolve_room_agent_refs marks private agents as inaccessible for non-owners
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from app_shell.room_runtime import RoomServices
+from common.utils.time import utcnow
 from models.agent import Agent, AgentStatus
 from models.response import (
     RoomCenterUserMessageResponse,
-    RoomAgentRef,
     ScopeResolutionError,
 )
-from models.room import Room, RoomUserMessage, MessageContent
-from services.room_services import RoomServices
-from a2a.types import AgentCard, AgentCapabilities
+from models.room import MessageContent, Room, RoomUserMessage
+from models.room_services_models import ParseResult
+from models.supervisor import (
+    ActionType,
+    SupervisorAction,
+    SupervisorTrajectory,
+    TrajectoryEntry,
+    TrajectoryStatus,
+)
 
-HITL_PATCH = "services.room_services.hitl_service"
+HITL_PATCH = "app_shell.room_runtime.hitl_service"
 
 
 @pytest.fixture
@@ -223,7 +231,7 @@ class TestPrePersistScopeValidation:
 
         mock_hitl = MagicMock()
         mock_hitl.get_pending_requests = AsyncMock(return_value=[])
-        with patch("services.hitl_service.hitl_service", mock_hitl):
+        with patch("app_shell.hitl_service.hitl_service", mock_hitl):
             result = await room_center.send_message_to_room(
                 request, target_group="room_team", mentioned_agent_ids=["ghost-agent"],
             )
@@ -251,7 +259,7 @@ class TestPrePersistScopeValidation:
 
         mock_hitl = MagicMock()
         mock_hitl.get_pending_requests = AsyncMock(return_value=[])
-        with patch("services.hitl_service.hitl_service", mock_hitl):
+        with patch("app_shell.hitl_service.hitl_service", mock_hitl):
             result = await room_center.send_message_to_room(
                 request, target_group="room_team", mentioned_agent_ids=None,
             )
@@ -280,7 +288,7 @@ class TestPrePersistScopeValidation:
 
         mock_hitl = MagicMock()
         mock_hitl.get_pending_requests = AsyncMock(return_value=[])
-        with patch("services.hitl_service.hitl_service", mock_hitl):
+        with patch("app_shell.hitl_service.hitl_service", mock_hitl):
             result = await room_center.send_message_to_room(
                 request, target_group="nonexistent-group", mentioned_agent_ids=None,
             )
@@ -321,6 +329,197 @@ class TestLegacyInlineMentionBehavior:
         )
         assert isinstance(scope, tuple)
         assert "a1" in scope[0]
+
+    @pytest.mark.asyncio
+    async def test_supervisor_inline_mention_is_planner_intent_not_hard_route(
+        self, room_center
+    ):
+        room = _make_room(
+            agent_set={"a1": "Alpha"},
+            extend_info={"debateMode": False, "use_supervisor": True},
+        )
+        agent = _make_agent("a1", "Alpha")
+        room_center.database_service.get_room_by_room_id.return_value = room
+        room_center.database_service.get_agent_by_agent_id.return_value = agent
+        room_center.database_service.get_room_memory_by_room_id = AsyncMock(
+            return_value=None
+        )
+
+        request = MagicMock()
+        request.room_id = "room-1"
+        request.user_id = "user-1"
+        request.client_request_id = None
+        request.message = RoomUserMessage(
+            room_id="room-1",
+            message_id="msg-inline-1",
+            user_id="user-1",
+            message_content=MessageContent(
+                message_text="<@a1|Alpha> please help",
+            ),
+            extend_info={},
+        )
+
+        room_center._validate_send_message_request = MagicMock(return_value=None)
+        room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
+        room_center._materialize_room_quote = AsyncMock(return_value=None)
+        room_center._persist_user_message = AsyncMock(return_value=True)
+        room_center._send_processing_status = AsyncMock()
+        room_center._initialize_room_memory = AsyncMock(return_value=None)
+        room_center.sse_manager.create_token = MagicMock(return_value=None)
+        handle_mentions = AsyncMock()
+        prepare_supervisor = AsyncMock(return_value=ParseResult(success=True))
+        room_center._handle_mentions_flow = handle_mentions
+        room_center._prepare_for_supervisor = prepare_supervisor
+
+        mock_hitl = MagicMock()
+        mock_hitl.get_pending_requests = AsyncMock(return_value=[])
+        with patch("app_shell.hitl_service.hitl_service", mock_hitl):
+            result = await room_center.send_message_to_room(
+                request, target_group="room_team", mentioned_agent_ids=None,
+            )
+
+        assert result.success is True
+        handle_mentions.assert_not_awaited()
+        assert prepare_supervisor.await_args.kwargs["explicit_mentions"] == [
+            {
+                "agent_id": "a1",
+                "agent_name": "Alpha",
+                "mention_text": "<@a1|Alpha>",
+                "position": 0,
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_clarify_resume_preserves_explicit_mentions(self, room_center):
+        room = _make_room(
+            agent_set={"a1": "Alpha"},
+            extend_info={
+                "debateMode": False,
+                "use_supervisor": True,
+                "pending_clarification_message_id": "orig-msg",
+            },
+        )
+        trajectory = SupervisorTrajectory(
+            status=TrajectoryStatus.CLARIFYING,
+            entries=[
+                TrajectoryEntry(
+                    step_number=1,
+                    action=SupervisorAction(
+                        action=ActionType.CLARIFY,
+                        reasoning="need detail",
+                        clarification_question="What should Alpha do?",
+                    ),
+                    started_at=utcnow(),
+                )
+            ],
+        )
+        original = MagicMock()
+        original.extend_info = {
+            "supervisor_trajectory": trajectory.model_dump(mode="json")
+        }
+        room_center.database_service.get_room_user_message_by_message_id.return_value = (
+            original
+        )
+        room_center.database_service.update_room_user_message_by_message_id = AsyncMock()
+        room_center.database_service.update_room_by_room_id = AsyncMock()
+        user_message = RoomUserMessage(
+            room_id="room-1",
+            message_id="reply-msg",
+            user_id="user-1",
+            message_content=MessageContent(message_text="ask Alpha"),
+            extend_info={},
+        )
+        mentions = [
+            {
+                "agent_id": "a1",
+                "agent_name": "Alpha",
+                "mention_text": "<@a1|Alpha>",
+                "position": 0,
+            }
+        ]
+
+        result = await room_center._prepare_clarify_resume(
+            room=room,
+            user_message=user_message,
+            message_text="ask Alpha",
+            pending_clarify_msg_id="orig-msg",
+            agents=None,
+            selected_agent_set={"a1": "Alpha"},
+            is_debate_mode=False,
+            room_memory=None,
+            explicit_mentions=mentions,
+        )
+
+        assert result is True
+        assert user_message.extend_info["explicit_mentions"] == mentions
+        assert user_message.extend_info["room_config"]["explicit_mentions"] == mentions
+
+    @pytest.mark.asyncio
+    async def test_supervisor_inline_mention_preserves_clarify_resume(
+        self, room_center
+    ):
+        room = _make_room(
+            agent_set={"a1": "Alpha"},
+            extend_info={
+                "debateMode": False,
+                "use_supervisor": True,
+                "pending_clarification_message_id": "orig-msg",
+            },
+        )
+        agent = _make_agent("a1", "Alpha")
+        room_center.database_service.get_room_by_room_id.return_value = room
+        room_center.database_service.get_agent_by_agent_id.return_value = agent
+        room_center.database_service.get_room_memory_by_room_id = AsyncMock(
+            return_value=None
+        )
+
+        request = MagicMock()
+        request.room_id = "room-1"
+        request.user_id = "user-1"
+        request.client_request_id = None
+        request.message = RoomUserMessage(
+            room_id="room-1",
+            message_id="msg-inline-clarify",
+            user_id="user-1",
+            message_content=MessageContent(
+                message_text="<@a1|Alpha> use the latest draft",
+            ),
+            extend_info={},
+        )
+
+        room_center._validate_send_message_request = MagicMock(return_value=None)
+        room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
+        room_center._materialize_room_quote = AsyncMock(return_value=None)
+        room_center._persist_user_message = AsyncMock(return_value=True)
+        room_center._send_processing_status = AsyncMock()
+        room_center._initialize_room_memory = AsyncMock(return_value=None)
+        room_center.sse_manager.create_token = MagicMock(return_value=None)
+        handle_mentions = AsyncMock()
+        prepare_clarify = AsyncMock(return_value=True)
+        prepare_supervisor = AsyncMock(return_value=ParseResult(success=True))
+        room_center._handle_mentions_flow = handle_mentions
+        room_center._prepare_clarify_resume = prepare_clarify
+        room_center._prepare_for_supervisor = prepare_supervisor
+
+        mock_hitl = MagicMock()
+        mock_hitl.get_pending_requests = AsyncMock(return_value=[])
+        with patch("app_shell.hitl_service.hitl_service", mock_hitl):
+            result = await room_center.send_message_to_room(
+                request, target_group="room_team", mentioned_agent_ids=None,
+            )
+
+        assert result.success is True
+        handle_mentions.assert_not_awaited()
+        prepare_supervisor.assert_not_awaited()
+        assert prepare_clarify.await_args.kwargs["pending_clarify_msg_id"] == "orig-msg"
+        assert prepare_clarify.await_args.kwargs["explicit_mentions"] == [
+            {
+                "agent_id": "a1",
+                "agent_name": "Alpha",
+                "mention_text": "<@a1|Alpha>",
+                "position": 0,
+            }
+        ]
 
 
 # =============================================================================
@@ -418,9 +617,12 @@ class TestAllAgentsPostPersistMessageId:
         request.message.message_content = MagicMock()
         request.message.message_content.message_text = "hello"
         request.message.message_content.message_attachments = None
+        request.message.quote = None
+        request.message.extend_info = {}
 
         room_center._validate_send_message_request = MagicMock(return_value=None)
         room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
+        room_center._materialize_room_quote = AsyncMock(return_value=None)
         room_center._persist_user_message = AsyncMock(return_value=True)
         room_center._send_processing_status = AsyncMock()
         room_center._initialize_room_memory = AsyncMock(return_value=None)
@@ -436,10 +638,12 @@ class TestAllAgentsPostPersistMessageId:
             status_code=500,
         )
         room_center._resolve_explicit_target_scope = AsyncMock(return_value=error_response)
+        emitter = AsyncMock()
+        room_center.bind_execution_event_deps(processing_status_emitter=emitter)
 
         mock_hitl = MagicMock()
         mock_hitl.get_pending_requests = AsyncMock(return_value=[])
-        with patch("services.hitl_service.hitl_service", mock_hitl):
+        with patch("app_shell.hitl_service.hitl_service", mock_hitl):
             result = await room_center.send_message_to_room(
                 request, target_group="all_agents", mentioned_agent_ids=None,
             )
@@ -449,12 +653,15 @@ class TestAllAgentsPostPersistMessageId:
         # The key assertion: message_id should be the real persisted ID, not None
         assert result.message_id == "msg-real-123"
         room_center._persist_user_message.assert_called_once()
-        room_center.sse_manager.send_processing_status.assert_awaited_with(
-            "room-1",
-            "failed",
-            "msg-real-123",
+        emitter.assert_awaited_with(
+            room_id="room-1",
+            status="failed",
+            message_id="msg-real-123",
+            lifecycle_message_id="msg-real-123",
+            record_lifecycle=True,
             client_request_id=None,
-            details="Agent selection failed.",
+            details={"message": "Agent selection failed."},
+            error_message="Agent selection failed.",
         )
 
 
@@ -480,9 +687,12 @@ class TestClientRequestIdPropagation:
         request.message.message_content = MagicMock()
         request.message.message_content.message_text = "hello"
         request.message.message_content.message_attachments = None
+        request.message.quote = None
+        request.message.extend_info = {}
 
         room_center._validate_send_message_request = MagicMock(return_value=None)
         room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
+        room_center._materialize_room_quote = AsyncMock(return_value=None)
         room_center._persist_user_message = AsyncMock(return_value=True)
         room_center._send_processing_status = AsyncMock()
         room_center._initialize_room_memory = AsyncMock(return_value=None)
@@ -499,10 +709,11 @@ class TestClientRequestIdPropagation:
             status_code=500,
         )
         room_center._resolve_explicit_target_scope = AsyncMock(return_value=error_response)
+        room_center.bind_execution_event_deps(processing_status_emitter=AsyncMock())
 
         mock_hitl = MagicMock()
         mock_hitl.get_pending_requests = AsyncMock(return_value=[])
-        with patch("services.hitl_service.hitl_service", mock_hitl):
+        with patch("app_shell.hitl_service.hitl_service", mock_hitl):
             await room_center.send_message_to_room(
                 request, target_group="all_agents", mentioned_agent_ids=None,
             )

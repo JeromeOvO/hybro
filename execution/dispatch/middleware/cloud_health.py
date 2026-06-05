@@ -19,11 +19,12 @@ import time
 from typing import TYPE_CHECKING
 
 from common.utils.logger import get_logger
-from models.agent import AgentStatus
 from execution.dispatch.dispatch_middleware import DispatchContext
+from models.agent import AgentStatus
 
 if TYPE_CHECKING:
     from models.processing import ProcessingResult
+    from app_shell.agent_health_service import AgentHealthService
 
 logger = get_logger(__name__)
 

@@ -7,10 +7,11 @@ Tests cover:
 - get_all_active_agents: delegation with correct filter
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from services.database_service import DatabaseService
+import pytest
+
+from app_shell.database_service import DatabaseService
 
 
 @pytest.fixture

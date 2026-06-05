@@ -1,6 +1,6 @@
 """Tests for RunCommandHandler.heal_head_from_events and watchdog integration."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -37,7 +37,7 @@ def _make_event(
         "seq": seq,
         "type": event_type,
         "payload": payload or {},
-        "ts": datetime(2025, 6, 1, tzinfo=timezone.utc),
+        "ts": datetime(2025, 6, 1, tzinfo=UTC),
     }
 
 
@@ -52,13 +52,13 @@ def _mock_mongodb():
 @pytest.mark.asyncio
 async def test_heal_no_run_doc_returns_false():
     """No run doc at all — nothing to heal."""
-    from services.run_command_handler import RunCommandHandler
+    from execution.run_command_handler import RunCommandHandler
 
     handler = RunCommandHandler()
     mock_db = _mock_mongodb()
     mock_db.runs_collection.find_one = AsyncMock(return_value=None)
 
-    with patch("services.run_command_handler.mongodb", mock_db):
+    with patch("execution.run_command_handler.mongodb", mock_db):
         assert await handler.heal_head_from_events("run-missing") is False
 
     mock_db.run_events_collection.find_one.assert_not_called()
@@ -67,14 +67,14 @@ async def test_heal_no_run_doc_returns_false():
 @pytest.mark.asyncio
 async def test_heal_no_newer_events_returns_false():
     """run_events has no events ahead of the head — nothing to heal."""
-    from services.run_command_handler import RunCommandHandler
+    from execution.run_command_handler import RunCommandHandler
 
     handler = RunCommandHandler()
     mock_db = _mock_mongodb()
     mock_db.runs_collection.find_one = AsyncMock(return_value=_make_run_doc(seq=2))
     mock_db.run_events_collection.find_one = AsyncMock(return_value=None)
 
-    with patch("services.run_command_handler.mongodb", mock_db):
+    with patch("execution.run_command_handler.mongodb", mock_db):
         assert await handler.heal_head_from_events("run-1") is False
 
     mock_db.runs_collection.update_one.assert_not_called()
@@ -83,7 +83,7 @@ async def test_heal_no_newer_events_returns_false():
 @pytest.mark.asyncio
 async def test_heal_terminal_event_projects_forward():
     """run_events has a terminal RUN_COMPLETED at seq=3, head is at seq=1 — should heal."""
-    from services.run_command_handler import RunCommandHandler
+    from execution.run_command_handler import RunCommandHandler
 
     handler = RunCommandHandler()
     mock_db = _mock_mongodb()
@@ -95,7 +95,7 @@ async def test_heal_terminal_event_projects_forward():
     )
     mock_db.runs_collection.update_one = AsyncMock()
 
-    with patch("services.run_command_handler.mongodb", mock_db):
+    with patch("execution.run_command_handler.mongodb", mock_db):
         result = await handler.heal_head_from_events("run-1")
 
     assert result is True
@@ -113,7 +113,7 @@ async def test_heal_terminal_event_projects_forward():
 @pytest.mark.asyncio
 async def test_heal_failed_event_with_payload():
     """run_events has a RUN_FAILED with error_code — error fields propagate to head."""
-    from services.run_command_handler import RunCommandHandler
+    from execution.run_command_handler import RunCommandHandler
 
     handler = RunCommandHandler()
     mock_db = _mock_mongodb()
@@ -129,7 +129,7 @@ async def test_heal_failed_event_with_payload():
     )
     mock_db.runs_collection.update_one = AsyncMock()
 
-    with patch("services.run_command_handler.mongodb", mock_db):
+    with patch("execution.run_command_handler.mongodb", mock_db):
         result = await handler.heal_head_from_events("run-1")
 
     assert result is True
@@ -142,7 +142,7 @@ async def test_heal_failed_event_with_payload():
 @pytest.mark.asyncio
 async def test_heal_active_event_projects_forward():
     """run_events has a RUN_STARTED at seq=2 but head is QUEUED at seq=0."""
-    from services.run_command_handler import RunCommandHandler
+    from execution.run_command_handler import RunCommandHandler
 
     handler = RunCommandHandler()
     mock_db = _mock_mongodb()
@@ -154,7 +154,7 @@ async def test_heal_active_event_projects_forward():
     )
     mock_db.runs_collection.update_one = AsyncMock()
 
-    with patch("services.run_command_handler.mongodb", mock_db):
+    with patch("execution.run_command_handler.mongodb", mock_db):
         result = await handler.heal_head_from_events("run-1")
 
     assert result is True
@@ -168,7 +168,7 @@ async def test_heal_active_event_projects_forward():
 async def test_watchdog_heals_instead_of_appending():
     """When heal succeeds, append_run_timeout_failure should return None without
     calling _record_terminal."""
-    from services.run_command_handler import RunCommandHandler
+    from execution.run_command_handler import RunCommandHandler
 
     handler = RunCommandHandler()
     handler.heal_head_from_events = AsyncMock(return_value=True)
@@ -186,7 +186,7 @@ async def test_watchdog_heals_instead_of_appending():
 @pytest.mark.asyncio
 async def test_watchdog_falls_through_when_no_divergence():
     """When heal returns False, the watchdog proceeds normally to _record_terminal."""
-    from services.run_command_handler import RunCommandHandler
+    from execution.run_command_handler import RunCommandHandler
 
     handler = RunCommandHandler()
     handler.heal_head_from_events = AsyncMock(return_value=False)
@@ -197,7 +197,7 @@ async def test_watchdog_falls_through_when_no_divergence():
     )
     handler._record_terminal = AsyncMock(return_value={"event_id": "e1"})
 
-    with patch("services.run_command_handler.mongodb", mock_db):
+    with patch("execution.run_command_handler.mongodb", mock_db):
         result = await handler.append_run_timeout_failure(
             "room-1", "run-1", stale_minutes=90
         )

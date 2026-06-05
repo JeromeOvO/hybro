@@ -3,21 +3,22 @@ import inspect
 import json
 import tomllib
 import warnings
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 
-from common.errors import AppError, NotFoundError, ValidationError
 from common.dto import (
-    AgentEvent,
     AgentCardSnapshot,
+    AgentEvent,
     AgentInfo,
-    AgentRegistered,
     AgentMessageFinal,
     AgentMessagePartial,
+    AgentRegistered,
+    ArtifactUpdateEvent,
     CancellationEvent,
     CompactionResult,
     ContextBlock,
@@ -27,6 +28,7 @@ from common.dto import (
     DeliveryEvent,
     DeliveryEventBase,
     EmbeddingResult,
+    ErrorEvent,
     ExecutionAck,
     ExecutionRequest,
     ExecutionResult,
@@ -50,6 +52,7 @@ from common.dto import (
     ModelInfo,
     NotificationPayload,
     PaginationParams,
+    ProcessingStatusEvent,
     QueryFilter,
     RateLimitInfo,
     RelayPayload,
@@ -62,17 +65,19 @@ from common.dto import (
     RunInfo,
     RunState,
     SavedUserMessage,
-    SSEEvent,
     SortOrder,
+    SSEEvent,
+    TaskSubmittedEvent,
+    TaskUpdateEvent,
     WorkflowState,
-    ProcessingStatusEvent,
 )
+from common.errors import AppError, NotFoundError, ValidationError
 
 
 def test_frozen_dto_is_immutable():
     agent = AgentInfo(agent_id="a1", name="Agent", status="active")
 
-    with pytest.raises(Exception):
+    with pytest.raises(PydanticValidationError):
         agent.name = "Changed"
 
 
@@ -80,10 +85,10 @@ def test_frozen_dto_container_fields_are_immutable():
     agent = AgentInfo(agent_id="a1", capabilities=["search"])
     delivery = DeliveryEnvelope(room_id="r1", event_type="message", payload={"x": 1})
 
-    with pytest.raises(Exception):
+    with pytest.raises(TypeError):
         agent.capabilities += ("write",)
 
-    with pytest.raises(Exception):
+    with pytest.raises(TypeError):
         delivery.payload["x"] = 2
 
     with warnings.catch_warnings():
@@ -196,8 +201,9 @@ def test_common_card_resolver_keeps_sdk_agent_card_validation(monkeypatch):
 
 
 def test_common_types_expose_sdk_free_task_parts():
-    from common.types import DataPart, FileContent, FilePart, Part, TaskState, TextPart
     from pydantic import TypeAdapter
+
+    from common.types import DataPart, FileContent, FilePart, Part, TaskState, TextPart
 
     assert TextPart.__module__ == "common.types"
     assert FilePart.__module__ == "common.types"
@@ -273,7 +279,7 @@ async def test_auth_config_binds_authorized_parties(monkeypatch):
 
 
 def test_common_foundation_dtos_can_be_instantiated():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     AgentInfo(agent_id="a1", name="Agent", status="active")
     AgentCardSnapshot(agent_id="a1", url="http://agent", name="Agent", raw_card={})
@@ -377,7 +383,16 @@ def test_common_foundation_dtos_can_be_instantiated():
         source="agent",
         message_id="m1",
     )
-    HITLResolvedEvent(room_id="r1", request_id="h1", message_id="m1")
+    HITLResolvedEvent(room_id="r1", request_id="h1", message_id="m1", source="agent")
+    TaskSubmittedEvent(
+        room_id="r1",
+        message_id="m1",
+        task_id="t1",
+        agent_name="Agent",
+    )
+    TaskUpdateEvent(room_id="r1", message_id="m1", status="working")
+    ArtifactUpdateEvent(room_id="r1", message_id="m1", agent_id="a1", artifact={})
+    ErrorEvent(room_id="r1", error="failed")
     HubAgentEvent(
         room_id="r1",
         hub_id="h1",
@@ -534,6 +549,7 @@ def test_delivery_event_schemas_match_design_doc():
             "status",
             "agent_id",
             "details",
+            "related_message_id",
             "client_request_id",
             "agents",
         },
@@ -581,10 +597,19 @@ def test_delivery_event_schemas_match_design_doc():
             "trace_id",
             "event_type",
             "request_id",
+            "message_id",
+            "source",
             "prompt",
             "prompt_type",
-            "source",
-            "message_id",
+            "choices",
+            "agent_id",
+            "agent_name",
+            "source_step_id",
+            "group_id",
+            "group_total",
+            "group_index",
+            "related_message_id",
+            "client_request_id",
         },
         HITLResolvedEvent: {
             "room_id",
@@ -593,6 +618,78 @@ def test_delivery_event_schemas_match_design_doc():
             "event_type",
             "request_id",
             "message_id",
+            "source",
+            "status",
+            "error_message",
+            "related_message_id",
+            "client_request_id",
+        },
+        TaskSubmittedEvent: {
+            "room_id",
+            "timestamp",
+            "trace_id",
+            "event_type",
+            "message_id",
+            "task_id",
+            "agent_name",
+            "agent_id",
+            "status",
+            "related_message_id",
+            "created_at",
+            "step_number",
+            "total_steps",
+            "task_content",
+            "client_request_id",
+        },
+        TaskUpdateEvent: {
+            "room_id",
+            "timestamp",
+            "trace_id",
+            "event_type",
+            "message_id",
+            "status",
+            "content",
+            "error",
+            "requires_input",
+            "requires_auth",
+            "status_message",
+            "agent_name",
+            "agent_id",
+            "related_message_id",
+            "created_at",
+            "step_number",
+            "total_steps",
+            "task_content",
+            "parts",
+            "client_request_id",
+        },
+        ArtifactUpdateEvent: {
+            "room_id",
+            "timestamp",
+            "trace_id",
+            "event_type",
+            "message_id",
+            "agent_id",
+            "artifact",
+            "append",
+            "last_chunk",
+            "client_request_id",
+        },
+        ErrorEvent: {
+            "room_id",
+            "timestamp",
+            "trace_id",
+            "event_type",
+            "error",
+            "error_type",
+            "message_id",
+            "agent_id",
+            "retry_after_seconds",
+            "user_requests_used",
+            "user_requests_limit",
+            "system_requests_used",
+            "system_requests_limit",
+            "client_request_id",
         },
         HubAgentEvent: {
             "room_id",
@@ -640,7 +737,11 @@ def test_delivery_event_schemas_match_design_doc():
             "source",
             "message_id",
         },
-        HITLResolvedEvent: {"room_id", "request_id", "message_id"},
+        HITLResolvedEvent: {"room_id", "request_id", "message_id", "source"},
+        TaskSubmittedEvent: {"room_id", "message_id", "task_id", "agent_name"},
+        TaskUpdateEvent: {"room_id", "message_id", "status"},
+        ArtifactUpdateEvent: {"room_id", "message_id", "agent_id", "artifact"},
+        ErrorEvent: {"room_id", "error"},
         HubAgentEvent: {"room_id", "hub_id", "agent_id", "message_id", "status"},
         DebateRoundEvent: {"room_id", "round_number", "agent_id", "message_id"},
     }
@@ -1022,11 +1123,11 @@ def test_settings_class_loads_from_env(monkeypatch):
     assert settings.mongodb_db_name == "common_foundation_test_db"
 
 
-def test_legacy_settings_singleton_is_common_singleton():
+def test_common_settings_package_exports_settings_singleton():
     from common.config import settings as common_settings
-    from config.settings import settings as legacy_settings
+    from common.config.settings import settings as exported_settings
 
-    assert legacy_settings is common_settings
+    assert exported_settings is common_settings
 
 
 def test_error_hierarchy():

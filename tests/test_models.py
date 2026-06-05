@@ -8,32 +8,29 @@ Tests cover:
 - Field constraints
 """
 
-import pytest
 from datetime import datetime
 from uuid import uuid4
 
-from a2a.types import Task, TaskStatus, TaskState
+from a2a.types import Task, TaskState, TaskStatus
 
-from models.room import (
-    Room,
-    RoomUserMessage,
-    RoomAgentMessage,
-    MessageContent,
-    CoordinatorAgentId,
-)
 from models.agent import Agent, AgentStatus
+from models.hitl import HITLPromptType, HITLRequest, HITLStatus
 from models.memory import (
-    RoomMemory,
-    MemoryContent,
-    ConversationTurn,
-    TurnRole,
-    TurnRepresentation,
     ContentType,
+    ConversationTurn,
+    MemoryContent,
+    RoomMemory,
+    TurnRepresentation,
+    TurnRole,
 )
-from models.hitl import HITLRequest, HITLStatus, HITLPromptType
-from models.request import AgentTaskRequest, TaskCenterRequest, TaskRequest
-from models.response import TaskCenterResponse
-
+from models.request import AgentTaskRequest, TaskRequest
+from models.room import (
+    CoordinatorAgentId,
+    MessageContent,
+    Room,
+    RoomAgentMessage,
+    RoomUserMessage,
+)
 
 # =============================================================================
 # Room Model Tests
@@ -59,16 +56,11 @@ class TestLegacyTaskRequestModels:
         )
 
         content = MessageContent(message_task=task)
-        request = TaskCenterRequest(task=task)
-        response = TaskCenterResponse(success=True, task=task)
-
         assert content.model_dump(mode="json")["message_task"]["status"] == {
             "message": None,
             "state": "working",
             "timestamp": None,
         }
-        assert request.model_dump(mode="json")["task"]["contextId"] == "ctx-1"
-        assert response.model_dump(mode="json")["task"]["contextId"] == "ctx-1"
 
     def test_agent_task_request_to_message_builds_valid_sdk_message(self):
         message = AgentTaskRequest(

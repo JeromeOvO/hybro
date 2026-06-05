@@ -10,35 +10,31 @@ Tests cover:
 - Authorization checks
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 
-from common.dto import ExecutionAck, RunInfo
 from api.room_center import (
-    verify_room_ownership,
     create_new_room,
     inquiry_active_runs,
+    inquiry_room_messages,
     inquiry_room_setting,
     inquiry_rooms_by_room_owner_id,
-    update_room_agent_set,
-    update_room_name,
-    update_room_extend_info,
-    create_and_parse_user_message,
-    inquiry_room_messages,
     send_message,
     suggest_agents,
+    update_room_agent_set,
+    update_room_extend_info,
+    update_room_name,
+    verify_room_ownership,
 )
-from modules.RoomCenter import RoomCenter
-from models.room import Room
+from app_shell.room_runtime import AppShellRoomCenter as RoomCenter
+from common.dto import ExecutionAck, RunInfo
 from models.response import (
-    RoomCenterRoomSettingResponse,
-    RoomCenterUserMessageResponse,
     RoomCenterRoomMessageResponse,
+    RoomCenterRoomSettingResponse,
 )
 from tests.conftest import PATCH
-
 
 # =============================================================================
 # Room Ownership Verification Tests
@@ -174,7 +170,7 @@ class TestCreateNewRoom:
         mock_room_center.create_new_room.return_value = expected_response
         
         with patch(PATCH["room_center.room_center"], mock_room_center):
-            response = await create_new_room(mock_request, mock_user)
+            await create_new_room(mock_request, mock_user)
         
         call_args = mock_room_center.create_new_room.call_args[0][0]
         assert call_args.applied_from_group == "group-123"
@@ -437,31 +433,6 @@ class TestUpdateEndpointsRejectNonOwner:
 # =============================================================================
 
 
-class TestCreateAndParseUserMessage:
-    """Tests for create_and_parse_user_message endpoint."""
-
-    @pytest.mark.asyncio
-    async def test_returns_410_without_invoking_legacy_message_flow(
-        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
-    ):
-        """Deprecated createAndParseUserMessage should not emit unowned processing status."""
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={
-            "room_id": sample_room.room_id,
-            "message": sample_user_message.model_dump(),
-            "client_request_id": "c7c9a000-0000-4000-8000-000000000010",
-        })
-
-        response = await create_and_parse_user_message(mock_request, mock_user)
-
-        assert response.status_code == 410
-        mock_request.json.assert_not_awaited()
-        patch_room_center_deps["db_service"].get_room_by_room_id.assert_not_called()
-        patch_room_center_deps[
-            "room_center"
-        ].create_and_parse_user_message.assert_not_awaited()
-
-
 class TestInquiryRoomMessages:
     """Tests for inquiry_room_messages endpoint."""
 
@@ -499,7 +470,7 @@ class TestSendMessage:
         mock_request.json = AsyncMock(return_value={
             "room_id": sample_room.room_id,
             "message": sample_user_message.model_dump(),
-            "target_group": "room_team",
+            "message_target_mode": "room_default",
             "client_request_id": "c7c9a000-0000-4000-8000-000000000001",
         })
         
@@ -527,7 +498,297 @@ class TestSendMessage:
         assert execution_request.room_id == sample_room.room_id
         assert execution_request.sender_id == mock_user.user_id
         assert execution_request.target_group == "room_team"
+        assert execution_request.message_target_mode == "room_default"
         assert execution_request.mentioned_agent_ids is None
+
+    @pytest.mark.asyncio
+    async def test_send_message_rejects_missing_message_target_mode_without_mentions(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "room_id": sample_room.room_id,
+            "message": sample_user_message.model_dump(),
+            "client_request_id": "c7c9a000-0000-4000-8000-000000000099",
+        })
+        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
+
+        response = await send_message(mock_request, MagicMock(), mock_user)
+
+        assert response.status_code == 400
+        assert "message_target_mode is required" in response.error
+
+    @pytest.mark.asyncio
+    async def test_send_message_rejects_legacy_target_group(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "room_id": sample_room.room_id,
+            "message": sample_user_message.model_dump(),
+            "client_request_id": "c7c9a000-0000-4000-8000-000000000098",
+            "target_group": "room_team",
+        })
+        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
+
+        response = await send_message(mock_request, MagicMock(), mock_user)
+
+        assert response.status_code == 400
+        assert "target_group is no longer supported" in response.error
+
+    @pytest.mark.asyncio
+    async def test_send_message_rejects_unknown_message_target_mode(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "room_id": sample_room.room_id,
+            "message": sample_user_message.model_dump(),
+            "client_request_id": "c7c9a000-0000-4000-8000-000000000097",
+            "message_target_mode": "room_team",
+        })
+        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
+
+        response = await send_message(mock_request, MagicMock(), mock_user)
+
+        assert response.status_code == 400
+        assert "message_target_mode must be one of" in response.error
+        patch_room_center_deps["execution_engine"].execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_send_message_saved_group_requires_target_group_id(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "room_id": sample_room.room_id,
+            "message": sample_user_message.model_dump(),
+            "client_request_id": "c7c9a000-0000-4000-8000-000000000096",
+            "message_target_mode": "saved_group",
+        })
+        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
+
+        response = await send_message(mock_request, MagicMock(), mock_user)
+
+        assert response.status_code == 400
+        assert "target_group_id is required" in response.error
+        patch_room_center_deps["execution_engine"].execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_send_message_saved_group_rejects_malformed_target_group_id(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "room_id": sample_room.room_id,
+            "message": sample_user_message.model_dump(),
+            "client_request_id": "c7c9a000-0000-4000-8000-000000000091",
+            "message_target_mode": "saved_group",
+            "target_group_id": {"id": "group-123"},
+        })
+        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
+
+        response = await send_message(mock_request, MagicMock(), mock_user)
+
+        assert response.status_code == 400
+        assert "target_group_id is required" in response.error
+        patch_room_center_deps["execution_engine"].execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reserved_id", ["room_team", "all_agents"])
+    async def test_send_message_saved_group_rejects_reserved_target_group_id(
+        self,
+        reserved_id,
+        mock_user,
+        sample_room,
+        sample_user_message,
+        patch_room_center_deps,
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "room_id": sample_room.room_id,
+            "message": sample_user_message.model_dump(),
+            "client_request_id": "c7c9a000-0000-4000-8000-000000000090",
+            "message_target_mode": "saved_group",
+            "target_group_id": reserved_id,
+        })
+        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
+
+        response = await send_message(mock_request, MagicMock(), mock_user)
+
+        assert response.status_code == 400
+        assert "target_group_id cannot be a reserved target group" in response.error
+        patch_room_center_deps["execution_engine"].execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_send_message_saved_group_uses_target_group_id(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "room_id": sample_room.room_id,
+            "message": sample_user_message.model_dump(),
+            "client_request_id": "c7c9a000-0000-4000-8000-000000000095",
+            "message_target_mode": "saved_group",
+            "target_group_id": " group-123 ",
+        })
+        mock_background_tasks = MagicMock()
+        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
+        patch_room_center_deps["execution_engine"].execute.return_value = ExecutionAck(
+            success=True,
+            message_id="new-message-id",
+        )
+
+        response = await send_message(mock_request, mock_background_tasks, mock_user)
+
+        assert response.success is True
+        execution_request = patch_room_center_deps[
+            "execution_engine"
+        ].execute.await_args.args[0]
+        assert execution_request.target_group == "group-123"
+        assert execution_request.target_group_id == "group-123"
+        assert execution_request.message_target_mode == "saved_group"
+
+    @pytest.mark.asyncio
+    async def test_send_message_all_agents_uses_explicit_mode(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "room_id": sample_room.room_id,
+            "message": sample_user_message.model_dump(),
+            "client_request_id": "c7c9a000-0000-4000-8000-000000000094",
+            "message_target_mode": "all_agents",
+        })
+        mock_background_tasks = MagicMock()
+        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
+        patch_room_center_deps["execution_engine"].execute.return_value = ExecutionAck(
+            success=True,
+            message_id="new-message-id",
+        )
+
+        response = await send_message(mock_request, mock_background_tasks, mock_user)
+
+        assert response.success is True
+        execution_request = patch_room_center_deps[
+            "execution_engine"
+        ].execute.await_args.args[0]
+        assert execution_request.target_group == "all_agents"
+        assert execution_request.message_target_mode == "all_agents"
+
+    @pytest.mark.asyncio
+    async def test_send_message_rejects_target_group_id_for_non_saved_group(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "room_id": sample_room.room_id,
+            "message": sample_user_message.model_dump(),
+            "client_request_id": "c7c9a000-0000-4000-8000-000000000093",
+            "message_target_mode": "room_default",
+            "target_group_id": "group-123",
+        })
+        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
+
+        response = await send_message(mock_request, MagicMock(), mock_user)
+
+        assert response.status_code == 400
+        assert "target_group_id is only supported" in response.error
+        patch_room_center_deps["execution_engine"].execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("target_group_id", [0, []])
+    async def test_send_message_rejects_falsy_target_group_id_for_non_saved_group(
+        self,
+        target_group_id,
+        mock_user,
+        sample_room,
+        sample_user_message,
+        patch_room_center_deps,
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "room_id": sample_room.room_id,
+            "message": sample_user_message.model_dump(),
+            "client_request_id": "c7c9a000-0000-4000-8000-000000000089",
+            "message_target_mode": "room_default",
+            "target_group_id": target_group_id,
+        })
+        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
+
+        response = await send_message(mock_request, MagicMock(), mock_user)
+
+        assert response.status_code == 400
+        assert "target_group_id is only supported" in response.error
+        patch_room_center_deps["execution_engine"].execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_send_message_rejects_target_group_id_with_mentions(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "room_id": sample_room.room_id,
+            "message": sample_user_message.model_dump(),
+            "client_request_id": "c7c9a000-0000-4000-8000-000000000092",
+            "mentioned_agent_ids": ["agent-1"],
+            "target_group_id": "group-123",
+        })
+        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
+
+        response = await send_message(mock_request, MagicMock(), mock_user)
+
+        assert response.status_code == 400
+        assert "target_group_id is only supported" in response.error
+        patch_room_center_deps["execution_engine"].execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_send_message_rejects_falsy_target_group_id_with_mentions(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "room_id": sample_room.room_id,
+            "message": sample_user_message.model_dump(),
+            "client_request_id": "c7c9a000-0000-4000-8000-000000000088",
+            "mentioned_agent_ids": ["agent-1"],
+            "target_group_id": 0,
+        })
+        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
+
+        response = await send_message(mock_request, MagicMock(), mock_user)
+
+        assert response.status_code == 400
+        assert "target_group_id is only supported" in response.error
+        patch_room_center_deps["execution_engine"].execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "mentioned_agent_ids",
+        ["agent-1", [1], [" "], {"agent_id": "agent-1"}],
+    )
+    async def test_send_message_rejects_malformed_mentioned_agent_ids(
+        self,
+        mentioned_agent_ids,
+        mock_user,
+        sample_room,
+        sample_user_message,
+        patch_room_center_deps,
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "room_id": sample_room.room_id,
+            "message": sample_user_message.model_dump(),
+            "client_request_id": "c7c9a000-0000-4000-8000-000000000087",
+            "mentioned_agent_ids": mentioned_agent_ids,
+        })
+        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
+
+        response = await send_message(mock_request, MagicMock(), mock_user)
+
+        assert response.status_code == 400
+        assert "mentioned_agent_ids must be a list of non-empty strings" in response.error
+        patch_room_center_deps["execution_engine"].execute.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_does_not_trigger_processing_on_failure(
@@ -538,6 +799,7 @@ class TestSendMessage:
         mock_request.json = AsyncMock(return_value={
             "room_id": sample_room.room_id,
             "message": sample_user_message.model_dump(),
+            "message_target_mode": "room_default",
             "client_request_id": "c7c9a000-0000-4000-8000-000000000002",
         })
         
@@ -566,6 +828,7 @@ class TestSendMessage:
         mock_request.json = AsyncMock(return_value={
             "room_id": sample_room.room_id,
             "message": sample_user_message.model_dump(),
+            "message_target_mode": "room_default",
             "client_request_id": "c7c9a000-0000-4000-8000-000000000012",
         })
         mock_background_tasks = MagicMock()

@@ -15,7 +15,7 @@ from typing import Any
 
 import httpx
 
-from config.settings import settings
+from common.config.settings import settings
 
 try:
     from dotenv import load_dotenv

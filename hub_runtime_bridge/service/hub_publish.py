@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from common.a2a_constants import (
-    CommonTaskState,
     INTERACTIVE_STATES,
+    CommonTaskState,
     is_failure_state,
     is_terminal_state,
 )

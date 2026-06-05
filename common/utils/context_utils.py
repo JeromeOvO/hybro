@@ -147,7 +147,7 @@ def extract_turn_notes(content: str | None) -> dict | None:
         "because", "until", "while", "this", "that", "these", "those", "i",
         "you", "he", "she", "it", "we", "they", "me", "him", "her", "us",
         "them", "my", "your", "his", "its", "our", "their", "what", "which",
-        "who", "whom", "please", "thanks", "thank", "yes", "no", "okay", "ok",
+        "who", "whom", "please", "thanks", "thank", "yes", "okay", "ok",
     }
 
     # Extract keywords (words > 4 chars, not stop words, alphanumeric)
@@ -449,6 +449,7 @@ def build_context_for_agent(
     include_system_instruction: bool = True,
     quoted_text: str | None = None,
     room_awareness: str | None = None,
+    agent_task: str | None = None,
     max_tokens: int | None = None,
 ) -> str:
     """
@@ -527,16 +528,23 @@ def build_context_for_agent(
 
     # 3. Quoted context (user highlighted specific text from a previous message)
     if quoted_text:
-        quoted_section = (
-            "[Quoted context]\n"
-            "The user is referencing the following specific content:\n"
-            f'"{quoted_text}"'
-        )
+        qt = quoted_text.strip()
+        if "\n---\n" in qt:
+            quoted_section = f"[Quoted context]\n{qt}"
+        else:
+            quoted_section = (
+                "[Quoted context]\n"
+                "The user is referencing the following specific content:\n"
+                f'"{qt}"'
+            )
         quoted_tokens = estimate_tokens(quoted_section)
         if total_tokens + quoted_tokens < effective_max_tokens:
             parts.append("[Quoted context]")
-            parts.append("The user is referencing the following specific content:")
-            parts.append(f'"{quoted_text}"')
+            if "\n---\n" in qt:
+                parts.append(qt)
+            else:
+                parts.append("The user is referencing the following specific content:")
+                parts.append(f'"{qt}"')
             parts.append("")
             total_tokens += quoted_tokens
 
@@ -554,6 +562,15 @@ def build_context_for_agent(
     parts.append("[Current request]")
     parts.append(f"User: {current_task}")
     total_tokens += task_tokens
+
+    if agent_task and agent_task.strip():
+        ts = f"\n[Task]\n{agent_task.strip()}"
+        tt = estimate_tokens(ts)
+        if total_tokens + tt < effective_max_tokens:
+            parts.append("")
+            parts.append("[Task]")
+            parts.append(agent_task.strip())
+            total_tokens += tt
 
     # 6. Agent instruction (optional)
     if include_system_instruction and agent_name:

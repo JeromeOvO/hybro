@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -10,11 +10,11 @@ from room.repository import MessageMongoRepository, RoomMongoRepository
 
 
 class FakeMongo:
-    def __init__(self, collections: dict[str, "FakeCollection"] | None = None) -> None:
+    def __init__(self, collections: dict[str, FakeCollection] | None = None) -> None:
         self.collections = collections or {}
         self.collection_calls: list[str] = []
 
-    def collection(self, name: str) -> "FakeCollection":
+    def collection(self, name: str) -> FakeCollection:
         self.collection_calls.append(name)
         self.collections.setdefault(name, FakeCollection())
         return self.collections[name]
@@ -212,8 +212,8 @@ async def test_message_repository_get_by_ids_combines_collections_and_preserves_
 
 @pytest.mark.asyncio
 async def test_message_repository_combines_history_sorted_with_before_filter():
-    older = datetime(2026, 5, 10, tzinfo=timezone.utc)
-    newer = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    older = datetime(2026, 5, 10, tzinfo=UTC)
+    newer = datetime(2026, 5, 11, tzinfo=UTC)
     repo, _, user_messages, agent_messages = _message_repo(
         user_docs=[
             {"message_id": "u2", "room_id": "r1", "message_created_at": newer},

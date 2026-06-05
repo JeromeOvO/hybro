@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from common.dto import MessageCommitted
 from context_memory.events import ContextMemoryEventHandler
 
-
-NOW = datetime(2026, 5, 13, tzinfo=timezone.utc)
+NOW = datetime(2026, 5, 13, tzinfo=UTC)
 
 
 class FakeProjector:

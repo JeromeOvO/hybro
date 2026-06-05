@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
@@ -17,8 +17,7 @@ from common.dto import (
 )
 from room import RoomFacade
 
-
-NOW = datetime(2026, 5, 11, tzinfo=timezone.utc)
+NOW = datetime(2026, 5, 11, tzinfo=UTC)
 
 
 @pytest.mark.asyncio

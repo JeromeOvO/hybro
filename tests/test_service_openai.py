@@ -1,11 +1,8 @@
-import json
-import os
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
-from services.openai_service import OpenAIService
-
+from app_shell.openai_service import OpenAIService
 
 # ---------------------------------------------------------------------------
 # Fixtures & helpers
@@ -23,30 +20,6 @@ def openai_svc():
 def _chat_completion(content: str):
     """Build mock ChatCompletion for chat.completions.create."""
     return MagicMock(choices=[MagicMock(message=MagicMock(content=content))])
-
-
-def _responses_result(text: str):
-    """Build mock Response for responses.create."""
-    return MagicMock(output_text=text)
-
-
-def _make_base_task(goal: str = "Write a blog post about AI"):
-    task = MagicMock()
-    part = MagicMock()
-    part.root.kind = "text"
-    part.root.text = goal
-    msg = MagicMock()
-    msg.parts = [part]
-    task.task.history = [msg]
-    return task
-
-
-def _make_context_data():
-    ctx = MagicMock()
-    ctx.room_context = ""
-    ctx.conversation_history = ""
-    ctx.task_context = ""
-    return ctx
 
 
 def _make_agent(agent_id: str, name: str, description: str = "A test agent",
@@ -87,79 +60,6 @@ class TestExpandQueryForDiscovery:
         assert result == "AI"
 
 
-# ---------------------------------------------------------------------------
-# Group 2: decompose_task
-# ---------------------------------------------------------------------------
-
-class TestDecomposeTask:
-
-    @pytest.mark.asyncio
-    async def test_returns_json_string_with_execution_steps(self, openai_svc):
-        valid_json = json.dumps({
-            "execution_steps": [
-                {
-                    "step_number": 1,
-                    "step_description": "Research the topic",
-                    "execution_context": "Use web search",
-                    "expected_output": "Research notes",
-                    "depends_on_steps": [],
-                },
-                {
-                    "step_number": 2,
-                    "step_description": "Write the blog post",
-                    "execution_context": "Based on research",
-                    "expected_output": "Blog post draft",
-                    "depends_on_steps": [1],
-                },
-            ]
-        })
-        openai_svc.client.responses.create.return_value = _responses_result(valid_json)
-
-        with patch.object(openai_svc, "_can_agent_handle_task_alone", new_callable=AsyncMock, return_value="NO"):
-            result = await openai_svc.decompose_task(
-                _make_base_task(), _make_context_data(), _make_agent("agent-1", "TestAgent")
-            )
-
-        parsed = json.loads(result)
-        assert "execution_steps" in parsed
-        assert len(parsed["execution_steps"]) == 2
-        openai_svc.client.responses.create.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_returns_fallback_json_string_on_malformed_response(self, openai_svc):
-        openai_svc.client.responses.create.return_value = _responses_result(
-            "This is not JSON at all, just plain garbage text with no braces"
-        )
-
-        with patch.object(openai_svc, "_can_agent_handle_task_alone", new_callable=AsyncMock, return_value="NO"):
-            result = await openai_svc.decompose_task(
-                _make_base_task(), _make_context_data(), _make_agent("agent-1", "TestAgent")
-            )
-
-        parsed = json.loads(result)
-        assert "execution_steps" in parsed
-        assert len(parsed["execution_steps"]) == 1
-
-    @pytest.mark.asyncio
-    async def test_single_agent_shortcircuit_skips_llm(self, openai_svc):
-        best_agent = _make_agent("agent-1", "TestAgent")
-
-        with patch.object(openai_svc, "_can_agent_handle_task_alone", new_callable=AsyncMock, return_value="YES"):
-            result = await openai_svc.decompose_task(
-                _make_base_task(), _make_context_data(), best_agent
-            )
-
-        parsed = json.loads(result)
-        assert "execution_steps" in parsed
-        assert len(parsed["execution_steps"]) == 1
-        assert "TestAgent" in parsed["execution_steps"][0]["execution_context"]
-        openai_svc.client.responses.create.assert_not_awaited()
-
-
-# ---------------------------------------------------------------------------
-# Group 3: call_supervisor_llm_json
-# ---------------------------------------------------------------------------
-
 class TestCallSupervisorLlmJson:
 
     @pytest.mark.asyncio
@@ -186,12 +86,61 @@ class TestCallSupervisorLlmJson:
             "not json at all"
         )
 
+        import json
+
         with pytest.raises(json.JSONDecodeError):
             await openai_svc.call_supervisor_llm_json("system", "user")
 
 
+class TestParseUserMessageByLlm:
+    @pytest.mark.asyncio
+    async def test_includes_explicit_mentions_as_structured_routing_context(
+        self, openai_svc
+    ):
+        openai_svc.client.chat.completions.create.return_value = _chat_completion(
+            """
+            {
+              "message_type": "AUTO_ASSIGNED",
+              "original_text": "please help",
+              "needs_decomposition": false,
+              "task_steps": [
+                {
+                  "step_id": "step_1",
+                  "agent_id": "agent-1",
+                  "agent_name": "Agent One",
+                  "task_content": "please help",
+                  "dependencies": []
+                }
+              ]
+            }
+            """
+        )
+
+        result = await openai_svc.parse_user_message_by_llm(
+            "please help",
+            selected_agent_set={"agent-1": "Agent One"},
+            auto_assign_agents=True,
+            explicit_mentions=[
+                {
+                    "agent_id": "agent-1",
+                    "agent_name": "Agent One",
+                    "mention_text": "<@agent-1|Agent One>",
+                }
+            ],
+        )
+
+        assert result["task_steps"][0]["agent_id"] == "agent-1"
+        messages = openai_svc.client.chat.completions.create.await_args.kwargs[
+            "messages"
+        ]
+        user_prompt = messages[1]["content"]
+        assert "Explicit mention routing intent" in user_prompt
+        assert "Treat them as strong routing intent" in user_prompt
+        assert "Agent One (ID: agent-1) via <@agent-1|Agent One>" in user_prompt
+
+
 # ---------------------------------------------------------------------------
-# Group 4: select_best_agent_for_task
+# Group 2: select_best_agent_for_task
 # ---------------------------------------------------------------------------
 
 class TestSelectBestAgentForTask:

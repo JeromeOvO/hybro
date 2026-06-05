@@ -499,90 +499,6 @@
     ]
   },
   {
-    "declared_owner": "api.orchestration_center",
-    "endpoint_module": "api.orchestration_center",
-    "methods": [
-      "POST"
-    ],
-    "name": "assign_agent_to_meta_task",
-    "path": "/api/v1/orchestrationCenter/assignAgentToMetaTask",
-    "tags": [
-      "orchestration"
-    ]
-  },
-  {
-    "declared_owner": "api.orchestration_center",
-    "endpoint_module": "api.orchestration_center",
-    "methods": [
-      "POST"
-    ],
-    "name": "assign_agents_to_meta_tasks_by_parent_task_id",
-    "path": "/api/v1/orchestrationCenter/assignAgentsToMetaTasks",
-    "tags": [
-      "orchestration"
-    ]
-  },
-  {
-    "declared_owner": "api.orchestration_center",
-    "endpoint_module": "api.orchestration_center",
-    "methods": [
-      "POST"
-    ],
-    "name": "decompose_task",
-    "path": "/api/v1/orchestrationCenter/decomposeTask",
-    "tags": [
-      "orchestration"
-    ]
-  },
-  {
-    "declared_owner": "api.orchestration_center",
-    "endpoint_module": "api.orchestration_center",
-    "methods": [
-      "POST"
-    ],
-    "name": "process_room_user_message",
-    "path": "/api/v1/orchestrationCenter/processRoomUserMessage",
-    "tags": [
-      "orchestration"
-    ]
-  },
-  {
-    "declared_owner": "api.orchestration_center",
-    "endpoint_module": "api.orchestration_center",
-    "methods": [
-      "POST"
-    ],
-    "name": "retry_meta_task",
-    "path": "/api/v1/orchestrationCenter/retryMetaTask",
-    "tags": [
-      "orchestration"
-    ]
-  },
-  {
-    "declared_owner": "api.orchestration_center",
-    "endpoint_module": "api.orchestration_center",
-    "methods": [
-      "POST"
-    ],
-    "name": "run_workflow",
-    "path": "/api/v1/orchestrationCenter/runWorkflow",
-    "tags": [
-      "orchestration"
-    ]
-  },
-  {
-    "declared_owner": "api.orchestration_center",
-    "endpoint_module": "api.orchestration_center",
-    "methods": [
-      "POST"
-    ],
-    "name": "summarize_meta_task_for_base_task",
-    "path": "/api/v1/orchestrationCenter/summarizeMetaTaskForBaseTask",
-    "tags": [
-      "orchestration"
-    ]
-  },
-  {
     "declared_owner": "api.relay",
     "endpoint_module": "api.relay",
     "methods": [
@@ -652,18 +568,6 @@
     "path": "/api/v1/relay/hub/{hub_id}/publish",
     "tags": [
       "relay"
-    ]
-  },
-  {
-    "declared_owner": "api.room_center",
-    "endpoint_module": "api.room_center",
-    "methods": [
-      "POST"
-    ],
-    "name": "create_and_parse_user_message",
-    "path": "/api/v1/roomCenter/createAndParseUserMessage",
-    "tags": [
-      "room"
     ]
   },
   {
@@ -871,66 +775,6 @@
     "path": "/api/v1/sse/room/{room_id}/stream",
     "tags": [
       "sse"
-    ]
-  },
-  {
-    "declared_owner": "api.task",
-    "endpoint_module": "api.task",
-    "methods": [
-      "GET"
-    ],
-    "name": "get_all_sessions",
-    "path": "/api/v1/task/getAllSessions/{user_name}",
-    "tags": [
-      "task"
-    ]
-  },
-  {
-    "declared_owner": "api.task",
-    "endpoint_module": "api.task",
-    "methods": [
-      "GET"
-    ],
-    "name": "get_base_task_by_session_id",
-    "path": "/api/v1/task/getBaseTasksBySessionId/{session_id}",
-    "tags": [
-      "task"
-    ]
-  },
-  {
-    "declared_owner": "api.task",
-    "endpoint_module": "api.task",
-    "methods": [
-      "GET"
-    ],
-    "name": "get_meta_tasks_by_parent_task_id",
-    "path": "/api/v1/task/getMetaTasksByParentTaskId/{parent_task_id}",
-    "tags": [
-      "task"
-    ]
-  },
-  {
-    "declared_owner": "api.task",
-    "endpoint_module": "api.task",
-    "methods": [
-      "GET"
-    ],
-    "name": "query_base_task",
-    "path": "/api/v1/task/queryBaseTask/{task_id}",
-    "tags": [
-      "task"
-    ]
-  },
-  {
-    "declared_owner": "api.task",
-    "endpoint_module": "api.task",
-    "methods": [
-      "GET"
-    ],
-    "name": "query_task",
-    "path": "/api/v1/task/queryTask/{task_id}",
-    "tags": [
-      "task"
     ]
   },
   {

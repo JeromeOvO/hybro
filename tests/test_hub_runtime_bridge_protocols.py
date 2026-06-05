@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 import inspect
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -12,7 +12,6 @@ from common.dto import (
     HubReplyCommand,
     OfflineHubFailureCommand,
 )
-from common.utils.time import utcnow
 from common.protocols import (
     AgentCallCounter,
     HubAgentStatusReader,
@@ -23,20 +22,18 @@ from common.protocols import (
     HubManagement,
     OfflineHubFailurePort,
 )
-from database.migration.phase8_legacy_workflow_cleanup import (
-    LEGACY_WORKFLOW_COLLECTIONS,
-    assess_cleanup_readiness,
-)
+from common.utils.time import utcnow
 from hub_runtime_bridge import HubFacade, HubRuntimeBridgeConfig, HubRuntimeBridgeDeps
 from hub_runtime_bridge.config import config_from_settings
 from hub_runtime_bridge.hub_response_journal import InMemoryHubResponseJournal
 from hub_runtime_bridge.repository.mongo import HubMongoRepository
-from hub_runtime_bridge.service.ownership_lease_maintainer import OwnershipLeaseMaintainer
+from hub_runtime_bridge.service.ownership_lease_maintainer import (
+    OwnershipLeaseMaintainer,
+)
 from hub_runtime_bridge.task_ownership import (
     InMemoryHubTaskOwnershipStore,
     MongoHubTaskOwnershipStore,
 )
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -309,14 +306,6 @@ def test_config_from_settings_reads_hub_heartbeat_ttl() -> None:
         relay_hub_heartbeat_ttl = 123
 
     assert config_from_settings(Settings()).heartbeat_ttl_seconds == 123
-
-
-def test_legacy_cleanup_gate_is_blocked_on_current_routes() -> None:
-    readiness = assess_cleanup_readiness(ROOT)
-    assert readiness.collections == LEGACY_WORKFLOW_COLLECTIONS
-    assert readiness.cleanup_allowed is False
-    assert "api/orchestration_center.py" in readiness.blockers
-    assert "api/task.py" in readiness.blockers
 
 
 def test_hub_facade_satisfies_core_runtime_protocols() -> None:
