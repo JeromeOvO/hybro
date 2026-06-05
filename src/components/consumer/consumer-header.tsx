@@ -25,7 +25,7 @@ export const ConsumerHeader = () => {
 
   if (!mounted) {
     return (
-      <header className="sticky top-0 z-40 backdrop-blur-xl md:hidden">
+      <header className="sticky top-0 z-40 bg-background/35 backdrop-blur-xl md:hidden">
         <div className="flex h-14 items-center gap-4 border-b border-border/30 px-4">
           <div className="flex items-center gap-2">
             <SidebarTrigger />
@@ -39,7 +39,7 @@ export const ConsumerHeader = () => {
 
   if (isUnauthenticated) {
     return (
-      <header className="sticky top-0 z-40 backdrop-blur-xl">
+      <header className="sticky top-0 z-40 bg-background/35 backdrop-blur-xl">
         <div className="border-b border-border/30">
           <div className="mx-auto flex h-14 max-w-6xl items-center gap-6 px-4 sm:px-8">
             <Logo />
@@ -86,7 +86,7 @@ export const ConsumerHeader = () => {
   }
   
   return (
-    <header className="sticky top-0 z-40 backdrop-blur-xl">
+    <header className="sticky top-0 z-40 bg-background/35 backdrop-blur-xl">
       <div className="flex h-14 items-center gap-4 border-b border-border/30 px-4">
         <div className="flex items-center gap-2">
           <SidebarTrigger />
