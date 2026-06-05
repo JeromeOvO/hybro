@@ -32,11 +32,11 @@ from models.memory import (
 from models.supervisor import (
     ActionType,
     RunStatus,
+    StepResult,
     SupervisorAction,
     SupervisorRunResult,
     SupervisorTrajectory,
     TrajectoryEntry,
-    StepResult,
 )
 
 # =========================================================================
@@ -578,19 +578,25 @@ class TestPromptCacheOptimization:
 
     def test_conversation_context_in_system_prompt(self):
         """conversation_context placeholder should be in the system prompt template."""
-        from execution.orchestration.room_supervisor_service import SUPERVISOR_SYSTEM_PROMPT
+        from execution.orchestration.room_supervisor_service import (
+            SUPERVISOR_SYSTEM_PROMPT,
+        )
 
         assert "{conversation_context}" in SUPERVISOR_SYSTEM_PROMPT
 
     def test_conversation_context_not_in_user_prompt(self):
         """conversation_context placeholder should NOT be in the user prompt template."""
-        from execution.orchestration.room_supervisor_service import SUPERVISOR_USER_PROMPT
+        from execution.orchestration.room_supervisor_service import (
+            SUPERVISOR_USER_PROMPT,
+        )
 
         assert "{conversation_context}" not in SUPERVISOR_USER_PROMPT
 
     def test_user_prompt_has_only_dynamic_fields(self):
         """User prompt should only contain fields that change per iteration."""
-        from execution.orchestration.room_supervisor_service import SUPERVISOR_USER_PROMPT
+        from execution.orchestration.room_supervisor_service import (
+            SUPERVISOR_USER_PROMPT,
+        )
 
         assert "{message_text}" in SUPERVISOR_USER_PROMPT
         assert "{trajectory_summary}" in SUPERVISOR_USER_PROMPT
@@ -604,8 +610,10 @@ class TestPromptCacheOptimization:
     @pytest.mark.asyncio
     async def test_decide_next_includes_quoted_text_in_user_prompt(self):
         """decide_next() should include verbatim quoted text in the user prompt."""
+        from execution.orchestration.room_supervisor_service import (
+            RoomSupervisorService,
+        )
         from models.supervisor import AgentProfile, RoomConfig, SupervisorTrajectory
-        from execution.orchestration.room_supervisor_service import RoomSupervisorService
 
         mock_openai = AsyncMock()
         service = RoomSupervisorService(openai_service=mock_openai)
@@ -648,12 +656,14 @@ class TestPromptCacheOptimization:
     @pytest.mark.asyncio
     async def test_decide_next_passes_context_to_system_prompt(self):
         """decide_next() should format conversation_context into system prompt."""
+        from execution.orchestration.room_supervisor_service import (
+            RoomSupervisorService,
+        )
         from models.supervisor import (
             AgentProfile,
             RoomConfig,
             SupervisorTrajectory,
         )
-        from execution.orchestration.room_supervisor_service import RoomSupervisorService
 
         mock_openai = AsyncMock()
         service = RoomSupervisorService(openai_service=mock_openai)
@@ -847,7 +857,9 @@ class TestParseV2ActionCaseInsensitive:
 
     @pytest.fixture
     def service(self):
-        from execution.orchestration.room_supervisor_service import RoomSupervisorService
+        from execution.orchestration.room_supervisor_service import (
+            RoomSupervisorService,
+        )
         mock_openai = MagicMock()
         return RoomSupervisorService(openai_service=mock_openai)
 
@@ -956,7 +968,9 @@ class TestParseV2ActionClarifySanitization:
 
     @pytest.fixture
     def service(self):
-        from execution.orchestration.room_supervisor_service import RoomSupervisorService
+        from execution.orchestration.room_supervisor_service import (
+            RoomSupervisorService,
+        )
         mock_openai = MagicMock()
         return RoomSupervisorService(openai_service=mock_openai)
 
@@ -1123,7 +1137,7 @@ class TestHandleV2RunResultUnifiedSummary:
 
             from execution.orchestration.factory import create_room_message_center
 
-            rmc = create_room_message_center()
+            rmc = create_room_message_center(debate_rounds=2)
             rmc._emit_unified_summary = AsyncMock()
             rmc._emit_deterministic_digest = AsyncMock()
             rmc._trigger_compaction_safe = AsyncMock()
@@ -1170,9 +1184,9 @@ class TestHandleV2RunResultUnifiedSummary:
 
         from models.supervisor import (
             ActionType,
+            StepResult,
             SupervisorAction,
             TrajectoryEntry,
-            StepResult,
         )
 
         completed_result_without_synthesis.trajectory.entries = [
@@ -1289,7 +1303,9 @@ class TestParseV2ActionMultiQuestion:
 
     @pytest.fixture
     def service(self):
-        from execution.orchestration.room_supervisor_service import RoomSupervisorService
+        from execution.orchestration.room_supervisor_service import (
+            RoomSupervisorService,
+        )
         return RoomSupervisorService(
             openai_service=MagicMock(),
             database_service=MagicMock(),

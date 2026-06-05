@@ -16,9 +16,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app_shell.room_runtime import RoomServices
 from common.dto import RoomInfo
 from models.request import RoomCenterRoomSettingRequest
-from app_shell.room_runtime import RoomServices
 
 
 @pytest.fixture

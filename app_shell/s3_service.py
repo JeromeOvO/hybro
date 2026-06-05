@@ -12,8 +12,8 @@ from typing import BinaryIO
 import aioboto3
 from botocore.exceptions import ClientError
 
-from common.utils.logger import get_logger
 from common.config.settings import settings
+from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

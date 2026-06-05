@@ -13,19 +13,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from common.utils.time import utcnow
+from execution.orchestration.supervisor_executor import SupervisorExecutor
 from models.supervisor import (
     ActionType,
     AgentProfile,
     DelegateTarget,
     RoomConfig,
     RunStatus,
+    StepResult,
     StepStatus,
     SupervisorAction,
     SupervisorTrajectory,
     TrajectoryEntry,
-    StepResult,
 )
-from execution.orchestration.supervisor_executor import SupervisorExecutor
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -54,6 +54,7 @@ def _make_supervisor_executor() -> SupervisorExecutor:
     se.room_memory_service.add_agent_response_to_memory = AsyncMock()
     se.rate_limit_service = MagicMock()
     se.room_coordinator_service = MagicMock()
+    se.debate_rounds = 1
     return se
 
 
@@ -93,9 +94,7 @@ def _make_delegate_entry(
 
 
 class TestSnapshotDebateAgents:
-    @patch("execution.orchestration.supervisor_executor.settings")
-    def test_initialized_once(self, mock_settings):
-        mock_settings.debate_rounds = 1
+    def test_initialized_once(self):
         registry = [
             _make_agent_profile("a1", "Alpha"),
             _make_agent_profile("a2", "Beta"),
@@ -103,7 +102,9 @@ class TestSnapshotDebateAgents:
         ]
         trajectory = SupervisorTrajectory()
 
-        ids = SupervisorExecutor._snapshot_debate_agents(registry, trajectory)
+        ids = SupervisorExecutor._snapshot_debate_agents(
+            registry, trajectory, debate_rounds=1
+        )
         assert ids == ["a1", "a2"]
         assert trajectory.debate_agent_ids == ["a1", "a2"]
 
@@ -112,17 +113,17 @@ class TestSnapshotDebateAgents:
         ids2 = SupervisorExecutor._snapshot_debate_agents(registry, trajectory)
         assert ids2 == ["a1", "a2"]
 
-    @patch("execution.orchestration.supervisor_executor.settings")
-    def test_multi_round_snapshot(self, mock_settings):
+    def test_multi_round_snapshot(self):
         """With debate_rounds=2, each agent appears twice in the snapshot."""
-        mock_settings.debate_rounds = 2
         registry = [
             _make_agent_profile("a1", "Alpha"),
             _make_agent_profile("a2", "Beta"),
         ]
         trajectory = SupervisorTrajectory()
 
-        ids = SupervisorExecutor._snapshot_debate_agents(registry, trajectory)
+        ids = SupervisorExecutor._snapshot_debate_agents(
+            registry, trajectory, debate_rounds=2
+        )
         assert ids == ["a1", "a2", "a1", "a2"]
         assert trajectory.debate_agent_ids == ["a1", "a2", "a1", "a2"]
 

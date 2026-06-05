@@ -2,8 +2,8 @@ from typing import Any
 
 from a2a.types import AgentCard
 
-from common.utils.logger import get_logger
 from app_shell.delivery_runtime import sse_manager
+from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

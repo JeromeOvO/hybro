@@ -18,6 +18,9 @@ from uuid import uuid4
 
 import pytest
 
+from app_shell.compaction_service import (
+    CompactionService,
+)
 from common.dto import CompactionResult as DtoCompactionResult
 from common.utils.time import utcnow
 from models.compaction import (
@@ -35,9 +38,6 @@ from models.memory import (
 from platform_module.content_storage import (
     ContentExpiredError,
     hash_content,
-)
-from app_shell.compaction_service import (
-    CompactionService,
 )
 
 # =============================================================================
@@ -169,8 +169,8 @@ class BoundCompactionFacade:
         self.service = service
 
     async def should_compact(self, room_id: str) -> bool:
-        from models.context_config import compaction_config
         from app_shell import compaction_service as compaction_module
+        from models.context_config import compaction_config
 
         config = compaction_config
         if not config.enabled:
@@ -196,8 +196,8 @@ class BoundCompactionFacade:
         room_id: str,
         room_memory_doc: dict | RoomMemory | None = None,
     ):
-        from models.context_config import compaction_config
         from app_shell import compaction_service as compaction_module
+        from models.context_config import compaction_config
 
         config = compaction_config
         if not config.enabled:

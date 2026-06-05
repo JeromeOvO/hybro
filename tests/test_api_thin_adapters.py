@@ -500,7 +500,7 @@ def test_api_key_management_routes_are_owned_by_store_protocol():
 def test_agent_viewset_mutations_record_vector_side_effect_protocols():
     routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
     expected = {
-        "app_shell.bound.EmbeddingProvider",
+        "common.protocols.EmbeddingServiceProtocol",
         "app_shell.bound.VectorIndex",
     }
     violations: list[str] = []

@@ -8,8 +8,8 @@ Tests cover:
 - Authorization checks
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
 import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException

@@ -35,33 +35,33 @@ from models.supervisor import (
     DelegateTarget,
     RoomConfig,
     RunStatus,
+    StepResult,
     StepStatus,
     SupervisorAction,
     SupervisorRunResult,
     SupervisorTrajectory,
     TrajectoryEntry,
     TrajectoryStatus,
-    StepResult,
 )
 
 if TYPE_CHECKING:
     from app_shell.rate_limit_service import RateLimitService
 
-    from execution.dispatch.agent_dispatcher import AgentDispatcher
-    from execution.dispatch.agent_message_processor import AgentMessageProcessor
-    from execution.state.task_state_manager import TaskStateManager
     from app_shell.database_service import DatabaseService
+    from app_shell.delivery_runtime import SSEManager
     from app_shell.memory_service import RoomMemoryService
     from app_shell.room_coordinator_service import RoomCoordinatorService
     from app_shell.room_runtime import RoomServices
+    from execution.dispatch.agent_dispatcher import AgentDispatcher
+    from execution.dispatch.agent_message_processor import AgentMessageProcessor
     from execution.orchestration.room_supervisor_service import RoomSupervisorService
-    from app_shell.delivery_runtime import SSEManager
+    from execution.state.task_state_manager import TaskStateManager
 
 logger = get_logger(__name__)
 
 
 class _SupervisorSettings:
-    debate_rounds = 1
+    debate_rounds = 2
 
 
 settings = _SupervisorSettings()
@@ -87,7 +87,7 @@ class SupervisorExecutor:
         room_coordinator_service: RoomCoordinatorService,
         slot_lifecycle=None,
         hitl_coordinator=None,
-        debate_rounds: int | None = None,
+        debate_rounds: int = 2,
     ) -> None:
         self.supervisor_service = supervisor_service
         self.room_runtime = room_services
@@ -101,9 +101,7 @@ class SupervisorExecutor:
         self.room_coordinator_service = room_coordinator_service
         self._slot_lifecycle = slot_lifecycle
         self.hitl_coordinator = hitl_coordinator
-        self.debate_rounds = (
-            settings.debate_rounds if debate_rounds is None else debate_rounds
-        )
+        self.debate_rounds = debate_rounds
         self._processing_status_emitter = None
 
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
@@ -264,11 +262,7 @@ class SupervisorExecutor:
             debate_agent_ids = self._snapshot_debate_agents(
                 agent_registry,
                 trajectory,
-                debate_rounds=getattr(
-                    self,
-                    "debate_rounds",
-                    settings.debate_rounds,
-                ),
+                debate_rounds=getattr(self, "debate_rounds", 2),
             )
             effective_max_steps = max(self.MAX_STEPS, len(debate_agent_ids) + 1)
 
@@ -2001,7 +1995,7 @@ class SupervisorExecutor:
     def _snapshot_debate_agents(
         agent_registry: list[AgentProfile],
         trajectory: SupervisorTrajectory,
-        debate_rounds: int | None = None,
+        debate_rounds: int = 2,
     ) -> list[str]:
         """Initialize or restore debate participant snapshot.
 
@@ -2011,9 +2005,7 @@ class SupervisorExecutor:
         """
         if trajectory.debate_agent_ids is not None:
             return trajectory.debate_agent_ids
-        num_rounds = (
-            settings.debate_rounds if debate_rounds is None else debate_rounds
-        ) or 1
+        num_rounds = debate_rounds or 1
         base_ids = [a.agent_id for a in agent_registry if a.is_healthy]
         ids = base_ids * num_rounds
         trajectory.debate_agent_ids = ids

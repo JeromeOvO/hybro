@@ -7,9 +7,9 @@ always sees an accurate ``agent_status``.
 
 from __future__ import annotations
 
+from common.config.settings import settings
 from common.protocols.hub_protocols import validate_hub_liveness_reader
 from common.utils.logger import get_logger
-from common.config.settings import settings
 from models.agent import Agent, AgentStatus
 
 logger = get_logger(__name__)

@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app_shell.hitl_service import MAX_HITL_ROUNDS, HITLService
 from execution.hitl.exceptions import (
     HITLConflictError,
     HITLNotFoundError,
@@ -26,7 +27,6 @@ from models.hitl import (
     HITLRequest,
     HITLStatus,
 )
-from app_shell.hitl_service import MAX_HITL_ROUNDS, HITLService
 
 
 class _AsyncCursor:

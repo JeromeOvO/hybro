@@ -12,8 +12,8 @@ from a2a.utils.constants import (
 )
 from loguru import logger
 
-from common.types import AgentCard as CommonAgentCard
 from common.config.settings import settings
+from common.types import AgentCard as CommonAgentCard
 from database.mongodb import mongodb
 from jobs.constants import AGENT_HEALTH_CHECKER
 from models.agent import (

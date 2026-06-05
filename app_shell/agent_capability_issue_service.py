@@ -17,9 +17,9 @@ from time import monotonic
 
 from pymongo import ReturnDocument
 
+from common.config.settings import settings
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from common.config.settings import settings
 from database.mongodb import mongodb
 from models.agent import AgentCapabilityIssue, IssueStatus
 

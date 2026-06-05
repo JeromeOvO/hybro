@@ -2,7 +2,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 SCRIPT = Path(__file__).parents[1] / "scripts" / "check_no_legacy_imports.py"
 
 

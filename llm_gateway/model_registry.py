@@ -55,6 +55,19 @@ class ModelRegistryImpl:
             capabilities=["json_schema"],
             max_context_tokens=128000,
         )
+        supervisor_provider = "bedrock" if settings.use_bedrock_supervisor else "openai"
+        supervisor_model = (
+            settings.bedrock_supervisor_model
+            if settings.use_bedrock_supervisor
+            else settings.supervisor_model or settings.lead_ai_model
+        )
+        self._register(
+            logical_name="supervisor_model",
+            model_id=supervisor_model,
+            provider=supervisor_provider,
+            capabilities=["json_schema", "tool_use"],
+            max_context_tokens=200000 if supervisor_provider == "bedrock" else 128000,
+        )
         self._register(
             logical_name="gemini_model_name",
             model_id=settings.gemini_model_name,

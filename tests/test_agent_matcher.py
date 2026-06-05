@@ -13,8 +13,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from a2a.types import AgentCapabilities, AgentCard, AgentProvider, AgentSkill
 
-from common.dto.agent import AgentInfo
-from models.agent import Agent, AgentStatus
 from app_shell.agent_matcher import (
     AgentMatcher,
     MatchedAgent,
@@ -23,6 +21,8 @@ from app_shell.agent_matcher import (
     compute_capability_score,
     select_top_agents,
 )
+from common.dto.agent import AgentInfo
+from models.agent import Agent, AgentStatus
 
 # ---- Fixtures ----
 

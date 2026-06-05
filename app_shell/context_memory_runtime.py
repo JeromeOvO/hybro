@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from app_shell.memory_service import chat_memory_service
 from models.request import ChatMemoryRequest
 from models.response import ChatMemoryResponse
-from app_shell.memory_service import chat_memory_service
 
 
 class AppShellMemoryCenter:

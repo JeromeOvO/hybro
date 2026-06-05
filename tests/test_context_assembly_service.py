@@ -16,6 +16,11 @@ from unittest.mock import patch
 
 import pytest
 
+from app_shell.context_assembly_service import (
+    ContextAssemblyResult,
+    ContextAssemblyService,
+    TruncationReason,
+)
 from context_memory import assembly as context_memory_assembly
 from context_memory.config import TokenBudgetConfig
 from models.context_config import TokenBudget
@@ -29,11 +34,6 @@ from models.memory import (
     TurnRepresentation,
     TurnRole,
     TurnType,
-)
-from app_shell.context_assembly_service import (
-    ContextAssemblyResult,
-    ContextAssemblyService,
-    TruncationReason,
 )
 
 

@@ -4,7 +4,7 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from common.protocols import LLMProvider, MemoryRepository, RoomHistoryReader
+from common.protocols import LLMStructuredGateway, MemoryRepository, RoomHistoryReader
 from common.utils.context_utils import (
     LLM_TURN_NOTES_THRESHOLD,
     MAX_HISTORY_TURNS,
@@ -279,7 +279,7 @@ async def add_agent_response_to_memory(
     was_successful: bool,
     id_factory: Callable[[], str],
     now,
-    llm_provider: LLMProvider,
+    llm_provider: LLMStructuredGateway,
     llm_config: ContextMemoryLLMConfig,
     background_task_runner: Callable[[Awaitable[Any]], None],
     message_id: str | None = None,
@@ -334,7 +334,7 @@ async def add_synthesis_to_history(
     trajectory: Any | None,
     id_factory: Callable[[], str],
     now,
-    llm_provider: LLMProvider,
+    llm_provider: LLMStructuredGateway,
     llm_config: ContextMemoryLLMConfig,
     background_task_runner: Callable[[Awaitable[Any]], None],
 ) -> str | None:
@@ -368,7 +368,7 @@ async def add_synthesis_to_history(
 async def enrich_turn_notes(
     *,
     repository: MemoryRepository,
-    llm_provider: LLMProvider,
+    llm_provider: LLMStructuredGateway,
     llm_config: ContextMemoryLLMConfig,
     room_id: str,
     turn_id: str,
@@ -391,7 +391,7 @@ async def enrich_turn_notes(
 async def extract_turn_notes_llm(
     content: str,
     *,
-    llm_provider: LLMProvider,
+    llm_provider: LLMStructuredGateway,
     llm_config: ContextMemoryLLMConfig,
 ) -> dict | None:
     if not content or len(content.strip()) < 10:

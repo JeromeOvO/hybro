@@ -32,17 +32,17 @@ from a2a.utils.constants import (
 )
 
 from a2a_adapter.message_factory import from_sdk_task, to_sdk_message
-from common.utils.logger import get_logger
-from common.config.settings import settings
-from database.mongodb import mongodb
-from models.error import A2AServiceError, IllgalParameterError
-from models.response import InsepectionCenterConnectionValidationResponse
-from models.room import RoomAgentMessage
 from common.a2a_constants import (
     INTERACTIVE_STATES,
     SyntheticTaskId,
     is_terminal_state,
 )
+from common.config.settings import settings
+from common.utils.logger import get_logger
+from database.mongodb import mongodb
+from models.error import A2AServiceError, IllgalParameterError
+from models.response import InsepectionCenterConnectionValidationResponse
+from models.room import RoomAgentMessage
 
 logger = get_logger(__name__)
 
@@ -234,9 +234,9 @@ class A2AService:
         Returns:
             Dict with message_id, created_at, context_id, webhook_token, step_number, total_steps
         """
-        from common.utils.time import utcnow
-        from common.a2a_constants import NON_TERMINAL_STATES
         from app_shell.database_service import db_service
+        from common.a2a_constants import NON_TERMINAL_STATES
+        from common.utils.time import utcnow
 
         room_id = current_message.room_id
         user_id = current_message.user_id or "unknown"

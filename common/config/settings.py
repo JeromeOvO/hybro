@@ -1,6 +1,6 @@
 import os
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 PINECONE_INDEX_NAME_DEFAULT = "agentmatch"
@@ -31,10 +31,25 @@ class Settings(BaseSettings):
     lead_ai_model: str = "gpt-5-mini"
     classifier_ai_model: str = "gpt-5-mini"
     embedding_model: str = "text-embedding-3-small"
+    supervisor_model: str | None = None
 
     google_api_key: str = ""
+    gemini_api_key: str = ""
     gemini_model_name: str = "gemini-2.0-flash"
     gemini_embedding_model_name: str = "gemini-embedding-exp-03-07"
+
+    # LLM gateway routing and runtime policy
+    llm_gateway_max_attempts: int = 2
+    llm_gateway_retry_backoff_seconds: float = 0.2
+    llm_gateway_request_timeout_seconds: float = 60.0
+    llm_gateway_stream_timeout_seconds: float = 120.0
+    llm_gateway_supervisor_json_timeout_seconds: float = 30.0
+    llm_gateway_supervisor_text_timeout_seconds: float = 90.0
+    llm_gateway_supervisor_stream_timeout_seconds: float = 90.0
+    llm_gateway_bedrock_request_timeout_seconds: float = 45.0
+    llm_gateway_default_generation_model: str = "lead_ai_model"
+    llm_gateway_default_embedding_model: str = "embedding_model"
+    llm_gateway_default_supervisor_model: str = "supervisor_model"
 
     log_level: str = "INFO"
     log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -182,7 +197,9 @@ class Settings(BaseSettings):
     )
     memory_search_max_results: int = 10  # Max results to return
     memory_search_max_snippet_chars: int = 500  # Max chars per snippet
-    memory_search_index_name: str = MEMORY_SEARCH_INDEX_NAME_DEFAULT  # Pinecone index for memory
+    memory_search_index_name: str = (
+        MEMORY_SEARCH_INDEX_NAME_DEFAULT  # Pinecone index for memory
+    )
 
     # AWS S3 (file uploads and binary content storage)
     s3_bucket_name: str = ""
@@ -234,10 +251,18 @@ class Settings(BaseSettings):
     @classmethod
     def parse_terminal_processing_statuses(cls, v):
         if isinstance(v, str):
-            return frozenset(status.strip().lower() for status in v.split(",") if status.strip())
+            return frozenset(
+                status.strip().lower() for status in v.split(",") if status.strip()
+            )
         if v is None:
             return frozenset()
         return frozenset(str(status).strip().lower() for status in v)
+
+    @model_validator(mode="after")
+    def apply_gemini_api_key_fallback(self):
+        if not str(self.google_api_key or "").strip():
+            self.google_api_key = self.gemini_api_key or os.getenv("GEMINI_API_KEY", "")
+        return self
 
 
 settings = Settings()

@@ -5,6 +5,7 @@ import aioboto3
 
 from common.config.settings import settings
 from common.dto import LLMResponse, LLMStructuredResponse, LLMUsage
+from llm_gateway.structured_generation import with_json_object_instruction
 
 
 class BedrockProvider:
@@ -12,10 +13,8 @@ class BedrockProvider:
         self,
         session: Any | None = None,
         region: str | None = None,
-        default_model: str | None = None,
     ) -> None:
         self._region = region or settings.bedrock_region
-        self._default_model = default_model or settings.bedrock_supervisor_model
         self._session = session or aioboto3.Session(
             aws_access_key_id=settings.aws_access_key_id or None,
             aws_secret_access_key=settings.aws_secret_access_key or None,
@@ -25,10 +24,10 @@ class BedrockProvider:
     async def generate(
         self,
         messages: list[dict],
-        model: str | None = None,
+        model: str,
         **kwargs,
     ) -> LLMResponse:
-        model_id = model or self._default_model
+        model_id = model
         system, bedrock_messages = _to_bedrock_messages(messages)
         body = {
             "anthropic_version": "bedrock-2023-05-31",
@@ -48,7 +47,7 @@ class BedrockProvider:
                 contentType="application/json",
                 accept="application/json",
             )
-        raw = json.loads((await response["body"].read()).decode())
+            raw = json.loads((await response["body"].read()).decode())
         content = _bedrock_content(raw)
         return LLMResponse(
             content=content,
@@ -60,12 +59,24 @@ class BedrockProvider:
     async def generate_structured(
         self,
         messages: list[dict],
-        schema: dict,
+        *args,
         model: str | None = None,
+        schema: dict | None = None,
+        json_mode: bool = False,
         **kwargs,
     ) -> LLMStructuredResponse:
+        model, schema = _normalize_structured_args(
+            args,
+            model,
+            schema,
+        )
+        structured_messages = (
+            with_json_object_instruction(messages)
+            if schema is None and json_mode
+            else _with_schema_instruction(messages, schema or {})
+        )
         response = await self.generate(
-            _with_schema_instruction(messages, schema),
+            structured_messages,
             model=model,
             **kwargs,
         )
@@ -76,13 +87,56 @@ class BedrockProvider:
             raw_response=response.raw_response,
         )
 
-    async def embed(self, text: str, model: str | None = None) -> list[float]:
+    async def generate_stream(
+        self,
+        messages: list[dict],
+        model: str,
+        **kwargs,
+    ):
+        system, bedrock_messages = _to_bedrock_messages(messages)
+        body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": kwargs.pop("max_tokens", 4096),
+            "system": system,
+            "messages": bedrock_messages,
+            "temperature": kwargs.pop("temperature", 1.0),
+            **kwargs,
+        }
+        async with self._session.client(
+            "bedrock-runtime",
+            region_name=self._region,
+        ) as client:
+            response = await client.invoke_model_with_response_stream(
+                modelId=model,
+                body=json.dumps(body),
+                contentType="application/json",
+                accept="application/json",
+            )
+            stream = response.get("body")
+            if stream is None:
+                return
+            async for event in stream:
+                stream_error = _bedrock_stream_error(event)
+                if stream_error is not None:
+                    raise ValueError(stream_error)
+                chunk_bytes = event.get("chunk", {}).get("bytes")
+                if not chunk_bytes:
+                    continue
+                chunk = json.loads(chunk_bytes)
+                if chunk.get("type") != "content_block_delta":
+                    continue
+                delta = chunk.get("delta") or {}
+                text = delta.get("text")
+                if text:
+                    yield text
+
+    async def embed(self, text: str, model: str) -> list[float]:
         raise NotImplementedError("BedrockProvider does not support embeddings")
 
     async def embed_batch(
         self,
         texts: list[str],
-        model: str | None = None,
+        model: str,
     ) -> list[list[float]]:
         raise NotImplementedError("BedrockProvider does not support embeddings")
 
@@ -160,32 +214,84 @@ def _extract_json(text: str) -> dict[str, Any]:
     stripped = text.strip()
     if stripped.startswith("{"):
         return json.loads(stripped)
-    if stripped.startswith("```"):
-        lines = stripped.split("\n")
-        inner_lines = []
-        in_fence = False
-        for line in lines:
-            if line.strip().startswith("```") and not in_fence:
-                in_fence = True
-                continue
-            if line.strip() == "```" and in_fence:
-                break
-            if in_fence:
-                inner_lines.append(line)
-        if inner_lines:
-            return json.loads("\n".join(inner_lines))
-    start = stripped.find("{")
-    if start < 0:
-        raise ValueError("No valid JSON found in response")
-    depth = 0
-    for i in range(start, len(stripped)):
-        if stripped[i] == "{":
-            depth += 1
-        elif stripped[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return json.loads(stripped[start : i + 1])
+
+    fenced_json = _extract_fenced_json_text(stripped)
+    if fenced_json is not None:
+        return json.loads(fenced_json)
+
+    embedded_json = _extract_embedded_json_text(stripped)
+    if embedded_json is not None:
+        return json.loads(embedded_json)
+
     raise ValueError("No valid JSON found in response")
 
 
+def _extract_fenced_json_text(text: str) -> str | None:
+    if not text.startswith("```"):
+        return None
+    inner_lines = []
+    in_fence = False
+    for line in text.split("\n"):
+        if line.strip().startswith("```") and not in_fence:
+            in_fence = True
+            continue
+        if line.strip() == "```" and in_fence:
+            break
+        if in_fence:
+            inner_lines.append(line)
+    return "\n".join(inner_lines) if inner_lines else None
+
+
+def _extract_embedded_json_text(text: str) -> str | None:
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return None
+
+
 __all__ = ["BedrockProvider"]
+
+
+def _normalize_structured_args(
+    args: tuple[Any, ...],
+    model: str | None,
+    schema: dict | str | None,
+) -> tuple[str, dict | None]:
+    if len(args) == 2:
+        legacy_schema, legacy_model = args
+        return str(legacy_model), legacy_schema if isinstance(legacy_schema, dict) else None
+    if len(args) == 1:
+        first = args[0]
+        if isinstance(first, dict):
+            if model is None:
+                raise TypeError("model is required")
+            return model, first
+        return str(first), schema if isinstance(schema, dict) else None
+    if model is None:
+        raise TypeError("model is required")
+    return model, schema if isinstance(schema, dict) else None
+
+
+def _bedrock_stream_error(event: dict[str, Any]) -> str | None:
+    error_keys = [
+        "internalServerException",
+        "modelStreamErrorException",
+        "validationException",
+        "throttlingException",
+        "modelTimeoutException",
+        "serviceUnavailableException",
+    ]
+    for key in error_keys:
+        if key in event:
+            payload = event.get(key) or {}
+            message = payload.get("message") if isinstance(payload, dict) else payload
+            return f"Bedrock stream error {key}: {message or 'unknown error'}"
+    return None

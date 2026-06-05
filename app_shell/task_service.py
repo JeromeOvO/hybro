@@ -6,8 +6,8 @@ from a2a.types import (
     TaskQueryParams,
 )
 
-from common.utils.logger import get_logger
 from app_shell.a2a_runtime import a2a_service
+from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

@@ -23,12 +23,13 @@ from a2a.utils.constants import (
     PREV_AGENT_CARD_WELL_KNOWN_PATH,
 )
 
-from common.utils.logger import get_logger
-from common.config.settings import settings
-from models.agent import Agent, AgentStatus
 from app_shell.agent_capability_issue_service import capability_issue_service
 from app_shell.database_service import db_service
-from app_shell.openai_service import openai_service
+from common.config.settings import settings
+from common.dto import AgentRoutingCandidate
+from common.utils.logger import get_logger
+from llm_gateway.errors import LLMModelRoutingError, LLMServiceNotBoundError
+from models.agent import Agent, AgentStatus
 
 logger = get_logger(__name__)
 
@@ -96,8 +97,11 @@ class AgentResolverService:
 
     def __init__(self) -> None:
         self.database_service = db_service
-        self.openai_service = openai_service
+        self.agent_selection_service = None
         self._health_cache = _HealthCache()
+
+    def bind_agent_selection_service(self, service) -> None:
+        self.agent_selection_service = service
 
     # ------------------------------------------------------------------
     # Public API
@@ -247,8 +251,15 @@ class AgentResolverService:
     ) -> list[Agent]:
         """Ask the LLM to pick the best agent; move it to the front."""
         try:
-            best_agent_id = await self.openai_service.select_best_agent_for_task(
-                query_text, candidates
+            if self.agent_selection_service is None:
+                raise LLMServiceNotBoundError(
+                    "AgentSelectionLLMService is not bound"
+                )
+            best_agent_id = (
+                await self.agent_selection_service.select_best_agent_for_task(
+                    query_text,
+                    [_agent_to_routing_candidate(agent) for agent in candidates],
+                )
             )
             best = next(
                 (a for a in candidates if a.agent_id == best_agent_id), None
@@ -256,6 +267,10 @@ class AgentResolverService:
             if best is not None and best.agent_status == AgentStatus.active:
                 others = [a for a in candidates if a.agent_id != best_agent_id]
                 return [best, *others]
+        except LLMServiceNotBoundError:
+            raise
+        except LLMModelRoutingError:
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "AgentResolver: LLM selection failed, using vector order: %s",
@@ -384,3 +399,22 @@ class AgentResolverService:
 
 # Singleton instance
 agent_resolver_service = AgentResolverService()
+
+
+def _agent_to_routing_candidate(agent: Agent) -> AgentRoutingCandidate:
+    card = agent.agent_card
+    capabilities = card.capabilities if isinstance(card.capabilities, dict) else {}
+    skills = []
+    if isinstance(card.skills, list):
+        for skill in card.skills:
+            if isinstance(skill, dict):
+                skills.append(str(skill.get("name") or skill.get("id") or "Unknown"))
+            else:
+                skills.append(str(getattr(skill, "name", None) or skill))
+    return AgentRoutingCandidate(
+        agent_id=str(agent.agent_id),
+        name=str(card.name),
+        description=str(card.description or ""),
+        capabilities=capabilities,
+        skills=skills,
+    )

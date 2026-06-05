@@ -2,7 +2,7 @@
 
 This document describes the current architecture and core workflows of the
 `multi-agents-backend` codebase. It is based on the repository state as of
-2026-05-31 and focuses on the code that is currently present, not on older
+2026-06-05 and focuses on the code that is currently present, not on older
 design documents that may have existed previously.
 
 ## High-Level Shape
@@ -159,6 +159,37 @@ use API-key auth from `common.api_key_auth`.
 When adding new boundaries, prefer using `common.protocols` instead of importing
 concrete runtime singletons.
 
+### `llm_gateway`
+
+`llm_gateway` owns all LLM provider SDK access and LLM model routing. Provider
+adapters under `llm_gateway/providers/` are the only LLM code that imports
+OpenAI, Google GenAI, or Bedrock runtime SDKs. The public gateway layer resolves
+logical model names through `ModelRegistryImpl`, applies centralized retry and
+timeout policy through `LLMGatewayConfig`, and exposes text, structured JSON,
+embedding, and streaming operations through protocols in `common.protocols`.
+`LLMGatewayConfig.from_settings()` reads typed `LLM_GATEWAY_*` policy fields;
+`ModelRegistryImpl` remains responsible for mapping logical routes to concrete
+provider model IDs.
+
+Focused workflow services under `llm_gateway/services/` wrap prompt workflows
+without importing domain models:
+
+- `SupervisorLLMService`: supervisor JSON/text/stream calls through the
+  `supervisor_model` logical route, or Bedrock through the configured Bedrock
+  supervisor route.
+- `EmbeddingLLMService`: agent and memory embeddings through `embedding_model`.
+- `DiscoveryLLMService`: discovery query expansion.
+- `SummaryLLMService`: streaming synthesis of multi-agent responses.
+- `AgentSelectionLLMService`, `MessageParserLLMService`, `RoomMemoryLLMService`,
+  and `DebateLLMService`: DTO-backed compatibility workflows for legacy app-shell
+  callers while migration continues.
+
+`main.py` constructs one `LLMGatewayImpl` and binds these focused services into
+production consumers. Legacy `app_shell.openai_service`,
+`app_shell.gemini_service`, and `app_shell.bedrock_service` remain as
+side-effect-free compatibility adapters, but they no longer construct provider
+SDK clients or read LLM environment variables directly.
+
 ### `agent`
 
 `agent.AgentFacade` owns canonical agent registry behavior:
@@ -236,7 +267,8 @@ The facade uses:
 
 - MongoDB for room memory and stored content documents.
 - Pinecone for memory search vectors.
-- `LLMGatewayImpl` for summary/turn-note generation.
+- `LLMGatewayImpl` and focused gateway services for embeddings, summary,
+  chat-context generation, and turn-note extraction.
 - `RoomHistoryReader` from `room.RoomFacade` for source message history.
 
 App-shell adapters such as `app_shell.context_assembly_service`,

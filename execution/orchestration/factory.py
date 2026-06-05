@@ -10,13 +10,17 @@ from execution.orchestration.room_message_center import (
 )
 
 
-def create_room_message_center(**kwargs: Any) -> RoomMessageCenter:
+def create_room_message_center(
+    *,
+    debate_rounds: int,
+    **kwargs: Any,
+) -> RoomMessageCenter:
     deps: dict[str, Any] = {
         "room_services": _defaults.room_services,
         "database_service": _defaults.db_service,
         "sse_manager": _defaults.sse_manager,
         "room_coordinator_service": _defaults.room_coordinator_service,
-        "openai_service": _defaults.openai_service,
+        "summary_service": _defaults.summary_service,
         "notification_service": _defaults.notification_service,
         "agent_resolver_service": _defaults.agent_resolver_service,
         "a2a_service": _defaults.a2a_service,
@@ -37,7 +41,7 @@ def create_room_message_center(**kwargs: Any) -> RoomMessageCenter:
         "build_turn_content_func": _defaults.build_turn_content,
         "supervisor_planning_error_cls": _defaults.SupervisorPlanningError,
         "orphan_threshold_minutes": _defaults.settings.orphan_threshold_minutes,
-        "debate_rounds": 1,
+        "debate_rounds": debate_rounds,
         "cloud_health_cache_ttl": 30.0,
         "cloud_health_check_timeout": 5.0,
     }

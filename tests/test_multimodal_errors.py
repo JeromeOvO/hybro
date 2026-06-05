@@ -93,8 +93,11 @@ class TestSharedInlineConversionCap:
     MAX_INLINE_CONVERSIONS_PER_MESSAGE."""
 
     async def test_total_conversions_respect_cap_across_both_paths(self):
+        from execution.dispatch.transports.direct import (
+            DirectTransport,
+            MessageStreamingState,
+        )
         from models.file_upload import MAX_INLINE_CONVERSIONS_PER_MESSAGE
-        from execution.dispatch.transports.direct import DirectTransport, MessageStreamingState
 
         upload_calls: list[str] = []
 
@@ -170,8 +173,8 @@ class TestSharedInlineConversionCap:
 
 class TestMissingFileId:
     async def test_resolve_attachments_missing_file(self):
-        from models.response import RoomCenterUserMessageResponse
         from app_shell.room_runtime import RoomServices
+        from models.response import RoomCenterUserMessageResponse
 
         svc = RoomServices()
         svc.database_service = MagicMock()

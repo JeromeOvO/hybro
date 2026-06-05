@@ -15,6 +15,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from common.dto import RoomMessageSummary
+from llm_gateway.errors import LLMServiceNotBoundError
 from models.room import Room
 
 # ---------------------------------------------------------------------------
@@ -40,7 +42,10 @@ def coordinator():
 
     svc = RoomCoordinatorService.__new__(RoomCoordinatorService)
     svc.database_service = AsyncMock()
-    svc.openai_service = AsyncMock()
+    svc.summary_service = MagicMock()
+    svc.summary_service.summarize_agent_responses_stream = MagicMock(
+        return_value=_stream_text("Summary text.")
+    )
     svc.sse_manager = AsyncMock()
 
     # Stub _create_and_emit_summary_message so we can assert without
@@ -48,6 +53,10 @@ def coordinator():
     svc._create_and_emit_summary_message = AsyncMock()
 
     yield svc
+
+
+async def _stream_text(text: str):
+    yield text
 
 
 # ---------------------------------------------------------------------------
@@ -64,8 +73,8 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
         coordinator.database_service.get_room_by_room_id = AsyncMock(
             return_value=_make_room(debate_mode=True)
         )
-        coordinator.openai_service.summarize_agent_responses = AsyncMock(
-            return_value="Debate summary text."
+        coordinator.summary_service.summarize_agent_responses_stream = MagicMock(
+            return_value=_stream_text("Debate summary text.")
         )
 
         await coordinator.on_room_user_message_completed(
@@ -77,15 +86,66 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
             ],
         )
 
-        coordinator.openai_service.summarize_agent_responses.assert_awaited_once_with(
-            [
-                {"agent_name": "Agent Alpha", "message": "Alpha says yes."},
-                {"agent_name": "Agent Beta", "message": "Beta says no."},
-            ],
+        coordinator.summary_service.summarize_agent_responses_stream.assert_called_once()
+        passed_responses = (
+            coordinator.summary_service.summarize_agent_responses_stream.call_args[0][0]
+        )
+        assert [item.agent_name for item in passed_responses] == [
+            "Agent Alpha",
+            "Agent Beta",
+        ]
+        coordinator.summary_service.summarize_agent_responses_stream.assert_called_with(
+            passed_responses,
             mode="debate",
             user_question=None,
         )
         coordinator._create_and_emit_summary_message.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_uses_bound_summary_service_when_available(self, coordinator):
+        coordinator.database_service.get_room_by_room_id = AsyncMock(
+            return_value=_make_room(debate_mode=False)
+        )
+        coordinator.summary_service = MagicMock()
+        coordinator.summary_service.summarize_agent_responses_stream = MagicMock(
+            return_value=_stream_text("Focused summary text.")
+        )
+
+        await coordinator.on_room_user_message_completed(
+            room_id="room-1",
+            room_user_message_id="msg-1",
+            trajectory_responses=[
+                {"agent_name": "Agent A", "message": "Response from A."},
+                {"agent_name": "Agent B", "message": "Response from B."},
+            ],
+        )
+
+        coordinator.summary_service.summarize_agent_responses_stream.assert_called_once()
+        passed_responses = (
+            coordinator.summary_service.summarize_agent_responses_stream.call_args[0][0]
+        )
+        assert all(
+            isinstance(item, RoomMessageSummary) for item in passed_responses
+        )
+        assert passed_responses[0].agent_name == "Agent A"
+        coordinator._create_and_emit_summary_message.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_missing_summary_service_fails_fast(self, coordinator):
+        coordinator.database_service.get_room_by_room_id = AsyncMock(
+            return_value=_make_room(debate_mode=False)
+        )
+        coordinator.summary_service = None
+
+        with pytest.raises(LLMServiceNotBoundError):
+            await coordinator.on_room_user_message_completed(
+                room_id="room-1",
+                room_user_message_id="msg-1",
+                trajectory_responses=[
+                    {"agent_name": "Agent A", "message": "Response from A."},
+                    {"agent_name": "Agent B", "message": "Response from B."},
+                ],
+            )
 
     @pytest.mark.asyncio
     async def test_two_responses_non_debate_mode_generates_summary(self, coordinator):
@@ -93,8 +153,8 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
         coordinator.database_service.get_room_by_room_id = AsyncMock(
             return_value=_make_room(debate_mode=False)
         )
-        coordinator.openai_service.summarize_agent_responses = AsyncMock(
-            return_value="Combined summary text."
+        coordinator.summary_service.summarize_agent_responses_stream = MagicMock(
+            return_value=_stream_text("Combined summary text.")
         )
 
         await coordinator.on_room_user_message_completed(
@@ -106,11 +166,13 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
             ],
         )
 
-        coordinator.openai_service.summarize_agent_responses.assert_awaited_once_with(
-            [
-                {"agent_name": "Agent A", "message": "Response from A."},
-                {"agent_name": "Agent B", "message": "Response from B."},
-            ],
+        coordinator.summary_service.summarize_agent_responses_stream.assert_called_once()
+        passed_responses = (
+            coordinator.summary_service.summarize_agent_responses_stream.call_args[0][0]
+        )
+        assert [item.agent_name for item in passed_responses] == ["Agent A", "Agent B"]
+        coordinator.summary_service.summarize_agent_responses_stream.assert_called_with(
+            passed_responses,
             mode="non_debate",
             user_question=None,
         )
@@ -131,7 +193,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
             ],
         )
 
-        coordinator.openai_service.summarize_agent_responses.assert_not_awaited()
+        coordinator.summary_service.summarize_agent_responses_stream.assert_not_called()
         coordinator._create_and_emit_summary_message.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -143,8 +205,8 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
         coordinator.database_service.get_room_agent_messages_by_related_message_id = (
             AsyncMock()
         )
-        coordinator.openai_service.summarize_agent_responses = AsyncMock(
-            return_value="summary"
+        coordinator.summary_service.summarize_agent_responses_stream = MagicMock(
+            return_value=_stream_text("summary")
         )
 
         await coordinator.on_room_user_message_completed(
@@ -214,7 +276,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
             ],
         )
 
-        coordinator.openai_service.summarize_agent_responses.assert_not_awaited()
+        coordinator.summary_service.summarize_agent_responses_stream.assert_not_called()
         coordinator._create_and_emit_summary_message.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -223,8 +285,8 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
         coordinator.database_service.get_room_by_room_id = AsyncMock(
             return_value=_make_room(debate_mode=True)
         )
-        coordinator.openai_service.summarize_agent_responses = AsyncMock(
-            return_value=""
+        coordinator.summary_service.summarize_agent_responses_stream = MagicMock(
+            return_value=_stream_text("")
         )
 
         await coordinator.on_room_user_message_completed(

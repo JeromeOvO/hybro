@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from a2a.types import TaskState, TaskStatus
 
-from models.room import RoomAgentMessage
 from execution.state.task_state_manager import TaskStateManager, get_task, state_str
+from models.room import RoomAgentMessage
 
 
 def _make_message_with_task(state: TaskState | None = None) -> RoomAgentMessage:

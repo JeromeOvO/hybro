@@ -5,8 +5,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from a2a.types import AgentCapabilities, AgentCard
 
-from models.agent import Agent, AgentStatus
-from models.room import MessageContent, RoomUserMessage, UserAttachment
 from app_shell.agent_matcher import MatchedAgent, MatchResult
 from app_shell.agent_selection_service import (
     AgentSelectionResult,
@@ -14,6 +12,8 @@ from app_shell.agent_selection_service import (
     RoutingStrategy,
 )
 from app_shell.room_runtime import DispatchStrategy, resolve_strategy
+from models.agent import Agent, AgentStatus
+from models.room import MessageContent, RoomUserMessage, UserAttachment
 
 
 def _create_test_agent_card(name: str, description: str) -> AgentCard:

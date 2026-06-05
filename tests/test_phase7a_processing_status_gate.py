@@ -112,7 +112,7 @@ def _enclosing_function(call: ast.Call, parents: dict[ast.AST, ast.AST]) -> str:
     names: list[str] = []
     current: ast.AST | None = call
     while current is not None:
-        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(current, ast.FunctionDef | ast.AsyncFunctionDef):
             names.append(current.name)
         elif isinstance(current, ast.ClassDef):
             names.append(current.name)
@@ -142,9 +142,10 @@ def _expr_equal(left: str | None, right: str | None) -> bool:
     if left is None or right is None:
         return False
     try:
-        return ast.unparse(ast.parse(left, mode="eval")).strip() == ast.unparse(
-            ast.parse(right, mode="eval")
-        ).strip()
+        return (
+            ast.unparse(ast.parse(left, mode="eval")).strip()
+            == ast.unparse(ast.parse(right, mode="eval")).strip()
+        )
     except SyntaxError:
         return False
 
@@ -177,7 +178,9 @@ class ProcessingStatusCall:
             "details_expression",
             "delivery_expression",
         )
-        return all(_expr_equal(getattr(self, field), entry.get(field)) for field in fields)
+        return all(
+            _expr_equal(getattr(self, field), entry.get(field)) for field in fields
+        )
 
 
 def _production_files() -> list[Path]:
@@ -316,13 +319,19 @@ def _assert_lifecycle_helper_matches(
             if helper is not None:
                 break
     assert helper is not None, f"{entry['call_id']} missing awaited lifecycle helper"
-    assert _expr_equal(_unparse(_arg_or_kw(helper, 0, "room_id")), entry["room_id_expression"])
-    assert _expr_equal(_unparse(_arg_or_kw(helper, 1, "status")), entry["status_expression"])
+    assert _expr_equal(
+        _unparse(_arg_or_kw(helper, 0, "room_id")), entry["room_id_expression"]
+    )
+    assert _expr_equal(
+        _unparse(_arg_or_kw(helper, 1, "status")), entry["status_expression"]
+    )
     assert _expr_equal(
         _unparse(_arg_or_kw(helper, 2, "message_id")),
         entry["lifecycle_message_id_expression"],
     )
-    assert _expr_equal(_unparse(_keyword(helper, "details")), entry["details_expression"])
+    assert _expr_equal(
+        _unparse(_keyword(helper, "details")), entry["details_expression"]
+    )
     assert _expr_equal(
         _unparse(_keyword(helper, "client_request_id")),
         entry["client_request_id_expression"],
@@ -344,19 +353,21 @@ def _assert_no_prior_lifecycle_work(item: ProcessingStatusCall, call_id: str) ->
     helper = _find_prior_awaited_helper(item, "record_and_maybe_emit_run_event")
     run_event_emit = _find_prior_awaited_helper(item, "emit_run_event_payload")
     assert helper is None, f"{call_id} is transport-only but has lifecycle helper"
-    assert run_event_emit is None, (
-        f"{call_id} is transport-only but has run_event emit"
-    )
+    assert run_event_emit is None, f"{call_id} is transport-only but has run_event emit"
 
 
-def _assert_pre_recorded_payload(item: ProcessingStatusCall, entry: dict[str, Any]) -> None:
+def _assert_pre_recorded_payload(
+    item: ProcessingStatusCall, entry: dict[str, Any]
+) -> None:
     prior = _prior_statements(item)
 
     def assignment_index(target_expr: str, value_expr: str) -> int | None:
         for idx, stmt in enumerate(prior):
             if not isinstance(stmt, ast.Assign):
                 continue
-            if not any(_expr_equal(_unparse(target), target_expr) for target in stmt.targets):
+            if not any(
+                _expr_equal(_unparse(target), target_expr) for target in stmt.targets
+            ):
                 continue
             if _expr_equal(_unparse(stmt.value), value_expr):
                 return idx
@@ -467,7 +478,9 @@ def test_production_processing_status_callers_are_manifest_covered() -> None:
     manifest = _load_manifest()
     discovered = _discover_calls()
 
-    missing_ids = [entry.get("call_id") for entry in manifest if not entry.get("call_id")]
+    missing_ids = [
+        entry.get("call_id") for entry in manifest if not entry.get("call_id")
+    ]
     assert not missing_ids, "Every manifest entry must have a stable call_id"
 
     matched_call_ids: set[int] = set()
@@ -499,7 +512,9 @@ def test_production_processing_status_callers_are_manifest_covered() -> None:
         recording_kind = entry.get("recording_kind")
         if entry.get("requires_recording"):
             if recording_kind != "record_processing_status":
-                errors.append(f"{entry['call_id']}: invalid recording_kind for lifecycle call")
+                errors.append(
+                    f"{entry['call_id']}: invalid recording_kind for lifecycle call"
+                )
                 continue
             try:
                 _assert_lifecycle_helper_matches(call, entry)
@@ -512,14 +527,18 @@ def test_production_processing_status_callers_are_manifest_covered() -> None:
                 errors.append(str(exc))
         elif recording_kind == "transport_only":
             if not entry.get("transport_only_reason"):
-                errors.append(f"{entry['call_id']}: transport-only entry needs a reason")
+                errors.append(
+                    f"{entry['call_id']}: transport-only entry needs a reason"
+                )
                 continue
             try:
                 _assert_no_prior_lifecycle_work(call, entry["call_id"])
             except AssertionError as exc:
                 errors.append(str(exc))
         else:
-            errors.append(f"{entry['call_id']}: unknown recording_kind {recording_kind!r}")
+            errors.append(
+                f"{entry['call_id']}: unknown recording_kind {recording_kind!r}"
+            )
 
     unlisted = [call for call in discovered if id(call) not in matched_call_ids]
     if unlisted:
@@ -568,9 +587,7 @@ async def send(flag):
         parents=parents,
     )
 
-    assert _find_prior_awaited_helper(
-        item, "record_and_maybe_emit_run_event"
-    ) is None
+    assert _find_prior_awaited_helper(item, "record_and_maybe_emit_run_event") is None
 
 
 def _pre_recorded_item_from_source(source: str) -> ProcessingStatusCall:
@@ -747,20 +764,29 @@ def test_sse_manager_processing_status_has_no_run_lifecycle_side_effects() -> No
     tree = ast.parse(path.read_text(), filename="app_shell/delivery_runtime.py")
     forbidden_imports: list[str] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "execution.run_command_handler":
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module == "execution.run_command_handler"
+        ):
             forbidden_imports.extend(alias.name for alias in node.names)
     assert "run_command_handler" not in forbidden_imports
     assert "run_event_sse_enabled" not in forbidden_imports
 
     send_func: ast.AsyncFunctionDef | None = None
     for node in ast.walk(tree):
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "send_processing_status":
+        if (
+            isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "send_processing_status"
+        ):
             send_func = node
             break
     assert send_func is not None
 
     for node in ast.walk(send_func):
-        if isinstance(node, ast.Call) and _call_name(node) == "record_processing_status":
+        if (
+            isinstance(node, ast.Call)
+            and _call_name(node) == "record_processing_status"
+        ):
             raise AssertionError(
                 f"send_processing_status still records lifecycle at line {node.lineno}"
             )

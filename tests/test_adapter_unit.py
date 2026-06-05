@@ -771,7 +771,8 @@ def test_model_registry_looks_up_models_capabilities_and_lists_unique_models(
         "embedding_model",
         "gemini_embedding_model_name",
     ]
-    assert len(registry.list_models()) == 7
+    assert len(registry.list_models()) == 8
+    assert registry.get_model("supervisor_model").logical_name == "supervisor_model"
     assert registry.get_model("context_memory_legacy_json_model").model_id == "gpt-4o-mini"
     assert registry.supports_capability(
         "context_memory_legacy_json_model", "json_schema"
@@ -817,11 +818,17 @@ async def test_openai_provider_generates_structured_responses_and_embeddings():
         {"type": "object"},
         "gpt-test",
     )
+    keyword_structured = await provider.generate_structured(
+        [{"role": "user", "content": "hello"}],
+        {"type": "object"},
+        model="gpt-test",
+    )
     embeddings = await provider.embed_batch(["a", "b"], "embed-test")
 
     assert text.content == '{"ok": true}'
     assert text.usage == LLMUsage(prompt_tokens=3, completion_tokens=4, total_tokens=7)
     assert structured.data == {"ok": True}
+    assert keyword_structured.data == {"ok": True}
     assert embeddings == [[0.1, 0.2], [0.3, 0.4]]
     structured_call = client.chat.completions.create.await_args_list[1].kwargs
     assert structured_call["response_format"]["type"] == "json_schema"
@@ -850,6 +857,32 @@ async def test_openai_provider_generate_structured_propagates_invalid_json():
             {"type": "object"},
             "gpt-test",
         )
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_schema_only_structured_call_requires_model():
+    from llm_gateway.providers.openai_provider import OpenAIProvider
+
+    completion = SimpleNamespace(
+        model="default-model",
+        usage=None,
+        choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok": true}'))],
+        model_dump=lambda mode="json": {"id": "completion-1"},
+    )
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=AsyncMock(return_value=completion))
+        )
+    )
+    provider = OpenAIProvider(client=client)
+
+    with pytest.raises(TypeError, match="model is required"):
+        await provider.generate_structured(
+            [{"role": "user", "content": "hello"}],
+            {"type": "object"},
+        )
+
+    client.chat.completions.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1039,6 +1072,38 @@ async def test_bedrock_provider_uses_content_blocks_and_merges_consecutive_roles
 
 
 @pytest.mark.asyncio
+async def test_bedrock_provider_uses_claude_messages_api_parameters():
+    from llm_gateway.providers.bedrock_provider import BedrockProvider
+
+    session = _FakeBedrockSession({"content": [{"text": '{"ok": true}'}]})
+    provider = BedrockProvider(session=session, region="us-west-2")
+
+    await provider.generate(
+        [
+            {"role": "system", "content": "System instructions"},
+            {"role": "user", "content": "User question"},
+        ],
+        "anthropic.claude-opus",
+    )
+
+    call = session.client_instance.calls[0]
+    body = json.loads(call["body"])
+    assert call["modelId"] == "anthropic.claude-opus"
+    assert call["contentType"] == "application/json"
+    assert call["accept"] == "application/json"
+    assert body["anthropic_version"] == "bedrock-2023-05-31"
+    assert body["max_tokens"] == 4096
+    assert body["temperature"] == 1.0
+    assert body["system"] == "System instructions"
+    assert body["messages"] == [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "User question"}],
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_bedrock_provider_extracts_first_balanced_json_object():
     from llm_gateway.providers.bedrock_provider import BedrockProvider
 
@@ -1078,6 +1143,30 @@ async def test_bedrock_provider_extracts_json_from_code_fence():
     )
 
     assert response.data == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_bedrock_provider_stream_error_event_raises():
+    from llm_gateway.providers.bedrock_provider import BedrockProvider
+
+    session = _FakeBedrockSession(
+        {"content": [{"text": "unused"}]},
+        stream_events=[
+            {
+                "modelStreamErrorException": {
+                    "message": "stream failed",
+                }
+            }
+        ],
+    )
+    provider = BedrockProvider(session=session, region="us-west-2")
+
+    with pytest.raises(ValueError, match="modelStreamErrorException"):
+        async for _ in provider.generate_stream(
+            [{"role": "user", "content": "hello"}],
+            "bedrock",
+        ):
+            pass
 
 
 @pytest.mark.asyncio
@@ -1142,8 +1231,9 @@ async def test_llm_gateway_routes_generation_structured_and_embeddings():
     )
     provider.generate_structured.assert_awaited_once_with(
         [{"role": "user", "content": "hello"}],
-        {"type": "object"},
         model="concrete-model",
+        schema={"type": "object"},
+        json_mode=False,
     )
     provider.embed.assert_awaited_once_with("hello", model="embedding-concrete")
 
@@ -1285,8 +1375,9 @@ class _FakeBedrockBody:
 
 
 class _FakeBedrockClient:
-    def __init__(self, payload):
+    def __init__(self, payload, stream_events=None):
         self.payload = payload
+        self.stream_events = stream_events or []
         self.calls = []
 
     async def __aenter__(self):
@@ -1299,12 +1390,29 @@ class _FakeBedrockClient:
         self.calls.append(kwargs)
         return {"body": _FakeBedrockBody(self.payload)}
 
+    async def invoke_model_with_response_stream(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"body": _FakeBedrockStream(self.stream_events)}
+
 
 class _FakeBedrockSession:
-    def __init__(self, payload):
-        self.client_instance = _FakeBedrockClient(payload)
+    def __init__(self, payload, stream_events=None):
+        self.client_instance = _FakeBedrockClient(payload, stream_events)
 
     def client(self, service_name, region_name=None):
         assert service_name == "bedrock-runtime"
         assert region_name == "us-west-2"
         return self.client_instance
+
+
+class _FakeBedrockStream:
+    def __init__(self, events):
+        self.events = events
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self.events:
+            raise StopAsyncIteration
+        return self.events.pop(0)

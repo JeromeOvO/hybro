@@ -24,11 +24,11 @@ from models.request import RoomCenterAgentMessageRequest
 from models.room import RoomAgentMessage
 
 if TYPE_CHECKING:
+    from app_shell.database_service import DatabaseService
+    from app_shell.delivery_runtime import SSEManager
+    from app_shell.room_runtime import RoomServices
     from execution.dispatch.transports.base import AgentTransport
     from models.agent import Agent
-    from app_shell.database_service import DatabaseService
-    from app_shell.room_runtime import RoomServices
-    from app_shell.delivery_runtime import SSEManager
 
 logger = get_logger(__name__)
 

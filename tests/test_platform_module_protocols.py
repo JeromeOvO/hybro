@@ -314,7 +314,7 @@ def test_platform_config_carries_discovery_confidence_threshold_from_settings():
 def test_main_injects_discovery_query_expander_into_platform_deps():
     source = Path("main.py").read_text()
 
-    assert "discovery_query_expander=openai_service" in source
+    assert "discovery_query_expander=discovery_llm_service" in source
 
 
 def test_file_route_dependencies_can_be_rebound_without_concrete_services():

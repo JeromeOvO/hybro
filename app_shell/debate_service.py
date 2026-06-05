@@ -1,19 +1,17 @@
 from __future__ import annotations
 
-from common.utils.a2a_helpers import extract_agent_text_from_room_message
-from common.utils.logger import get_logger
-from models.room import MessageContent, RoomAgentMessage
-from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
 from app_shell.agent_service import agent_service
 from app_shell.database_service import db_service
-from app_shell.openai_service import openai_service
+from common.utils.a2a_helpers import extract_agent_text_from_room_message
+from common.utils.logger import get_logger
+from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
+from models.room import MessageContent, RoomAgentMessage
 
 logger = get_logger(__name__)
 
 
 class DebateService:
     def __init__(self):
-        self.openai_service = openai_service
         self.agent_service = agent_service
         self.db_service = db_service
         self.active_debates = {}  # Store active debate sessions

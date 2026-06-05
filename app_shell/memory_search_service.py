@@ -22,6 +22,7 @@ from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
+from llm_gateway.errors import LLMServiceNotBoundError
 from models.context_config import memory_search_config
 from models.memory import ConversationTurn
 from models.search import (
@@ -29,7 +30,6 @@ from models.search import (
     MemorySearchResult,
     MemorySourceType,
 )
-from app_shell.openai_service import openai_service
 
 logger = get_logger(__name__)
 
@@ -65,7 +65,7 @@ class MemorySearchService:
     """
 
     def __init__(self):
-        self.openai_service = openai_service
+        self.embedding_service = None
         self.pinecone = pinecone_db
         self._index_available: bool | None = None
         self._facade = None
@@ -74,6 +74,14 @@ class MemorySearchService:
     def bind_facade(self, facade) -> None:
         self._facade = facade
         self._bound = True
+
+    def bind_embedding_service(self, service) -> None:
+        self.embedding_service = service
+
+    def _require_embedding_service(self):
+        if self.embedding_service is None:
+            raise LLMServiceNotBoundError("EmbeddingLLMService is not bound")
+        return self.embedding_service
 
     def _require_facade(self):
         if not self._bound or self._facade is None:
@@ -256,7 +264,7 @@ class MemorySearchService:
         if not self._is_index_available():
             return []
 
-        embedding = await self.openai_service.get_embedding(query)
+        embedding = await self._require_embedding_service().get_embedding(query)
 
         try:
             results = await asyncio.to_thread(

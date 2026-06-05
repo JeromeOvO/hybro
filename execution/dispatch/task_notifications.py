@@ -40,8 +40,8 @@ from common.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from app_shell.database_service import DatabaseService
-    from app_shell.notification_service import NotificationService
     from app_shell.delivery_runtime import SSEManager
+    from app_shell.notification_service import NotificationService
 
 logger = get_logger(__name__)
 
@@ -475,8 +475,8 @@ async def notify_task_update(
     that have no handler context.
     """
     from app_shell.database_service import db_service
-    from app_shell.notification_service import notification_service
     from app_shell.delivery_runtime import sse_manager
+    from app_shell.notification_service import notification_service
 
     return await _notify_task_update_impl(
         db_service,

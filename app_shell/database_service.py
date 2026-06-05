@@ -8,17 +8,17 @@ from typing import Any, Protocol, runtime_checkable
 from a2a.types import AgentCard
 from pymongo.errors import DuplicateKeyError
 
+from common.config.settings import settings
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from common.config.settings import settings
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
+from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import Agent, AgentStatus
 from models.agent_group import AgentGroup
 from models.memory import ChatContext, RoomMemory
 from models.quote import QuotedSnippet
 from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
-from app_shell.openai_service import openai_service
 
 logger = get_logger(__name__)
 
@@ -60,9 +60,18 @@ class DatabaseService:
     def __init__(self):
         self.mongo = mongodb
         self.pinecone = pinecone_db
-        # Import here to avoid circular import
+        self.ai_service = None
 
-        self.ai_service = openai_service
+    def bind_embedding_service(self, embedding_service: Any) -> None:
+        self.ai_service = embedding_service
+
+    def _require_embedding_service(self) -> Any:
+        embedding_service = getattr(self, "ai_service", None)
+        if embedding_service is None:
+            raise LLMServiceNotBoundError(
+                "DatabaseService embedding service is not bound"
+            )
+        return embedding_service
 
     # agent management
     async def add_agent(self, agent: Agent) -> bool:
@@ -90,7 +99,7 @@ class DatabaseService:
                 raise ValueError("Agent already exists, repeated agent_id")
 
         # get embedding of agent description
-        embedding_data = await self.ai_service.get_embedding(
+        embedding_data = await self._require_embedding_service().get_embedding(
             agent.agent_card.description
         )
         vector_data = {
@@ -298,7 +307,7 @@ class DatabaseService:
             List[Agent]: List of similar agents with complete information from MongoDB
         """
         # Make sure to await the embedding generation
-        embedding = await self.ai_service.get_embedding(query_text)
+        embedding = await self._require_embedding_service().get_embedding(query_text)
 
         # Request more candidates from Pinecone to account for filtering
         # We may need to filter out inactive agents, so get extra candidates
@@ -391,7 +400,7 @@ class DatabaseService:
                                       Scores range from 0.0 to 1.0 (Pinecone similarity).
         """
         # Make sure to await the embedding generation
-        embedding = await self.ai_service.get_embedding(query_text)
+        embedding = await self._require_embedding_service().get_embedding(query_text)
 
         # Request more candidates from Pinecone to account for filtering
         # Use max(count * 3, 15) to give downstream filters more candidates
@@ -473,7 +482,9 @@ class DatabaseService:
             raise ValueError("Agent not found")
 
         # get embedding of agent description
-        embedding_data = await self.ai_service.get_embedding(agent_card.description)
+        embedding_data = await self._require_embedding_service().get_embedding(
+            agent_card.description
+        )
         vector_data = {
             "id": str(agent_id),
             "values": embedding_data,
@@ -503,7 +514,7 @@ class DatabaseService:
             raise ValueError("Agent not found")
 
         # get embedding of agent description
-        embedding_data = await self.ai_service.get_embedding(
+        embedding_data = await self._require_embedding_service().get_embedding(
             agent.agent_card.description
         )
         vector_data = {
@@ -1636,8 +1647,8 @@ class DatabaseService:
             True if updated successfully.
         """
         try:
-            from common.utils.a2a_helpers import sanitize_artifact_parts
             from common.a2a_constants import TERMINAL_STATES
+            from common.utils.a2a_helpers import sanitize_artifact_parts
 
             terminal_values = [s.value for s in TERMINAL_STATES]
             artifact_id = artifact.get("artifactId") or artifact.get("artifact_id")
