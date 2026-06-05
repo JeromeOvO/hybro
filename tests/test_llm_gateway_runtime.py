@@ -170,24 +170,24 @@ async def test_registered_model_override_routes_through_registry_metadata():
 
 
 @pytest.mark.asyncio
-async def test_unregistered_concrete_model_requires_provider_hint():
+async def test_unregistered_concrete_model_uses_public_provider_override():
     provider = FakeProvider()
     gateway = _gateway(provider)
 
     with pytest.raises(LLMModelRoutingError):
         await gateway.generate([{"role": "user", "content": "hi"}], model="custom")
 
-    hinted = await gateway._generate_with_provider_hint(
+    hinted = await gateway.generate_with_provider(
         [{"role": "user", "content": "hi"}],
         model="custom",
-        provider_hint="openai",
+        provider="openai",
     )
     assert hinted.model == "custom"
     assert provider.generate_calls[0]["model"] == "custom"
 
 
 @pytest.mark.asyncio
-async def test_unregistered_bedrock_concrete_model_requires_provider_hint():
+async def test_unregistered_bedrock_concrete_model_uses_public_provider_override():
     openai_provider = FakeProvider()
     bedrock_provider = FakeProvider()
     gateway = LLMGatewayImpl(
@@ -203,10 +203,10 @@ async def test_unregistered_bedrock_concrete_model_requires_provider_hint():
             json_mode=True,
         )
 
-    result = await gateway._generate_structured_with_provider_hint(
+    result = await gateway.generate_structured_with_provider(
         [{"role": "user", "content": "hi"}],
         model="custom-bedrock-model",
-        provider_hint="bedrock",
+        provider="bedrock",
         json_mode=True,
     )
 

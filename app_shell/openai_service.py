@@ -90,6 +90,9 @@ class OpenAIService:
         self._room_memory_llm_service = RoomMemoryLLMService(llm_provider)
         self._summary_service = SummaryLLMService(llm_provider)
 
+    def bind_debate_service(self, service: Any) -> None:
+        self._debate_service = service
+
     async def get_embedding(
         self, text: str, target_dim: int | None = None
     ) -> list[float]:
@@ -542,10 +545,10 @@ class _GatewayOpenAIChatCompletions:
         kwargs.pop("timeout_seconds", None)
         if stream:
             stream_chunks = (
-                self._llm_provider._generate_stream_with_provider_hint(
+                self._llm_provider.generate_stream_with_provider(
                     messages,
                     model=model,
-                    provider_hint="openai",
+                    provider="openai",
                     timeout_seconds=timeout,
                     **kwargs,
                 )
@@ -560,10 +563,10 @@ class _GatewayOpenAIChatCompletions:
             return _OpenAICompatStream(stream_chunks)
         if response_format and response_format.get("type") == "json_object":
             if _requires_openai_provider_hint(model):
-                response = await self._llm_provider._generate_structured_with_provider_hint(
+                response = await self._llm_provider.generate_structured_with_provider(
                     messages,
                     model=model,
-                    provider_hint="openai",
+                    provider="openai",
                     schema=None,
                     json_mode=True,
                     timeout_seconds=timeout,
@@ -581,10 +584,10 @@ class _GatewayOpenAIChatCompletions:
             content = json.dumps(response.data)
             return _chat_completion(content, response.model)
         if _requires_openai_provider_hint(model):
-            response = await self._llm_provider._generate_with_provider_hint(
+            response = await self._llm_provider.generate_with_provider(
                 messages,
                 model=model,
-                provider_hint="openai",
+                provider="openai",
                 timeout_seconds=timeout,
                 **kwargs,
             )
@@ -626,10 +629,10 @@ class _GatewayOpenAIResponses:
     ) -> Any:
         kwargs.pop("reasoning", None)
         if _requires_openai_provider_hint(model):
-            response = await self._llm_provider._generate_with_provider_hint(
+            response = await self._llm_provider.generate_with_provider(
                 input,
                 model=model,
-                provider_hint="openai",
+                provider="openai",
                 **kwargs,
             )
         else:

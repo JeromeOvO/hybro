@@ -107,9 +107,30 @@ class LLMGatewayImpl:
         timeout_seconds: float | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
-        model_info, provider = self._resolve_provider(model, provider_hint=provider_hint)
+        return await self.generate_with_provider(
+            messages,
+            model=model,
+            provider=provider_hint,
+            timeout_seconds=timeout_seconds,
+            **kwargs,
+        )
+
+    async def generate_with_provider(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        provider: ProviderHint,
+        timeout_seconds: float | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        model_info, provider_adapter = self._resolve_provider(
+            model, provider_hint=provider
+        )
         return await self._with_retry(
-            lambda: provider.generate(messages, model=model_info.model_id, **kwargs),
+            lambda: provider_adapter.generate(
+                messages, model=model_info.model_id, **kwargs
+            ),
             timeout_seconds=timeout_seconds or self.config.request_timeout_seconds,
         )
 
@@ -124,13 +145,36 @@ class LLMGatewayImpl:
         timeout_seconds: float | None = None,
         **kwargs: Any,
     ) -> LLMStructuredResponse:
+        return await self.generate_structured_with_provider(
+            messages,
+            model=model,
+            provider=provider_hint,
+            schema=schema,
+            json_mode=json_mode,
+            timeout_seconds=timeout_seconds,
+            **kwargs,
+        )
+
+    async def generate_structured_with_provider(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        provider: ProviderHint,
+        schema: dict[str, Any] | None = None,
+        json_mode: bool = False,
+        timeout_seconds: float | None = None,
+        **kwargs: Any,
+    ) -> LLMStructuredResponse:
         if schema is None and not json_mode:
             raise LLMModelRoutingError(
                 "generate_structured requires schema or json_mode=True"
             )
-        model_info, provider = self._resolve_provider(model, provider_hint=provider_hint)
+        model_info, provider_adapter = self._resolve_provider(
+            model, provider_hint=provider
+        )
         return await self._with_retry(
-            lambda: provider.generate_structured(
+            lambda: provider_adapter.generate_structured(
                 messages,
                 model=model_info.model_id,
                 schema=schema,
@@ -165,11 +209,29 @@ class LLMGatewayImpl:
         timeout_seconds: float | None = None,
         **kwargs: Any,
     ):
+        async for chunk in self.generate_stream_with_provider(
+            messages,
+            model=model,
+            provider=provider_hint,
+            timeout_seconds=timeout_seconds,
+            **kwargs,
+        ):
+            yield chunk
+
+    async def generate_stream_with_provider(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        provider: ProviderHint,
+        timeout_seconds: float | None = None,
+        **kwargs: Any,
+    ):
         async for chunk in self._generate_stream(
             messages,
             model=model,
             timeout_seconds=timeout_seconds,
-            provider_hint=provider_hint,
+            provider_hint=provider,
             **kwargs,
         ):
             yield chunk

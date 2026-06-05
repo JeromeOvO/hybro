@@ -55,10 +55,10 @@ class BedrockService:
     ) -> dict:
         model_id = model or self._default_model
         if model and _requires_bedrock_provider_hint(model):
-            response = await self._require_llm_provider()._generate_structured_with_provider_hint(
+            response = await self._require_llm_provider().generate_structured_with_provider(
                 _messages(system_prompt, user_prompt),
                 model=model_id,
-                provider_hint="bedrock",
+                provider="bedrock",
                 schema=None,
                 json_mode=True,
                 timeout_seconds=self._timeout,
@@ -79,10 +79,10 @@ class BedrockService:
     ) -> str:
         model_id = model or self._default_model
         if model and _requires_bedrock_provider_hint(model):
-            response = await self._require_llm_provider()._generate_with_provider_hint(
+            response = await self._require_llm_provider().generate_with_provider(
                 _messages(system_prompt, user_prompt),
                 model=model_id,
-                provider_hint="bedrock",
+                provider="bedrock",
                 timeout_seconds=self._timeout,
             )
             return response_content(response)
@@ -101,10 +101,10 @@ class BedrockService:
     ) -> AsyncIterator[str]:
         model_id = model or self._default_model
         if model and _requires_bedrock_provider_hint(model):
-            async for chunk in self._require_llm_provider()._generate_stream_with_provider_hint(
+            async for chunk in self._require_llm_provider().generate_stream_with_provider(
                 _messages(system_prompt, user_prompt),
                 model=model_id,
-                provider_hint="bedrock",
+                provider="bedrock",
                 timeout_seconds=self._timeout,
             ):
                 yield chunk

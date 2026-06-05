@@ -125,12 +125,12 @@ class TestCallSupervisorLlmJson:
             await openai_svc.call_supervisor_llm_json("system", "user")
 
     @pytest.mark.asyncio
-    async def test_custom_model_override_uses_openai_provider_hint(self):
+    async def test_custom_model_override_uses_public_openai_provider_override(self):
         class FakeGateway:
             def __init__(self):
                 self.calls = []
 
-            async def _generate_structured_with_provider_hint(self, messages, **kwargs):
+            async def generate_structured_with_provider(self, messages, **kwargs):
                 self.calls.append((messages, kwargs))
                 return LLMStructuredResponse(
                     data={"action": "proceed"},
@@ -148,7 +148,7 @@ class TestCallSupervisorLlmJson:
         )
 
         assert result == {"action": "proceed"}
-        assert gateway.calls[0][1]["provider_hint"] == "openai"
+        assert gateway.calls[0][1]["provider"] == "openai"
         assert gateway.calls[0][1]["model"] == "custom-openai-model"
 
     @pytest.mark.asyncio
@@ -157,14 +157,14 @@ class TestCallSupervisorLlmJson:
             def __init__(self):
                 self.calls = []
 
-            async def _generate_structured_with_provider_hint(self, messages, **kwargs):
-                raise AssertionError("provider hint should not be used")
+            async def generate_structured_with_provider(self, messages, **kwargs):
+                raise AssertionError("provider override should not be used")
 
-            async def _generate_with_provider_hint(self, messages, **kwargs):
-                raise AssertionError("provider hint should not be used")
+            async def generate_with_provider(self, messages, **kwargs):
+                raise AssertionError("provider override should not be used")
 
-            def _generate_stream_with_provider_hint(self, messages, **kwargs):
-                raise AssertionError("provider hint should not be used")
+            def generate_stream_with_provider(self, messages, **kwargs):
+                raise AssertionError("provider override should not be used")
 
             async def generate_structured(self, messages, **kwargs):
                 self.calls.append(kwargs)
@@ -201,13 +201,13 @@ class TestCallSupervisorLlmJson:
         ]
 
     @pytest.mark.asyncio
-    async def test_responses_compat_custom_model_uses_openai_provider_hint(self):
+    async def test_responses_compat_custom_model_uses_public_openai_provider_override(self):
         class FakeGateway:
             def __init__(self):
                 self.hinted_calls = []
                 self.public_calls = []
 
-            async def _generate_with_provider_hint(self, messages, **kwargs):
+            async def generate_with_provider(self, messages, **kwargs):
                 self.hinted_calls.append((messages, kwargs))
                 return LLMResponse(content="ok", model=kwargs["model"])
 
@@ -228,7 +228,7 @@ class TestCallSupervisorLlmJson:
         assert gateway.public_calls == []
         assert gateway.hinted_calls[0][1] == {
             "model": "gpt-4.1",
-            "provider_hint": "openai",
+            "provider": "openai",
         }
 
 
@@ -441,6 +441,13 @@ class TestSelectBestAgentForTask:
 
 
 class TestDebateDelegation:
+    def test_bind_debate_service_sets_focused_debate_service(self, openai_svc):
+        debate = object()
+
+        openai_svc.bind_debate_service(debate)
+
+        assert openai_svc._debate_service is debate
+
     @pytest.mark.asyncio
     async def test_short_debate_delegates_to_focused_debate_service(self, openai_svc):
         debate = AsyncMock()

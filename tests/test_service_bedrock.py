@@ -126,10 +126,10 @@ async def test_bedrock_text_delegates_to_focused_supervisor_service():
 
 
 @pytest.mark.asyncio
-async def test_explicit_model_text_uses_bedrock_hinted_gateway_helper():
+async def test_explicit_model_text_uses_public_bedrock_provider_override():
     supervisor = AsyncMock()
     gateway = AsyncMock()
-    gateway._generate_with_provider_hint = AsyncMock(
+    gateway.generate_with_provider = AsyncMock(
         return_value=LLMResponse(content="summary", model="anthropic.claude-opus")
     )
     service = BedrockService()
@@ -147,13 +147,13 @@ async def test_explicit_model_text_uses_bedrock_hinted_gateway_helper():
 
     assert result == "summary"
     supervisor.call_text.assert_not_called()
-    gateway._generate_with_provider_hint.assert_awaited_once_with(
+    gateway.generate_with_provider.assert_awaited_once_with(
         [
             {"role": "system", "content": "system"},
             {"role": "user", "content": "user"},
         ],
         model="anthropic.claude-opus",
-        provider_hint="bedrock",
+        provider="bedrock",
         timeout_seconds=8.0,
     )
 
@@ -181,7 +181,7 @@ async def test_bedrock_text_stream_delegates_to_focused_supervisor_service():
 
 
 @pytest.mark.asyncio
-async def test_explicit_model_stream_uses_bedrock_hinted_gateway_helper():
+async def test_explicit_model_stream_uses_public_bedrock_provider_override():
     async def stream(*args, **kwargs):
         yield "a"
         yield "b"
@@ -189,7 +189,7 @@ async def test_explicit_model_stream_uses_bedrock_hinted_gateway_helper():
     supervisor = AsyncMock()
     supervisor.call_text_stream = MagicMock(side_effect=stream)
     gateway = MagicMock()
-    gateway._generate_stream_with_provider_hint = MagicMock(side_effect=stream)
+    gateway.generate_stream_with_provider = MagicMock(side_effect=stream)
     service = BedrockService()
     service.bind_llm_services(
         supervisor_service=supervisor,
@@ -208,12 +208,12 @@ async def test_explicit_model_stream_uses_bedrock_hinted_gateway_helper():
 
     assert chunks == ["a", "b"]
     supervisor.call_text_stream.assert_not_called()
-    gateway._generate_stream_with_provider_hint.assert_called_once_with(
+    gateway.generate_stream_with_provider.assert_called_once_with(
         [
             {"role": "system", "content": "system"},
             {"role": "user", "content": "user"},
         ],
         model="anthropic.claude-opus",
-        provider_hint="bedrock",
+        provider="bedrock",
         timeout_seconds=9.0,
     )

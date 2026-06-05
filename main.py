@@ -520,7 +520,7 @@ async def lifespan(app: FastAPI):
             )
             memory_search_service.bind_embedding_service(embedding_llm_service)
             room_coordinator_service.bind_summary_service(summary_llm_service)
-            openai_service._debate_service = debate_llm_service
+            openai_service.bind_debate_service(debate_llm_service)
             agent_viewset.bind_agent_viewset_dependencies(
                 embedding_source=embedding_llm_service,
                 vector_index_service=pinecone_db,

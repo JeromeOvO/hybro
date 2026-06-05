@@ -138,6 +138,7 @@ def test_main_binds_focused_llm_services_to_production_consumers():
         "room_coordinator_service.bind_summary_service(",
         "chat_memory_service.bind_room_memory_llm_service(",
         "room_memory_service.bind_turn_notes_llm_provider(llm_provider)",
+        "openai_service.bind_debate_service(",
     ]
     missing = [snippet for snippet in expected_snippets if snippet not in source]
     assert not missing, f"main.py missing focused LLM bindings: {missing}"
@@ -157,6 +158,7 @@ def test_focused_llm_binding_targets_expose_startup_methods():
     from app_shell.agent_resolver_service import agent_resolver_service
     from app_shell.memory_search_service import memory_search_service
     from app_shell.memory_service import chat_memory_service, room_memory_service
+    from app_shell.openai_service import openai_service
     from app_shell.room_coordinator_service import room_coordinator_service
     from app_shell.room_runtime import room_runtime
 
@@ -168,6 +170,7 @@ def test_focused_llm_binding_targets_expose_startup_methods():
         (room_coordinator_service, "bind_summary_service"),
         (chat_memory_service, "bind_room_memory_llm_service"),
         (room_memory_service, "bind_turn_notes_llm_provider"),
+        (openai_service, "bind_debate_service"),
     ]
     missing = [
         f"{target.__class__.__name__}.{method}"

@@ -26,6 +26,7 @@ venv/
 
 config.py
 !hub_runtime_bridge/config.py
+!llm_gateway/config.py
 
 # logs
 logs/
