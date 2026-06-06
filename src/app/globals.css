@@ -79,6 +79,7 @@
   --radius-xl: 12px;
 
   /* Font families */
+  --font-sans: var(--font-plus-jakarta), ui-sans-serif, system-ui, sans-serif;
   --font-spaceGrotesk: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif;
 }
 
