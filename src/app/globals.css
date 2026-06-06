@@ -634,54 +634,42 @@
 
 /* Room Chat Input & Message Mention Styles */
 .room-mention {
-  display: inline-flex;
-  align-items: center;
-  max-width: min(100%, 18rem);
-  background: hsl(var(--color-primary) / 0.14);
-  color: hsl(var(--color-primary)) !important;
-  padding: 1px 6px;
-  margin: 0 2px;
-  border-radius: 5px;
+  display: inline;
+  color: var(--mention-color, hsl(250 35% 78%));
   font-weight: 600;
-  font-size: 0.92em;
-  line-height: 1.45;
-  border: 1px solid hsl(var(--color-primary) / 0.22);
-  box-shadow: none;
-  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
-  vertical-align: -0.08em;
+  font-size: inherit;
+  line-height: inherit;
   white-space: nowrap;
   cursor: text;
   user-select: text;
   -webkit-user-select: text;
+  transition: opacity 120ms ease;
+}
+
+.room-mention > .room-mention-avatar,
+.room-mention > img {
+  width: 1.25em;
+  height: 1.25em;
+  min-width: 1.25em;
+  min-height: 1.25em;
+  max-width: 1.25em;
+  max-height: 1.25em;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+  pointer-events: none;
+  display: inline;
+  vertical-align: text-bottom;
+  margin-right: 3px;
 }
 
 a.room-mention {
-  color: hsl(var(--color-primary)) !important;
   cursor: pointer;
   text-decoration: none;
-  user-select: text;
-  -webkit-user-select: text;
 }
 
 .room-mention:hover {
-  background: hsl(var(--color-primary) / 0.2);
-  border-color: hsl(var(--color-primary) / 0.32);
-  color: hsl(var(--color-primary)) !important;
-  box-shadow: none;
-}
-
-.dark .room-mention {
-  background: hsl(var(--color-primary) / 0.14);
-  color: hsl(var(--color-primary)) !important;
-  border-color: hsl(var(--color-primary) / 0.22);
-  box-shadow: none;
-}
-
-.dark .room-mention:hover {
-  background: hsl(var(--color-primary) / 0.2);
-  border-color: hsl(var(--color-primary) / 0.32);
-  color: hsl(var(--color-primary)) !important;
-  box-shadow: none;
+  opacity: 0.7;
 }
 
 /* ── Page layout ── */

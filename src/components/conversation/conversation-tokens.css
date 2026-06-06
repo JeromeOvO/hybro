@@ -202,10 +202,7 @@
 }
 
 .conversation-user-message-text .room-mention {
-  line-height: calc(var(--conversation-user-line-height) - 4px);
-  padding-top: 0;
-  padding-bottom: 0;
-  vertical-align: middle;
+  line-height: inherit;
 }
 
 /* ---------- Agent blocks ---------- */

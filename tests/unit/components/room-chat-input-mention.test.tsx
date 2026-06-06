@@ -148,7 +148,7 @@ describe('RoomChatInput – @mention behavior', () => {
 
     const mentionSpan = editor.querySelector('.room-mention')
     expect(mentionSpan).toBeTruthy()
-    expect(mentionSpan?.textContent).toBe('@Alpha Agent')
+    expect(mentionSpan?.textContent).toBe('Alpha Agent')
     expect(mentionSpan?.getAttribute('data-id')).toBe('a-1')
   })
 
