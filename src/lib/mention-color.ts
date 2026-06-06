@@ -1,16 +1,20 @@
-const PALETTE = [
-  'hsl(220 70% 72%)',  // blue
-  'hsl(270 60% 75%)',  // purple
-  'hsl(340 65% 72%)',  // rose
-  'hsl(25 80% 68%)',   // peach
-  'hsl(45 60% 65%)',   // amber
-  'hsl(170 55% 62%)',  // teal
-  'hsl(150 45% 65%)',  // mint
-  'hsl(200 70% 70%)',  // sky
-]
+export const AGENT_PALETTE = [
+  { name: 'slate-blue',  hsl: '215 30% 76%' },
+  { name: 'soft-purple', hsl: '265 25% 78%' },
+  { name: 'dusty-rose',  hsl: '340 28% 77%' },
+  { name: 'warm-peach',  hsl: '25 35% 75%' },
+  { name: 'muted-gold',  hsl: '45 28% 73%' },
+  { name: 'sage-teal',   hsl: '170 25% 72%' },
+  { name: 'soft-mint',   hsl: '145 22% 74%' },
+  { name: 'calm-sky',    hsl: '195 28% 75%' },
+] as const
 
-export function mentionColor(id: string): string {
+export function agentColorIndex(id: string): number {
   let hash = 0
   for (let i = 0; i < id.length; i++) hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0
-  return PALETTE[((hash % PALETTE.length) + PALETTE.length) % PALETTE.length]
+  return ((hash % AGENT_PALETTE.length) + AGENT_PALETTE.length) % AGENT_PALETTE.length
+}
+
+export function mentionColor(id: string): string {
+  return `hsl(${AGENT_PALETTE[agentColorIndex(id)].hsl})`
 }
