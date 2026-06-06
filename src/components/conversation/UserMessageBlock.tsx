@@ -6,15 +6,9 @@ import type { MessageEntity } from '@/stores/message-store/types'
 import { UserAttachmentCard } from './UserAttachmentCard'
 import { copySelectionWithMentions } from '@/components/markdown-content'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
+import { mentionColor } from '@/lib/mention-color'
 
 const MENTION_RE = /<@([^|]+)\|([^>]+)>/g
-
-function mentionColor(id: string): string {
-  let hash = 0
-  for (let i = 0; i < id.length; i++) hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0
-  const hue = ((hash % 360) + 360) % 360
-  return `hsl(${hue} 50% 78%)`
-}
 
 function renderContent(content: string): ReactNode[] {
   const parts: ReactNode[] = []

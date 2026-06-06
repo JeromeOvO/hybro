@@ -23,13 +23,7 @@ import type { ChatMode } from '@/lib/types/chat-mode'
 import { DEFAULT_CHAT_MODE } from '@/lib/types/chat-mode'
 import { AttachmentPreview } from './attachment-preview'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
-
-function mentionColor(id: string): string {
-  let hash = 0
-  for (let i = 0; i < id.length; i++) hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0
-  const hue = ((hash % 360) + 360) % 360
-  return `hsl(${hue} 50% 78%)`
-}
+import { mentionColor } from '@/lib/mention-color'
 
 const _parsed = parseInt(process.env.NEXT_PUBLIC_MAX_MESSAGE_LENGTH || '10000', 10)
 export const MAX_MESSAGE_LENGTH = Number.isNaN(_parsed) || _parsed < 1 ? 10000 : _parsed
