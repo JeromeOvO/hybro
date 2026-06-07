@@ -84,38 +84,48 @@
 }
 
 :root {
-  /* Comfortable Light Mode - Softer, eye-friendly tones */
-  --color-background: 220 15% 96%;
-  --color-foreground: 220 20% 15%;
-  --color-card: 220 16% 98%;
-  --color-card-foreground: 220 20% 15%;
-  --color-popover: 220 16% 98%;
-  --color-popover-foreground: 220 20% 15%;
+  /* Agent palette — light mode: deeper, readable on light backgrounds */
+  --agent-color-0: 215 40% 45%;
+  --agent-color-1: 265 35% 48%;
+  --agent-color-2: 340 38% 47%;
+  --agent-color-3: 25 45% 44%;
+  --agent-color-4: 45 40% 40%;
+  --agent-color-5: 170 35% 38%;
+  --agent-color-6: 145 32% 40%;
+  --agent-color-7: 195 38% 43%;
+
+  /* Comfortable Light Mode - Warm neutral, low glare */
+  --color-background: 220 10% 93%;
+  --color-foreground: 220 15% 18%;
+  --color-card: 220 10% 95%;
+  --color-card-foreground: 220 15% 18%;
+  --color-popover: 220 10% 95%;
+  --color-popover-foreground: 220 15% 18%;
 
   /* Refined teal primary - easier on eyes */
   --color-primary: 192 85% 35%;
   --color-primary-foreground: 0 0% 100%;
 
   /* Soft secondary */
-  --color-secondary: 220 14% 92%;
-  --color-secondary-foreground: 220 20% 20%;
+  --color-secondary: 220 8% 89%;
+  --color-secondary-foreground: 220 15% 22%;
 
   /* Comfortable muted tones */
-  --color-muted: 220 12% 92%;
-  --color-muted-foreground: 220 14% 40%;
+  --color-muted: 220 8% 89%;
+  --color-muted-foreground: 220 10% 42%;
 
   /* Softer accent */
-  --color-accent: 270 40% 95%;
-  --color-accent-foreground: 270 30% 22%;
+  --color-accent: 270 25% 91%;
+  --color-accent-foreground: 270 20% 25%;
 
   /* Destructive - clear danger signal */
   --color-destructive: 0 72% 51%;
   --color-destructive-foreground: 0 0% 100%;
 
   /* Softer borders */
-  --color-border: 220 14% 85%;
-  --color-input: 220 14% 90%;
-  --color-ring: 192 85% 45%;
+  --color-border: 220 8% 82%;
+  --color-input: 220 8% 87%;
+  --color-ring: 192 70% 45%;
 
   /* Balanced chart colors */
   --color-chart-1: 192 75% 45%;
@@ -125,15 +135,15 @@
   --color-chart-5: 320 60% 58%;
 
   /* Comfortable sidebar */
-  --color-sidebar-background: 220 16% 98%;
-  --color-sidebar-foreground: 220 18% 25%;
+  --color-sidebar-background: 220 10% 94%;
+  --color-sidebar-foreground: 220 12% 25%;
   --color-sidebar-primary: 192 85% 38%;
   --color-sidebar-primary-foreground: 0 0% 100%;
   /* Distinct cyan-tinted accent for visible hover/active states */
-  --color-sidebar-accent: 192 50% 92%;
-  --color-sidebar-accent-foreground: 192 85% 30%;
-  --color-sidebar-border: 220 14% 92%;
-  --color-sidebar-ring: 192 85% 45%;
+  --color-sidebar-accent: 192 35% 89%;
+  --color-sidebar-accent-foreground: 192 70% 30%;
+  --color-sidebar-border: 220 8% 88%;
+  --color-sidebar-ring: 192 70% 45%;
 
   /* Brand colors for HYBRO */
   --color-hybro-hy: 192 85% 38%;
@@ -163,6 +173,16 @@
 }
 
 .dark {
+  /* Agent palette — dark mode: lighter, soft pastels on dark backgrounds */
+  --agent-color-0: 215 30% 76%;
+  --agent-color-1: 265 25% 78%;
+  --agent-color-2: 340 28% 77%;
+  --agent-color-3: 25 35% 75%;
+  --agent-color-4: 45 28% 73%;
+  --agent-color-5: 170 25% 72%;
+  --agent-color-6: 145 22% 74%;
+  --agent-color-7: 195 28% 75%;
+
   /* Futuristic Dark Mode - Deep space theme with neon accents */
   --color-background: 230 25% 8%;
   --color-foreground: 210 30% 88%;

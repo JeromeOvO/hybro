@@ -13,13 +13,13 @@ export interface AgentTheme {
   cardBg: string
 }
 
-export const AGENT_THEMES: AgentTheme[] = AGENT_PALETTE.map(({ name, hsl }) => ({
+export const AGENT_THEMES: AgentTheme[] = AGENT_PALETTE.map(({ name }, i) => ({
   name,
-  accent: `hsl(${hsl})`,
-  border: `hsl(${hsl} / 0.18)`,
-  avatarBg: `hsl(${hsl} / 0.06)`,
-  avatarLightBg: `hsl(${hsl} / 0.12)`,
-  cardBg: `hsl(${hsl} / 0.08)`,
+  accent: `hsl(var(--agent-color-${i}))`,
+  border: `hsl(var(--agent-color-${i}) / 0.18)`,
+  avatarBg: `hsl(var(--agent-color-${i}) / 0.06)`,
+  avatarLightBg: `hsl(var(--agent-color-${i}) / 0.12)`,
+  cardBg: `hsl(var(--agent-color-${i}) / 0.08)`,
 }))
 
 export const UNRESOLVED_THEME: AgentTheme = {
