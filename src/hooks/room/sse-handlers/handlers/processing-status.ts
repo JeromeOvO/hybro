@@ -9,6 +9,7 @@ import {
   processingDetailsToLogMessage,
 } from '../../processing-status-log'
 import { getResolvedMessageId } from '../pending-turn-buffer'
+import { applyRoomCommands } from '../apply-commands'
 import type { CorrelationResult } from '../correlation'
 import type { SSEHandlerDeps } from '../types'
 
@@ -272,6 +273,13 @@ export function handleProcessingStatus(
     lifecycle.disarmCancelTimeout()
     store.removeMessage(lifecycle.placeholderId(roomId))
     lifecycle.dismissPlaceholder()
+
+    const turnClientRequestId = correlation.clientReqId ?? sseMessage.data.client_request_id
+    if (turnClientRequestId) {
+      applyRoomCommands([
+        { type: 'stream_clear_client_request', clientRequestId: turnClientRequestId },
+      ])
+    }
 
     if (sseMessage.data.message_id === lifecycleMessageId) {
       lifecycle.setMessageId(null)

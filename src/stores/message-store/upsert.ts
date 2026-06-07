@@ -363,22 +363,30 @@ export function mergeArtifacts(
 }
 
 /**
- * Extract the combined text from all text-only artifacts.
- * Returns the last text-only artifact's text — artifacts are appended in
- * emission order, so the last one is always the most recently started stream.
- * For single-artifact agents this is identical to returning the only artifact.
+ * Extract display text from text-only artifacts for persisted entity state.
+ * Returns the last text-only artifact so thinking + answer agents surface
+ * only the most recent stream (the answer artifact).
  */
 export function extractTextFromArtifacts(artifacts: ArtifactData[]): string {
-  // Prefer the last text-only artifact: artifacts are appended in emission
-  // order, so the last one is always the most recently started stream (the
-  // answer artifact for agents that emit thinking before answering).
-  // For single-artifact agents this is identical to the previous behaviour.
   let last = ''
   for (const a of artifacts) {
     if (!isTextOnlyArtifact(a)) continue
     last = a.parts.map(p => p.text || '').join('')
   }
   return last
+}
+
+/**
+ * Extract live streaming display text by concatenating all text-only artifacts
+ * in emission order. Matches backend extract_parts_from_artifacts ("" join).
+ */
+export function extractStreamTextFromArtifacts(artifacts: ArtifactData[]): string {
+  let combined = ''
+  for (const a of artifacts) {
+    if (!isTextOnlyArtifact(a)) continue
+    combined += a.parts.map(p => p.text || '').join('')
+  }
+  return combined
 }
 
 /**

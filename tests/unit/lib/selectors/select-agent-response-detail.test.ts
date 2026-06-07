@@ -84,7 +84,7 @@ describe('selectAgentResponseDetail', () => {
         id: 'agent-1',
         roomId: 'room-1',
         relatedMessageId: 'user-1',
-        taskStatus: TASK_STATE.COMPLETED,
+        taskStatus: TASK_STATE.WORKING,
         content: 'final from db',
       }),
     ])
@@ -100,6 +100,55 @@ describe('selectAgentResponseDetail', () => {
     expect(detail?.content).toBe('live tokens')
     expect(detail?.isStreaming).toBe(true)
     expect(detail?.artifacts).toBeUndefined()
+  })
+
+  it('ignores live buffer when entity taskStatus is terminal (strict terminal guard)', () => {
+    const { entities, orderedIds } = setup([
+      createUserMessage({ id: 'user-1', roomId: 'room-1' }),
+      createAgentMessage({
+        id: 'agent-1',
+        roomId: 'room-1',
+        relatedMessageId: 'user-1',
+        taskStatus: TASK_STATE.COMPLETED,
+        content: 'Hermes final answer',
+      }),
+    ])
+
+    const detail = selectAgentResponseDetail('room-1', 'agent-1', entities, orderedIds, {
+      text: 'Synthesis text that must not appear',
+      artifacts: [],
+      isComplete: false,
+      roomId: 'room-1',
+      lastUpdatedAt: Date.now(),
+    })
+
+    expect(detail?.content).toBe('Hermes final answer')
+    expect(detail?.isStreaming).toBe(false)
+    expect(detail?.display.label).not.toBe('Streaming')
+  })
+
+  it('ignores live buffer when entity is canceled mid-stream', () => {
+    const { entities, orderedIds } = setup([
+      createUserMessage({ id: 'user-1', roomId: 'room-1' }),
+      createAgentMessage({
+        id: 'agent-1',
+        roomId: 'room-1',
+        relatedMessageId: 'user-1',
+        taskStatus: TASK_STATE.CANCELED,
+        content: '',
+      }),
+    ])
+
+    const detail = selectAgentResponseDetail('room-1', 'agent-1', entities, orderedIds, {
+      text: 'partial stream',
+      artifacts: [],
+      isComplete: false,
+      roomId: 'room-1',
+      lastUpdatedAt: Date.now(),
+    })
+
+    expect(detail?.content).toBe('')
+    expect(detail?.isStreaming).toBe(false)
   })
 
   it('shows entity artifacts when buffer is complete but not yet cleared', () => {

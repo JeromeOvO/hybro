@@ -37,6 +37,19 @@ describe('append', () => {
     expect(buf.text).toBe('Hello world')
   })
 
+  it('concatenates text across multiple text-only artifacts', () => {
+    useStreamingStore.getState().append('msg-1', 'room-1', {
+      artifactId: 'art-a',
+      parts: [{ kind: 'text', text: 'Earlier paragraph. ' }],
+    }, false)
+    useStreamingStore.getState().append('msg-1', 'room-1', {
+      artifactId: 'art-b',
+      parts: [{ kind: 'text', text: 'Later paragraph.' }],
+    }, false)
+    const buf = useStreamingStore.getState().buffers['msg-1']
+    expect(buf.text).toBe('Earlier paragraph. Later paragraph.')
+  })
+
   it('stamps roomId from the first append and preserves it on re-append', () => {
     useStreamingStore.getState().append('msg-1', 'room-A', makeChunk('chunk'), false)
     useStreamingStore.getState().append('msg-1', 'room-A', makeChunk(' more'), true)

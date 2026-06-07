@@ -31,6 +31,8 @@ export function resolveEntityStreaming(
   return ACTIVE_ENTITY_TASK_STATES.has(taskStatus)
 }
 
+export { resolveStreamBuffer } from '@/stores/streaming-store'
+
 export function resolveStreamText(
   buffer: StreamBuffer | undefined,
   fallbackContent: string,

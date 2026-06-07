@@ -33,8 +33,12 @@ export function handleArtifactUpdate(
     isAppend,
     last_chunk,
   )
+  const artifactId = artifactData.artifactId
+  const hasExistingArtifact = (streaming.buffers[message_id]?.artifacts ?? [])
+    .some(a => a.artifactId === artifactId)
+  const resolvedAppend = isAppend ?? hasExistingArtifact
 
-  streaming.append(message_id, ctx.roomId, artifactData, isAppend, {
+  streaming.append(message_id, ctx.roomId, artifactData, resolvedAppend, {
     clientRequestId: correlation.clientReqId,
     userMessageId: correlation.clientReqId
       ? getResolvedMessageId(correlation.clientReqId)
@@ -42,7 +46,7 @@ export function handleArtifactUpdate(
   })
   if (last_chunk) streaming.markComplete(message_id)
 
-  if (!isAppend) {
+  if (!resolvedAppend) {
     appendEvent(ctx.roomId, {
       kind: 'artifact_emitted',
       timestamp: sseMessage.timestamp,

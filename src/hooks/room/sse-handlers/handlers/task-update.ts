@@ -59,7 +59,8 @@ export async function handleTaskUpdate(
   }
 
   // INVARIANT: buffer read + stream_clear in same sync turn (see applyRoomCommands).
-  const bufferText = useStreamingStore.getState().buffers[messageId]?.text
+  const streamingBuffers = useStreamingStore.getState().buffers
+  const bufferText = streamingBuffers[messageId]?.text
   const resolvedContent = (content ?? '').trim().length > 0
     ? content
     : (bufferText && bufferText.length > 0 ? bufferText : (existing?.content ?? ''))
@@ -84,7 +85,6 @@ export async function handleTaskUpdate(
         },
       },
       { type: 'stream_clear', messageId },
-      { type: 'stream_clear_client_request', clientRequestId: sseMessage.data.client_request_id },
     ])
     ctx.lifecycle.dismissPlaceholder()
 

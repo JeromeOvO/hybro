@@ -2,8 +2,11 @@
 
 import { useMemo } from 'react'
 import type { ArtifactData } from '@/stores/message-store/types'
-import type { StreamBuffer } from '@/stores/streaming-store'
-import { useStreamingStore } from '@/stores/streaming-store'
+import {
+  resolveStreamBuffer,
+  useStreamingStore,
+  type StreamBuffer,
+} from '@/stores/streaming-store'
 import {
   resolveStreamArtifacts,
   resolveStreamText,
@@ -12,15 +15,8 @@ import {
 import type { AgentResultViewModel } from '@/lib/room-timeline/types'
 
 /** Subscribe to a single message's stream buffer (avoids re-renders on unrelated chunks). */
-export function useStreamBuffer(
-  messageId: string | undefined,
-  clientRequestId?: string,
-): StreamBuffer | undefined {
-  return useStreamingStore((s) => {
-    if (messageId && s.buffers[messageId]) return s.buffers[messageId]
-    if (!clientRequestId) return undefined
-    return Object.values(s.buffers).find(buffer => buffer.clientRequestId === clientRequestId)
-  })
+export function useStreamBuffer(messageId: string | undefined): StreamBuffer | undefined {
+  return useStreamingStore((s) => resolveStreamBuffer(s.buffers, messageId))
 }
 
 export interface ResultStreamDisplay {
@@ -32,9 +28,9 @@ export interface ResultStreamDisplay {
 
 /** Derived stream display fields for AgentResultViewModel-backed UI. */
 export function useResultStreamDisplay(
-  result: Pick<AgentResultViewModel, 'messageId' | 'clientRequestId' | 'content' | 'artifacts' | 'status'>,
+  result: Pick<AgentResultViewModel, 'messageId' | 'content' | 'artifacts' | 'status'>,
 ): ResultStreamDisplay {
-  const buffer = useStreamBuffer(result.messageId, result.clientRequestId)
+  const buffer = useStreamBuffer(result.messageId)
   return useMemo(
     () => ({
       buffer,

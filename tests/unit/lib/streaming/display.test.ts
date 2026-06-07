@@ -4,6 +4,7 @@ import {
   resolveDetailArtifacts,
   resolveEntityStreaming,
   resolveStreamArtifacts,
+  resolveStreamBuffer,
   resolveStreamText,
   resolveViewModelStreaming,
 } from '@/lib/streaming/display'
@@ -54,5 +55,15 @@ describe('streaming display helpers', () => {
     expect(
       resolveDetailArtifacts(buffer({ isComplete: true }), [{ artifactId: 'a', parts: [] }]),
     ).toHaveLength(1)
+  })
+
+  it('resolveStreamBuffer returns the message-scoped buffer only', () => {
+    const buffers = {
+      'msg-1': buffer({ text: 'agent-a live', clientRequestId: 'req-1' }),
+      'msg-2': buffer({ text: 'agent-b live', clientRequestId: 'req-1' }),
+    }
+    expect(resolveStreamBuffer(buffers, 'msg-1')?.text).toBe('agent-a live')
+    expect(resolveStreamBuffer(buffers, 'msg-2')?.text).toBe('agent-b live')
+    expect(resolveStreamBuffer(buffers, undefined)).toBeUndefined()
   })
 })
