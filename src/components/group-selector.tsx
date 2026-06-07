@@ -1,5 +1,6 @@
 'use client'
 import { ChevronDown, Globe, Users, X, Loader2, Pencil, Trash2, Plus } from 'lucide-react'
+import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -132,21 +133,26 @@ export function GroupSelector({
     )
   }
 
-  // If mentions are present, show a special display
+  // If mentions are present, show avatars + count
   if (hasMentions) {
+    const visibleAvatars = mentionedAgents.slice(0, 3)
     return (
-      <div className={cn("flex min-w-0 items-center gap-2", className)}>
-        <div className="flex h-8 min-w-0 max-w-full items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-full bg-muted/60 border border-border/60 px-3 text-sm">
-          <span className="shrink-0">{displayInfo.icon}</span>
-          <span className="min-w-0 truncate font-medium text-primary">{displayInfo.label}</span>
-          {onClearMentions && (
-            <button
-              onClick={onClearMentions}
-              className="ml-1 shrink-0 hover:bg-primary/20 rounded-full p-0.5"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          )}
+      <div className={cn("flex min-w-0 items-center", className)}>
+        <div className="flex h-8 min-w-0 items-center gap-2 whitespace-nowrap px-3">
+          <div className="flex items-center -space-x-1.5 shrink-0">
+            {visibleAvatars.map((agent) => (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img
+                key={agent.id}
+                src={getAgentAvatarUri(agent.id)}
+                alt={agent.name}
+                className="h-4 w-4 rounded-full border-[1.5px] border-background object-cover"
+              />
+            ))}
+          </div>
+          <span className="text-sm text-muted-foreground font-medium">
+            {mentionedAgents.length} {mentionedAgents.length === 1 ? 'agent' : 'agents'}
+          </span>
         </div>
       </div>
     )

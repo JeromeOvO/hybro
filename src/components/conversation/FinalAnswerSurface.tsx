@@ -181,8 +181,8 @@ function HitlPrimary({ turn, isRunning }: { turn: TurnViewModel; isRunning: bool
           key={p.messageId}
           className="rounded-xl border px-4 py-3"
           style={{
-            borderColor: 'var(--conversation-agent-border-amber)',
-            backgroundColor: 'var(--conversation-agent-card-amber)',
+            borderColor: 'hsl(var(--agent-color-4) / 0.18)',
+            backgroundColor: 'hsl(var(--agent-color-4) / 0.08)',
           }}
         >
           <div className="text-xs font-medium mb-2" style={{ color: 'var(--conversation-text-muted)' }}>

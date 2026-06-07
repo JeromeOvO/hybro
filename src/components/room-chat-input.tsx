@@ -23,6 +23,7 @@ import type { ChatMode } from '@/lib/types/chat-mode'
 import { DEFAULT_CHAT_MODE } from '@/lib/types/chat-mode'
 import { AttachmentPreview } from './attachment-preview'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
+import { mentionColor } from '@/lib/mention-color'
 
 const _parsed = parseInt(process.env.NEXT_PUBLIC_MAX_MESSAGE_LENGTH || '10000', 10)
 export const MAX_MESSAGE_LENGTH = Number.isNaN(_parsed) || _parsed < 1 ? 10000 : _parsed
@@ -267,11 +268,14 @@ export function RoomChatInput({
         parts.push(escapeHtml(content.slice(lastIndex, match.index)))
       }
 
-      // Add mention span using room-mention class (styles defined in globals.css)
+      // Add mention span with avatar
       const id = match[1]
       const name = match[2]
+      const agent = agents.find(a => a.id === id)
+      const avatarSrc = agent?.iconUrl || getAgentAvatarUri(id)
+      const color = mentionColor(id)
       parts.push(
-        `<span class="room-mention" data-id="${escapeHtml(id)}" data-name="${escapeHtml(name)}" contenteditable="false" style="user-select:text;-webkit-user-select:text;">@${escapeHtml(name)}</span>`
+        `<span class="room-mention" data-id="${escapeHtml(id)}" data-name="${escapeHtml(name)}" contenteditable="false" style="--mention-color:${color};user-select:text;-webkit-user-select:text;"><img src="${escapeHtml(avatarSrc)}" alt="" class="room-mention-avatar" />${escapeHtml(name)}</span>`
       )
 
       lastIndex = match.index + match[0].length

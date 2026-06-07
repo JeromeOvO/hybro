@@ -5,6 +5,8 @@ import { Quote } from 'lucide-react'
 import type { MessageEntity } from '@/stores/message-store/types'
 import { UserAttachmentCard } from './UserAttachmentCard'
 import { copySelectionWithMentions } from '@/components/markdown-content'
+import { getAgentAvatarUri } from '@/lib/agent-avatar'
+import { mentionColor } from '@/lib/mention-color'
 
 const MENTION_RE = /<@([^|]+)\|([^>]+)>/g
 
@@ -20,8 +22,10 @@ function renderContent(content: string): ReactNode[] {
     }
     const [, id, name] = match
     parts.push(
-      <span key={`${id}-${match.index}`} className="room-mention" data-id={id} data-name={name}>
-        @{name}
+      <span key={`${id}-${match.index}`} className="room-mention" data-id={id} data-name={name} style={{ '--mention-color': mentionColor(id) } as React.CSSProperties}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={getAgentAvatarUri(id)} alt="" className="room-mention-avatar" />
+        {name}
       </span>
     )
     lastIndex = MENTION_RE.lastIndex

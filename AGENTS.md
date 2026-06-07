@@ -36,6 +36,20 @@ After code changes, update the relevant architecture documentation before handof
 
 Do not add or commit `superpowers` planning docs in this repository. Any `superpowers/` or related folders should be removed before commit.
 
+## Agent Workflow Preferences
+
+For review-only requests, do not edit files. Focus findings on the requested diff, PR, plan, or files, and avoid unrelated pre-existing issues unless they directly affect the requested change.
+
+When reviewing implementation plans, validate referenced paths, functions, types, tests, and architecture assumptions against the current repository. Prioritize execution blockers, design mismatches, and missing test coverage over wording.
+
+For room, SSE, streaming, HITL, processing status, message sending, or agent response rendering changes, treat `client_request_id` as critical correlation data and review `docs/System-Architecture.md` for required updates.
+
+For visible UI changes, verify the affected route in a browser when feasible and check layout, text overflow, and interaction behavior across relevant viewports.
+
+Before editing, check `git status` and preserve user or other-agent changes. Do not commit `docs/superpowers/`, `superpowers/`, or generated review-loop planning artifacts unless explicitly requested.
+
+In handoff summaries, include changed behavior, tests run, documentation updates, and any verification that could not be completed.
+
 ## Security & Configuration Tips
 
 Copy required environment keys from `.env.example` into `.env.local`; do not commit local secrets. Keep generated output such as `.next`, `coverage`, and `playwright-report` out of commits.
