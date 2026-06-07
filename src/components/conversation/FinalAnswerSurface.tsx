@@ -93,7 +93,7 @@ function FailedBlock({ intro, turnId }: { intro: string; turnId?: string }) {
         interactive={false}
       />
       <div className="conversation-content-body" data-quote-message-id={turnId} data-quote-agent-name="HYBRO AI" data-quote-source-kind="user_turn">
-        <MarkdownContent className="conversation-markdown-body text-sm" content={intro} />
+        <MarkdownContent className="conversation-markdown-body" content={intro} />
       </div>
     </>
   )
@@ -119,7 +119,7 @@ function CanceledBlock({ intro, turnId }: { intro: string; turnId?: string }) {
         interactive={false}
       />
       <div className="conversation-content-body" data-quote-message-id={turnId} data-quote-agent-name="HYBRO AI" data-quote-source-kind="user_turn">
-        <MarkdownContent className="conversation-markdown-body text-sm" content={intro} />
+        <MarkdownContent className="conversation-markdown-body" content={intro} />
       </div>
     </>
   )
@@ -162,7 +162,7 @@ function DeterministicDoneBlock({
         interactive={false}
       />
       <div className="conversation-content-body" data-quote-message-id={turnId} data-quote-agent-name="HYBRO AI" data-quote-source-kind="user_turn">
-        <MarkdownContent className="conversation-markdown-body text-sm" content={intro} />
+        <MarkdownContent className="conversation-markdown-body" content={intro} />
       </div>
     </>
   )

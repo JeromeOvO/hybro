@@ -28,21 +28,39 @@
   --conversation-danger-border: hsl(var(--color-destructive) / 0.20);
 
   --conversation-radius-card: 10px;
-  --conversation-user-font-size: 14px;
-  --conversation-user-line-height: 22px;
-  --conversation-user-max-height: 66px;
-  --conversation-user-padding-x: 14px;
-  --conversation-user-padding-y: 10px;
-  --conversation-agent-card-padding-x: 16px;
-  --conversation-agent-card-padding-y: 13px;
-  --conversation-agent-status-font-size: 12px;
-  --conversation-content-font-size: 14px;
-  --conversation-content-line-height: 24px;
 
-  --conversation-gap-turn: 28px;
-  --conversation-gap-block: 8px;
-  --conversation-turn-content-top-gap: 8px;
-  --conversation-frame-max-width: 800px;
+  /*
+   * Reading typography (balanced readability):
+   * - 16px / 1.625 lh ≈ 26px row (WCAG floor + comfortable scanning)
+   * - 400 body (light), 500 body (dark)
+   * - 0.8125em paragraph rhythm, 0.3125em list item rhythm
+   */
+  --conversation-user-font-size: 1rem;
+  --conversation-user-line-height: 1.625;
+  --conversation-user-max-height: 4.875rem;
+  --conversation-user-padding-x: 1rem;
+  --conversation-user-padding-y: 0.6875rem;
+  --conversation-agent-card-padding-x: 15px;
+  --conversation-agent-card-padding-y: 12px;
+  --conversation-agent-status-font-size: 12px;
+  --conversation-content-font-size: 1rem;
+  --conversation-content-line-height: 1.625;
+  --conversation-content-font-family: var(--font-plus-jakarta), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --conversation-content-font-weight: 400;
+  --conversation-content-heading-weight: 600;
+  --conversation-content-emphasis-weight: 600;
+  --conversation-content-ui-weight: 500;
+  --conversation-content-letter-spacing: 0.012em;
+  --conversation-content-paragraph-gap: 0.8125em;
+  --conversation-content-list-indent: 1.5625rem;
+  --conversation-content-list-gap: 0.3125em;
+  --conversation-content-block-gap: 0.9375em;
+  --conversation-content-heading-line-height: 1.3;
+
+  --conversation-gap-turn: 2.125rem;
+  --conversation-gap-block: 0.5625rem;
+  --conversation-turn-content-top-gap: 0.5625rem;
+  --conversation-frame-max-width: 42.5rem;
   --conversation-detail-width: 520px;
   --conversation-body-inset: 8px;
 
@@ -75,8 +93,13 @@
 
   --conversation-border-light: rgba(255, 255, 255, 0.08);
 
-
   --conversation-danger-border: #ef444433;
+
+  /* Dark mode: medium body weight compensates for thin stroke perception on dark bg */
+  --conversation-content-font-weight: 500;
+  --conversation-text-primary: hsl(var(--color-foreground) / 0.97);
+  --conversation-text-secondary: hsl(var(--color-foreground) / 0.88);
+  --conversation-text-tertiary: hsl(var(--color-foreground) / 0.74);
 }
 
 /* ---------- Gutter ---------- */
@@ -152,8 +175,11 @@
 }
 
 .conversation-user-message-text {
+  font-family: var(--conversation-content-font-family);
   font-size: var(--conversation-user-font-size);
   line-height: var(--conversation-user-line-height);
+  font-weight: var(--conversation-content-font-weight);
+  letter-spacing: var(--conversation-content-letter-spacing);
 }
 
 .conversation-user-message-text .room-mention {
@@ -188,26 +214,100 @@
 
 .conversation-content-body,
 .conversation-markdown-body {
+  font-family: var(--conversation-content-font-family);
   font-size: var(--conversation-content-font-size);
   line-height: var(--conversation-content-line-height);
+  font-weight: var(--conversation-content-font-weight);
+  letter-spacing: var(--conversation-content-letter-spacing);
+  color: var(--conversation-text-primary);
   overflow-wrap: anywhere;
   word-break: break-word;
+  font-synthesis: none;
 }
 
-.conversation-content-body :where(p) {
-  margin-bottom: 10px;
+.conversation-content-body :where(p, li, td, th, blockquote, a),
+.conversation-markdown-body :where(p, li, td, th, blockquote, a) {
+  font-weight: inherit;
 }
 
-.conversation-content-body :where(ul, ol) {
-  margin: 6px 0 10px 1.25rem;
+.conversation-content-body :where(p),
+.conversation-markdown-body :where(p) {
+  margin: 0 0 var(--conversation-content-paragraph-gap);
 }
 
-.conversation-content-body :where(li) {
-  margin-bottom: 3px;
+.conversation-content-body :where(p:last-child),
+.conversation-markdown-body :where(p:last-child) {
+  margin-bottom: 0;
 }
 
-.conversation-content-body :where(pre) {
-  margin: 8px 0;
+.conversation-content-body :where(h1, h2, h3, h4, h5, h6),
+.conversation-markdown-body :where(h1, h2, h3, h4, h5, h6) {
+  font-weight: var(--conversation-content-heading-weight);
+  line-height: var(--conversation-content-heading-line-height);
+  letter-spacing: -0.012em;
+  color: var(--conversation-text-primary);
+  margin: 1.125em 0 0.4375em;
+}
+
+.conversation-content-body :where(h1:first-child, h2:first-child, h3:first-child, h4:first-child, h5:first-child, h6:first-child),
+.conversation-markdown-body :where(h1:first-child, h2:first-child, h3:first-child, h4:first-child, h5:first-child, h6:first-child) {
+  margin-top: 0;
+}
+
+.conversation-content-body :where(h1),
+.conversation-markdown-body :where(h1) { font-size: 1.1875em; }
+.conversation-content-body :where(h2),
+.conversation-markdown-body :where(h2) { font-size: 1.125em; }
+.conversation-content-body :where(h3),
+.conversation-markdown-body :where(h3) { font-size: 1.0625em; }
+
+.conversation-content-body :where(strong, b),
+.conversation-markdown-body :where(strong, b) {
+  font-weight: var(--conversation-content-emphasis-weight);
+}
+
+.conversation-content-body :where(ul, ol),
+.conversation-markdown-body :where(ul, ol) {
+  margin: 0 0 var(--conversation-content-paragraph-gap) var(--conversation-content-list-indent);
+  padding: 0;
+}
+
+.conversation-content-body :where(li),
+.conversation-markdown-body :where(li) {
+  margin-bottom: var(--conversation-content-list-gap);
+  padding-left: 0.15em;
+}
+
+.conversation-content-body :where(li:last-child),
+.conversation-markdown-body :where(li:last-child) {
+  margin-bottom: 0;
+}
+
+.conversation-content-body :where(blockquote),
+.conversation-markdown-body :where(blockquote) {
+  margin: 0 0 var(--conversation-content-paragraph-gap);
+  padding: 0.25em 0 0.25em 1em;
+  border-left: 3px solid var(--conversation-border-light);
+  color: var(--conversation-text-secondary);
+}
+
+.conversation-content-body :where(hr),
+.conversation-markdown-body :where(hr) {
+  margin: var(--conversation-content-block-gap) 0;
+  border: none;
+  border-top: 1px solid var(--conversation-border-subtle);
+}
+
+.conversation-content-body :where(pre),
+.conversation-markdown-body :where(pre) {
+  margin: 0 0 var(--conversation-content-block-gap);
+  line-height: 1.6;
+  font-size: 0.9375em;
+}
+
+.conversation-content-body :where(pre:last-child),
+.conversation-markdown-body :where(pre:last-child) {
+  margin-bottom: 0;
 }
 
 /* ---------- Processing status log ---------- */
@@ -359,8 +459,10 @@
   }
 }
 
-.conversation-content-body :where(code) {
-  font-size: 12px;
+.conversation-content-body :where(code),
+.conversation-markdown-body :where(code) {
+  font-size: 0.88em;
+  font-weight: var(--conversation-content-font-weight);
 }
 
 /* ---------- Top cover (opaque strip at scroll top) ---------- */
@@ -470,7 +572,7 @@
   min-width: 0;
   color: var(--conversation-text-secondary);
   font-size: 13px;
-  font-weight: 650;
+  font-weight: var(--conversation-content-ui-weight);
   line-height: 18px;
 }
 
@@ -743,7 +845,7 @@
   min-width: 0;
   color: var(--conversation-text-primary);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: var(--conversation-content-ui-weight);
   line-height: 18px;
 }
 
@@ -762,7 +864,7 @@
   padding: 2px 8px;
   background: rgba(255, 255, 255, 0.07);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: var(--conversation-content-ui-weight);
   line-height: 18px;
 }
 
@@ -796,7 +898,13 @@
   flex-direction: column;
   overflow-y: auto;
   overflow-anchor: none;
-  padding: 18px 22px 32px;
+  padding: 1.125rem 1.375rem 2.75rem;
+}
+
+.conversation-detail-body .conversation-content-body,
+.conversation-detail-body .conversation-markdown-body {
+  font-size: var(--conversation-content-font-size);
+  line-height: var(--conversation-content-line-height);
 }
 
 .conversation-detail-body .conversation-detail-frame {
