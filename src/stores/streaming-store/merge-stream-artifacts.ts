@@ -46,6 +46,16 @@ export function mergeStreamArtifacts(
         parts: merged,
         isStreaming: incoming.isStreaming ?? list[idx].isStreaming,
       }
+    } else if (
+      isTextOnlyArtifact(incoming) &&
+      isTextOnlyArtifact(list[idx])
+    ) {
+      const existingText = artifactText(list[idx])
+      const incomingText = artifactText(incoming)
+      if (existingText.startsWith(incomingText) && existingText.length > incomingText.length) {
+        return list
+      }
+      list[idx] = incoming
     } else {
       list[idx] = incoming
     }
@@ -57,11 +67,11 @@ export function mergeStreamArtifacts(
     if (sameNameIdx >= 0) {
       const existingText = artifactText(list[sameNameIdx])
       const incomingText = artifactText(incoming)
-      if (
-        incomingText.startsWith(existingText) ||
-        existingText.startsWith(incomingText)
-      ) {
+      if (incomingText.startsWith(existingText)) {
         list[sameNameIdx] = incoming
+        return list
+      }
+      if (existingText.startsWith(incomingText)) {
         return list
       }
     }

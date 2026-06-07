@@ -348,7 +348,7 @@ resolveDetailArtifacts(buffer, entityArtifacts) {
 
 | Option | Description |
 |--------|-------------|
-| **A ★ Recommended** | While `isStreaming`: auto-scroll detail body to bottom; on terminal: scroll to top (respect manual scroll if user moved). |
+| **A ★ Recommended** | Open detail at **top** (read top-down as stream grows). Tail-follow bottom only when user is already near bottom. On complete, **leave scroll position unchanged**. Disable browser scroll anchoring on detail body. |
 | B | “Jump to latest” control during stream only. |
 | C | Leave as-is |
 
@@ -415,9 +415,10 @@ Empty or punctuation-only text parts concatenated into stream display.
 
 ### Phase 3 — P2/P3 (UX polish)
 
-11. **Mixed artifacts during stream** (S6) — show non-text entity artifacts (e.g. files) while text streams from buffer.
-12. **Detail pane auto-scroll** (S7) — auto-scroll while streaming; respect manual scroll; jump-to-top on terminal.
-13. **Empty/punctuation chunk filter** (S8) — frontend filter + backend defense in depth.
+11. **Mixed artifacts during stream** (S6) ✅ Implemented 2026-06-07 — show non-text entity artifacts (e.g. files) while text streams from buffer.
+12. **Detail pane auto-scroll** (S7) ✅ Implemented 2026-06-07 — ChatGPT-aligned: open at top; tail-follow only when pinned near bottom; no jump on complete; `overflow-anchor: none` on detail body.
+13. **Main feed focus scroll** ✅ Implemented 2026-06-07 — ChatGPT-aligned send behavior: hydrate scrolls to bottom; on send anchor last user message near top with dynamic spacer; disable primary tail-follow during live turn; `overflow-anchor: none` on `.conversation-frame`. See `useTurnFocusScroll`, `src/lib/conversation/focus-scroll.ts`.
+14. **Empty/punctuation chunk filter** (S8) — frontend filter + backend defense in depth.
 
 ### Documentation
 
@@ -493,7 +494,9 @@ Use turn: *“Everyone check what are the most interesting news on AI agents in 
 - [ ] Click Hermes → Codex → OpenClaw while all **Working** → **different** stream text per agent.
 - [ ] Keep Hermes detail open through synthesis → after HYBRO **Completed**, Hermes detail stays **Completed** with final Hermes body (no synthesis text, no Streaming badge).
 - [ ] After all agents complete, synthesis shows once (no duplicate generation in main feed).
-- [ ] Completed agent with file artifact → file visible in detail (Phase 3).
+- [ ] Completed agent with file artifact → file visible in detail **during stream** (S6) and after completion.
+- [ ] Open completed Hermes detail → viewport starts at **top** of response (S7).
+- [ ] During stream → content grows downward from top; no forced tail-follow unless user scrolls near bottom.
 
 ---
 
@@ -504,8 +507,9 @@ Use turn: *“Everyone check what are the most interesting news on AI agents in 
 | Buffer merge / lookup | `src/stores/streaming-store/index.ts` |
 | Artifact merge / extract | `src/stores/message-store/upsert.ts` |
 | Display helpers | `src/lib/streaming/display.ts` |
+| Detail pane scroll | `src/hooks/useDetailPaneScroll.ts`, `src/lib/streaming/detail-pane-scroll.ts` |
 | Detail selector | `src/lib/selectors/select-agent-response-detail.ts` |
-| Detail pane shell | `src/components/room-page-shell.tsx` |
+| Detail pane shell | `src/components/room-page-shell.tsx`, `src/components/conversation/AgentResponseDetailPane.tsx` |
 | Partial SSE handler | `src/hooks/room/sse-handlers/handlers/agent-response.ts` |
 | Artifact SSE handler | `src/hooks/room/sse-handlers/handlers/artifact-update.ts` |
 | Task checkpoint + clear | `src/hooks/room/sse-handlers/handlers/task-update.ts` |

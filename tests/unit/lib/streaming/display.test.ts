@@ -3,6 +3,7 @@ import {
   isBufferStreaming,
   resolveDetailArtifacts,
   resolveEntityStreaming,
+  resolveNonTextArtifacts,
   resolveStreamArtifacts,
   resolveStreamBuffer,
   resolveStreamText,
@@ -19,6 +20,18 @@ function buffer(overrides: Partial<StreamBuffer> = {}): StreamBuffer {
     lastUpdatedAt: Date.now(),
     ...overrides,
   }
+}
+
+const fileArtifact = {
+  artifactId: 'file-1',
+  name: 'report.csv',
+  parts: [{ kind: 'file' as const, file: { uri: 's3://bucket/report.csv' } }],
+}
+
+const textArtifact = {
+  artifactId: 'text-1',
+  name: 'response',
+  parts: [{ kind: 'text' as const, text: 'live body' }],
 }
 
 describe('streaming display helpers', () => {
@@ -46,15 +59,29 @@ describe('streaming display helpers', () => {
   it('resolveStreamText and artifacts fall back when no buffer', () => {
     expect(resolveStreamText(undefined, 'fallback')).toBe('fallback')
     expect(resolveStreamText(buffer({ text: 'live' }), 'fallback')).toBe('live')
-    expect(resolveStreamText(buffer({ text: '' }), 'fallback')).toBe('')
-    expect(resolveStreamArtifacts(undefined, [{ artifactId: 'a', parts: [] }])).toHaveLength(1)
+    expect(resolveStreamText(buffer({ text: '' }), 'fallback')).toBe('fallback')
+    expect(resolveStreamText(buffer({ text: 'short' }), 'longer checkpoint')).toBe('short')
     expect(
-      resolveStreamArtifacts(buffer({ isComplete: true, artifacts: [] }), [{ artifactId: 'a', parts: [] }]),
-    ).toHaveLength(1)
-    expect(resolveDetailArtifacts(buffer(), [{ artifactId: 'a', parts: [] }])).toBeUndefined()
+      resolveStreamText(buffer({ text: 'short', isComplete: true }), 'longer checkpoint'),
+    ).toBe('longer checkpoint')
+    expect(resolveStreamArtifacts(undefined, [fileArtifact])).toHaveLength(1)
     expect(
-      resolveDetailArtifacts(buffer({ isComplete: true }), [{ artifactId: 'a', parts: [] }]),
+      resolveStreamArtifacts(buffer({ isComplete: true, artifacts: [] }), [fileArtifact]),
     ).toHaveLength(1)
+  })
+
+  it('resolveNonTextArtifacts merges entity and buffer file artifacts while streaming', () => {
+    const liveBuffer = buffer({
+      artifacts: [textArtifact, fileArtifact],
+    })
+    expect(resolveNonTextArtifacts(liveBuffer, [fileArtifact])).toEqual([fileArtifact])
+    expect(resolveStreamArtifacts(liveBuffer, [fileArtifact])).toEqual([fileArtifact])
+  })
+
+  it('resolveDetailArtifacts keeps non-text entity artifacts visible while streaming', () => {
+    expect(resolveDetailArtifacts(buffer(), [fileArtifact])).toEqual([fileArtifact])
+    expect(resolveDetailArtifacts(buffer({ isComplete: true }), [fileArtifact])).toEqual([fileArtifact])
+    expect(resolveDetailArtifacts(buffer(), [textArtifact])).toBeUndefined()
   })
 
   it('resolveStreamBuffer returns the message-scoped buffer only', () => {

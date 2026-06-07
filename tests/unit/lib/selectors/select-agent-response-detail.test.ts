@@ -102,6 +102,33 @@ describe('selectAgentResponseDetail', () => {
     expect(detail?.artifacts).toBeUndefined()
   })
 
+  it('shows non-text entity artifacts while streaming text from buffer', () => {
+    const entityArtifacts = [{ artifactId: 'file-1', parts: [{ kind: 'file' as const, file: { uri: 's3://x' } }] }]
+    const { entities, orderedIds } = setup([
+      createUserMessage({ id: 'user-1', roomId: 'room-1' }),
+      createAgentMessage({
+        id: 'agent-1',
+        roomId: 'room-1',
+        relatedMessageId: 'user-1',
+        taskStatus: TASK_STATE.WORKING,
+        content: '',
+        artifacts: entityArtifacts,
+      }),
+    ])
+
+    const detail = selectAgentResponseDetail('room-1', 'agent-1', entities, orderedIds, {
+      text: 'streaming report body',
+      artifacts: [],
+      isComplete: false,
+      roomId: 'room-1',
+      lastUpdatedAt: Date.now(),
+    })
+
+    expect(detail?.content).toBe('streaming report body')
+    expect(detail?.isStreaming).toBe(true)
+    expect(detail?.artifacts).toEqual(entityArtifacts)
+  })
+
   it('ignores live buffer when entity taskStatus is terminal (strict terminal guard)', () => {
     const { entities, orderedIds } = setup([
       createUserMessage({ id: 'user-1', roomId: 'room-1' }),

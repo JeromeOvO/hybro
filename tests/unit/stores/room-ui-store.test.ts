@@ -174,6 +174,58 @@ describe('RoomUiStore', () => {
     })
   })
 
+  describe('conversationScroll', () => {
+    it('persists and reads scroll snapshots per room', () => {
+      useRoomUiStore.getState().saveConversationScroll('room-1', { scrollTop: 120, atBottom: false })
+      expect(useRoomUiStore.getState().getConversationScroll('room-1')).toEqual({
+        scrollTop: 120,
+        atBottom: false,
+      })
+      expect(useRoomUiStore.getState().getConversationScroll('room-2')).toBeUndefined()
+    })
+
+    it('survives resetRoom so revisits can restore position', () => {
+      useRoomUiStore.getState().saveConversationScroll('room-1', { scrollTop: 300, atBottom: false })
+      useRoomUiStore.getState().resetRoom('room-1')
+      expect(useRoomUiStore.getState().getConversationScroll('room-1')).toEqual({
+        scrollTop: 300,
+        atBottom: false,
+      })
+    })
+
+    it('is cleared by resetAll', () => {
+      useRoomUiStore.getState().saveConversationScroll('room-1', { scrollTop: 300, atBottom: false })
+      useRoomUiStore.getState().resetAll()
+      expect(useRoomUiStore.getState().getConversationScroll('room-1')).toBeUndefined()
+    })
+  })
+
+  describe('detailPaneScroll', () => {
+    it('persists and reads scroll snapshots per message', () => {
+      useRoomUiStore.getState().saveDetailPaneScroll('msg-1', { scrollTop: 180, atBottom: false })
+      expect(useRoomUiStore.getState().getDetailPaneScroll('msg-1')).toEqual({
+        scrollTop: 180,
+        atBottom: false,
+      })
+      expect(useRoomUiStore.getState().getDetailPaneScroll('msg-2')).toBeUndefined()
+    })
+
+    it('survives resetRoom', () => {
+      useRoomUiStore.getState().saveDetailPaneScroll('msg-1', { scrollTop: 180, atBottom: false })
+      useRoomUiStore.getState().resetRoom('room-1')
+      expect(useRoomUiStore.getState().getDetailPaneScroll('msg-1')).toEqual({
+        scrollTop: 180,
+        atBottom: false,
+      })
+    })
+
+    it('is cleared by resetAll', () => {
+      useRoomUiStore.getState().saveDetailPaneScroll('msg-1', { scrollTop: 180, atBottom: false })
+      useRoomUiStore.getState().resetAll()
+      expect(useRoomUiStore.getState().getDetailPaneScroll('msg-1')).toBeUndefined()
+    })
+  })
+
   describe('selectedAgentMessageId', () => {
     it('openAgentDetail sets messageId for a room', () => {
       useRoomUiStore.getState().openAgentDetail('room-1', 'agent-msg-1')

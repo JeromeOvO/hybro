@@ -38,6 +38,19 @@ describe('mergeStreamArtifacts', () => {
     expect(extractStreamTextFromArtifacts(list)).toBe('Hello world')
   })
 
+  it('ignores stale shorter same-name snapshots', () => {
+    let list = mergeStreamArtifacts(undefined, textArtifact('tok-1', 'Hello world'), false)
+    list = mergeStreamArtifacts(list, textArtifact('tok-2', 'Hello'), false)
+    expect(list).toHaveLength(1)
+    expect(extractStreamTextFromArtifacts(list)).toBe('Hello world')
+  })
+
+  it('ignores stale shorter same artifactId snapshots when append is false', () => {
+    let list = mergeStreamArtifacts(undefined, textArtifact('art-1', 'Hello world'), false)
+    list = mergeStreamArtifacts(list, textArtifact('art-1', 'Hello'), false)
+    expect(extractStreamTextFromArtifacts(list)).toBe('Hello world')
+  })
+
   it('pushes non-text artifacts alongside text segments', () => {
     let list = mergeStreamArtifacts(undefined, textArtifact('text-1', 'Report body'), false)
     list = mergeStreamArtifacts(list, {

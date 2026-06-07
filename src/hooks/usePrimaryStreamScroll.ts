@@ -9,6 +9,9 @@ interface UsePrimaryStreamScrollOptions {
   primaryStreamMessageId?: string
   userPausedRef: RefObject<boolean>
   programmaticScrollRef: RefObject<boolean>
+  /** When true, reveal growing stream tail even if user is not pinned to bottom. */
+  focusModeRef?: RefObject<boolean>
+  enabled?: boolean
 }
 
 function isNearBottom(el: HTMLElement, threshold = 100): boolean {
@@ -34,6 +37,8 @@ export function usePrimaryStreamScroll({
   primaryStreamMessageId,
   userPausedRef,
   programmaticScrollRef,
+  focusModeRef,
+  enabled = true,
 }: UsePrimaryStreamScrollOptions) {
   const bufferText = useStreamingStore(s =>
     primaryStreamMessageId ? s.buffers[primaryStreamMessageId]?.text : undefined,
@@ -49,14 +54,15 @@ export function usePrimaryStreamScroll({
     const primaryEl = primarySurfaceRef.current
     if (!scrollEl || !primaryEl) return
     if (userPausedRef.current) return
-    if (!isNearBottom(scrollEl)) return
+    const inFocusMode = focusModeRef?.current ?? false
+    if (!inFocusMode && !isNearBottom(scrollEl)) return
 
     programmaticScrollRef.current = true
     scrollPrimaryTailIntoView(scrollEl, primaryEl, behavior)
   }
 
   useLayoutEffect(() => {
-    if (!primaryStreamMessageId) return
+    if (!enabled || !primaryStreamMessageId) return
 
     if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
     rafRef.current = requestAnimationFrame(() => {
@@ -67,21 +73,24 @@ export function usePrimaryStreamScroll({
     return () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
     }
-  }, [bufferText, bufferUpdatedAt, primaryStreamMessageId])
+  }, [bufferText, bufferUpdatedAt, primaryStreamMessageId, enabled])
 
   useLayoutEffect(() => {
+    if (!enabled) return
+
     const primaryEl = primarySurfaceRef.current
     const scrollEl = scrollRef.current
     if (!primaryEl || !scrollEl) return
 
     const observer = new ResizeObserver(() => {
       if (userPausedRef.current) return
-      if (!isNearBottom(scrollEl)) return
+      const inFocusMode = focusModeRef?.current ?? false
+      if (!inFocusMode && !isNearBottom(scrollEl)) return
       programmaticScrollRef.current = true
       scrollPrimaryTailIntoView(scrollEl, primaryEl, 'auto')
     })
 
     observer.observe(primaryEl)
     return () => observer.disconnect()
-  }, [primaryStreamMessageId, scrollRef, primarySurfaceRef, userPausedRef, programmaticScrollRef])
+  }, [primaryStreamMessageId, scrollRef, primarySurfaceRef, userPausedRef, programmaticScrollRef, enabled])
 }

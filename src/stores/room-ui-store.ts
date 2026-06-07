@@ -4,6 +4,11 @@ import type { MessageDispatchInput } from '@/lib/types/agent-group'
 
 type RoomId = string
 
+export interface ConversationScrollSnapshot {
+  scrollTop: number
+  atBottom: boolean
+}
+
 interface PendingRoomData {
   initialMessage: string
   dispatch?: MessageDispatchInput
@@ -51,6 +56,8 @@ interface RoomUiState {
   pendingTurnSkeletons: Record<RoomId, PendingTurnSkeleton | undefined>
   localSendSeqByRoom: Record<RoomId, number>
   initialHydrationSeqByRoom: Record<RoomId, number>
+  conversationScrollByRoom: Record<RoomId, ConversationScrollSnapshot>
+  detailScrollByMessageId: Record<string, ConversationScrollSnapshot>
   selectedAgentMessageIdByRoom: Record<RoomId, string | undefined>
 
   // Per-room flag setters (roomId, value)
@@ -76,6 +83,10 @@ interface RoomUiState {
   setPendingTurnSkeleton: (roomId: RoomId, value?: PendingTurnSkeleton) => void
   markLocalSend: (roomId: RoomId) => void
   markInitialHydrated: (roomId: RoomId) => void
+  saveConversationScroll: (roomId: RoomId, snapshot: ConversationScrollSnapshot) => void
+  getConversationScroll: (roomId: RoomId) => ConversationScrollSnapshot | undefined
+  saveDetailPaneScroll: (messageId: string, snapshot: ConversationScrollSnapshot) => void
+  getDetailPaneScroll: (messageId: string) => ConversationScrollSnapshot | undefined
   openAgentDetail: (roomId: RoomId, messageId: string) => void
   closeAgentDetail: (roomId: RoomId) => void
 }
@@ -91,6 +102,8 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
   pendingTurnSkeletons: {},
   localSendSeqByRoom: {},
   initialHydrationSeqByRoom: {},
+  conversationScrollByRoom: {},
+  detailScrollByMessageId: {},
   selectedAgentMessageIdByRoom: {},
 
   setSending: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sending: v }) })),
@@ -124,6 +137,8 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
       pendingTurnSkeletons: {},
       localSendSeqByRoom: {},
       initialHydrationSeqByRoom: {},
+      conversationScrollByRoom: {},
+      detailScrollByMessageId: {},
       selectedAgentMessageIdByRoom: {},
     }),
 
@@ -166,6 +181,22 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
         [roomId]: (state.initialHydrationSeqByRoom[roomId] ?? 0) + 1,
       },
     })),
+  saveConversationScroll: (roomId, snapshot) =>
+    set((state) => ({
+      conversationScrollByRoom: {
+        ...state.conversationScrollByRoom,
+        [roomId]: snapshot,
+      },
+    })),
+  getConversationScroll: (roomId) => get().conversationScrollByRoom[roomId],
+  saveDetailPaneScroll: (messageId, snapshot) =>
+    set((state) => ({
+      detailScrollByMessageId: {
+        ...state.detailScrollByMessageId,
+        [messageId]: snapshot,
+      },
+    })),
+  getDetailPaneScroll: (messageId) => get().detailScrollByMessageId[messageId],
   openAgentDetail: (roomId, messageId) =>
     set((state) => ({
       selectedAgentMessageIdByRoom: {

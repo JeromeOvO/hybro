@@ -98,6 +98,7 @@
   width: 100%;
   max-width: var(--conversation-frame-max-width);
   margin-inline: auto;
+  overflow-anchor: none;
 }
 
 .conversation-body-frame {
@@ -794,6 +795,7 @@
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  overflow-anchor: none;
   padding: 18px 22px 32px;
 }
 

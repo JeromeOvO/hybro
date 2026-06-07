@@ -219,7 +219,8 @@ src/hooks/
 |-- useChatRoomCreation.ts     # room creation and navigation
 |-- useGroupManagement.ts      # saved groups and room group selection
 |-- useHubStatus.ts            # hub availability
-|-- useMessageScrollAnchoring.ts
+|-- useMessageScrollAnchoring.ts  # legacy; superseded by useTurnFocusScroll for main feed
+|-- useTurnFocusScroll.ts       # ChatGPT-style user-message focus + dynamic spacer
 |-- useMyAgents.ts
 |-- usePrimaryStreamScroll.ts
 |-- useStreamBuffer.ts
@@ -341,6 +342,10 @@ Live buffer text is derived via `extractStreamTextFromArtifacts`, which concaten
 - **I4** — Detail pane content for terminal entities comes from `message-store`, never from the live buffer (strict terminal guard in `selectAgentResponseDetail`).
 - **I5** — Per-agent terminal SSE clears that message's buffer only. Turn-level clear runs exactly once per turn, on user-turn terminal `processing_status`.
 - **I6** — `streaming-store/append` does not import `mergeArtifacts` from `message-store/upsert`. Live merge is `mergeStreamArtifacts` (disjoint-segment push, prefix-relation replace).
+
+Display helpers in `src/lib/streaming/display.ts` split live **text** (buffer) from **non-text artifacts** (files/data) during stream so the detail pane and activity strip can show file attachments while text is still growing. `AgentResponseDetailPane` uses `useDetailPaneScroll` with ChatGPT-aligned behavior: first open scrolls to top; reopening the same message restores saved scroll from `room-ui-store.detailScrollByMessageId`; optional tail-follow when pinned near bottom during stream; no scroll reset on stream complete; detail body uses `overflow-anchor: none`.
+
+**Main feed scroll (`ConversationMessageList`):** On first open (no saved position), the list scrolls to the bottom. When revisiting a room, the last scroll position is restored from `room-ui-store.conversationScrollByRoom` (including an `atBottom` flag so rooms left pinned to the latest message still land at the bottom). Scroll snapshots persist across `resetRoom` and are cleared on `resetAll`. On send (`localSendSeq`), `useTurnFocusScroll` anchors the last user message near the top (~50px offset) and grows a dynamic bottom spacer (`data-scroll-spacer`) so the answer expands downward without forced tail-chase. While the room is processing, `usePrimaryStreamScroll` follows the growing answer tail when focus mode is active unless the user scrolled away. `.conversation-frame` uses `overflow-anchor: none` to prevent browser scroll anchoring from fighting the spacer. Users who scroll away see the existing scroll-to-bottom affordance.
 
 Known issues and the convergence plan are in [`docs/STREAMING_UI_ISSUES_AND_FIXES.md`](STREAMING_UI_ISSUES_AND_FIXES.md).
 
