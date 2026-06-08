@@ -32,7 +32,7 @@ def _make_handler(
 ):
     if db is None:
         db = MagicMock()
-        db.update_task_state_on_message = AsyncMock(return_value=True)
+        db.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
         db.get_pending_continuation_on_message = AsyncMock(return_value=None)
     if sse is None:
@@ -302,6 +302,31 @@ class TestResponseEvent:
         h._rmc.resume_queue_from_continuation.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_uses_resolved_terminal_text_from_database_layer(self):
+        db = MagicMock()
+        db.update_task_state_on_message = AsyncMock(
+            return_value=(True, "resolved from artifacts")
+        )
+        db.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        db.get_pending_continuation_on_message = AsyncMock(return_value=None)
+        h = _make_handler(db=db)
+        event = AgentEvent(kind="response", **_base_event(), text=None)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(event)
+
+        h._db.update_task_state_on_message.assert_awaited_once_with(
+            "msg-001", "completed", message_text=None, artifacts=None,
+        )
+        h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
+            message_id="msg-001", task_result_text="resolved from artifacts", failed=False,
+        )
+
+    @pytest.mark.asyncio
     async def test_skip_persist_response(self):
         h = _make_handler()
         event = AgentEvent(
@@ -443,7 +468,7 @@ class TestInteractiveEvent:
     async def test_creates_hitl_request_for_async_interactive_continuation(self):
         mock_impl = AsyncMock(return_value=True)
         db = MagicMock()
-        db.update_task_state_on_message = AsyncMock(return_value=True)
+        db.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
         db.get_pending_continuation_on_message = AsyncMock(
             return_value={"user_message_id": "user-msg-001"}
@@ -505,7 +530,7 @@ class TestInteractiveEvent:
     @pytest.mark.asyncio
     async def test_skips_duplicate_hitl_request_for_existing_async_pending(self):
         db = MagicMock()
-        db.update_task_state_on_message = AsyncMock(return_value=True)
+        db.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
         db.get_pending_continuation_on_message = AsyncMock(
             return_value={"user_message_id": "user-msg-001"}
@@ -545,7 +570,7 @@ class TestInteractiveEvent:
     @pytest.mark.asyncio
     async def test_logs_agent_name_lookup_failure_without_blocking_hitl(self):
         db = MagicMock()
-        db.update_task_state_on_message = AsyncMock(return_value=True)
+        db.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
         db.get_pending_continuation_on_message = AsyncMock(
             return_value={"user_message_id": "user-msg-001"}

@@ -1564,14 +1564,16 @@ class DatabaseService:
         artifacts: list[dict] | None = None,
         task_id: str | None = None,
         context_id: str | None = None,
-    ) -> bool:
+    ) -> tuple[bool, str | None]:
         """Partial update of task fields on a room agent message using dot-notation.
 
         Unlike ``update_task_on_message`` which replaces the entire task object,
         this method only updates the specific fields provided, preserving all
         other existing task fields (``id``, ``contextId``, ``kind``, etc.).
 
-        Includes the same atomic terminal-state guard.
+        Includes the same atomic terminal-state guard. For terminal states,
+        resolves canonical display text from artifacts when ``message_text`` is
+        empty and returns the resolved text alongside the update result.
 
         Args:
             message_id: The message ID.
@@ -1582,18 +1584,22 @@ class DatabaseService:
             context_id: Optional override for the task ``contextId`` field.
 
         Returns:
-            True if updated successfully.
+            ``(updated, resolved_message_text)`` where *updated* is True when
+            the document was modified and *resolved_message_text* is the
+            canonical terminal display text when resolution ran.
         """
+        resolved_message_text = message_text
         try:
             from common.a2a_constants import TERMINAL_STATES
             from common.utils.a2a_helpers import (
+                artifacts_to_dicts,
                 is_terminal_task_state_value,
                 prepare_terminal_agent_content,
             )
 
             terminal_values = [s.value for s in TERMINAL_STATES]
             if is_terminal_task_state_value(state):
-                if artifacts is None and state == "completed":
+                if artifacts is None:
                     existing_msg = await self.get_room_agent_message_by_message_id(
                         message_id
                     )
@@ -1603,14 +1609,13 @@ class DatabaseService:
                         else None
                     )
                     if task and task.artifacts:
-                        from common.utils.a2a_helpers import artifacts_to_dicts
-
                         artifacts = artifacts_to_dicts(task.artifacts)
 
                 message_text, artifacts, _ = prepare_terminal_agent_content(
                     message_text=message_text,
                     artifacts=artifacts,
                 )
+                resolved_message_text = message_text
             set_fields: dict = {
                 "message_content.message_task.status.state": state,
                 "task_updated_at": utcnow(),
@@ -1638,12 +1643,12 @@ class DatabaseService:
                     "update_task_state_on_message: skipped %s (already terminal or not found)",
                     message_id,
                 )
-            return result.modified_count > 0
+            return result.modified_count > 0, resolved_message_text
         except Exception as e:
             logger.error(
                 "Failed to update task state on message %s: %s", message_id, e
             )
-            return False
+            return False, resolved_message_text
 
     async def accumulate_artifact_on_message(
         self,
@@ -1747,6 +1752,7 @@ class DatabaseService:
 
     @classmethod
     def _map_replace_artifact_expr(cls, artifact_id: str, artifact: dict) -> dict[str, Any]:
+        # Keep $ifNull in sync with _map_append_parts_expr for null/missing arrays.
         return {
             "$map": {
                 "input": {"$ifNull": ["$message_content.message_task.artifacts", []]},

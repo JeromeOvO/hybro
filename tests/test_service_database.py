@@ -7,6 +7,7 @@ Tests cover:
 - get_all_active_agents: delegation with correct filter
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -652,6 +653,43 @@ class TestAccumulateArtifactOnMessage:
         call_args = db_svc.mongo.room_agent_messages_collection.update_one.call_args
         update_doc = call_args[0][1]
         assert self._set_stage(update_doc)["message_content.message_text"] == "nested text"
+
+
+class TestUpdateTaskStateOnMessage:
+    @pytest.mark.asyncio
+    async def test_resolves_terminal_text_from_existing_artifacts(self, db_svc):
+        artifact = SimpleNamespace(
+            model_dump=lambda mode="json", by_alias=True: {
+                "artifactId": "stream-1",
+                "parts": [{"kind": "text", "text": "full body"}],
+            }
+        )
+        task = SimpleNamespace(artifacts=[artifact])
+        message = SimpleNamespace(
+            message_content=SimpleNamespace(message_task=task)
+        )
+        db_svc.get_room_agent_message_by_message_id = AsyncMock(return_value=message)
+        mock_result = MagicMock(modified_count=1, matched_count=1)
+        db_svc.mongo.room_agent_messages_collection = MagicMock()
+        db_svc.mongo.room_agent_messages_collection.update_one = AsyncMock(
+            return_value=mock_result
+        )
+
+        updated, resolved_text = await db_svc.update_task_state_on_message(
+            "msg-1",
+            "completed",
+            message_text=None,
+            artifacts=None,
+        )
+
+        assert updated is True
+        assert resolved_text == "full body"
+        update_doc = (
+            db_svc.mongo.room_agent_messages_collection.update_one.call_args[0][1]
+        )
+        assert update_doc["$set"]["message_content.message_text"] == "full body"
+        synced_artifacts = update_doc["$set"]["message_content.message_task.artifacts"]
+        assert synced_artifacts[0]["parts"] == [{"kind": "text", "text": "full body"}]
 
 
 # =============================================================================

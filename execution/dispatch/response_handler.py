@@ -324,35 +324,18 @@ class AgentResponseHandler:
                         }
                     ]
 
-        from common.utils.a2a_helpers import (
-            artifacts_to_dicts,
-            extract_text_from_artifact_dicts,
-        )
-
         display_text = e.text
-        if not display_text and not e.skip_persist:
-            existing_msg = await self._db.get_room_agent_message_by_message_id(
-                e.message_id
-            )
-            task = (
-                existing_msg.message_content.message_task
-                if existing_msg and existing_msg.message_content
-                else None
-            )
-            if task and task.artifacts:
-                display_text = extract_text_from_artifact_dicts(
-                    artifacts_to_dicts(task.artifacts)
-                )
-
         display_artifacts = e.artifacts
 
         if not e.skip_persist:
-            await self._db.update_task_state_on_message(
+            _, resolved_text = await self._db.update_task_state_on_message(
                 e.message_id,
                 "completed",
-                message_text=display_text,
+                message_text=e.text,
                 artifacts=artifacts_for_db,
             )
+            if resolved_text:
+                display_text = resolved_text
         await self._notify(e, coerce_task_state("completed"))
         await self._terminate_slot(
             e,

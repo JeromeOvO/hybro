@@ -432,13 +432,41 @@ def is_terminal_task_state_value(state: Any) -> bool:
     return _state_value(state) in {item.value for item in TERMINAL_STATES}
 
 
+def _part_dict_is_text(part: dict) -> bool:
+    root = part.get("root", part)
+    if isinstance(root, dict):
+        kind = root.get("kind")
+        if kind == "text":
+            return True
+        if "text" in root and kind not in ("file", "data"):
+            return True
+    kind = part.get("kind") if isinstance(part, dict) else None
+    if kind == "text":
+        return True
+    if isinstance(part, dict) and "text" in part and kind not in ("file", "data"):
+        return True
+    return False
+
+
+def filter_non_text_parts(parts: list[dict] | None) -> list[dict] | None:
+    """Drop text parts so SSE ``parts`` carries only file/data payloads."""
+    if not parts:
+        return parts
+    kept = [part for part in parts if not _part_dict_is_text(part)]
+    return kept or None
+
+
 def prepare_terminal_agent_content(
     *,
     message_text: str | None = None,
     artifacts: list[dict] | None = None,
     task_data: dict | None = None,
 ) -> tuple[str | None, list[dict] | None, dict | None]:
-    """Resolve terminal message_text and sync artifact text parts (no markdown transform)."""
+    """Resolve terminal message_text and sync artifact text parts (no markdown transform).
+
+    Terminal contract: one canonical text part holds the full display body per
+    artifact. Streaming chunks are collapsed; file/data parts are preserved.
+    """
     import copy
 
     resolved_text = message_text
@@ -495,32 +523,34 @@ def sync_artifact_dicts_to_canonical_text(
     artifacts: list[dict],
     canonical_text: str,
 ) -> list[dict]:
-    """Align artifact text payload with canonical terminal display text."""
+    """Align artifact text payload with canonical terminal display text.
+
+    Collapses multi-part streaming text into a single text part and removes
+    empty text slots. Non-text parts (file, data) are preserved as-is.
+    """
     import copy
 
     if not canonical_text.strip():
         return artifacts
 
     out = copy.deepcopy(artifacts)
-    text_written = False
-    for artifact in out:
-        for part in artifact.get("parts") or []:
-            root = part.get("root", part)
-            if isinstance(root, dict) and "text" in root:
-                root["text"] = canonical_text if not text_written else ""
-                text_written = True
-            elif isinstance(part, dict) and "text" in part:
-                part["text"] = canonical_text if not text_written else ""
-                text_written = True
+    canonical_written = False
 
-    if text_written:
+    for artifact in out:
+        parts = artifact.get("parts") or []
+        non_text_parts = [part for part in parts if not _part_dict_is_text(part)]
+        if not canonical_written:
+            non_text_parts.insert(0, {"kind": "text", "text": canonical_text})
+            canonical_written = True
+        artifact["parts"] = non_text_parts
+
+    if canonical_written:
         return out
 
     first = out[0] if out else {"artifactId": "response", "name": "response", "parts": []}
     if not out:
         out = [first]
-    parts = first.setdefault("parts", [])
-    parts.insert(0, {"kind": "text", "text": canonical_text})
+    first.setdefault("parts", []).insert(0, {"kind": "text", "text": canonical_text})
     return out
 
 

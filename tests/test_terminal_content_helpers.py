@@ -1,8 +1,10 @@
 """Tests for terminal agent content helpers in a2a_helpers."""
 
 from common.utils.a2a_helpers import (
+    _part_dict_is_text,
     artifacts_to_dicts,
     extract_text_from_artifact_dicts,
+    filter_non_text_parts,
     prepare_terminal_agent_content,
     resolve_terminal_sse_content,
     sync_artifact_dicts_to_canonical_text,
@@ -45,6 +47,21 @@ class TestTerminalContentHelpers:
         canonical = "canonical body"
         synced = sync_artifact_dicts_to_canonical_text(artifacts, canonical)
         assert extract_text_from_artifact_dicts(synced) == canonical
+        text_parts = [
+            part
+            for part in synced[0]["parts"]
+            if _part_dict_is_text(part)
+        ]
+        assert len(text_parts) == 1
+        assert text_parts[0]["text"] == canonical
+
+    def test_filter_non_text_parts_drops_text(self) -> None:
+        parts = [
+            {"kind": "text", "text": "stale"},
+            {"kind": "file", "uri": "s3://bucket/file.png"},
+        ]
+        filtered = filter_non_text_parts(parts)
+        assert filtered == [{"kind": "file", "uri": "s3://bucket/file.png"}]
 
     def test_resolve_terminal_sse_content_prefers_message_text_on_completed(self) -> None:
         from a2a.types import TaskState
