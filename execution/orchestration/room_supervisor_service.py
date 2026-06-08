@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from common.utils.logger import get_logger
+from common.prompts.markdown_response_format import HYBRO_MARKDOWN_RESPONSE_FORMAT
 from llm_gateway.errors import LLMModelRoutingError, LLMServiceNotBoundError
 from models.supervisor import (
     ActionType,
@@ -194,10 +195,7 @@ SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = """You are synthesizing the results from mu
 - Be concise. The user has already seen each agent's individual response.
 - Focus on the unified answer, not a recap of each agent's full response.
 
-## Markdown Formatting
-- When using numbered lists, always use sequential integers (1, 2, 3, 4...) — never repeat "1." for every item.
-- Indent all nested content under a list item with 4 spaces so it stays attached to that item and does not break the list.
-"""
+""" + HYBRO_MARKDOWN_RESPONSE_FORMAT + "\n"
 
 
 class RoomSupervisorService:
