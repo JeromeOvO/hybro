@@ -74,7 +74,7 @@ describe('selectAgentResponseDetail', () => {
     const detail = selectAgentResponseDetail('room-1', 'agent-client', entities, orderedIds)
 
     expect(detail?.requestMessage?.id).toBe('user-client')
-    expect(detail?.isStreaming).toBe(true)
+    expect(detail?.isStreaming).toBe(false)
   })
 
   it('uses stream buffer text and streaming flag when provided', () => {

@@ -9,6 +9,7 @@ import { useTurnFocusScroll } from '@/hooks/useTurnFocusScroll'
 import {
   readConversationScrollSnapshot,
   restoreConversationScrollWithRetry,
+  shouldSkipInitialHydrationScrollRestore,
 } from '@/lib/conversation/conversation-scroll'
 import { TurnRenderer } from './TurnRenderer'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
@@ -74,6 +75,7 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
     frameRef,
     lastUserMessageId,
     localSendSeq,
+    initialHydrationSeq,
     turnLive,
     contentVersion: storeVersion,
     userPausedRef,
@@ -125,7 +127,7 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
       prevHydrationSeqRef.current = initialHydrationSeq
       initialScrollResolvedRef.current = true
 
-      if (!userPausedRef.current) {
+      if (!userPausedRef.current && !shouldSkipInitialHydrationScrollRestore(localSendSeq)) {
         const saved = useRoomUiStore.getState().getConversationScroll(roomId)
         programmaticScrollRef.current = true
         restoreConversationScrollWithRetry(el, saved, (result) => {
@@ -139,6 +141,9 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
         })
       } else {
         prevMetricsRef.current = readMetrics(el)
+        requestAnimationFrame(() => {
+          programmaticScrollRef.current = false
+        })
       }
 
       return
@@ -169,7 +174,7 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
     }
 
     prevMetricsRef.current = curr
-  }, [roomId, storeVersion, initialHydrationSeq, scrollToBottom, turnLive, focusModeRef])
+  }, [roomId, storeVersion, initialHydrationSeq, localSendSeq, scrollToBottom, turnLive, focusModeRef])
 
   useEffect(() => {
     const el = scrollRef.current

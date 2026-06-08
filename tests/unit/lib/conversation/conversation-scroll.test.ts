@@ -5,6 +5,7 @@ import {
   clampScrollTop,
   readConversationScrollSnapshot,
   restoreConversationScrollWithRetry,
+  shouldSkipInitialHydrationScrollRestore,
 } from '@/lib/conversation/conversation-scroll'
 
 function createScrollElement(initialHeight = 1000) {
@@ -81,5 +82,10 @@ describe('conversation-scroll', () => {
     expect(onApplied).toHaveBeenCalledTimes(1)
     expect(onApplied).toHaveBeenCalledWith('restored-position')
     expect(element.scrollTop).toBe(220)
+  })
+
+  it('skips hydration scroll restore after a local send', () => {
+    expect(shouldSkipInitialHydrationScrollRestore(0)).toBe(false)
+    expect(shouldSkipInitialHydrationScrollRestore(1)).toBe(true)
   })
 })

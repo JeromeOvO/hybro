@@ -8,6 +8,52 @@ function artifactText(a: ArtifactData): string {
   return a.parts.map(p => p.text || '').join('')
 }
 
+function isPunctuationOnlySnapshot(text: string): boolean {
+  const trimmed = text.trim()
+  return trimmed.length > 0 && trimmed.length <= 3 && /^[.!?,;:]+$/.test(trimmed)
+}
+
+/**
+ * Merge two text snapshots for the same artifactId when append=false.
+ * Handles cumulative snapshots, stale prefixes, sliding-window overlap, and
+ * mislabeled token deltas (e.g. "news." continuing "...agent news.").
+ */
+export function mergeStreamingTextSnapshots(existing: string, incoming: string): string {
+  if (!incoming) return existing
+  if (!existing) return incoming
+  if (isPunctuationOnlySnapshot(incoming) && existing.length > incoming.length) return existing
+  if (incoming.startsWith(existing)) return incoming
+  if (existing.startsWith(incoming)) return existing
+
+  let overlap = 0
+  const maxOverlap = Math.min(existing.length, incoming.length)
+  for (let size = maxOverlap; size > 0; size--) {
+    if (existing.endsWith(incoming.slice(0, size))) {
+      overlap = size
+      break
+    }
+  }
+  if (overlap > 0) {
+    return existing + incoming.slice(overlap)
+  }
+
+  if (existing.includes(incoming)) return existing
+  if (incoming.includes(existing)) return incoming
+
+  // Short unrelated replacement (e.g. Draft → Final)
+  if (existing.length <= 48 && incoming.length <= 48) {
+    return incoming.length >= existing.length ? incoming : existing + incoming
+  }
+
+  // Disjoint streaming window: stitch after sentence punctuation, never clobber
+  if (incoming.startsWith('.')) {
+    const rest = incoming.slice(1).replace(/^\s+/, ' ')
+    return existing.endsWith(' ') || existing.endsWith('\n') ? existing + incoming : existing + rest
+  }
+
+  return existing + incoming
+}
+
 function mergeTextParts(
   existingParts: ArtifactData['parts'],
   newParts: ArtifactData['parts'],
@@ -52,10 +98,13 @@ export function mergeStreamArtifacts(
     ) {
       const existingText = artifactText(list[idx])
       const incomingText = artifactText(incoming)
-      if (existingText.startsWith(incomingText) && existingText.length > incomingText.length) {
-        return list
+      const mergedText = mergeStreamingTextSnapshots(existingText, incomingText)
+      if (mergedText === existingText) return list
+      list[idx] = {
+        ...list[idx],
+        parts: [{ kind: 'text', text: mergedText }],
+        isStreaming: incoming.isStreaming ?? list[idx].isStreaming,
       }
-      list[idx] = incoming
     } else {
       list[idx] = incoming
     }

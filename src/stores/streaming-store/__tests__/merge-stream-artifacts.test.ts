@@ -67,4 +67,50 @@ describe('mergeStreamArtifacts', () => {
     list = mergeStreamArtifacts(list, textArtifact('art-1', 'Final'), false)
     expect(extractStreamTextFromArtifacts(list)).toBe('Final')
   })
+
+  it('merges sliding-window overlap on same artifactId when append is false', () => {
+    let list = mergeStreamArtifacts(
+      undefined,
+      textArtifact('stream-1', 'Let me find the latest AI agent news.'),
+      false,
+    )
+    list = mergeStreamArtifacts(
+      list,
+      textArtifact('stream-1', 'news. HN front page right now shows:'),
+      false,
+    )
+    expect(extractStreamTextFromArtifacts(list)).toBe(
+      'Let me find the latest AI agent news. HN front page right now shows:',
+    )
+  })
+
+  it('does not clobber intro when a disjoint window starts with ". I can see"', () => {
+    let list = mergeStreamArtifacts(
+      undefined,
+      textArtifact('stream-1', "I'll check the latest harness engineering news"),
+      false,
+    )
+    list = mergeStreamArtifacts(
+      list,
+      textArtifact(
+        'stream-1',
+        '. I can see the arXiv tokenomics paper (156 pts) and the career erosion post are trending.',
+      ),
+      false,
+    )
+    const text = extractStreamTextFromArtifacts(list)
+    expect(text).toContain('harness engineering news')
+    expect(text).toContain('I can see the arXiv tokenomics paper')
+    expect(text).not.toMatch(/^\.\s*\n\nI can see/)
+  })
+
+  it('ignores punctuation-only snapshot chunks', () => {
+    let list = mergeStreamArtifacts(
+      undefined,
+      textArtifact('stream-1', 'Working on your request.'),
+      false,
+    )
+    list = mergeStreamArtifacts(list, textArtifact('stream-1', '.'), false)
+    expect(extractStreamTextFromArtifacts(list)).toBe('Working on your request.')
+  })
 })

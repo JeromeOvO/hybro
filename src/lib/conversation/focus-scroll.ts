@@ -4,6 +4,8 @@ export const FOCUS_SCROLL_MIN_SPACER_PX = 208
 /** Offset from viewport top when anchoring the active user message (ChatGPT-style). */
 export const FOCUS_SCROLL_TOP_OFFSET_PX = 50
 
+/** Keep in sync with --conversation-focus-scroll-top in conversation-tokens.css */
+
 export function computeFocusSpacerHeight(
   container: HTMLElement,
   anchorEl: HTMLElement,

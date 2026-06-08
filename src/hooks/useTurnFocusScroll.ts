@@ -13,6 +13,7 @@ interface UseTurnFocusScrollOptions {
   frameRef: RefObject<HTMLDivElement | null>
   lastUserMessageId: string | undefined
   localSendSeq: number
+  initialHydrationSeq: number
   turnLive: boolean
   contentVersion: number
   userPausedRef: RefObject<boolean>
@@ -24,6 +25,7 @@ export function useTurnFocusScroll({
   frameRef,
   lastUserMessageId,
   localSendSeq,
+  initialHydrationSeq,
   turnLive,
   contentVersion,
   userPausedRef,
@@ -32,6 +34,7 @@ export function useTurnFocusScroll({
   const [spacerHeight, setSpacerHeight] = useState(FOCUS_SCROLL_MIN_SPACER_PX)
   const focusModeRef = useRef(false)
   const prevLocalSendSeqRef = useRef(localSendSeq)
+  const prevInitialHydrationSeqRef = useRef(initialHydrationSeq)
   const prevTurnLiveRef = useRef(turnLive)
 
   const updateSpacer = () => {
@@ -87,6 +90,24 @@ export function useTurnFocusScroll({
       requestAnimationFrame(tryFocus)
     }
   }, [localSendSeq, lastUserMessageId])
+
+  useLayoutEffect(() => {
+    if (initialHydrationSeq === prevInitialHydrationSeqRef.current) return
+    prevInitialHydrationSeqRef.current = initialHydrationSeq
+    if (initialHydrationSeq === 0 || localSendSeq === 0) return
+
+    focusModeRef.current = true
+    userPausedRef.current = false
+    if (!focusLastUserMessage()) {
+      let retries = 0
+      const tryFocus = () => {
+        retries += 1
+        if (focusLastUserMessage() || retries >= 5) return
+        requestAnimationFrame(tryFocus)
+      }
+      requestAnimationFrame(tryFocus)
+    }
+  }, [initialHydrationSeq, localSendSeq, lastUserMessageId])
 
   useLayoutEffect(() => {
     if (turnLive) {

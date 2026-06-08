@@ -1,3 +1,4 @@
+import { isTerminalState } from '@/lib/types/sse'
 import type { TaskState } from '@/lib/types/sse'
 import type { ArtifactData } from '@/stores/message-store/types'
 import type { StreamBuffer } from '@/stores/streaming-store'
@@ -44,23 +45,17 @@ export function resolveViewModelStreaming(
   buffer: StreamBuffer | undefined,
   status: 'completed' | 'failed' | 'awaiting_input' | 'working',
 ): boolean {
-  if (buffer) return !buffer.isComplete
-  return status === 'working'
+  if (status !== 'working') return false
+  return isBufferStreaming(buffer)
 }
-
-const ACTIVE_ENTITY_TASK_STATES: ReadonlySet<TaskState> = new Set([
-  'working',
-  'submitted',
-])
 
 /** Streaming for message entities (detail pane / selectors). */
 export function resolveEntityStreaming(
   buffer: StreamBuffer | undefined,
   taskStatus: TaskState | undefined,
 ): boolean {
-  if (buffer) return !buffer.isComplete
-  if (!taskStatus) return false
-  return ACTIVE_ENTITY_TASK_STATES.has(taskStatus)
+  if (taskStatus && isTerminalState(taskStatus)) return false
+  return isBufferStreaming(buffer)
 }
 
 export { resolveStreamBuffer } from '@/stores/streaming-store'

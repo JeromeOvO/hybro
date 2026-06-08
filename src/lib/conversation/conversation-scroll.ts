@@ -20,6 +20,15 @@ export function readConversationScrollSnapshot(element: HTMLElement): Conversati
 
 export type ConversationScrollApplyResult = 'default-bottom' | 'restored-bottom' | 'restored-position'
 
+/**
+ * When the user sends before initial DB hydration finishes, focus-scroll already
+ * anchored the turn. Applying the default hydration scroll-to-bottom would land
+ * in the empty spacer below the content.
+ */
+export function shouldSkipInitialHydrationScrollRestore(localSendSeq: number): boolean {
+  return localSendSeq > 0
+}
+
 function scrollHeightReady(element: HTMLElement): boolean {
   return element.scrollHeight > element.clientHeight || element.scrollTop === 0
 }

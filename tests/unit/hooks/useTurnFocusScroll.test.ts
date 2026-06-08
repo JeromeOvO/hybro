@@ -77,6 +77,7 @@ describe('useTurnFocusScroll', () => {
           frameRef,
           lastUserMessageId: 'user-1',
           localSendSeq,
+          initialHydrationSeq: 0,
           turnLive,
           contentVersion: 0,
           userPausedRef,
@@ -92,6 +93,36 @@ describe('useTurnFocusScroll', () => {
     expect(scroll.scrollTop).toBeGreaterThan(0)
   })
 
+  it('re-focuses after initial hydration when a send already happened', () => {
+    const { scroll } = createDom('user-1')
+
+    const { rerender } = renderHook(
+      ({ initialHydrationSeq }) => {
+        const scrollRef = useRef(scroll)
+        const frameRef = useRef(scroll.firstElementChild as HTMLDivElement)
+        const userPausedRef = useRef(false)
+        const programmaticScrollRef = useRef(false)
+        return useTurnFocusScroll({
+          scrollRef,
+          frameRef,
+          lastUserMessageId: 'user-1',
+          localSendSeq: 1,
+          initialHydrationSeq,
+          turnLive: true,
+          contentVersion: 0,
+          userPausedRef,
+          programmaticScrollRef,
+        })
+      },
+      { initialProps: { initialHydrationSeq: 0 } },
+    )
+
+    Object.defineProperty(scroll, 'scrollTop', { value: 900, writable: true, configurable: true })
+    rerender({ initialHydrationSeq: 1 })
+
+    expect(scroll.scrollTo).toHaveBeenCalled()
+  })
+
   it('returns minimum spacer when turn is not live', () => {
     const { scroll } = createDom('user-1')
 
@@ -105,6 +136,7 @@ describe('useTurnFocusScroll', () => {
         frameRef,
         lastUserMessageId: 'user-1',
         localSendSeq: 0,
+        initialHydrationSeq: 0,
         turnLive: false,
         contentVersion: 0,
         userPausedRef,
@@ -128,6 +160,7 @@ describe('useTurnFocusScroll', () => {
         frameRef,
         lastUserMessageId: 'user-1',
         localSendSeq: 1,
+        initialHydrationSeq: 0,
         turnLive: true,
         contentVersion: 1,
         userPausedRef,

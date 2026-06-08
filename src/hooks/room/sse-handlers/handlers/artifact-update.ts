@@ -1,4 +1,5 @@
 import type { RoomSSEFrameMap } from '@/lib/types/sse'
+import { isTerminalState } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
 import { useStreamingStore } from '@/stores/streaming-store'
 import { appendEvent } from '@/lib/room-timeline/event-log'
@@ -28,6 +29,12 @@ export function handleArtifactUpdate(
   if (!sseMessage.data.message_id || !sseMessage.data.artifact) return
 
   const { message_id, artifact, append: isAppend, last_chunk } = sseMessage.data
+
+  const entity = store.entities[message_id]
+  if (entity?.taskStatus && isTerminalState(entity.taskStatus)) {
+    streaming.clear(message_id)
+    return
+  }
   const artifactData = sseArtifactDataFromPayload(
     artifact as Record<string, unknown>,
     isAppend,

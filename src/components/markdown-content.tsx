@@ -6,6 +6,7 @@ import rehypeHighlight from 'rehype-highlight'
 import { Check, ChevronRight, Code2, Copy } from 'lucide-react'
 import { cn, formatIfJson } from '@/lib/utils'
 import { getPlainTextFromRange } from '@/lib/selection-plain-text'
+import { normalizeConversationMarkdown } from '@/lib/markdown/normalize-conversation'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 
 const MENTION_CLIPBOARD_MIME = 'application/x-hybro-mentions'
@@ -172,6 +173,9 @@ function isConversationMarkdownClass(className?: string): boolean {
   return !!className?.includes('conversation-markdown-body')
 }
 
+/** Tracks `<ol>` nesting depth so section counters apply only to top-level lists. */
+const OlDepthContext = React.createContext(0)
+
 /** Shared custom component overrides used by all Streamdown instances. */
 function makeComponents(isStreaming: boolean, conversationTypography: boolean) {
   const blockSpacing = conversationTypography ? undefined : 'mb-2 last:mb-0'
@@ -245,9 +249,25 @@ function makeComponents(isStreaming: boolean, conversationTypography: boolean) {
   ul: ({ children }: { children?: React.ReactNode }) => (
     <ul className={listSpacing ?? (conversationTypography ? 'list-disc' : undefined)}>{children}</ul>
   ),
-  ol: ({ children }: { children?: React.ReactNode }) => (
-    <ol className={orderedListSpacing ?? (conversationTypography ? 'list-decimal' : undefined)}>{children}</ol>
-  ),
+  ol: ({ children, start, ...olProps }: React.OlHTMLAttributes<HTMLOListElement> & { children?: React.ReactNode }) => {
+    const depth = React.useContext(OlDepthContext)
+    const isTopLevel = depth === 0
+    return (
+      <OlDepthContext.Provider value={depth + 1}>
+        <ol
+          className={orderedListSpacing ?? (conversationTypography ? undefined : 'list-decimal')}
+          style={
+            conversationTypography && isTopLevel
+              ? { counterReset: `conv-section-ol ${(start ?? 1) - 1}` }
+              : undefined
+          }
+          {...olProps}
+        >
+          {children}
+        </ol>
+      </OlDepthContext.Provider>
+    )
+  },
   li: ({ children }: { children?: React.ReactNode }) => <li className={listItemSpacing}>{children}</li>,
   h1: ({ children }: { children?: React.ReactNode }) => (
     <h1 className={conversationTypography ? undefined : 'text-lg font-bold mb-2'}>{children}</h1>
@@ -322,9 +342,13 @@ export function MarkdownContent({
   className?: string
 }) {
   const contentRef = useRef<HTMLDivElement>(null)
-  const formatted = autoFormatJson ? formatIfJson(content) : content
-  const processedContent = stripLiteralFourSpacesPrefix(processMentions(formatted))
   const conversationTypography = isConversationMarkdownClass(className)
+  const processedContent = React.useMemo(() => {
+    const formatted = autoFormatJson ? formatIfJson(content) : content
+    const mentionProcessed = stripLiteralFourSpacesPrefix(processMentions(formatted))
+    if (!conversationTypography) return mentionProcessed
+    return normalizeConversationMarkdown(mentionProcessed, { streaming: isStreaming })
+  }, [content, autoFormatJson, conversationTypography, isStreaming])
   // Memoize components by isStreaming to avoid Streamdown re-rendering on every render
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const components = React.useMemo(

@@ -41,19 +41,21 @@ describe('streaming display helpers', () => {
     expect(isBufferStreaming(buffer({ isComplete: true }))).toBe(false)
   })
 
-  it('resolveViewModelStreaming prefers buffer over status', () => {
-    expect(resolveViewModelStreaming(undefined, 'working')).toBe(true)
+  it('resolveViewModelStreaming stops when view-model status is terminal', () => {
+    expect(resolveViewModelStreaming(undefined, 'working')).toBe(false)
     expect(resolveViewModelStreaming(undefined, 'completed')).toBe(false)
-    expect(resolveViewModelStreaming(buffer(), 'completed')).toBe(true)
+    expect(resolveViewModelStreaming(buffer(), 'working')).toBe(true)
+    expect(resolveViewModelStreaming(buffer(), 'completed')).toBe(false)
     expect(resolveViewModelStreaming(buffer({ isComplete: true }), 'working')).toBe(false)
   })
 
-  it('resolveEntityStreaming matches active task states', () => {
+  it('resolveEntityStreaming follows live buffer only', () => {
     expect(resolveEntityStreaming(undefined, undefined)).toBe(false)
-    expect(resolveEntityStreaming(undefined, 'working')).toBe(true)
-    expect(resolveEntityStreaming(undefined, 'submitted')).toBe(true)
+    expect(resolveEntityStreaming(undefined, 'working')).toBe(false)
+    expect(resolveEntityStreaming(undefined, 'submitted')).toBe(false)
     expect(resolveEntityStreaming(undefined, 'completed')).toBe(false)
-    expect(resolveEntityStreaming(buffer(), 'completed')).toBe(true)
+    expect(resolveEntityStreaming(buffer(), 'working')).toBe(true)
+    expect(resolveEntityStreaming(buffer(), 'completed')).toBe(false)
   })
 
   it('resolveStreamText and artifacts fall back when no buffer', () => {
