@@ -6,7 +6,8 @@ import rehypeHighlight from 'rehype-highlight'
 import { Check, ChevronRight, Code2, Copy } from 'lucide-react'
 import { cn, formatIfJson } from '@/lib/utils'
 import { getPlainTextFromRange } from '@/lib/selection-plain-text'
-import { normalizeConversationMarkdown } from '@/lib/markdown/normalize-conversation'
+import { preprocessConversationMarkdown } from '@/lib/markdown/normalize-conversation'
+import { conversationRemarkPlugins } from '@/lib/markdown/conversation-remark-plugins'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 
 const MENTION_CLIPBOARD_MIME = 'application/x-hybro-mentions'
@@ -347,7 +348,7 @@ export function MarkdownContent({
     const formatted = autoFormatJson ? formatIfJson(content) : content
     const mentionProcessed = stripLiteralFourSpacesPrefix(processMentions(formatted))
     if (!conversationTypography) return mentionProcessed
-    return normalizeConversationMarkdown(mentionProcessed, { streaming: isStreaming })
+    return preprocessConversationMarkdown(mentionProcessed, { streaming: isStreaming })
   }, [content, autoFormatJson, conversationTypography, isStreaming])
   // Memoize components by isStreaming to avoid Streamdown re-rendering on every render
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -375,6 +376,10 @@ export function MarkdownContent({
         mode={isStreaming ? 'streaming' : 'static'}
         caret={isStreaming ? 'block' : undefined}
         components={components}
+        remarkPlugins={conversationTypography ? conversationRemarkPlugins : undefined}
+        parseMarkdownIntoBlocksFn={
+          conversationTypography && !isStreaming ? (md) => [md] : undefined
+        }
         rehypePlugins={[rehypeHighlight]}
       >
         {processedContent}

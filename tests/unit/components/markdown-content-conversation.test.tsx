@@ -173,6 +173,144 @@ describe('MarkdownContent conversation typography', () => {
     }
   })
 
+  itIfStreamdown('restarts ordered-list numbering after supervisor section labels', () => {
+    const { container } = render(
+      <div className="conversation-content-body">
+        <MarkdownContent
+          className="conversation-markdown-body"
+          content={[
+            'TL;DR — Top 3',
+            '1. MCP release candidate.',
+            '2. OpenAI Agents SDK.',
+            '3. Anthropic Teaching Claude Why.',
+            '',
+            'Prioritized items (up to 6)',
+            '',
+            '1. MCP (Model Context Protocol) — release candidate',
+            '- **Summary:** MCP RC.',
+            '- **Paywall:** No',
+            '',
+            '2. OpenAI Agents SDK',
+            '- **Summary:** SDK update.',
+          ].join('\n')}
+        />
+      </div>,
+    )
+
+    const lists = container.querySelectorAll('.conversation-markdown-body ol:not(ol ol)')
+    expect(lists.length).toBeGreaterThanOrEqual(2)
+
+    const secondListItems = lists[1]?.querySelectorAll(':scope > li')
+    expect(secondListItems?.length).toBe(2)
+    expect(secondListItems?.[0]?.textContent).toContain('MCP (Model Context Protocol)')
+
+    if (typeof CSS !== 'undefined' && CSS.supports?.('selector', 'ol ::before')) {
+      const firstMarker = window.getComputedStyle(
+        secondListItems![0]!,
+        '::before',
+      ).content.replace(/"/g, '')
+      expect(firstMarker).toMatch(/^1\.\s/)
+    }
+  })
+
+  itIfStreamdown('restarts ordered-list numbering when supervisor sections use ### headings', () => {
+    const { container } = render(
+      <div className="conversation-content-body">
+        <MarkdownContent
+          className="conversation-markdown-body"
+          content={[
+            '### TL;DR — Top 3',
+            '1. MCP release candidate.',
+            '2. OpenAI Agents SDK.',
+            '',
+            '### Prioritized items (up to 6)',
+            '1. MCP (Model Context Protocol) — release candidate',
+            '- **Summary:** MCP RC.',
+            '',
+            '2. OpenAI Agents SDK',
+            '- **Summary:** SDK update.',
+          ].join('\n')}
+        />
+      </div>,
+    )
+
+    const lists = container.querySelectorAll('.conversation-markdown-body ol:not(ol ol)')
+    expect(lists.length).toBeGreaterThanOrEqual(2)
+
+    const secondListItems = lists[1]?.querySelectorAll(':scope > li')
+    expect(secondListItems?.length).toBe(2)
+
+    if (typeof CSS !== 'undefined' && CSS.supports?.('selector', 'ol ::before')) {
+      const firstMarker = window.getComputedStyle(
+        secondListItems![0]!,
+        '::before',
+      ).content.replace(/"/g, '')
+      expect(firstMarker).toMatch(/^1\.\s/)
+    }
+  })
+
+  itIfStreamdown('keeps full supervisor shape numbered 1–3, 1–6, 1–3 across sections', () => {
+    const { container } = render(
+      <div className="conversation-content-body">
+        <MarkdownContent
+          className="conversation-markdown-body"
+          content={[
+            'TL;DR — Top 3',
+            '1. MCP release candidate.',
+            '2. OpenAI Agents SDK.',
+            '3. Anthropic Teaching Claude Why.',
+            '',
+            'Prioritized items (up to 6)',
+            '',
+            '1. MCP (Model Context Protocol) — release candidate',
+            '- **Summary:** MCP RC.',
+            '- **Paywall:** No',
+            '',
+            '2. OpenAI Agents SDK',
+            '- **Summary:** SDK update.',
+            '- **Paywall:** No',
+            '',
+            '3. Teaching Claude Why',
+            '- **Summary:** Anthropic research.',
+            '- **Paywall:** No',
+            '',
+            '4. LangChain patterns',
+            '- **Summary:** middleware-first.',
+            '- **Paywall:** No',
+            '',
+            '5. Google ADK Go 1.0',
+            '- **Summary:** ADK updates.',
+            '- **Paywall:** No',
+            '',
+            '6. Terminal coding agents paper',
+            '- **Summary:** two-phase approach.',
+            '- **Paywall:** No',
+            '',
+            'Recommended next actions (specific)',
+            '1. Experiment with MCP RC.',
+            '2. Prototype a sandboxed harness.',
+            '3. Add harness-level tests.',
+          ].join('\n')}
+        />
+      </div>,
+    )
+
+    const lists = container.querySelectorAll('.conversation-markdown-body ol:not(ol ol)')
+    expect(lists.length).toBeGreaterThanOrEqual(3)
+    expect(lists[0]?.querySelectorAll(':scope > li').length).toBe(3)
+    expect(lists[1]?.querySelectorAll(':scope > li').length).toBe(6)
+    expect(lists[2]?.querySelectorAll(':scope > li').length).toBe(3)
+
+    if (typeof CSS !== 'undefined' && CSS.supports?.('selector', 'ol ::before')) {
+      const prioritizedFirst = lists[1]?.querySelector(':scope > li')
+      const marker = window.getComputedStyle(
+        prioritizedFirst!,
+        '::before',
+      ).content.replace(/"/g, '')
+      expect(marker).toMatch(/^1\.\s/)
+    }
+  })
+
   itIfStreamdown('folds bare ATX heading markers into headings instead of empty h3 + ol', () => {
     const { container } = render(
       <div className="conversation-content-body">
@@ -201,6 +339,31 @@ describe('MarkdownContent conversation typography', () => {
     expect(headings[1]?.textContent).toContain('Harness Engineering Survey')
     expect(container.querySelectorAll('.conversation-markdown-body h3:empty').length).toBe(0)
     expect(container.querySelectorAll('.conversation-markdown-body ol').length).toBe(0)
+  })
+
+  itIfStreamdown('renders GFM tables in conversation markdown', () => {
+    const { container } = render(
+      <div className="conversation-content-body">
+        <MarkdownContent
+          className="conversation-markdown-body"
+          content={[
+            '| Agent | Status |',
+            '| --- | --- |',
+            '| MCP | Active |',
+            '| SDK | Beta |',
+          ].join('\n')}
+        />
+      </div>,
+    )
+
+    const table = container.querySelector('.conversation-markdown-body table')
+    expect(table).toBeTruthy()
+    const headers = container.querySelectorAll('.conversation-markdown-body th')
+    const cells = container.querySelectorAll('.conversation-markdown-body td')
+    expect(headers.length).toBe(2)
+    expect(cells.length).toBe(4)
+    expect(table?.textContent).toContain('MCP')
+    expect(table?.textContent).toContain('Beta')
   })
 
   itIfStreamdown('keeps compact defaults outside conversation surfaces', () => {

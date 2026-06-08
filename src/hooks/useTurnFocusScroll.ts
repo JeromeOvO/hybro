@@ -1,6 +1,6 @@
 'use client'
 
-import { useLayoutEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import { escapeCssIdent } from '@/lib/room-timeline/message-groups'
 import {
   computeFocusSpacerHeight,
@@ -20,6 +20,12 @@ interface UseTurnFocusScrollOptions {
   programmaticScrollRef: RefObject<boolean>
 }
 
+interface SpacerUpdateOptions {
+  /** When true, keep the dynamic bottom spacer even if turnLive is still false. */
+  focusMode?: boolean
+  liveTurn?: boolean
+}
+
 export function useTurnFocusScroll({
   scrollRef,
   frameRef,
@@ -33,11 +39,14 @@ export function useTurnFocusScroll({
 }: UseTurnFocusScrollOptions) {
   const [spacerHeight, setSpacerHeight] = useState(FOCUS_SCROLL_MIN_SPACER_PX)
   const focusModeRef = useRef(false)
+  const turnLiveRef = useRef(turnLive)
   const prevLocalSendSeqRef = useRef(localSendSeq)
   const prevInitialHydrationSeqRef = useRef(initialHydrationSeq)
   const prevTurnLiveRef = useRef(turnLive)
 
-  const updateSpacer = () => {
+  turnLiveRef.current = turnLive
+
+  const updateSpacer = useCallback((options: SpacerUpdateOptions = {}) => {
     const container = scrollRef.current
     const frame = frameRef.current
     if (!container || !frame || !lastUserMessageId) return
@@ -49,15 +58,18 @@ export function useTurnFocusScroll({
 
     if (!contentEnd || !userEl) return
 
-    if (!focusModeRef.current && !turnLive) {
+    const focusMode = options.focusMode ?? focusModeRef.current
+    const liveTurn = options.liveTurn ?? turnLiveRef.current
+
+    if (!focusMode && !liveTurn) {
       setSpacerHeight(FOCUS_SCROLL_MIN_SPACER_PX)
       return
     }
 
     setSpacerHeight(computeFocusSpacerHeight(container, userEl, contentEnd))
-  }
+  }, [scrollRef, frameRef, lastUserMessageId])
 
-  const focusLastUserMessage = () => {
+  const focusLastUserMessage = useCallback((options: SpacerUpdateOptions = {}) => {
     const container = scrollRef.current
     const frame = frameRef.current
     if (!container || !frame || !lastUserMessageId) return false
@@ -69,9 +81,22 @@ export function useTurnFocusScroll({
 
     programmaticScrollRef.current = true
     scrollUserMessageToFocus(container, userEl)
-    updateSpacer()
+    updateSpacer({
+      focusMode: options.focusMode ?? true,
+      liveTurn: options.liveTurn ?? turnLiveRef.current,
+    })
     return true
-  }
+  }, [scrollRef, frameRef, lastUserMessageId, programmaticScrollRef, updateSpacer])
+
+  const scheduleFocusRetries = useCallback((options: SpacerUpdateOptions) => {
+    let retries = 0
+    const tryFocus = () => {
+      retries += 1
+      if (focusLastUserMessage(options) || retries >= 5) return
+      requestAnimationFrame(tryFocus)
+    }
+    requestAnimationFrame(tryFocus)
+  }, [focusLastUserMessage])
 
   useLayoutEffect(() => {
     if (localSendSeq === prevLocalSendSeqRef.current) return
@@ -80,16 +105,11 @@ export function useTurnFocusScroll({
     focusModeRef.current = true
     userPausedRef.current = false
 
-    if (!focusLastUserMessage()) {
-      let retries = 0
-      const tryFocus = () => {
-        retries += 1
-        if (focusLastUserMessage() || retries >= 5) return
-        requestAnimationFrame(tryFocus)
-      }
-      requestAnimationFrame(tryFocus)
+    const focusOptions: SpacerUpdateOptions = { focusMode: true, liveTurn: turnLiveRef.current }
+    if (!focusLastUserMessage(focusOptions)) {
+      scheduleFocusRetries(focusOptions)
     }
-  }, [localSendSeq, lastUserMessageId])
+  }, [localSendSeq, lastUserMessageId, focusLastUserMessage, scheduleFocusRetries, userPausedRef])
 
   useLayoutEffect(() => {
     if (initialHydrationSeq === prevInitialHydrationSeqRef.current) return
@@ -98,16 +118,18 @@ export function useTurnFocusScroll({
 
     focusModeRef.current = true
     userPausedRef.current = false
-    if (!focusLastUserMessage()) {
-      let retries = 0
-      const tryFocus = () => {
-        retries += 1
-        if (focusLastUserMessage() || retries >= 5) return
-        requestAnimationFrame(tryFocus)
-      }
-      requestAnimationFrame(tryFocus)
+    const focusOptions: SpacerUpdateOptions = { focusMode: true, liveTurn: turnLiveRef.current }
+    if (!focusLastUserMessage(focusOptions)) {
+      scheduleFocusRetries(focusOptions)
     }
-  }, [initialHydrationSeq, localSendSeq, lastUserMessageId])
+  }, [
+    initialHydrationSeq,
+    localSendSeq,
+    lastUserMessageId,
+    focusLastUserMessage,
+    scheduleFocusRetries,
+    userPausedRef,
+  ])
 
   useLayoutEffect(() => {
     if (turnLive) {
@@ -116,22 +138,22 @@ export function useTurnFocusScroll({
       focusModeRef.current = false
     }
     prevTurnLiveRef.current = turnLive
-    updateSpacer()
-  }, [turnLive, contentVersion, lastUserMessageId])
+    updateSpacer({ focusMode: focusModeRef.current, liveTurn: turnLive })
+  }, [turnLive, contentVersion, lastUserMessageId, updateSpacer])
 
   useLayoutEffect(() => {
     const frame = frameRef.current
     if (!frame || typeof ResizeObserver === 'undefined') return
 
     const observer = new ResizeObserver(() => {
-      if (!focusModeRef.current && !turnLive) return
+      if (!focusModeRef.current && !turnLiveRef.current) return
       if (userPausedRef.current) return
-      updateSpacer()
+      updateSpacer({ focusMode: focusModeRef.current, liveTurn: turnLiveRef.current })
     })
 
     observer.observe(frame)
     return () => observer.disconnect()
-  }, [frameRef, turnLive, lastUserMessageId])
+  }, [frameRef, updateSpacer, userPausedRef])
 
   return { spacerHeight, focusModeRef }
 }

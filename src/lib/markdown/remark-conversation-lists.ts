@@ -39,16 +39,16 @@ function nestUnorderedListUnderLastOrderedItem(
  * Move a `<ul>` that directly follows an `<ol>` (no intervening heading,
  * paragraph, hr, etc.) into the last `<li>` of that `<ol>`.
  */
-function nestAdjacentBulletLists(blocks: RootContent[]): RootContent[] {
+export function nestAdjacentBulletLists(blocks: RootContent[]): RootContent[] {
   const output: RootContent[] = []
 
   for (const block of blocks) {
     const prev = output[output.length - 1]
     if (
       block.type === 'list'
-      && !block.ordered
+      && block.ordered === false
       && prev?.type === 'list'
-      && prev.ordered
+      && prev.ordered !== false
     ) {
       nestUnorderedListUnderLastOrderedItem(prev, block)
       continue
@@ -68,7 +68,7 @@ function nestAdjacentBulletLists(blocks: RootContent[]): RootContent[] {
  *   - a thematic break (`---`)
  *   - a non-empty plain paragraph (e.g. an introductory sentence)
  */
-function assignOrderedListStarts(blocks: RootContent[]): RootContent[] {
+export function assignOrderedListStarts(blocks: RootContent[]): RootContent[] {
   let counter = 0
 
   return blocks.map((block, index) => {
@@ -77,7 +77,7 @@ function assignOrderedListStarts(blocks: RootContent[]): RootContent[] {
       return block
     }
 
-    if (block.type !== 'list' || !block.ordered) {
+    if (block.type !== 'list' || block.ordered === false) {
       return block
     }
 
@@ -101,6 +101,23 @@ function assignOrderedListStarts(blocks: RootContent[]): RootContent[] {
   })
 }
 
+export const remarkNestAdjacentBulletLists: Plugin<[], Root> = () => (tree) => {
+  try {
+    tree.children = nestAdjacentBulletLists(tree.children)
+  } catch {
+    // Preserve raw render on unexpected mdast shapes.
+  }
+}
+
+export const remarkAssignOrderedListStarts: Plugin<[], Root> = () => (tree) => {
+  try {
+    tree.children = assignOrderedListStarts(tree.children)
+  } catch {
+    // Preserve raw render on unexpected mdast shapes.
+  }
+}
+
+/** Nest bullets under prior ordered items, then assign sequential list starts. */
 export const remarkConversationLists: Plugin<[], Root> = () => (tree) => {
   tree.children = nestAdjacentBulletLists(tree.children)
   tree.children = assignOrderedListStarts(tree.children)

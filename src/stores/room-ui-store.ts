@@ -1,12 +1,30 @@
 import { create } from 'zustand'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { MessageDispatchInput } from '@/lib/types/agent-group'
+import type { ConversationScrollSnapshot } from '@/lib/conversation/conversation-scroll'
 
 type RoomId = string
 
-export interface ConversationScrollSnapshot {
-  scrollTop: number
-  atBottom: boolean
+/** Max detail-pane scroll snapshots retained (LRU by last access). */
+const MAX_DETAIL_SCROLL_SNAPSHOTS = 32
+
+function touchDetailScrollSnapshot(
+  map: Record<string, ConversationScrollSnapshot>,
+  messageId: string,
+  snapshot: ConversationScrollSnapshot,
+): Record<string, ConversationScrollSnapshot> {
+  const { [messageId]: _removed, ...rest } = map
+  const next: Record<string, ConversationScrollSnapshot> = { ...rest, [messageId]: snapshot }
+  const keys = Object.keys(next)
+  if (keys.length <= MAX_DETAIL_SCROLL_SNAPSHOTS) return next
+
+  const trimmed: Record<string, ConversationScrollSnapshot> = {}
+  const dropCount = keys.length - MAX_DETAIL_SCROLL_SNAPSHOTS
+  for (let i = dropCount; i < keys.length; i += 1) {
+    const key = keys[i]
+    trimmed[key] = next[key]
+  }
+  return trimmed
 }
 
 interface PendingRoomData {
@@ -191,10 +209,11 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
   getConversationScroll: (roomId) => get().conversationScrollByRoom[roomId],
   saveDetailPaneScroll: (messageId, snapshot) =>
     set((state) => ({
-      detailScrollByMessageId: {
-        ...state.detailScrollByMessageId,
-        [messageId]: snapshot,
-      },
+      detailScrollByMessageId: touchDetailScrollSnapshot(
+        state.detailScrollByMessageId,
+        messageId,
+        snapshot,
+      ),
     })),
   getDetailPaneScroll: (messageId) => get().detailScrollByMessageId[messageId],
   openAgentDetail: (roomId, messageId) =>

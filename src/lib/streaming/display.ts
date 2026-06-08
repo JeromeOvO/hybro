@@ -68,7 +68,10 @@ export function resolveStreamText(
   const live = buffer.text
   if (!live) return fallbackContent
   if (!buffer.isComplete) return live
-  return live.length >= fallbackContent.length ? live : fallbackContent
+  // Terminal buffer may linger briefly before entity hydration; keep live text until
+  // persisted content is available. Once persisted, trust it over stale buffer bytes.
+  if (!fallbackContent.trim()) return live
+  return fallbackContent
 }
 
 export function resolveStreamArtifacts(

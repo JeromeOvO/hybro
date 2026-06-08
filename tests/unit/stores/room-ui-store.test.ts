@@ -224,6 +224,28 @@ describe('RoomUiStore', () => {
       useRoomUiStore.getState().resetAll()
       expect(useRoomUiStore.getState().getDetailPaneScroll('msg-1')).toBeUndefined()
     })
+
+    it('evicts oldest entries when the LRU cap is exceeded', () => {
+      const store = useRoomUiStore.getState()
+      for (let i = 0; i < 33; i += 1) {
+        store.saveDetailPaneScroll(`msg-${i}`, { scrollTop: i, atBottom: false })
+      }
+      expect(store.getDetailPaneScroll('msg-0')).toBeUndefined()
+      expect(store.getDetailPaneScroll('msg-32')).toEqual({ scrollTop: 32, atBottom: false })
+      expect(Object.keys(useRoomUiStore.getState().detailScrollByMessageId)).toHaveLength(32)
+    })
+
+    it('refreshes LRU order when an existing message is saved again', () => {
+      const store = useRoomUiStore.getState()
+      for (let i = 0; i < 32; i += 1) {
+        store.saveDetailPaneScroll(`msg-${i}`, { scrollTop: i, atBottom: false })
+      }
+      store.saveDetailPaneScroll('msg-0', { scrollTop: 999, atBottom: true })
+      store.saveDetailPaneScroll('msg-new', { scrollTop: 1, atBottom: false })
+      expect(store.getDetailPaneScroll('msg-0')).toEqual({ scrollTop: 999, atBottom: true })
+      expect(store.getDetailPaneScroll('msg-1')).toBeUndefined()
+      expect(store.getDetailPaneScroll('msg-new')).toEqual({ scrollTop: 1, atBottom: false })
+    })
   })
 
   describe('selectedAgentMessageId', () => {

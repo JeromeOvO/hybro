@@ -66,6 +66,9 @@ describe('streaming display helpers', () => {
     expect(
       resolveStreamText(buffer({ text: 'short', isComplete: true }), 'longer checkpoint'),
     ).toBe('longer checkpoint')
+    expect(
+      resolveStreamText(buffer({ text: 'live tail', isComplete: true }), ''),
+    ).toBe('live tail')
     expect(resolveStreamArtifacts(undefined, [fileArtifact])).toHaveLength(1)
     expect(
       resolveStreamArtifacts(buffer({ isComplete: true, artifacts: [] }), [fileArtifact]),

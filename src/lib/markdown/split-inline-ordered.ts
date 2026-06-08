@@ -55,7 +55,10 @@ function foldBareHeadingMarkers(content: string): string {
  * heading like `#### 1. Title` is not split into an empty heading + list item.
  * Also folds bare heading markers (`###` alone on a line) into the next line.
  */
-export function splitInlineOrderedListItems(content: string): string {
+export function splitInlineOrderedListItems(
+  content: string,
+  _options?: { streaming?: boolean },
+): string {
   const folded = foldBareHeadingMarkers(content)
   let inFence = false
   const lines: string[] = []
