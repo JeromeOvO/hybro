@@ -324,24 +324,46 @@ class AgentResponseHandler:
                         }
                     ]
 
+        from common.utils.a2a_helpers import (
+            artifacts_to_dicts,
+            extract_text_from_artifact_dicts,
+        )
+
+        display_text = e.text
+        if not display_text and not e.skip_persist:
+            existing_msg = await self._db.get_room_agent_message_by_message_id(
+                e.message_id
+            )
+            task = (
+                existing_msg.message_content.message_task
+                if existing_msg and existing_msg.message_content
+                else None
+            )
+            if task and task.artifacts:
+                display_text = extract_text_from_artifact_dicts(
+                    artifacts_to_dicts(task.artifacts)
+                )
+
+        display_artifacts = e.artifacts
+
         if not e.skip_persist:
             await self._db.update_task_state_on_message(
                 e.message_id,
                 "completed",
-                message_text=e.text,
+                message_text=display_text,
                 artifacts=artifacts_for_db,
             )
         await self._notify(e, coerce_task_state("completed"))
         await self._terminate_slot(
             e,
             "completed",
-            content=e.text,
-            artifacts=e.artifacts,
+            content=display_text,
+            artifacts=display_artifacts,
         )
         # NOTE: send_agent_response removed — _notify() above already delivers
         # content + parts via task_update SSE. The redundant agent_response SSE
         # created a duplicate message entity in the frontend.
-        await self._resume_orchestration(e.message_id, e.text)
+        await self._resume_orchestration(e.message_id, display_text or "")
 
     async def _on_error(self, e: AgentEvent) -> None:
         error = e.error_text or e.text or "Unknown agent error"

@@ -417,3 +417,126 @@ async def convert_pydantic_artifacts_to_s3(
         message_id,
         converted_so_far=converted_so_far,
     )
+
+
+def _state_value(state: Any) -> str:
+    value = getattr(state, "value", state)
+    return str(value)
+
+
+def is_terminal_task_state_value(state: Any) -> bool:
+    from common.a2a_constants import TERMINAL_STATES
+
+    if state is None:
+        return False
+    return _state_value(state) in {item.value for item in TERMINAL_STATES}
+
+
+def prepare_terminal_agent_content(
+    *,
+    message_text: str | None = None,
+    artifacts: list[dict] | None = None,
+    task_data: dict | None = None,
+) -> tuple[str | None, list[dict] | None, dict | None]:
+    """Resolve terminal message_text and sync artifact text parts (no markdown transform)."""
+    import copy
+
+    resolved_text = message_text
+    if (not resolved_text or not resolved_text.strip()) and artifacts:
+        resolved_text = extract_text_from_artifact_dicts(artifacts)
+
+    resolved_artifacts = artifacts
+    if resolved_text and resolved_artifacts:
+        resolved_artifacts = sync_artifact_dicts_to_canonical_text(
+            resolved_artifacts,
+            resolved_text,
+        )
+
+    resolved_task = task_data
+    if resolved_task is not None and resolved_artifacts is not None:
+        resolved_task = copy.deepcopy(task_data)
+        resolved_task["artifacts"] = resolved_artifacts
+
+    return resolved_text, resolved_artifacts, resolved_task
+
+
+def artifacts_to_dicts(artifacts: list | None) -> list[dict]:
+    """Convert persisted A2A artifact models to plain dicts."""
+    if not artifacts:
+        return []
+    result: list[dict] = []
+    for artifact in artifacts:
+        if isinstance(artifact, dict):
+            result.append(artifact)
+        elif hasattr(artifact, "model_dump"):
+            result.append(artifact.model_dump(mode="json", by_alias=True))
+    return result
+
+
+def extract_text_from_artifact_dicts(artifacts: list[dict] | None) -> str | None:
+    """Concatenate text parts from serialized artifact dicts."""
+    if not artifacts:
+        return None
+    chunks: list[str] = []
+    for artifact in artifacts:
+        for part in artifact.get("parts") or []:
+            root = part.get("root", part)
+            if isinstance(root, dict):
+                text = root.get("text")
+            else:
+                text = part.get("text") if isinstance(part, dict) else None
+            if isinstance(text, str) and text:
+                chunks.append(text)
+    combined = "".join(chunks)
+    return combined if combined else None
+
+
+def sync_artifact_dicts_to_canonical_text(
+    artifacts: list[dict],
+    canonical_text: str,
+) -> list[dict]:
+    """Align artifact text payload with canonical terminal display text."""
+    import copy
+
+    if not canonical_text.strip():
+        return artifacts
+
+    out = copy.deepcopy(artifacts)
+    text_written = False
+    for artifact in out:
+        for part in artifact.get("parts") or []:
+            root = part.get("root", part)
+            if isinstance(root, dict) and "text" in root:
+                root["text"] = canonical_text if not text_written else ""
+                text_written = True
+            elif isinstance(part, dict) and "text" in part:
+                part["text"] = canonical_text if not text_written else ""
+                text_written = True
+
+    if text_written:
+        return out
+
+    first = out[0] if out else {"artifactId": "response", "name": "response", "parts": []}
+    if not out:
+        out = [first]
+    parts = first.setdefault("parts", [])
+    parts.insert(0, {"kind": "text", "text": canonical_text})
+    return out
+
+
+def resolve_terminal_sse_content(
+    state: Any,
+    *,
+    message_text: str | None,
+    artifact_text: str | None,
+) -> str | None:
+    """Pick terminal content for SSE (message_text wins on completed)."""
+    from common.a2a_constants import CommonTaskState
+
+    stored = message_text.strip() if message_text and message_text.strip() else None
+    extracted = (
+        artifact_text.strip() if artifact_text and artifact_text.strip() else None
+    )
+    if _state_value(state) == CommonTaskState.COMPLETED.value and stored:
+        return stored
+    return stored or extracted

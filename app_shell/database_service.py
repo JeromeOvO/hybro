@@ -1586,8 +1586,31 @@ class DatabaseService:
         """
         try:
             from common.a2a_constants import TERMINAL_STATES
+            from common.utils.a2a_helpers import (
+                is_terminal_task_state_value,
+                prepare_terminal_agent_content,
+            )
 
             terminal_values = [s.value for s in TERMINAL_STATES]
+            if is_terminal_task_state_value(state):
+                if artifacts is None and state == "completed":
+                    existing_msg = await self.get_room_agent_message_by_message_id(
+                        message_id
+                    )
+                    task = (
+                        existing_msg.message_content.message_task
+                        if existing_msg and existing_msg.message_content
+                        else None
+                    )
+                    if task and task.artifacts:
+                        from common.utils.a2a_helpers import artifacts_to_dicts
+
+                        artifacts = artifacts_to_dicts(task.artifacts)
+
+                message_text, artifacts, _ = prepare_terminal_agent_content(
+                    message_text=message_text,
+                    artifacts=artifacts,
+                )
             set_fields: dict = {
                 "message_content.message_task.status.state": state,
                 "task_updated_at": utcnow(),
@@ -1713,6 +1736,61 @@ class DatabaseService:
             )
             return False
 
+    @staticmethod
+    def _artifact_id_match_expr(artifact_id: str) -> dict[str, Any]:
+        return {
+            "$or": [
+                {"$eq": ["$$art.artifactId", artifact_id]},
+                {"$eq": ["$$art.artifact_id", artifact_id]},
+            ]
+        }
+
+    @classmethod
+    def _map_replace_artifact_expr(cls, artifact_id: str, artifact: dict) -> dict[str, Any]:
+        return {
+            "$map": {
+                "input": {"$ifNull": ["$message_content.message_task.artifacts", []]},
+                "as": "art",
+                "in": {
+                    "$cond": {
+                        "if": cls._artifact_id_match_expr(artifact_id),
+                        "then": artifact,
+                        "else": "$$art",
+                    }
+                },
+            }
+        }
+
+    @classmethod
+    def _map_append_parts_expr(
+        cls, artifact_id: str, new_parts: list[dict]
+    ) -> dict[str, Any]:
+        return {
+            "$map": {
+                "input": {"$ifNull": ["$message_content.message_task.artifacts", []]},
+                "as": "art",
+                "in": {
+                    "$cond": {
+                        "if": cls._artifact_id_match_expr(artifact_id),
+                        "then": {
+                            "$mergeObjects": [
+                                "$$art",
+                                {
+                                    "parts": {
+                                        "$concatArrays": [
+                                            {"$ifNull": ["$$art.parts", []]},
+                                            new_parts,
+                                        ]
+                                    }
+                                },
+                            ]
+                        },
+                        "else": "$$art",
+                    }
+                },
+            }
+        }
+
     async def _append_parts_to_artifact(
         self,
         message_id: str,
@@ -1742,36 +1820,9 @@ class DatabaseService:
             pipeline: list = [
                 {
                     "$set": {
-                        "message_content.message_task.artifacts": {
-                            "$map": {
-                                "input": "$message_content.message_task.artifacts",
-                                "as": "art",
-                                "in": {
-                                    "$cond": {
-                                        "if": {
-                                            "$or": [
-                                                {"$eq": ["$$art.artifactId", artifact_id]},
-                                                {"$eq": ["$$art.artifact_id", artifact_id]},
-                                            ]
-                                        },
-                                        "then": {
-                                            "$mergeObjects": [
-                                                "$$art",
-                                                {
-                                                    "parts": {
-                                                        "$concatArrays": [
-                                                            {"$ifNull": ["$$art.parts", []]},
-                                                            new_parts,
-                                                        ]
-                                                    }
-                                                },
-                                            ]
-                                        },
-                                        "else": "$$art",
-                                    }
-                                },
-                            }
-                        },
+                        "message_content.message_task.artifacts": self._map_append_parts_expr(
+                            artifact_id, new_parts
+                        ),
                         "message_content.message_task.status.state": "working",
                         "message_content.message_text": {
                             "$concat": [
@@ -1787,17 +1838,19 @@ class DatabaseService:
                 filter_with_artifact, pipeline
             )
         else:
-            update: dict = {
-                "$push": {
-                    "message_content.message_task.artifacts.$.parts": {"$each": new_parts}
-                },
-                "$set": {
-                    "message_content.message_task.status.state": "working",
-                    "task_updated_at": utcnow(),
-                },
-            }
+            pipeline = [
+                {
+                    "$set": {
+                        "message_content.message_task.artifacts": self._map_append_parts_expr(
+                            artifact_id, new_parts
+                        ),
+                        "message_content.message_task.status.state": "working",
+                        "task_updated_at": utcnow(),
+                    }
+                }
+            ]
             result = await self.mongo.room_agent_messages_collection.update_one(
-                filter_with_artifact, update
+                filter_with_artifact, pipeline
             )
 
         if result.modified_count > 0:
@@ -1844,18 +1897,19 @@ class DatabaseService:
             },
         }
 
-        update: dict = {
-            "$set": {
-                "message_content.message_task.artifacts.$": artifact,
-                "message_content.message_task.status.state": "working",
-                "task_updated_at": utcnow(),
-            },
+        set_fields: dict[str, Any] = {
+            "message_content.message_task.artifacts": self._map_replace_artifact_expr(
+                artifact_id, artifact
+            ),
+            "message_content.message_task.status.state": "working",
+            "task_updated_at": utcnow(),
         }
         if artifact_text:
-            update["$set"]["message_content.message_text"] = artifact_text
+            set_fields["message_content.message_text"] = artifact_text
 
+        pipeline = [{"$set": set_fields}]
         result = await self.mongo.room_agent_messages_collection.update_one(
-            filter_with_artifact, update
+            filter_with_artifact, pipeline
         )
 
         if result.modified_count > 0:
