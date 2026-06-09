@@ -1148,7 +1148,7 @@ class DirectTransport(AgentTransport):
             logger.error("DirectTransport: process_a2a_response returned None")
             return False
 
-        if message_data.kind == "task":
+        if getattr(message_data, "kind", None) == "task":
             existing_task = get_task(room_agent_message)
             if (
                 existing_task
@@ -1180,7 +1180,7 @@ class DirectTransport(AgentTransport):
                 room_agent_message.message_content.message_task = from_sdk_task(message_data)
             return await self.tsm.persist_message(room_agent_message)
 
-        if message_data.kind == "message":
+        if getattr(message_data, "kind", None) == "message":
             task = get_task(room_agent_message)
             if task:
                 if task.history is None:
