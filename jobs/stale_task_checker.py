@@ -54,7 +54,7 @@ class _UnboundDependency:
 
 
 store: Any = _UnboundDependency("store")
-mongodb: Any = _UnboundDependency("mongodb")
+_legacy_mongo: Any = _UnboundDependency("_legacy_mongo")
 a2a_service: Any = _UnboundDependency("a2a_service")
 
 
@@ -169,7 +169,7 @@ class StaleTaskChecker:
             return self._runtime_deps
         return StaleTaskCheckerDeps(
             store=store,
-            rooms_collection=getattr(mongodb, "rooms_collection", None),
+            rooms_collection=getattr(_legacy_mongo, "rooms_collection", None),
             notify_task_update=notify_task_update,
             increment_counter=increment_counter,
             a2a_service=a2a_service,

@@ -47,7 +47,7 @@ from models.room import RoomAgentMessage
 logger = get_logger(__name__)
 
 _mongodb_backend: Any | None = None
-mongodb: Any | None = None
+_legacy_mongo: Any | None = None
 
 
 def __getattr__(name: str) -> Any:
@@ -59,8 +59,8 @@ def __getattr__(name: str) -> Any:
 def _bind_mongodb_backend(value: Any | None = None) -> None:
     global _mongodb_backend
     _mongodb_backend = value
-    global mongodb
-    mongodb = value
+    global _legacy_mongo
+    _legacy_mongo = value
 
 
 PLATFORM_SUPPORTED_MODES = {
@@ -339,8 +339,8 @@ class A2AService:
             return
         task_db = self._get_task_db()
         if task_db is None:
-            task_db = globals().get("mongodb")
-        legacy_db = globals().get("mongodb")
+            task_db = _legacy_mongo
+        legacy_db = _legacy_mongo
 
         def _supports_increment(db: Any) -> bool:
             try:

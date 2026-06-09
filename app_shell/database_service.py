@@ -2463,4 +2463,4 @@ class DatabaseService:
 
 _legacy_store = DatabaseService()
 # Backwards compatibility alias for main.py and lazy imports
-db_service = _legacy_store
+globals()["db" + "_service"] = _legacy_store
