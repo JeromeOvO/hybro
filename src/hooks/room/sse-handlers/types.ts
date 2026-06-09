@@ -6,6 +6,7 @@ export interface SSEHandlerDeps {
   lifecycle: ProcessingLifecycle
   getAgentName: (agentId: string) => Promise<string>
   getAgentSource: (agentId: string | undefined) => 'cloud' | 'hub' | undefined
+  getToken?: (() => Promise<string | null>) | undefined
   reconcileWithDb: (roomId: string) => Promise<void>
   hitlRequestIndex: MutableRefObject<Map<string, string>>
   setCancelling: (v: boolean) => void

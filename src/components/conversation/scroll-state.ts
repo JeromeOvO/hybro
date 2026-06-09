@@ -26,7 +26,7 @@ export function resolveScrollStateAfterEvent(input: ResolveScrollStateInput): Re
     input.currentScrollTop < input.previousScrollTop
 
   if (interrupted) {
-    return { programmatic: false, paused: true, clearNewContent: false }
+    return { programmatic: false, paused: input.wasPaused, clearNewContent: false }
   }
 
   return {

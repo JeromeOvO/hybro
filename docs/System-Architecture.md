@@ -199,11 +199,11 @@ The current room UI is centered on `src/components/conversation/`:
 - `ConversationMessageList.tsx`: top-level message/timeline list.
 - `TurnRenderer.tsx`, `TurnBody.tsx`: turn-level rendering.
 - `UserMessageBlock.tsx`, `UserAttachmentCard.tsx`, `UserAnswerCard.tsx`: user-side turn content.
-- `AgentCard.tsx`, `AgentContentBlock.tsx`, `AgentResultContent.tsx`, `AgentIndex.tsx`: agent response presentation.
+- `AgentCard.tsx`, `AgentContentBlock.tsx`, `AgentResultContent.tsx`, `AgentIndex.tsx`: agent response presentation. Multi-agent turns with LLM synthesis (`llm_synthesis`) show the combined answer in the primary surface and compact per-agent index rows below. Supervisor DONE without synthesis (`deterministic_done`) shows the digest intro in the primary surface and full per-agent bodies in the expanded `AgentIndex`. Substantive `summary-*` content classifies as `llm_synthesis`; the short coordinator digest stub (`"N agents responded. Expand below…"`) classifies as `deterministic`.
 - `FinalAnswerSurface.tsx`, `SynthesisContent.tsx`: final/synthesis answer surfaces.
 - `AgentResponseDetailPane.tsx`: right-side detail pane for a selected agent response.
 - `ScrollToBottomButton.tsx`, `scroll-state.ts`: scroll affordances and state.
-- `conversation-tokens.css`, `shimmer.css`: conversation-specific CSS tokens and loading effects.
+- `conversation-tokens.css`, `shimmer.css`: conversation-specific CSS tokens and loading effects. Reading typography uses 16px / 1.75 line-height, system UI sans, 400 weight (light and dark), neutral letter-spacing, 1em paragraph gaps, 2.75rem turn spacing, an 800px content column, and 14px table cell text.
 
 `src/components/room-page-shell.tsx` owns the room workspace. It renders the conversation list, the composer dock, desktop resizable detail panes, and mobile detail sheets. It also wires selected message state from `room-ui-store`, streaming buffers from `useStreamBuffer`, and detail view models from `selectAgentResponseDetail`.
 
@@ -219,7 +219,8 @@ src/hooks/
 |-- useChatRoomCreation.ts     # room creation and navigation
 |-- useGroupManagement.ts      # saved groups and room group selection
 |-- useHubStatus.ts            # hub availability
-|-- useMessageScrollAnchoring.ts
+|-- useMessageScrollAnchoring.ts  # legacy scroll anchoring
+|-- useScrollUserMessageOnSend.ts # one-time scroll into sticky zone on send
 |-- useMyAgents.ts
 |-- usePrimaryStreamScroll.ts
 |-- useStreamBuffer.ts
@@ -331,6 +332,31 @@ The room UI store contains ephemeral per-room UI state:
 
 The streaming store contains transient live artifact/text buffers. It is intentionally separate from `message-store`: streaming artifacts are displayed live, then cleared after DB reconcile or task checkpoint persistence.
 
+Live buffer text is derived via `extractStreamTextFromArtifacts`, which concatenates all text-only artifacts in emission order (matching backend final assembly). Persisted entity text still uses `extractTextFromArtifacts` (last text-only artifact) for thinking + answer agents — this asymmetry is intentional today and disappears under the AG-UI roadmap (`REASONING_*` events split thinking from answer at the wire layer).
+
+**Streaming invariants** (enforced after the convergence plan in [`docs/STREAMING_UI_ISSUES_AND_FIXES.md`](STREAMING_UI_ISSUES_AND_FIXES.md)):
+
+- **I1** — One live ingest pipeline. All live streaming text flows through `streaming-store.append(message_id, …)`. `agent_response_partial` is a compat shim that maps `content_delta` to a synthetic artifact and calls the same append.
+- **I2** — Live buffer key is always `message_id`. `client_request_id` is correlation/cleanup metadata, never a buffer key or display merge dimension.
+- **I3** — Live text equals persisted text. `extractStreamTextFromArtifacts` over the live artifact list equals backend `extract_parts_from_artifacts` over the persisted artifact list at terminal.
+- **I4** — Detail pane content for terminal entities comes from `message-store`, never from the live buffer (strict terminal guard in `selectAgentResponseDetail`).
+- **I5** — Per-agent terminal SSE clears that message's buffer only. Turn-level clear runs exactly once per turn, on user-turn terminal `processing_status`.
+- **I6** — `streaming-store/append` does not import `mergeArtifacts` from `message-store/upsert`. Live merge is `mergeStreamArtifacts` (disjoint-segment push, prefix-relation replace).
+- **I7** — Streaming UI (badge, cursor, Streamdown caret) is driven only by an incomplete live buffer while the agent view-model status is `working`. Terminal agent status always wins over a stale buffer. Late `artifact_update` frames after terminal `task_update` are ignored and any leftover buffer for that `message_id` is cleared.
+
+**Conversation markdown normalization** (`src/lib/markdown/`, applied in `MarkdownContent` when `className` includes `conversation-markdown-body`):
+
+- **Pre-parse** (`preprocessConversationMarkdown` in `normalize-conversation.ts` + `split-inline-ordered.ts`) runs before Streamdown: inline ordered split for run-on `1. foo 2. bar` lines; supervisor-shaped lines (`3. **#3 — …`) only split before the next `N. **#N` marker so prose like `adoption in 4. The era` stays one item; ATX heading lines and fenced code are skipped; bare `###` markers on their own line are folded into the next content line. Section-label promotion and list renumbering are **not** done in pre-parse.
+- **Render-time remark plugins** (`conversation-remark-plugins.ts`, passed to Streamdown `remarkPlugins`) operate on the mdast tree Streamdown actually renders — no remark-stringify/reparse gap. The bundle includes `remark-gfm` because Streamdown replaces (not merges) default plugins when `remarkPlugins` is set. For completed conversation markdown, `parseMarkdownIntoBlocksFn={(md) => [md]}` parses the full message in one pass so section/list surgery is not split across Streamdown blocks. Plugin order: `remark-gfm` → `remarkSplitSectionLists` → `remarkNestAdjacentBulletLists` → `remarkCoalesceOrderedLists` → `remarkAssignOrderedListStarts`.
+- Agent `message_text` is stored and returned by the backend as produced; markdown repair is client-side only. Hybro-controlled LLM synthesis prompts (`multi-agents-backend/common/prompts/markdown_response_format.py`) encourage `###` section headers for cleaner source text; the frontend AST pipeline is the universal compatibility layer for third-party agents.
+- The renderer maps top-level `<ol>` elements to `style.counterReset = 'conv-section-ol <start - 1>'` from the mdast `start` prop. CSS counters in `conversation-tokens.css` provide visible `N.` markers for ordinary lists; items that already start with `#N` (supervisor-style `**#1 — …` rows) get `conv-hash-numbered-item` and suppress the extra counter.
+
+Display helpers in `src/lib/streaming/display.ts` split live **text** (buffer) from **non-text artifacts** (files/data) during stream so the detail pane and activity strip can show file attachments while text is still growing. `AgentResponseDetailPane` uses `useDetailPaneScroll` with ChatGPT-aligned behavior: first open scrolls to top; reopening the same message restores saved scroll from `room-ui-store.detailScrollByMessageId`; optional tail-follow when pinned near bottom during stream; no scroll reset on stream complete; detail body uses `overflow-anchor: none`.
+
+**Main feed scroll (`ConversationMessageList`):** The logical bottom of the feed is the `[data-content-end]` sentinel after the last turn — not the full `scrollHeight`, which includes the fixed `[data-scroll-spacer]` below it. `content-end-scroll.ts` centralizes `scrollToContentEnd`, `isNearContentEnd`, and snapshot `atBottom` detection. On first open (no saved position), the list scrolls to content-end. When revisiting a room, the last scroll position is restored from `room-ui-store.conversationScrollByRoom` (including an `atBottom` flag so rooms left pinned to the latest message still land at content-end). Scroll snapshots persist across `resetRoom` and are cleared on `resetAll`. Every user message bubble uses native CSS sticky (`.conversation-user-sticky { position: sticky; top: 0 }`) for both live and completed turns. On send (`localSendSeq`), `useScrollUserMessageOnSend` scrolls the sticky wrapper into the top of the scrollport once so sticky engages; CSS sticky then holds the question visible while HYBRO/agent content grows below. While the room is processing (`turnLive`), bottom-follow and `usePrimaryStreamScroll` tail-follow are disabled so programmatic scroll does not fight sticky positioning. `.conversation-scroll-area` and `.conversation-frame` use `overflow-anchor: none`. Users who scroll away see the scroll-to-bottom button, which aligns content-end with the viewport bottom.
+
+Known issues and the convergence plan are in [`docs/STREAMING_UI_ISSUES_AND_FIXES.md`](STREAMING_UI_ISSUES_AND_FIXES.md).
+
 ## 10. SSE And Room Sync
 
 SSE handling is split into small handlers under `src/hooks/room/sse-handlers/`.
@@ -366,7 +392,15 @@ Legacy `user_message`, `turn_event`, `hitl_input_requested`, and `hitl_status_up
 
 `processing_status` requires `message_id`, non-empty `client_request_id`, a known status, and `details` as either an object or `null`. Active statuses such as `queued`, `processing`, and `awaiting_input` keep the user turn active; terminal statuses mark the correlated user turn and clear the send guard only when they target the user message rather than a per-agent task. HITL resume can introduce a new backend `client_request_id`; in that case, a terminal frame with an agent-task `message_id` is accepted only when `related_message_id` points at the resolved user turn and the new request id differs from the user message's original request id.
 
-`agent_response_partial` text goes through `streaming-store` keyed by `client_request_id` so it can attach before the final response message id is known. Live `artifact_update` data also uses `streaming-store` with correlation metadata. Terminal `task_update` frames and final durable `agent_response` frames write to `message-store` and clear transient stream buffers for the correlated request and final message.
+**Multi-agent turn completion fallback:** Per-agent terminal SSE alone does not complete a multi-agent turn. The backend emits a `turn_completion_kind` field (`"synthesis"` or `"deterministic"`) as part of the COMPLETED `processing_status` SSE `details` and persists it on the user message `extend_info` before emitting the event. The frontend stores this as `turnCompletionKind` on the user `MessageEntity`.
+
+`deriveFinalAnswer` promotes to `deterministic_done` only when `turnCompletionKind === 'deterministic'` OR a deterministic `summary-*` digest entity is present. When `turnCompletionKind === 'synthesis'`, the turn remains in `pending`/`synthesizing` state even after `turnTerminalStatus` is set, until the LLM synthesis content arrives. When `turnCompletionKind` is absent (old backend), a conservative fallback prevents premature `deterministic_done` — it requires explicit entity evidence.
+
+`turnCompletionKind` is delivered via three redundant paths: (1) SSE `processing_status` COMPLETED `details`, (2) DB `extend_info.turn_completion_kind` on the user message (read during hydration/reconcile), (3) `inquiryActiveRuns` response (queried during truth-check when `trigger_message_id` is passed and no active run matches). This ensures correctness across SSE drops, page refreshes, and reconnects.
+
+`isPreSynthesisGap` covers the narrow window after all agents finish and before synthesis signals arrive; `hasActiveSynthesisGap` also treats user `processing_status` log lines containing "synthesiz" as synthesis in progress (before summary entities land), which drives `phase: synthesizing` and keeps the primary HYBRO card on "Synthesizing" instead of stuck "Working". Both functions remain active when `turnCompletionKind === 'synthesis'` even if `turnTerminalStatus === 'completed'`. Backend-truth stamping (`turn-terminal-stamp.ts`) passes `turnCompletionKind` atomically alongside `turnTerminalStatus` and queries the backend `inquiryActiveRuns` endpoint with `trigger_message_id` to retrieve it when the SSE path was missed.
+
+**Live streaming (target):** `artifact_update` is the primary path into `streaming-store.append(message_id, …)`. `agent_response_partial` (rare in production; delivery-layer alias) should shim into the same message-keyed append — not a separate turn-level buffer. **Checkpoints:** terminal `task_update` and final `agent_response` write to `message-store`, read the message-scoped buffer for fallback text, then clear that message's stream buffer (turn-level clear only on turn complete).
 
 Room DB synchronization lives under `src/lib/room-sync/`:
 

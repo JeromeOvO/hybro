@@ -8,7 +8,24 @@ import { appendEvent } from '@/lib/room-timeline/event-log'
 import { partsToArtifacts } from '../artifacts'
 import { applyRoomCommands } from '../apply-commands'
 import type { CorrelationResult } from '../correlation'
+import { stampLiveTurnTerminalIfInferable } from '@/lib/room-timeline/stamp-live-turn-terminal'
+import { scheduleTurnTerminalBackendTruthCheck } from '@/lib/room-timeline/turn-terminal-stamp'
 import type { SSEHandlerDeps } from '../types'
+
+function maybeScheduleTurnTerminalRecovery(
+  ctx: SSEHandlerDeps,
+  hint: {
+    clientRequestId?: string | null
+    relatedMessageId?: string | null
+  },
+): void {
+  scheduleTurnTerminalBackendTruthCheck(
+    ctx.roomId,
+    ctx.lifecycle,
+    hint,
+    ctx.getToken,
+  )
+}
 
 export async function handleTaskUpdate(
   ctx: SSEHandlerDeps,
@@ -59,7 +76,8 @@ export async function handleTaskUpdate(
   }
 
   // INVARIANT: buffer read + stream_clear in same sync turn (see applyRoomCommands).
-  const bufferText = useStreamingStore.getState().buffers[messageId]?.text
+  const streamingBuffers = useStreamingStore.getState().buffers
+  const bufferText = streamingBuffers[messageId]?.text
   const resolvedContent = (content ?? '').trim().length > 0
     ? content
     : (bufferText && bufferText.length > 0 ? bufferText : (existing?.content ?? ''))
@@ -84,7 +102,6 @@ export async function handleTaskUpdate(
         },
       },
       { type: 'stream_clear', messageId },
-      { type: 'stream_clear_client_request', clientRequestId: sseMessage.data.client_request_id },
     ])
     ctx.lifecycle.dismissPlaceholder()
 
@@ -122,6 +139,17 @@ export async function handleTaskUpdate(
       } else if (status === TASK_STATE.REJECTED) {
         banner.error(sseMessage.data.error || 'Task was rejected')
       }
+    }
+
+    const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
+      clientRequestId: sseMessage.data.client_request_id,
+      relatedMessageId: sseMessage.data.related_message_id,
+    })
+    if (!stamped && status === TASK_STATE.COMPLETED) {
+      maybeScheduleTurnTerminalRecovery(ctx, {
+        clientRequestId: sseMessage.data.client_request_id,
+        relatedMessageId: sseMessage.data.related_message_id,
+      })
     }
   } else {
     store.upsertMessage({

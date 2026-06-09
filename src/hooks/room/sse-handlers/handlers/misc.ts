@@ -2,6 +2,7 @@ import { banner } from '@/components/ui/banner'
 import type { ErrorData, RoomSSEFrameMap } from '@/lib/types/sse'
 import type { ProcessingLifecycle } from '../../processing-lifecycle'
 import type { SSEHandlerDeps } from '../types'
+import { ensureTurnTerminalStampedFromBackendTruth } from '@/lib/room-timeline/turn-terminal-stamp'
 
 function isErrorDataObject(data: unknown): data is ErrorData {
   return Boolean(data && typeof data === 'object' && !Array.isArray(data))
@@ -84,6 +85,15 @@ export function handleRunEvent(
 
   const sub = sseMessage.data?.type as string | undefined
   if (sub === 'run_failed' || sub === 'run_completed' || sub === 'run_canceled') {
+    const runId = sseMessage.data?.run_id
+    if (runId) {
+      void ensureTurnTerminalStampedFromBackendTruth(
+        ctx.roomId,
+        lifecycle,
+        { relatedMessageId: runId, clientRequestId: correlationId },
+        ctx.getToken,
+      )
+    }
     void ctx.reconcileWithDb(ctx.roomId)
   }
 }

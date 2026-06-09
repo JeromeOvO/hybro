@@ -4,18 +4,42 @@ import { useMessageStore } from '@/stores/message-store'
 import { useStreamingStore } from '@/stores/streaming-store'
 import type { ArtifactData } from '@/stores/message-store/types'
 import { normalizeTimestampOrNow } from '@/lib/time'
+import { isSummarySystemAgent } from '@/lib/system-agents'
+import { isDeterministicDigestContent } from '@/lib/room-timeline/derive-final-answer'
+import { stampLiveTurnTerminalIfInferable } from '@/lib/room-timeline/stamp-live-turn-terminal'
+import { scheduleTurnTerminalBackendTruthCheck } from '@/lib/room-timeline/turn-terminal-stamp'
+import type { SummaryOrigin } from '@/lib/room-timeline/types'
 import { partsToReplacementArtifacts } from '../artifacts'
 import type { SSEHandlerDeps } from '../types'
 import type { CorrelationResult } from '../correlation'
 import { getResolvedMessageId } from '../pending-turn-buffer'
 
+const PARTIAL_STREAM_ARTIFACT_SUFFIX = '-partial-stream'
+
+function partialStreamArtifactId(messageId: string): string {
+  return `${messageId}${PARTIAL_STREAM_ARTIFACT_SUFFIX}`
+}
+
 function textPartialToArtifact(messageId: string, content: string): ArtifactData {
   return {
-    artifactId: `${messageId}-agent-response-partial`,
-    name: 'Response',
+    artifactId: partialStreamArtifactId(messageId),
+    name: 'response',
     parts: [{ kind: 'text', text: content }],
     isStreaming: true,
   }
+}
+
+function inferSummaryOriginFromAgentResponse(
+  agentId: string | undefined,
+  messageId: string,
+  content: string,
+): SummaryOrigin | undefined {
+  if (!agentId || !isSummarySystemAgent(agentId)) return undefined
+  if (!messageId.startsWith('summary-')) return undefined
+  const text = content.trim()
+  if (!text) return undefined
+  if (isDeterministicDigestContent(text)) return 'deterministic'
+  return 'llm'
 }
 
 function artifactsEqual(a: ArtifactData[] | undefined, b: ArtifactData[] | undefined): boolean {
@@ -32,13 +56,16 @@ export function handleAgentResponsePartial(
 ): void {
   const { message_id, content_delta } = sseMessage.data
   if (!message_id || typeof content_delta !== 'string') return
-  const bufferId = correlation.clientReqId ?? sseMessage.data.client_request_id
 
-  useStreamingStore.getState().append(
-    bufferId,
+  const streaming = useStreamingStore.getState()
+  const hasPartialArtifact = (streaming.buffers[message_id]?.artifacts ?? [])
+    .some(a => a.artifactId === partialStreamArtifactId(message_id))
+
+  streaming.append(
+    message_id,
     ctx.roomId,
     textPartialToArtifact(message_id, content_delta),
-    true,
+    hasPartialArtifact,
     {
       clientRequestId: correlation.clientReqId,
       userMessageId: correlation.clientReqId
@@ -98,8 +125,22 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
         }, 'sse')
       }
       streaming.clear(messageId)
-      streaming.clearByClientRequestId(sseMessage.data.client_request_id)
       console.log('🔄 Skipping duplicate agent_response for', messageId, '— streamed content already present')
+      const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
+        clientRequestId: existing.clientRequestId || sseMessage.data.client_request_id,
+        relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
+      })
+      if (!stamped) {
+        scheduleTurnTerminalBackendTruthCheck(
+          ctx.roomId,
+          ctx.lifecycle,
+          {
+            clientRequestId: existing.clientRequestId || sseMessage.data.client_request_id,
+            relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
+          },
+          ctx.getToken,
+        )
+      }
       return
     }
     if (isDivergentRewrite) {
@@ -119,6 +160,8 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
   const responseTaskStatus = entity?.taskStatus && isTerminalState(entity.taskStatus)
     ? entity.taskStatus
     : TASK_STATE.COMPLETED
+  const summaryOrigin = inferSummaryOriginFromAgentResponse(agentId, messageId, content)
+    ?? entity?.summaryOrigin
 
   store.upsertMessage({
     id: messageId,
@@ -129,13 +172,30 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
     agentId,
     agentSource: agentId ? ctx.getAgentSource(agentId) : undefined,
     clientRequestId: entity?.clientRequestId || sseMessage.data.client_request_id,
+    relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id ?? undefined,
     timestamp: msgTimestamp,
     taskStatus: responseTaskStatus,
     taskContent: '',
     taskUpdatedAt: msgTimestamp,
     isEphemeral: false,
     artifacts: incomingArtifacts,
+    ...(summaryOrigin ? { summaryOrigin } : {}),
   }, 'sse')
   streaming.clear(messageId)
-  streaming.clearByClientRequestId(sseMessage.data.client_request_id)
+
+  const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
+    clientRequestId: entity?.clientRequestId || sseMessage.data.client_request_id,
+    relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id,
+  })
+  if (!stamped) {
+    scheduleTurnTerminalBackendTruthCheck(
+      ctx.roomId,
+      ctx.lifecycle,
+      {
+        clientRequestId: entity?.clientRequestId || sseMessage.data.client_request_id,
+        relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id,
+      },
+      ctx.getToken,
+    )
+  }
 }

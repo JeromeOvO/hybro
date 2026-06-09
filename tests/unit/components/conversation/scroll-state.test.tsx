@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { resolveScrollStateAfterEvent } from '@/components/conversation/scroll-state'
 
 describe('resolveScrollStateAfterEvent', () => {
-  it('treats interrupted programmatic upward scroll as a user pause', () => {
+  it('does not pause on programmatic upward scroll', () => {
     const next = resolveScrollStateAfterEvent({
       atBottom: false,
       programmatic: true,
@@ -12,7 +12,7 @@ describe('resolveScrollStateAfterEvent', () => {
     })
 
     expect(next.programmatic).toBe(false)
-    expect(next.paused).toBe(true)
+    expect(next.paused).toBe(false)
     expect(next.clearNewContent).toBe(false)
   })
 

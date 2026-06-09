@@ -9,6 +9,7 @@ import {
   processingDetailsToLogMessage,
 } from '../../processing-status-log'
 import { getResolvedMessageId } from '../pending-turn-buffer'
+import { applyRoomCommands } from '../apply-commands'
 import type { CorrelationResult } from '../correlation'
 import type { SSEHandlerDeps } from '../types'
 
@@ -177,11 +178,22 @@ export function handleProcessingStatus(
       preferClientRequestId: true,
     })
     if (processingUserEntity?.turnTerminalStatus) {
-      console.log('[SSE PROCESSING] skipping placeholder/log — turn already terminal', {
-        turnTerminalStatus: processingUserEntity.turnTerminalStatus,
-        userMsgId: processingUserEntity.id,
-      })
-      return
+      const stageMessage = processingDetailsToLogMessage(sseMessage.data.details)?.toLowerCase() ?? ''
+      const isOrchestrationStage =
+        stageMessage.includes('synthesiz')
+        || stageMessage.includes('evaluat')
+        || stageMessage.includes('planning')
+        || stageMessage.includes('delegat')
+      const holdForSynthesis =
+        processingUserEntity.turnCompletionKind === 'synthesis'
+        || isOrchestrationStage
+      if (!holdForSynthesis) {
+        console.log('[SSE PROCESSING] skipping placeholder/log — turn already terminal', {
+          turnTerminalStatus: processingUserEntity.turnTerminalStatus,
+          userMsgId: processingUserEntity.id,
+        })
+        return
+      }
     }
 
     if (!isCurrentProcessingUser(
@@ -273,6 +285,13 @@ export function handleProcessingStatus(
     store.removeMessage(lifecycle.placeholderId(roomId))
     lifecycle.dismissPlaceholder()
 
+    const turnClientRequestId = correlation.clientReqId ?? sseMessage.data.client_request_id
+    if (turnClientRequestId) {
+      applyRoomCommands([
+        { type: 'stream_clear_client_request', clientRequestId: turnClientRequestId },
+      ])
+    }
+
     if (sseMessage.data.message_id === lifecycleMessageId) {
       lifecycle.setMessageId(null)
     }
@@ -309,6 +328,9 @@ export function handleProcessingStatus(
         status === PROCESSING_STATUS.ERROR ||
         status === PROCESSING_STATUS.REJECTED ||
         status === PROCESSING_STATUS.RATE_LIMITED ? 'failed' : 'completed'
+      const rawKind = sseMessage.data.details?.turn_completion_kind
+      const turnCompletionKind: 'synthesis' | 'deterministic' | undefined =
+        rawKind === 'synthesis' || rawKind === 'deterministic' ? rawKind : undefined
       store.upsertMessage({
         id: resolvedTerminalUserMsgId,
         roomId,
@@ -317,6 +339,7 @@ export function handleProcessingStatus(
         senderName: existingUserMsg.senderName,
         timestamp: existingUserMsg.timestamp,
         turnTerminalStatus: terminalStatus,
+        turnCompletionKind,
       }, 'sse')
     }
   }

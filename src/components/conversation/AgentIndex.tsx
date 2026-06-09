@@ -34,8 +34,8 @@ function IndexRow({
   selected: boolean
   onOpenDetail: (messageId: string) => void
 }) {
-  const { isStreaming, artifacts } = useResultStreamDisplay(result)
-  const display = mapResultDisplayProps(result, isStreaming)
+  const { content, isStreaming, artifacts } = useResultStreamDisplay(result)
+  const display = mapResultDisplayProps(result, isStreaming, content)
   const theme = getAgentTheme(result.agentId, result.agentName)
   const artifactCount = artifacts?.length ?? 0
   const statusSuffix = artifactCount > 0 ? `${artifactCount} file${artifactCount === 1 ? '' : 's'}` : undefined
@@ -84,7 +84,13 @@ export function AgentIndex({
 
   if (stripResults.length === 0) return null
 
-  const showFullBodies = finalAnswer.kind === 'deterministic_done'
+  // No-synthesis supervisor DONE: primary surface is only the digest intro — show full
+  // agent bodies here. LLM synthesis keeps compact rows; synthesis lives in primary surface.
+  // Require a real deterministic summary entity (primaryMessageId) to avoid a flash when
+  // turnTerminalStatus is stamped before the synthesis entity arrives.
+  const showFullBodies =
+    finalAnswer.kind === 'deterministic_done'
+    && !!finalAnswer.primaryMessageId
   const listMaxHeight = showFullBodies ? 0 : getActivityStripListMaxHeight(stripResults.length)
 
   return (

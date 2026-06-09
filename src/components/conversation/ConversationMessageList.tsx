@@ -2,9 +2,17 @@
 
 import { useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react'
 import { useMessageStore } from '@/stores/message-store'
-import { useInitialHydrationSeq, useLocalSendSeq, useRoomUiStore } from '@/stores/room-ui-store'
+import { useInitialHydrationSeq, useLocalSendSeq, useRoomProcessing, useRoomUiStore } from '@/stores/room-ui-store'
 import { useTurnViewModels } from '@/hooks/useTurnViewModels'
 import { usePrimaryStreamScroll } from '@/hooks/usePrimaryStreamScroll'
+import { useScrollUserMessageOnSend } from '@/hooks/useScrollUserMessageOnSend'
+import {
+  readConversationScrollSnapshot,
+  restoreConversationScrollWithRetry,
+  shouldSkipInitialHydrationScrollRestore,
+} from '@/lib/conversation/conversation-scroll'
+import { contentEndScrollTop, isNearContentEnd, scrollToContentEnd } from '@/lib/conversation/content-end-scroll'
+import { FOCUS_SCROLL_MIN_SPACER_PX } from '@/lib/conversation/focus-scroll'
 import { TurnRenderer } from './TurnRenderer'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { resolveScrollStateAfterEvent } from './scroll-state'
@@ -24,30 +32,51 @@ function readMetrics(el: HTMLElement): ScrollMetrics {
   return { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop, clientHeight: el.clientHeight }
 }
 
-function isAtBottom(m: ScrollMetrics): boolean {
-  return m.scrollHeight - m.scrollTop - m.clientHeight < 100
-}
-
 export function ConversationMessageList({ roomId, selectedAgentMessageId, enableAgentDetail = true }: ConversationMessageListProps) {
   const turns = useTurnViewModels(roomId)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const frameRef = useRef<HTMLDivElement>(null)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
   const [hasNewContent, setHasNewContent] = useState(false)
 
   const localSendSeq = useLocalSendSeq(roomId)
   const initialHydrationSeq = useInitialHydrationSeq(roomId)
+  const processing = useRoomProcessing(roomId)
   const prevRoomIdRef = useRef(roomId)
-  const prevLocalSendSeqRef = useRef(localSendSeq)
   const prevHydrationSeqRef = useRef(0)
   const initialScrollResolvedRef = useRef(false)
 
   const userPausedRef = useRef(false)
+  const pinnedToContentEndRef = useRef(false)
   const programmaticScrollRef = useRef(false)
   const prevMetricsRef = useRef<ScrollMetrics | null>(null)
   const primarySurfaceRef = useRef<HTMLDivElement>(null)
 
   const lastTurn = turns[turns.length - 1]
   const primaryStreamMessageId = lastTurn?.primaryStreamMessageId
+  const lastUserMessageId = lastTurn?.userMessageId ?? undefined
+  const turnLive = processing && Boolean(lastUserMessageId)
+
+  const storeVersion = useMessageStore(s => s.version)
+  const hydratedFromDb = useMessageStore(s => s.hydratedFromDb)
+
+  const saveConversationScroll = useCallback((targetRoomId: string) => {
+    const el = scrollRef.current
+    if (!el) return
+    useRoomUiStore.getState().saveConversationScroll(
+      targetRoomId,
+      readConversationScrollSnapshot(el),
+    )
+  }, [])
+
+  useScrollUserMessageOnSend({
+    scrollRef,
+    frameRef,
+    lastUserMessageId,
+    localSendSeq,
+    programmaticScrollRef,
+    userPausedRef,
+  })
 
   usePrimaryStreamScroll({
     scrollRef,
@@ -55,20 +84,44 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
     primaryStreamMessageId,
     userPausedRef,
     programmaticScrollRef,
+    enabled: !turnLive,
   })
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const el = scrollRef.current
     if (!el) return
     programmaticScrollRef.current = true
-    el.scrollTo({ top: el.scrollHeight, behavior })
+    const targetScrollTop = contentEndScrollTop(el)
+    scrollToContentEnd(el, behavior)
     userPausedRef.current = false
+    pinnedToContentEndRef.current = true
     setHasNewContent(false)
     setShowScrollBtn(false)
-  }, [])
+    useRoomUiStore.getState().saveConversationScroll(roomId, { scrollTop: targetScrollTop, atBottom: true })
 
-  const storeVersion = useMessageStore(s => s.version)
-  const hydratedFromDb = useMessageStore(s => s.hydratedFromDb)
+    if (behavior !== 'smooth') return
+
+    const saveWhenSettled = () => {
+      if (!isNearContentEnd(el)) return
+      useRoomUiStore.getState().saveConversationScroll(roomId, {
+        scrollTop: el.scrollTop,
+        atBottom: true,
+      })
+    }
+
+    if ('onscrollend' in el) {
+      el.addEventListener('scrollend', saveWhenSettled, { once: true })
+      return
+    }
+
+    requestAnimationFrame(() => requestAnimationFrame(saveWhenSettled))
+  }, [roomId])
+
+  useEffect(() => {
+    return () => {
+      saveConversationScroll(roomId)
+    }
+  }, [roomId, saveConversationScroll])
 
   useLayoutEffect(() => {
     const el = scrollRef.current
@@ -76,33 +129,40 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
 
     if (roomId !== prevRoomIdRef.current) {
       prevRoomIdRef.current = roomId
-      prevLocalSendSeqRef.current = localSendSeq
       prevHydrationSeqRef.current = 0
       initialScrollResolvedRef.current = false
       userPausedRef.current = false
+      pinnedToContentEndRef.current = false
       programmaticScrollRef.current = false
       prevMetricsRef.current = null
       setShowScrollBtn(false)
       setHasNewContent(false)
     }
 
-    if (localSendSeq !== prevLocalSendSeqRef.current) {
-      prevLocalSendSeqRef.current = localSendSeq
-      initialScrollResolvedRef.current = true
-      scrollToBottom('auto')
-      prevMetricsRef.current = readMetrics(el)
-      return
-    }
-
     if (initialHydrationSeq !== prevHydrationSeqRef.current) {
       prevHydrationSeqRef.current = initialHydrationSeq
       initialScrollResolvedRef.current = true
 
-      if (!userPausedRef.current) {
-        scrollToBottom('auto')
+      if (!userPausedRef.current && !shouldSkipInitialHydrationScrollRestore(localSendSeq)) {
+        const saved = useRoomUiStore.getState().getConversationScroll(roomId)
+        programmaticScrollRef.current = true
+        restoreConversationScrollWithRetry(el, saved, (result) => {
+          userPausedRef.current = result === 'restored-position'
+          const metrics = readMetrics(el)
+          prevMetricsRef.current = metrics
+          pinnedToContentEndRef.current = isNearContentEnd(el)
+          setShowScrollBtn(!pinnedToContentEndRef.current)
+          requestAnimationFrame(() => {
+            programmaticScrollRef.current = false
+          })
+        })
+      } else {
+        prevMetricsRef.current = readMetrics(el)
+        requestAnimationFrame(() => {
+          programmaticScrollRef.current = false
+        })
       }
 
-      prevMetricsRef.current = readMetrics(el)
       return
     }
 
@@ -115,25 +175,31 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
     const curr = readMetrics(el)
 
     if (prev && curr.scrollHeight !== prev.scrollHeight) {
-      if (!userPausedRef.current && isAtBottom(prev)) {
+      if (turnLive) {
+        prevMetricsRef.current = curr
+        return
+      }
+
+      if (!userPausedRef.current && pinnedToContentEndRef.current) {
         scrollToBottom('auto')
         prevMetricsRef.current = readMetrics(el)
         return
-      } else {
-        setHasNewContent(true)
-        setShowScrollBtn(true)
       }
+
+      setHasNewContent(true)
+      setShowScrollBtn(true)
     }
 
     prevMetricsRef.current = curr
-  }, [roomId, storeVersion, localSendSeq, initialHydrationSeq, scrollToBottom])
+  }, [roomId, storeVersion, initialHydrationSeq, localSendSeq, scrollToBottom, turnLive])
 
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
     const onScroll = () => {
       const m = readMetrics(el)
-      const atBottom = isAtBottom(m)
+      const atBottom = isNearContentEnd(el)
+      pinnedToContentEndRef.current = atBottom
       const next = resolveScrollStateAfterEvent({
         atBottom,
         programmatic: programmaticScrollRef.current,
@@ -148,10 +214,14 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
 
       setShowScrollBtn(!atBottom)
       prevMetricsRef.current = m
+
+      if (!programmaticScrollRef.current) {
+        useRoomUiStore.getState().saveConversationScroll(roomId, { scrollTop: m.scrollTop, atBottom })
+      }
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
-  }, [])
+  }, [roomId])
 
   const handleOpenAgentDetail = useCallback((messageId: string) => {
     const store = useRoomUiStore.getState()
@@ -172,6 +242,7 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
       >
         <div className="conversation-gutter">
           <div
+            ref={frameRef}
             className="conversation-frame"
             data-hydrated={hydratedFromDb || undefined}
             style={{ paddingTop: 'var(--conversation-sticky-top)', paddingBottom: 'calc(var(--conversation-dock-height, 120px) + 24px)' }}
@@ -186,6 +257,12 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
                 isLastTurn={index === turns.length - 1}
               />
             ))}
+            <div aria-hidden data-content-end />
+            <div
+              aria-hidden
+              data-scroll-spacer
+              style={{ height: FOCUS_SCROLL_MIN_SPACER_PX, flexShrink: 0 }}
+            />
           </div>
         </div>
       </div>

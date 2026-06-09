@@ -6,6 +6,9 @@ import rehypeHighlight from 'rehype-highlight'
 import { Check, ChevronRight, Code2, Copy } from 'lucide-react'
 import { cn, formatIfJson } from '@/lib/utils'
 import { getPlainTextFromRange } from '@/lib/selection-plain-text'
+import { preprocessConversationMarkdown } from '@/lib/markdown/normalize-conversation'
+import { conversationRemarkPlugins } from '@/lib/markdown/conversation-remark-plugins'
+import { isHashNumberedListItemText } from '@/lib/markdown/hash-numbered-list-item'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 
 const MENTION_CLIPBOARD_MIME = 'application/x-hybro-mentions'
@@ -121,6 +124,11 @@ function processMentions(content: string): string {
   )
 }
 
+/** Supervisor prompts once asked for "4 spaces" indent; models sometimes echo that phrase. */
+function stripLiteralFourSpacesPrefix(content: string): string {
+  return content.replace(/^4 spaces /gm, '')
+}
+
 /** Check if a link href points to an agent profile (i.e. was an @mention). */
 function isAgentMentionHref(href: string | undefined): boolean {
   return !!href && href.startsWith('/c/agents/')
@@ -163,8 +171,20 @@ export function copySelectionWithMentions(
   e.clipboardData.setData(MENTION_CLIPBOARD_MIME, mentionStorageText)
 }
 
+function isConversationMarkdownClass(className?: string): boolean {
+  return !!className?.includes('conversation-markdown-body')
+}
+
+/** Tracks `<ol>` nesting depth so section counters apply only to top-level lists. */
+const OlDepthContext = React.createContext(0)
+
 /** Shared custom component overrides used by all Streamdown instances. */
-function makeComponents(isStreaming: boolean) {
+function makeComponents(isStreaming: boolean, conversationTypography: boolean) {
+  const blockSpacing = conversationTypography ? undefined : 'mb-2 last:mb-0'
+  const listSpacing = conversationTypography ? undefined : 'mb-2 ml-4 list-disc'
+  const orderedListSpacing = conversationTypography ? undefined : 'mb-2 ml-4 list-decimal'
+  const listItemSpacing = conversationTypography ? undefined : 'mb-1'
+
   return {
   a: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { children?: React.ReactNode }) => {
     if (isAgentMentionHref(href)) {
@@ -201,7 +221,10 @@ function makeComponents(isStreaming: boolean) {
     if (isInline) {
       return (
         <code
-          className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-1.5 py-0.5 rounded text-sm font-mono"
+          className={cn(
+            'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-1.5 py-0.5 rounded font-mono',
+            !conversationTypography && 'text-sm',
+          )}
           {...props}
         >
           {children}
@@ -224,31 +247,86 @@ function makeComponents(isStreaming: boolean) {
       </CodeBlockWithCopy>
     )
   },
-  p: ({ children }: { children?: React.ReactNode }) => <p className="mb-2 last:mb-0">{children}</p>,
-  ul: ({ children }: { children?: React.ReactNode }) => <ul className="mb-2 ml-4 list-disc">{children}</ul>,
-  ol: ({ children }: { children?: React.ReactNode }) => <ol className="mb-2 ml-4 list-decimal">{children}</ol>,
-  li: ({ children }: { children?: React.ReactNode }) => <li className="mb-1">{children}</li>,
-  h1: ({ children }: { children?: React.ReactNode }) => <h1 className="text-lg font-bold mb-2">{children}</h1>,
-  h2: ({ children }: { children?: React.ReactNode }) => <h2 className="text-base font-bold mb-2">{children}</h2>,
-  h3: ({ children }: { children?: React.ReactNode }) => <h3 className="text-sm font-bold mb-1">{children}</h3>,
-  h4: ({ children }: { children?: React.ReactNode }) => <h4 className="text-sm font-semibold mb-1">{children}</h4>,
-  h5: ({ children }: { children?: React.ReactNode }) => <h5 className="text-xs font-semibold mb-1">{children}</h5>,
-  h6: ({ children }: { children?: React.ReactNode }) => <h6 className="text-xs font-medium mb-1">{children}</h6>,
+  p: ({ children }: { children?: React.ReactNode }) => <p className={blockSpacing}>{children}</p>,
+  ul: ({ children }: { children?: React.ReactNode }) => (
+    <ul className={listSpacing ?? (conversationTypography ? 'list-disc' : undefined)}>{children}</ul>
+  ),
+  ol: ({ children, start, ...olProps }: React.OlHTMLAttributes<HTMLOListElement> & { children?: React.ReactNode }) => {
+    const depth = React.useContext(OlDepthContext)
+    const isTopLevel = depth === 0
+    return (
+      <OlDepthContext.Provider value={depth + 1}>
+        <ol
+          className={orderedListSpacing ?? (conversationTypography ? undefined : 'list-decimal')}
+          style={
+            conversationTypography && isTopLevel
+              ? { counterReset: `conv-section-ol ${(start ?? 1) - 1}` }
+              : undefined
+          }
+          {...olProps}
+        >
+          {children}
+        </ol>
+      </OlDepthContext.Provider>
+    )
+  },
+  li: ({ children }: { children?: React.ReactNode }) => {
+    const hashNumbered = conversationTypography
+      && isHashNumberedListItemText(extractText(children))
+    return (
+      <li
+        className={cn(
+          listItemSpacing,
+          hashNumbered && 'conv-hash-numbered-item',
+        )}
+      >
+        {children}
+      </li>
+    )
+  },
+  h1: ({ children }: { children?: React.ReactNode }) => (
+    <h1 className={conversationTypography ? undefined : 'text-lg font-bold mb-2'}>{children}</h1>
+  ),
+  h2: ({ children }: { children?: React.ReactNode }) => (
+    <h2 className={conversationTypography ? undefined : 'text-base font-bold mb-2'}>{children}</h2>
+  ),
+  h3: ({ children }: { children?: React.ReactNode }) => (
+    <h3 className={conversationTypography ? undefined : 'text-sm font-bold mb-1'}>{children}</h3>
+  ),
+  h4: ({ children }: { children?: React.ReactNode }) => (
+    <h4 className={conversationTypography ? undefined : 'text-sm font-semibold mb-1'}>{children}</h4>
+  ),
+  h5: ({ children }: { children?: React.ReactNode }) => (
+    <h5 className={conversationTypography ? undefined : 'text-xs font-semibold mb-1'}>{children}</h5>
+  ),
+  h6: ({ children }: { children?: React.ReactNode }) => (
+    <h6 className={conversationTypography ? undefined : 'text-xs font-medium mb-1'}>{children}</h6>
+  ),
   table: ({ children }: { children?: React.ReactNode }) => (
-    <div className="overflow-x-auto my-2">
-      <table className="min-w-full border-collapse text-sm">{children}</table>
+    <div className={conversationTypography ? 'overflow-x-auto' : 'overflow-x-auto my-2'}>
+      <table className={cn('min-w-full border-collapse', !conversationTypography && 'text-sm')}>{children}</table>
     </div>
   ),
   thead: ({ children }: { children?: React.ReactNode }) => (
     <thead className="bg-slate-100 dark:bg-slate-800">{children}</thead>
   ),
   th: ({ children }: { children?: React.ReactNode }) => (
-    <th className="border border-slate-200 dark:border-slate-700 px-3 py-1.5 text-left text-xs font-semibold">
+    <th
+      className={cn(
+        'border border-slate-200 dark:border-slate-700 px-3 py-1.5 text-left font-semibold',
+        !conversationTypography && 'text-xs',
+      )}
+    >
       {children}
     </th>
   ),
   td: ({ children }: { children?: React.ReactNode }) => (
-    <td className="border border-slate-200 dark:border-slate-700 px-3 py-1.5 text-xs">
+    <td
+      className={cn(
+        'border border-slate-200 dark:border-slate-700 px-3 py-1.5',
+        !conversationTypography && 'text-xs',
+      )}
+    >
       {children}
     </td>
   ),
@@ -279,11 +357,19 @@ export function MarkdownContent({
   className?: string
 }) {
   const contentRef = useRef<HTMLDivElement>(null)
-  const formatted = autoFormatJson ? formatIfJson(content) : content
-  const processedContent = processMentions(formatted)
+  const conversationTypography = isConversationMarkdownClass(className)
+  const processedContent = React.useMemo(() => {
+    const formatted = autoFormatJson ? formatIfJson(content) : content
+    const mentionProcessed = stripLiteralFourSpacesPrefix(processMentions(formatted))
+    if (!conversationTypography) return mentionProcessed
+    return preprocessConversationMarkdown(mentionProcessed, { streaming: isStreaming })
+  }, [content, autoFormatJson, conversationTypography, isStreaming])
   // Memoize components by isStreaming to avoid Streamdown re-rendering on every render
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const components = React.useMemo(() => makeComponents(isStreaming), [isStreaming])
+  const components = React.useMemo(
+    () => makeComponents(isStreaming, conversationTypography),
+    [isStreaming, conversationTypography],
+  )
   const handleCopy = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
     const container = contentRef.current
     if (!container) return
@@ -294,12 +380,20 @@ export function MarkdownContent({
     <div
       ref={contentRef}
       onCopy={handleCopy}
-      className={cn("min-w-0 text-sm leading-relaxed text-inherit", className)}
+      className={cn(
+        'min-w-0 text-inherit',
+        conversationTypography ? null : 'text-sm leading-relaxed',
+        className,
+      )}
     >
       <Streamdown
         mode={isStreaming ? 'streaming' : 'static'}
         caret={isStreaming ? 'block' : undefined}
         components={components}
+        remarkPlugins={conversationTypography ? conversationRemarkPlugins : undefined}
+        parseMarkdownIntoBlocksFn={
+          conversationTypography && !isStreaming ? (md) => [md] : undefined
+        }
         rehypePlugins={[rehypeHighlight]}
       >
         {processedContent}

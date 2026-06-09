@@ -1,6 +1,10 @@
 import { buildTurns } from '@/lib/room-timeline/build-turns'
 import { isCanceledMultiAgentTurn, isFailedMultiAgentTurn } from '@/lib/room-timeline/derive-final-answer'
 import { getStripSourceResults } from '@/lib/room-timeline/turn-live-shell'
+import {
+  canStampTurnTerminalFromEntityState,
+  terminalStatusForTurn,
+} from '@/lib/room-timeline/turn-terminal-stamp'
 import type { TurnViewModel } from '@/lib/room-timeline/types'
 import { useMessageStore } from './index'
 
@@ -13,45 +17,15 @@ function shouldStampTurnTerminal(
   turn: TurnViewModel,
   activeRunTriggerMessageIds: ReadonlySet<string>,
 ): boolean {
-  if (turn.status === 'active' || turn.status === 'awaiting_input') return false
   if (!turn.userMessageId) return false
 
   const real = getStripSourceResults(turn)
-
-  // Stale active_runs after restart: agents already terminal — still stamp.
-  if (activeRunTriggerMessageIds.has(turn.userMessageId)) {
-    if (isFailedMultiAgentTurn(turn, real) || isCanceledMultiAgentTurn(turn, real)) {
-      // fall through to stamp
-    } else if (
-      real.length >= 2
-      && real.every(r => r.status === 'completed')
-      && !turn.agentResults.some(r => r.isSummaryAgent && r.status === 'working')
-    ) {
-      return false
-    } else if (real.some(r => r.status === 'working')) {
-      return false
-    } else if (turn.agentResults.some(r => r.isSummaryAgent && r.status === 'working')) {
-      return false
-    } else {
-      return false
-    }
+  if (isFailedMultiAgentTurn(turn, real) || isCanceledMultiAgentTurn(turn, real)) {
+    return true
   }
 
-  if (real.length === 0) return false
-  if (real.some(r => r.status === 'working')) return false
-
-  const summary = turn.agentResults.find(r => r.isSummaryAgent)
-  if (summary?.status === 'working') return false
-
-  return true
-}
-
-function terminalStatusForTurn(turn: TurnViewModel): 'completed' | 'failed' | 'canceled' {
-  if (isCanceledMultiAgentTurn(turn)) return 'canceled'
-  if (turn.status === 'failed') return 'failed'
-  const real = turn.agentResults.filter(r => !r.isSummaryAgent && !r.isEphemeral)
-  if (real.length > 0 && real.every(r => r.status === 'failed')) return 'failed'
-  return 'completed'
+  const backendRunActive = activeRunTriggerMessageIds.has(turn.userMessageId)
+  return canStampTurnTerminalFromEntityState(turn, real, backendRunActive)
 }
 
 /**

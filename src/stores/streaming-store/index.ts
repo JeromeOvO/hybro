@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { ArtifactData } from '@/stores/message-store/types'
-import { mergeArtifacts, extractTextFromArtifacts } from '@/stores/message-store/upsert'
+import { extractStreamTextFromArtifacts } from '@/stores/message-store/upsert'
+import { mergeStreamArtifacts } from './merge-stream-artifacts'
 
 // Buffers not updated within this window are considered orphaned (backend crash
 // before task_update was sent). They are evicted on the next append() call.
@@ -18,7 +19,7 @@ export type StreamBufferMetadata = {
  * Discarded when task_update (checkpoint) or DB reconcile fires.
  */
 export interface StreamBuffer {
-  /** Accumulated text for live render, derived from artifacts via extractTextFromArtifacts. */
+  /** Accumulated text for live render, derived from artifacts via extractStreamTextFromArtifacts. */
   text: string
   /** Accumulated artifacts for live render (non-text artifact cards). */
   artifacts: ArtifactData[]
@@ -40,15 +41,21 @@ export interface StreamBuffer {
   lastUpdatedAt: number
 }
 
+/** Message-scoped live buffer lookup — never merges by client_request_id. */
+export function resolveStreamBuffer(
+  buffers: Record<string, StreamBuffer>,
+  messageId?: string,
+): StreamBuffer | undefined {
+  return messageId ? buffers[messageId] : undefined
+}
+
 interface StreamingState {
   buffers: Record<string, StreamBuffer>
 
   /**
    * Append an incoming artifact chunk to the buffer for message_id.
    * Creates the buffer if it does not yet exist.
-   * Mirrors the mergeArtifacts + extractTextFromArtifacts pipeline from
-   * message-store/upsert.ts but without any token filtering — buffer
-   * corruption only affects the transient display, never permanent entity state.
+   * Uses mergeStreamArtifacts + extractStreamTextFromArtifacts for live display.
    *
    * Also evicts stale buffers (older than STALE_BUFFER_TTL_MS) whose
    * task_update was never received (e.g. backend crash mid-stream).
@@ -121,8 +128,8 @@ export const useStreamingStore = create<StreamingState>()((set) => ({
 
     const existing = base[id]
     const prevArtifacts = existing?.artifacts ?? []
-    const nextArtifacts = mergeArtifacts(prevArtifacts, chunk, isAppend)
-    const text = extractTextFromArtifacts(nextArtifacts)
+    const nextArtifacts = mergeStreamArtifacts(prevArtifacts, chunk, isAppend)
+    const text = extractStreamTextFromArtifacts(nextArtifacts)
     return {
       buffers: {
         ...base,

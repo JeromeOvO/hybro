@@ -174,6 +174,80 @@ describe('RoomUiStore', () => {
     })
   })
 
+  describe('conversationScroll', () => {
+    it('persists and reads scroll snapshots per room', () => {
+      useRoomUiStore.getState().saveConversationScroll('room-1', { scrollTop: 120, atBottom: false })
+      expect(useRoomUiStore.getState().getConversationScroll('room-1')).toEqual({
+        scrollTop: 120,
+        atBottom: false,
+      })
+      expect(useRoomUiStore.getState().getConversationScroll('room-2')).toBeUndefined()
+    })
+
+    it('survives resetRoom so revisits can restore position', () => {
+      useRoomUiStore.getState().saveConversationScroll('room-1', { scrollTop: 300, atBottom: false })
+      useRoomUiStore.getState().resetRoom('room-1')
+      expect(useRoomUiStore.getState().getConversationScroll('room-1')).toEqual({
+        scrollTop: 300,
+        atBottom: false,
+      })
+    })
+
+    it('is cleared by resetAll', () => {
+      useRoomUiStore.getState().saveConversationScroll('room-1', { scrollTop: 300, atBottom: false })
+      useRoomUiStore.getState().resetAll()
+      expect(useRoomUiStore.getState().getConversationScroll('room-1')).toBeUndefined()
+    })
+  })
+
+  describe('detailPaneScroll', () => {
+    it('persists and reads scroll snapshots per message', () => {
+      useRoomUiStore.getState().saveDetailPaneScroll('msg-1', { scrollTop: 180, atBottom: false })
+      expect(useRoomUiStore.getState().getDetailPaneScroll('msg-1')).toEqual({
+        scrollTop: 180,
+        atBottom: false,
+      })
+      expect(useRoomUiStore.getState().getDetailPaneScroll('msg-2')).toBeUndefined()
+    })
+
+    it('survives resetRoom', () => {
+      useRoomUiStore.getState().saveDetailPaneScroll('msg-1', { scrollTop: 180, atBottom: false })
+      useRoomUiStore.getState().resetRoom('room-1')
+      expect(useRoomUiStore.getState().getDetailPaneScroll('msg-1')).toEqual({
+        scrollTop: 180,
+        atBottom: false,
+      })
+    })
+
+    it('is cleared by resetAll', () => {
+      useRoomUiStore.getState().saveDetailPaneScroll('msg-1', { scrollTop: 180, atBottom: false })
+      useRoomUiStore.getState().resetAll()
+      expect(useRoomUiStore.getState().getDetailPaneScroll('msg-1')).toBeUndefined()
+    })
+
+    it('evicts oldest entries when the LRU cap is exceeded', () => {
+      const store = useRoomUiStore.getState()
+      for (let i = 0; i < 33; i += 1) {
+        store.saveDetailPaneScroll(`msg-${i}`, { scrollTop: i, atBottom: false })
+      }
+      expect(store.getDetailPaneScroll('msg-0')).toBeUndefined()
+      expect(store.getDetailPaneScroll('msg-32')).toEqual({ scrollTop: 32, atBottom: false })
+      expect(Object.keys(useRoomUiStore.getState().detailScrollByMessageId)).toHaveLength(32)
+    })
+
+    it('refreshes LRU order when an existing message is saved again', () => {
+      const store = useRoomUiStore.getState()
+      for (let i = 0; i < 32; i += 1) {
+        store.saveDetailPaneScroll(`msg-${i}`, { scrollTop: i, atBottom: false })
+      }
+      store.saveDetailPaneScroll('msg-0', { scrollTop: 999, atBottom: true })
+      store.saveDetailPaneScroll('msg-new', { scrollTop: 1, atBottom: false })
+      expect(store.getDetailPaneScroll('msg-0')).toEqual({ scrollTop: 999, atBottom: true })
+      expect(store.getDetailPaneScroll('msg-1')).toBeUndefined()
+      expect(store.getDetailPaneScroll('msg-new')).toEqual({ scrollTop: 1, atBottom: false })
+    })
+  })
+
   describe('selectedAgentMessageId', () => {
     it('openAgentDetail sets messageId for a room', () => {
       useRoomUiStore.getState().openAgentDetail('room-1', 'agent-msg-1')

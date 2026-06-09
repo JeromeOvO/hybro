@@ -73,6 +73,7 @@ describe('useProcessingRestore', () => {
       { active_runs: [{ trigger_message_id: 'msg-active' }] },
       false,
       lifecycle,
+      undefined,
     ))
 
     await waitFor(() => {

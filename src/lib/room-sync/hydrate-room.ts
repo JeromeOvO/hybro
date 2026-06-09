@@ -133,6 +133,9 @@ export async function hydrateRoomFromDb(options: HydrateRoomOptions): Promise<Hy
         `(${rawCount} raw, ${filtered.length} filtered) in ${Date.now() - startTime}ms`,
       )
     } else {
+      stampInferredTurnTerminalStatus(roomId, {
+        activeRunTriggerMessageIds: collectActiveRunTriggerMessageIds(options.room),
+      })
       useMessageStore.getState().markDbSynced()
       pruneStaleProcessingPlaceholder(roomId)
     }

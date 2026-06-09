@@ -56,6 +56,8 @@ export interface TurnViewModel {
   primaryMessageId?: string
   /** Room-level terminal signal from user entity (processing_status SSE). */
   turnTerminalStatus?: 'completed' | 'failed' | 'canceled'
+  /** Backend-authoritative signal for how the turn completed (synthesis vs deterministic). */
+  turnCompletionKind?: 'synthesis' | 'deterministic'
   /** Transient room-level processing status details shown while the turn is live. */
   processingStatusLogs: ProcessingStatusLogEntry[]
   /** V3: unified final-answer slot (§17). */

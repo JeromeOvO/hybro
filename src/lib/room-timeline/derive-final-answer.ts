@@ -7,10 +7,22 @@ import type {
   SummaryOrigin,
   TurnViewModel,
 } from './types'
+import {
+  hasActiveSynthesisGap,
+  isMultiAgentTurnReadyForDeterministicDone,
+  isPreSynthesisGap,
+} from './multi-agent-turn-complete'
 import { getStripSourceResults } from './turn-live-shell'
 
 export function buildDeterministicIntro(agentCount: number): string {
   return `${agentCount} agent${agentCount === 1 ? '' : 's'} responded. Expand below to read each answer.`
+}
+
+/** Matches the non-LLM coordinator digest stub (`_emit_deterministic_digest`). */
+export function isDeterministicDigestContent(content: string): boolean {
+  const text = content.trim()
+  if (!text) return false
+  return /^\d+ agents? responded\. Expand below to read each answer\.?$/i.test(text)
 }
 
 export const CANCELED_TURN_INTRO =
@@ -51,12 +63,6 @@ export function isCanceledMultiAgentTurn(
   return terminal.length > 0 && terminal.every(isAgentResultCanceled)
 }
 
-function isSynthesisGapEphemeral(result: AgentResultViewModel): boolean {
-  if (result.isSummaryAgent && result.status === 'working') return true
-  const stage = result.taskStatusMessage?.trim().toLowerCase() ?? ''
-  return stage.includes('synthesiz')
-}
-
 function allRealTerminal(real: AgentResultViewModel[]): boolean {
   if (real.length === 0) return false
   return real.every(r => r.status === 'completed' || r.status === 'failed')
@@ -79,14 +85,6 @@ function hasDeterministicSummaryEntity(summary: AgentResultViewModel | undefined
   return summary.status === 'working' || summary.content.trim().length > 0
 }
 
-function hasActiveSynthesisGap(turn: TurnViewModel): boolean {
-  if (turn.agentResults.some(r => r.isEphemeral && isSynthesisGapEphemeral(r))) {
-    return true
-  }
-  const summary = turn.agentResults.find(r => r.isSummaryAgent)
-  return summary?.status === 'working' && !isDeterministicSummary(summary)
-}
-
 /** Hold pending while a synthesis gap is active (any orchestration mode). */
 function shouldHoldPendingForSynthesisGap(turn: TurnViewModel, real: AgentResultViewModel[]): boolean {
   if (real.length < 2) return false
@@ -96,15 +94,16 @@ function shouldHoldPendingForSynthesisGap(turn: TurnViewModel, real: AgentResult
   if (hasLlmSynthesisContent(summary)) return false
   if (hasDeterministicSummaryEntity(summary)) return false
 
-  if (
-    turn.turnTerminalStatus === 'completed'
-    || turn.turnTerminalStatus === 'failed'
-    || turn.turnTerminalStatus === 'canceled'
-  ) {
+  if (turn.turnTerminalStatus === 'failed' || turn.turnTerminalStatus === 'canceled') {
+    return false
+  }
+  if (turn.turnTerminalStatus === 'completed' && turn.turnCompletionKind !== 'synthesis') {
     return false
   }
 
-  return hasActiveSynthesisGap(turn)
+  if (hasActiveSynthesisGap(turn)) return true
+  if (turn.turnCompletionKind === 'synthesis') return true
+  return isPreSynthesisGap(turn, real)
 }
 
 function isTurnTerminal(status: TurnViewModel['status']): boolean {
@@ -290,7 +289,7 @@ export function deriveFinalAnswer(
     return { kind: 'pending', label: 'Working' }
   }
 
-  if (real.length >= 2 && turn.turnTerminalStatus === 'completed') {
+  if (isMultiAgentTurnReadyForDeterministicDone(turn, real)) {
     return buildDeterministicDoneFinalAnswer(turn, real, agentMessageIds, summary)
   }
 

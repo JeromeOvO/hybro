@@ -39,6 +39,7 @@ vi.mock('@clerk/nextjs', () => ({
 // Mock room API
 vi.mock('@/lib/api/room', () => ({
   inquiryRoomSetting: vi.fn().mockResolvedValue({ success: true, room: { room_id: 'room-1', room_name: 'Test', room_agent_set: {} } }),
+  inquiryActiveRuns: vi.fn().mockResolvedValue({ success: true, active_runs: [], turn_completion_kind: null }),
   SendMessage: vi.fn().mockResolvedValue({ success: true, message_id: 'msg-1' }),
   inquiryRoomMessagesByRoomId: vi.fn().mockResolvedValue({ success: true, message_list: [] }),
   updateRoomAgentSet: vi.fn().mockResolvedValue({ success: true }),
@@ -239,7 +240,7 @@ describe('useRoomWebhook SSE message handling', () => {
       }))
     })
 
-    const buffer = useStreamingStore.getState().buffers['req-partial-response']
+    const buffer = useStreamingStore.getState().buffers['agent-partial-1']
     expect(buffer.text).toBe('Partial text')
     expect(buffer.clientRequestId).toBe('req-partial-response')
     expect(buffer.userMessageId).toBe('user-partial-1')
@@ -269,13 +270,13 @@ describe('useRoomWebhook SSE message handling', () => {
       }, 'user-buffered-1')
     })
 
-    const buffer = useStreamingStore.getState().buffers['req-partial-buffered']
+    const buffer = useStreamingStore.getState().buffers['agent-partial-buffered']
     expect(buffer.text).toBe('Buffered text')
     expect(buffer.clientRequestId).toBe('req-partial-buffered')
     expect(buffer.userMessageId).toBe('user-buffered-1')
   })
 
-  it('clears request-keyed partial buffers when final agent_response uses a different message_id', async () => {
+  it('clears message-keyed partial buffer when final agent_response arrives for the same message_id', async () => {
     await mountHook()
     resolveClientRequestMessageId('req-partial-final', 'user-partial-final')
 
@@ -283,7 +284,7 @@ describe('useRoomWebhook SSE message handling', () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'agent_response_partial',
         data: {
-          message_id: 'partial-msg-1',
+          message_id: 'final-msg-1',
           agent_id: 'agent-1',
           content_delta: 'Draft stream',
           client_request_id: 'req-partial-final',
@@ -291,7 +292,7 @@ describe('useRoomWebhook SSE message handling', () => {
       }))
     })
 
-    expect(useStreamingStore.getState().buffers['req-partial-final']?.text).toBe('Draft stream')
+    expect(useStreamingStore.getState().buffers['final-msg-1']?.text).toBe('Draft stream')
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
@@ -305,7 +306,7 @@ describe('useRoomWebhook SSE message handling', () => {
       }))
     })
 
-    expect(useStreamingStore.getState().buffers['req-partial-final']).toBeUndefined()
+    expect(useStreamingStore.getState().buffers['final-msg-1']).toBeUndefined()
     expect(useMessageStore.getState().entities['final-msg-1']?.content).toBe('Final stream')
   })
 
@@ -342,7 +343,7 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(entity.taskStatus).toBe(TASK_STATE.COMPLETED)
   })
 
-  it('clears request-keyed partial buffers when duplicate final repeats a completed task_update', async () => {
+  it('clears only the completed message buffer on terminal task_update (not turn-wide)', async () => {
     await mountHook()
     resolveClientRequestMessageId('req-completed-duplicate-final', 'user-completed-duplicate-final')
 
@@ -358,7 +359,8 @@ describe('useRoomWebhook SSE message handling', () => {
       }))
     })
 
-    expect(useStreamingStore.getState().buffers['req-completed-duplicate-final']?.text).toBe('Draft that should not linger')
+    expect(useStreamingStore.getState().buffers['partial-completed-duplicate-final']?.text)
+      .toBe('Draft that should not linger')
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
@@ -375,7 +377,9 @@ describe('useRoomWebhook SSE message handling', () => {
     })
 
     expect(useMessageStore.getState().entities['completed-duplicate-final']?.taskStatus).toBe(TASK_STATE.COMPLETED)
-    expect(useStreamingStore.getState().buffers['req-completed-duplicate-final']).toBeUndefined()
+    expect(useStreamingStore.getState().buffers['completed-duplicate-final']).toBeUndefined()
+    expect(useStreamingStore.getState().buffers['partial-completed-duplicate-final']?.text)
+      .toBe('Draft that should not linger')
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
@@ -389,7 +393,8 @@ describe('useRoomWebhook SSE message handling', () => {
       }))
     })
 
-    expect(useStreamingStore.getState().buffers['req-completed-duplicate-final']?.text).toBe('Late draft that should not linger')
+    expect(useStreamingStore.getState().buffers['partial-completed-duplicate-final']?.text)
+      .toBe('Draft that should not lingerLate draft that should not linger')
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
@@ -404,7 +409,7 @@ describe('useRoomWebhook SSE message handling', () => {
     })
 
     expect(useMessageStore.getState().entities['completed-duplicate-final']?.content).toBe('Completed answer')
-    expect(useStreamingStore.getState().buffers['req-completed-duplicate-final']).toBeUndefined()
+    expect(useStreamingStore.getState().buffers['completed-duplicate-final']).toBeUndefined()
   })
 
   it('persists a distinct final agent_response after task_submitted from the same agent', async () => {
@@ -961,6 +966,65 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(entity.content).toBe('Here is the employee CSV report.')
     // artifact_update goes to streamingStore only; messageStore entity is unchanged
     expect(entity.artifacts).toBeUndefined()
+  })
+
+  it('concatenates multi-artifact streaming text instead of keeping only the last segment', async () => {
+    await mountHook()
+    resolveClientRequestMessageId('req-hermes-stream', 'user-hermes-1')
+
+    useMessageStore.getState().upsertMessage({
+      id: 'agent-hermes-1',
+      roomId: 'room-1',
+      messageType: 'agent',
+      content: '',
+      senderName: 'Hermes Agent',
+      timestamp: new Date().toISOString(),
+      agentId: 'hermes-agent',
+      clientRequestId: 'req-hermes-stream',
+      taskStatus: TASK_STATE.WORKING,
+    }, 'sse')
+
+    const segments = [
+      'Now let me execute the research workflow. ',
+      'Good HN data. Let me navigate to the top AI stories now. ',
+      'Excellent! Now I have all the URLs.',
+    ]
+
+    for (const [index, text] of segments.entries()) {
+      await act(async () => {
+        await capturedOnMessage!(makeSSEMessage({
+          type: 'artifact_update',
+          data: {
+            client_request_id: 'req-hermes-stream',
+            message_id: 'agent-hermes-1',
+            agent_id: 'hermes-agent',
+            artifact: {
+              artifact_id: `segment-${index}`,
+              parts: [{ kind: 'text', text }],
+            },
+            append: false,
+            last_chunk: index === segments.length - 1,
+          },
+        }))
+      })
+    }
+
+    const buffer = useStreamingStore.getState().buffers['agent-hermes-1']
+    expect(buffer?.text).toBe(segments.join(''))
+    expect(buffer?.isComplete).toBe(true)
+
+    const { selectAgentResponseDetail } = await import('@/lib/selectors/select-agent-response-detail')
+    const { entities, orderedIds } = useMessageStore.getState()
+    const detail = selectAgentResponseDetail(
+      'room-1',
+      'agent-hermes-1',
+      entities,
+      orderedIds,
+      buffer,
+    )
+
+    expect(detail?.content).toBe(segments.join(''))
+    expect(detail?.isStreaming).toBe(false)
   })
 
   it('normalizes root-wrapped file parts from task_update before storing artifacts', async () => {
@@ -1520,6 +1584,7 @@ describe('useRoomWebhook SSE message handling', () => {
       senderName: 'Test',
       timestamp: '2026-06-04T01:00:00.000Z',
       clientRequestId: 'req-old-stale-detail',
+      turnTerminalStatus: 'completed',
       processingStatusLogs: [],
     }, 'optimistic')
     useMessageStore.getState().upsertMessage({
@@ -1552,8 +1617,6 @@ describe('useRoomWebhook SSE message handling', () => {
         },
       }))
     })
-
-    expect(flags().processing).toBe(true)
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({

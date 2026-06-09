@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { X, ChevronDown, Quote } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -11,6 +11,7 @@ import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { cn } from '@/lib/utils'
 import type { AgentDisplayProps, AgentResponseDetail } from '@/lib/selectors/conversation-types'
 import type { Agent } from '@/lib/types/agent'
+import { useDetailPaneScroll } from '@/hooks/useDetailPaneScroll'
 
 interface AgentResponseDetailPaneProps {
   detail: AgentResponseDetail
@@ -172,6 +173,14 @@ function AgentResponseDetailHeader({
 export function AgentResponseDetailPane({ detail, onClose }: AgentResponseDetailPaneProps) {
   const hasContent = detail.content.trim().length > 0
   const hasArtifacts = (detail.artifacts?.length ?? 0) > 0
+  const bodyRef = useRef<HTMLDivElement>(null)
+
+  useDetailPaneScroll(
+    bodyRef,
+    detail.messageId,
+    detail.isStreaming,
+    detail.content.length + (detail.artifacts?.length ?? 0),
+  )
 
   return (
     <aside className="conversation-detail-pane" data-testid="agent-response-detail-pane" aria-label="Agent response detail">
@@ -180,7 +189,7 @@ export function AgentResponseDetailPane({ detail, onClose }: AgentResponseDetail
         <QuotedUserContext detail={detail} />
       </div>
 
-      <div className="conversation-detail-body">
+      <div ref={bodyRef} className="conversation-detail-body">
         <div className="conversation-detail-frame">
           <section className="conversation-detail-response" aria-label="Agent response" data-quote-message-id={detail.messageId} data-quote-agent-name={detail.agentName} data-quote-source-kind="agent">
             {hasContent ? (

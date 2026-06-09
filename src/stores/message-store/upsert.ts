@@ -127,6 +127,7 @@ function mergeIncoming(
       artifacts: incoming.artifacts,
       attachments: incoming.attachments,
       turnTerminalStatus: incoming.turnTerminalStatus,
+      turnCompletionKind: incoming.turnCompletionKind,
       summaryOrigin: incoming.summaryOrigin,
       processingStatusLogs: incoming.processingStatusLogs,
       quotedText: incoming.quotedText,
@@ -172,6 +173,7 @@ function mergeIncoming(
     artifacts: incoming.artifacts !== undefined ? incoming.artifacts : existing.artifacts,
     attachments: incoming.attachments !== undefined ? incoming.attachments : existing.attachments,
     turnTerminalStatus: incoming.turnTerminalStatus !== undefined ? incoming.turnTerminalStatus : existing.turnTerminalStatus,
+    turnCompletionKind: incoming.turnCompletionKind !== undefined ? incoming.turnCompletionKind : existing.turnCompletionKind,
     summaryOrigin: incoming.summaryOrigin !== undefined ? incoming.summaryOrigin : existing.summaryOrigin,
     processingStatusLogs: incoming.processingStatusLogs !== undefined ? incoming.processingStatusLogs : existing.processingStatusLogs,
     quotedText: incoming.quotedText !== undefined ? incoming.quotedText : existing.quotedText,
@@ -262,6 +264,7 @@ export function isNoOpUpdate(
     artifactsEqual(existing.artifacts, coalesce(incoming.artifacts, existing.artifacts)) &&
     existing.attachments       === coalesce(incoming.attachments, existing.attachments) &&
     existing.turnTerminalStatus === coalesce(incoming.turnTerminalStatus, existing.turnTerminalStatus) &&
+    existing.turnCompletionKind === coalesce(incoming.turnCompletionKind, existing.turnCompletionKind) &&
     existing.summaryOrigin === coalesce(incoming.summaryOrigin, existing.summaryOrigin) &&
     processingLogsEqual(existing.processingStatusLogs, coalesce(incoming.processingStatusLogs, existing.processingStatusLogs)) &&
     existing.quoteId === coalesce(incoming.quoteId, existing.quoteId)
@@ -363,22 +366,30 @@ export function mergeArtifacts(
 }
 
 /**
- * Extract the combined text from all text-only artifacts.
- * Returns the last text-only artifact's text — artifacts are appended in
- * emission order, so the last one is always the most recently started stream.
- * For single-artifact agents this is identical to returning the only artifact.
+ * Extract display text from text-only artifacts for persisted entity state.
+ * Returns the last text-only artifact so thinking + answer agents surface
+ * only the most recent stream (the answer artifact).
  */
 export function extractTextFromArtifacts(artifacts: ArtifactData[]): string {
-  // Prefer the last text-only artifact: artifacts are appended in emission
-  // order, so the last one is always the most recently started stream (the
-  // answer artifact for agents that emit thinking before answering).
-  // For single-artifact agents this is identical to the previous behaviour.
   let last = ''
   for (const a of artifacts) {
     if (!isTextOnlyArtifact(a)) continue
     last = a.parts.map(p => p.text || '').join('')
   }
   return last
+}
+
+/**
+ * Extract live streaming display text by concatenating all text-only artifacts
+ * in emission order. Matches backend extract_parts_from_artifacts ("" join).
+ */
+export function extractStreamTextFromArtifacts(artifacts: ArtifactData[]): string {
+  let combined = ''
+  for (const a of artifacts) {
+    if (!isTextOnlyArtifact(a)) continue
+    combined += a.parts.map(p => p.text || '').join('')
+  }
+  return combined
 }
 
 /**

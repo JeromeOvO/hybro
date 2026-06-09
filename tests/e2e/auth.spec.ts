@@ -162,9 +162,15 @@ test.describe('Sidebar Sign-in Button', () => {
 
     // If the dev server has an active Clerk session the user is already signed in —
     // the sign-in button never renders in that case. Skip rather than fail.
-    const signInBtn = page.locator('[title="Sign in"]')
+    const signInBtn = page.getByTestId('sidebar-sign-in')
     const isSignInVisible = await signInBtn.isVisible({ timeout: 2000 }).catch(() => false)
     if (!isSignInVisible) {
+      test.skip()
+      return
+    }
+
+    const signInTitle = await signInBtn.getAttribute('title')
+    if (signInTitle !== 'Sign in') {
       test.skip()
       return
     }
@@ -172,14 +178,17 @@ test.describe('Sidebar Sign-in Button', () => {
     // Dismiss cookie consent if it overlays the sidebar footer (only needed when unauthenticated)
     const declineBtn = page.getByRole('button', { name: 'Decline' })
     if (await declineBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await declineBtn.click({ force: true })
+      await declineBtn.click()
     }
 
     await expect(signInBtn).toBeVisible({ timeout: 5000 })
-    await signInBtn.click({ force: true })
 
-    // After clicking, the sidebar button does window.location.href = /sign-in?redirect_url=...
-    await expect(page).toHaveURL(/sign-in/, { timeout: 10000 })
+    // Full-page navigation via window.location.href — wait for URL change in parallel
+    // with a DOM click (avoids Next.js dev overlay intercepting Playwright pointer events).
+    await Promise.all([
+      page.waitForURL(/sign-in/, { timeout: 10000 }),
+      signInBtn.evaluate((el) => (el as HTMLButtonElement).click()),
+    ])
     const decoded = decodeURIComponent(page.url())
     expect(decoded).toContain('redirect_url')
     expect(decoded).toContain('/chat')

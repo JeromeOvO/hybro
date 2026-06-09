@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyUpsert, isNoOpUpdate, buildSortedIds, mergeArtifacts, extractTextFromArtifacts } from '../upsert'
+import { applyUpsert, isNoOpUpdate, buildSortedIds, mergeArtifacts, extractTextFromArtifacts, extractStreamTextFromArtifacts } from '../upsert'
 import type { MessageEntity, IncomingMessage } from '../types'
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -634,7 +634,7 @@ describe('mergeArtifacts — same-name text-only dedup', () => {
 })
 
 describe('extractTextFromArtifacts', () => {
-  it('extracts text from the longest text-only artifact', () => {
+  it('returns the last text-only artifact', () => {
     const artifacts = [
       { artifactId: 'a1', parts: [{ kind: 'text' as const, text: 'short' }] },
       { artifactId: 'a2', parts: [{ kind: 'text' as const, text: 'this is much longer text' }] },
@@ -654,5 +654,25 @@ describe('extractTextFromArtifacts', () => {
       { artifactId: 'a1', parts: [{ kind: 'text' as const, text: 'text' }, { kind: 'file' as const, file: { uri: 'x' } }] },
     ]
     expect(extractTextFromArtifacts(artifacts as any)).toBe('')
+  })
+})
+
+describe('extractStreamTextFromArtifacts', () => {
+  it('concatenates all text-only artifacts in order', () => {
+    const artifacts = [
+      { artifactId: 'a1', parts: [{ kind: 'text' as const, text: 'Now let me execute. ' }] },
+      { artifactId: 'a2', parts: [{ kind: 'text' as const, text: 'Excellent! URLs ready.' }] },
+    ]
+    expect(extractStreamTextFromArtifacts(artifacts as any)).toBe(
+      'Now let me execute. Excellent! URLs ready.',
+    )
+  })
+
+  it('ignores empty trailing stream artifacts', () => {
+    const artifacts = [
+      { artifactId: 'agent-stream', parts: [{ kind: 'text' as const, text: 'Full body' }] },
+      { artifactId: 'msg-stream', parts: [{ kind: 'text' as const, text: '' }] },
+    ]
+    expect(extractStreamTextFromArtifacts(artifacts as any)).toBe('Full body')
   })
 })

@@ -19,6 +19,12 @@ import {
   deriveFinalAnswer,
   derivePrimaryStreamFromFinalAnswer,
 } from './derive-final-answer'
+import {
+  hasActiveSynthesisGap,
+  shouldShowSynthesizingPhase,
+  shouldShowSynthesizingPhaseForResults,
+} from './multi-agent-turn-complete'
+import { getStripSourceResults } from './turn-live-shell'
 
 // ── Constants ──────────────────────────────────────────────────
 
@@ -202,6 +208,8 @@ function assembleTurn(
   const status = deriveTurnStatus(agentResults, {
     isSupervisorTurn: agentResults.some(r => isSupervisorSystemAgent(r.agentId)),
     turnTerminalStatus: scaffold.userEntity?.turnTerminalStatus,
+    turnCompletionKind: scaffold.userEntity?.turnCompletionKind,
+    processingStatusLogs: scaffold.userEntity?.processingStatusLogs ?? [],
   })
   const summary = selectSummary(agentResults)
   const activeAgentIds = agentResults
@@ -243,6 +251,7 @@ function assembleTurn(
     isSupervisorTurn,
     supervisorStage,
     turnTerminalStatus: scaffold.userEntity?.turnTerminalStatus,
+    turnCompletionKind: scaffold.userEntity?.turnCompletionKind,
     processingStatusLogs: scaffold.userEntity?.processingStatusLogs ?? [],
     displayMode: 'single_agent', // placeholder, set below
     finalAnswer: { kind: 'pending', label: 'Working' }, // placeholder
@@ -511,20 +520,32 @@ function suppressEphemeralResults(
 // ── Turn phase derivation ──────────────────────────────────────
 
 export function deriveTurnPhase(turn: TurnViewModel): TurnPhase {
+  const summaryResult = turn.agentResults.find(r => r.isSummaryAgent)
+  const real = getStripSourceResults(turn)
+  const allRealTerminal =
+    real.length > 0
+    && real.every(r => r.status === 'completed' || r.status === 'failed')
+
+  if (
+    summaryResult?.status === 'working'
+    || (allRealTerminal && hasActiveSynthesisGap(turn))
+    || shouldShowSynthesizingPhase(turn, real)
+  ) {
+    return 'synthesizing'
+  }
+
   if (turn.status === 'completed' || turn.status === 'failed' || turn.status === 'partial') {
     return 'completed'
   }
 
-  const summaryResult = turn.agentResults.find(r => r.isSummaryAgent)
-  const real = turn.agentResults.filter(r => !r.isSummaryAgent && !r.isEphemeral)
   const inSynthesisGap =
     turn.status === 'active'
-    && real.length > 0
-    && real.every(r => r.status === 'completed' || r.status === 'failed')
+    && allRealTerminal
     && !summaryResult
     && turn.agentResults.some(r => r.isEphemeral && isSynthesisGapEphemeral(r))
 
-  if (summaryResult?.status === 'working' || inSynthesisGap) return 'synthesizing'
+  if (inSynthesisGap) return 'synthesizing'
+
   if (
     turn.status === 'active'
     && turn.processingStatusLogs.length > 0
@@ -547,6 +568,8 @@ function deriveTurnStatus(
   opts: {
     isSupervisorTurn: boolean
     turnTerminalStatus?: TurnViewModel['turnTerminalStatus']
+    turnCompletionKind?: TurnViewModel['turnCompletionKind']
+    processingStatusLogs?: TurnViewModel['processingStatusLogs']
   },
 ): TurnStatus {
   const substantive = agentResults.filter(r => !r.isEphemeral)
@@ -576,6 +599,22 @@ function deriveTurnStatus(
   const synthesisGapActive =
     agentResults.some(r => r.isEphemeral && isSynthesisGapEphemeral(r))
     || (summaryAgent?.status === 'working' && (summaryAgent.content.trim().length ?? 0) === 0)
+    || (opts.processingStatusLogs ?? []).some(entry =>
+      entry.message.toLowerCase().includes('synthesiz'),
+    )
+
+  const awaitingOrchestrator =
+    (opts.processingStatusLogs?.length ?? 0) > 0
+    || opts.isSupervisorTurn
+
+  const preOrchestrationGap =
+    awaitingOrchestrator
+    && real.length >= 2
+    && allRealAgentsTerminal(agentResults)
+    && !hasSummaryContent
+    && !synthesisGapActive
+    && opts.turnTerminalStatus !== 'completed'
+    && opts.turnTerminalStatus !== 'failed'
 
   const awaitingSynthesisGap =
     real.length >= 2
@@ -585,9 +624,18 @@ function deriveTurnStatus(
     && opts.turnTerminalStatus !== 'completed'
     && opts.turnTerminalStatus !== 'failed'
 
+  const awaitingMultiAgentSynthesis = shouldShowSynthesizingPhaseForResults(agentResults, {
+    turnTerminalStatus: opts.turnTerminalStatus,
+    turnCompletionKind: opts.turnCompletionKind,
+    processingStatusLogs: opts.processingStatusLogs,
+    isSupervisorTurn: opts.isSupervisorTurn,
+  })
+
   if (hasWorking) return 'active'
   if (hasAwaitingInput) return 'awaiting_input'
-  if (inSynthesisGap || awaitingSynthesisGap) return 'active'
+  if (inSynthesisGap || awaitingSynthesisGap || preOrchestrationGap || awaitingMultiAgentSynthesis) {
+    return 'active'
+  }
   if (allFailed) return 'failed'
   if (allCompleted) return 'completed'
   if (hasCompleted && hasFailed) return 'partial'
@@ -783,6 +831,7 @@ function turnsAreEqual(a: TurnViewModel, b: TurnViewModel): boolean {
   if (a.phase !== b.phase) return false
   if (a.primaryStreamMessageId !== b.primaryStreamMessageId) return false
   if (a.turnTerminalStatus !== b.turnTerminalStatus) return false
+  if (a.turnCompletionKind !== b.turnCompletionKind) return false
   if (!processingStatusLogsEqual(a.processingStatusLogs, b.processingStatusLogs)) return false
   if (a.finalAnswer.kind !== b.finalAnswer.kind) return false
   if (a.finalAnswer.primaryMessageId !== b.finalAnswer.primaryMessageId) return false

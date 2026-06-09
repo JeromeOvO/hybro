@@ -13,12 +13,17 @@ function make(
 export function mapResultDisplayProps(
   result: AgentResultViewModel,
   isStreaming: boolean,
+  displayContent?: string,
 ): AgentDisplayProps {
   const name = result.agentName
+  const visibleContent = (displayContent ?? result.content).trim()
 
   switch (result.status) {
     case 'working':
-      return isStreaming && result.content.trim().length > 0
+      if (result.isSummaryAgent) {
+        return make(name, 'Synthesizing', 'accent', true)
+      }
+      return isStreaming && visibleContent.length > 0
         ? make(name, 'Streaming', 'accent', true)
         : make(name, 'Working', 'accent', true)
     case 'completed':

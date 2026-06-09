@@ -38,7 +38,7 @@ function CollectingBlock({
   const display = {
     label: synthesizing ? 'Synthesizing' : 'Working',
     tone: 'accent' as const,
-    isAnimated: true,
+    isAnimated: isRunning,
     ariaLabel: `HYBRO AI — ${synthesizing ? 'Synthesizing' : 'Working'}`,
   }
 
@@ -57,9 +57,17 @@ function CollectingBlock({
   )
 }
 
-function ResultHeader({ result, isStreaming }: { result: AgentResultViewModel; isStreaming: boolean }) {
+function ResultHeader({
+  result,
+  isStreaming,
+  displayContent,
+}: {
+  result: AgentResultViewModel
+  isStreaming: boolean
+  displayContent?: string
+}) {
   const theme = getAgentTheme(result.agentId, result.agentName)
-  const display = mapResultDisplayProps(result, isStreaming)
+  const display = mapResultDisplayProps(result, isStreaming, displayContent)
   return (
     <AgentCard
       agentId={result.agentId ?? result.messageId}
@@ -93,7 +101,7 @@ function FailedBlock({ intro, turnId }: { intro: string; turnId?: string }) {
         interactive={false}
       />
       <div className="conversation-content-body" data-quote-message-id={turnId} data-quote-agent-name="HYBRO AI" data-quote-source-kind="user_turn">
-        <MarkdownContent className="conversation-markdown-body text-sm" content={intro} />
+        <MarkdownContent className="conversation-markdown-body" content={intro} />
       </div>
     </>
   )
@@ -119,7 +127,7 @@ function CanceledBlock({ intro, turnId }: { intro: string; turnId?: string }) {
         interactive={false}
       />
       <div className="conversation-content-body" data-quote-message-id={turnId} data-quote-agent-name="HYBRO AI" data-quote-source-kind="user_turn">
-        <MarkdownContent className="conversation-markdown-body text-sm" content={intro} />
+        <MarkdownContent className="conversation-markdown-body" content={intro} />
       </div>
     </>
   )
@@ -162,7 +170,7 @@ function DeterministicDoneBlock({
         interactive={false}
       />
       <div className="conversation-content-body" data-quote-message-id={turnId} data-quote-agent-name="HYBRO AI" data-quote-source-kind="user_turn">
-        <MarkdownContent className="conversation-markdown-body text-sm" content={intro} />
+        <MarkdownContent className="conversation-markdown-body" content={intro} />
       </div>
     </>
   )
@@ -188,7 +196,10 @@ function HitlPrimary({ turn, isRunning }: { turn: TurnViewModel; isRunning: bool
           <div className="text-xs font-medium mb-2" style={{ color: 'var(--conversation-text-muted)' }}>
             {p.agentName} · Needs Input
           </div>
-          <div className="text-sm whitespace-pre-wrap" style={{ color: 'var(--conversation-text-primary)' }}>
+          <div
+            className="conversation-user-message-text whitespace-pre-wrap"
+            style={{ color: 'var(--conversation-text-primary)' }}
+          >
             {p.prompt}
           </div>
         </div>
@@ -210,15 +221,31 @@ function HitlPrimary({ turn, isRunning }: { turn: TurnViewModel; isRunning: bool
 function SynthesisBlock({
   summaryResult,
   supervisorStatus,
+  processingStatusLogs,
+  processingStatusRunning,
 }: {
   summaryResult: AgentResultViewModel
   supervisorStatus: string | null
+  processingStatusLogs?: TurnViewModel['processingStatusLogs']
+  processingStatusRunning: boolean
 }) {
   const stream = useResultStreamDisplay(summaryResult)
+  const logs = processingStatusLogs ?? []
+  const showProcessingLog = logs.length > 0
 
   return (
     <>
-      <ResultHeader result={summaryResult} isStreaming={stream.isStreaming} />
+      <ResultHeader
+        result={summaryResult}
+        isStreaming={stream.isStreaming}
+        displayContent={stream.content}
+      />
+      {showProcessingLog && (
+        <ProcessingStatusLog
+          entries={logs}
+          isRunning={processingStatusRunning}
+        />
+      )}
       {supervisorStatus && !stream.isStreaming && (
         <p className="text-xs mt-1" style={{ color: 'var(--conversation-text-muted)' }} aria-live="polite">
           {supervisorStatus}
@@ -255,13 +282,21 @@ export function FinalAnswerSurface({
       break
     case 'llm_synthesis':
       if (summaryResult) {
-        body = <SynthesisBlock summaryResult={summaryResult} supervisorStatus={supervisorStatus} />
+        processingLogRenderedInBody = true
+        body = (
+          <SynthesisBlock
+            summaryResult={summaryResult}
+            supervisorStatus={supervisorStatus}
+            processingStatusLogs={turn.processingStatusLogs ?? []}
+            processingStatusRunning={processingStatusRunning}
+          />
+        )
       } else {
         processingLogRenderedInBody = true
         body = (
           <CollectingBlock
             phase={turn.phase}
-            processingStatusLogs={turn.processingStatusLogs}
+            processingStatusLogs={turn.processingStatusLogs ?? []}
             isRunning={processingStatusRunning}
           />
         )

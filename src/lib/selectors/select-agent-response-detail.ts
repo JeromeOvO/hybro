@@ -1,5 +1,6 @@
 import type { MessageEntity } from '@/stores/message-store/types'
 import type { StreamBuffer } from '@/stores/streaming-store'
+import { isTerminalState } from '@/lib/types/sse'
 import {
   isBufferStreaming,
   resolveDetailArtifacts,
@@ -71,16 +72,19 @@ export function selectAgentResponseDetail(
     ? getAgentTheme(agent.agentId, agent.senderName)
     : UNRESOLVED_THEME
 
-  const content = resolveStreamText(buffer, (agent.content ?? '').trim())
-  const isStreaming = resolveEntityStreaming(buffer, agent.taskStatus)
-  const artifacts = resolveDetailArtifacts(buffer, agent.artifacts)
+  const isTerminal = agent.taskStatus != null && isTerminalState(agent.taskStatus)
+  const effectiveBuffer = isTerminal ? undefined : buffer
+
+  const content = resolveStreamText(effectiveBuffer, (agent.content ?? '').trim())
+  const isStreaming = resolveEntityStreaming(effectiveBuffer, agent.taskStatus)
+  const artifacts = resolveDetailArtifacts(effectiveBuffer, agent.artifacts)
 
   const isActivelyWorking = agent.taskStatus == null || agent.taskStatus === 'working' || agent.taskStatus === 'submitted'
   const staticDescription = agent.taskContent ?? agent.taskStatusMessage ?? ''
   const taskDescription = staticDescription || (isActivelyWorking ? 'Working on your request…' : '')
 
   const baseDisplay = mapAgentDisplayProps(agent)
-  const display = isBufferStreaming(buffer)
+  const display = isBufferStreaming(effectiveBuffer)
     ? { ...baseDisplay, label: 'Streaming' }
     : baseDisplay
 

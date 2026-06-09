@@ -1,4 +1,5 @@
 import type { RoomSSEFrameMap } from '@/lib/types/sse'
+import { isTerminalState } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
 import { useStreamingStore } from '@/stores/streaming-store'
 import { appendEvent } from '@/lib/room-timeline/event-log'
@@ -28,13 +29,23 @@ export function handleArtifactUpdate(
   if (!sseMessage.data.message_id || !sseMessage.data.artifact) return
 
   const { message_id, artifact, append: isAppend, last_chunk } = sseMessage.data
+
+  const entity = store.entities[message_id]
+  if (entity?.taskStatus && isTerminalState(entity.taskStatus)) {
+    streaming.clear(message_id)
+    return
+  }
   const artifactData = sseArtifactDataFromPayload(
     artifact as Record<string, unknown>,
     isAppend,
     last_chunk,
   )
+  const artifactId = artifactData.artifactId
+  const hasExistingArtifact = (streaming.buffers[message_id]?.artifacts ?? [])
+    .some(a => a.artifactId === artifactId)
+  const resolvedAppend = isAppend ?? hasExistingArtifact
 
-  streaming.append(message_id, ctx.roomId, artifactData, isAppend, {
+  streaming.append(message_id, ctx.roomId, artifactData, resolvedAppend, {
     clientRequestId: correlation.clientReqId,
     userMessageId: correlation.clientReqId
       ? getResolvedMessageId(correlation.clientReqId)
@@ -42,7 +53,7 @@ export function handleArtifactUpdate(
   })
   if (last_chunk) streaming.markComplete(message_id)
 
-  if (!isAppend) {
+  if (!resolvedAppend) {
     appendEvent(ctx.roomId, {
       kind: 'artifact_emitted',
       timestamp: sseMessage.timestamp,

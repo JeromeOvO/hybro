@@ -98,10 +98,12 @@ export async function inquiryRoomSetting(
 export async function inquiryActiveRuns(
   room_id: string,
   getToken?: () => Promise<string | null>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  trigger_message_id?: string,
 ): Promise<RoomCenterActiveRunsResponse> {
-  const requestData: RoomCenterRoomSettingRequest = {
-    room_id
+  const requestData: RoomCenterRoomSettingRequest & { trigger_message_id?: string } = {
+    room_id,
+    ...(trigger_message_id ? { trigger_message_id } : {}),
   }
 
   return apiPost<RoomCenterActiveRunsResponse>(
