@@ -12,13 +12,16 @@ function createDom() {
   const scroll = document.createElement('div')
   Object.defineProperty(scroll, 'clientHeight', { value: 400, writable: true, configurable: true })
   Object.defineProperty(scroll, 'scrollTop', { value: 100, writable: true, configurable: true })
-  scroll.scrollBy = vi.fn(function (this: HTMLElement, opts: ScrollToOptions) {
-    Object.defineProperty(this, 'scrollTop', {
-      value: this.scrollTop + (opts.top ?? 0),
-      writable: true,
-      configurable: true,
-    })
-  }) as typeof scroll.scrollBy
+  scroll.scrollTo = vi.fn(function (this: HTMLElement, opts: ScrollToOptions) {
+    if (typeof opts === 'object' && opts.top != null) {
+      Object.defineProperty(this, 'scrollTop', {
+        value: opts.top,
+        writable: true,
+        configurable: true,
+      })
+    }
+  }) as typeof scroll.scrollTo
+  Object.defineProperty(scroll, 'scrollHeight', { value: 800, writable: true, configurable: true })
   Object.defineProperty(scroll, 'getBoundingClientRect', {
     value: () => ({
       top: 0,
@@ -84,44 +87,65 @@ describe('usePrimaryStreamScroll', () => {
   it('does not tail-follow while focus mode is active', () => {
     const { scroll, primary } = createDom()
     const focusModeRef = { current: true }
+    const tailFollowRef = { current: true }
 
     renderHook(() => {
       const scrollRef = useRef(scroll)
       const primarySurfaceRef = useRef(primary)
-      const userPausedRef = useRef(false)
       const programmaticScrollRef = useRef(false)
       return usePrimaryStreamScroll({
         scrollRef,
         primarySurfaceRef,
         primaryStreamMessageId: 'agent-1',
-        userPausedRef,
+        tailFollowRef,
         programmaticScrollRef,
+        markProgrammaticScroll: () => {},
         focusModeRef,
       })
     })
 
-    expect(scroll.scrollBy).not.toHaveBeenCalled()
+    expect(scroll.scrollTo).not.toHaveBeenCalled()
   })
 
-  it('tail-follows near content end when focus mode is inactive', () => {
+  it('tail-follows when tail follow is enabled', () => {
     const { scroll, primary } = createDom()
-    const focusModeRef = { current: false }
+    const tailFollowRef = { current: true }
 
     renderHook(() => {
       const scrollRef = useRef(scroll)
       const primarySurfaceRef = useRef(primary)
-      const userPausedRef = useRef(false)
       const programmaticScrollRef = useRef(false)
       return usePrimaryStreamScroll({
         scrollRef,
         primarySurfaceRef,
         primaryStreamMessageId: 'agent-1',
-        userPausedRef,
+        tailFollowRef,
         programmaticScrollRef,
-        focusModeRef,
+        markProgrammaticScroll: () => {},
       })
     })
 
-    expect(scroll.scrollBy).toHaveBeenCalled()
+    expect(scroll.scrollTo).toHaveBeenCalled()
+  })
+
+  it('does not tail-follow when tail follow is disabled', () => {
+    const { scroll, primary } = createDom()
+    const tailFollowRef = { current: false }
+
+    renderHook(() => {
+      const scrollRef = useRef(scroll)
+      const primarySurfaceRef = useRef(primary)
+      const programmaticScrollRef = useRef(false)
+      return usePrimaryStreamScroll({
+        scrollRef,
+        primarySurfaceRef,
+        primaryStreamMessageId: 'agent-1',
+        tailFollowRef,
+        programmaticScrollRef,
+        markProgrammaticScroll: () => {},
+      })
+    })
+
+    expect(scroll.scrollTo).not.toHaveBeenCalled()
   })
 })

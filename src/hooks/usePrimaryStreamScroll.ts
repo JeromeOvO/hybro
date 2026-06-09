@@ -1,39 +1,43 @@
 'use client'
 
 import { useLayoutEffect, useRef, type RefObject } from 'react'
-import { isNearContentEnd } from '@/lib/conversation/content-end-scroll'
+import { scrollToContentEnd } from '@/lib/conversation/content-end-scroll'
 import { useStreamingStore } from '@/stores/streaming-store'
 
 interface UsePrimaryStreamScrollOptions {
   scrollRef: RefObject<HTMLDivElement | null>
   primarySurfaceRef: RefObject<HTMLDivElement | null>
   primaryStreamMessageId?: string
-  userPausedRef: RefObject<boolean>
+  tailFollowRef: RefObject<boolean>
   programmaticScrollRef: RefObject<boolean>
+  markProgrammaticScroll: () => void
   /** When true, focus-scroll owns the viewport — tail-follow is disabled. */
   focusModeRef?: RefObject<boolean>
   enabled?: boolean
 }
 
-function scrollPrimaryTailIntoView(
+function followContentEndTail(
   scrollEl: HTMLElement,
-  primaryEl: HTMLElement,
-  behavior: ScrollBehavior,
-) {
-  const scrollRect = scrollEl.getBoundingClientRect()
-  const primaryRect = primaryEl.getBoundingClientRect()
-  const delta = primaryRect.bottom - scrollRect.bottom
-  if (delta > 0) {
-    scrollEl.scrollBy({ top: delta, behavior })
-  }
+  tailFollowRef: RefObject<boolean>,
+  programmaticScrollRef: RefObject<boolean>,
+  markProgrammaticScroll: () => void,
+  focusModeRef?: RefObject<boolean>,
+  behavior: ScrollBehavior = 'auto',
+): void {
+  if (!tailFollowRef.current) return
+  if (focusModeRef?.current) return
+  programmaticScrollRef.current = true
+  markProgrammaticScroll()
+  scrollToContentEnd(scrollEl, behavior)
 }
 
 export function usePrimaryStreamScroll({
   scrollRef,
   primarySurfaceRef,
   primaryStreamMessageId,
-  userPausedRef,
+  tailFollowRef,
   programmaticScrollRef,
+  markProgrammaticScroll,
   focusModeRef,
   enabled = true,
 }: UsePrimaryStreamScrollOptions) {
@@ -48,14 +52,15 @@ export function usePrimaryStreamScroll({
 
   const followPrimary = (behavior: ScrollBehavior = 'auto') => {
     const scrollEl = scrollRef.current
-    const primaryEl = primarySurfaceRef.current
-    if (!scrollEl || !primaryEl) return
-    if (userPausedRef.current) return
-    if (focusModeRef?.current) return
-    if (!isNearContentEnd(scrollEl)) return
-
-    programmaticScrollRef.current = true
-    scrollPrimaryTailIntoView(scrollEl, primaryEl, behavior)
+    if (!scrollEl) return
+    followContentEndTail(
+      scrollEl,
+      tailFollowRef,
+      programmaticScrollRef,
+      markProgrammaticScroll,
+      focusModeRef,
+      behavior,
+    )
   }
 
   useLayoutEffect(() => {
@@ -80,14 +85,26 @@ export function usePrimaryStreamScroll({
     if (!primaryEl || !scrollEl) return
 
     const observer = new ResizeObserver(() => {
-      if (userPausedRef.current) return
-      if (focusModeRef?.current) return
-      if (!isNearContentEnd(scrollEl)) return
-      programmaticScrollRef.current = true
-      scrollPrimaryTailIntoView(scrollEl, primaryEl, 'auto')
+      followContentEndTail(
+        scrollEl,
+        tailFollowRef,
+        programmaticScrollRef,
+        markProgrammaticScroll,
+        focusModeRef,
+        'auto',
+      )
     })
 
     observer.observe(primaryEl)
     return () => observer.disconnect()
-  }, [primaryStreamMessageId, scrollRef, primarySurfaceRef, userPausedRef, programmaticScrollRef, enabled])
+  }, [
+    primaryStreamMessageId,
+    scrollRef,
+    primarySurfaceRef,
+    tailFollowRef,
+    programmaticScrollRef,
+    markProgrammaticScroll,
+    focusModeRef,
+    enabled,
+  ])
 }
