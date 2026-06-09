@@ -120,6 +120,36 @@ async def test_mongo_collection_adapter_preserves_zero_limit():
 
 
 @pytest.mark.asyncio
+async def test_mongo_collection_adapter_delegates_bulk_write():
+    from dal.mongo.client import MongoCollectionAdapter
+
+    collection = MagicMock()
+    collection.bulk_write = AsyncMock(return_value="bulk-result")
+
+    adapter = MongoCollectionAdapter(collection)
+
+    result = await adapter.bulk_write(["op"], ordered=False)
+
+    assert result == "bulk-result"
+    collection.bulk_write.assert_awaited_once_with(["op"], ordered=False)
+
+
+@pytest.mark.asyncio
+async def test_mongo_collection_adapter_delegates_distinct():
+    from dal.mongo.client import MongoCollectionAdapter
+
+    collection = MagicMock()
+    collection.distinct = AsyncMock(return_value=["room-1"])
+
+    adapter = MongoCollectionAdapter(collection)
+
+    result = await adapter.distinct("room_id", {"state": "running"})
+
+    assert result == ["room-1"]
+    collection.distinct.assert_awaited_once_with("room_id", {"state": "running"})
+
+
+@pytest.mark.asyncio
 async def test_redis_kv_impl_uses_direct_redis_client():
     from dal.redis.kv import RedisKVImpl
 
