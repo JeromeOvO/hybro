@@ -1,0 +1,58 @@
+{
+  "database_singleton_import_blockers": [
+    "main.py"
+  ],
+  "hidden_mongo_fallback_blockers": [
+    "app_shell/a2a_runtime.py",
+    "jobs/stale_task_checker.py"
+  ],
+  "database_service_type_blockers": [
+    "app_shell/debate_service.py",
+    "app_shell/memory_service.py",
+    "app_shell/room_coordinator_service.py",
+    "app_shell/room_membership_source.py",
+    "app_shell/room_runtime.py",
+    "execution/dispatch/agent_dispatcher.py",
+    "execution/dispatch/task_notifications.py",
+    "execution/dispatch/transports/webhook.py",
+    "execution/orchestration/queue_executor.py",
+    "execution/orchestration/room_supervisor_service.py",
+    "execution/orchestration/supervisor_executor.py",
+    "main.py"
+  ],
+  "database_service_duck_type_blockers": [
+    "api_gateway/dependencies.py",
+    "api_gateway/routes/a2a_task_routes.py",
+    "api_gateway/routes/agent_group_routes.py",
+    "api_gateway/routes/room_routes.py",
+    "api_gateway/routes/sse_routes.py",
+    "app_shell/compaction_service.py",
+    "app_shell/database_service.py",
+    "app_shell/debate_service.py",
+    "app_shell/memory_service.py",
+    "app_shell/relay_service.py",
+    "app_shell/room_coordinator_service.py",
+    "app_shell/room_membership_source.py",
+    "app_shell/room_runtime.py",
+    "common/utils/turn_id.py",
+    "execution/cancellation.py",
+    "execution/client_request_id.py",
+    "execution/dispatch/agent_dispatcher.py",
+    "execution/dispatch/agent_message_processor.py",
+    "execution/dispatch/response_handler.py",
+    "execution/dispatch/transports/direct.py",
+    "execution/hitl/adapters.py",
+    "execution/hitl/factory.py",
+    "execution/hitl/service.py",
+    "execution/orchestration/factory.py",
+    "execution/orchestration/queue_executor.py",
+    "execution/orchestration/room_message_center.py",
+    "execution/orchestration/room_supervisor_service.py",
+    "execution/orchestration/supervisor_executor.py",
+    "jobs/stale_task_checker.py",
+    "main.py"
+  ],
+  "pinecone_singleton_import_blockers": [
+    "main.py"
+  ]
+}
