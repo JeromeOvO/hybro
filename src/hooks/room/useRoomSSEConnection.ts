@@ -8,7 +8,36 @@ import type { ProcessingLifecycle } from './processing-lifecycle'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { useMessageStore } from '@/stores/message-store'
 import { allAgentsTerminalForUserMessage } from '@/lib/room-timeline/turn-agent-terminal'
+import { ensureTurnTerminalStampedFromBackendTruth } from '@/lib/room-timeline/turn-terminal-stamp'
 import { findProcessingStatusUserEntity } from './processing-status-log'
+
+function resolveLiveTurnUserMessageId(roomId: string, lifecycle: ProcessingLifecycle): string | undefined {
+  const userEntity = findProcessingStatusUserEntity(roomId, {
+    messageId: lifecycle.getMessageId(),
+    clientRequestId: lifecycle.getPendingRunEventAck(),
+    latestWithLogs: true,
+  })
+  return lifecycle.getMessageId() ?? userEntity?.id
+}
+
+async function tryRecoverTurnTerminalFromBackendTruth(
+  roomId: string,
+  lifecycle: ProcessingLifecycle,
+  getToken: (() => Promise<string | null>) | undefined,
+): Promise<boolean> {
+  const userMessageId = resolveLiveTurnUserMessageId(roomId, lifecycle)
+  if (!userMessageId) return false
+
+  return ensureTurnTerminalStampedFromBackendTruth(
+    roomId,
+    lifecycle,
+    {
+      relatedMessageId: userMessageId,
+      clientRequestId: lifecycle.getPendingRunEventAck(),
+    },
+    getToken,
+  )
+}
 
 function hasTerminalEvidenceForCurrentTurn(roomId: string, lifecycle: ProcessingLifecycle): boolean {
   const userEntity = findProcessingStatusUserEntity(roomId, {
@@ -122,11 +151,12 @@ export function useRoomSSEConnection(
         if (hasActive === false && lifecycle.getMessageId() === messageIdAtReconnect && !sending) {
           await reconcileWithDb(roomId)
           if (lifecycle.getMessageId() !== messageIdAtReconnect) return
+          await tryRecoverTurnTerminalFromBackendTruth(roomId, lifecycle, getToken)
           if (!hasTerminalEvidenceForCurrentTurn(roomId, lifecycle)) {
-            console.log('🔄 Reconnect: backend has no active runs, but DB has no terminal turn yet — keeping processing log')
+            console.log('🔄 Reconnect: backend has no active runs, but turn is not terminal yet — keeping processing log')
             return
           }
-          console.log('🔄 Reconnect: backend confirms no active runs and DB has terminal turn — stopping processing lifecycle')
+          console.log('🔄 Reconnect: backend confirms no active runs and turn is terminal — stopping processing lifecycle')
           lifecycle.stopProcessing()
           lifecycle.clearSseDisconnection()
         }
@@ -142,15 +172,16 @@ export function useRoomSSEConnection(
         const hasActiveLifecycle = await backendHasActiveLifecycle()
         if (hasActiveLifecycle === false) {
           await reconcileWithDb(roomId)
+          await tryRecoverTurnTerminalFromBackendTruth(roomId, lifecycle, getToken)
           if (!hasTerminalEvidenceForCurrentTurn(roomId, lifecycle)) {
-            console.log('🔄 Safety-net: backend has no active runs, but DB has no terminal turn yet — keeping processing log')
+            console.log('🔄 Safety-net: backend has no active runs, but turn is not terminal yet — keeping processing log')
             return
           }
-          console.log('🔄 Safety-net: backend confirms processing ended and DB has terminal turn — stopping processing lifecycle')
+          console.log('🔄 Safety-net: backend confirms processing ended and turn is terminal — stopping processing lifecycle')
           lifecycle.stopProcessing()
           lifecycle.clearSseDisconnection()
         }
-      }, 15_000)
+      }, 5000)
     }
 
     prevSseConnectedRef.current = sseConnected

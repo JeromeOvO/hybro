@@ -30,39 +30,41 @@
   --conversation-radius-card: 10px;
 
   /*
-   * Reading typography (balanced readability):
-   * - 16px / 1.625 lh ≈ 26px row (WCAG floor + comfortable scanning)
-   * - 400 body (light), 500 body (dark)
-   * - 0.8125em paragraph rhythm, 0.3125em list item rhythm
+   * Reading typography (ChatGPT-aligned rhythm):
+   * - 16px / 1.75 lh — airy body scan line
+   * - 400 body in light and dark
+   * - 1em paragraph rhythm, 0.375em list item rhythm
    */
   --conversation-user-font-size: 1rem;
-  --conversation-user-line-height: 1.625;
-  --conversation-user-max-height: 4.875rem;
+  --conversation-user-line-height: 1.75;
+  --conversation-user-max-height: 5.25rem;
   --conversation-user-padding-x: 1rem;
   --conversation-user-padding-y: 0.6875rem;
   --conversation-agent-card-padding-x: 15px;
   --conversation-agent-card-padding-y: 12px;
   --conversation-agent-status-font-size: 12px;
   --conversation-content-font-size: 1rem;
-  --conversation-content-line-height: 1.625;
-  --conversation-content-font-family: var(--font-plus-jakarta), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --conversation-content-line-height: 1.75;
+  --conversation-content-font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --conversation-content-font-weight: 400;
   --conversation-content-heading-weight: 600;
   --conversation-content-emphasis-weight: 600;
   --conversation-content-ui-weight: 500;
-  --conversation-content-letter-spacing: 0.012em;
-  --conversation-content-paragraph-gap: 0.8125em;
+  --conversation-content-letter-spacing: 0;
+  --conversation-content-paragraph-gap: 1em;
   --conversation-content-list-indent: 1.5625rem;
-  --conversation-content-list-gap: 0.3125em;
-  /* Nested list type scale (absolute rem — avoids compounding em shrink) */
-  --conversation-content-list-nested-font-size: 0.9375rem;
-  --conversation-content-list-nested-line-height: 1.55;
-  --conversation-content-list-deep-font-size: 0.875rem;
-  --conversation-content-list-deep-line-height: 1.5;
+  --conversation-content-list-gap: 0.375em;
+  /* Nested lists stay body-sized; one optional step for deep nesting */
+  --conversation-content-list-nested-font-size: 1rem;
+  --conversation-content-list-nested-line-height: 1.75;
+  --conversation-content-list-deep-font-size: 0.9375rem;
+  --conversation-content-list-deep-line-height: 1.65;
   --conversation-content-block-gap: 0.9375em;
   --conversation-content-heading-line-height: 1.3;
+  --conversation-content-table-font-size: 0.875rem;
+  --conversation-content-table-line-height: 1.5;
 
-  --conversation-gap-turn: 2.125rem;
+  --conversation-gap-turn: 2.75rem;
   --conversation-gap-block: 0.5625rem;
   --conversation-turn-content-top-gap: 0.75rem;
   --conversation-frame-max-width: 800px;
@@ -102,8 +104,6 @@
 
   --conversation-danger-border: #ef444433;
 
-  /* Dark mode: medium body weight compensates for thin stroke perception on dark bg */
-  --conversation-content-font-weight: 500;
   --conversation-text-primary: hsl(var(--color-foreground) / 0.97);
   --conversation-text-secondary: hsl(var(--color-foreground) / 0.88);
   --conversation-text-tertiary: hsl(var(--color-foreground) / 0.74);
@@ -121,6 +121,7 @@
 .conversation-scroll-area {
   scrollbar-gutter: stable both-edges;
   scroll-padding-top: var(--conversation-sticky-top);
+  overflow-anchor: none;
 }
 
 /* ---------- Two-layer frame ---------- */
@@ -298,6 +299,14 @@
   left: 0;
 }
 
+.conversation-markdown-body ol > li.conv-hash-numbered-item::before {
+  content: none;
+}
+
+.conversation-markdown-body ol > li.conv-hash-numbered-item {
+  padding-left: 0;
+}
+
 .conversation-markdown-body ol ol {
   counter-reset: conv-nested-ol 0;
   list-style: none;
@@ -362,6 +371,12 @@
   margin: var(--conversation-content-block-gap) 0;
   border: none;
   border-top: 1px solid var(--conversation-border-subtle);
+}
+
+.conversation-content-body :where(table),
+.conversation-markdown-body :where(table) {
+  font-size: var(--conversation-content-table-font-size);
+  line-height: var(--conversation-content-table-line-height);
 }
 
 .conversation-content-body :where(pre),
@@ -552,12 +567,6 @@
   z-index: 20;
   padding-top: var(--conversation-sticky-top);
   isolation: isolate;
-}
-
-/* Live turn: avoid sticky overlap on HYBRO AI / agent cards below the user bubble */
-.conversation-user-sticky--static {
-  position: relative;
-  top: auto;
 }
 
 .conversation-user-sticky::before {

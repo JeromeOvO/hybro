@@ -1,4 +1,5 @@
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react'
+import { isNearContentEnd, scrollToContentEnd } from '@/lib/conversation/content-end-scroll'
 import { escapeCssIdent } from '@/lib/room-timeline/message-groups'
 
 interface AnchorEntity {
@@ -72,26 +73,6 @@ function scrollElementToContainerTop(container: HTMLElement, el: HTMLElement) {
   ensureTailScrollRange(container, el)
   const offset = el.getBoundingClientRect().top - container.getBoundingClientRect().top
   container.scrollTo({ top: Math.max(0, container.scrollTop + offset), behavior: 'auto' })
-}
-
-function scrollToContentEnd(container: HTMLElement) {
-  const contentEnd = container.querySelector('[data-content-end]') as HTMLElement | null
-  if (contentEnd) {
-    const offset = contentEnd.getBoundingClientRect().top - container.getBoundingClientRect().top
-    const target = container.scrollTop + offset - container.clientHeight
-    container.scrollTo({ top: Math.max(0, target), behavior: 'auto' })
-  } else {
-    container.scrollTo({ top: Math.max(0, container.scrollHeight - container.clientHeight), behavior: 'auto' })
-  }
-}
-
-function isNearContentEnd(container: HTMLElement): boolean {
-  const contentEnd = container.querySelector('[data-content-end]') as HTMLElement | null
-  if (!contentEnd) {
-    return container.scrollHeight - container.scrollTop - container.clientHeight < 100
-  }
-  const offset = contentEnd.getBoundingClientRect().top - container.getBoundingClientRect().top
-  return offset - container.clientHeight <= 100
 }
 
 // ---------------------------------------------------------------------------

@@ -8,11 +8,39 @@ import {
   shouldSkipInitialHydrationScrollRestore,
 } from '@/lib/conversation/conversation-scroll'
 
-function createScrollElement(initialHeight = 1000) {
+function createScrollElement(initialHeight = 1000, contentEndTop = 600) {
   const element = document.createElement('div')
   Object.defineProperty(element, 'clientHeight', { value: 400, writable: true, configurable: true })
   Object.defineProperty(element, 'scrollHeight', { value: initialHeight, writable: true, configurable: true })
   Object.defineProperty(element, 'scrollTop', { value: 0, writable: true, configurable: true })
+
+  element.getBoundingClientRect = () => ({
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 400,
+    width: 0,
+    height: 400,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  })
+
+  const contentEnd = document.createElement('div')
+  contentEnd.setAttribute('data-content-end', '')
+  contentEnd.getBoundingClientRect = () => ({
+    top: contentEndTop - element.scrollTop,
+    left: 0,
+    right: 0,
+    bottom: contentEndTop - element.scrollTop,
+    width: 0,
+    height: 0,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  })
+  element.appendChild(contentEnd)
+
   element.scrollTo = vi.fn(function (this: HTMLElement, opts: ScrollToOptions) {
     const maxTop = Math.max(0, this.scrollHeight - this.clientHeight)
     Object.defineProperty(this, 'scrollTop', {
@@ -31,16 +59,16 @@ describe('conversation-scroll', () => {
     expect(clampScrollTop(element, -10)).toBe(0)
   })
 
-  it('reads atBottom snapshot', () => {
+  it('reads atBottom snapshot from content-end proximity', () => {
     const element = createScrollElement(1000)
-    element.scrollTop = 580
-    expect(readConversationScrollSnapshot(element)).toEqual({ scrollTop: 580, atBottom: true })
+    element.scrollTop = 200
+    expect(readConversationScrollSnapshot(element)).toEqual({ scrollTop: 200, atBottom: true })
   })
 
-  it('scrolls to bottom when no snapshot exists', () => {
+  it('scrolls to content-end when no snapshot exists', () => {
     const element = createScrollElement(1000)
     expect(applyConversationScrollSnapshot(element, undefined)).toBe('default-bottom')
-    expect(element.scrollTop).toBe(600)
+    expect(element.scrollTop).toBe(200)
   })
 
   it('restores saved scroll position', () => {
@@ -54,9 +82,9 @@ describe('conversation-scroll', () => {
   it('restores bottom when snapshot was at bottom', () => {
     const element = createScrollElement(1000)
     expect(
-      applyConversationScrollSnapshot(element, { scrollTop: 580, atBottom: true }),
+      applyConversationScrollSnapshot(element, { scrollTop: 200, atBottom: true }),
     ).toBe('restored-bottom')
-    expect(element.scrollTop).toBe(600)
+    expect(element.scrollTop).toBe(200)
   })
 
   it('retries position restore until layout settles', () => {

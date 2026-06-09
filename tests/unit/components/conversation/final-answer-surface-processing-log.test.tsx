@@ -75,8 +75,8 @@ describe('FinalAnswerSurface processing logs', () => {
     expect(screen.queryByText('Agents working on your request…')).not.toBeInTheDocument()
   })
 
-  it('renders processing status logs while the turn is synthesizing with a summary stream', () => {
-    render(
+  it('renders processing status logs below synthesis content while streaming', () => {
+    const { container } = render(
       <FinalAnswerSurface
         turn={makeTurn({
           phase: 'synthesizing',
@@ -87,7 +87,7 @@ describe('FinalAnswerSurface processing logs', () => {
               agentId: 'supervisor_synthesis',
               agentName: 'HYBRO AI',
               status: 'working',
-              content: '',
+              content: 'Combined answer text',
               artifacts: [],
               isSummaryAgent: true,
             },
@@ -105,6 +105,17 @@ describe('FinalAnswerSurface processing logs', () => {
 
     expect(screen.getByRole('button', { name: /work logs/i })).toBeInTheDocument()
     expect(within(screen.getByRole('log')).getByText('Synthesizing responses')).toBeInTheDocument()
+    expect(screen.getByText('Combined answer text')).toBeInTheDocument()
+    expect(screen.getByLabelText('HYBRO AI — Synthesizing')).toBeInTheDocument()
+
+    const processingLog = container.querySelector('.conversation-processing-log')
+    const synthesisContent = container.querySelector('[data-quote-source-kind="synthesis"]')
+    expect(processingLog).not.toBeNull()
+    expect(synthesisContent).not.toBeNull()
+    expect(
+      processingLog!.compareDocumentPosition(synthesisContent!)
+      & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
   })
 
   it('renders processing status logs for a single-agent collecting turn', () => {

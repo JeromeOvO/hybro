@@ -9,6 +9,11 @@ import { normalizeTimestampOrNow } from '@/lib/time'
 import { parseSummaryOrigin } from '@/lib/room-timeline/derive-final-answer'
 import type { ArtifactData, ArtifactPart, IncomingMessage } from './types'
 
+function parseTurnCompletionKind(raw: unknown): 'synthesis' | 'deterministic' | undefined {
+  if (raw === 'synthesis' || raw === 'deterministic') return raw
+  return undefined
+}
+
 /**
  * Parameters for converting API messages to IncomingMessage shape.
  */
@@ -217,6 +222,7 @@ export async function convertApiMessageToIncoming(
   // ── Build IncomingMessage ────────────────────────────────────
   const extendInfo = apiMessage.extend_info as Record<string, unknown> | null | undefined
   const summaryOrigin = parseSummaryOrigin(extendInfo?.summary_origin)
+  const turnCompletionKind = parseTurnCompletionKind(extendInfo?.turn_completion_kind)
   const quotedText = typeof extendInfo?.quoted_text === 'string' ? extendInfo.quoted_text : undefined
   const quotedSenderName = typeof extendInfo?.quoted_sender_name === 'string' ? extendInfo.quoted_sender_name : undefined
   const extQuoteId = typeof extendInfo?.quote_id === 'string' ? extendInfo.quote_id : undefined
@@ -267,6 +273,7 @@ export async function convertApiMessageToIncoming(
     attachments,
     artifacts,
     summaryOrigin,
+    turnCompletionKind,
     quotedText,
     quotedSenderName,
     quoteId,

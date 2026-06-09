@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, render, render as probeRender } from '@testing-library/react'
 import { MarkdownContent } from '@/components/markdown-content'
@@ -15,6 +16,12 @@ try {
 const itIfStreamdown = streamdownRenders ? it : it.skip
 
 describe('MarkdownContent conversation typography', () => {
+  it('conversation tokens set table text to 14px', () => {
+    const tokens = readFileSync('src/components/conversation/conversation-tokens.css', 'utf8')
+    expect(tokens).toContain('--conversation-content-table-font-size: 0.875rem;')
+    expect(tokens).toContain('.conversation-markdown-body :where(table)')
+  })
+
   itIfStreamdown('does not apply compact defaults when conversation-markdown-body is set', () => {
     const { container } = render(
       <div className="conversation-content-body">
@@ -364,6 +371,55 @@ describe('MarkdownContent conversation typography', () => {
     expect(cells.length).toBe(4)
     expect(table?.textContent).toContain('MCP')
     expect(table?.textContent).toContain('Beta')
+  })
+
+  itIfStreamdown('hides CSS list counters when items already include #N markers', () => {
+    const { container } = render(
+      <div className="conversation-content-body">
+        <MarkdownContent
+          className="conversation-markdown-body"
+          content={[
+            '### Top 3 Must-Reads',
+            '1. **#1 — Anthropic IPO** summary text.',
+            '2. **#2 — OpenAI Super App** summary text.',
+            '3. **#3 — Tokenpocalypse** summary text.',
+          ].join('\n')}
+        />
+      </div>,
+    )
+
+    const items = container.querySelectorAll('.conversation-markdown-body ol:not(ol ol) > li')
+    expect(items.length).toBe(3)
+    expect(items[0]?.classList.contains('conv-hash-numbered-item')).toBe(true)
+    expect(items[1]?.classList.contains('conv-hash-numbered-item')).toBe(true)
+    expect(items[2]?.classList.contains('conv-hash-numbered-item')).toBe(true)
+
+    if (typeof CSS !== 'undefined' && CSS.supports?.('selector', 'ol ::before')) {
+      const marker = window.getComputedStyle(items[0]!, '::before').content.replace(/"/g, '')
+      expect(marker).toBe('none')
+    }
+  })
+
+  itIfStreamdown('keeps CSS list counters for ordinary numbered items', () => {
+    const { container } = render(
+      <div className="conversation-content-body">
+        <MarkdownContent
+          className="conversation-markdown-body"
+          content={[
+            '1. MCP release candidate.',
+            '2. OpenAI Agents SDK.',
+          ].join('\n')}
+        />
+      </div>,
+    )
+
+    const items = container.querySelectorAll('.conversation-markdown-body ol:not(ol ol) > li')
+    expect(items[0]?.classList.contains('conv-hash-numbered-item')).toBe(false)
+
+    if (typeof CSS !== 'undefined' && CSS.supports?.('selector', 'ol ::before')) {
+      const marker = window.getComputedStyle(items[0]!, '::before').content.replace(/"/g, '')
+      expect(marker).toMatch(/^1\.\s/)
+    }
   })
 
   itIfStreamdown('keeps compact defaults outside conversation surfaces', () => {

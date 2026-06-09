@@ -5,12 +5,14 @@ import { useMessageStore } from '@/stores/message-store'
 import { useInitialHydrationSeq, useLocalSendSeq, useRoomProcessing, useRoomUiStore } from '@/stores/room-ui-store'
 import { useTurnViewModels } from '@/hooks/useTurnViewModels'
 import { usePrimaryStreamScroll } from '@/hooks/usePrimaryStreamScroll'
-import { useTurnFocusScroll } from '@/hooks/useTurnFocusScroll'
+import { useScrollUserMessageOnSend } from '@/hooks/useScrollUserMessageOnSend'
 import {
   readConversationScrollSnapshot,
   restoreConversationScrollWithRetry,
   shouldSkipInitialHydrationScrollRestore,
 } from '@/lib/conversation/conversation-scroll'
+import { contentEndScrollTop, isNearContentEnd, scrollToContentEnd } from '@/lib/conversation/content-end-scroll'
+import { FOCUS_SCROLL_MIN_SPACER_PX } from '@/lib/conversation/focus-scroll'
 import { TurnRenderer } from './TurnRenderer'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { resolveScrollStateAfterEvent } from './scroll-state'
@@ -30,10 +32,6 @@ function readMetrics(el: HTMLElement): ScrollMetrics {
   return { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop, clientHeight: el.clientHeight }
 }
 
-function isAtBottom(m: ScrollMetrics): boolean {
-  return m.scrollHeight - m.scrollTop - m.clientHeight < 100
-}
-
 export function ConversationMessageList({ roomId, selectedAgentMessageId, enableAgentDetail = true }: ConversationMessageListProps) {
   const turns = useTurnViewModels(roomId)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -49,6 +47,7 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
   const initialScrollResolvedRef = useRef(false)
 
   const userPausedRef = useRef(false)
+  const pinnedToContentEndRef = useRef(false)
   const programmaticScrollRef = useRef(false)
   const prevMetricsRef = useRef<ScrollMetrics | null>(null)
   const primarySurfaceRef = useRef<HTMLDivElement>(null)
@@ -70,16 +69,13 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
     )
   }, [])
 
-  const { spacerHeight, focusModeRef } = useTurnFocusScroll({
+  useScrollUserMessageOnSend({
     scrollRef,
     frameRef,
     lastUserMessageId,
     localSendSeq,
-    initialHydrationSeq,
-    turnLive,
-    contentVersion: storeVersion,
-    userPausedRef,
     programmaticScrollRef,
+    userPausedRef,
   })
 
   usePrimaryStreamScroll({
@@ -88,18 +84,37 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
     primaryStreamMessageId,
     userPausedRef,
     programmaticScrollRef,
-    focusModeRef,
+    enabled: !turnLive,
   })
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const el = scrollRef.current
     if (!el) return
     programmaticScrollRef.current = true
-    el.scrollTo({ top: el.scrollHeight, behavior })
+    const targetScrollTop = contentEndScrollTop(el)
+    scrollToContentEnd(el, behavior)
     userPausedRef.current = false
+    pinnedToContentEndRef.current = true
     setHasNewContent(false)
     setShowScrollBtn(false)
-    useRoomUiStore.getState().saveConversationScroll(roomId, { scrollTop: el.scrollHeight, atBottom: true })
+    useRoomUiStore.getState().saveConversationScroll(roomId, { scrollTop: targetScrollTop, atBottom: true })
+
+    if (behavior !== 'smooth') return
+
+    const saveWhenSettled = () => {
+      if (!isNearContentEnd(el)) return
+      useRoomUiStore.getState().saveConversationScroll(roomId, {
+        scrollTop: el.scrollTop,
+        atBottom: true,
+      })
+    }
+
+    if ('onscrollend' in el) {
+      el.addEventListener('scrollend', saveWhenSettled, { once: true })
+      return
+    }
+
+    requestAnimationFrame(() => requestAnimationFrame(saveWhenSettled))
   }, [roomId])
 
   useEffect(() => {
@@ -117,6 +132,7 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
       prevHydrationSeqRef.current = 0
       initialScrollResolvedRef.current = false
       userPausedRef.current = false
+      pinnedToContentEndRef.current = false
       programmaticScrollRef.current = false
       prevMetricsRef.current = null
       setShowScrollBtn(false)
@@ -134,7 +150,8 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
           userPausedRef.current = result === 'restored-position'
           const metrics = readMetrics(el)
           prevMetricsRef.current = metrics
-          setShowScrollBtn(!isAtBottom(metrics))
+          pinnedToContentEndRef.current = isNearContentEnd(el)
+          setShowScrollBtn(!pinnedToContentEndRef.current)
           requestAnimationFrame(() => {
             programmaticScrollRef.current = false
           })
@@ -158,12 +175,12 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
     const curr = readMetrics(el)
 
     if (prev && curr.scrollHeight !== prev.scrollHeight) {
-      if (focusModeRef.current || turnLive) {
+      if (turnLive) {
         prevMetricsRef.current = curr
         return
       }
 
-      if (!userPausedRef.current && isAtBottom(prev)) {
+      if (!userPausedRef.current && pinnedToContentEndRef.current) {
         scrollToBottom('auto')
         prevMetricsRef.current = readMetrics(el)
         return
@@ -174,14 +191,15 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
     }
 
     prevMetricsRef.current = curr
-  }, [roomId, storeVersion, initialHydrationSeq, localSendSeq, scrollToBottom, turnLive, focusModeRef])
+  }, [roomId, storeVersion, initialHydrationSeq, localSendSeq, scrollToBottom, turnLive])
 
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
     const onScroll = () => {
       const m = readMetrics(el)
-      const atBottom = isAtBottom(m)
+      const atBottom = isNearContentEnd(el)
+      pinnedToContentEndRef.current = atBottom
       const next = resolveScrollStateAfterEvent({
         atBottom,
         programmatic: programmaticScrollRef.current,
@@ -243,7 +261,7 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
             <div
               aria-hidden
               data-scroll-spacer
-              style={{ height: spacerHeight, flexShrink: 0 }}
+              style={{ height: FOCUS_SCROLL_MIN_SPACER_PX, flexShrink: 0 }}
             />
           </div>
         </div>

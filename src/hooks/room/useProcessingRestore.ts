@@ -4,6 +4,8 @@ import { ensureInitialProcessingStatusLog } from './processing-status-log'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { allAgentsTerminalForUserMessage } from '@/lib/room-timeline/turn-agent-terminal'
+import { ensureTurnTerminalStampedFromBackendTruth } from '@/lib/room-timeline/turn-terminal-stamp'
+import { inquiryActiveRuns } from '@/lib/api/room'
 import { isTerminalState } from '@/lib/types/sse'
 import { isStale } from '@/lib/time'
 
@@ -16,6 +18,7 @@ export function useProcessingRestore(
   room: ProcessingSnapshotRoom | null,
   queryLoading: boolean,
   lifecycle: ProcessingLifecycle,
+  getToken?: (() => Promise<string | null>) | undefined,
 ) {
   // Reactive subscription ensures the effect re-fires when hydration completes,
   // even if room/queryLoading settled first.
@@ -40,22 +43,54 @@ export function useProcessingRestore(
     const lifecycleMessageId = activeRunTriggerMessageId
     const hasActiveLifecycle = activeRuns.length > 0
 
+    const finishStaleActiveRunIfTerminal = async () => {
+      if (!lifecycleMessageId) return
+      if (!allAgentsTerminalForUserMessage(store.entities, roomId, lifecycleMessageId)) return
+
+      let backendRunActive = true
+      if (getToken) {
+        try {
+          const result = await inquiryActiveRuns(roomId, getToken)
+          if (result.success) {
+            backendRunActive = (result.active_runs ?? []).some(
+              run => run.trigger_message_id === lifecycleMessageId,
+            )
+          }
+        } catch {
+          backendRunActive = true
+        }
+      }
+
+      if (backendRunActive) return
+
+      await ensureTurnTerminalStampedFromBackendTruth(
+        roomId,
+        lifecycle,
+        { relatedMessageId: lifecycleMessageId },
+        getToken,
+      )
+
+      const { sending } = useRoomUiStore.getState().rooms[roomId] ?? {}
+      if (!sending) {
+        store.removeMessage(lifecycle.placeholderId(roomId))
+        lifecycle.stopProcessing()
+      }
+    }
+
     // Check if room has an active processing state
     if (hasActiveLifecycle) {
       // Always restore the message ID so cancellation works after refresh.
       lifecycle.setMessageId(lifecycleMessageId)
 
-      // Stale active_runs after server restart — every agent task is already terminal.
+      // Cached active_runs may be stale — verify with backend before stopping processing.
+      if (lifecycleMessageId) {
+        void finishStaleActiveRunIfTerminal()
+      }
+
       if (
         lifecycleMessageId
         && allAgentsTerminalForUserMessage(store.entities, roomId, lifecycleMessageId)
       ) {
-        console.log('🔄 Skipping processing restore — all agents terminal for message:', lifecycleMessageId)
-        const { sending } = useRoomUiStore.getState().rooms[roomId] ?? {}
-        if (!sending) {
-          store.removeMessage(lifecycle.placeholderId(roomId))
-          lifecycle.stopProcessing()
-        }
         return
       }
 
@@ -104,5 +139,5 @@ export function useProcessingRestore(
       store.removeMessage(lifecycle.placeholderId(roomId))
       lifecycle.stopProcessing()
     }
-  }, [room, queryLoading, roomId, lifecycle, hydratedFromDb])
+  }, [room, queryLoading, roomId, lifecycle, hydratedFromDb, getToken])
 }

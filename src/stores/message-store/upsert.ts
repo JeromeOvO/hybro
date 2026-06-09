@@ -127,6 +127,7 @@ function mergeIncoming(
       artifacts: incoming.artifacts,
       attachments: incoming.attachments,
       turnTerminalStatus: incoming.turnTerminalStatus,
+      turnCompletionKind: incoming.turnCompletionKind,
       summaryOrigin: incoming.summaryOrigin,
       processingStatusLogs: incoming.processingStatusLogs,
       quotedText: incoming.quotedText,
@@ -172,6 +173,7 @@ function mergeIncoming(
     artifacts: incoming.artifacts !== undefined ? incoming.artifacts : existing.artifacts,
     attachments: incoming.attachments !== undefined ? incoming.attachments : existing.attachments,
     turnTerminalStatus: incoming.turnTerminalStatus !== undefined ? incoming.turnTerminalStatus : existing.turnTerminalStatus,
+    turnCompletionKind: incoming.turnCompletionKind !== undefined ? incoming.turnCompletionKind : existing.turnCompletionKind,
     summaryOrigin: incoming.summaryOrigin !== undefined ? incoming.summaryOrigin : existing.summaryOrigin,
     processingStatusLogs: incoming.processingStatusLogs !== undefined ? incoming.processingStatusLogs : existing.processingStatusLogs,
     quotedText: incoming.quotedText !== undefined ? incoming.quotedText : existing.quotedText,
@@ -262,6 +264,7 @@ export function isNoOpUpdate(
     artifactsEqual(existing.artifacts, coalesce(incoming.artifacts, existing.artifacts)) &&
     existing.attachments       === coalesce(incoming.attachments, existing.attachments) &&
     existing.turnTerminalStatus === coalesce(incoming.turnTerminalStatus, existing.turnTerminalStatus) &&
+    existing.turnCompletionKind === coalesce(incoming.turnCompletionKind, existing.turnCompletionKind) &&
     existing.summaryOrigin === coalesce(incoming.summaryOrigin, existing.summaryOrigin) &&
     processingLogsEqual(existing.processingStatusLogs, coalesce(incoming.processingStatusLogs, existing.processingStatusLogs)) &&
     existing.quoteId === coalesce(incoming.quoteId, existing.quoteId)

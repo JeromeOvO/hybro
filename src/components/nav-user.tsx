@@ -114,23 +114,29 @@ export function NavUser() {
 
   // Show sign in / waitlist entry if user is not logged in
   if (!user) {
+    const guestActionLabel = isWaitlistEnabled() ? "Join Waitlist" : "Sign in"
+
+    const handleGuestAction = () => {
+      if (isWaitlistEnabled()) {
+        openWaitlist()
+      } else {
+        window.location.href = `/sign-in?redirect_url=${encodeURIComponent(window.location.pathname + window.location.search)}`
+      }
+    }
+
     return (
       <SidebarMenu>
         <SidebarMenuItem>
           <div
-            className={`flex h-10 items-center gap-2 px-2 hover:bg-black/10 dark:hover:bg-white/15 hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out ${SIDEBAR_ICON_BUTTON}`}
-            title={isWaitlistEnabled() ? "Join Waitlist" : "Sign in"}
+            className={`flex h-10 items-center gap-2 px-2 rounded-md transition-all duration-150 ease-out ${SIDEBAR_ICON_BUTTON}`}
           >
-            <div
-              className={`flex items-center gap-2 flex-1 cursor-pointer ${SIDEBAR_ICON_CENTER}`}
-              onClick={() => {
-                if (isWaitlistEnabled()) {
-                  openWaitlist()
-                } else {
-                  // When waitlist is disabled, redirect to regular sign-in
-                  window.location.href = `/sign-in?redirect_url=${encodeURIComponent(window.location.pathname + window.location.search)}`
-                }
-              }}
+            <button
+              type="button"
+              data-testid="sidebar-sign-in"
+              title={guestActionLabel}
+              aria-label={guestActionLabel}
+              className={`flex min-w-0 flex-1 items-center gap-2 rounded-md border-0 bg-transparent p-0 text-left hover:bg-black/10 dark:hover:bg-white/15 hover:text-sidebar-accent-foreground cursor-pointer ${SIDEBAR_ICON_CENTER}`}
+              onClick={handleGuestAction}
             >
               <div
                 className="flex h-8 w-8 items-center justify-center rounded-lg 
@@ -146,10 +152,10 @@ export function NavUser() {
                             to-[hsl(var(--color-hybro-bro))]
                             bg-clip-text text-transparent"
                 >
-                  {isWaitlistEnabled() ? "Join Waitlist" : "Sign in"}
+                  {guestActionLabel}
                 </span>
               </div>
-            </div>
+            </button>
             <div className={SIDEBAR_ICON_HIDDEN}>
               <ThemeToggle />
             </div>

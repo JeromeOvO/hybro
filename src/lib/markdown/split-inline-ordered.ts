@@ -1,16 +1,26 @@
 /** Run-on numbered marker inside prose (`foo 2. bar`). Pre-parse only; AST cannot recover this. */
 const INLINE_ORDERED_MARKER = /([^\n])[ \t]+(\d+\.\s+)/
+/** Supervisor-style items (`3. **#3 — … 4. **#4 — …`) — only split before the next hash marker. */
+const HASH_NUMBERED_INLINE_MARKER = /([^\n])[ \t]+(\d+\.\s+\*\*#\d+)/
+const HASH_NUMBERED_ITEM_LINE = /^\s*\d+\.\s+\*\*#\d+\b/
 const HEADING_LINE = /^\s{0,3}#{1,6}\s/
 const BARE_HEADING_LINE = /^\s{0,3}#{1,6}\s*$/
 
-function splitInlineOrderedOnLine(line: string): string {
+function splitRunOnOrderedMarkers(line: string, marker: RegExp): string {
   let result = line
   let prev = ''
   while (prev !== result) {
     prev = result
-    result = result.replace(INLINE_ORDERED_MARKER, '$1\n$2')
+    result = result.replace(marker, '$1\n$2')
   }
   return result
+}
+
+function splitInlineOrderedOnLine(line: string): string {
+  if (HASH_NUMBERED_ITEM_LINE.test(line)) {
+    return splitRunOnOrderedMarkers(line, HASH_NUMBERED_INLINE_MARKER)
+  }
+  return splitRunOnOrderedMarkers(line, INLINE_ORDERED_MARKER)
 }
 
 /**

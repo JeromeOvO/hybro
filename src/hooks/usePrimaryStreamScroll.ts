@@ -1,6 +1,7 @@
 'use client'
 
 import { useLayoutEffect, useRef, type RefObject } from 'react'
+import { isNearContentEnd } from '@/lib/conversation/content-end-scroll'
 import { useStreamingStore } from '@/stores/streaming-store'
 
 interface UsePrimaryStreamScrollOptions {
@@ -9,13 +10,9 @@ interface UsePrimaryStreamScrollOptions {
   primaryStreamMessageId?: string
   userPausedRef: RefObject<boolean>
   programmaticScrollRef: RefObject<boolean>
-  /** When true, reveal growing stream tail even if user is not pinned to bottom. */
+  /** When true, focus-scroll owns the viewport — tail-follow is disabled. */
   focusModeRef?: RefObject<boolean>
   enabled?: boolean
-}
-
-function isNearBottom(el: HTMLElement, threshold = 100): boolean {
-  return el.scrollHeight - el.scrollTop - el.clientHeight < threshold
 }
 
 function scrollPrimaryTailIntoView(
@@ -54,8 +51,8 @@ export function usePrimaryStreamScroll({
     const primaryEl = primarySurfaceRef.current
     if (!scrollEl || !primaryEl) return
     if (userPausedRef.current) return
-    const inFocusMode = focusModeRef?.current ?? false
-    if (!inFocusMode && !isNearBottom(scrollEl)) return
+    if (focusModeRef?.current) return
+    if (!isNearContentEnd(scrollEl)) return
 
     programmaticScrollRef.current = true
     scrollPrimaryTailIntoView(scrollEl, primaryEl, behavior)
@@ -84,8 +81,8 @@ export function usePrimaryStreamScroll({
 
     const observer = new ResizeObserver(() => {
       if (userPausedRef.current) return
-      const inFocusMode = focusModeRef?.current ?? false
-      if (!inFocusMode && !isNearBottom(scrollEl)) return
+      if (focusModeRef?.current) return
+      if (!isNearContentEnd(scrollEl)) return
       programmaticScrollRef.current = true
       scrollPrimaryTailIntoView(scrollEl, primaryEl, 'auto')
     })

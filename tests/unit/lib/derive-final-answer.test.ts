@@ -7,6 +7,7 @@ import {
   deriveDisplayModeFromFinalAnswer,
   deriveFinalAnswer,
   derivePrimaryStreamFromFinalAnswer,
+  isDeterministicDigestContent,
 } from '@/lib/room-timeline/derive-final-answer'
 
 function makeTurn(overrides: Partial<TurnViewModel>): TurnViewModel {
@@ -49,6 +50,18 @@ function makeAgent(
 describe('buildDeterministicIntro', () => {
   it('pluralizes agent count', () => {
     expect(buildDeterministicIntro(2)).toContain('2 agents')
+  })
+})
+
+describe('isDeterministicDigestContent', () => {
+  it('matches coordinator deterministic digest stub', () => {
+    expect(isDeterministicDigestContent(buildDeterministicIntro(2))).toBe(true)
+  })
+
+  it('rejects substantive LLM synthesis text', () => {
+    expect(
+      isDeterministicDigestContent('Combined analysis from both agents with detailed findings.'),
+    ).toBe(false)
   })
 })
 
@@ -100,6 +113,26 @@ describe('deriveFinalAnswer', () => {
     const result = deriveFinalAnswer(turn, ['a1', 'a2', 's1'])
     expect(result.kind).toBe('llm_synthesis')
     expect(result.primaryMessageId).toBe('s1')
+  })
+
+  it('returns llm_synthesis for summary-* supervisor stream with substantive content', () => {
+    const turn = makeTurn({
+      turnTerminalStatus: 'completed',
+      agentResults: [
+        makeAgent({ messageId: 'a1', agentId: 'agent-a' }),
+        makeAgent({ messageId: 'a2', agentId: 'agent-b' }),
+        makeAgent({
+          messageId: 'summary-u1',
+          agentId: 'summary',
+          isSummaryAgent: true,
+          summaryOrigin: 'llm',
+          content: 'Unified synthesis combining both agent perspectives in detail.',
+        }),
+      ],
+    })
+    const result = deriveFinalAnswer(turn, ['a1', 'a2', 'summary-u1'])
+    expect(result.kind).toBe('llm_synthesis')
+    expect(result.primaryMessageId).toBe('summary-u1')
   })
 
   it('returns deterministic_done when summary entity is deterministic', () => {
@@ -156,10 +189,23 @@ describe('deriveFinalAnswer', () => {
     expect(deriveFinalAnswer(turn, ['a1', 'a2']).kind).toBe('pending')
   })
 
+  it('returns pending when processing log signals synthesis started', () => {
+    const turn = makeTurn({
+      status: 'active',
+      processingStatusLogs: [{ id: 'l1', message: 'Synthesizing responses...', timestamp: '2026-01-01T00:00:03.000Z' }],
+      agentResults: [
+        makeAgent({ messageId: 'a1', agentId: 'agent-a', content: 'A' }),
+        makeAgent({ messageId: 'a2', agentId: 'agent-b', content: 'B' }),
+      ],
+    })
+    expect(deriveFinalAnswer(turn, ['a1', 'a2']).kind).toBe('pending')
+  })
+
   it('returns deterministic_done when supervisor turn has no synthesis gap', () => {
     const turn = makeTurn({
       status: 'active',
       turnTerminalStatus: 'completed',
+      turnCompletionKind: 'deterministic',
       isSupervisorTurn: true,
       agentResults: [
         makeAgent({ messageId: 'a1', agentId: 'agent-a', content: 'A' }),
@@ -178,6 +224,7 @@ describe('deriveFinalAnswer', () => {
     const turn = makeTurn({
       status: 'active',
       turnTerminalStatus: 'completed',
+      turnCompletionKind: 'deterministic',
       isSupervisorTurn: true,
       agentResults: [
         makeAgent({ messageId: 'a1', agentId: 'agent-a', content: 'A' }),
@@ -211,7 +258,20 @@ describe('deriveFinalAnswer', () => {
     expect(result.primaryMessageId).toBe('a1')
   })
 
-  it('stays pending when all agents done but turnTerminalStatus not set (anti-flash)', () => {
+  it('stays pending while turn is active even if all agents are terminal (anti-flash)', () => {
+    const turn = makeTurn({
+      status: 'active',
+      turnTerminalStatus: undefined,
+      isSupervisorTurn: true,
+      agentResults: [
+        makeAgent({ messageId: 'a1', agentId: 'agent-a', content: 'A' }),
+        makeAgent({ messageId: 'a2', agentId: 'agent-b', content: 'B' }),
+      ],
+    })
+    expect(deriveFinalAnswer(turn, ['a1', 'a2']).kind).toBe('pending')
+  })
+
+  it('stays pending when all agents terminal but turnTerminalStatus is unset (pre-synthesis gap)', () => {
     const turn = makeTurn({
       status: 'completed',
       turnTerminalStatus: undefined,
@@ -302,6 +362,7 @@ describe('deriveFinalAnswer', () => {
     const turn = makeTurn({
       status: 'completed',
       turnTerminalStatus: 'completed',
+      turnCompletionKind: 'deterministic',
       isSupervisorTurn: false,
       agentResults: [
         makeAgent({ messageId: 'a1', agentId: 'agent-a', content: 'A' }),
@@ -318,6 +379,7 @@ describe('deriveFinalAnswer', () => {
     const turn = makeTurn({
       status: 'completed',
       turnTerminalStatus: 'completed',
+      turnCompletionKind: 'deterministic',
       isSupervisorTurn: false,
       agentResults: [
         makeAgent({ messageId: 'a1', content: 'A' }),

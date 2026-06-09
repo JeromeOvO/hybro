@@ -24,7 +24,7 @@ export function AgentResultContent({
   onOpenDetail,
 }: AgentResultContentProps) {
   const { content, isStreaming, artifacts } = useResultStreamDisplay(result)
-  const display = mapResultDisplayProps(result, isStreaming)
+  const display = mapResultDisplayProps(result, isStreaming, content)
   const theme = getAgentTheme(result.agentId, result.agentName)
   const taskDescription = result.taskStatusMessage ?? ''
   const hasContent = content.trim().length > 0 || (artifacts?.length ?? 0) > 0

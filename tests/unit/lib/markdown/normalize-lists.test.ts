@@ -80,6 +80,22 @@ describe('splitInlineOrderedListItems', () => {
     expect(splitInlineOrderedListItems(input)).toBe(input)
   })
 
+  it('does not split prose "in 4. The" inside hash-numbered supervisor list items', () => {
+    const input = [
+      '3. **#3 — Tokenpocalypse / Token Cost Reckoning:** The most structurally important story for enterprise AI adoption in 4. The era of unlimited AI spend is ending — expect repricing, consolidation, and new tooling standards.',
+    ].join('\n')
+
+    expect(splitInlineOrderedListItems(input)).toBe(input)
+  })
+
+  it('still splits run-on hash-numbered supervisor items onto separate lines', () => {
+    const input = '1. **#1 — Alpha** summary 2. **#2 — Beta** summary'
+    expect(splitInlineOrderedListItems(input)).toBe([
+      '1. **#1 — Alpha** summary',
+      '2. **#2 — Beta** summary',
+    ].join('\n'))
+  })
+
   it('does not split inside fenced code blocks', () => {
     const input = [
       '```',

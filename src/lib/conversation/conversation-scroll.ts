@@ -1,3 +1,8 @@
+import {
+  isNearContentEnd,
+  scrollToContentEnd,
+} from '@/lib/conversation/content-end-scroll'
+
 export interface ConversationScrollSnapshot {
   scrollTop: number
   atBottom: boolean
@@ -14,7 +19,7 @@ export function readConversationScrollSnapshot(element: HTMLElement): Conversati
     scrollTop: element.scrollTop,
     clientHeight: element.clientHeight,
   }
-  const atBottom = metrics.scrollHeight - metrics.scrollTop - metrics.clientHeight < 100
+  const atBottom = isNearContentEnd(element)
   return { scrollTop: metrics.scrollTop, atBottom }
 }
 
@@ -76,12 +81,12 @@ export function applyConversationScrollSnapshot(
   snapshot: ConversationScrollSnapshot | undefined,
 ): ConversationScrollApplyResult {
   if (!snapshot) {
-    element.scrollTo({ top: element.scrollHeight, behavior: 'auto' })
+    scrollToContentEnd(element)
     return 'default-bottom'
   }
 
   if (snapshot.atBottom) {
-    element.scrollTo({ top: element.scrollHeight, behavior: 'auto' })
+    scrollToContentEnd(element)
     return 'restored-bottom'
   }
 

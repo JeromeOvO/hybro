@@ -78,7 +78,7 @@ describe('stampInferredTurnTerminalStatus', () => {
     expect(useMessageStore.getState().entities.u1?.turnTerminalStatus).toBe('canceled')
   })
 
-  it('stamps completed multi-agent turn without summary entity', () => {
+  it('does not stamp multi-agent turn without summary entity (may await synthesis)', () => {
     const u1 = makeUser('u1')
     const a1 = makeAgent('a1', 'u1', { agentId: 'agent-a' })
     const a2 = makeAgent('a2', 'u1', { agentId: 'agent-b' })
@@ -87,7 +87,7 @@ describe('stampInferredTurnTerminalStatus', () => {
 
     stampInferredTurnTerminalStatus('room-1')
 
-    expect(useMessageStore.getState().entities.u1?.turnTerminalStatus).toBe('completed')
+    expect(useMessageStore.getState().entities.u1?.turnTerminalStatus).toBeUndefined()
   })
 
   it('stamps failed when active_runs stale but all agents failed', () => {

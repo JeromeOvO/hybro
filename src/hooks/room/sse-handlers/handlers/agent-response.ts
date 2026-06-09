@@ -4,6 +4,11 @@ import { useMessageStore } from '@/stores/message-store'
 import { useStreamingStore } from '@/stores/streaming-store'
 import type { ArtifactData } from '@/stores/message-store/types'
 import { normalizeTimestampOrNow } from '@/lib/time'
+import { isSummarySystemAgent } from '@/lib/system-agents'
+import { isDeterministicDigestContent } from '@/lib/room-timeline/derive-final-answer'
+import { stampLiveTurnTerminalIfInferable } from '@/lib/room-timeline/stamp-live-turn-terminal'
+import { scheduleTurnTerminalBackendTruthCheck } from '@/lib/room-timeline/turn-terminal-stamp'
+import type { SummaryOrigin } from '@/lib/room-timeline/types'
 import { partsToReplacementArtifacts } from '../artifacts'
 import type { SSEHandlerDeps } from '../types'
 import type { CorrelationResult } from '../correlation'
@@ -22,6 +27,19 @@ function textPartialToArtifact(messageId: string, content: string): ArtifactData
     parts: [{ kind: 'text', text: content }],
     isStreaming: true,
   }
+}
+
+function inferSummaryOriginFromAgentResponse(
+  agentId: string | undefined,
+  messageId: string,
+  content: string,
+): SummaryOrigin | undefined {
+  if (!agentId || !isSummarySystemAgent(agentId)) return undefined
+  if (!messageId.startsWith('summary-')) return undefined
+  const text = content.trim()
+  if (!text) return undefined
+  if (isDeterministicDigestContent(text)) return 'deterministic'
+  return 'llm'
 }
 
 function artifactsEqual(a: ArtifactData[] | undefined, b: ArtifactData[] | undefined): boolean {
@@ -108,6 +126,21 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
       }
       streaming.clear(messageId)
       console.log('🔄 Skipping duplicate agent_response for', messageId, '— streamed content already present')
+      const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
+        clientRequestId: existing.clientRequestId || sseMessage.data.client_request_id,
+        relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
+      })
+      if (!stamped) {
+        scheduleTurnTerminalBackendTruthCheck(
+          ctx.roomId,
+          ctx.lifecycle,
+          {
+            clientRequestId: existing.clientRequestId || sseMessage.data.client_request_id,
+            relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
+          },
+          ctx.getToken,
+        )
+      }
       return
     }
     if (isDivergentRewrite) {
@@ -127,6 +160,8 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
   const responseTaskStatus = entity?.taskStatus && isTerminalState(entity.taskStatus)
     ? entity.taskStatus
     : TASK_STATE.COMPLETED
+  const summaryOrigin = inferSummaryOriginFromAgentResponse(agentId, messageId, content)
+    ?? entity?.summaryOrigin
 
   store.upsertMessage({
     id: messageId,
@@ -137,12 +172,30 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
     agentId,
     agentSource: agentId ? ctx.getAgentSource(agentId) : undefined,
     clientRequestId: entity?.clientRequestId || sseMessage.data.client_request_id,
+    relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id ?? undefined,
     timestamp: msgTimestamp,
     taskStatus: responseTaskStatus,
     taskContent: '',
     taskUpdatedAt: msgTimestamp,
     isEphemeral: false,
     artifacts: incomingArtifacts,
+    ...(summaryOrigin ? { summaryOrigin } : {}),
   }, 'sse')
   streaming.clear(messageId)
+
+  const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
+    clientRequestId: entity?.clientRequestId || sseMessage.data.client_request_id,
+    relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id,
+  })
+  if (!stamped) {
+    scheduleTurnTerminalBackendTruthCheck(
+      ctx.roomId,
+      ctx.lifecycle,
+      {
+        clientRequestId: entity?.clientRequestId || sseMessage.data.client_request_id,
+        relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id,
+      },
+      ctx.getToken,
+    )
+  }
 }

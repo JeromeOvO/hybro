@@ -39,6 +39,7 @@ vi.mock('@clerk/nextjs', () => ({
 // Mock room API
 vi.mock('@/lib/api/room', () => ({
   inquiryRoomSetting: vi.fn().mockResolvedValue({ success: true, room: { room_id: 'room-1', room_name: 'Test', room_agent_set: {} } }),
+  inquiryActiveRuns: vi.fn().mockResolvedValue({ success: true, active_runs: [], turn_completion_kind: null }),
   SendMessage: vi.fn().mockResolvedValue({ success: true, message_id: 'msg-1' }),
   inquiryRoomMessagesByRoomId: vi.fn().mockResolvedValue({ success: true, message_list: [] }),
   updateRoomAgentSet: vi.fn().mockResolvedValue({ success: true }),
@@ -1583,6 +1584,7 @@ describe('useRoomWebhook SSE message handling', () => {
       senderName: 'Test',
       timestamp: '2026-06-04T01:00:00.000Z',
       clientRequestId: 'req-old-stale-detail',
+      turnTerminalStatus: 'completed',
       processingStatusLogs: [],
     }, 'optimistic')
     useMessageStore.getState().upsertMessage({
@@ -1615,8 +1617,6 @@ describe('useRoomWebhook SSE message handling', () => {
         },
       }))
     })
-
-    expect(flags().processing).toBe(true)
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({

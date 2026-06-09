@@ -822,7 +822,7 @@ describe('displayMode from finalAnswer', () => {
   })
 
   it('supervisor DONE with 2+ agents uses deterministic_done final answer', () => {
-    const user = makeUserEntity({ id: 'u1', turnTerminalStatus: 'completed' })
+    const user = makeUserEntity({ id: 'u1', turnTerminalStatus: 'completed', turnCompletionKind: 'deterministic' })
     const agentA = makeAgentEntity({
       id: 'a1',
       agentId: 'agent-a',
@@ -891,7 +891,7 @@ describe('displayMode from finalAnswer', () => {
   })
 
   it('empty summary agent falls back to deterministic_done', () => {
-    const user = makeUserEntity({ id: 'u1', turnTerminalStatus: 'completed' })
+    const user = makeUserEntity({ id: 'u1', turnTerminalStatus: 'completed', turnCompletionKind: 'deterministic' })
     const agentA = makeAgentEntity({ id: 'a1', agentId: 'agent-a', taskStatus: 'completed', content: 'A' })
     const agentB = makeAgentEntity({ id: 'a2', agentId: 'agent-b', taskStatus: 'completed', content: 'B' })
     const emptySynthesis = makeAgentEntity({
@@ -990,6 +990,30 @@ describe('deriveTurnPhase', () => {
     const turns = buildTurns(entitiesToMap([user, agent, summary]), ['u1', 'a1', 's1'], [])
     expect(deriveTurnPhase(turns[0])).toBe('synthesizing')
   })
+
+  it('returns synthesizing during pre-synthesis gap after all agents finish', () => {
+    const user = makeUserEntity({
+      id: 'u1',
+      processingStatusLogs: [
+        { id: 'l1', message: 'Delegating to 2 agent(s)...', timestamp: '2026-01-01T00:00:01.000Z' },
+      ],
+    })
+    const agentA = makeAgentEntity({
+      id: 'a1',
+      agentId: 'agent-a',
+      taskStatus: 'completed',
+      content: 'A',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      agentId: 'agent-b',
+      taskStatus: 'completed',
+      content: 'B',
+    })
+    const turns = buildTurns(entitiesToMap([user, agentA, agentB]), ['u1', 'a1', 'a2'], [])
+    expect(turns[0].status).toBe('active')
+    expect(deriveTurnPhase(turns[0])).toBe('synthesizing')
+  })
 })
 
 describe('primaryStreamMessageId', () => {
@@ -1035,7 +1059,7 @@ describe('primaryStreamMessageId', () => {
   })
 
   it('returns undefined primary stream for deterministic_done without summary entity', () => {
-    const user = makeUserEntity({ id: 'u1', turnTerminalStatus: 'completed' })
+    const user = makeUserEntity({ id: 'u1', turnTerminalStatus: 'completed', turnCompletionKind: 'deterministic' })
     const agentA = makeAgentEntity({
       id: 'a1',
       agentId: 'agent-a',
@@ -1056,7 +1080,7 @@ describe('primaryStreamMessageId', () => {
   })
 
   it('resolves supervisor DONE to deterministic_done when no synthesis gap', () => {
-    const user = makeUserEntity({ id: 'u1', turnTerminalStatus: 'completed' })
+    const user = makeUserEntity({ id: 'u1', turnTerminalStatus: 'completed', turnCompletionKind: 'deterministic' })
     const agentA = makeAgentEntity({
       id: 'a1',
       agentId: 'agent-a',
@@ -1119,6 +1143,7 @@ describe('primaryStreamMessageId', () => {
     const user = makeUserEntity({
       id: 'u1',
       turnTerminalStatus: 'completed',
+      turnCompletionKind: 'deterministic',
       clientRequestId: 'cr-1',
     })
     const agentA = makeAgentEntity({

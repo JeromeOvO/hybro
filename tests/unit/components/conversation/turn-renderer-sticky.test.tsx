@@ -36,7 +36,7 @@ function baseTurn(overrides: Partial<TurnViewModel> = {}): TurnViewModel {
 }
 
 describe('TurnRenderer sticky user message', () => {
-  it('disables sticky positioning on the live last turn', () => {
+  it('always uses sticky positioning for live and completed turns', () => {
     useMessageStore.setState({
       entities: {
         'user-1': {
@@ -56,13 +56,14 @@ describe('TurnRenderer sticky user message', () => {
       <TurnRenderer turn={baseTurn()} isLastTurn />,
     )
 
-    expect(container.querySelector('.conversation-user-sticky--static')).toBeTruthy()
+    expect(container.querySelector('.conversation-user-sticky')).toBeTruthy()
+    expect(container.querySelector('.conversation-user-sticky--static')).toBeNull()
 
     rerender(
       <TurnRenderer turn={baseTurn({ status: 'completed' })} isLastTurn={false} />,
     )
 
-    expect(container.querySelector('.conversation-user-sticky--static')).toBeNull()
     expect(container.querySelector('.conversation-user-sticky')).toBeTruthy()
+    expect(container.querySelector('.conversation-user-sticky--static')).toBeNull()
   })
 })

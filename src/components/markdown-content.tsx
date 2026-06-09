@@ -8,6 +8,7 @@ import { cn, formatIfJson } from '@/lib/utils'
 import { getPlainTextFromRange } from '@/lib/selection-plain-text'
 import { preprocessConversationMarkdown } from '@/lib/markdown/normalize-conversation'
 import { conversationRemarkPlugins } from '@/lib/markdown/conversation-remark-plugins'
+import { isHashNumberedListItemText } from '@/lib/markdown/hash-numbered-list-item'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 
 const MENTION_CLIPBOARD_MIME = 'application/x-hybro-mentions'
@@ -269,7 +270,20 @@ function makeComponents(isStreaming: boolean, conversationTypography: boolean) {
       </OlDepthContext.Provider>
     )
   },
-  li: ({ children }: { children?: React.ReactNode }) => <li className={listItemSpacing}>{children}</li>,
+  li: ({ children }: { children?: React.ReactNode }) => {
+    const hashNumbered = conversationTypography
+      && isHashNumberedListItemText(extractText(children))
+    return (
+      <li
+        className={cn(
+          listItemSpacing,
+          hashNumbered && 'conv-hash-numbered-item',
+        )}
+      >
+        {children}
+      </li>
+    )
+  },
   h1: ({ children }: { children?: React.ReactNode }) => (
     <h1 className={conversationTypography ? undefined : 'text-lg font-bold mb-2'}>{children}</h1>
   ),
