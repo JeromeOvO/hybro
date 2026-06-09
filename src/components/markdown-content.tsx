@@ -1,7 +1,8 @@
 'use client'
 
-import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Streamdown } from 'streamdown'
+import React, { useCallback, useRef, useState } from 'react'
+import { Streamdown, defaultRehypePlugins } from 'streamdown'
+import type { PluggableList } from 'unified'
 import rehypeHighlight from 'rehype-highlight'
 import { Check, ChevronRight, Code2, Copy } from 'lucide-react'
 import { cn, formatIfJson } from '@/lib/utils'
@@ -12,6 +13,15 @@ import { isHashNumberedListItemText } from '@/lib/markdown/hash-numbered-list-it
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 
 const MENTION_CLIPBOARD_MIME = 'application/x-hybro-mentions'
+
+/** Streamdown replaces default rehype plugins when `rehypePlugins` is set — keep sanitize/harden. */
+const streamdownRehypePlugins: PluggableList = [
+  ...Object.values(defaultRehypePlugins),
+  rehypeHighlight,
+]
+
+/** Conversation remark surgery needs the full document, not Streamdown block chunks. */
+const parseConversationAsSingleBlock = (markdown: string) => [markdown]
 
 /**
  * Extract plain text from React children tree (strips HTML / highlight spans).
@@ -41,11 +51,11 @@ function CodeBlockWithCopy({
 
   const handleCopy = useCallback(() => {
     const text = extractText(children).replace(/\n$/, '')
-    navigator.clipboard.writeText(text).then(() => {
+    void navigator.clipboard.writeText(text).then(() => {
       setCopied(true)
       if (timerRef.current) clearTimeout(timerRef.current)
       timerRef.current = setTimeout(() => setCopied(false), 2000)
-    })
+    }).catch(() => {})
   }, [children])
 
   return (
@@ -72,27 +82,15 @@ function CodeBlockWithCopy({
 }
 
 /**
- * Context that propagates the parent message bubble's expanded state.
- * When true, JSON code blocks inside the message should default to open.
- */
-export const JsonBlockExpandedContext = React.createContext(false)
-
-/**
  * Collapsible wrapper for JSON fenced code blocks in markdown.
- * Starts closed so large JSON responses don't flood the message view,
- * but opens automatically when the parent message bubble is expanded.
+ * Starts closed so large JSON responses don't flood the message view.
  */
 function CollapsibleCodeBlock({
   className,
   children,
   lineCount,
 }: React.HTMLAttributes<HTMLElement> & { children?: React.ReactNode; lineCount: number }) {
-  const isMessageExpanded = React.useContext(JsonBlockExpandedContext)
-  const [open, setOpen] = useState(isMessageExpanded)
-
-  useEffect(() => {
-    if (isMessageExpanded) setOpen(true)
-  }, [isMessageExpanded])
+  const [open, setOpen] = useState(false)
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="my-1">
@@ -330,6 +328,14 @@ function makeComponents(isStreaming: boolean, conversationTypography: boolean) {
       {children}
     </td>
   ),
+  img: ({ alt, ...props }: React.ImgHTMLAttributes<HTMLImageElement>) => (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      alt={alt ?? ''}
+      className={cn('max-w-full h-auto rounded-md', !conversationTypography && 'my-2')}
+      {...props}
+    />
+  ),
   }
 }
 
@@ -392,9 +398,9 @@ export function MarkdownContent({
         components={components}
         remarkPlugins={conversationTypography ? conversationRemarkPlugins : undefined}
         parseMarkdownIntoBlocksFn={
-          conversationTypography && !isStreaming ? (md) => [md] : undefined
+          conversationTypography ? parseConversationAsSingleBlock : undefined
         }
-        rehypePlugins={[rehypeHighlight]}
+        rehypePlugins={streamdownRehypePlugins}
       >
         {processedContent}
       </Streamdown>

@@ -5,6 +5,8 @@ const HASH_NUMBERED_INLINE_MARKER = /([^\n])[ \t]+(\d+\.\s+\*\*#\d+)/
 const HASH_NUMBERED_ITEM_LINE = /^\s*\d+\.\s+\*\*#\d+\b/
 const HEADING_LINE = /^\s{0,3}#{1,6}\s/
 const BARE_HEADING_LINE = /^\s{0,3}#{1,6}\s*$/
+/** Lines that already begin a list item — safe to split run-on markers on. */
+const LIST_ITEM_LINE = /^\s*\d+\.\s/
 
 function splitRunOnOrderedMarkers(line: string, marker: RegExp): string {
   let result = line
@@ -65,9 +67,13 @@ function foldBareHeadingMarkers(content: string): string {
  * heading like `#### 1. Title` is not split into an empty heading + list item.
  * Also folds bare heading markers (`###` alone on a line) into the next line.
  */
+function shouldSplitInlineOrderedOnLine(line: string): boolean {
+  return LIST_ITEM_LINE.test(line) || HASH_NUMBERED_ITEM_LINE.test(line)
+}
+
 export function splitInlineOrderedListItems(
   content: string,
-  _options?: { streaming?: boolean },
+  options?: { streaming?: boolean },
 ): string {
   const folded = foldBareHeadingMarkers(content)
   let inFence = false
@@ -80,6 +86,10 @@ export function splitInlineOrderedListItems(
       continue
     }
     if (inFence || HEADING_LINE.test(line)) {
+      lines.push(line)
+      continue
+    }
+    if (options?.streaming || !shouldSplitInlineOrderedOnLine(line)) {
       lines.push(line)
       continue
     }

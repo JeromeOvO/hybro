@@ -116,9 +116,3 @@ export const remarkAssignOrderedListStarts: Plugin<[], Root> = () => (tree) => {
     // Preserve raw render on unexpected mdast shapes.
   }
 }
-
-/** Nest bullets under prior ordered items, then assign sequential list starts. */
-export const remarkConversationLists: Plugin<[], Root> = () => (tree) => {
-  tree.children = nestAdjacentBulletLists(tree.children)
-  tree.children = assignOrderedListStarts(tree.children)
-}

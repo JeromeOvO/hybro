@@ -1,5 +1,6 @@
 import { MarkdownContent } from '@/components/markdown-content'
 import { ArtifactList } from '@/components/artifact-list'
+import { filterDuplicateTextArtifacts } from '@/lib/artifacts/filter-display-artifacts'
 import type { ArtifactData } from '@/stores/message-store/types'
 
 interface AgentContentBlockProps {
@@ -12,18 +13,8 @@ interface AgentContentBlockProps {
   artifacts?: ArtifactData[]
 }
 
-function textOnlyArtifactContent(artifact: ArtifactData): string | null {
-  if (artifact.parts.length === 0) return null
-  if (!artifact.parts.every(part => part.kind === 'text')) return null
-  return artifact.parts.map(part => part.text ?? '').join('').trim()
-}
-
 export function AgentContentBlock({ agentId, agentName, messageId, content, isStreaming, showAttribution, artifacts }: AgentContentBlockProps) {
-  const normalizedContent = content.trim()
-  const displayArtifacts = artifacts?.filter(artifact => {
-    if (!normalizedContent) return true
-    return textOnlyArtifactContent(artifact) !== normalizedContent
-  })
+  const displayArtifacts = filterDuplicateTextArtifacts(artifacts, content)
 
   return (
     <div data-quote-message-id={messageId} data-quote-agent-name={agentName} data-quote-source-kind="agent" data-quote-agent-id={agentId}>

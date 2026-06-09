@@ -53,7 +53,15 @@ function TextPartView({ text, isStreaming }: { text: string; isStreaming?: boole
       return <CollapsibleJsonBlock data={parsed} open={jsonOpen} onOpenChange={setJsonOpen} />
     }
   }
-  return <MarkdownContent content={text} isStreaming={isStreaming} />
+  return (
+    <div className="conversation-content-body">
+      <MarkdownContent
+        className="conversation-markdown-body"
+        content={text}
+        isStreaming={isStreaming}
+      />
+    </div>
+  )
 }
 
 function FilePartView({ file }: { file: NonNullable<ArtifactPart['file']> }) {

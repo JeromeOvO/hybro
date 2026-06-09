@@ -109,6 +109,16 @@ describe('splitInlineOrderedListItems', () => {
       '2. me',
     ].join('\n'))
   })
+
+  it('does not split prose sentences that mention numbered steps', () => {
+    const input = 'See step 1. For details 2. For more context on the rollout.'
+    expect(splitInlineOrderedListItems(input)).toBe(input)
+  })
+
+  it('skips inline ordered splits while streaming', () => {
+    const input = '1. "First" — 2 hours ago 2. "Second" — 3 hours ago'
+    expect(splitInlineOrderedListItems(input, { streaming: true })).toBe(input)
+  })
 })
 
 describe('preprocessConversationMarkdown', () => {
@@ -142,7 +152,7 @@ describe('preprocessConversationMarkdown', () => {
     expect(out).not.toMatch(/^\s*###\s*$/m)
   })
 
-  it('only splits inline markers while streaming', () => {
+  it('does not change multi-line repeated list markers while streaming', () => {
     const input = [
       '1. Anthropic headline',
       '- Summary: Example',

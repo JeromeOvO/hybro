@@ -6,6 +6,7 @@ import { X, ChevronDown, Quote } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { MarkdownContent } from '@/components/markdown-content'
 import { ArtifactList } from '@/components/artifact-list'
+import { filterDuplicateTextArtifacts } from '@/lib/artifacts/filter-display-artifacts'
 import { AgentSourceBadge } from '@/components/agent-source-badge'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { cn } from '@/lib/utils'
@@ -172,7 +173,7 @@ function AgentResponseDetailHeader({
 
 export function AgentResponseDetailPane({ detail, onClose }: AgentResponseDetailPaneProps) {
   const hasContent = detail.content.trim().length > 0
-  const hasArtifacts = (detail.artifacts?.length ?? 0) > 0
+  const displayArtifacts = filterDuplicateTextArtifacts(detail.artifacts, detail.content)
   const bodyRef = useRef<HTMLDivElement>(null)
 
   useDetailPaneScroll(
@@ -199,8 +200,8 @@ export function AgentResponseDetailPane({ detail, onClose }: AgentResponseDetail
             ) : (
               <EmptyResponse detail={detail} />
             )}
-            {hasArtifacts && (
-              <ArtifactList artifacts={detail.artifacts!} />
+            {displayArtifacts && displayArtifacts.length > 0 && (
+              <ArtifactList artifacts={displayArtifacts} />
             )}
           </section>
         </div>
