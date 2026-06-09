@@ -176,7 +176,8 @@ class RoomMessageCenter:
         self.agent_message_processor = AgentMessageProcessor(
             sse_manager=self.sse_manager,
             room_services=self.room_runtime,
-            database_service=self.database_service,
+            room_memory_reader=self.database_service,
+            task_tracker=self.database_service,
             transports={"direct": self.direct_transport},
             health_service=agent_health_service,
             cloud_health_cache_ttl=cloud_health_cache_ttl,

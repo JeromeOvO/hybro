@@ -4,15 +4,14 @@ from typing import Any
 
 from common.utils.logger import get_logger
 from execution.ports import ProcessingStatusLike
-from models.run import NON_TERMINAL_RUN_STATE_VALUES
 
 logger = get_logger(__name__)
 
 
 class RunLifecycleAdapter:
-    def __init__(self, command_handler, runs_collection) -> None:
+    def __init__(self, command_handler, run_repository) -> None:
         self._command_handler = command_handler
-        self._runs_collection = runs_collection
+        self._run_repository = run_repository
 
     async def record_processing_status(
         self,
@@ -36,10 +35,7 @@ class RunLifecycleAdapter:
 
     async def heal_diverged_runs(self, limit: int = 500) -> int:
         try:
-            cursor = self._runs_collection.find(
-                {"state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)}},
-            ).limit(limit)
-            docs = await cursor.to_list(length=limit)
+            docs = await self._run_repository.get_diverged(limit=limit)
         except Exception:
             logger.warning("startup heal: failed to query non-terminal runs", exc_info=True)
             return 0

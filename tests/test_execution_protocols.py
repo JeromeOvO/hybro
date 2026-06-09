@@ -419,6 +419,7 @@ class _FakeRunsCollection:
         self.docs = docs or []
         self.find_error = find_error
         self.find_calls = []
+        self.get_active_calls = []
         self.find_one = AsyncMock()
         self.cursor = _FakeCursor(self.docs, error=find_error)
 
@@ -426,11 +427,14 @@ class _FakeRunsCollection:
         self.find_calls.append(query)
         return self.cursor
 
+    async def get_active_for_room(self, room_id: str) -> list[dict]:
+        self.get_active_calls.append(room_id)
+        return list(self.docs)
+
 
 @pytest.mark.asyncio
 async def test_run_query_adapter_filters_non_terminal_runs_and_preserves_trigger_message_id():
     from execution.run_queries import RunQueryAdapter
-    from models.run import NON_TERMINAL_RUN_STATE_VALUES
 
     collection = _FakeRunsCollection(
         docs=[
@@ -448,13 +452,7 @@ async def test_run_query_adapter_filters_non_terminal_runs_and_preserves_trigger
 
     runs = await adapter.get_runs_for_room("room-1")
 
-    assert collection.find_calls == [
-        {
-            "room_id": "room-1",
-            "state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)},
-        }
-    ]
-    assert collection.cursor.sort_calls == [("updated_at", -1)]
+    assert collection.get_active_calls == ["room-1"]
     assert runs[0].trigger_message_id == "user-msg-1"
     assert runs[0].seq == 4
 

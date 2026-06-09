@@ -1,6 +1,6 @@
 """Unit tests for RunLifecycleService shadow persistence."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -19,43 +19,41 @@ class FakeEventPublisher:
 @pytest.mark.asyncio
 async def test_record_processing_status_skips_when_dual_write_disabled(monkeypatch):
     monkeypatch.setenv("FEATURE_RUN_DUAL_WRITE", "0")
-    import execution.run_command_handler as handler_mod
     import execution.run_lifecycle_service as mod
 
-    fake = MagicMock()
-    with patch.object(handler_mod, "mongodb", fake):
-        await mod.run_lifecycle_service.record_processing_status(
-            room_id="room-1",
-            status="processing",
-            message_id="msg-1",
-        )
-    fake.runs_collection.find_one.assert_not_called()
+    fake = AsyncMock()
+    fake.record_processing_status = AsyncMock(return_value=None)
+    mod.run_command_handler = fake
+    await mod.run_lifecycle_service.record_processing_status(
+        room_id="room-1",
+        status="processing",
+        message_id="msg-1",
+    )
+    fake.record_processing_status.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_record_processing_status_dual_write_default_allows_calls(monkeypatch):
     monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
-    import execution.run_command_handler as handler_mod
     import execution.run_lifecycle_service as mod
     from common.a2a_constants import SSEProcessingStatus
 
-    fake_runs = MagicMock()
-    fake_runs.find_one = AsyncMock(return_value=None)
-    fake_runs.insert_one = AsyncMock()
-    fake_runs.update_one = AsyncMock()
-    fake_events = MagicMock()
-    fake_events.insert_one = AsyncMock()
-    fake_mongo = MagicMock()
-    fake_mongo.runs_collection = fake_runs
-    fake_mongo.run_events_collection = fake_events
+    fake = AsyncMock()
+    fake.record_processing_status = AsyncMock(return_value={"ok": True})
+    mod.run_command_handler = fake
 
-    with patch.object(handler_mod, "mongodb", fake_mongo):
-        await mod.run_lifecycle_service.record_processing_status(
-            room_id="room-1",
-            status=SSEProcessingStatus.PROCESSING,
-            message_id="msg-1",
-        )
-    fake_runs.find_one.assert_called()
+    await mod.run_lifecycle_service.record_processing_status(
+        room_id="room-1",
+        status=SSEProcessingStatus.PROCESSING,
+        message_id="msg-1",
+    )
+    fake.record_processing_status.assert_awaited_once_with(
+        room_id="room-1",
+        status=SSEProcessingStatus.PROCESSING,
+        message_id="msg-1",
+        client_request_id=None,
+        details=None,
+    )
 
 
 @pytest.mark.asyncio

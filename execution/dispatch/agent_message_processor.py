@@ -14,7 +14,7 @@ Contains zero orchestration logic — only the mechanics of:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
@@ -24,11 +24,27 @@ from models.request import RoomCenterAgentMessageRequest
 from models.room import RoomAgentMessage
 
 if TYPE_CHECKING:
-    from app_shell.database_service import DatabaseService
     from app_shell.delivery_runtime import SSEManager
     from app_shell.room_runtime import RoomServices
     from execution.dispatch.transports.base import AgentTransport
     from models.agent import Agent
+
+
+if TYPE_CHECKING:
+    class RoomMemoryReader(Protocol):
+        async def get_room_memory_by_room_id(self, room_id: str): ...
+
+    class TaskTrackerPort(Protocol):
+        async def enable_task_tracking_on_message(
+            self,
+            message_id: str,
+            *,
+            webhook_token_hash: str | None,
+            agent_url: str | None,
+            task_created_at,
+            task_updated_at,
+            task_data: dict,
+        ) -> bool: ...
 
 logger = get_logger(__name__)
 
@@ -46,7 +62,8 @@ class AgentMessageProcessor:
         *,
         sse_manager: SSEManager,
         room_services: RoomServices,
-        database_service: DatabaseService,
+        room_memory_reader: RoomMemoryReader,
+        task_tracker: TaskTrackerPort,
         transports: dict[str, AgentTransport],
         relay_service: object | None = None,
         dispatch_chain: DispatchChain | None = None,
@@ -56,13 +73,18 @@ class AgentMessageProcessor:
     ) -> None:
         self.sse_manager = sse_manager
         self.room_runtime = room_services
-        self.database_service = database_service
+        self._room_memory_reader = room_memory_reader
+        self._task_tracker = task_tracker
         self.transports = dict(transports)
         self._relay_service_explicit = relay_service
         self._dispatch_chain_explicit = dispatch_chain
         self._health_service = health_service
         self._cloud_health_cache_ttl = cloud_health_cache_ttl
         self._cloud_health_check_timeout = cloud_health_check_timeout
+        # Backward-compatible alias for existing call sites/tests that still
+        # introspect this attribute. It points at the injected room memory reader
+        # port to avoid retaining the full DatabaseService name in construction.
+        self.database_service = room_memory_reader
         self._lazy_initialized = False
         self.relay_service: object | None = relay_service
         self.dispatch_chain: DispatchChain = dispatch_chain or DispatchChain()
@@ -127,9 +149,9 @@ class AgentMessageProcessor:
                 resolved_transport = RelayTransport(
                     response_handler=response_handler,
                     relay_service=relay_service,
-                    db=self.database_service,
-                    sse_manager=self.sse_manager,
+                    task_tracker=self._task_tracker,
                     call_counter=getattr(relay_service, "agent_call_counter", None),
+                    sse_manager=self.sse_manager,
                     ownership_store=getattr(relay_service, "task_ownership_store", None),
                     ownership_lease_maintainer=getattr(
                         relay_service,
@@ -161,7 +183,7 @@ class AgentMessageProcessor:
         """
         self._ensure_relay_initialized()
 
-        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+        room_memory = await self._room_memory_reader.get_room_memory_by_room_id(room_id)
 
         process_response = await self.room_runtime.process_agent_message(
             RoomCenterAgentMessageRequest(message=current_message),
