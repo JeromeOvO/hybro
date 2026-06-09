@@ -12,9 +12,11 @@ import time
 from collections import deque
 from collections.abc import AsyncGenerator, Callable
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import uuid4
 
+from app_shell.delivery_runtime import SSEManager
+from app_shell.redis_runtime import AppShellLeaderElection, AppShellRelayStreamService
 from common.config.settings import settings
 from common.dto import (
     HubCancelCommand,
@@ -28,17 +30,8 @@ from common.utils.time import utcnow
 from hub_runtime_bridge.adapters.legacy_failure import LegacyOfflineFailureAdapter
 from hub_runtime_bridge.config import config_from_settings
 from hub_runtime_bridge.facade import HubFacade
+from models.api_key import APIKey
 from models.hub import Hub, HubAgentSync, HubPublishRequest, HubStatus, RelayToHubEvent
-
-if TYPE_CHECKING:
-    from app_shell.database_service import DatabaseService
-    from app_shell.delivery_runtime import SSEManager
-    from app_shell.redis_runtime import (
-        AppShellLeaderElection,
-        AppShellRelayStreamService,
-    )
-    from database.mongodb import MongoDB
-    from models.api_key import APIKey
 
 logger = get_logger(__name__)
 
@@ -50,8 +43,8 @@ def _get_field(obj: Any, name: str, default: Any = None) -> Any:
 
 
 class _RelayPublishAuthorizationReader:
-    def __init__(self, database_service: DatabaseService) -> None:
-        self._db = database_service
+    def __init__(self, db: Any) -> None:
+        self._db = db
 
     async def authorize_hub_publish(
         self, *, hub_id: str, owner_id: str, room_id: str, agent_message_id: str
@@ -125,8 +118,8 @@ class _RelayPublishAuthorizationReader:
 
 
 class _RelayCancellationReader:
-    def __init__(self, database_service: DatabaseService) -> None:
-        self._db = database_service
+    def __init__(self, db: Any) -> None:
+        self._db = db
 
     async def is_message_cancelled(self, message_id: str) -> bool:
         return bool(await self._db.is_message_cancelled(message_id))
@@ -197,15 +190,25 @@ class RelayService:
     def __init__(
         self,
         *,
-        mongo: MongoDB,
-        database_service: DatabaseService,
+        mongo: Any,
+        db: Any | None = None,
+        database_service: Any | None = None,
         sse_manager: SSEManager,
         event_publisher: Any | None = None,
         worker_id: str | None = None,
         response_converter: Callable[[Any], Any] | None = None,
     ) -> None:
         self._mongo = mongo
-        self._db = database_service
+        self._mongo = (
+            mongo
+            if mongo is not None
+            else getattr(database_service, "mongo", None)
+            if database_service is not None
+            else None
+        )
+        self._db = db if db is not None else database_service
+        if self._db is None:
+            raise ValueError("RelayService requires a mongo-compatible db/service")
         self._sse = sse_manager
         self._hub_queues: dict[str, asyncio.Queue] = {}
         self._offline_queues: dict[str, deque[_OfflineQueueEntry]] = {}
@@ -228,20 +231,19 @@ class RelayService:
             if callable(getattr(mongo, "increment_agent_call_count", None))
             else None
         )
+        if self.agent_call_counter is None and callable(
+            getattr(self._db, "increment_agent_call_count", None)
+        ):
+            self.agent_call_counter = self._db
         self._facade = HubFacade(
-            mongo=mongo,
+            mongo=self._mongo,
             config=config_from_settings(settings),
             worker_id=worker_id or "local-worker",
             agent_call_counter=self.agent_call_counter,
             event_publisher=event_publisher,
-            publish_authorization_reader=_RelayPublishAuthorizationReader(
-                database_service
-            ),
-            cancellation_reader=_RelayCancellationReader(database_service),
-            offline_failure_port=LegacyOfflineFailureAdapter(
-                database_service=database_service,
-                sse_manager=sse_manager,
-            ),
+            publish_authorization_reader=_RelayPublishAuthorizationReader(self._db),
+            cancellation_reader=_RelayCancellationReader(self._db),
+            offline_failure_port=LegacyOfflineFailureAdapter(self._db, sse_manager),
         )
 
     @property
@@ -557,10 +559,7 @@ class RelayService:
     async def _fail_offline_message(
         self, event: RelayToHubEvent, error_text: str | None = None
     ) -> None:
-        port = LegacyOfflineFailureAdapter(
-            database_service=self._db,
-            sse_manager=self._sse,
-        )
+        port = LegacyOfflineFailureAdapter(self._db, self._sse)
         await port.mark_hub_message_failed(
             OfflineHubFailureCommand(
                 room_id=event.room_id,
@@ -812,8 +811,9 @@ class RelayHubLivenessReader:
 
 def init_relay_service(
     *,
-    mongo: MongoDB,
-    database_service: DatabaseService,
+    mongo: Any,
+    db: Any | None = None,
+    database_service: Any | None = None,
     sse_manager: SSEManager,
     room_message_center: object,
     hitl_coordinator: object | None = None,
@@ -821,10 +821,13 @@ def init_relay_service(
     worker_id: str | None = None,
     response_converter: Callable[[Any], Any] | None = None,
 ) -> RelayService:
+    resolved_db = db if db is not None else database_service
+    if resolved_db is None:
+        raise ValueError("init_relay_service requires db or database_service")
     global relay_service
     relay_service = RelayService(
         mongo=mongo,
-        database_service=database_service,
+        db=resolved_db,
         sse_manager=sse_manager,
         event_publisher=event_publisher,
         worker_id=worker_id,
@@ -835,7 +838,7 @@ def init_relay_service(
         handler_module = importlib.import_module("execution.dispatch.response_handler")
         handler_cls = getattr(handler_module, "Agent" + "ResponseHandler")
         response_handler = handler_cls(
-            db=database_service,
+            db=resolved_db,
             sse=sse_manager,
             room_message_center=room_message_center,
             hitl_coordinator=hitl_coordinator,

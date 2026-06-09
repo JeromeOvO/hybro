@@ -10,7 +10,6 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6 for design details.
 
 import os
 
-from app_shell.database_service import db_service
 from common.utils.context_utils import estimate_tokens
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -67,6 +66,25 @@ class _UnboundContentStorage:
         self._raise_unbound()
 
 
+class _UnboundRoomMemoryReader:
+    """Sentinel used when the legacy room-memory reader is not bound."""
+
+    def _raise_unbound(self):
+        raise RuntimeError(
+            "CompactionService.bind_room_memory_reader() not called - startup incomplete"
+        )
+
+    async def get_room_memory_by_room_id(self, room_id: str):  # noqa: ARG002
+        self._raise_unbound()
+
+    async def compact_turns_bulk(self, room_id: str, compacted_turns: list[dict]):  # noqa: ARG002
+        self._raise_unbound()
+
+
+class RoomMemoryReader:
+    async def get_room_memory_by_room_id(self, room_id: str) -> RoomMemory | None: ...
+
+
 class CompactionService:
     """
     Service for lossless compaction of conversation turns.
@@ -85,12 +103,25 @@ class CompactionService:
 
     def __init__(self):
         self.content_storage = _UnboundContentStorage()
-        self.db_service = db_service
+        self._room_memory_reader: RoomMemoryReader = _UnboundRoomMemoryReader()
+        self.db_service = _UnboundRoomMemoryReader()
         self._facade = None
         self._bound = False
 
     def bind_content_storage(self, content_storage) -> None:
         self.content_storage = content_storage
+
+    def bind_room_memory_reader(self, reader: RoomMemoryReader) -> None:
+        self._room_memory_reader = reader
+        self.db_service = reader
+
+    @property
+    def db_service(self) -> RoomMemoryReader:
+        return self._room_memory_reader
+
+    @db_service.setter
+    def db_service(self, value: RoomMemoryReader) -> None:
+        self._room_memory_reader = value
 
     def bind_facade(self, facade) -> None:
         self._facade = facade
@@ -307,7 +338,7 @@ class CompactionService:
     async def _fetch_turn_content_via_legacy_storage(
         self, turn_id: str, room_id: str
     ) -> str:
-        room_memory = await self.db_service.get_room_memory_by_room_id(room_id)
+        room_memory = await self._fetch_room_memory_for_fallback(room_id)
         if not room_memory:
             return f"[Error: Room {room_id} not found]"
 
@@ -327,6 +358,19 @@ class CompactionService:
             return f"[Error: Content for turn {turn_id} uses unsupported storage: {exc}]"
         except ValueError as exc:
             return f"[Error: {exc}]"
+
+    async def _fetch_room_memory_for_fallback(self, room_id: str) -> RoomMemory | None:
+        reader = self.db_service
+        if hasattr(reader, "get_room_memory_by_room_id"):
+            return await reader.get_room_memory_by_room_id(room_id)
+        if hasattr(reader, "legacy_get_room_memory_by_room_id"):
+            doc = await reader.legacy_get_room_memory_by_room_id(room_id)
+            if doc is None:
+                return None
+            return RoomMemory.model_validate(doc)
+        raise RuntimeError(
+            "Configured room-memory reader does not support room lookup for fallback"
+        )
 
     async def expand_turns_for_context(
         self, turns: list[ConversationTurn]
