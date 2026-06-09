@@ -185,3 +185,33 @@ def test_database_service_duck_type_blockers_are_exact():
         if _has_database_service_duck_usage(path)
     ]
     assert sorted(found) == expected
+
+
+def test_production_object_storage_access_goes_through_dal():
+    """Ensure no production module directly imports app_shell.s3_service.
+
+    The app_shell/ layer itself and main.py are excluded since they ARE the
+    infrastructure wiring layer.
+    """
+    production_roots = [
+        ROOT / "api_gateway",
+        ROOT / "agent",
+        ROOT / "room",
+        ROOT / "context_memory",
+        ROOT / "delivery",
+        ROOT / "execution",
+        ROOT / "hub_runtime_bridge",
+        ROOT / "a2a_adapter",
+        ROOT / "platform_module",
+        ROOT / "llm_gateway",
+        ROOT / "jobs",
+        ROOT / "common",
+    ]
+    offenders = []
+    for root in production_roots:
+        if not root.exists():
+            continue
+        for path in root.rglob("*.py"):
+            if _imports_prefix(path, "app_shell.s3_service"):
+                offenders.append(path.relative_to(ROOT).as_posix())
+    assert offenders == [], f"Direct S3 imports in production code: {offenders}"

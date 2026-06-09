@@ -181,6 +181,10 @@ class RoomServices:
         self._attachment_cleanup = None
         self._quote_writer = None
 
+    def bind_s3_service(self, service) -> None:
+        """Inject object-storage service (avoids lazy singleton import)."""
+        self._s3_service = service
+
     @property
     def s3_service(self):
         if self._s3_service is None:
@@ -3748,9 +3752,7 @@ class RoomServices:
 
         if s3_keys:
             try:
-                from app_shell.s3_service import s3_service
-
-                url_map = await s3_service.batch_presigned_urls(s3_keys)
+                url_map = await self.s3_service.batch_presigned_urls(s3_keys)
                 for msg in messages:
                     if msg.message_content and msg.message_content.attachments:
                         for att in msg.message_content.attachments:
@@ -3774,7 +3776,7 @@ class RoomServices:
         and patches each ``file.uri`` in-place so the frontend always receives
         a valid URL regardless of when the original was created.
         """
-        from app_shell.s3_service import s3_service
+        s3_service = self.s3_service
 
         key_refs: list[tuple[object, str]] = []
         key_filenames: dict[str, str] = {}

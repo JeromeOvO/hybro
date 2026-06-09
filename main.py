@@ -588,6 +588,7 @@ async def lifespan(app: FastAPI):
             )
             _room_facade = _room_deps.room_registry
             room_runtime.bind_facade(_room_facade)
+            room_runtime.bind_s3_service(s3_service)
             room_center.room_center.bind_facade(_room_facade)
             hitl.bind_room_ownership_reader(_room_facade)
             execution_room_message_center.bind(
