@@ -23,8 +23,8 @@ logger = get_logger(__name__)
 class ChatMemoryService:
     def __init__(self, *, context_store=None):
         if context_store is None:
-            from app_shell.database_service import db_service as bound_database_service
-            context_store = bound_database_service
+            import importlib
+            context_store = getattr(importlib.import_module("app_shell.database_service"), "db_service")
         self._store = context_store
         self.room_memory_llm_service = None
 
@@ -217,8 +217,8 @@ class ChatMemoryService:
 class RoomMemoryService:
     def __init__(self, *, room_memory_store=None):
         if room_memory_store is None:
-            from app_shell.database_service import db_service as bound_database_service
-            room_memory_store = bound_database_service
+            import importlib
+            room_memory_store = getattr(importlib.import_module("app_shell.database_service"), "db_service")
         self._store = room_memory_store
         self.turn_notes_llm_provider = None
         self._facade = None

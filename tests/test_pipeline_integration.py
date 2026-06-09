@@ -127,7 +127,7 @@ async def test_room_team_bypasses_matcher():
 
         # Create RoomServices and call _resolve_explicit_target_scope
         room_runtime = RoomServices()
-        room_runtime.database_service = mock_db
+        room_runtime._store = mock_db
 
         result = await room_runtime._resolve_explicit_target_scope(
             room=room,

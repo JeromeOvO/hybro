@@ -7,17 +7,10 @@
     "jobs/stale_task_checker.py"
   ],
   "database_service_type_blockers": [
-    "app_shell/debate_service.py",
-    "app_shell/memory_service.py",
-    "app_shell/room_coordinator_service.py",
-    "app_shell/room_membership_source.py",
-    "app_shell/room_runtime.py",
     "main.py"
   ],
   "database_service_duck_type_blockers": [
     "app_shell/database_service.py",
-    "app_shell/room_runtime.py",
-    "execution/orchestration/room_message_center.py",
     "main.py"
   ],
   "pinecone_singleton_import_blockers": [

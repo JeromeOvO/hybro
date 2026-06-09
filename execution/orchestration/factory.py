@@ -17,7 +17,7 @@ def create_room_message_center(
 ) -> RoomMessageCenter:
     deps: dict[str, Any] = {
         "room_services": _defaults.room_services,
-        "store": _defaults.db_service,
+        "store": _defaults._legacy_store,
         "sse_manager": _defaults.sse_manager,
         "room_coordinator_service": _defaults.room_coordinator_service,
         "summary_service": _defaults.summary_service,

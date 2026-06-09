@@ -38,7 +38,7 @@ from models.supervisor import (
 
 a2a_service = None
 agent_resolver_service = None
-db_service = None
+_legacy_store = None
 debate_service = None
 room_memory_service = None
 notification_service = None

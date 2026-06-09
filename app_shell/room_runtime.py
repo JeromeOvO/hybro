@@ -158,8 +158,8 @@ class _ResolvedAttachments:
 class RoomServices:
     def __init__(self, debate_rounds: int = 2, *, room_store=None):
         if room_store is None:
-            from app_shell.database_service import db_service as bound_database_service
-            room_store = bound_database_service
+            import importlib
+            room_store = getattr(importlib.import_module("app_shell.database_service"), "db_service")
         self._store = room_store
         self.agent_service = agent_service  # Use singleton
         self.message_parser_service = None
@@ -520,7 +520,7 @@ class RoomServices:
         if has_legacy:
             normalized = self._normalize_room_agent_set(request.room_agent_set)
             if request.applied_from_group:
-                group = await self.database_service.get_agent_group_by_id(request.applied_from_group)
+                group = await self._store.get_agent_group_by_id(request.applied_from_group)
                 group_name = group.name if group else None
                 return (normalized, MembershipOrigin.SAVED_GROUP, MembershipOriginStatus.SEEDED_NEVER_EDITED, request.applied_from_group, group_name)
             return (normalized, MembershipOrigin.MANUAL, MembershipOriginStatus.MANUAL, None, None)
@@ -1927,7 +1927,7 @@ class RoomServices:
             "conversation_context": conversation_context,
             "explicit_mentions": explicit_mentions or [],
         }
-        await self.database_service.update_room_user_message_by_message_id(
+        await self._store.update_room_user_message_by_message_id(
             user_message.message_id, user_message
         )
 
@@ -1971,7 +1971,7 @@ class RoomServices:
         )
 
         original_msg = (
-            await self.database_service.get_room_user_message_by_message_id(
+            await self._store.get_room_user_message_by_message_id(
                 pending_clarify_msg_id
             )
         )
@@ -2094,7 +2094,7 @@ class RoomServices:
             "conversation_context": conversation_context,
             "explicit_mentions": explicit_mentions or [],
         }
-        await self.database_service.update_room_user_message_by_message_id(
+        await self._store.update_room_user_message_by_message_id(
             user_message.message_id, user_message
         )
 
@@ -2115,7 +2115,7 @@ class RoomServices:
         """Remove the ``pending_clarification_message_id`` flag from the room."""
         if isinstance(room.extend_info, dict):
             room.extend_info.pop("pending_clarification_message_id", None)
-            await self.database_service.update_room_by_room_id(
+            await self._store.update_room_by_room_id(
                 room.room_id, room
             )
 
@@ -2279,7 +2279,7 @@ class RoomServices:
 
         # ── Pre-persist scope validation ──────────────────────────────────
         # Fetch room early: needed for scope resolution and downstream flags.
-        room = await self.database_service.get_room_by_room_id(request.room_id)
+        room = await self._store.get_room_by_room_id(request.room_id)
         if not room:
             return RoomCenterUserMessageResponse(
                 message_id=None, message=None, success=False,
@@ -2388,7 +2388,7 @@ class RoomServices:
                 }
                 agents = []
                 for mention in pre_resolved_mentions:
-                    agent = await self.database_service.get_agent_by_agent_id(
+                    agent = await self._store.get_agent_by_agent_id(
                         mention["agent_id"]
                     )
                     if agent is not None:
@@ -2430,7 +2430,7 @@ class RoomServices:
                     }
                     agents = []
                     for mention in mentions:
-                        agent = await self.database_service.get_agent_by_agent_id(
+                        agent = await self._store.get_agent_by_agent_id(
                             mention["agent_id"]
                         )
                         if agent is not None:
@@ -2491,7 +2491,7 @@ class RoomServices:
         # Non-supervisor multi-agent paths need it for build_minimal_context.
         room_memory = None
         if use_supervisor or len(selected_agent_set) > 1:
-            room_memory = await self.database_service.get_room_memory_by_room_id(
+            room_memory = await self._store.get_room_memory_by_room_id(
                 request.room_id
             )
             if room_memory and room_memory.memory_content:
@@ -2762,7 +2762,7 @@ class RoomServices:
 
     async def _persist_user_message(self, user_message: RoomUserMessage) -> bool:
         """Persist user message to the database."""
-        return await self.database_service.add_room_user_message(user_message)
+        return await self._store.add_room_user_message(user_message)
 
     async def _send_processing_status(self, room_id: str, message_id: str, client_request_id: str | None = None) -> None:
         """Notify client that processing has started.
@@ -2831,7 +2831,7 @@ class RoomServices:
     ) -> RoomCenterUserMessageResponse | None:
         """Initialize or update room memory with conversation history."""
         # Get room to access room_agent_set for cleaning @mentions
-        room = await self.database_service.get_room_by_room_id(request.room_id)
+        room = await self._store.get_room_by_room_id(request.room_id)
         room_agent_set = room.room_agent_set if room else {}
 
         room_memory_initialize_or_update_response = (
@@ -2869,7 +2869,7 @@ class RoomServices:
         sends COMPLETED when all agents finish.  Sending it here would prematurely
         clear the frontend processing state and hide the Stop button.
         """
-        room = await self.database_service.get_room_by_room_id(request.room_id)
+        room = await self._store.get_room_by_room_id(request.room_id)
         mention_response = await self.parse_user_message_with_mentions(
             room, user_message, mentions
         )
@@ -2888,7 +2888,7 @@ class RoomServices:
         canonical_mentions: list[dict] = []
         invalid_ids: list[str] = []
         for aid in mentioned_agent_ids:
-            agent = await self.database_service.get_agent_by_agent_id(aid)
+            agent = await self._store.get_agent_by_agent_id(aid)
             if not agent or agent.agent_status != AgentStatus.active:
                 invalid_ids.append(aid)
                 continue
@@ -2954,7 +2954,7 @@ class RoomServices:
                     }
                     full_agents = []
                     for agent_info in selection_result.agents:
-                        full_agent = await self.database_service.get_agent_by_agent_id(
+                        full_agent = await self._store.get_agent_by_agent_id(
                             agent_info.agent_id
                         )
                         if full_agent:
@@ -3012,7 +3012,7 @@ class RoomServices:
             )
 
         # Custom group (saved-group override at send time)
-        group = await self.database_service.get_agent_group_by_id(target_group)
+        group = await self._store.get_agent_group_by_id(target_group)
         if not group:
             error_msg = "The selected agent group no longer exists. Please choose a different group."
             logger.warning(
@@ -3042,7 +3042,7 @@ class RoomServices:
         if group.agents:
             agents = []
             for agent_id in group.agents:
-                agent = await self.database_service.get_agent_by_agent_id(agent_id)
+                agent = await self._store.get_agent_by_agent_id(agent_id)
                 if agent:
                     agents.append(agent)
 
@@ -3077,7 +3077,7 @@ class RoomServices:
 
         agents = []
         for agent_id in agent_set.keys():
-            agent = await self.database_service.get_agent_by_agent_id(agent_id)
+            agent = await self._store.get_agent_by_agent_id(agent_id)
             if agent:
                 agents.append(agent)
         return agents
@@ -3099,7 +3099,7 @@ class RoomServices:
 
         refs: list[RoomAgentRef] = []
         for agent_id, agent_name in agent_set.items():
-            agent = await self.database_service.get_agent_by_agent_id(agent_id)
+            agent = await self._store.get_agent_by_agent_id(agent_id)
             if not agent:
                 refs.append(RoomAgentRef(id=agent_id, name=agent_name, availability="deleted"))
             elif agent.agent_status != AgentStatus.active:
@@ -3147,7 +3147,7 @@ class RoomServices:
             client_request_id=user_message.client_request_id,
         )
 
-        added = await self.database_service.add_room_agent_message(
+        added = await self._store.add_room_agent_message(
             fallback_agent_message
         )
         if not added:
@@ -3230,7 +3230,7 @@ class RoomServices:
                         )
 
                         agent_message_success = (
-                            await self.database_service.add_room_agent_message(
+                            await self._store.add_room_agent_message(
                                 agent_message
                             )
                         )
@@ -3255,7 +3255,7 @@ class RoomServices:
                         )
 
                         agent_message_success = (
-                            await self.database_service.add_room_agent_message(
+                            await self._store.add_room_agent_message(
                                 agent_message
                             )
                         )
@@ -3363,7 +3363,7 @@ class RoomServices:
             for agent_id, agent_name in room.room_agent_set.items():
                 if agent_id != current_agent_id:
                     # Try to get agent description for richer context
-                    agent = await self.database_service.get_agent_by_agent_id(agent_id)
+                    agent = await self._store.get_agent_by_agent_id(agent_id)
                     if agent and agent.agent_card and agent.agent_card.description:
                         other_agents.append(
                             f"- {agent_name}: {agent.agent_card.description}"
@@ -3454,13 +3454,13 @@ class RoomServices:
             )
 
         # Get agent info for context personalization
-        agent = await self.database_service.get_agent_by_agent_id(agent_id)
+        agent = await self._store.get_agent_by_agent_id(agent_id)
         agent_name = agent.agent_card.name if agent else None
 
         # Turn context (QUOTE_REPLY): user prompt + quote snapshot + separate agent task
         turn_ctx = None
         if orchestration_user_message_id:
-            um = await self.database_service.get_room_user_message_by_message_id(
+            um = await self._store.get_room_user_message_by_message_id(
                 orchestration_user_message_id
             )
             if um:
@@ -3471,7 +3471,7 @@ class RoomServices:
                 )
 
                 try:
-                    turn_ctx = await load_turn_context(self.database_service, um)
+                    turn_ctx = await load_turn_context(self._store, um)
                 except TurnQuoteMissingError as e:
                     return RoomCenterAgentMessageResponse(
                         message_id=message.message_id,
@@ -3641,7 +3641,7 @@ class RoomServices:
                         continue
                     user_attachments.append(UserAttachment.model_validate(attachment))
             if user_attachments:
-                agent_obj = await self.database_service.get_agent_by_agent_id(agent_id)
+                agent_obj = await self._store.get_agent_by_agent_id(agent_id)
                 agent_card_obj = agent_obj.agent_card if agent_obj else None
                 if agent_card_obj:
                     file_parts = await self._build_message_parts(
@@ -3692,7 +3692,7 @@ class RoomServices:
             and message.message_content.message_task.metadata is None
         ):
             existing_message = (
-                await self.database_service.get_room_agent_message_by_message_id(
+                await self._store.get_room_agent_message_by_message_id(
                     message_id
                 )
             )
@@ -3707,7 +3707,7 @@ class RoomServices:
                 )
 
         update_message_success = (
-            await self.database_service.update_room_agent_message_by_message_id(
+            await self._store.update_room_agent_message_by_message_id(
                 message_id, message
             )
         )
@@ -3735,7 +3735,7 @@ class RoomServices:
             )
 
         room_id = request.room_id
-        messages = await self.database_service.get_room_user_messages_by_room_id(
+        messages = await self._store.get_room_user_messages_by_room_id(
             room_id
         )
 
@@ -3833,7 +3833,7 @@ class RoomServices:
             )
 
         room_id = request.room_id
-        messages = await self.database_service.get_room_agent_messages_by_room_id(
+        messages = await self._store.get_room_agent_messages_by_room_id(
             room_id
         )
 
@@ -3897,7 +3897,7 @@ class RoomServices:
                         "possibly due to a server restart.",
                     )
                     try:
-                        await self.database_service.update_room_agent_message_by_message_id(
+                        await self._store.update_room_agent_message_by_message_id(
                             msg.message_id, msg
                         )
                     except Exception as e:
@@ -3926,7 +3926,7 @@ class RoomServices:
                     "a server restart or agent failure.",
                 )
                 try:
-                    await self.database_service.update_room_agent_message_by_message_id(
+                    await self._store.update_room_agent_message_by_message_id(
                         msg.message_id, msg
                     )
                 except Exception as e:
@@ -3954,7 +3954,7 @@ class RoomServices:
             )
 
         message_id = request.message_id
-        message = await self.database_service.get_room_agent_message_by_message_id(
+        message = await self._store.get_room_agent_message_by_message_id(
             message_id
         )
         if message:
@@ -3975,7 +3975,7 @@ class RoomServices:
             )
 
         message_id = request.message_id
-        message = await self.database_service.get_room_user_message_by_message_id(
+        message = await self._store.get_room_user_message_by_message_id(
             message_id
         )
         return RoomCenterUserMessageResponse(
@@ -3995,7 +3995,7 @@ class RoomServices:
 
         related_message_id = request.related_message_id
         messages = (
-            await self.database_service.get_room_agent_messages_by_related_message_id(
+            await self._store.get_room_agent_messages_by_related_message_id(
                 related_message_id
             )
         )

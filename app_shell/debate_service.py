@@ -12,8 +12,8 @@ logger = get_logger(__name__)
 class DebateService:
     def __init__(self, *, message_store=None):
         if message_store is None:
-            from app_shell.database_service import db_service as bound_database_service
-            message_store = bound_database_service
+            import importlib
+            message_store = getattr(importlib.import_module("app_shell.database_service"), "db_service")
         self.agent_service = agent_service
         self._store = message_store
         self.active_debates = {}  # Store active debate sessions

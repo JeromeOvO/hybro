@@ -1118,7 +1118,7 @@ class TestHandleV2RunResultUnifiedSummary:
     def rmc(self):
         """Build a RoomMessageCenter with key collaborators mocked."""
         with (
-            patch("execution.orchestration.room_message_center.db_service") as mock_db,
+            patch("execution.orchestration.room_message_center._legacy_store") as mock_db,
             patch("execution.orchestration.room_message_center.sse_manager") as mock_sse,
             patch("execution.orchestration.room_message_center.room_coordinator_service"),
             patch("execution.orchestration.room_message_center.room_services"),

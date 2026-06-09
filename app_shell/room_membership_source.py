@@ -18,9 +18,8 @@ class LegacyRoomMembershipSeedSource:
         agent_service_adapter=agent_service,
     ) -> None:
         if membership_store is None:
-            from app_shell.database_service import db_service as bound_database_service
-
-            membership_store = bound_database_service
+            import importlib
+            membership_store = getattr(importlib.import_module("app_shell.database_service"), "db_service")
         self._store = membership_store
         self._agent_service = agent_service_adapter
 
