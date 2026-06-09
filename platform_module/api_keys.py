@@ -14,6 +14,11 @@ from typing import Any
 from common.protocols import APIKeyRecord, MongoDAL
 
 
+_API_KEY_FIELDS = frozenset(
+    ("key_id", "user_id", "name", "is_active", "created_at", "last_used_at", "usage_count", "key_hash")
+)
+
+
 @dataclass
 class APIKeyData:
     """Internal data class for API keys that implements APIKeyRecord protocol."""
@@ -46,7 +51,7 @@ class MongoAPIKeyStore:
             APIKeyRecord or None if not found
         """
         doc = await self._collection.find_one({"key_hash": key_hash})
-        return APIKeyData(**doc) if doc else None
+        return APIKeyData(**{k: v for k, v in doc.items() if k in _API_KEY_FIELDS}) if doc else None
 
     async def get_api_key_by_id(self, key_id: str) -> APIKeyRecord | None:
         """
@@ -59,7 +64,7 @@ class MongoAPIKeyStore:
             APIKeyRecord or None if not found
         """
         doc = await self._collection.find_one({"key_id": key_id})
-        return APIKeyData(**doc) if doc else None
+        return APIKeyData(**{k: v for k, v in doc.items() if k in _API_KEY_FIELDS}) if doc else None
 
     async def get_api_keys_by_user(self, user_id: str) -> list[APIKeyRecord]:
         """
@@ -71,9 +76,8 @@ class MongoAPIKeyStore:
         Returns:
             List of APIKeyRecord instances
         """
-        cursor = self._collection.find({"user_id": user_id})
-        docs = await cursor.to_list(length=None)
-        return [APIKeyData(**doc) for doc in docs]
+        docs = await self._collection.find({"user_id": user_id})
+        return [APIKeyData(**{k: v for k, v in doc.items() if k in _API_KEY_FIELDS}) for doc in docs]
 
     async def add_api_key(self, api_key: APIKeyRecord) -> str:
         """
@@ -109,11 +113,10 @@ class MongoAPIKeyStore:
         Returns:
             bool: True if deactivation was successful
         """
-        result = await self._collection.update_one(
+        return await self._collection.update_one(
             {"key_id": key_id},
             {"$set": {"is_active": False}},
         )
-        return result.modified_count > 0
 
     async def update_api_key_usage(self, key_hash: str) -> bool:
         """
@@ -128,14 +131,13 @@ class MongoAPIKeyStore:
         """
         from common.utils.time import utcnow
 
-        result = await self._collection.update_one(
+        return await self._collection.update_one(
             {"key_hash": key_hash},
             {
                 "$set": {"last_used_at": utcnow()},
                 "$inc": {"usage_count": 1},
             },
         )
-        return result.modified_count > 0
 
 
 __all__ = ["MongoAPIKeyStore"]
