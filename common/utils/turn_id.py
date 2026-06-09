@@ -18,7 +18,7 @@ class TurnMessage(Protocol):
     turn_id: str | None
 
 
-async def resolve_turn_id(msg: TurnMessage, db_service) -> str:
+async def resolve_turn_id(msg: TurnMessage, message_reader) -> str:
     if msg.turn_id:
         return msg.turn_id
 
@@ -26,11 +26,11 @@ async def resolve_turn_id(msg: TurnMessage, db_service) -> str:
     visited: set[str] = set()
     while current_id and current_id not in visited:
         visited.add(current_id)
-        user_msg = await db_service.get_room_user_message_by_message_id(current_id)
+        user_msg = await message_reader.get_room_user_message_by_message_id(current_id)
         if user_msg:
             return current_id
 
-        agent_msg = await db_service.get_room_agent_message_by_message_id(current_id)
+        agent_msg = await message_reader.get_room_agent_message_by_message_id(current_id)
         if not agent_msg or not agent_msg.related_message_id:
             return current_id
         current_id = agent_msg.related_message_id

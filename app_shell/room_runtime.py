@@ -24,7 +24,6 @@ from a2a.types import (
 from app_shell.a2a_runtime import a2a_service
 from app_shell.agent_selection_service import agent_selection_service
 from app_shell.agent_service import agent_service
-from app_shell.database_service import db_service
 from app_shell.delivery_runtime import sse_manager
 from app_shell.memory_service import room_memory_service
 from app_shell.task_service import task_service
@@ -157,8 +156,11 @@ class _ResolvedAttachments:
 
 
 class RoomServices:
-    def __init__(self, debate_rounds: int = 2):
-        self.database_service = db_service  # Use singleton
+    def __init__(self, debate_rounds: int = 2, *, room_store=None):
+        if room_store is None:
+            from app_shell.database_service import db_service as bound_database_service
+            room_store = bound_database_service
+        self._store = room_store
         self.agent_service = agent_service  # Use singleton
         self.message_parser_service = None
         self.debate_rounds = debate_rounds
@@ -238,7 +240,7 @@ class RoomServices:
     async def _read_active_runs_for_room(self, room_id: str) -> list[dict[str, Any]]:
         reader = getattr(self, "_active_run_reader", None)
         if reader is None:
-            active_runs_raw = await self.database_service.get_active_runs_by_room_id(
+            active_runs_raw = await self._store.get_active_runs_by_room_id(
                 room_id
             )
             return self._active_run_payloads_from_raw(active_runs_raw)
@@ -458,7 +460,7 @@ class RoomServices:
                 agent_set: dict[str, str] = {}
                 unknown_ids: list[str] = []
                 for aid in agent_ids:
-                    agent = await self.database_service.get_agent_by_agent_id(aid)
+                    agent = await self._store.get_agent_by_agent_id(aid)
                     if not agent:
                         unknown_ids.append(aid)
                         continue
@@ -478,7 +480,7 @@ class RoomServices:
                         error="seed_group_id is required for saved_group seed input",
                         status_code=400,
                     )
-                group = await self.database_service.get_agent_group_by_id(request.seed_group_id)
+                group = await self._store.get_agent_group_by_id(request.seed_group_id)
                 if not group:
                     return RoomCenterRoomSettingResponse(
                         room_id=None, room=None, success=False,
@@ -493,13 +495,13 @@ class RoomServices:
                     )
                 agent_set = {}
                 for aid in group.agents:
-                    agent = await self.database_service.get_agent_by_agent_id(aid)
+                    agent = await self._store.get_agent_by_agent_id(aid)
                     if agent and agent.agent_status == AgentStatus.active:
                         agent_set[aid] = agent.agent_card.name
                 return (agent_set, MembershipOrigin.SAVED_GROUP, MembershipOriginStatus.SEEDED_NEVER_EDITED, group.group_id, group.name)
 
             if seed == "all_current_agents":
-                all_agents = await self.database_service.get_all_active_agents(
+                all_agents = await self._store.get_all_active_agents(
                     user_id=requesting_user,
                 )
                 agent_set = {
@@ -550,7 +552,7 @@ class RoomServices:
             return []
         
         # Fetch all agents in one query
-        agents = await self.database_service.get_agents_with_conditions(
+        agents = await self._store.get_agents_with_conditions(
             {"agent_id": {"$in": agent_ids}}
         )
         
@@ -627,7 +629,7 @@ class RoomServices:
             active_runs=await self._read_active_runs_for_room(room_id),
         )
 
-        room = await self.database_service.get_room_by_room_id(room_id)
+        room = await self._store.get_room_by_room_id(room_id)
         if room is None:
             return RoomCenterRoomSettingResponse(
                 room_id=None,
@@ -658,7 +660,7 @@ class RoomServices:
                 needs_write = True
 
             if needs_write:
-                await self.database_service.update_room_by_room_id(room_id, room)
+                await self._store.update_room_by_room_id(room_id, room)
 
             resolved_agents, room_default_status = await self._resolve_room_agent_refs(
                 room.room_agent_set, viewer_user_id=request.requesting_user_id
@@ -690,7 +692,7 @@ class RoomServices:
             )
 
         room_id = request.room_id
-        room = await self.database_service.get_room_by_room_id(room_id)
+        room = await self._store.get_room_by_room_id(room_id)
         if room is None:
             return RoomCenterActiveRunsResponse(
                 room_id=None,
@@ -730,7 +732,7 @@ class RoomServices:
             status_code=200,
         )
 
-        rooms = await self.database_service.get_rooms_by_room_owner_id(room_owner_id)
+        rooms = await self._store.get_rooms_by_room_owner_id(room_owner_id)
         return RoomCenterRoomSettingResponse(
             room_list=rooms, success=True, error=None, status_code=200
         )
@@ -771,7 +773,7 @@ class RoomServices:
             return self._room_error_response(room_id=room_id, error=str(exc))
         return self._room_setting_response_from_info(info)
 
-        room = await self.database_service.get_room_by_room_id(room_id)
+        room = await self._store.get_room_by_room_id(room_id)
         if room is None:
             return RoomCenterRoomSettingResponse(
                 room_id=None,
@@ -827,7 +829,7 @@ class RoomServices:
             else:
                 room.membership_origin = MembershipOrigin.MANUAL
                 room.membership_origin_status = MembershipOriginStatus.MANUAL
-        success = await self.database_service.update_room_by_room_id(room_id, room)
+        success = await self._store.update_room_by_room_id(room_id, room)
         if success:
             resolved_agents, room_default_status = await self._resolve_room_agent_refs(
                 room.room_agent_set, viewer_user_id=request.requesting_user_id
@@ -881,7 +883,7 @@ class RoomServices:
             )
         return self._room_setting_response_from_info(info)
 
-        room = await self.database_service.get_room_by_room_id(room_id)
+        room = await self._store.get_room_by_room_id(room_id)
         if room is None:
             return RoomCenterRoomSettingResponse(
                 room_id=None,
@@ -901,7 +903,7 @@ class RoomServices:
             )
 
         room.room_name = request.room_name
-        success = await self.database_service.update_room_by_room_id(room_id, room)
+        success = await self._store.update_room_by_room_id(room_id, room)
         if success:
             return RoomCenterRoomSettingResponse(
                 room_id=room_id, room=room, success=True, error=None, status_code=200
@@ -949,7 +951,7 @@ class RoomServices:
             )
         return self._room_setting_response_from_info(info)
 
-        room = await self.database_service.get_room_by_room_id(room_id)
+        room = await self._store.get_room_by_room_id(room_id)
         if room is None:
             return RoomCenterRoomSettingResponse(
                 room_id=None,
@@ -969,7 +971,7 @@ class RoomServices:
             )
 
         room.extend_info = request.extend_info
-        success = await self.database_service.update_room_by_room_id(room_id, room)
+        success = await self._store.update_room_by_room_id(room_id, room)
         if success:
             return RoomCenterRoomSettingResponse(
                 room_id=room_id, room=room, success=True, error=None, status_code=200
@@ -1805,7 +1807,7 @@ class RoomServices:
             step_to_message_id[step_id] = agent_message.message_id
 
             # Save to database
-            agent_message_success = await self.database_service.add_room_agent_message(
+            agent_message_success = await self._store.add_room_agent_message(
                 agent_message
             )
             if not agent_message_success:
@@ -2408,7 +2410,7 @@ class RoomServices:
             # mentions against all active agents so inline @-mentions are honoured
             # regardless of room membership.
             if target_group == "all_agents":
-                all_agents = await self.database_service.get_all_active_agents(
+                all_agents = await self._store.get_all_active_agents(
                     user_id=request.user_id,
                 )
                 effective_agent_set = {
@@ -3342,7 +3344,7 @@ class RoomServices:
                 # Fall through to DB path if no descriptions available
 
             # Fallback: fetch from database (for backward compatibility)
-            room = await self.database_service.get_room_by_room_id(room_id)
+            room = await self._store.get_room_by_room_id(room_id)
             if not room or not room.room_agent_set:
                 return None
 

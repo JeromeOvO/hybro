@@ -452,7 +452,7 @@ async def lifespan(app: FastAPI):
             from execution.run_queries import RunQueryAdapter
             room_center.bind_room_dependencies(
                 center=AppShellRoomCenter(),
-                database_service=_db_svc,
+                store=_db_svc,
                 selection_service=agent_selection_service,
             )
             a2a_tasks.bind_a2a_task_dependencies(_db_svc)
@@ -489,7 +489,7 @@ async def lifespan(app: FastAPI):
                 run_repository=_execution_repos["run_repository"],
             )
             app_shell_client_request_id_resolver = SSEClientRequestIdResolver(
-                db_service=_db_svc,
+                resolver=_db_svc,
             )
             app.state.execution_run_lifecycle = run_lifecycle
             app.state.execution_client_request_id_resolver = (
@@ -648,7 +648,7 @@ async def lifespan(app: FastAPI):
                 cancellation_store=MongoCancellationStoreAdapter(mongodb),
                 hitl_message_cancellation=HITLMessageCancellationAdapter(hitl_service),
                 agent_task_cleanup=AgentTaskCleanupAdapter(
-                    db_service=_db_svc,
+                    store=_db_svc,
                     get_agent_card_from_url=a2a_service.get_agent_card_from_url,
                     cancel_remote_task=a2a_service.cancel_remote_task,
                     notify_task_update=notify_task_update_with_string_state,

@@ -65,7 +65,7 @@ class _FacadeSpy:
 def service(monkeypatch):
     relay = RelayService(
         mongo=None,
-        database_service=_DatabaseService(),
+        legacy_store=_DatabaseService(),
         sse_manager=_SSEManager(),
     )
     spy = _FacadeSpy()

@@ -90,7 +90,7 @@ class BoundRoomMemoryFacade:
             f"[Supervisor synthesis ({turn.turn_id[:8]})] "
             f"{enriched_content[:200]}..."
         )
-        modified, matched = await self.service.database_service.push_and_trim_conversation_turn(
+        modified, matched = await self.service._store.push_and_trim_conversation_turn(
             room_id,
             turn.model_dump(mode="json"),
             max_turns=MAX_HISTORY_TURNS,
@@ -126,7 +126,7 @@ class BoundRoomMemoryFacade:
         except Exception:
             return False
 
-        doc = await self.service.database_service.get_room_summary_projection(room_id)
+        doc = await self.service._store.get_room_summary_projection(room_id)
         if not doc:
             return False
 
@@ -180,7 +180,7 @@ class BoundRoomMemoryFacade:
             )
             existing_fact_contents.add(normalized)
 
-        return await self.service.database_service.update_room_summary_atomic(
+        return await self.service._store.update_room_summary_atomic(
             room_id,
             new_summary.model_dump(mode="json"),
             new_facts=new_facts if new_facts else None,
@@ -286,7 +286,7 @@ class TestAddSynthesisToHistory:
         from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
-        service.database_service = mock_db_service
+        service._store = mock_db_service
         service.openai_service = mock_openai_service
 
         result = await service.add_synthesis_to_history(
@@ -311,7 +311,7 @@ class TestAddSynthesisToHistory:
         from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
-        service.database_service = mock_db_service
+        service._store = mock_db_service
         service.openai_service = mock_openai_service
 
         result = await service.add_synthesis_to_history(
@@ -331,7 +331,7 @@ class TestAddSynthesisToHistory:
         from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
-        service.database_service = mock_db_service
+        service._store = mock_db_service
         service.openai_service = mock_openai_service
 
         result = await service.add_synthesis_to_history(
@@ -355,7 +355,7 @@ class TestSynthesisLLMEnrichment:
         from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
-        service.database_service = mock_db_service
+        service._store = mock_db_service
         service.openai_service = mock_openai_service
 
         long_text = "This is a very detailed synthesis. " * 50
@@ -385,7 +385,7 @@ class TestSynthesisLLMEnrichment:
         from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
-        service.database_service = mock_db_service
+        service._store = mock_db_service
         service.openai_service = mock_openai_service
 
         with patch.object(
@@ -430,7 +430,7 @@ class TestUpdateRoomSummary:
         from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
-        service.database_service = mock_db_service
+        service._store = mock_db_service
         service.openai_service = mock_openai_service
 
         success = await service.update_room_summary(
@@ -456,7 +456,7 @@ class TestUpdateRoomSummary:
         from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
-        service.database_service = mock_db_service
+        service._store = mock_db_service
         service.openai_service = mock_openai_service
 
         success = await service.update_room_summary(
@@ -484,7 +484,7 @@ class TestUpdateRoomSummary:
         from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
-        service.database_service = mock_db_service
+        service._store = mock_db_service
         service.openai_service = mock_openai_service
 
         success = await service.update_room_summary(
@@ -518,7 +518,7 @@ class TestUpdateRoomSummary:
         from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
-        service.database_service = mock_db_service
+        service._store = mock_db_service
         service.openai_service = mock_openai_service
 
         success = await service.update_room_summary(
@@ -553,7 +553,7 @@ class TestUpdateRoomSummary:
         from app_shell.memory_service import RoomMemoryService
 
         service = bind_room_memory_facade(RoomMemoryService())
-        service.database_service = mock_db_service
+        service._store = mock_db_service
         service.openai_service = mock_openai_service
 
         success = await service.update_room_summary(
@@ -717,6 +717,7 @@ class TestCompactionTrigger:
 
         rmc = RoomMessageCenter.__new__(RoomMessageCenter)
         rmc.database_service = AsyncMock()
+        rmc._store = rmc.database_service
         rmc.sse_manager = AsyncMock()
         rmc.sse_manager.remove_token = MagicMock()
         rmc.sse_manager.clear_cancellation = MagicMock()
@@ -1308,7 +1309,7 @@ class TestParseV2ActionMultiQuestion:
         )
         return RoomSupervisorService(
             openai_service=MagicMock(),
-            database_service=MagicMock(),
+            store=MagicMock(),
         )
 
     def test_parses_valid_questions_array(self, service):

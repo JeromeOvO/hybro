@@ -103,8 +103,7 @@ class CompactionService:
 
     def __init__(self):
         self.content_storage = _UnboundContentStorage()
-        self._room_memory_reader: RoomMemoryReader = _UnboundRoomMemoryReader()
-        self.db_service = _UnboundRoomMemoryReader()
+        self._store: RoomMemoryReader = _UnboundRoomMemoryReader()
         self._facade = None
         self._bound = False
 
@@ -112,16 +111,7 @@ class CompactionService:
         self.content_storage = content_storage
 
     def bind_room_memory_reader(self, reader: RoomMemoryReader) -> None:
-        self._room_memory_reader = reader
-        self.db_service = reader
-
-    @property
-    def db_service(self) -> RoomMemoryReader:
-        return self._room_memory_reader
-
-    @db_service.setter
-    def db_service(self, value: RoomMemoryReader) -> None:
-        self._room_memory_reader = value
+        self._store = reader
 
     def bind_facade(self, facade) -> None:
         self._facade = facade
@@ -360,7 +350,7 @@ class CompactionService:
             return f"[Error: {exc}]"
 
     async def _fetch_room_memory_for_fallback(self, room_id: str) -> RoomMemory | None:
-        reader = self.db_service
+        reader = self._store
         if hasattr(reader, "get_room_memory_by_room_id"):
             return await reader.get_room_memory_by_room_id(room_id)
         if hasattr(reader, "legacy_get_room_memory_by_room_id"):

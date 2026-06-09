@@ -202,7 +202,7 @@ class TestStaleTaskCheckerSemaphore:
             StaleRecoveryDeps(schedule_recovery=schedule_recovery)
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_orphaned_agent_messages",
             AsyncMock(
                 return_value=[
@@ -216,7 +216,7 @@ class TestStaleTaskCheckerSemaphore:
             ),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_agent_by_agent_id",
             AsyncMock(return_value=None),
         )
@@ -238,12 +238,12 @@ class TestStaleTaskCheckerSemaphore:
 
         checker = StaleTaskChecker()
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_orphaned_agent_messages",
             AsyncMock(return_value=[MagicMock()]),
         )
         get_agent = AsyncMock()
-        monkeypatch.setattr(mod.db_service, "get_agent_by_agent_id", get_agent)
+        monkeypatch.setattr(mod.store, "get_agent_by_agent_id", get_agent)
 
         await checker._recover_orphaned_messages()
 
@@ -265,17 +265,17 @@ class TestStaleTaskCheckerSemaphore:
             StaleRecoveryDeps(schedule_recovery=schedule_recovery)
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_stuck_supervisor_trajectory_messages",
             AsyncMock(return_value=[{"message_id": "msg-1", "room_id": "room-1"}]),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "is_message_cancelled",
             AsyncMock(return_value=False),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "claim_stuck_supervisor_trajectory",
             AsyncMock(return_value=True),
         )
@@ -301,37 +301,37 @@ class TestStaleTaskCheckerSemaphore:
             )
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_stale_task_messages",
             AsyncMock(return_value=[]),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_expired_task_messages",
             AsyncMock(return_value=[]),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_orphaned_agent_messages",
             AsyncMock(return_value=[]),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_room_ids_with_non_terminal_runs",
             AsyncMock(return_value=[]),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_non_tracked_stale_task_messages",
             AsyncMock(return_value=[]),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_stuck_supervisor_trajectory_messages",
             AsyncMock(return_value=[]),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "find_stale_non_terminal_runs",
             AsyncMock(return_value=[]),
         )
@@ -360,17 +360,17 @@ class TestStaleTaskCheckerSemaphore:
         msg.room_id = "room-1"
         msg.user_id = "user-1"
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "update_task_on_message",
             AsyncMock(),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_and_clear_continuation_on_message",
             AsyncMock(),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_and_clear_continuation_on_user_message",
             AsyncMock(),
         )

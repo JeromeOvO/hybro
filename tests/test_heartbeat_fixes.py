@@ -108,7 +108,7 @@ def _make_service(mongo=None, streams=None):
 
     svc = RelayService(
         mongo=mongo,
-        database_service=db_service,
+        legacy_store=db_service,
         sse_manager=sse_manager,
     )
     if streams is not None:

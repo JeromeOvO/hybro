@@ -2461,4 +2461,6 @@ class DatabaseService:
             logger.error(f"Failed to create HITL indexes: {e}")
 
 
-db_service = DatabaseService()
+_legacy_store = DatabaseService()
+# Backwards compatibility alias for main.py and lazy imports
+db_service = _legacy_store

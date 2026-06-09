@@ -21,7 +21,7 @@ from models.response import (
 
 router = APIRouter()
 room_center: RoomCenterRouteOwner | None = None
-db_service: A2ATaskReader | None = None
+room_store: A2ATaskReader | None = None
 agent_selection_service: AgentSelectionSuggester | None = None
 execution_engine: ExecutionEngine | None = None
 
@@ -29,13 +29,13 @@ execution_engine: ExecutionEngine | None = None
 def bind_room_dependencies(
     *,
     center: RoomCenterRouteOwner,
-    database_service: A2ATaskReader,
+    store: A2ATaskReader,
     selection_service: AgentSelectionSuggester,
 ) -> None:
-    global room_center, db_service, agent_selection_service
+    global room_center, room_store, agent_selection_service
 
     room_center = center
-    db_service = database_service
+    room_store = store
     agent_selection_service = selection_service
 
 
@@ -50,10 +50,10 @@ def _require_room_center() -> RoomCenterRouteOwner:
     return room_center
 
 
-def _require_db_service() -> A2ATaskReader:
-    if db_service is None:
+def _require_room_store() -> A2ATaskReader:
+    if room_store is None:
         raise RuntimeError("Room database dependency has not been bound")
-    return db_service
+    return room_store
 
 
 def get_agent_selection_service() -> AgentSelectionSuggester:
@@ -135,7 +135,7 @@ async def verify_room_ownership(room_id: str, user: ClerkUser) -> None:
     if not room_id:
         raise HTTPException(status_code=400, detail="room_id is required")
 
-    room = await _require_db_service().get_room_by_room_id(room_id)
+    room = await _require_room_store().get_room_by_room_id(room_id)
 
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")

@@ -192,7 +192,7 @@ class RelayService:
         *,
         mongo: Any,
         db: Any | None = None,
-        database_service: Any | None = None,
+        legacy_store: Any | None = None,
         sse_manager: SSEManager,
         event_publisher: Any | None = None,
         worker_id: str | None = None,
@@ -202,11 +202,11 @@ class RelayService:
         self._mongo = (
             mongo
             if mongo is not None
-            else getattr(database_service, "mongo", None)
-            if database_service is not None
+            else getattr(legacy_store, "mongo", None)
+            if legacy_store is not None
             else None
         )
-        self._db = db if db is not None else database_service
+        self._db = db if db is not None else legacy_store
         if self._db is None:
             raise ValueError("RelayService requires a mongo-compatible db/service")
         self._sse = sse_manager
@@ -813,7 +813,7 @@ def init_relay_service(
     *,
     mongo: Any,
     db: Any | None = None,
-    database_service: Any | None = None,
+    legacy_store: Any | None = None,
     sse_manager: SSEManager,
     room_message_center: object,
     hitl_coordinator: object | None = None,
@@ -821,9 +821,9 @@ def init_relay_service(
     worker_id: str | None = None,
     response_converter: Callable[[Any], Any] | None = None,
 ) -> RelayService:
-    resolved_db = db if db is not None else database_service
+    resolved_db = db if db is not None else legacy_store
     if resolved_db is None:
-        raise ValueError("init_relay_service requires db or database_service")
+        raise ValueError("init_relay_service requires db or legacy_store")
     global relay_service
     relay_service = RelayService(
         mongo=mongo,

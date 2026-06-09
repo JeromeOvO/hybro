@@ -37,7 +37,7 @@ class TestGetTaskStatus:
             sample_agent_message_with_task
         )
         
-        with patch(PATCH["a2a_tasks.db_service"], mock_db_service):
+        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
             result = await get_task_status(
                 sample_agent_message_with_task.message_id, mock_user
             )
@@ -53,7 +53,7 @@ class TestGetTaskStatus:
         """Should raise 404 when message doesn't exist."""
         mock_db_service.get_room_agent_message_by_message_id.return_value = None
         
-        with patch(PATCH["a2a_tasks.db_service"], mock_db_service):
+        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
             with pytest.raises(HTTPException) as exc_info:
                 await get_task_status("nonexistent-message", mock_user)
         
@@ -69,7 +69,7 @@ class TestGetTaskStatus:
             sample_agent_message
         )
         
-        with patch(PATCH["a2a_tasks.db_service"], mock_db_service):
+        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
             with pytest.raises(HTTPException) as exc_info:
                 await get_task_status(sample_agent_message.message_id, mock_user)
         
@@ -84,7 +84,7 @@ class TestGetTaskStatus:
             sample_agent_message_with_task
         )
         
-        with patch(PATCH["a2a_tasks.db_service"], mock_db_service):
+        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
             with pytest.raises(HTTPException) as exc_info:
                 await get_task_status(
                     sample_agent_message_with_task.message_id, mock_user_2
@@ -110,7 +110,7 @@ class TestListRoomTasks:
             sample_agent_message_with_task
         ]
         
-        with patch(PATCH["a2a_tasks.db_service"], mock_db_service):
+        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
             result = await list_room_tasks(sample_room.room_id, limit=50, current_user=mock_user)
         
         assert "tasks" in result
@@ -129,7 +129,7 @@ class TestListRoomTasks:
         
         mock_db_service.get_task_messages_for_room.return_value = [other_user_task]
         
-        with patch(PATCH["a2a_tasks.db_service"], mock_db_service):
+        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
             result = await list_room_tasks(sample_room.room_id, limit=50, current_user=mock_user)
         
         # Should be empty since the task belongs to another user
@@ -142,7 +142,7 @@ class TestListRoomTasks:
         """Should pass limit parameter to database query."""
         mock_db_service.get_task_messages_for_room.return_value = []
         
-        with patch(PATCH["a2a_tasks.db_service"], mock_db_service):
+        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
             await list_room_tasks(sample_room.room_id, limit=25, current_user=mock_user)
         
         mock_db_service.get_task_messages_for_room.assert_called_once_with(
@@ -167,7 +167,7 @@ class TestListUserPendingTasks:
             sample_agent_message_with_task
         ]
         
-        with patch(PATCH["a2a_tasks.db_service"], mock_db_service):
+        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
             result = await list_user_pending_tasks(mock_user)
         
         assert "tasks" in result
@@ -180,7 +180,7 @@ class TestListUserPendingTasks:
         """Should query for non-terminal task states."""
         mock_db_service.get_pending_task_messages_for_user.return_value = []
         
-        with patch(PATCH["a2a_tasks.db_service"], mock_db_service):
+        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
             await list_user_pending_tasks(mock_user)
         
         # Verify the call was made with user_id and state values
@@ -196,7 +196,7 @@ class TestListUserPendingTasks:
         """Should return empty list when user has no pending tasks."""
         mock_db_service.get_pending_task_messages_for_user.return_value = []
         
-        with patch(PATCH["a2a_tasks.db_service"], mock_db_service):
+        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
             result = await list_user_pending_tasks(mock_user)
         
         assert result["tasks"] == []

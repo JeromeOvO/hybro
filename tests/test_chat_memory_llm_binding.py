@@ -12,8 +12,8 @@ from models.request import ChatMemoryRequest
 @pytest.mark.asyncio
 async def test_chat_memory_update_uses_bound_room_memory_llm_service():
     service = ChatMemoryService()
-    service.database_service = MagicMock()
-    service.database_service.get_chat_context_by_session_id = AsyncMock(
+    service._store = MagicMock()
+    service._store.get_chat_context_by_session_id = AsyncMock(
         return_value=ChatContext(
             memory_id="mem-1",
             user_name="user",
@@ -24,7 +24,7 @@ async def test_chat_memory_update_uses_bound_room_memory_llm_service():
             extend_info=[],
         )
     )
-    service.database_service.update_chat_context_by_session_id = AsyncMock(
+    service._store.update_chat_context_by_session_id = AsyncMock(
         return_value=True
     )
     service.room_memory_llm_service = MagicMock()
