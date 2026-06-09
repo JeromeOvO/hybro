@@ -234,8 +234,6 @@ export class SSEConnection {
         : 0
       const delay = Math.min(exponential + jitter, this.maxReconnectDelay)
 
-      console.log(`🔄 SSE reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${Math.round(delay)}ms`)
-
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer)
       }

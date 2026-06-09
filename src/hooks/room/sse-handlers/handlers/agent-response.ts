@@ -76,7 +76,6 @@ export function handleAgentResponsePartial(
 }
 
 export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomSSEFrameMap['agent_response']): Promise<void> {
-  console.log('🤖 Agent response received via SSE')
   if (!sseMessage.data.message_id) return
 
   const store = useMessageStore.getState()
@@ -97,12 +96,6 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
     const looksDuplicateContent = incomingContent.length > 0
       && incomingContent === existingContent
       && artifactsEqual(existing.artifacts, incomingArtifacts)
-    const isAppendOnlyUpgrade = incomingContent.length > existingContent.length
-      && incomingContent.startsWith(existingContent)
-    const isDivergentRewrite = existingContent.length > 0
-      && incomingContent.length > 0
-      && !looksDuplicateContent
-      && !isAppendOnlyUpgrade
     if (hasExistingRenderable && looksDuplicateContent) {
       const canFinalizeExisting = !existing.taskStatus || !isTerminalState(existing.taskStatus)
       const needsStatusUpdate = existing.taskStatus !== TASK_STATE.COMPLETED
@@ -125,7 +118,6 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
         }, 'sse')
       }
       streaming.clear(messageId)
-      console.log('🔄 Skipping duplicate agent_response for', messageId, '— streamed content already present')
       const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
         clientRequestId: existing.clientRequestId || sseMessage.data.client_request_id,
         relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
@@ -142,9 +134,6 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
         )
       }
       return
-    }
-    if (isDivergentRewrite) {
-      console.log('🔄 Applying final agent_response rewrite for', messageId)
     }
   }
 

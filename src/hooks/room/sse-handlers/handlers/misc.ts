@@ -52,7 +52,6 @@ export function handleConnected(sseMessage: RoomSSEFrameMap['connected']): void 
 }
 
 export function handleHeartbeat(): void {
-  console.log('💓 SSE heartbeat received')
 }
 
 export function handleCancellation(

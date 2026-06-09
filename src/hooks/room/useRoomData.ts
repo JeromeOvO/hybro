@@ -25,7 +25,6 @@ export function useRoomData(
     staleTime: 1000 * 30,
     queryFn: async ({ signal }): Promise<RoomWithActiveRuns | null> => {
       activeRoomLoad.current = roomId
-      console.log(`🏠 Loading room: ${roomId}`)
 
       try {
         const response = await inquiryRoomSetting(roomId, getToken, signal)
@@ -51,7 +50,6 @@ export function useRoomData(
           })
           primeAgentNameCache(catalogEntries)
         }
-        console.log(`✅ Room loaded: ${roomId}`)
         return { ...response.room, active_runs: response.active_runs ?? null }
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {

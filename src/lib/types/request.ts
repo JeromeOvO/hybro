@@ -44,7 +44,9 @@ import type {
   Message,
 } from '@a2a-js/sdk'
 
-// ── Types NOT in SDK ─────────────────────────────────────────────────────
+import type { Room } from './response'
+
+export type { Room }
 
 /**
  * The location of the API key.
@@ -256,18 +258,6 @@ export interface PaginationParams {
    * Number of items per page
    */
   limit?: number | null;
-}
-export interface Room {
-  room_id?: string;
-  room_name: string;
-  room_owner_id: string;
-  room_owner_name: string;
-  room_agent_set?: {
-    [k: string]: string;
-  };
-  room_created_at?: string;
-  applied_from_group?: string | null;
-  extend_info?: unknown;
 }
 export interface RoomAgentMessage {
   room_id: string;

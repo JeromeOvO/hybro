@@ -849,8 +849,6 @@ export function RoomChatInput({
         : resolveSelectedGroupDispatch(selectedGroup ?? BUILTIN_GROUP_ALL_AGENTS)
       const submittedAttachments = attachments.length > 0 ? attachments : undefined
 
-      console.log('🚀 Submitting message (storage format):', trimmedMessage, 'dispatch:', dispatch, 'attachments:', attachments.length)
-
       setMessage('')
       setPlainTextLength(0)
       setAttachments([])

@@ -49,8 +49,6 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
   const { lifecycle } = deps
 
   return async (sseMessage: AnySSEFrame) => {
-    console.log('🔔 Room webhook received SSE message:', sseMessage)
-
     if (!isRoomSSEType(sseMessage.type)) {
       console.debug('Ignoring unknown room SSE frame type:', sseMessage.type, sseMessage)
       return
@@ -71,12 +69,6 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
 
     if (needsCorrelationBuffer(roomMessage.type)) {
       if (correlation.shouldBuffer && correlation.clientReqId) {
-        if (roomMessage.type === 'processing_status') {
-          console.log('📦 [SSE] processing_status BUFFERED', {
-            status: roomMessage.data?.status,
-            clientReqId: correlation.clientReqId,
-          })
-        }
         bufferCorrelatedEvent(correlation.clientReqId, roomMessage)
         return
       }

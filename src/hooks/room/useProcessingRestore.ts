@@ -94,9 +94,7 @@ export function useProcessingRestore(
         return
       }
 
-      console.log('🔄 Restoring processing log for message:', lifecycleMessageId)
-
-      // Some active runs are proactive and may not be anchored to a user message.
+      // Check if the triggering user message is stale (> 2 min).
       if (!lifecycleMessageId) {
         lifecycle.startProcessing(null)
         return
@@ -106,11 +104,9 @@ export function useProcessingRestore(
       const PLACEHOLDER_STALE_MS = 2 * 60 * 1000
       const triggerMsg = store.entities[lifecycleMessageId]
       if (!triggerMsg) {
-        console.log('🔄 Skipping processing log - processing trigger message not in hydrated store')
         return
       }
       if (isStale(triggerMsg.timestamp, PLACEHOLDER_STALE_MS)) {
-        console.log('🔄 Skipping processing log - processing message is stale (>2min)')
         return
       }
 
@@ -120,7 +116,6 @@ export function useProcessingRestore(
       )
 
       if (hasTaskEntities) {
-        console.log('🔄 Skipping processing log - tasks already exist')
         return
       }
 

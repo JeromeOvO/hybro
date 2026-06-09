@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  indentSubBulletsUnderOrderedItems,
-  normalizeConversationMarkdown,
-  normalizeOrderedListMarkers,
   preprocessConversationMarkdown,
   splitInlineOrderedListItems,
 } from '@/lib/markdown/normalize-conversation'
@@ -153,20 +150,5 @@ describe('preprocessConversationMarkdown', () => {
     ].join('\n')
 
     expect(preprocessConversationMarkdown(input, { streaming: true })).toBe(input)
-  })
-})
-
-/** Deprecated aliases still exported for callers migrating gradually. */
-describe('deprecated normalize helpers', () => {
-  it('normalizeOrderedListMarkers delegates to preprocess', () => {
-    expect(normalizeOrderedListMarkers('1. A\n1. B')).toBe('1. A\n1. B')
-  })
-
-  it('indentSubBulletsUnderOrderedItems delegates to preprocess', () => {
-    expect(indentSubBulletsUnderOrderedItems('1. A\n- b')).toBe('1. A\n- b')
-  })
-
-  it('normalizeConversationMarkdown is an alias of preprocessConversationMarkdown', () => {
-    expect(normalizeConversationMarkdown('1. A 2. B')).toBe('1. A\n2. B')
   })
 })

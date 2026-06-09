@@ -34,7 +34,6 @@ export async function handleTaskUpdate(
 ): Promise<void> {
   if (correlation.shouldDrop) return
   if (correlation.shouldBuffer && correlation.clientReqId) return
-  console.log('📋 Task update via SSE:', sseMessage.data)
   if (!sseMessage.data.message_id) return
 
   const messageId = sseMessage.data.message_id

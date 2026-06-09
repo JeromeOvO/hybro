@@ -174,8 +174,7 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
         if (!roomId) {
           throw new Error('Room created but no room_id returned')
         }
-        console.log('Room created successfully:', roomId)
-        
+
         // Store initial message and target group in Zustand for the room page to pick up.
         // Clear the override when the room was seeded with an explicit snapshot:
         //  - saved group seeded → room has snapshot → default to Room Default (Locked Decision #4)

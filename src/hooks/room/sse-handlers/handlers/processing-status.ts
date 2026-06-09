@@ -117,9 +117,6 @@ export function handleProcessingStatus(
   sseMessage: RoomSSEFrameMap['processing_status'],
   correlation: CorrelationResult,
 ): void {
-  console.log('⚙️ Processing status update:', sseMessage.data?.status, {
-    client_request_id: sseMessage.data?.client_request_id,
-  })
   if (!isProcessingStatusData(sseMessage.data)) {
     const details = sseMessage.data && typeof sseMessage.data === 'object'
       ? (sseMessage.data as Record<string, unknown>).details
@@ -140,12 +137,6 @@ export function handleProcessingStatus(
     || status === PROCESSING_STATUS.PROCESSING
     || status === PROCESSING_STATUS.AWAITING_INPUT
   ) {
-    console.log('[SSE] PROCESSING event received', {
-      status,
-      details: sseMessage.data.details,
-      messageId: sseMessage.data.message_id,
-      clientReqId: correlation.clientReqId,
-    })
     const pendingAckClientRequestId = lifecycle.getPendingRunEventAck()
     if (
       pendingAckClientRequestId
@@ -188,10 +179,6 @@ export function handleProcessingStatus(
         processingUserEntity.turnCompletionKind === 'synthesis'
         || isOrchestrationStage
       if (!holdForSynthesis) {
-        console.log('[SSE PROCESSING] skipping placeholder/log — turn already terminal', {
-          turnTerminalStatus: processingUserEntity.turnTerminalStatus,
-          userMsgId: processingUserEntity.id,
-        })
         return
       }
     }
@@ -250,13 +237,6 @@ export function handleProcessingStatus(
       correlation.clientReqId,
     )
   ) {
-    console.log('🚫 [SSE] Ignoring per-agent processing_status — terminal id is not the user message', {
-      status,
-      sseMessageId,
-      lifecycleMessageId,
-      resolvedClientMessageId,
-      terminalUserMsgId: terminalUser?.id ?? terminalUserMsgId,
-    })
     return
   }
 
@@ -270,16 +250,9 @@ export function handleProcessingStatus(
     relatedMessageId,
   )
 
-  console.log('✅ [SSE] Terminal processing_status received — clearing send guard', {
-    status,
-    messageId: sseMessage.data.message_id,
-    clientRequestId: sseMessage.data.client_request_id,
-    sendGuardBefore: lifecycle.isSendGuardActive(),
-  })
   if (isCurrentLifecycleTerminal) {
     lifecycle.markProcessingResolved()
     lifecycle.stopProcessing({ clearMessageId: false })
-    console.log('✅ [SSE] Send guard after stopProcessing:', lifecycle.isSendGuardActive())
     ctx.setCancelling(false)
     lifecycle.disarmCancelTimeout()
     store.removeMessage(lifecycle.placeholderId(roomId))
@@ -313,7 +286,7 @@ export function handleProcessingStatus(
       } else if (status === PROCESSING_STATUS.FAILED) {
         banner.error(`Processing failed: ${processingDetailsToLogMessage(sseMessage.data.details) ?? 'Unknown error'}`)
       } else if (status === PROCESSING_STATUS.RATE_LIMITED) {
-        console.log('Rate limit reached, processing stopped')
+        // rate limit terminal — banner handled elsewhere if needed
       }
     }
     lifecycle.setCancelTimedOut(false)
@@ -346,7 +319,6 @@ export function handleProcessingStatus(
 
   if (isCurrentLifecycleTerminal) {
     if (lifecycle.hadSseDisconnection()) {
-      console.log('🔄 SSE had disconnection during processing — reconciling with DB')
       scheduleTerminalReconcile(ctx, roomId, lifecycle, correlation.clientReqId, 1500)
       lifecycle.clearSseDisconnection()
     } else {

@@ -12,22 +12,4 @@ export function preprocessConversationMarkdown(
   return splitInlineOrderedListItems(content, options)
 }
 
-/** @deprecated Use preprocessConversationMarkdown for render; kept for tests. */
-export function normalizeConversationMarkdown(
-  content: string,
-  options?: { streaming?: boolean },
-): string {
-  return preprocessConversationMarkdown(content, options)
-}
-
 export { splitInlineOrderedListItems } from '@/lib/markdown/split-inline-ordered'
-
-/** @deprecated Use preprocessConversationMarkdown — kept for tests during remark migration. */
-export function normalizeOrderedListMarkers(content: string): string {
-  return preprocessConversationMarkdown(content)
-}
-
-/** @deprecated Use preprocessConversationMarkdown — kept for tests during remark migration. */
-export function indentSubBulletsUnderOrderedItems(content: string): string {
-  return preprocessConversationMarkdown(content)
-}

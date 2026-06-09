@@ -37,7 +37,6 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
   }, [getToken])
 
   const handleMessage = useCallback((message: AnySSEFrame) => {
-    console.log('📨 SSE Hook received message:', message)
     onMessageRef.current?.(message)
   }, [])
 
@@ -73,7 +72,6 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
         getToken: () => getTokenRef.current?.() ?? Promise.resolve(null),
         onMessage: handleMessage,
         onOpen: () => {
-          console.log('✅ SSE connected')
           clearResurrectTimer()
           handleConnectionChange(true)
           setConnecting(false)
@@ -88,7 +86,6 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
           setConnecting(false)
 
           if (reason === 'permanent-failure') {
-            console.log(`🔌 SSE permanently failed — will resurrect in ${RESURRECT_DELAY_MS / 1000}s`)
             connectionRef.current = null
             clearResurrectTimer()
             resurrectTimerRef.current = setTimeout(() => {
@@ -96,8 +93,6 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
               // connect() has its own guards, so stale calls are harmless.
               connectRef.current()
             }, RESURRECT_DELAY_MS)
-          } else {
-            console.log('🔌 SSE disconnected (manual)')
           }
         }
       })

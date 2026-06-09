@@ -110,7 +110,6 @@ export function useRoomSSEConnection(
     }
 
     if (!sseConnected && processing) {
-      console.log('⚠️ SSE disconnected during processing — will reconcile after completion')
       lifecycle.markSseDisconnection()
     }
 
@@ -141,7 +140,6 @@ export function useRoomSSEConnection(
     // stuck spinner even when processing=false (e.g. page refresh during a turn,
     // or terminal SSE events were sent before this reconnect was established).
     if (isReconnection) {
-      console.log('🔄 SSE reconnected after gap — reconciling with DB')
       reconcileWithDb(roomId)
       // Capture the current message ID before the async check so we can detect
       // if the user starts a new turn before the response comes back (race guard).
@@ -153,10 +151,8 @@ export function useRoomSSEConnection(
           if (lifecycle.getMessageId() !== messageIdAtReconnect) return
           await tryRecoverTurnTerminalFromBackendTruth(roomId, lifecycle, getToken)
           if (!hasTerminalEvidenceForCurrentTurn(roomId, lifecycle)) {
-            console.log('🔄 Reconnect: backend has no active runs, but turn is not terminal yet — keeping processing log')
             return
           }
-          console.log('🔄 Reconnect: backend confirms no active runs and turn is terminal — stopping processing lifecycle')
           lifecycle.stopProcessing()
           lifecycle.clearSseDisconnection()
         }
@@ -174,10 +170,8 @@ export function useRoomSSEConnection(
           await reconcileWithDb(roomId)
           await tryRecoverTurnTerminalFromBackendTruth(roomId, lifecycle, getToken)
           if (!hasTerminalEvidenceForCurrentTurn(roomId, lifecycle)) {
-            console.log('🔄 Safety-net: backend has no active runs, but turn is not terminal yet — keeping processing log')
             return
           }
-          console.log('🔄 Safety-net: backend confirms processing ended and turn is terminal — stopping processing lifecycle')
           lifecycle.stopProcessing()
           lifecycle.clearSseDisconnection()
         }

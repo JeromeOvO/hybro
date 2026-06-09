@@ -163,7 +163,6 @@ src/components/
 |-- group-selector.tsx
 |-- group-management-modal.tsx
 |-- agent-selector.tsx
-|-- agent-card.tsx
 |-- consumer-agent-card.tsx
 |-- hitl-compact-card.tsx
 |-- hitl-inline-reply-form.tsx
@@ -215,7 +214,7 @@ Top-level hooks live in `src/hooks/`; room-specific orchestration lives in `src/
 src/hooks/
 |-- useRoomWebhook.ts          # public re-export/entry hook
 |-- useRoomSSE.ts              # low-level SSE connection hook
-|-- useRoomMessages.ts         # message selectors
+|-- useTurnViewModels.ts       # turn view model builder
 |-- useChatRoomCreation.ts     # room creation and navigation
 |-- useGroupManagement.ts      # saved groups and room group selection
 |-- useHubStatus.ts            # hub availability
@@ -225,7 +224,6 @@ src/hooks/
 |-- usePrimaryStreamScroll.ts
 |-- useStreamBuffer.ts
 |-- useTextSelectionQuote.ts
-|-- useTurnViewModels.ts
 `-- use-mobile.ts
 ```
 
