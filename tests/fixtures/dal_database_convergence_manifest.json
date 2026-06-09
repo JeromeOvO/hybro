@@ -1,19 +1,12 @@
 {
-  "database_singleton_import_blockers": [
-    "main.py"
-  ],
+  "database_singleton_import_blockers": [],
   "hidden_mongo_fallback_blockers": [
     "app_shell/a2a_runtime.py",
     "jobs/stale_task_checker.py"
   ],
-  "database_service_type_blockers": [
-    "main.py"
-  ],
+  "database_service_type_blockers": [],
   "database_service_duck_type_blockers": [
-    "app_shell/database_service.py",
-    "main.py"
+    "app_shell/database_service.py"
   ],
-  "pinecone_singleton_import_blockers": [
-    "main.py"
-  ]
+  "pinecone_singleton_import_blockers": []
 }

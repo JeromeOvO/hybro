@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import logging
 import os
 import sys
@@ -73,7 +74,6 @@ from common.api_key_auth import bind_api_key_authenticator
 from common.auth import bind_auth_config
 from common.config.settings import settings
 from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
-from database.mongodb import mongodb
 from jobs.cleanup_orphaned_uploads import (
     OrphanedUploadCleanerDeps,
     orphaned_upload_cleaner,
@@ -216,9 +216,11 @@ async def lifespan(app: FastAPI):
     try:
         # ── Phase 1: Infrastructure (DB + Redis, no background work) ──
 
-        await mongodb.connect()
+        _mongodb_mod = importlib.import_module("database.mongodb")
+        _legacy_mongo = _mongodb_mod.mongodb
+        await _legacy_mongo.connect()
 
-        if mongodb.client is not None:
+        if _legacy_mongo.client is not None:
             from a2a_adapter import AgentCardResolverImpl, AgentTransportImpl
             from a2a_adapter import artifact_storage as a2a_artifact_storage
             from app_shell.agent_capability_issue_service import (
@@ -280,8 +282,8 @@ async def lifespan(app: FastAPI):
                 create_vector_dal,
             )
             from context_memory.config import ContextMemoryLLMConfig
-            from database.mongodb import get_db
-            from database.repository import Repository
+            get_db = _mongodb_mod.get_db
+            Repository = importlib.import_module("database.repository").Repository
             from execution.orchestration.room_supervisor_service import (
                 SupervisorPlanningError,
                 room_supervisor_service,
@@ -310,9 +312,9 @@ async def lifespan(app: FastAPI):
                 max_file_size_mb=settings.max_file_size_mb,
             )
             bind_a2a_artifact_storage(a2a_artifact_storage)
-            await mongodb.create_context_memory_indexes()
+            await _legacy_mongo.create_context_memory_indexes()
             agent_rate_limiter = PlatformAgentRateLimiter(
-                collection=mongodb.agent_requests_collection,
+                collection=_legacy_mongo.agent_requests_collection,
             )
             viewset.bind_viewset_dependencies(
                 provider=AppShellViewSetRepositoryProvider(
@@ -350,7 +352,7 @@ async def lifespan(app: FastAPI):
                 center=AppShellAgentCenter(),
                 service=agent_service,
                 issue_service=capability_issue_service,
-                avatar_manager=AppShellAgentAvatarManager(s3_service, mongodb),
+                avatar_manager=AppShellAgentAvatarManager(s3_service, _legacy_mongo),
             )
             inspection_center.bind_inspection_dependencies(AppShellInspectionCenter())
             memory_center.bind_memory_dependencies(AppShellMemoryCenter())
@@ -396,22 +398,22 @@ async def lifespan(app: FastAPI):
                 _bind_mongodb_backend as _bind_a2a_mongodb,
                 a2a_service,
             )
-            from app_shell.database_service import db_service as _db_svc
+            _db_svc = importlib.import_module("app_shell.database_service").db_service
             from app_shell.hitl_service import (
                 bind_hitl_service,
                 create_hitl_service,
                 hitl_service,
             )
-            from database.pinecone_db import pinecone_db
+            pinecone_db = importlib.import_module("database.pinecone_db").pinecone_db
             pinecone_db.connect()
-            _db_svc.bind_backends(mongo=mongodb, pinecone=pinecone_db)
+            _db_svc.bind_backends(mongo=_legacy_mongo, pinecone=pinecone_db)
             capability_issue_service.bind_mongo(mongo_dal)
-            _bind_a2a_mongodb(mongodb)
+            _bind_a2a_mongodb(_legacy_mongo)
             from app_shell.memory_search_service import (
                 bind_mongo_backend as _bind_mem_mongo,
                 bind_pinecone_backend as _bind_mem_pinecone,
             )
-            _bind_mem_mongo(mongodb)
+            _bind_mem_mongo(_legacy_mongo)
             _bind_mem_pinecone(pinecone_db)
             a2a_service.bind_task_db(_db_svc)
             from common.observability.run_metrics import increment_counter
@@ -476,7 +478,7 @@ async def lifespan(app: FastAPI):
 
             bind_hitl_service(
                 create_hitl_service(
-                    database_service=_db_svc,
+                    store=_db_svc,
                     delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
                     a2a_service=a2a_service,
                     continuation=A2AHITLContinuationAdapter(
@@ -591,7 +593,7 @@ async def lifespan(app: FastAPI):
             execution_room_message_center.bind(
                 create_room_message_center(
                     room_services=room_services,
-                    database_service=_db_svc,
+                    store=_db_svc,
                     sse_manager=sse_manager,
                     room_coordinator_service=room_coordinator_service,
                     summary_service=summary_llm_service,
@@ -649,7 +651,7 @@ async def lifespan(app: FastAPI):
                 run_lifecycle=run_lifecycle,
                 run_reader=RunQueryAdapter(_execution_repos["run_repository"]),
                 cancellation_state=CancellationStateC3Adapter(sse_manager),
-                cancellation_store=MongoCancellationStoreAdapter(mongodb),
+                cancellation_store=MongoCancellationStoreAdapter(_legacy_mongo),
                 hitl_message_cancellation=HITLMessageCancellationAdapter(hitl_service),
                 agent_task_cleanup=AgentTaskCleanupAdapter(
                     store=_db_svc,
@@ -764,11 +766,11 @@ async def lifespan(app: FastAPI):
         else:
             logger.warning("AgentDeps binding skipped: MongoDB client is unavailable")
 
-        await mongodb.ensure_agent_indexes()
-        await mongodb.create_capability_issue_indexes()
-        await mongodb.create_run_lifecycle_indexes()
-        await mongodb.create_room_quotes_indexes()
-        if mongodb.client is not None:
+        await _legacy_mongo.ensure_agent_indexes()
+        await _legacy_mongo.create_capability_issue_indexes()
+        await _legacy_mongo.create_run_lifecycle_indexes()
+        await _legacy_mongo.create_room_quotes_indexes()
+        if _legacy_mongo.client is not None:
             if _execution_deps is None:
                 raise RuntimeError("ExecutionDeps have not been bound")
             try:
@@ -781,9 +783,9 @@ async def lifespan(app: FastAPI):
                 if healed:
                     logger.info("startup heal: healed %s diverged run(s)", healed)
         if settings.webhook_signing_key:
-            await mongodb.create_task_tracking_indexes()
-            from app_shell.database_service import db_service
-            await db_service.ensure_hitl_indexes()
+            await _legacy_mongo.create_task_tracking_indexes()
+            _hitl_db_svc = importlib.import_module("app_shell.database_service").db_service
+            await _hitl_db_svc.ensure_hitl_indexes()
 
         # Init app-shell Redis subsystems before the guard. Delivery-owned
         # Pub/Sub/KV clients are constructed through container.py above.
@@ -845,8 +847,8 @@ async def lifespan(app: FastAPI):
         )
         stale_task_checker.set_runtime_deps(
             StaleTaskCheckerDeps(
-                db_service=_db_svc,
-                rooms_collection=mongodb.rooms_collection,
+                store=_db_svc,
+                rooms_collection=_legacy_mongo.rooms_collection,
                 notify_task_update=notify_task_update,
                 increment_counter=increment_counter,
                 a2a_service=a2a_service,
@@ -924,16 +926,16 @@ async def lifespan(app: FastAPI):
         compaction_sweep.set_leader_election(_leader)
         compaction_sweep.set_sweep_deps(
             CompactionSweepDeps(
-                room_memories_collection=mongodb.room_memories_collection,
-                get_room_ids_with_non_terminal_runs=mongodb.get_room_ids_with_non_terminal_runs,
+                room_memories_collection=_legacy_mongo.room_memories_collection,
+                get_room_ids_with_non_terminal_runs=_legacy_mongo.get_room_ids_with_non_terminal_runs,
                 compaction_service=compaction_service,
             )
         )
         orphaned_upload_cleaner.set_leader_election(_leader)
         orphaned_upload_cleaner.set_cleanup_deps(
             OrphanedUploadCleanerDeps(
-                file_uploads_collection=mongodb.file_uploads_collection,
-                room_user_messages_collection=mongodb.room_user_messages_collection,
+                file_uploads_collection=_legacy_mongo.file_uploads_collection,
+                room_user_messages_collection=_legacy_mongo.room_user_messages_collection,
                 object_storage=s3_service,
             )
         )
@@ -958,7 +960,7 @@ async def lifespan(app: FastAPI):
             bind_agent_liveness_deps,
             check_and_sync_liveness,
         )
-        from app_shell.database_service import db_service as _db_svc
+        _db_svc = importlib.import_module("app_shell.database_service").db_service
         from app_shell.execution_runtime import get_bound_room_message_center
         from app_shell.relay_service import (
             RelayHubLivenessReader,
@@ -969,7 +971,7 @@ async def lifespan(app: FastAPI):
         _rmc = get_bound_room_message_center()
         _rmc.set_room_distributed_lock(RedisRoomDistributedLock(_redis_service))
         _relay_svc = init_relay_service(
-            mongo=mongodb, db=_db_svc, sse_manager=sse_manager,
+            mongo=_legacy_mongo, db=_db_svc, sse_manager=sse_manager,
             room_message_center=_rmc,
             hitl_coordinator=hitl_service,
             event_publisher=_delivery_deps.event_publisher if _delivery_deps else None,
@@ -1048,7 +1050,7 @@ async def lifespan(app: FastAPI):
             if _delivery_bound:
                 sse_manager.unbind_facade()
             app.state.delivery_facade = None
-        await mongodb.close_database_connection()
+        await _legacy_mongo.close_database_connection()
         raise
 
     # ── Phase 3: Serve + Normal Shutdown ──
@@ -1107,7 +1109,7 @@ async def lifespan(app: FastAPI):
             await _mongo_dal.close()
             app.state.mongo_dal = None
 
-        await mongodb.close_database_connection()
+        await _legacy_mongo.close_database_connection()
 
 
 app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")
