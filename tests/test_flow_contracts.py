@@ -412,7 +412,7 @@ class TestHITLFlow:
         mock_delivery.emit = AsyncMock()
 
         svc = HITLService()
-        svc._db_service = mock_db
+        svc._store = mock_db
         svc._delivery = mock_delivery
 
         # Step 1: request_input
@@ -449,7 +449,7 @@ class TestHITLFlow:
         mock_db.count_hitl_requests_for_message = AsyncMock(
             return_value=MAX_HITL_ROUNDS,
         )
-        svc._db_service = mock_db
+        svc._store = mock_db
 
         result = await svc.request_input(
             room_id="r", user_message_id="m", source="supervisor",

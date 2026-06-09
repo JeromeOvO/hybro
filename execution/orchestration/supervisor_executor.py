@@ -47,7 +47,6 @@ from models.supervisor import (
 if TYPE_CHECKING:
     from app_shell.rate_limit_service import RateLimitService
 
-    from app_shell.database_service import DatabaseService
     from app_shell.delivery_runtime import SSEManager
     from app_shell.memory_service import RoomMemoryService
     from app_shell.room_coordinator_service import RoomCoordinatorService
@@ -79,7 +78,7 @@ class SupervisorExecutor:
         room_services: RoomServices,
         tsm: TaskStateManager,
         sse_manager: SSEManager,
-        database_service: DatabaseService,
+        store,
         room_memory_service: RoomMemoryService,
         rate_limit_service: RateLimitService,
         agent_dispatcher: AgentDispatcher,
@@ -93,7 +92,7 @@ class SupervisorExecutor:
         self.room_runtime = room_services
         self.tsm = tsm
         self.sse_manager = sse_manager
-        self.database_service = database_service
+        self._store = store
         self.room_memory_service = room_memory_service
         self.rate_limit_service = rate_limit_service
         self.agent_dispatcher = agent_dispatcher
@@ -913,7 +912,7 @@ class SupervisorExecutor:
                         )
 
                     client_req_id = (
-                        await self.database_service.resolve_client_request_id_for_message_id(
+                        await self._store.resolve_client_request_id_for_message_id(
                             user_message_id
                         )
                     )
@@ -1026,7 +1025,7 @@ class SupervisorExecutor:
                                 logger.warning("Failed to cancel orphaned HITL request %s", rid)
                         for mid in message_ids:
                             try:
-                                await self.database_service.delete_room_agent_message_by_message_id(mid)
+                                await self._store.delete_room_agent_message_by_message_id(mid)
                             except Exception:
                                 logger.warning("Failed to delete orphaned HITL agent message %s", mid)
 
@@ -1046,11 +1045,11 @@ class SupervisorExecutor:
                             user_id=request_user_id,
                             step_number=step_number + 1,
                             task_content=q.prompt,
-                            client_request_id=await self.database_service.resolve_client_request_id_for_message_id(
+                            client_request_id=await self._store.resolve_client_request_id_for_message_id(
                                 user_message_id
                             ),
                         )
-                        await self.database_service.add_room_agent_message(
+                        await self._store.add_room_agent_message(
                             hitl_agent_message
                         )
                         created_messages.append(hitl_agent_message.message_id)
@@ -1176,7 +1175,7 @@ class SupervisorExecutor:
                     ),
                 )
             budget_client_req_id = (
-                await self.database_service.resolve_client_request_id_for_message_id(
+                await self._store.resolve_client_request_id_for_message_id(
                     user_message_id
                 )
             )
@@ -1358,11 +1357,11 @@ class SupervisorExecutor:
                     step_number=step_number,
                     total_steps=None,
                     task_content=target.task,
-                    client_request_id=await self.database_service.resolve_client_request_id_for_message_id(
+                    client_request_id=await self._store.resolve_client_request_id_for_message_id(
                         user_message_id
                     ),
                 )
-                await self.database_service.add_room_agent_message(message)
+                await self._store.add_room_agent_message(message)
 
                 # --- Emit slot_opened (Phase 1b) ---
                 if getattr(self, '_slot_lifecycle', None) and message.turn_id:
@@ -1707,7 +1706,7 @@ class SupervisorExecutor:
             user_message = cached_user_message
             if user_message is None:
                 user_message = (
-                    await self.database_service.get_room_user_message_by_message_id(
+                    await self._store.get_room_user_message_by_message_id(
                         user_message_id
                     )
                 )
@@ -1717,7 +1716,7 @@ class SupervisorExecutor:
                 user_message.extend_info["supervisor_trajectory"] = (
                     trajectory.model_dump(mode="json")
                 )
-                await self.database_service.update_room_user_message_by_message_id(
+                await self._store.update_room_user_message_by_message_id(
                     user_message_id, user_message
                 )
             return user_message
@@ -1755,7 +1754,7 @@ class SupervisorExecutor:
             msg_id = pr.agent_message_id or pr.paused_message_id
             if not msg_id:
                 continue
-            msg = await self.database_service.get_room_agent_message_by_message_id(msg_id)
+            msg = await self._store.get_room_agent_message_by_message_id(msg_id)
             if not msg:
                 continue
             if msg.last_notified_state not in _TERMINAL:
@@ -1877,7 +1876,7 @@ class SupervisorExecutor:
                         pr.agent_id,
                     )
                     continue
-                success = await self.database_service.save_continuation_on_message(
+                success = await self._store.save_continuation_on_message(
                     pr.paused_message_id, interrupted_state
                 )
                 if success:
@@ -1907,7 +1906,7 @@ class SupervisorExecutor:
                     "SupervisorExecutor: HITL_AGENT save missing message_id"
                 )
                 return False
-            success = await self.database_service.save_continuation_on_message(
+            success = await self._store.save_continuation_on_message(
                 message_id, interrupted_state
             )
             if success:
@@ -1936,7 +1935,7 @@ class SupervisorExecutor:
                     "SupervisorExecutor: HITL_SUPERVISOR save missing message_id"
                 )
                 return False
-            success = await self.database_service.save_continuation_on_user_message(
+            success = await self._store.save_continuation_on_user_message(
                 message_id, interrupted_state
             )
             if success:

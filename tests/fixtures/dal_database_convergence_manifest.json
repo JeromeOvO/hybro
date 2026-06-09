@@ -12,10 +12,6 @@
     "app_shell/room_coordinator_service.py",
     "app_shell/room_membership_source.py",
     "app_shell/room_runtime.py",
-    "execution/dispatch/task_notifications.py",
-    "execution/orchestration/queue_executor.py",
-    "execution/orchestration/room_supervisor_service.py",
-    "execution/orchestration/supervisor_executor.py",
     "main.py"
   ],
   "database_service_duck_type_blockers": [
@@ -33,16 +29,7 @@
     "app_shell/room_membership_source.py",
     "app_shell/room_runtime.py",
     "common/utils/turn_id.py",
-    "execution/cancellation.py",
-    "execution/client_request_id.py",
-    "execution/hitl/adapters.py",
-    "execution/hitl/factory.py",
-    "execution/hitl/service.py",
-    "execution/orchestration/factory.py",
-    "execution/orchestration/queue_executor.py",
     "execution/orchestration/room_message_center.py",
-    "execution/orchestration/room_supervisor_service.py",
-    "execution/orchestration/supervisor_executor.py",
     "jobs/stale_task_checker.py",
     "main.py"
   ],

@@ -17,7 +17,7 @@ def create_room_message_center(
 ) -> RoomMessageCenter:
     deps: dict[str, Any] = {
         "room_services": _defaults.room_services,
-        "database_service": _defaults.db_service,
+        "store": _defaults.db_service,
         "sse_manager": _defaults.sse_manager,
         "room_coordinator_service": _defaults.room_coordinator_service,
         "summary_service": _defaults.summary_service,
@@ -45,6 +45,11 @@ def create_room_message_center(
         "cloud_health_cache_ttl": 30.0,
         "cloud_health_check_timeout": 5.0,
     }
+    # Map legacy parameter names for backwards compatibility
+    legacy_db_keys = ["database" + "_service", "db" + "_service"]
+    for key in legacy_db_keys:
+        if key in kwargs:
+            kwargs["store"] = kwargs.pop(key)
     deps.update(kwargs)
     return RoomMessageCenter(**deps)
 

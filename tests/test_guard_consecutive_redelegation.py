@@ -24,7 +24,7 @@ from models.supervisor import (
 
 
 def _make_service() -> RoomSupervisorService:
-    return RoomSupervisorService(openai_service=None, database_service=None)
+    return RoomSupervisorService(openai_service=None, store=None)
 
 
 def _target(agent_id: str, name: str, task: str = "do something") -> DelegateTarget:

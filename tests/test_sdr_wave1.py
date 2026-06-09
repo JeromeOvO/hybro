@@ -99,8 +99,8 @@ class TestIdempotencyGuardInRoomMessageCenter:
         from execution.orchestration.room_message_center import RoomMessageCenter
 
         rmc = object.__new__(RoomMessageCenter)
-        rmc.database_service = MagicMock()
-        rmc.database_service.claim_user_message_for_processing = AsyncMock(return_value=False)
+        rmc._store = MagicMock()
+        rmc._store.claim_user_message_for_processing = AsyncMock(return_value=False)
         rmc.sse_manager = MagicMock()
 
         request = OrchestrationRequest(
@@ -120,8 +120,8 @@ class TestIdempotencyGuardInRoomMessageCenter:
         from execution.orchestration.room_message_center import RoomMessageCenter
 
         rmc = object.__new__(RoomMessageCenter)
-        rmc.database_service = MagicMock()
-        rmc.database_service.claim_or_reclaim_user_message = AsyncMock(return_value=False)
+        rmc._store = MagicMock()
+        rmc._store.claim_or_reclaim_user_message = AsyncMock(return_value=False)
         rmc.sse_manager = MagicMock()
 
         request = OrchestrationRequest(
@@ -134,7 +134,7 @@ class TestIdempotencyGuardInRoomMessageCenter:
         result = await rmc.process_room_user_message(request)
         assert result.success is False
         assert result.status_code == 409
-        rmc.database_service.claim_or_reclaim_user_message.assert_called_once()
+        rmc._store.claim_or_reclaim_user_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_recovery_threshold_uses_orphan_threshold(self):
@@ -143,8 +143,8 @@ class TestIdempotencyGuardInRoomMessageCenter:
         from execution.orchestration.room_message_center import RoomMessageCenter
 
         rmc = object.__new__(RoomMessageCenter)
-        rmc.database_service = MagicMock()
-        rmc.database_service.claim_or_reclaim_user_message = AsyncMock(return_value=False)
+        rmc._store = MagicMock()
+        rmc._store.claim_or_reclaim_user_message = AsyncMock(return_value=False)
         rmc.sse_manager = MagicMock()
 
         request = OrchestrationRequest(
@@ -159,7 +159,7 @@ class TestIdempotencyGuardInRoomMessageCenter:
             mock_settings.processing_status_expiry_minutes = 30
             await rmc.process_room_user_message(request)
 
-        call_args = rmc.database_service.claim_or_reclaim_user_message.call_args
+        call_args = rmc._store.claim_or_reclaim_user_message.call_args
         threshold_arg = call_args[0][1]
         now = real_utcnow()
         # The threshold should be ~2 minutes ago (orphan), not ~30 minutes ago

@@ -488,12 +488,17 @@ async def notify_task_update(
     (``stale_task_checker``) and safety-net paths (``RoomMessageCenter``)
     that have no handler context.
     """
-    from app_shell.database_service import db_service
+    import sys
+    import importlib
     from app_shell.delivery_runtime import sse_manager
     from app_shell.notification_service import notification_service
 
+    db_module = sys.modules.get('app_shell.database_service')
+    if db_module is None:
+        db_module = importlib.import_module('app_shell.database_service')
+    _db_svc = db_module.db_service
     return await _notify_task_update_impl(
-        db_service,
+        _db_svc,
         notification_service,
         sse_manager,
         message_id=message_id,

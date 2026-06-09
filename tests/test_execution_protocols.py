@@ -255,9 +255,9 @@ def test_execution_scaffold_adapters_are_available():
     assert RoomLockManager.__name__ == "RoomLockManager"
     db = object()
     hitl = create_hitl_service(database_service=db)
-    assert hitl._db_service is db
+    assert hitl._store is db
     runtime = create_room_message_center(database_service=db, debate_rounds=7)
-    assert runtime.database_service is db
+    assert runtime._store is db
     assert runtime.debate_rounds == 7
     assert isinstance(room_message_center, BoundRoomMessageCenterProxy)
 
@@ -287,7 +287,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     }
     runtime = create_room_message_center(**deps, debate_rounds=5)
 
-    assert runtime.database_service is deps["database_service"]
+    assert runtime._store is deps["database_service"]
     assert runtime.sse_manager is deps["sse_manager"]
     assert runtime.room_runtime is deps["room_services"]
     assert runtime.summary_service is deps["summary_service"]
@@ -311,11 +311,11 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.agent_message_processor._room_memory_reader is deps["database_service"]
     assert runtime.agent_message_processor._task_tracker is deps["database_service"]
     assert runtime.agent_message_processor.sse_manager is deps["sse_manager"]
-    assert runtime.queue_executor.database_service is deps["database_service"]
+    assert runtime.queue_executor._store is deps["database_service"]
     assert runtime.queue_executor.sse_manager is deps["sse_manager"]
     assert runtime.queue_executor.room_runtime is deps["room_services"]
     assert runtime.queue_executor.hitl_coordinator is deps["hitl_coordinator"]
-    assert runtime.supervisor_executor.database_service is deps["database_service"]
+    assert runtime.supervisor_executor._store is deps["database_service"]
     assert runtime.supervisor_executor.sse_manager is deps["sse_manager"]
     assert runtime.supervisor_executor.room_runtime is deps["room_services"]
     assert runtime.supervisor_executor.hitl_coordinator is deps["hitl_coordinator"]
@@ -349,7 +349,7 @@ def test_room_message_center_factory_owns_default_dependency_wiring():
     }
     runtime = create_room_message_center(**deps, debate_rounds=6)
 
-    assert runtime.database_service is deps["database_service"]
+    assert runtime._store is deps["database_service"]
     assert runtime.sse_manager is deps["sse_manager"]
     assert runtime.room_runtime is deps["room_services"]
     assert runtime.debate_rounds == 6

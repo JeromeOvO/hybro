@@ -3,12 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 
-class DatabaseHITLPersistenceAdapter:
-    def __init__(self, database_service) -> None:
-        self._database_service = database_service
+class HITLPersistenceAdapter:
+    def __init__(self, store) -> None:
+        self._store = store
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._database_service, name)
+        return getattr(self._store, name)
 
 
 class HITLDeliveryAdapter:
@@ -67,7 +67,7 @@ class HITLTaskNotificationAdapter:
 
 __all__ = [
     "A2AHITLContinuationAdapter",
-    "DatabaseHITLPersistenceAdapter",
+    "HITLPersistenceAdapter",
     "HITLDeliveryAdapter",
     "HITLTaskNotificationAdapter",
 ]
