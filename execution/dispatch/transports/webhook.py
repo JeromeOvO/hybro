@@ -9,7 +9,7 @@ Task -> AgentEvent normalization.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from fastapi import HTTPException
 
@@ -34,10 +34,22 @@ from execution.dispatch.agent_event import AgentEvent
 from execution.dispatch.transports.base import AgentTransport
 
 if TYPE_CHECKING:
-    from app_shell.database_service import DatabaseService
     from execution.dispatch.dispatch_middleware import DispatchContext
     from execution.dispatch.response_handler import AgentResponseHandler
     from models.room import RoomAgentMessage
+
+    class WebhookAuthPort(Protocol):
+        async def verify_webhook_token_for_task(
+            self, message_id: str, token: str
+        ) -> tuple[bool, str | None]: ...
+
+    class WebhookMessageReader(Protocol):
+        async def get_room_agent_message_by_message_id(
+            self, message_id: str
+        ): ...
+
+    class WebhookCancellationReader(Protocol):
+        async def is_message_cancelled(self, message_id: str) -> bool: ...
 
 logger = get_logger(__name__)
 
@@ -48,11 +60,15 @@ class WebhookTransport(AgentTransport):
     def __init__(
         self,
         response_handler: AgentResponseHandler,
-        db: DatabaseService,
+        webhook_auth: "WebhookAuthPort",
+        message_reader: "WebhookMessageReader",
+        cancellation_reader: "WebhookCancellationReader",
         task_notifier=None,
     ) -> None:
         super().__init__(response_handler)
-        self._db = db
+        self._webhook_auth = webhook_auth
+        self._message_reader = message_reader
+        self._cancellation_reader = cancellation_reader
         self._task_notifier = task_notifier
 
     async def dispatch(
@@ -74,7 +90,7 @@ class WebhookTransport(AgentTransport):
             logger.warning("Webhook for task %s: Missing authorization token", message_id)
             raise HTTPException(status_code=401, detail="Missing authorization token")
 
-        is_valid, error_reason = await self._db.verify_webhook_token_for_task(
+        is_valid, error_reason = await self._webhook_auth.verify_webhook_token_for_task(
             message_id, token
         )
         if not is_valid:
@@ -107,15 +123,15 @@ class WebhookTransport(AgentTransport):
         )
 
         # 3. Load current message, check idempotency
-        current_msg = await self._db.get_room_agent_message_by_message_id(message_id)
+        current_msg = await self._message_reader.get_room_agent_message_by_message_id(message_id)
         if not current_msg or not current_msg.has_task_tracking:
             logger.warning("Webhook for unknown task %s", message_id)
             raise HTTPException(status_code=404, detail="Task not found")
 
         # 3a. Check if the message was cancelled while the agent was processing
-        is_cancelled = await self._db.is_message_cancelled(message_id)
+        is_cancelled = await self._cancellation_reader.is_message_cancelled(message_id)
         if not is_cancelled and current_msg.related_message_id:
-            is_cancelled = await self._db.is_message_cancelled(
+            is_cancelled = await self._cancellation_reader.is_message_cancelled(
                 current_msg.related_message_id
             )
         if is_cancelled:

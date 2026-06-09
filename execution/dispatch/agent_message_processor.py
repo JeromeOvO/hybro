@@ -81,10 +81,6 @@ class AgentMessageProcessor:
         self._health_service = health_service
         self._cloud_health_cache_ttl = cloud_health_cache_ttl
         self._cloud_health_check_timeout = cloud_health_check_timeout
-        # Backward-compatible alias for existing call sites/tests that still
-        # introspect this attribute. It points at the injected room memory reader
-        # port to avoid retaining the full DatabaseService name in construction.
-        self.database_service = room_memory_reader
         self._lazy_initialized = False
         self.relay_service: object | None = relay_service
         self.dispatch_chain: DispatchChain = dispatch_chain or DispatchChain()

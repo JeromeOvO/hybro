@@ -10,7 +10,7 @@ Extracted from ``RoomMessageCenter`` as part of the A-4 decomposition.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from common.utils.logger import get_logger
 from execution.state.task_state_manager import get_task
@@ -20,7 +20,17 @@ from models.room import RoomAgentMessage
 
 if TYPE_CHECKING:
     from app_shell.agent_resolver_service import AgentResolverService
-    from app_shell.database_service import DatabaseService
+
+    class DispatchMessageWriter(Protocol):
+        async def update_room_agent_message_by_message_id(
+            self, message_id: str, room_agent_message
+        ) -> bool: ...
+
+    class DispatchAgentLookup(Protocol):
+        async def get_agent_by_agent_id(self, agent_id: str): ...
+
+    class DispatchAgentGroupReader(Protocol):
+        async def get_agent_group_by_id(self, group_id: str): ...
 
 logger = get_logger(__name__)
 
@@ -41,10 +51,14 @@ class AgentDispatcher:
         self,
         *,
         agent_resolver: AgentResolverService,
-        database_service: DatabaseService,
+        message_writer: "DispatchMessageWriter",
+        agent_lookup: "DispatchAgentLookup",
+        agent_group_reader: "DispatchAgentGroupReader",
     ) -> None:
         self.agent_resolver = agent_resolver
-        self.database_service = database_service
+        self._message_writer = message_writer
+        self._agent_lookup = agent_lookup
+        self._agent_group_reader = agent_group_reader
 
     # ------------------------------------------------------------------
     # Public API
@@ -98,7 +112,7 @@ class AgentDispatcher:
         current_message.agent_id = agent.agent_id
 
         update_success = (
-            await self.database_service.update_room_agent_message_by_message_id(
+            await self._message_writer.update_room_agent_message_by_message_id(
                 message_id=current_message.message_id,
                 room_agent_message=current_message,
             )
@@ -140,7 +154,7 @@ class AgentDispatcher:
         """
         from models.agent import AgentStatus
 
-        agent = await self.database_service.get_agent_by_agent_id(agent_id)
+        agent = await self._agent_lookup.get_agent_by_agent_id(agent_id)
         if agent is None:
             return None
         if agent.agent_status != AgentStatus.active:
@@ -179,7 +193,7 @@ class AgentDispatcher:
             if tg in ["all_agents", "room_team"]:
                 continue
             try:
-                group = await self.database_service.get_agent_group_by_id(tg)
+                group = await self._agent_group_reader.get_agent_group_by_id(tg)
                 if group and group.agents:
                     merged_ids |= set(str(aid) for aid in group.agents)
             except Exception as e:

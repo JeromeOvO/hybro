@@ -838,8 +838,13 @@ def init_relay_service(
         handler_module = importlib.import_module("execution.dispatch.response_handler")
         handler_cls = getattr(handler_module, "Agent" + "ResponseHandler")
         response_handler = handler_cls(
-            db=resolved_db,
-            sse=sse_manager,
+            message_writer=resolved_db,
+            task_writer=resolved_db,
+            continuation_store=resolved_db,
+            client_request_resolver=resolved_db,
+            room_reader=resolved_db,
+            hitl_reader=resolved_db,
+            sse_manager=sse_manager,
             room_message_center=room_message_center,
             hitl_coordinator=hitl_coordinator,
         )

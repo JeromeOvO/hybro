@@ -141,7 +141,10 @@ def _make_processor(**overrides):
     proc.sse_manager = overrides.get("sse_manager", MagicMock())
     proc.a2a_service = overrides.get("a2a_service", MagicMock())
     proc.task_service = overrides.get("task_service", MagicMock())
-    proc.database_service = overrides.get("database_service", MagicMock())
+    db = overrides.get("database_service", MagicMock())
+    proc._message_reader = db
+    proc._artifact_store = db
+    proc._task_updater = db
     proc._s3_service = overrides.get("s3_service", MagicMock())
     return proc
 
@@ -580,7 +583,7 @@ class TestArtifactUpdateRoutedThroughHandler:
         proc = _make_processor()
         proc.response_handler.handle = AsyncMock()
         proc.tsm.persist_message = AsyncMock(return_value=True)
-        proc.database_service.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        proc._artifact_store.accumulate_artifact_on_message = AsyncMock(return_value=True)
 
         current_message = _make_room_agent_message()
         agent_card = MagicMock(spec_set=["name"])
@@ -617,7 +620,7 @@ class TestArtifactUpdateRoutedThroughHandler:
         # Old persist_message NOT called
         proc.tsm.persist_message.assert_not_awaited()
         # Instead uses atomic accumulate
-        proc.database_service.accumulate_artifact_on_message.assert_awaited_once_with(
+        proc._artifact_store.accumulate_artifact_on_message.assert_awaited_once_with(
             "msg-1", {"artifact_id": "art-1", "parts": []}, append=False,
         )
 

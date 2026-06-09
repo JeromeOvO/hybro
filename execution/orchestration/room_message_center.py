@@ -145,13 +145,20 @@ class RoomMessageCenter:
         self.tsm = TaskStateManager(self.room_runtime, notification_service)
         self.agent_dispatcher = AgentDispatcher(
             agent_resolver=agent_resolver_service,
-            database_service=self.database_service,
+            message_writer=self.database_service,
+            agent_lookup=self.database_service,
+            agent_group_reader=self.database_service,
         )
 
         # Shared result handler used by all transports
         self.agent_response_handler = AgentResponseHandler(
-            db=self.database_service,
-            sse=self.sse_manager,
+            message_writer=self.database_service,
+            task_writer=self.database_service,
+            continuation_store=self.database_service,
+            client_request_resolver=self.database_service,
+            room_reader=self.database_service,
+            hitl_reader=self.database_service,
+            sse_manager=self.sse_manager,
             room_message_center=self,
             hitl_coordinator=hitl_coordinator,
             notification_service=notification_service,
@@ -165,7 +172,9 @@ class RoomMessageCenter:
             a2a_service=a2a_service,
             task_service=task_service,
             sse_manager=self.sse_manager,
-            database_service=self.database_service,
+            message_reader=self.database_service,
+            artifact_store=self.database_service,
+            task_updater=self.database_service,
             s3_service=s3_service,
             capability_issue_service=capability_issue_service,
         )
