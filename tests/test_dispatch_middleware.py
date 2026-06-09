@@ -247,7 +247,8 @@ class TestAMPRelayDispatch:
         amp = AgentMessageProcessor(
             sse_manager=MagicMock(),
             room_services=MagicMock(),
-            database_service=MagicMock(),
+            room_memory_reader=MagicMock(),
+            task_tracker=MagicMock(),
             transports={"direct": direct_transport},
         )
 
@@ -287,7 +288,8 @@ class TestAMPRelayDispatch:
         amp = AgentMessageProcessor(
             sse_manager=MagicMock(),
             room_services=room_runtime,
-            database_service=db_service,
+            room_memory_reader=db_service,
+            task_tracker=MagicMock(),
             transports={"direct": MagicMock(), "relay": relay_transport_mock},
             relay_service=relay_svc,
             dispatch_chain=chain,
@@ -331,7 +333,8 @@ class TestAMPRelayDispatch:
         amp = AgentMessageProcessor(
             sse_manager=MagicMock(),
             room_services=room_runtime,
-            database_service=db_service,
+            room_memory_reader=db_service,
+            task_tracker=MagicMock(),
             transports={"direct": dt},
             dispatch_chain=chain,
         )

@@ -5,10 +5,9 @@ from fastapi.params import Depends as DependsParam
 
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from app_shell.bound import AgentSelectionSuggester, RoomCenterRouteOwner
-from app_shell.database_service import A2ATaskReader
 from common.auth import ClerkUser, get_current_user
 from common.dto import ExecutionRequest, RunInfo
-from common.protocols import ExecutionEngine
+from common.protocols import A2ATaskReader, ExecutionEngine
 from models.file_upload import MAX_ATTACHMENT_REFS_PER_REQUEST
 from models.request import (
     RoomCenterRoomMessageRequest,

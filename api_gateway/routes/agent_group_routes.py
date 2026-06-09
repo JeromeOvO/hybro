@@ -12,8 +12,8 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.params import Depends as DependsParam
 
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
-from app_shell.database_service import AgentGroupStore
 from common.auth import ClerkUser, get_current_user
+from common.protocols import AgentGroupStore
 from models.agent_group import (
     BUILTIN_GROUP_ALL_AGENTS,
     BUILTIN_GROUP_ROOM_TEAM,

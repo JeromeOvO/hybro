@@ -11,12 +11,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.params import Depends as DependsParam
 
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
-from app_shell.database_service import A2ATaskReader
 from common.a2a_constants import (
     NON_TERMINAL_STATES,
     get_retry_after_seconds,
 )
 from common.auth import ClerkUser, get_current_user
+from common.protocols import A2ATaskReader
 from common.utils.logger import get_logger
 
 logger = get_logger(__name__)

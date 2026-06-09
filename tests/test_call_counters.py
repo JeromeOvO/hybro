@@ -23,7 +23,8 @@ from models.processing import ProcessingStatus
 def _make_relay_transport(
     *,
     relay_service=None,
-    db_service=None,
+    task_tracker=None,
+    call_counter=None,
     sse_manager=None,
     ownership_store=None,
     ownership_lease_maintainer=None,
@@ -33,16 +34,17 @@ def _make_relay_transport(
     if relay_service is None:
         relay_service = MagicMock()
         relay_service.push_to_hub = AsyncMock(return_value=True)
-    if db_service is None:
-        db_service = MagicMock()
-        db_service.enable_task_tracking_on_message = AsyncMock()
+    if task_tracker is None:
+        task_tracker = MagicMock()
+        task_tracker.enable_task_tracking_on_message = AsyncMock()
     if sse_manager is None:
         sse_manager = MagicMock()
         sse_manager.send_error = AsyncMock()
     return RelayTransport(
         response_handler=handler,
         relay_service=relay_service,
-        db=db_service,
+        task_tracker=task_tracker,
+        call_counter=call_counter,
         sse_manager=sse_manager,
         ownership_store=ownership_store,
         ownership_lease_maintainer=ownership_lease_maintainer,
@@ -168,48 +170,57 @@ class TestRelayTransportDispatchCallCounter:
     async def test_records_success_on_delivered(self):
         relay_svc = MagicMock()
         relay_svc.push_to_hub = AsyncMock(return_value=True)
-        rt = _make_relay_transport(relay_service=relay_svc)
+        call_counter = MagicMock()
+        call_counter.increment_agent_call_count = AsyncMock()
+        rt = _make_relay_transport(
+            relay_service=relay_svc,
+            call_counter=call_counter,
+        )
         ctx = _make_dispatch_ctx()
         msg = _make_room_agent_message()
 
-        with patch("execution.dispatch.transports.relay.mongodb") as mock_db:
-            mock_db.increment_agent_call_count = AsyncMock()
-            result = await rt.dispatch(ctx, msg)
+        result = await rt.dispatch(ctx, msg)
 
-            assert result.status == ProcessingStatus.RELAY_DISPATCHED
-            mock_db.increment_agent_call_count.assert_awaited_once_with(
-                "agent-001", success=True,
-            )
+        assert result.status == ProcessingStatus.RELAY_DISPATCHED
+        call_counter.increment_agent_call_count.assert_awaited_once_with(
+            "agent-001", success=True
+        )
 
     @pytest.mark.asyncio
     async def test_records_failure_on_not_delivered(self):
         relay_svc = MagicMock()
         relay_svc.push_to_hub = AsyncMock(return_value=False)
-        rt = _make_relay_transport(relay_service=relay_svc)
+        call_counter = MagicMock()
+        call_counter.increment_agent_call_count = AsyncMock()
+        rt = _make_relay_transport(
+            relay_service=relay_svc,
+            call_counter=call_counter,
+        )
         ctx = _make_dispatch_ctx()
         ctx.metadata["queued_for_offline"] = True
         msg = _make_room_agent_message()
 
-        with patch("execution.dispatch.transports.relay.mongodb") as mock_db:
-            mock_db.increment_agent_call_count = AsyncMock()
-            result = await rt.dispatch(ctx, msg)
+        result = await rt.dispatch(ctx, msg)
 
-            assert result.status == ProcessingStatus.RELAY_DISPATCHED
-            mock_db.increment_agent_call_count.assert_awaited_once_with(
-                "agent-001", success=False,
-            )
+        assert result.status == ProcessingStatus.RELAY_DISPATCHED
+        call_counter.increment_agent_call_count.assert_awaited_once_with(
+            "agent-001", success=False
+        )
 
     @pytest.mark.asyncio
     async def test_dispatch_succeeds_when_counter_raises(self):
         relay_svc = MagicMock()
         relay_svc.push_to_hub = AsyncMock(return_value=True)
-        rt = _make_relay_transport(relay_service=relay_svc)
+        call_counter = MagicMock()
+        call_counter.increment_agent_call_count = AsyncMock(
+            side_effect=RuntimeError("DB down")
+        )
+        rt = _make_relay_transport(
+            relay_service=relay_svc,
+            call_counter=call_counter,
+        )
         ctx = _make_dispatch_ctx()
         msg = _make_room_agent_message()
 
-        with patch("execution.dispatch.transports.relay.mongodb") as mock_db:
-            mock_db.increment_agent_call_count = AsyncMock(
-                side_effect=RuntimeError("DB down"),
-            )
-            result = await rt.dispatch(ctx, msg)
-            assert result.status == ProcessingStatus.RELAY_DISPATCHED
+        result = await rt.dispatch(ctx, msg)
+        assert result.status == ProcessingStatus.RELAY_DISPATCHED
