@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from app_shell.agent_service import agent_service
-from app_shell.database_service import db_service
 from common.dto import AgentInfo, SavedAgentGroupSnapshot
 from common.utils.logger import get_logger
 from models.request import AgentCenterRequest
@@ -15,9 +14,13 @@ class LegacyRoomMembershipSeedSource:
     def __init__(
         self,
         *,
-        database_service=db_service,
+        database_service=None,
         agent_service_adapter=agent_service,
     ) -> None:
+        if database_service is None:
+            from app_shell.database_service import db_service as bound_database_service
+
+            database_service = bound_database_service
         self._database_service = database_service
         self._agent_service = agent_service_adapter
 

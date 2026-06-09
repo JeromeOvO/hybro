@@ -49,6 +49,7 @@ from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import AgentStatus
 from models.file_upload import MAX_ATTACHMENTS_PER_MESSAGE
 from models.memory import MemoryContent, RoomMemory
+from models.quote import QuoteSourceKind
 from models.request import (
     AgentCenterRequest,
     RoomCenterAgentMessageRequest,
@@ -174,6 +175,9 @@ class RoomServices:
         self._active_run_reader: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None
         self._hitl_pending_checker: Callable[[str], Awaitable[list[Any]]] | None = None
         self._processing_status_emitter: Callable[..., Awaitable[dict[str, Any] | None]] | None = None
+        self._attachment_metadata_reader = None
+        self._attachment_cleanup = None
+        self._quote_writer = None
 
     @property
     def s3_service(self):
@@ -214,6 +218,15 @@ class RoomServices:
         processing_status_emitter: Callable[..., Awaitable[dict[str, Any] | None]],
     ) -> None:
         self._processing_status_emitter = processing_status_emitter
+
+    def bind_attachment_metadata_reader(self, reader) -> None:
+        self._attachment_metadata_reader = reader
+
+    def bind_attachment_cleanup(self, cleanup) -> None:
+        self._attachment_cleanup = cleanup
+
+    def bind_quote_writer(self, writer) -> None:
+        self._quote_writer = writer
 
     def _require_facade(self):
         if not getattr(self, "_bound", False) or getattr(self, "_facade", None) is None:
@@ -1062,9 +1075,9 @@ class RoomServices:
 
         if s3_cleanup_ok:
             try:
-                from database.mongodb import mongodb
-
-                await mongodb.file_uploads_collection.delete_many({"room_id": room_id})
+                attachment_cleanup = getattr(self, "_attachment_cleanup", None)
+                if attachment_cleanup is not None:
+                    await attachment_cleanup.delete_for_room(room_id)
             except Exception:
                 logger.warning(
                     "Transitional file upload cleanup failed for room %s",
@@ -1073,9 +1086,11 @@ class RoomServices:
                 )
 
         try:
-            from database.mongodb import mongodb
-
-            await mongodb.delete_room_quotes_by_room_id(room_id)
+            facade = self._facade
+            if facade is not None and hasattr(facade, "cleanup_room_owned_data"):
+                await facade.cleanup_room_owned_data(room_id)
+            elif facade is not None and hasattr(facade, "delete_room_owned_messages"):
+                await facade.delete_room_owned_messages(room_id)
         except Exception:
             logger.warning(
                 "Room quotes cleanup failed for room %s",
@@ -1091,8 +1106,6 @@ class RoomServices:
         room_id: str,
     ) -> "_ResolvedAttachments | RoomCenterUserMessageResponse":
         """Resolve file_id list to server-authoritative UserAttachment objects."""
-        from database.mongodb import mongodb
-
         if len(file_ids) > MAX_ATTACHMENTS_PER_MESSAGE:
             return RoomCenterUserMessageResponse(
                 message_id=None,
@@ -1103,10 +1116,17 @@ class RoomServices:
             )
 
         attachments: list[UserAttachment] = []
+        attachment_reader = getattr(self, "_attachment_metadata_reader", None)
         for file_id in file_ids:
-            file_meta = await mongodb.file_uploads_collection.find_one(
-                {"file_id": file_id, "room_id": room_id}
-            )
+            if attachment_reader is None:
+                return RoomCenterUserMessageResponse(
+                    message_id=None,
+                    message=None,
+                    success=False,
+                    error="Attachment resolution unavailable",
+                    status_code=503,
+                )
+            file_meta = await attachment_reader.get_for_room_file(room_id, file_id)
             if not file_meta:
                 return RoomCenterUserMessageResponse(
                     message_id=None,
@@ -2304,9 +2324,26 @@ class RoomServices:
 
         if not await self._persist_user_message(user_message):
             if getattr(user_message, "quote_id", None):
-                await self.database_service.delete_quoted_snippet_by_id(
-                    user_message.quote_id
-                )
+                quote_writer = getattr(self, "_quote_writer", None)
+                quote_id = user_message.quote_id
+                delete_by_id = getattr(quote_writer, "delete_by_id", None)
+                if callable(delete_by_id):
+                    try:
+                        await delete_by_id(quote_id)
+                    except Exception:
+                        logger.warning(
+                            "Failed to remove quoted snippet %s for room %s after "
+                            "message persistence failure",
+                            quote_id,
+                            request.room_id,
+                            exc_info=True,
+                        )
+                else:
+                    logger.warning(
+                        "Quote writer missing delete_by_id for room %s, quote %s",
+                        request.room_id,
+                        quote_id,
+                    )
             return RoomCenterUserMessageResponse(
                 message_id=None,
                 message=None,
@@ -2620,23 +2657,84 @@ class RoomServices:
         payload = user_message.quote
         if payload is None:
             return None
-        from app_shell.quote_service import QuoteValidationError, create_quoted_snippet
 
-        try:
-            qid = await create_quoted_snippet(
-                self.database_service,
-                room_id=room.room_id,
-                created_by_user_id=request.user_id or user_message.user_id or "",
-                payload=payload,
-            )
-        except QuoteValidationError as e:
+        quote_writer = getattr(self, "_quote_writer", None)
+        text = payload.text.strip()
+        if not text:
             return RoomCenterUserMessageResponse(
                 message_id=None,
                 message=None,
                 success=False,
-                error=str(e),
+                error="Quote text is required",
                 status_code=400,
             )
+
+        source_kind = (
+            payload.source_kind.value
+            if hasattr(payload.source_kind, "value")
+            else payload.source_kind
+        )
+        source_kind_value = str(source_kind)
+        if source_kind_value not in {"unknown", QuoteSourceKind.UNKNOWN.value, ""}:
+            source_message = None
+            expected_message_type = {
+                "user_turn": "user",
+                "agent": "agent",
+                "synthesis": "agent",
+            }.get(source_kind_value.lower())
+            if self._facade is not None:
+                source_message = await self._facade.get_message(
+                    payload.source_message_id
+                )
+                if source_message is None or source_message.room_id != room.room_id:
+                    return RoomCenterUserMessageResponse(
+                        message_id=None,
+                        message=None,
+                        success=False,
+                        error="Invalid quote source",
+                        status_code=400,
+                    )
+            else:
+                logger.warning(
+                    "Quote source validation skipped for message %s because no room facade "
+                    "is available.",
+                    payload.source_message_id,
+                )
+            if (
+                expected_message_type is not None
+                and source_message is not None
+                and source_message.message_type != expected_message_type
+            ):
+                return RoomCenterUserMessageResponse(
+                    message_id=None,
+                    message=None,
+                    success=False,
+                    error="Invalid quote source type",
+                    status_code=400,
+                )
+
+        if quote_writer is None:
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="Could not save quoted context. Try again.",
+                status_code=503,
+            )
+
+        try:
+            from models.quote import QuotedSnippet
+
+            snippet = QuotedSnippet(
+                room_id=room.room_id,
+                created_by_user_id=request.user_id or user_message.user_id or "",
+                text=text,
+                source_message_id=payload.source_message_id,
+                source_kind=str(source_kind),
+                source_agent_id=payload.source_agent_id,
+                sender_display_name=payload.sender_display_name,
+            )
+            qid = await quote_writer.insert(snippet)
         except Exception as e:
             logger.exception("Quote snippet creation failed: %s", e)
             return RoomCenterUserMessageResponse(
@@ -2647,9 +2745,12 @@ class RoomServices:
                 status_code=500,
             )
 
+        if not isinstance(qid, str):
+            qid = str(qid)
+
         user_message.quote_id = qid
         ei = dict(user_message.extend_info or {})
-        ei["quoted_text"] = payload.text.strip()
+        ei["quoted_text"] = text
         if payload.sender_display_name:
             ei["quoted_sender_name"] = payload.sender_display_name
         ei["quote_id"] = qid
@@ -3511,8 +3612,6 @@ class RoomServices:
 
         # Append file parts from user attachments if the agent supports them
         try:
-            from database.mongodb import mongodb
-
             # Trace back through agent message chain to find the originating user message.
             # In chained mention flows, later agents have related_message_id pointing to
             # a previous agent message, not the user message directly.
@@ -3523,21 +3622,22 @@ class RoomServices:
             visited: set[str] = set()
             while trace_id and trace_id not in visited:
                 visited.add(trace_id)
-                user_msg = await mongodb.get_room_user_message_by_message_id(trace_id)
-                if user_msg:
+                message_info = None
+                if self._facade is not None:
+                    message_info = await self._facade.get_message(trace_id)
+                if message_info is not None and message_info.message_type == "user":
+                    user_msg = message_info
                     break
-                agent_msg = await mongodb.get_room_agent_message_by_message_id(
-                    trace_id
-                )
                 trace_id = (
-                    agent_msg.related_message_id if agent_msg else None
+                    message_info.parent_message_id if message_info else None
                 )
 
-            user_attachments = (
-                user_msg.message_content.attachments
-                if user_msg and user_msg.message_content
-                else None
-            )
+            user_attachments = []
+            if user_msg and isinstance(user_msg.content, dict):
+                for attachment in (user_msg.content.get("attachments") or []):
+                    if not isinstance(attachment, dict | UserAttachment):
+                        continue
+                    user_attachments.append(UserAttachment.model_validate(attachment))
             if user_attachments:
                 agent_obj = await self.database_service.get_agent_by_agent_id(agent_id)
                 agent_card_obj = agent_obj.agent_card if agent_obj else None

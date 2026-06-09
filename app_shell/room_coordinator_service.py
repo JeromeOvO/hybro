@@ -5,7 +5,6 @@ from uuid import uuid4
 
 from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
 
-from app_shell.database_service import db_service
 from app_shell.delivery_runtime import sse_manager
 from common.dto import RoomMessageSummary
 from common.utils.a2a_helpers import extract_agent_text_from_room_message
@@ -32,10 +31,22 @@ class RoomCoordinatorService:
     - Be extended later to route follow-up questions and manage per-room policies
     """
 
-    def __init__(self) -> None:
-        self.database_service = db_service
+    def __init__(self, *, database_service=None) -> None:
+        if database_service is None:
+            from app_shell.database_service import db_service as bound_database_service
+
+            database_service = bound_database_service
+        self._database_service = database_service
         self.summary_service = None
         self.sse_manager = sse_manager
+
+    @property
+    def database_service(self):
+        return self._database_service
+
+    @database_service.setter
+    def database_service(self, value) -> None:
+        self._database_service = value
 
     def bind_summary_service(self, service) -> None:
         self.summary_service = service
@@ -86,7 +97,7 @@ class RoomCoordinatorService:
         summary_client_request_id: str | None = None
 
         try:
-            room: Room | None = await self.database_service.get_room_by_room_id(room_id)
+            room: Room | None = await self._database_service.get_room_by_room_id(room_id)
             if room is None:
                 logger.warning(
                     "RoomCoordinatorService: Room %s not found, skipping coordination",
@@ -146,7 +157,7 @@ class RoomCoordinatorService:
                     text = extract_agent_text_from_room_message(msg)
                     if text and msg.agent_id:
                         # Get agent name from database
-                        agent_name = await self.database_service.get_agent_name_by_agent_id(
+                        agent_name = await self._database_service.get_agent_name_by_agent_id(
                             msg.agent_id
                         )
                         agent_responses.append(
@@ -170,7 +181,7 @@ class RoomCoordinatorService:
             # frontend shows a spinner while the LLM summarisation runs.
             summary_message_id = str(uuid4())
             summary_dispatched_at = utcnow().isoformat()
-            root_user_message = await self.database_service.get_room_user_message_by_message_id(
+            root_user_message = await self._database_service.get_room_user_message_by_message_id(
                 room_user_message_id
             )
             summary_client_request_id = (
@@ -268,7 +279,7 @@ class RoomCoordinatorService:
         visited: set[str] = set()
 
         initial_children = (
-            await self.database_service.get_room_agent_messages_by_related_message_id(  # noqa: E501
+            await self._database_service.get_room_agent_messages_by_related_message_id(  # noqa: E501
                 root_user_message_id
             )
         )
@@ -285,7 +296,7 @@ class RoomCoordinatorService:
             visited.add(msg.message_id)
             all_messages.append(msg)
 
-            children = await self.database_service.get_room_agent_messages_by_related_message_id(  # noqa: E501
+            children = await self._database_service.get_room_agent_messages_by_related_message_id(  # noqa: E501
                 msg.message_id
             )
             if not children:
@@ -373,7 +384,7 @@ class RoomCoordinatorService:
 
         summary_content = MessageContent(message_task=summary_task)
 
-        user_message = await self.database_service.get_room_user_message_by_message_id(
+        user_message = await self._database_service.get_room_user_message_by_message_id(
             room_user_message_id
         )
         user_id = user_message.user_id if user_message else None
@@ -398,7 +409,7 @@ class RoomCoordinatorService:
             task_content=summary_text,
         )
 
-        await self.database_service.add_room_agent_message(summary_agent_message)
+        await self._database_service.add_room_agent_message(summary_agent_message)
 
         await self.sse_manager.send_agent_response(
             room_id,

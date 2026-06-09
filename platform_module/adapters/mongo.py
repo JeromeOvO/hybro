@@ -38,3 +38,6 @@ class MongoFileMetadataRepository:
 
     async def list_for_room(self, room_id: str) -> list[dict]:
         return await self._collection.find({"room_id": room_id})
+
+    async def delete_for_room(self, room_id: str) -> int:
+        return await self._collection.delete_many({"room_id": room_id})

@@ -93,6 +93,16 @@ class FileStorage(Protocol):
     async def list_for_room(self, room_id: str) -> list[FileInfo]: ...
 
 
+@runtime_checkable
+class AttachmentMetadataReader(Protocol):
+    async def get_for_room_file(self, room_id: str, file_id: str) -> dict | None: ...
+
+
+@runtime_checkable
+class AttachmentCleanupPort(Protocol):
+    async def delete_for_room(self, room_id: str) -> int: ...
+
+
 __all__ = [
     "APIKeyAuthenticator",
     "APIKeyRateLimiter",
@@ -101,6 +111,8 @@ __all__ = [
     "APIKeyStore",
     "FileStorage",
     "GatewayDiscoveryProvider",
+    "AttachmentCleanupPort",
+    "AttachmentMetadataReader",
     "GatewayService",
     "RateLimiter",
 ]

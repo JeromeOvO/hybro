@@ -1,5 +1,15 @@
+from platform_module.attachments import (
+    PlatformAttachmentCleanupPort,
+    PlatformAttachmentMetadataReader,
+)
 from platform_module.config import PlatformConfig
 from platform_module.deps import PlatformDeps
 from platform_module.facade import PlatformFacade
 
-__all__ = ["PlatformConfig", "PlatformDeps", "PlatformFacade"]
+__all__ = [
+    "PlatformAttachmentCleanupPort",
+    "PlatformAttachmentMetadataReader",
+    "PlatformConfig",
+    "PlatformDeps",
+    "PlatformFacade",
+]

@@ -181,9 +181,11 @@ class TestMissingFileId:
         svc.sse_manager = MagicMock()
         svc.room_memory_service = MagicMock()
 
-        with patch("database.mongodb.mongodb") as mock_db:
-            mock_db.file_uploads_collection.find_one = AsyncMock(return_value=None)
-            result = await svc._resolve_attachments(["nonexistent"], "room1")
+        reader = MagicMock()
+        reader.get_for_room_file = AsyncMock(return_value=None)
+        svc.bind_attachment_metadata_reader(reader)
+
+        result = await svc._resolve_attachments(["nonexistent"], "room1")
 
         assert isinstance(result, RoomCenterUserMessageResponse)
         assert result.status_code == 404
