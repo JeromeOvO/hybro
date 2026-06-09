@@ -87,7 +87,7 @@ bind_auth_config(
     clerk_secret_key_value=settings.clerk_secret_key,
     authorized_parties=tuple(settings.frontend_origins),
 )
-bind_api_key_authenticator(MongoAPIKeyAuthenticator(mongodb))
+# API key authenticator is bound in lifespan after MongoDAL is created
 
 
 class InterceptHandler(logging.Handler):
@@ -259,6 +259,7 @@ async def lifespan(app: FastAPI):
                 create_agent_deps,
                 create_agent_resolver_repository,
                 create_agent_viewset_vector_index,
+                create_api_key_store,
                 create_context_memory_deps,
                 create_context_memory_facade,
                 create_delivery_cancellation_collection,
@@ -353,11 +354,14 @@ async def lifespan(app: FastAPI):
             )
             inspection_center.bind_inspection_dependencies(AppShellInspectionCenter())
             memory_center.bind_memory_dependencies(AppShellMemoryCenter())
-            discovery_api_keys.bind_api_key_store(mongodb)
             mongo_dal = create_mongo_dal()
             _mongo_dal = mongo_dal
             app.state.mongo_dal = mongo_dal
             await mongo_dal.connect()
+            # Bind Platform-owned API key store after MongoDAL is created
+            api_key_store = create_api_key_store(mongo=mongo_dal)
+            discovery_api_keys.bind_api_key_store(api_key_store)
+            bind_api_key_authenticator(MongoAPIKeyAuthenticator(api_key_store))
             vector_dal = create_vector_dal()
             _delivery_config = create_delivery_config(settings)
             delivery_startup_policy = create_delivery_startup_policy(

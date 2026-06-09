@@ -679,3 +679,10 @@ def _legacy_compaction_concurrency() -> int:
         return max(1, int(os.getenv("COMPACTION_CONCURRENCY", "5")))
     except (TypeError, ValueError):
         return 5
+
+
+def create_api_key_store(*, mongo: MongoDAL):
+    """Create Platform-owned API key store."""
+    from platform_module.api_keys import MongoAPIKeyStore
+
+    return MongoAPIKeyStore(mongo=mongo)

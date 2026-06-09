@@ -43,6 +43,12 @@ class APIKeyStore(Protocol):
 
 
 @runtime_checkable
+class APIKeyValidationStore(Protocol):
+    async def get_api_key_by_hash(self, key_hash: str) -> APIKeyRecord | None: ...
+    async def update_api_key_usage(self, key_hash: str) -> bool: ...
+
+
+@runtime_checkable
 class GatewayDiscoveryProvider(Protocol):
     async def discover_agents(
         self, query: str, limit: int | None = None
@@ -109,6 +115,7 @@ __all__ = [
     "APIKeyPrincipal",
     "APIKeyRecord",
     "APIKeyStore",
+    "APIKeyValidationStore",
     "FileStorage",
     "GatewayDiscoveryProvider",
     "AttachmentCleanupPort",
