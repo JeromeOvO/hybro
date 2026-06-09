@@ -74,7 +74,6 @@ from common.auth import bind_auth_config
 from common.config.settings import settings
 from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
 from database.mongodb import mongodb
-from database.pinecone_db import pinecone_db
 from jobs.cleanup_orphaned_uploads import (
     OrphanedUploadCleanerDeps,
     orphaned_upload_cleaner,
@@ -210,6 +209,7 @@ async def lifespan(app: FastAPI):
     _delivery_facade = None
     _delivery_config = None
     _execution_deps = None
+    _mongo_dal = None
     _delivery_bound = False
     _bg_started = False
 
@@ -217,7 +217,6 @@ async def lifespan(app: FastAPI):
         # ── Phase 1: Infrastructure (DB + Redis, no background work) ──
 
         await mongodb.connect()
-        pinecone_db.connect()
 
         if mongodb.client is not None:
             from a2a_adapter import AgentCardResolverImpl, AgentTransportImpl
@@ -258,6 +257,8 @@ async def lifespan(app: FastAPI):
             from common.utils.a2a_helpers import bind_a2a_artifact_storage
             from container import (
                 create_agent_deps,
+                create_agent_resolver_repository,
+                create_agent_viewset_vector_index,
                 create_context_memory_deps,
                 create_context_memory_facade,
                 create_delivery_cancellation_collection,
@@ -268,6 +269,7 @@ async def lifespan(app: FastAPI):
                 create_delivery_startup_policy,
                 create_execution_deps,
                 create_execution_facade,
+                create_execution_repositories,
                 create_mongo_dal,
                 create_object_storage_dal,
                 create_platform_config,
@@ -296,6 +298,10 @@ async def lifespan(app: FastAPI):
                 SupervisorLLMService,
             )
             from platform_module.rate_limit import PlatformAgentRateLimiter
+            from platform_module import (
+                PlatformAttachmentCleanupPort,
+                PlatformAttachmentMetadataReader,
+            )
 
             a2a_artifact_storage.bind_a2a_storage_dependencies(
                 storage_service=s3_service,
@@ -348,7 +354,10 @@ async def lifespan(app: FastAPI):
             inspection_center.bind_inspection_dependencies(AppShellInspectionCenter())
             memory_center.bind_memory_dependencies(AppShellMemoryCenter())
             discovery_api_keys.bind_api_key_store(mongodb)
-            mongo_dal = create_mongo_dal(database=mongodb.db)
+            mongo_dal = create_mongo_dal()
+            _mongo_dal = mongo_dal
+            app.state.mongo_dal = mongo_dal
+            await mongo_dal.connect()
             vector_dal = create_vector_dal()
             _delivery_config = create_delivery_config(settings)
             delivery_startup_policy = create_delivery_startup_policy(
@@ -379,13 +388,28 @@ async def lifespan(app: FastAPI):
             app.state.delivery_deps = _delivery_deps
 
             from a2a_adapter.task_status import coerce_task_state
-            from app_shell.a2a_runtime import a2a_service
+            from app_shell.a2a_runtime import (
+                _bind_mongodb_backend as _bind_a2a_mongodb,
+                a2a_service,
+            )
             from app_shell.database_service import db_service as _db_svc
             from app_shell.hitl_service import (
                 bind_hitl_service,
                 create_hitl_service,
                 hitl_service,
             )
+            from database.pinecone_db import pinecone_db
+            pinecone_db.connect()
+            _db_svc.bind_backends(mongo=mongodb, pinecone=pinecone_db)
+            capability_issue_service.bind_mongo(mongo_dal)
+            _bind_a2a_mongodb(mongodb)
+            from app_shell.memory_search_service import (
+                bind_mongo_backend as _bind_mem_mongo,
+                bind_pinecone_backend as _bind_mem_pinecone,
+            )
+            _bind_mem_mongo(mongodb)
+            _bind_mem_pinecone(pinecone_db)
+            a2a_service.bind_task_db(_db_svc)
             from common.observability.run_metrics import increment_counter
             from execution.cancellation import (
                 AgentTaskCleanupAdapter,
@@ -434,9 +458,10 @@ async def lifespan(app: FastAPI):
             a2a_tasks.bind_a2a_task_dependencies(_db_svc)
             agent_group.bind_agent_group_dependencies(_db_svc)
             sse.bind_sse_dependencies(_db_svc, sse_manager)
+            _execution_repos = create_execution_repositories(mongo=mongo_dal)
             run_command_handler = RunCommandHandler(
-                runs_collection=mongodb.runs_collection,
-                run_events_collection=mongodb.run_events_collection,
+                run_repository=_execution_repos["run_repository"],
+                run_event_repository=_execution_repos["run_event_repository"],
             )
             bind_run_lifecycle_service(run_command_handler)
 
@@ -461,7 +486,7 @@ async def lifespan(app: FastAPI):
             )
             run_lifecycle = RunLifecycleAdapter(
                 command_handler=run_command_handler,
-                runs_collection=mongodb.runs_collection,
+                run_repository=_execution_repos["run_repository"],
             )
             app_shell_client_request_id_resolver = SSEClientRequestIdResolver(
                 db_service=_db_svc,
@@ -523,7 +548,7 @@ async def lifespan(app: FastAPI):
             openai_service.bind_debate_service(debate_llm_service)
             agent_viewset.bind_agent_viewset_dependencies(
                 embedding_source=embedding_llm_service,
-                vector_index_service=pinecone_db,
+                vector_index_service=create_agent_viewset_vector_index(vector=vector_dal),
             )
             agent_card_resolver = AgentCardResolverImpl()
             _agent_deps = create_agent_deps(
@@ -539,7 +564,16 @@ async def lifespan(app: FastAPI):
             agent_service.bind_facade(_agent_facade)
             agent_matcher.bind_facade(_agent_facade)
             agent_selection_service.bind_facade(_agent_facade)
-            agent_health_service.bind_facade(_agent_facade)
+            agent_health_service.bind_repository(_agent_deps.agent_repository)
+            _resolver_repo = create_agent_resolver_repository(service=agent_service)
+            agent_resolver_service.bind_repository(_resolver_repo)
+            from agent.domain_alias import DomainAliasService as _DomainAliasSvc
+            from app_shell.domain_alias_service import (
+                bind_domain_alias_service as _bind_domain_alias,
+            )
+            _bind_domain_alias(
+                _DomainAliasSvc(repository=_agent_deps.agent_repository)
+            )
 
             _room_deps = create_room_deps(
                 mongo=mongo_dal,
@@ -609,7 +643,7 @@ async def lifespan(app: FastAPI):
                 room_message_center=execution_room_message_center,
                 hitl_service=hitl_service,
                 run_lifecycle=run_lifecycle,
-                run_reader=RunQueryAdapter(mongodb.runs_collection),
+                run_reader=RunQueryAdapter(_execution_repos["run_repository"]),
                 cancellation_state=CancellationStateC3Adapter(sse_manager),
                 cancellation_store=MongoCancellationStoreAdapter(mongodb),
                 hitl_message_cancellation=HITLMessageCancellationAdapter(hitl_service),
@@ -686,6 +720,12 @@ async def lifespan(app: FastAPI):
                 discovery_query_expander=discovery_llm_service,
                 logger=logger,
             )
+            room_runtime.bind_attachment_metadata_reader(
+                PlatformAttachmentMetadataReader(platform_deps.file_metadata_repository)
+            )
+            room_runtime.bind_attachment_cleanup(
+                PlatformAttachmentCleanupPort(platform_deps.file_metadata_repository)
+            )
             platform_facade = create_platform_facade(
                 config=platform_config,
                 deps=platform_deps,
@@ -713,6 +753,7 @@ async def lifespan(app: FastAPI):
             context_assembly_service.bind_facade(context_memory_facade)
             memory_search_service.bind_facade(context_memory_facade)
             compaction_service.bind_content_storage(platform_facade.content_storage)
+            compaction_service.bind_room_memory_reader(context_memory_facade)
             compaction_service.bind_facade(context_memory_facade)
             room_memory_service.bind_facade(context_memory_facade)
             room_runtime.bind_context_memory(_context_memory_deps.memory_manager)
@@ -924,7 +965,7 @@ async def lifespan(app: FastAPI):
         _rmc = get_bound_room_message_center()
         _rmc.set_room_distributed_lock(RedisRoomDistributedLock(_redis_service))
         _relay_svc = init_relay_service(
-            mongo=mongodb, database_service=_db_svc, sse_manager=sse_manager,
+            mongo=mongodb, db=_db_svc, sse_manager=sse_manager,
             room_message_center=_rmc,
             hitl_coordinator=hitl_service,
             event_publisher=_delivery_deps.event_publisher if _delivery_deps else None,
@@ -993,6 +1034,9 @@ async def lifespan(app: FastAPI):
             await _leader.release_all(ALL_JOB_NAMES)
         if _redis_service:
             await _redis_service.stop()
+        if _mongo_dal is not None:
+            await _mongo_dal.close()
+            app.state.mongo_dal = None
         try:
             if _delivery_facade is not None:
                 await _delivery_facade.stop()
@@ -1055,6 +1099,9 @@ async def lifespan(app: FastAPI):
         # Stop RedisService
         if _redis_service:
             await _redis_service.stop()
+        if _mongo_dal is not None:
+            await _mongo_dal.close()
+            app.state.mongo_dal = None
 
         await mongodb.close_database_connection()
 

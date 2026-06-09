@@ -16,6 +16,7 @@ Design decisions:
 
 from dataclasses import dataclass, field
 from time import monotonic
+from typing import Protocol
 
 import httpx
 from a2a.utils.constants import (
@@ -24,7 +25,6 @@ from a2a.utils.constants import (
 )
 
 from app_shell.agent_capability_issue_service import capability_issue_service
-from app_shell.database_service import db_service
 from common.config.settings import settings
 from common.dto import AgentRoutingCandidate
 from common.utils.logger import get_logger
@@ -39,6 +39,25 @@ _PROBE_TIMEOUT: float = 3.0
 
 # How long a cached health result is considered fresh (seconds).
 _CACHE_TTL: float = 30.0
+
+
+class AgentResolutionRepository(Protocol):
+    async def query_similar_agents(
+        self,
+        query_text: str,
+        count: int,
+        allowed_agent_ids: list[str] | None,
+        excluded_agent_ids: set[str],
+        active_only: bool,
+        user_id: str | None = None,
+    ) -> list[Agent]: ...
+
+    async def get_agents_with_conditions_visible(
+        self,
+        user_id: str | None,
+        query: dict,
+        limit: int = 0,
+    ) -> list[Agent]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -95,10 +114,20 @@ class AgentResolverService:
     RoomMessageCenter and WorkflowCenter can share.
     """
 
-    def __init__(self) -> None:
-        self.database_service = db_service
+    def __init__(self, repository: AgentResolutionRepository | None = None) -> None:
+        self._resolution_repository = repository
         self.agent_selection_service = None
         self._health_cache = _HealthCache()
+
+    def bind_repository(self, repository: AgentResolutionRepository) -> None:
+        self._resolution_repository = repository
+
+    def _require_repository(self):
+        if self._resolution_repository is None:
+            raise RuntimeError(
+                "AgentResolverService.bind_repository() not called - startup incomplete"
+            )
+        return self._resolution_repository
 
     def bind_agent_selection_service(self, service) -> None:
         self.agent_selection_service = service
@@ -153,7 +182,7 @@ class AgentResolverService:
         excluded = await capability_issue_service.get_excluded_agent_ids()
 
         # Step 1 – vector similarity search (already filters active_only)
-        candidates = await self.database_service.query_similar_agents(
+        candidates = await self._require_repository().query_similar_agents(
             query_text,
             count=count,
             allowed_agent_ids=allowed_agent_ids,
@@ -223,7 +252,7 @@ class AgentResolverService:
             ]
         }
         # Uses the public method which internally applies visibility filter
-        agents = await self.database_service.get_agents_with_conditions_visible(
+        agents = await self._require_repository().get_agents_with_conditions_visible(
             user_id=user_id,
             query=query,
         )

@@ -60,10 +60,9 @@ def select_top_agents(
 
 
 class AgentMatcher:
-    def __init__(self, facade=None, database_service=None) -> None:
+    def __init__(self, facade=None) -> None:
         self._facade = facade
         self._bound = facade is not None
-        self._legacy_database_service = database_service
 
     def bind_facade(self, facade) -> None:
         self._facade = facade
