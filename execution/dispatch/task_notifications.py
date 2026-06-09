@@ -384,6 +384,27 @@ async def _notify_task_update_impl(
         client_request_id = None
 
     # --- Send the SSE -----------------------------------------------------
+    from common.utils.a2a_helpers import (
+        filter_non_text_parts,
+        is_terminal_task_state_value,
+        resolve_terminal_sse_content,
+    )
+
+    stored_text = (
+        room_agent_message.message_content.message_text
+        if room_agent_message.message_content
+        else None
+    )
+    if is_terminal_task_state_value(state):
+        content = resolve_terminal_sse_content(
+            state,
+            message_text=stored_text,
+            artifact_text=content,
+        )
+        # SSE text lives in ``content``; strip any text parts so ``parts`` is
+        # file/data only and cannot drift from the resolved terminal body.
+        parts = filter_non_text_parts(parts)
+
     # Convert any inline base64 file bytes to S3 URIs before broadcasting
     if parts:
         from common.utils.a2a_helpers import convert_inline_bytes_to_s3

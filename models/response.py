@@ -205,6 +205,7 @@ class RoomCenterActiveRunsResponse(BaseModel):
 
     room_id: str | None = None
     active_runs: list[ActiveRunRef] | None = None
+    turn_completion_kind: str | None = None
     success: bool
     error: str | None = None
     status_code: int = 200

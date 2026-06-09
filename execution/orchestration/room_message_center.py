@@ -280,6 +280,37 @@ class RoomMessageCenter:
             agents=agents,
         )
 
+    async def _persist_turn_completion_kind(
+        self,
+        user_message_id: str,
+        turn_completion_kind: str,
+    ) -> None:
+        """Persist turn_completion_kind on user message extend_info (best-effort).
+
+        Must be called BEFORE emitting the COMPLETED SSE so that the
+        truth-check / reconcile path can always find the value in the DB.
+        """
+        try:
+            user_msg = (
+                await self.database_service.get_room_user_message_by_message_id(
+                    user_message_id
+                )
+            )
+            if user_msg:
+                if not isinstance(user_msg.extend_info, dict):
+                    user_msg.extend_info = {}
+                user_msg.extend_info["turn_completion_kind"] = turn_completion_kind
+                await self.database_service.update_room_user_message_by_message_id(
+                    user_message_id, user_msg
+                )
+        except Exception:
+            logger.warning(
+                "RoomMessageCenter: failed to persist turn_completion_kind "
+                "for user message %s",
+                user_message_id,
+                exc_info=True,
+            )
+
     def bind_facade(self, facade) -> None:
         self._room_facade = facade
         self._room_bound = True
@@ -855,11 +886,15 @@ class RoomMessageCenter:
                 pass
 
         # Send completion status
+        await self._persist_turn_completion_kind(
+            room_user_message_id, "synthesis"
+        )
         await self._emit_processing_status(
             room_id=room_id,
             status=SSEProcessingStatus.COMPLETED,
             message_id=room_user_message_id,
             lifecycle_message_id=room_user_message_id,
+            details={"turn_completion_kind": "synthesis"},
         )
 
         # Log room memory stats (debug/monitoring)
@@ -1937,11 +1972,20 @@ class RoomMessageCenter:
                         )
                     except Exception:
                         pass
+
+                turn_completion_kind = (
+                    "synthesis" if result.synthesis_text is not None
+                    else "deterministic"
+                )
+                await self._persist_turn_completion_kind(
+                    user_message_id, turn_completion_kind
+                )
                 await self._emit_processing_status(
                     room_id=room_id,
                     status=SSEProcessingStatus.COMPLETED,
                     message_id=user_message_id,
                     lifecycle_message_id=user_message_id,
+                    details={"turn_completion_kind": turn_completion_kind},
                 )
 
             case RunStatus.PAUSED:
@@ -2314,11 +2358,15 @@ class RoomMessageCenter:
                     )
                 except Exception:
                     pass
+            await self._persist_turn_completion_kind(
+                result.user_message_id, "synthesis"
+            )
             await self._emit_processing_status(
                 room_id=result.room_id,
                 status=SSEProcessingStatus.COMPLETED,
                 message_id=result.user_message_id,
                 lifecycle_message_id=result.user_message_id,
+                details={"turn_completion_kind": "synthesis"},
             )
             await self._log_room_memory_stats(result.room_id)
 

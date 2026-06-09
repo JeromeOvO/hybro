@@ -90,7 +90,7 @@ def _make_relay_service(
         db_service.update_room_agent_message_by_message_id = AsyncMock(
             return_value=True
         )
-        db_service.update_task_state_on_message = AsyncMock(return_value=True)
+        db_service.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db_service.is_message_cancelled = AsyncMock(return_value=False)
         db_service.ai_service.get_embedding = AsyncMock(return_value=[0.0] * 128)
         db_service.pinecone.upsert = MagicMock()
@@ -814,7 +814,7 @@ class TestRelayServicePublish:
         db_service.update_room_agent_message_by_message_id = AsyncMock(
             return_value=True
         )
-        db_service.update_task_state_on_message = AsyncMock(return_value=True)
+        db_service.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db_service.is_message_cancelled = AsyncMock(return_value=False)
         agent_mock = MagicMock()
         agent_mock.hub_id = "hub-001"
