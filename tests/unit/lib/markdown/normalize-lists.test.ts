@@ -121,6 +121,40 @@ describe('splitInlineOrderedListItems', () => {
   })
 })
 
+describe('normalizeAgentListMarkers', () => {
+  it('rewrites ordered unicode-bullet sub-fields to markdown dashes', () => {
+    const input = [
+      '1. Plain-language description',
+      '1. • Summary: Example model',
+      '• Target users: Developers',
+    ].join('\n')
+
+    expect(preprocessConversationMarkdown(input)).toBe([
+      '1. Plain-language description',
+      '- Summary: Example model',
+      '- Target users: Developers',
+    ].join('\n'))
+  })
+
+  it('does not rewrite markers inside fenced code blocks', () => {
+    const input = [
+      '```',
+      '1. • keep literal',
+      '• keep literal',
+      '```',
+      '1. • Summary: fix me',
+    ].join('\n')
+
+    expect(preprocessConversationMarkdown(input)).toBe([
+      '```',
+      '1. • keep literal',
+      '• keep literal',
+      '```',
+      '- Summary: fix me',
+    ].join('\n'))
+  })
+})
+
 describe('preprocessConversationMarkdown', () => {
   it('fixes inline numbered article lists from agent responses', () => {
     const input = '1. "Notion restores access" — 2 hours ago 2. "OpenAI super app" — 3 hours ago'
