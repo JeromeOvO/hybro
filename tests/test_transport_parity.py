@@ -21,7 +21,7 @@ from execution.dispatch.response_handler import AgentResponseHandler
 def _make_handler(*, db=None, sse=None, rmc=None):
     if db is None:
         db = MagicMock()
-        db.update_task_state_on_message = AsyncMock(return_value=True)
+        db.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
     if sse is None:
         sse = MagicMock()

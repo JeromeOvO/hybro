@@ -179,7 +179,7 @@ without importing domain models:
   supervisor route.
 - `EmbeddingLLMService`: agent and memory embeddings through `embedding_model`.
 - `DiscoveryLLMService`: discovery query expansion.
-- `SummaryLLMService`: streaming synthesis of multi-agent responses.
+- `SummaryLLMService`: streaming synthesis of multi-agent responses (system prompt includes shared markdown formatting rules from `common/prompts/markdown_response_format.py`).
 - `AgentSelectionLLMService`, `MessageParserLLMService`, `RoomMemoryLLMService`,
   and `DebateLLMService`: DTO-backed compatibility workflows for legacy app-shell
   callers while migration continues.
@@ -555,6 +555,8 @@ The route:
 This keeps all final task state, artifact persistence, and SSE emission logic
 in one response handler regardless of whether the response came from direct
 transport, relay, or webhook.
+
+**Agent display text:** Terminal `message_text` and artifact text parts are persisted as received from agents. List/section markdown repair runs only in the frontend remark plugin pipeline (`hybro-frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown render time. Hybro-controlled LLM paths (supervisor synthesis, `SummaryLLMService`) append `HYBRO_MARKDOWN_RESPONSE_FORMAT` so synthesis uses `###` section headers; third-party agent text is still stored as-is. Backend terminal helpers in `common/utils/a2a_helpers.py` (`prepare_terminal_agent_content`, `resolve_terminal_sse_content`, `sync_artifact_dicts_to_canonical_text`) resolve canonical text from artifacts and align artifact payloads without transforming markdown. Terminal resolution is owned by `update_task_state_on_message`; streaming text parts collapse to a single canonical text part while file/data parts are preserved. SSE terminal `content` is authoritative for display text; `parts` carries only non-text payloads.
 
 ## Hub Relay Workflow
 

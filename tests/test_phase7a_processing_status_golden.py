@@ -371,3 +371,113 @@ def test_clarifying_path_emits_turn_completed_via_turn_event_appender():
     assert clarifying.index("turn_completed") < clarifying.index(
         "SSEProcessingStatus.COMPLETED"
     )
+
+
+@pytest.mark.asyncio
+async def test_supervisor_completed_emits_turn_completion_kind_in_details():
+    """COMPLETED processing_status must include turn_completion_kind in details."""
+    from models.supervisor import ActionType, TrajectoryEntry, SupervisorAction, StepResult
+    from datetime import datetime, timezone
+
+    manager = make_bound_manager()
+    conn = await manager.add_connection("room-1")
+    rmc = _make_rmc_for_supervisor_result(manager)
+    rmc._emit_deterministic_digest = AsyncMock()
+    rmc._run_supervisor_terminal_post_loop_integration = AsyncMock()
+    record = AsyncMock(return_value=None)
+    _bind_test_processing_emitter(rmc, manager, record)
+
+    result = SupervisorRunResult(
+        status=RunStatus.COMPLETED,
+        trajectory=SupervisorTrajectory(
+            entries=[
+                TrajectoryEntry(
+                    step_number=1,
+                    action=SupervisorAction(action=ActionType.DELEGATE, reasoning="test"),
+                    results=[StepResult(
+                        step_number=1,
+                        agent_id="agent-a",
+                        agent_name="a",
+                        task="do something",
+                        response_text="answer",
+                        success=True,
+                    )],
+                    started_at=datetime.now(timezone.utc),
+                )
+            ],
+        ),
+        synthesis_text=None,
+    )
+    await rmc._handle_supervisor_run_result(
+        room_id="room-1",
+        user_message_id="msg-1",
+        result=result,
+        room=SimpleNamespace(room_id="room-1", extend_info={}),
+        user_message=SimpleNamespace(extend_info={}),
+    )
+
+    db = rmc.database_service
+    db.update_room_user_message_by_message_id.assert_called()
+    persisted_msg = db.update_room_user_message_by_message_id.call_args_list[-1][0][1]
+    assert persisted_msg.extend_info["turn_completion_kind"] == "deterministic"
+
+    frames = await _drain_sse(conn)
+    completed_frames = [
+        (kind, data) for kind, data in frames if kind == "processing_status" and data.get("status") == "completed"
+    ]
+    assert len(completed_frames) == 1
+    assert completed_frames[0][1]["details"]["turn_completion_kind"] == "deterministic"
+
+
+@pytest.mark.asyncio
+async def test_supervisor_synthesis_completed_emits_synthesis_kind():
+    """Synthesis path emits turn_completion_kind='synthesis' in details."""
+    from models.supervisor import ActionType, TrajectoryEntry, SupervisorAction, StepResult
+    from datetime import datetime, timezone
+
+    manager = make_bound_manager()
+    conn = await manager.add_connection("room-1")
+    rmc = _make_rmc_for_supervisor_result(manager)
+    rmc._run_supervisor_terminal_post_loop_integration = AsyncMock()
+    record = AsyncMock(return_value=None)
+    _bind_test_processing_emitter(rmc, manager, record)
+
+    result = SupervisorRunResult(
+        status=RunStatus.COMPLETED,
+        trajectory=SupervisorTrajectory(
+            entries=[
+                TrajectoryEntry(
+                    step_number=1,
+                    action=SupervisorAction(action=ActionType.DELEGATE, reasoning="test"),
+                    results=[StepResult(
+                        step_number=1,
+                        agent_id="agent-a",
+                        agent_name="a",
+                        task="do something",
+                        response_text="answer",
+                        success=True,
+                    )],
+                    started_at=datetime.now(timezone.utc),
+                )
+            ],
+        ),
+        synthesis_text="Here is the combined answer...",
+    )
+    await rmc._handle_supervisor_run_result(
+        room_id="room-1",
+        user_message_id="msg-1",
+        result=result,
+        room=SimpleNamespace(room_id="room-1", extend_info={}),
+        user_message=SimpleNamespace(extend_info={}),
+    )
+
+    db = rmc.database_service
+    persisted_msg = db.update_room_user_message_by_message_id.call_args_list[-1][0][1]
+    assert persisted_msg.extend_info["turn_completion_kind"] == "synthesis"
+
+    frames = await _drain_sse(conn)
+    completed_frames = [
+        (kind, data) for kind, data in frames if kind == "processing_status" and data.get("status") == "completed"
+    ]
+    assert len(completed_frames) == 1
+    assert completed_frames[0][1]["details"]["turn_completion_kind"] == "synthesis"

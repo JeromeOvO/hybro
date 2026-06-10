@@ -180,7 +180,7 @@ def mock_db_service():
     mock.get_room_messages_by_room_id = AsyncMock(return_value=[])
     mock.get_task_messages_for_room = AsyncMock(return_value=[])
     mock.get_pending_task_messages_for_user = AsyncMock(return_value=[])
-    mock.update_task_state_on_message = AsyncMock(return_value=True)
+    mock.update_task_state_on_message = AsyncMock(return_value=(True, None))
     mock.is_message_cancelled = AsyncMock(return_value=False)
     
     # Memory operations

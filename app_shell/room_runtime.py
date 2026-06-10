@@ -707,9 +707,29 @@ class RoomServices:
             )
 
         active_runs = await self._read_active_runs_for_room(room.room_id)
+
+        turn_completion_kind: str | None = None
+        trigger_msg_id = request.trigger_message_id
+        if trigger_msg_id and not any(
+            r.get("trigger_message_id") == trigger_msg_id for r in active_runs
+        ):
+            try:
+                user_msg = (
+                    await self._store.get_room_user_message_by_message_id(
+                        trigger_msg_id
+                    )
+                )
+                if user_msg and isinstance(user_msg.extend_info, dict):
+                    kind = user_msg.extend_info.get("turn_completion_kind")
+                    if kind in ("synthesis", "deterministic"):
+                        turn_completion_kind = kind
+            except Exception:
+                pass
+
         return RoomCenterActiveRunsResponse(
             room_id=room.room_id,
             active_runs=active_runs,
+            turn_completion_kind=turn_completion_kind,
             success=True,
             error=None,
             status_code=200,

@@ -1510,7 +1510,11 @@ class DirectTransport(AgentTransport):
                     room_id=room_id,
                     message_id=message_id,
                     status=actual_state,
-                    content=full_response_text or error_text,
+                    content=(
+                        full_response_text
+                        if actual_state == CommonTaskState.COMPLETED
+                        else (full_response_text or error_text)
+                    ),
                     error=error_text,
                     agent_name=agent_card.name if agent_card else None,
                     agent_id=current_message.agent_id,

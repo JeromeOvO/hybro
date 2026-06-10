@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 
 from common.dto import RoomMessageSummary
+from common.prompts.markdown_response_format import HYBRO_MARKDOWN_RESPONSE_FORMAT
 from common.protocols import LLMStreamGateway
 
 
@@ -20,12 +21,14 @@ class SummaryLLMService:
         )
         system_prompt = (
             "You are HYBRO AI synthesizing multi-agent responses. Preserve useful "
-            "agent attribution and return a concise user-facing answer."
+            "agent attribution and return a concise user-facing answer.\n\n"
+            + HYBRO_MARKDOWN_RESPONSE_FORMAT
         )
         if mode == "debate":
             system_prompt = (
                 "You are HYBRO AI summarizing a multi-agent debate. Compare "
-                "perspectives, agreements, disagreements, and actionable conclusions."
+                "perspectives, agreements, disagreements, and actionable conclusions.\n\n"
+                + HYBRO_MARKDOWN_RESPONSE_FORMAT
             )
         user_prompt = (
             f"The user asked: {user_question or 'Not provided'}\n\n"
