@@ -17,13 +17,17 @@ class FakeStreamGateway:
 
 def test_hybro_markdown_response_format_requires_section_headers() -> None:
     assert "###" in HYBRO_MARKDOWN_RESPONSE_FORMAT
-    assert "Restart at 1" in HYBRO_MARKDOWN_RESPONSE_FORMAT
+    assert "starts numbering over at `1.`" in HYBRO_MARKDOWN_RESPONSE_FORMAT
+    assert "top-level ordered list" in HYBRO_MARKDOWN_RESPONSE_FORMAT
+    assert "Hybro renders them nested" in HYBRO_MARKDOWN_RESPONSE_FORMAT
+    assert "Do not:" in HYBRO_MARKDOWN_RESPONSE_FORMAT
+    assert "1. •" in HYBRO_MARKDOWN_RESPONSE_FORMAT
     assert "4 spaces" in HYBRO_MARKDOWN_RESPONSE_FORMAT
 
 
 def test_supervisor_synthesis_prompt_includes_shared_markdown_format() -> None:
     assert "### TL;DR" in SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT
-    assert "Restart at 1" in SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT
+    assert "starts numbering over at `1.`" in SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT
     assert "{trajectory_summary}" in SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT
 
 
@@ -46,7 +50,7 @@ async def test_summary_service_system_prompt_includes_markdown_format() -> None:
 
     system_prompt = gateway.stream_calls[0][0][0]["content"]
     assert "### Prioritized items" in system_prompt
-    assert "Restart at 1" in system_prompt
+    assert "Do not write `1.` for every item" in system_prompt
 
 
 @pytest.mark.asyncio
@@ -70,4 +74,4 @@ async def test_summary_service_debate_prompt_includes_markdown_format() -> None:
     system_prompt = gateway.stream_calls[0][0][0]["content"]
     assert "multi-agent debate" in system_prompt
     assert "### Prioritized items" in system_prompt
-    assert "Restart at 1" in system_prompt
+    assert "Do not write `1.` for every item" in system_prompt
