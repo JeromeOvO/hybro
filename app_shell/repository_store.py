@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import secrets
 import uuid
+from datetime import timedelta
+from typing import Any
 
+from common.a2a_constants import TERMINAL_STATES
+from common.config.settings import settings
 from common.protocols import (
     AgentRepository,
     MessageRepository,
     MongoDAL,
     RoomRepository,
+)
+from common.utils.a2a_helpers import (
+    sanitize_artifact_parts,
 )
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -14,17 +24,17 @@ from models.agent import Agent
 from models.agent_group import AgentGroup
 from models.memory import ChatContext
 from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
+from models.run import NON_TERMINAL_RUN_STATE_VALUES
+from models.supervisor import TrajectoryStatus
 
 logger = get_logger(__name__)
 
 
 class AppShellRepositoryStore:
-    """PR2 compatibility store for low-risk app-shell DB consumers.
+    """Compatibility store backed by DAL repositories during app-shell migration."""
 
-    This intentionally exposes only the methods used by room membership,
-    debate injection, and room coordination. Later migration PRs should extend
-    this store only when their first migrated consumer needs a method.
-    """
+    MAX_TASKS_PER_USER = 100
+    MAX_TASKS_PER_ROOM = 50
 
     def __init__(
         self,
@@ -39,6 +49,9 @@ class AppShellRepositoryStore:
         self._user_memories = mongo.collection("user_memories")
         self._agent_memories = mongo.collection("agent_memories")
         self._room_agent_messages = mongo.collection("room_agent_messages")
+        self._room_user_messages = mongo.collection("room_user_messages")
+        self._cancelled_messages = mongo.collection("cancelled_messages")
+        self._runs = mongo.collection("runs")
         self._room_repository = room_repository
         self._message_repository = message_repository
         self._agent_repository = agent_repository
@@ -54,11 +67,11 @@ class AppShellRepositoryStore:
     async def get_agent_groups_by_owner(self, owner_id: str) -> list[AgentGroup]:
         try:
             docs = await self._agent_groups.find({"owner_id": owner_id})
+            groups = [_safe_parse_agent_group(doc) for doc in docs if doc is not None]
+            return [group for group in groups if group is not None]
         except Exception:
             logger.error("Failed to get agent groups by owner", exc_info=True)
             return []
-        groups = [_safe_parse_agent_group(doc) for doc in docs if doc is not None]
-        return [group for group in groups if group is not None]
 
     async def get_agent_group_by_id(self, group_id: str) -> AgentGroup | None:
         try:
@@ -93,11 +106,11 @@ class AppShellRepositoryStore:
                 active_only=True,
                 limit=0,
             )
+            agents = [_safe_parse_agent(doc) for doc in docs if doc is not None]
+            return [agent for agent in agents if agent is not None]
         except Exception:
             logger.error("Failed to get active agents", exc_info=True)
             return []
-        agents = [_safe_parse_agent(doc) for doc in docs if doc is not None]
-        return [agent for agent in agents if agent is not None]
 
     async def get_agent_name_by_agent_id(self, agent_id: str) -> str | None:
         try:
@@ -106,7 +119,25 @@ class AppShellRepositoryStore:
             logger.error("Failed to get agent name", exc_info=True)
             return None
         card = (doc or {}).get("agent_card") or {}
-        return card.get("name") if isinstance(card, dict) else getattr(card, "name", None)
+        return (
+            card.get("name") if isinstance(card, dict) else getattr(card, "name", None)
+        )
+
+    async def get_agent_by_agent_id(self, agent_id: str) -> Agent | None:
+        try:
+            return _safe_parse_agent(await self._agent_repository.get_by_id(agent_id))
+        except Exception:
+            logger.error("Failed to get agent", exc_info=True)
+            return None
+
+    async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> None:
+        try:
+            await self._agent_repository.increment_agent_call_count(
+                agent_id,
+                success=success,
+            )
+        except Exception:
+            logger.error("Failed to increment agent call count", exc_info=True)
 
     async def get_room_by_room_id(self, room_id: str) -> Room | None:
         try:
@@ -141,44 +172,22 @@ class AppShellRepositoryStore:
         self, related_message_id: str
     ) -> list[RoomAgentMessage]:
         try:
-            docs = await self._message_repository.get_agent_messages_by_related_message_id(
-                related_message_id
+            docs = (
+                await self._message_repository.get_agent_messages_by_related_message_id(
+                    related_message_id
+                )
             )
+            messages = [
+                _safe_parse_agent_message(doc) for doc in docs if doc is not None
+            ]
+            return [message for message in messages if message is not None]
         except Exception:
             logger.error("Failed to get related agent messages", exc_info=True)
             return []
-        messages = [_safe_parse_agent_message(doc) for doc in docs if doc is not None]
-        return [message for message in messages if message is not None]
 
-    async def get_task_messages_for_room(
-        self, room_id: str, *, limit: int = 50
-    ) -> list[RoomAgentMessage]:
-        try:
-            docs = await self._message_repository.get_task_messages_for_room(
-                room_id,
-                limit,
-            )
-        except Exception:
-            logger.error("Failed to get task messages for room", exc_info=True)
-            return []
-        messages = [_safe_parse_agent_message(doc) for doc in docs if doc is not None]
-        return [message for message in messages if message is not None]
-
-    async def get_pending_task_messages_for_user(
-        self, user_id: str, states: list[str]
-    ) -> list[RoomAgentMessage]:
-        try:
-            docs = await self._message_repository.get_pending_task_messages_for_user(
-                user_id,
-                states,
-            )
-        except Exception:
-            logger.error("Failed to get pending task messages", exc_info=True)
-            return []
-        messages = [_safe_parse_agent_message(doc) for doc in docs if doc is not None]
-        return [message for message in messages if message is not None]
-
-    async def add_room_agent_message(self, room_agent_message: RoomAgentMessage) -> bool:
+    async def add_room_agent_message(
+        self, room_agent_message: RoomAgentMessage
+    ) -> bool:
         try:
             if room_agent_message.message_id == "":
                 room_agent_message.message_id = str(uuid.uuid4())
@@ -194,7 +203,9 @@ class AppShellRepositoryStore:
         self, message_id: str, room_agent_message: RoomAgentMessage
     ) -> bool:
         try:
-            update_data = _agent_message_update_payload(room_agent_message)
+            update_data = _strip_unset_task_tracking_fields(
+                room_agent_message.model_dump(exclude_unset=True, mode="json")
+            )
             return await self._message_repository.update_agent_message(
                 message_id,
                 update_data,
@@ -226,8 +237,7 @@ class AppShellRepositoryStore:
             return False
 
     async def resolve_client_request_id_for_agent_message(
-        self,
-        room_agent_message: RoomAgentMessage,
+        self, room_agent_message: RoomAgentMessage
     ) -> str | None:
         if room_agent_message.client_request_id:
             return room_agent_message.client_request_id
@@ -258,8 +268,772 @@ class AppShellRepositoryStore:
 
         return None
 
+    async def resolve_client_request_id_for_message_id(
+        self, message_id: str
+    ) -> str | None:
+        user_message = await self.get_room_user_message_by_message_id(message_id)
+        if user_message and user_message.client_request_id:
+            return user_message.client_request_id
+
+        agent_message = await self.get_room_agent_message_by_message_id(message_id)
+        if agent_message is not None:
+            return await self.resolve_client_request_id_for_agent_message(agent_message)
+
+        return None
+
+    async def get_task_messages_for_room(
+        self, room_id: str, *, limit: int = 50
+    ) -> list[RoomAgentMessage]:
+        try:
+            docs = await self._message_repository.get_task_messages_for_room(
+                room_id,
+                limit,
+            )
+        except Exception:
+            logger.error("Failed to get task messages for room", exc_info=True)
+            return []
+        return [
+            msg
+            for msg in (
+                _safe_parse_agent_message(doc) for doc in docs if doc is not None
+            )
+            if msg is not None
+        ]
+
+    async def get_pending_task_messages_for_user(
+        self, user_id: str, states: list[str]
+    ) -> list[RoomAgentMessage]:
+        try:
+            docs = await self._message_repository.get_pending_task_messages_for_user(
+                user_id,
+                states,
+            )
+        except Exception:
+            logger.error("Failed to get pending task messages", exc_info=True)
+            return []
+        messages = [_safe_parse_agent_message(doc) for doc in docs if doc is not None]
+        return [message for message in messages if message is not None]
+
+    def _get_webhook_signing_key(self) -> bytes:
+        if not settings.webhook_signing_key:
+            raise RuntimeError("WEBHOOK_SIGNING_KEY not configured")
+        return settings.webhook_signing_key.encode()
+
+    def hash_webhook_token(self, token: str) -> str:
+        return hmac.new(
+            self._get_webhook_signing_key(),
+            token.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def verify_webhook_token(self, token: str, stored_hash: str) -> bool:
+        return hmac.compare_digest(self.hash_webhook_token(token), stored_hash)
+
+    def generate_webhook_token(self) -> str:
+        return secrets.token_urlsafe(32)
+
+    async def check_task_limits(
+        self, user_id: str, room_id: str, non_terminal_states: list[str]
+    ) -> None:
+        user_count = await self._count_agent_messages(
+            {
+                "user_id": user_id,
+                "message_content.message_task.status.state": {
+                    "$in": list(non_terminal_states)
+                },
+                "has_task_tracking": True,
+            }
+        )
+        if user_count >= self.MAX_TASKS_PER_USER:
+            raise ValueError(
+                f"User has too many pending tasks ({user_count}). "
+                "Please wait for some to complete."
+            )
+
+        room_count = await self._count_agent_messages(
+            {
+                "room_id": room_id,
+                "message_content.message_task.status.state": {
+                    "$in": list(non_terminal_states)
+                },
+                "has_task_tracking": True,
+            }
+        )
+        if room_count >= self.MAX_TASKS_PER_ROOM:
+            raise ValueError(
+                f"Room has too many pending tasks ({room_count}). "
+                "Please wait for some to complete."
+            )
+
+    async def enable_task_tracking_on_message(
+        self,
+        *,
+        message_id: str,
+        webhook_token_hash: str,
+        agent_url: str,
+        task_created_at: Any,
+        task_updated_at: Any,
+        task_data: dict,
+    ) -> bool:
+        updates = {
+            "has_task_tracking": True,
+            "webhook_token_hash": webhook_token_hash,
+            "agent_url": agent_url,
+            "task_created_at": task_created_at,
+            "task_updated_at": task_updated_at,
+            "message_content.message_task": task_data,
+        }
+        try:
+            updated = await self._message_repository.update_agent_message(
+                message_id, updates
+            )
+            if updated:
+                return True
+            doc = await self._message_repository.get_agent_message_by_id(message_id)
+            return _task_tracking_matches(
+                doc,
+                webhook_token_hash=webhook_token_hash,
+                agent_url=agent_url,
+                task_data=task_data,
+            )
+        except Exception:
+            logger.error("Failed to enable task tracking on message", exc_info=True)
+            return False
+
+    async def update_task_on_message(
+        self,
+        message_id: str,
+        task_data: dict,
+        message_text: str | None = None,
+    ) -> bool:
+        terminal_values = {state.value for state in TERMINAL_STATES}
+
+        updates: dict[str, Any] = {
+            "message_content.message_task": task_data,
+            "task_updated_at": utcnow(),
+        }
+        if message_text is not None:
+            updates["message_content.message_text"] = message_text
+        try:
+            return await self._message_repository.update_agent_message_if_not_terminal(
+                message_id,
+                updates,
+                sorted(terminal_values),
+            )
+        except Exception:
+            logger.error("Failed to update task on message", exc_info=True)
+            return False
+
+    async def update_webhook_token_hash_on_message(
+        self, message_id: str, webhook_token_hash: str
+    ) -> bool:
+        try:
+            return await self._message_repository.update_agent_message(
+                message_id,
+                {"webhook_token_hash": webhook_token_hash},
+            )
+        except Exception:
+            logger.error("Failed to update webhook token hash", exc_info=True)
+            return False
+
+    async def verify_webhook_token_on_message(self, message_id: str) -> str | None:
+        message = await self.get_room_agent_message_by_message_id(message_id)
+        if not message or not message.has_task_tracking:
+            return None
+        return message.webhook_token_hash
+
+    async def verify_webhook_token_for_task(
+        self, message_id: str, token: str
+    ) -> tuple[bool, str]:
+        try:
+            stored_hash = await self.verify_webhook_token_on_message(message_id)
+            if not stored_hash:
+                return False, "task_not_found"
+            if not self.verify_webhook_token(token, stored_hash):
+                return False, "invalid_token"
+            return True, ""
+        except Exception:
+            logger.error("Failed to verify webhook token", exc_info=True)
+            return False, "verification_error"
+
+    async def is_message_cancelled(self, message_id: str) -> bool:
+        try:
+            reader = getattr(self._message_repository, "is_message_cancelled", None)
+            if callable(reader):
+                return await reader(message_id)
+            return (
+                await self._cancelled_messages.find_one({"message_id": message_id})
+            ) is not None
+        except Exception:
+            logger.error("Failed to check message cancellation", exc_info=True)
+            return False
+
+    async def cancel_message(
+        self,
+        message_id: str,
+        requested_by_user_id: str,
+    ) -> bool:
+        try:
+            await self._cancelled_messages.update_one(
+                {"message_id": message_id},
+                {
+                    "$setOnInsert": {
+                        "message_id": message_id,
+                        "user_id": requested_by_user_id,
+                        "cancelled_at": utcnow(),
+                    }
+                },
+                upsert=True,
+            )
+            return True
+        except Exception:
+            logger.error("Failed to cancel message", exc_info=True)
+            return False
+
+    async def get_room_ids_with_non_terminal_runs(self) -> list[str]:
+        try:
+            ids = await self._runs.distinct(
+                "room_id",
+                {"state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)}},
+            )
+            return [str(room_id) for room_id in ids if room_id]
+        except Exception:
+            logger.error("Failed to get rooms with non-terminal runs", exc_info=True)
+            return []
+
+    async def find_stale_non_terminal_runs(
+        self,
+        stale_minutes: int,
+        limit: int = 200,
+    ) -> list[dict]:
+        try:
+            cutoff = utcnow() - timedelta(minutes=stale_minutes)
+            return await self._runs.find(
+                {
+                    "state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)},
+                    "updated_at": {"$lt": cutoff},
+                },
+                sort=[("updated_at", 1)],
+                limit=limit,
+            )
+        except Exception:
+            logger.error("Failed to find stale runs", exc_info=True)
+            return []
+
+    async def get_stale_task_messages(
+        self,
+        stale_minutes: int,
+        non_terminal_states: list[str],
+    ) -> list[RoomAgentMessage]:
+        threshold = utcnow() - timedelta(minutes=stale_minutes)
+        return await self._find_agent_messages(
+            {
+                "message_content.message_task.status.state": {
+                    "$in": list(non_terminal_states)
+                },
+                "task_updated_at": {"$lt": threshold},
+                "has_task_tracking": True,
+            },
+            "Failed to get stale task messages",
+        )
+
+    async def get_expired_task_messages(
+        self,
+        max_age_hours: int,
+        non_terminal_states: list[str],
+    ) -> list[RoomAgentMessage]:
+        threshold = utcnow() - timedelta(hours=max_age_hours)
+        return await self._find_agent_messages(
+            {
+                "message_content.message_task.status.state": {
+                    "$in": list(non_terminal_states)
+                },
+                "task_created_at": {"$lt": threshold},
+                "has_task_tracking": True,
+            },
+            "Failed to get expired task messages",
+        )
+
+    async def get_non_tracked_stale_task_messages(
+        self,
+        max_age_hours: int,
+        non_terminal_states: list[str],
+    ) -> list[RoomAgentMessage]:
+        threshold = utcnow() - timedelta(hours=max_age_hours)
+        return await self._find_agent_messages(
+            {
+                "message_content.message_task.status.state": {
+                    "$in": list(non_terminal_states)
+                },
+                "message_created_at": {"$lt": threshold},
+                "has_task_tracking": {"$ne": True},
+            },
+            "Failed to get non-tracked stale task messages",
+        )
+
+    async def get_orphaned_agent_messages(
+        self,
+        orphan_threshold_minutes: int,
+    ) -> list[RoomAgentMessage]:
+        threshold = utcnow() - timedelta(minutes=orphan_threshold_minutes)
+        return await self._find_agent_messages(
+            {
+                "message_type": "agent",
+                "message_created_at": {"$lt": threshold},
+                "$and": [
+                    {
+                        "$or": [
+                            {"has_task_tracking": {"$ne": True}},
+                            {"has_task_tracking": {"$exists": False}},
+                        ]
+                    },
+                    {
+                        "$or": [
+                            {"message_content.message_task.status": {"$exists": False}},
+                            {"message_content.message_task.status": None},
+                        ]
+                    },
+                ],
+            },
+            "Failed to get orphaned agent messages",
+        )
+
+    async def touch_task_message(self, message_id: str) -> bool:
+        try:
+            return await self._room_agent_messages.update_one(
+                {"message_id": message_id, "has_task_tracking": True},
+                {"$set": {"task_updated_at": utcnow()}},
+            )
+        except Exception:
+            logger.error("Failed to touch task message", exc_info=True)
+            return False
+
+    async def get_and_clear_continuation_on_message(
+        self, message_id: str
+    ) -> dict | None:
+        try:
+            doc = await self._room_agent_messages.find_one_and_update(
+                {
+                    "message_id": message_id,
+                    "pending_continuation": {"$exists": True, "$ne": None},
+                },
+                {
+                    "$set": {
+                        "pending_continuation": None,
+                        "task_updated_at": utcnow(),
+                    }
+                },
+            )
+            return doc.get("pending_continuation") if doc else None
+        except Exception:
+            logger.error("Failed to get and clear agent continuation", exc_info=True)
+            return None
+
+    async def get_pending_continuation_on_message(self, message_id: str) -> dict | None:
+        try:
+            agent_doc = await self._room_agent_messages.find_one(
+                {"message_id": message_id, "pending_continuation": {"$exists": True}},
+            )
+            if agent_doc and agent_doc.get("pending_continuation"):
+                return agent_doc["pending_continuation"]
+            user_doc = await self._room_user_messages.find_one(
+                {"message_id": message_id, "pending_continuation": {"$exists": True}},
+            )
+            if user_doc and user_doc.get("pending_continuation"):
+                return user_doc["pending_continuation"]
+            return None
+        except Exception:
+            logger.error("Failed to get pending continuation", exc_info=True)
+            return None
+
+    async def get_and_clear_continuation_on_user_message(
+        self, message_id: str
+    ) -> dict | None:
+        try:
+            doc = await self._room_user_messages.find_one_and_update(
+                {"message_id": message_id, "pending_continuation": {"$exists": True}},
+                {"$unset": {"pending_continuation": ""}},
+            )
+            return doc.get("pending_continuation") if doc else None
+        except Exception:
+            logger.error("Failed to get and clear user continuation", exc_info=True)
+            return None
+
+    async def update_task_state_on_message(
+        self,
+        message_id: str,
+        state: str,
+        *,
+        message_text: str | None = None,
+        artifacts: list[dict] | None = None,
+        task_id: str | None = None,
+        context_id: str | None = None,
+    ) -> tuple[bool, str | None]:
+        resolved_message_text = message_text
+        try:
+            from common.utils.a2a_helpers import (
+                artifacts_to_dicts,
+                is_terminal_task_state_value,
+                prepare_terminal_agent_content,
+            )
+
+            if is_terminal_task_state_value(state):
+                if artifacts is None:
+                    existing = await self.get_room_agent_message_by_message_id(
+                        message_id
+                    )
+                    task = (
+                        existing.message_content.message_task
+                        if existing and existing.message_content
+                        else None
+                    )
+                    if task and task.artifacts:
+                        artifacts = artifacts_to_dicts(task.artifacts)
+                message_text, artifacts, _ = prepare_terminal_agent_content(
+                    message_text=message_text,
+                    artifacts=artifacts,
+                )
+                resolved_message_text = message_text
+
+            updates: dict[str, Any] = {
+                "message_content.message_task.status.state": state,
+                "task_updated_at": utcnow(),
+            }
+            if message_text is not None:
+                updates["message_content.message_text"] = message_text
+            if artifacts is not None:
+                updates["message_content.message_task.artifacts"] = artifacts
+            if task_id is not None:
+                updates["message_content.message_task.id"] = task_id
+            if context_id is not None:
+                updates["message_content.message_task.contextId"] = context_id
+
+            terminal_values = sorted(state.value for state in TERMINAL_STATES)
+            updated = (
+                await self._message_repository.update_agent_message_if_not_terminal(
+                    message_id,
+                    updates,
+                    terminal_values,
+                )
+            )
+            return updated, resolved_message_text
+        except Exception:
+            logger.error("Failed to update task state on message", exc_info=True)
+            return False, resolved_message_text
+
+    async def accumulate_artifact_on_message(
+        self,
+        message_id: str,
+        artifact: dict,
+        append: bool = False,
+    ) -> bool:
+        """Accumulate A2A artifact chunks with atomic DAL collection updates."""
+        try:
+            raw_parts = artifact.get("parts", [])
+            clean_parts = sanitize_artifact_parts(raw_parts)
+            artifact = {**artifact, "parts": clean_parts}
+
+            if append and not clean_parts:
+                logger.warning(
+                    "All artifact parts dropped by sanitizer; skipping append "
+                    "(message_id=%s)",
+                    message_id,
+                )
+                return False
+
+            artifact_id = artifact.get("artifactId") or artifact.get("artifact_id")
+            artifact_text = _extract_text_from_artifact_parts(clean_parts)
+
+            base_filter = {
+                "message_id": message_id,
+                "message_content.message_task.status.state": {
+                    "$nin": sorted(state.value for state in TERMINAL_STATES)
+                },
+            }
+            if not artifact_id:
+                update: dict[str, Any] = {
+                    "$push": {"message_content.message_task.artifacts": artifact},
+                    "$set": {
+                        "message_content.message_task.status.state": "working",
+                        "task_updated_at": utcnow(),
+                    },
+                }
+                if artifact_text:
+                    update["$set"]["message_content.message_text"] = artifact_text
+                result = await self._room_agent_messages.update_one(base_filter, update)
+                return _mongo_update_succeeded(result)
+
+            if append:
+                return await self._append_parts_to_artifact(
+                    message_id,
+                    artifact_id,
+                    artifact,
+                    artifact_text,
+                    base_filter,
+                )
+            return await self._replace_or_insert_artifact(
+                artifact_id,
+                artifact,
+                artifact_text,
+                base_filter,
+            )
+        except Exception:
+            logger.error("Failed to accumulate artifact on message", exc_info=True)
+            return False
+
+    @staticmethod
+    def _artifact_id_match_expr(artifact_id: str) -> dict[str, Any]:
+        return {
+            "$or": [
+                {"$eq": ["$$art.artifactId", artifact_id]},
+                {"$eq": ["$$art.artifact_id", artifact_id]},
+            ]
+        }
+
+    @classmethod
+    def _map_replace_artifact_expr(
+        cls, artifact_id: str, artifact: dict
+    ) -> dict[str, Any]:
+        return {
+            "$map": {
+                "input": {"$ifNull": ["$message_content.message_task.artifacts", []]},
+                "as": "art",
+                "in": {
+                    "$cond": {
+                        "if": cls._artifact_id_match_expr(artifact_id),
+                        "then": artifact,
+                        "else": "$$art",
+                    }
+                },
+            }
+        }
+
+    @classmethod
+    def _map_append_parts_expr(
+        cls, artifact_id: str, new_parts: list[dict]
+    ) -> dict[str, Any]:
+        return {
+            "$map": {
+                "input": {"$ifNull": ["$message_content.message_task.artifacts", []]},
+                "as": "art",
+                "in": {
+                    "$cond": {
+                        "if": cls._artifact_id_match_expr(artifact_id),
+                        "then": {
+                            "$mergeObjects": [
+                                "$$art",
+                                {
+                                    "parts": {
+                                        "$concatArrays": [
+                                            {"$ifNull": ["$$art.parts", []]},
+                                            new_parts,
+                                        ]
+                                    }
+                                },
+                            ]
+                        },
+                        "else": "$$art",
+                    }
+                },
+            }
+        }
+
+    async def _append_parts_to_artifact(
+        self,
+        message_id: str,
+        artifact_id: str,
+        artifact: dict,
+        artifact_text: str,
+        base_filter: dict,
+    ) -> bool:
+        new_parts = artifact.get("parts", [])
+        if not new_parts:
+            return False
+
+        filter_with_artifact = {
+            **base_filter,
+            "message_content.message_task.artifacts": {
+                "$elemMatch": {
+                    "$or": [
+                        {"artifactId": artifact_id},
+                        {"artifact_id": artifact_id},
+                    ]
+                }
+            },
+        }
+        set_fields: dict[str, Any] = {
+            "message_content.message_task.artifacts": self._map_append_parts_expr(
+                artifact_id,
+                new_parts,
+            ),
+            "message_content.message_task.status.state": "working",
+            "task_updated_at": utcnow(),
+        }
+        if artifact_text:
+            set_fields["message_content.message_text"] = {
+                "$concat": [
+                    {"$ifNull": ["$message_content.message_text", ""]},
+                    artifact_text,
+                ]
+            }
+        result = await self._room_agent_messages.update_one(
+            filter_with_artifact,
+            [{"$set": set_fields}],
+        )
+        if _mongo_update_succeeded(result):
+            return True
+
+        logger.warning(
+            "append=True for nonexistent artifact %s on message %s, inserting new",
+            artifact_id,
+            message_id,
+        )
+        insert_update: dict[str, Any] = {
+            "$push": {"message_content.message_task.artifacts": artifact},
+            "$set": {
+                "message_content.message_task.status.state": "working",
+                "task_updated_at": utcnow(),
+            },
+        }
+        if artifact_text:
+            insert_update["$set"]["message_content.message_text"] = artifact_text
+        result = await self._room_agent_messages.update_one(base_filter, insert_update)
+        return _mongo_update_succeeded(result)
+
+    async def _replace_or_insert_artifact(
+        self,
+        artifact_id: str,
+        artifact: dict,
+        artifact_text: str,
+        base_filter: dict,
+    ) -> bool:
+        filter_with_artifact = {
+            **base_filter,
+            "message_content.message_task.artifacts": {
+                "$elemMatch": {
+                    "$or": [
+                        {"artifactId": artifact_id},
+                        {"artifact_id": artifact_id},
+                    ]
+                }
+            },
+        }
+        set_fields: dict[str, Any] = {
+            "message_content.message_task.artifacts": self._map_replace_artifact_expr(
+                artifact_id,
+                artifact,
+            ),
+            "message_content.message_task.status.state": "working",
+            "task_updated_at": utcnow(),
+        }
+        if artifact_text:
+            set_fields["message_content.message_text"] = artifact_text
+        result = await self._room_agent_messages.update_one(
+            filter_with_artifact,
+            [{"$set": set_fields}],
+        )
+        if _mongo_update_succeeded(result):
+            return True
+
+        insert_update: dict[str, Any] = {
+            "$push": {"message_content.message_task.artifacts": artifact},
+            "$set": {
+                "message_content.message_task.status.state": "working",
+                "task_updated_at": utcnow(),
+            },
+        }
+        if artifact_text:
+            insert_update["$set"]["message_content.message_text"] = artifact_text
+        result = await self._room_agent_messages.update_one(base_filter, insert_update)
+        return _mongo_update_succeeded(result)
+
+    async def update_task_state_on_message_if_not_terminal(
+        self,
+        message_id: str,
+        state: str,
+    ) -> bool:
+        try:
+            terminal_values = sorted(state.value for state in TERMINAL_STATES)
+            return await self._message_repository.update_agent_message_if_not_terminal(
+                message_id,
+                {
+                    "message_content.message_task.status.state": state,
+                    "task_updated_at": utcnow(),
+                },
+                terminal_values,
+            )
+        except Exception:
+            logger.error("Failed to update task state on message", exc_info=True)
+            return False
+
+    async def get_stuck_supervisor_trajectory_messages(
+        self,
+        older_than_minutes: int,
+        limit: int = 100,
+    ) -> list[dict]:
+        try:
+            threshold = utcnow() - timedelta(minutes=older_than_minutes)
+            return await self._room_user_messages.find(
+                {
+                    "extend_info.supervisor_trajectory.status": TrajectoryStatus.RUNNING,
+                    "extend_info.supervisor": True,
+                    "message_created_at": {"$lt": threshold},
+                },
+                projection={"message_id": 1, "room_id": 1, "_id": 0},
+                limit=limit,
+            )
+        except Exception:
+            logger.error(
+                "Failed to get stuck supervisor trajectory messages",
+                exc_info=True,
+            )
+            return []
+
+    async def claim_stuck_supervisor_trajectory(self, message_id: str) -> bool:
+        try:
+            doc = await self._room_user_messages.find_one_and_update(
+                {
+                    "message_id": message_id,
+                    "extend_info.supervisor_trajectory.status": TrajectoryStatus.RUNNING,
+                },
+                {
+                    "$set": {
+                        "extend_info.supervisor_trajectory.status": (
+                            TrajectoryStatus.RECOVERING
+                        ),
+                    }
+                },
+            )
+            return doc is not None
+        except Exception:
+            logger.error("Failed to claim stuck supervisor trajectory", exc_info=True)
+            return False
+
+    async def _find_agent_messages(
+        self,
+        query: dict,
+        log_message: str,
+    ) -> list[RoomAgentMessage]:
+        try:
+            docs = await self._room_agent_messages.find(query)
+            messages = [
+                _safe_parse_agent_message(doc) for doc in docs if doc is not None
+            ]
+            return [message for message in messages if message is not None]
+        except Exception:
+            logger.error(log_message, exc_info=True)
+            return []
+
+    async def _count_agent_messages(self, query: dict) -> int:
+        counter = getattr(self._message_repository, "count_agent_messages", None)
+        if callable(counter):
+            return await counter(query)
+        return 0
+
     async def add_chat_context(self, chat_context: ChatContext) -> bool:
         try:
+            if chat_context.memory_id == "":
+                chat_context.memory_id = str(uuid.uuid4())
             await self._chat_contexts.insert_one(chat_context.model_dump(mode="json"))
             return True
         except Exception:
@@ -267,8 +1041,7 @@ class AppShellRepositoryStore:
             return False
 
     async def get_chat_context_by_session_id(
-        self,
-        session_id: str,
+        self, session_id: str
     ) -> ChatContext | None:
         try:
             return _safe_parse_chat_context(
@@ -279,22 +1052,22 @@ class AppShellRepositoryStore:
             return None
 
     async def update_chat_context_by_session_id(
-        self,
-        session_id: str,
-        chat_context: ChatContext,
+        self, session_id: str, chat_context: ChatContext
     ) -> bool:
         try:
-            return await self._chat_contexts.update_one(
+            await self._chat_contexts.update_one(
                 {"session_id": session_id},
-                {"$set": chat_context.model_dump(mode="json")},
+                {"$set": chat_context.model_dump(exclude_unset=True, mode="json")},
             )
+            return True
         except Exception:
             logger.error("Failed to update chat context", exc_info=True)
             return False
 
     async def delete_chat_context_by_session_id(self, session_id: str) -> bool:
         try:
-            return await self._chat_contexts.delete_one({"session_id": session_id})
+            await self._chat_contexts.delete_one({"session_id": session_id})
+            return True
         except Exception:
             logger.error("Failed to delete chat context", exc_info=True)
             return False
@@ -342,6 +1115,17 @@ class AppShellRepositoryStore:
             logger.error("Failed to record agent call", exc_info=True)
             return False
 
+    async def update_turn_notes(
+        self, room_id: str, turn_id: str, turn_notes: dict
+    ) -> bool:
+        updater = getattr(self._room_repository, "update_turn_notes", None)
+        if callable(updater):
+            try:
+                return await updater(room_id, turn_id, turn_notes)
+            except Exception:
+                logger.error("Failed to update turn notes", exc_info=True)
+        return False
+
 
 def _safe_parse_agent_group(doc: dict | None) -> AgentGroup | None:
     if doc is None:
@@ -373,16 +1157,6 @@ def _safe_parse_room(doc: dict | None) -> Room | None:
         return None
 
 
-def _safe_parse_user_message(doc: dict | None) -> RoomUserMessage | None:
-    if doc is None:
-        return None
-    try:
-        return RoomUserMessage.model_validate(doc)
-    except Exception:
-        logger.warning("Invalid room user message document", exc_info=True)
-        return None
-
-
 def _safe_parse_agent_message(doc: dict | None) -> RoomAgentMessage | None:
     if doc is None:
         return None
@@ -393,8 +1167,7 @@ def _safe_parse_agent_message(doc: dict | None) -> RoomAgentMessage | None:
         return None
 
 
-def _agent_message_update_payload(room_agent_message: RoomAgentMessage) -> dict:
-    update_data = room_agent_message.model_dump(mode="json")
+def _strip_unset_task_tracking_fields(update_data: dict[str, Any]) -> dict[str, Any]:
     task_tracking_fields = {
         "webhook_token_hash",
         "pending_continuation",
@@ -403,12 +1176,60 @@ def _agent_message_update_payload(room_agent_message: RoomAgentMessage) -> dict:
         "task_created_at",
         "task_updated_at",
         "task_content",
-        "has_task_tracking",
     }
     for field in task_tracking_fields:
         if update_data.get(field) is None:
             update_data.pop(field, None)
+    if update_data.get("has_task_tracking") is False:
+        update_data.pop("has_task_tracking", None)
     return update_data
+
+
+def _task_tracking_matches(
+    doc: dict | None,
+    *,
+    webhook_token_hash: str,
+    agent_url: str,
+    task_data: dict,
+) -> bool:
+    if not doc:
+        return False
+    message_content = doc.get("message_content") or {}
+    return (
+        doc.get("has_task_tracking") is True
+        and doc.get("webhook_token_hash") == webhook_token_hash
+        and doc.get("agent_url") == agent_url
+        and message_content.get("message_task") == task_data
+    )
+
+
+def _extract_text_from_artifact_parts(parts: list[dict]) -> str:
+    chunks: list[str] = []
+    for part in parts:
+        root = part.get("root", part)
+        if isinstance(root, dict) and isinstance(root.get("text"), str):
+            chunks.append(root["text"])
+    return "".join(chunks)
+
+
+def _mongo_update_succeeded(result: Any) -> bool:
+    if isinstance(result, bool):
+        return result
+    modified_count = getattr(result, "modified_count", None)
+    upserted_id = getattr(result, "upserted_id", None)
+    if modified_count is not None:
+        return modified_count > 0 or upserted_id is not None
+    return bool(result)
+
+
+def _safe_parse_user_message(doc: dict | None) -> RoomUserMessage | None:
+    if doc is None:
+        return None
+    try:
+        return RoomUserMessage.model_validate(doc)
+    except Exception:
+        logger.warning("Invalid room user message document", exc_info=True)
+        return None
 
 
 def _safe_parse_chat_context(doc: dict | None) -> ChatContext | None:

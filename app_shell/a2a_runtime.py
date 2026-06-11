@@ -1,5 +1,4 @@
 import asyncio
-import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -46,22 +45,6 @@ from models.room import RoomAgentMessage
 
 logger = get_logger(__name__)
 
-_mongodb_backend: Any | None = None
-_legacy_mongo: Any | None = None
-
-
-def __getattr__(name: str) -> Any:
-    if name == "mongodb":
-        return _mongodb_backend
-    raise AttributeError(name)
-
-
-def _bind_mongodb_backend(value: Any | None = None) -> None:
-    global _mongodb_backend
-    _mongodb_backend = value
-    global _legacy_mongo
-    _legacy_mongo = value
-
 
 PLATFORM_SUPPORTED_MODES = {
     "text/plain",
@@ -102,16 +85,8 @@ class A2AService:
     def bind_task_db(self, task_db: Any) -> None:
         self._task_db = task_db
 
-    @staticmethod
-    def _resolve_legacy_task_db() -> Any | None:
-        legacy_module = sys.modules.get("app_shell.database_service")
-        return getattr(legacy_module, "db_service", None) if legacy_module else None
-
     def _get_task_db(self) -> Any | None:
-        task_db = getattr(self, "_task_db", None)
-        if task_db is not None:
-            return task_db
-        return self._resolve_legacy_task_db()
+        return getattr(self, "_task_db", None)
 
     def _resolve_accepted_modes(self, agent_card: AgentCard) -> list[str]:
         """Intersect agent's output modes with platform capabilities."""
@@ -179,8 +154,12 @@ class A2AService:
             raise IllgalParameterError()
 
         try:
-            async with httpx.AsyncClient(timeout=self.AGENT_CARD_FETCH_TIMEOUT) as httpx_client:
-                card = await self._fetch_agent_card_with_fallback(httpx_client, agent_url)
+            async with httpx.AsyncClient(
+                timeout=self.AGENT_CARD_FETCH_TIMEOUT
+            ) as httpx_client:
+                card = await self._fetch_agent_card_with_fallback(
+                    httpx_client, agent_url
+                )
                 return card
 
         except Exception as e:
@@ -277,9 +256,7 @@ class A2AService:
         # Check task limits before creating
         non_terminal_state_values = [s.value for s in NON_TERMINAL_STATES]
         try:
-            await task_db.check_task_limits(
-                user_id, room_id, non_terminal_state_values
-            )
+            await task_db.check_task_limits(user_id, room_id, non_terminal_state_values)
         except ValueError as e:
             raise A2AServiceError(str(e)) from e
 
@@ -321,7 +298,9 @@ class A2AService:
 
         # Keep the in-memory object in sync with what was written to the DB.
         if current_message.message_content:
-            current_message.message_content.message_task = from_sdk_task(placeholder_task)
+            current_message.message_content.message_task = from_sdk_task(
+                placeholder_task
+            )
         current_message.has_task_tracking = True
 
         return {
@@ -339,19 +318,6 @@ class A2AService:
             return
         task_db = self._get_task_db()
         if task_db is None:
-            task_db = _legacy_mongo
-        legacy_db = _legacy_mongo
-
-        def _supports_increment(db: Any) -> bool:
-            try:
-                candidate = getattr(db, "increment_agent_call_count", None)
-            except Exception:
-                return False
-            return callable(candidate)
-
-        if _supports_increment(task_db) is False and legacy_db is not None:
-            task_db = legacy_db
-        if task_db is None:
             return
 
         increment_agent_call_count = None
@@ -363,12 +329,6 @@ class A2AService:
             )
         except Exception:
             increment_agent_call_count = None
-
-        if not callable(increment_agent_call_count):
-            try:
-                increment_agent_call_count = task_db.mongo.increment_agent_call_count
-            except Exception:
-                increment_agent_call_count = None
 
         if callable(increment_agent_call_count):
             try:
@@ -418,7 +378,9 @@ class A2AService:
         # of posting to an unreachable localhost URL.
         push_config = None
         has_capability = self.has_push_notification_capability(agent_card)
-        webhook_url = settings.webhook_base_url.rstrip("/") if settings.webhook_base_url else ""
+        webhook_url = (
+            settings.webhook_base_url.rstrip("/") if settings.webhook_base_url else ""
+        )
 
         logger.info(
             f"Push notification check: has_capability={has_capability}, "
@@ -436,7 +398,11 @@ class A2AService:
                 f"(callback → {webhook_url}/api/v1/webhooks/a2a/{message_id})"
             )
         else:
-            reason = "Agent missing capability" if not has_capability else "WEBHOOK_BASE_URL not set — using blocking=True"
+            reason = (
+                "Agent missing capability"
+                if not has_capability
+                else "WEBHOOK_BASE_URL not set — using blocking=True"
+            )
             logger.warning(
                 f"Push notifications DISABLED for task {message_id}. Reason: {reason}"
             )
@@ -469,10 +435,13 @@ class A2AService:
         # Blocking agents hold the connection for the full task duration.
         try:
             dispatch_timeout = (
-                self.PUSH_NOTIFICATION_TIMEOUT if push_config
+                self.PUSH_NOTIFICATION_TIMEOUT
+                if push_config
                 else self.DEFAULT_REQUEST_TIMEOUT
             )
-            async with self.create_a2a_client(agent_card, timeout=dispatch_timeout) as a2a_client:
+            async with self.create_a2a_client(
+                agent_card, timeout=dispatch_timeout
+            ) as a2a_client:
                 response = await a2a_client.send_message(send_message_request)
         except Exception as e:
             await self._record_call(agent_id, success=False)
@@ -520,7 +489,11 @@ class A2AService:
         result = response.root.result
 
         # --- Diagnostic: log the raw response shape ---
-        _art_count = len(result.artifacts) if hasattr(result, "artifacts") and result.artifacts else 0
+        _art_count = (
+            len(result.artifacts)
+            if hasattr(result, "artifacts") and result.artifacts
+            else 0
+        )
         _parts_summary = ""
         if hasattr(result, "artifacts") and result.artifacts:
             _parts_summary = "; ".join(
@@ -533,7 +506,9 @@ class A2AService:
             "send_message_to_tracked_agent: response kind=%s, state=%s, "
             "artifacts=%d (%s) for message_id=%s",
             result.kind,
-            getattr(result.status, "state", "N/A") if hasattr(result, "status") else "N/A",
+            getattr(result.status, "state", "N/A")
+            if hasattr(result, "status")
+            else "N/A",
             _art_count,
             _parts_summary or "none",
             message_id,
@@ -544,9 +519,12 @@ class A2AService:
             # Create completed task with message as artifact
             completed_task = self._message_to_completed_task(result, context_id)
             from common.utils.a2a_helpers import convert_pydantic_artifacts_to_s3
+
             if completed_task.artifacts:
                 await convert_pydantic_artifacts_to_s3(
-                    completed_task.artifacts, room_id=room_id or message_id, message_id=message_id,
+                    completed_task.artifacts,
+                    room_id=room_id or message_id,
+                    message_id=message_id,
                 )
 
             message_text = self._extract_text_from_message(result)
@@ -558,7 +536,11 @@ class A2AService:
 
             from common.utils.a2a_helpers import extract_parts_from_artifacts
 
-            extracted = extract_parts_from_artifacts(completed_task.artifacts) if completed_task.artifacts else None
+            extracted = (
+                extract_parts_from_artifacts(completed_task.artifacts)
+                if completed_task.artifacts
+                else None
+            )
             non_text_parts = None
             if extracted and extracted.has_non_text:
                 non_text_parts = extracted.file_parts + extracted.data_parts
@@ -579,11 +561,18 @@ class A2AService:
             # If already terminal, convert artifacts to S3 before persisting
             if is_terminal_state(state) and result.artifacts:
                 from common.utils.a2a_helpers import convert_pydantic_artifacts_to_s3
+
                 await convert_pydantic_artifacts_to_s3(
-                    result.artifacts, room_id=room_id or message_id, message_id=message_id,
+                    result.artifacts,
+                    room_id=room_id or message_id,
+                    message_id=message_id,
                 )
 
-            task_text = self._extract_text_from_task(result) if is_terminal_state(state) else None
+            task_text = (
+                self._extract_text_from_task(result)
+                if is_terminal_state(state)
+                else None
+            )
 
             # Update with real task from agent
             persisted = await task_db.update_task_on_message(
@@ -596,7 +585,11 @@ class A2AService:
             if is_terminal_state(state):
                 from common.utils.a2a_helpers import extract_parts_from_artifacts
 
-                extracted = extract_parts_from_artifacts(result.artifacts) if result.artifacts else None
+                extracted = (
+                    extract_parts_from_artifacts(result.artifacts)
+                    if result.artifacts
+                    else None
+                )
                 non_text_parts = None
                 if extracted and extracted.has_non_text:
                     non_text_parts = extracted.file_parts + extracted.data_parts
@@ -733,7 +726,9 @@ class A2AService:
                     params=payload,
                 )
 
-                logger.debug(f"a2a_service: Sending sync message to agent: {agent_card}")
+                logger.debug(
+                    f"a2a_service: Sending sync message to agent: {agent_card}"
+                )
                 response = await a2a_client.send_message(send_message_request)
 
                 # Handle error
@@ -793,7 +788,9 @@ class A2AService:
                     params=payload,
                 )
 
-                logger.debug(f"a2a_service: Starting streaming from agent: {agent_card}")
+                logger.debug(
+                    f"a2a_service: Starting streaming from agent: {agent_card}"
+                )
                 response_stream = a2a_client.send_message_streaming(stream_request)
                 async for response in response_stream:
                     success = True
@@ -802,7 +799,10 @@ class A2AService:
             await self._record_call(agent_id, success=success)
 
     async def send_message(
-        self, agent_card: AgentCard, message: Message, agent_id: str | None = None,
+        self,
+        agent_card: AgentCard,
+        message: Message,
+        agent_id: str | None = None,
     ) -> AsyncGenerator[SendStreamingMessageResponse | SendMessageResponse, None]:
         """
         Send message to agent with automatic capability detection.
@@ -824,7 +824,9 @@ class A2AService:
         # Check agent capability and route to appropriate method
         if self.has_streaming_capability(agent_card):
             logger.debug(f"a2a_service: Agent supports streaming: {agent_card.url}")
-            async for event in self.send_message_streaming(agent_card, message, agent_id=agent_id):
+            async for event in self.send_message_streaming(
+                agent_card, message, agent_id=agent_id
+            ):
                 yield event
 
         else:
@@ -832,7 +834,9 @@ class A2AService:
                 f"a2a_service: Agent doesn't support streaming, using sync: {agent_card.url}"
             )
             try:
-                event = await self.send_message_sync(agent_card, message, agent_id=agent_id)
+                event = await self.send_message_sync(
+                    agent_card, message, agent_id=agent_id
+                )
                 yield event
 
             except Exception as e:
@@ -1083,9 +1087,7 @@ class A2AService:
 
         agent_url = msg.agent_url
         if not agent_url:
-            raise ValueError(
-                f"Agent message {message_id} has no agent_url"
-            )
+            raise ValueError(f"Agent message {message_id} has no agent_url")
 
         # Generate a NEW webhook token (original plaintext was never stored)
         webhook_token = task_db.generate_webhook_token()
@@ -1103,13 +1105,17 @@ class A2AService:
         # agent can POST back asynchronously — but only if the agent advertises
         # push-notification capability (mirrors the check in send_message_to_tracked_agent).
         # Otherwise fall back to blocking=True.
-        webhook_url = settings.webhook_base_url.rstrip("/") if settings.webhook_base_url else ""
+        webhook_url = (
+            settings.webhook_base_url.rstrip("/") if settings.webhook_base_url else ""
+        )
 
         has_capability = False
         if webhook_url and msg.agent_id:
             agent_record = await task_db.get_agent_by_agent_id(msg.agent_id)
             if agent_record and agent_record.agent_card:
-                has_capability = self.has_push_notification_capability(agent_record.agent_card)
+                has_capability = self.has_push_notification_capability(
+                    agent_record.agent_card
+                )
             else:
                 logger.warning(
                     "hitl: could not load agent card for agent %s — disabling push notifications",
@@ -1134,7 +1140,8 @@ class A2AService:
             hitl_blocking = True
             hitl_timeout = self.DEFAULT_REQUEST_TIMEOUT
             reason = (
-                "WEBHOOK_BASE_URL not set" if not webhook_url
+                "WEBHOOK_BASE_URL not set"
+                if not webhook_url
                 else "agent missing push-notification capability"
             )
             logger.warning(
@@ -1191,6 +1198,7 @@ class A2AService:
                 task_obj = task_result
                 if task_obj.artifacts:
                     from common.utils.a2a_helpers import extract_text_from_artifacts
+
                     response_text = extract_text_from_artifacts(task_obj.artifacts)
             elif hasattr(task_result, "kind") and task_result.kind == "message":
                 parts = getattr(task_result, "parts", []) or []
@@ -1204,7 +1212,12 @@ class A2AService:
 
         # Fallback: check task.status.message for the agent's follow-up prompt
         # (e.g. when task is input_required / auth_required)
-        if not response_text and task_obj and hasattr(task_obj, "status") and task_obj.status:
+        if (
+            not response_text
+            and task_obj
+            and hasattr(task_obj, "status")
+            and task_obj.status
+        ):
             status_msg = getattr(task_obj.status, "message", None)
             if status_msg:
                 parts = getattr(status_msg, "parts", []) or []

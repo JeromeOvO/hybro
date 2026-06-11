@@ -5,7 +5,7 @@ Covers:
 - RelayTransport.dispatch   (hub agent path)
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -95,47 +95,63 @@ class TestA2AServiceRecordCall:
     @pytest.mark.asyncio
     async def test_records_success(self):
         svc = A2AService()
-        with patch("app_shell.a2a_runtime._legacy_mongo") as mock_db:
-            mock_db.increment_agent_call_count = AsyncMock()
-            await svc._record_call("agent-001", success=True)
-            mock_db.increment_agent_call_count.assert_awaited_once_with(
-                "agent-001", success=True,
-            )
+        mock_db = MagicMock()
+        mock_db.increment_agent_call_count = AsyncMock()
+        svc.bind_task_db(mock_db)
+
+        await svc._record_call("agent-001", success=True)
+
+        mock_db.increment_agent_call_count.assert_awaited_once_with(
+            "agent-001",
+            success=True,
+        )
 
     @pytest.mark.asyncio
     async def test_records_failure(self):
         svc = A2AService()
-        with patch("app_shell.a2a_runtime._legacy_mongo") as mock_db:
-            mock_db.increment_agent_call_count = AsyncMock()
-            await svc._record_call("agent-001", success=False)
-            mock_db.increment_agent_call_count.assert_awaited_once_with(
-                "agent-001", success=False,
-            )
+        mock_db = MagicMock()
+        mock_db.increment_agent_call_count = AsyncMock()
+        svc.bind_task_db(mock_db)
+
+        await svc._record_call("agent-001", success=False)
+
+        mock_db.increment_agent_call_count.assert_awaited_once_with(
+            "agent-001",
+            success=False,
+        )
 
     @pytest.mark.asyncio
     async def test_skips_none_agent_id(self):
         svc = A2AService()
-        with patch("app_shell.a2a_runtime._legacy_mongo") as mock_db:
-            mock_db.increment_agent_call_count = AsyncMock()
-            await svc._record_call(None, success=True)
-            mock_db.increment_agent_call_count.assert_not_awaited()
+        mock_db = MagicMock()
+        mock_db.increment_agent_call_count = AsyncMock()
+        svc.bind_task_db(mock_db)
+
+        await svc._record_call(None, success=True)
+
+        mock_db.increment_agent_call_count.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_skips_empty_agent_id(self):
         svc = A2AService()
-        with patch("app_shell.a2a_runtime._legacy_mongo") as mock_db:
-            mock_db.increment_agent_call_count = AsyncMock()
-            await svc._record_call("", success=True)
-            mock_db.increment_agent_call_count.assert_not_awaited()
+        mock_db = MagicMock()
+        mock_db.increment_agent_call_count = AsyncMock()
+        svc.bind_task_db(mock_db)
+
+        await svc._record_call("", success=True)
+
+        mock_db.increment_agent_call_count.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_swallows_db_exception(self):
         svc = A2AService()
-        with patch("app_shell.a2a_runtime._legacy_mongo") as mock_db:
-            mock_db.increment_agent_call_count = AsyncMock(
-                side_effect=RuntimeError("DB down"),
-            )
-            await svc._record_call("agent-001", success=True)
+        mock_db = MagicMock()
+        mock_db.increment_agent_call_count = AsyncMock(
+            side_effect=RuntimeError("DB down"),
+        )
+        svc.bind_task_db(mock_db)
+
+        await svc._record_call("agent-001", success=True)
 
 
 # ===========================================================================

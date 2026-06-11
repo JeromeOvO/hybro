@@ -6,7 +6,6 @@ from typing import Any
 
 import pytest
 
-from models.room import MessageContent, RoomAgentMessage
 from room.repository import MessageMongoRepository, RoomMongoRepository
 
 
@@ -58,14 +57,18 @@ class FakeCollection:
         return str(document.get("_id") or f"inserted-{len(self.docs)}")
 
     async def update_one(self, query: dict, update: dict, **kwargs) -> bool:
-        self.update_one_calls.append((deepcopy(query), deepcopy(update), deepcopy(kwargs)))
+        self.update_one_calls.append(
+            (deepcopy(query), deepcopy(update), deepcopy(kwargs))
+        )
         for doc in self.docs:
             if _matches(doc, query):
                 _apply_update(doc, update)
                 return True
         return False
 
-    async def find_one_and_update(self, query: dict, update: dict, **kwargs) -> dict | None:
+    async def find_one_and_update(
+        self, query: dict, update: dict, **kwargs
+    ) -> dict | None:
         self.find_one_and_update_calls.append(
             (deepcopy(query), deepcopy(update), deepcopy(kwargs))
         )
@@ -219,115 +222,20 @@ async def test_message_repository_get_by_ids_combines_collections_and_preserves_
 
 
 @pytest.mark.asyncio
-async def test_message_repository_combines_history_sorted_with_before_filter():
-    older = datetime(2026, 5, 10, tzinfo=UTC)
-    newer = datetime(2026, 5, 11, tzinfo=UTC)
+async def test_message_repository_direct_room_history_methods_pass_limits():
     repo, _, user_messages, agent_messages = _message_repo(
-        user_docs=[
-            {"message_id": "u2", "room_id": "r1", "message_created_at": newer},
-            {"message_id": "u1", "room_id": "r1", "message_created_at": older},
-        ],
-        agent_docs=[
-            {
-                "message_id": "a1",
-                "room_id": "r1",
-                "message_created_at": older,
-                "step_number": 2,
-            },
-            {
-                "message_id": "a0",
-                "room_id": "r1",
-                "message_created_at": older,
-                "step_number": 1,
-            },
-        ],
+        user_docs=[{"message_id": "u1", "room_id": "r1"}],
+        agent_docs=[{"message_id": "a1", "room_id": "r1"}],
     )
 
-    history = await repo.get_for_room("r1", limit=3, before=newer)
-
-    assert [doc["message_id"] for doc in history] == ["u1", "a0", "a1"]
-    assert [doc["message_type"] for doc in history] == ["user", "agent", "agent"]
-    assert user_messages.find_calls[-1] == (
-        {"room_id": "r1", "message_created_at": {"$lt": newer}},
-        {},
-    )
-    assert agent_messages.find_calls[-1] == (
-        {"room_id": "r1", "message_created_at": {"$lt": newer}},
-        {},
-    )
-
-
-@pytest.mark.asyncio
-async def test_message_repository_get_agent_messages_by_related_message_id_queries_agent_messages():
-    repo, _, _, agent_messages = _message_repo(
-        agent_docs=[
-            {
-                "message_id": "a1",
-                "room_id": "r1",
-                "agent_id": "agent-1",
-                "related_message_id": "u1",
-                "message_content": {"message_text": "first"},
-            },
-            {
-                "message_id": "a2",
-                "room_id": "r1",
-                "agent_id": "agent-2",
-                "related_message_id": "u2",
-                "message_content": {"message_text": "second"},
-            },
-        ]
-    )
-
-    docs = await repo.get_agent_messages_by_related_message_id("u1")
-
-    assert [doc["message_id"] for doc in docs] == ["a1"]
-    assert agent_messages.find_calls[-1] == ({"related_message_id": "u1"}, {})
-
-
-@pytest.mark.asyncio
-async def test_app_shell_repository_store_returns_related_agent_messages():
-    from app_shell.repository_store import AppShellRepositoryStore
-
-    class FakeMessageRepository:
-        async def get_agent_messages_by_related_message_id(self, related_message_id: str):
-            assert related_message_id == "u1"
-            return [
-                {
-                    "message_id": "a1",
-                    "room_id": "r1",
-                    "agent_id": "agent-1",
-                    "related_message_id": "u1",
-                    "message_content": {"message_text": "first"},
-                }
-            ]
-
-    store = AppShellRepositoryStore(
-        mongo=FakeMongo(),
-        room_repository=object(),
-        message_repository=FakeMessageRepository(),
-        agent_repository=object(),
-    )
-
-    messages = await store.get_room_agent_messages_by_related_message_id("u1")
-
-    assert [message.message_id for message in messages] == ["a1"]
-    assert messages[0].message_content.message_text == "first"
-
-
-@pytest.mark.asyncio
-async def test_message_repository_get_thread_walks_descendants_and_stops_cycles():
-    repo, _, _, _ = _message_repo(
-        agent_docs=[
-            {"message_id": "a1", "related_message_id": "u1"},
-            {"message_id": "a2", "parent_message_id": "a1"},
-            {"message_id": "cycle", "related_message_id": "a2", "parent_message_id": "cycle"},
-            {"message_id": "other", "related_message_id": "not-u1"},
-        ]
-    )
-
-    thread = await repo.get_thread("u1")
-
-    assert [doc["message_id"] for doc in thread] == ["a1", "a2", "cycle"]
+    assert await repo.get_user_messages_for_room("r1", limit=3) == [
+        {"message_id": "u1", "room_id": "r1"}
+    ]
+    assert await repo.get_agent_messages_for_room("r1", limit=4) == [
+        {"message_id": "a1", "room_id": "r1"}
+    ]
+    assert user_messages.find_calls[-1] == ({"room_id": "r1"}, {"limit": 3})
+    assert agent_messages.find_calls[-1] == ({"room_id": "r1"}, {"limit": 4})
 
 
 @pytest.mark.asyncio
@@ -352,6 +260,12 @@ async def test_message_repository_task_room_query_filters_sorts_and_limits():
                 "message_id": "untracked",
                 "room_id": "r1",
                 "has_task_tracking": False,
+                "task_created_at": newer,
+            },
+            {
+                "message_id": "other-room",
+                "room_id": "r2",
+                "has_task_tracking": True,
                 "task_created_at": newer,
             },
         ]
@@ -410,63 +324,142 @@ async def test_message_repository_pending_user_tasks_filters_and_sorts():
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_returns_parsed_task_messages_for_routes():
+async def test_app_shell_store_cancel_message_is_idempotent_when_record_exists():
     from app_shell.repository_store import AppShellRepositoryStore
 
-    class FakeMessageRepository:
-        async def get_task_messages_for_room(self, room_id: str, limit: int):
-            assert (room_id, limit) == ("r1", 5)
+    class ExistingCancellationCollection(FakeCollection):
+        async def update_one(self, query: dict, update: dict, **kwargs) -> bool:
+            await super().update_one(query, update, **kwargs)
+            return False
+
+    mongo = FakeMongo({"cancelled_messages": ExistingCancellationCollection()})
+    store = AppShellRepositoryStore(
+        mongo=mongo,
+        room_repository=object(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+
+    assert await store.cancel_message("msg-1", "user-1") is True
+    cancelled_messages = mongo.collections["cancelled_messages"]
+    query, update, kwargs = cancelled_messages.update_one_calls[0]
+    assert query == {"message_id": "msg-1"}
+    assert update["$setOnInsert"]["message_id"] == "msg-1"
+    assert update["$setOnInsert"]["user_id"] == "user-1"
+    assert "cancelled_at" in update["$setOnInsert"]
+    assert kwargs == {"upsert": True}
+
+
+@pytest.mark.asyncio
+async def test_app_shell_store_updates_last_notified_state_atomically():
+    from app_shell.repository_store import AppShellRepositoryStore
+
+    agent_messages = FakeCollection(
+        [{"message_id": "a1", "last_notified_state": "working"}]
+    )
+    store = AppShellRepositoryStore(
+        mongo=FakeMongo({"room_agent_messages": agent_messages}),
+        room_repository=object(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+
+    assert await store.update_last_notified_state("a1", "completed") is True
+    assert agent_messages.docs[0]["last_notified_state"] == "completed"
+    assert agent_messages.update_one_calls == [
+        (
+            {"message_id": "a1", "last_notified_state": {"$ne": "completed"}},
+            {"$set": {"last_notified_state": "completed"}},
+            {},
+        )
+    ]
+    assert await store.update_last_notified_state("a1", "completed") is False
+
+
+@pytest.mark.asyncio
+async def test_app_shell_store_accumulates_artifacts_with_atomic_collection_update():
+    from app_shell.repository_store import AppShellRepositoryStore
+
+    class RecordingSuccessCollection(FakeCollection):
+        async def update_one(self, query: dict, update: dict, **kwargs) -> bool:
+            self.update_one_calls.append(
+                (deepcopy(query), deepcopy(update), deepcopy(kwargs))
+            )
+            return True
+
+    agent_messages = RecordingSuccessCollection()
+    mongo = FakeMongo({"room_agent_messages": agent_messages})
+    store = AppShellRepositoryStore(
+        mongo=mongo,
+        room_repository=object(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+
+    assert await store.accumulate_artifact_on_message(
+        "a1",
+        {
+            "artifactId": "artifact-1",
+            "parts": [{"kind": "text", "text": " world"}],
+        },
+        append=True,
+    )
+
+    query, update, _ = agent_messages.update_one_calls[-1]
+    assert query["message_content.message_task.status.state"]["$nin"]
+    assert query["message_content.message_task.artifacts"]["$elemMatch"]
+    assert isinstance(update, list)
+    set_stage = update[0]["$set"]
+    assert set_stage["message_content.message_task.status.state"] == "working"
+    assert "$map" in set_stage["message_content.message_task.artifacts"]
+    assert "$concat" in set_stage["message_content.message_text"]
+
+
+@pytest.mark.asyncio
+async def test_app_shell_store_filters_malformed_related_agent_messages():
+    from app_shell.repository_store import AppShellRepositoryStore
+
+    class RelatedMessageRepository:
+        async def get_agent_messages_by_related_message_id(self, related_message_id):
             return [
+                {"message_id": "bad"},
                 {
                     "message_id": "a1",
                     "room_id": "r1",
-                    "user_id": "u1",
+                    "message_type": "agent",
                     "agent_id": "agent-1",
-                    "message_content": {"message_text": "task"},
-                    "has_task_tracking": True,
-                }
-            ]
-
-        async def get_pending_task_messages_for_user(self, user_id: str, states: list[str]):
-            assert (user_id, states) == ("u1", ["working"])
-            return [
-                {
-                    "message_id": "a2",
-                    "room_id": "r1",
-                    "user_id": "u1",
-                    "agent_id": "agent-2",
-                    "message_content": {"message_text": "pending"},
-                    "has_task_tracking": True,
-                }
+                    "message_created_at": datetime(2026, 5, 11, tzinfo=UTC),
+                    "related_message_id": related_message_id,
+                    "message_content": {"message_text": "ok"},
+                },
             ]
 
     store = AppShellRepositoryStore(
         mongo=FakeMongo(),
         room_repository=object(),
-        message_repository=FakeMessageRepository(),
+        message_repository=RelatedMessageRepository(),
         agent_repository=object(),
     )
 
-    room_tasks = await store.get_task_messages_for_room("r1", limit=5)
-    user_tasks = await store.get_pending_task_messages_for_user("u1", ["working"])
+    messages = await store.get_room_agent_messages_by_related_message_id("u1")
 
-    assert [message.message_id for message in room_tasks] == ["a1"]
-    assert [message.message_id for message in user_tasks] == ["a2"]
+    assert [message.message_id for message in messages] == ["a1"]
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_preserves_none_task_tracking_fields_on_agent_update():
+async def test_app_shell_store_full_agent_update_preserves_task_tracking_fields():
     from app_shell.repository_store import AppShellRepositoryStore
+    from models.room import RoomAgentMessage
 
-    class FakeMessageRepository:
-        def __init__(self):
-            self.updates = []
+    class RecordingMessageRepository:
+        def __init__(self) -> None:
+            self.update_calls: list[tuple[str, dict]] = []
 
-        async def update_agent_message(self, message_id: str, updates: dict) -> bool:
-            self.updates.append((message_id, deepcopy(updates)))
+        async def update_agent_message(self, message_id, updates):
+            self.update_calls.append((message_id, updates))
             return True
 
-    message_repository = FakeMessageRepository()
+    message_repository = RecordingMessageRepository()
     store = AppShellRepositoryStore(
         mongo=FakeMongo(),
         room_repository=object(),
@@ -475,56 +468,245 @@ async def test_app_shell_store_preserves_none_task_tracking_fields_on_agent_upda
     )
     message = RoomAgentMessage(
         room_id="r1",
-        user_id="u1",
         message_id="a1",
+        message_type="agent",
         agent_id="agent-1",
-        message_content=MessageContent(message_text="same"),
-        webhook_token_hash=None,
-        pending_continuation=None,
-        last_notified_state=None,
-        agent_url=None,
-        task_created_at=None,
-        task_updated_at=None,
-        task_content=None,
+        message_created_at=datetime(2026, 5, 11, tzinfo=UTC),
+        message_content={"message_text": "updated"},
     )
 
-    assert await store.update_room_agent_message_by_message_id("a1", message) is True
+    assert await store.update_room_agent_message_by_message_id("a1", message)
 
-    _, update = message_repository.updates[-1]
-    for field in {
-        "webhook_token_hash",
-        "pending_continuation",
-        "last_notified_state",
-        "agent_url",
-        "task_created_at",
-        "task_updated_at",
-        "task_content",
-    }:
-        assert field not in update
+    _, updates = message_repository.update_calls[0]
+    assert "webhook_token_hash" not in updates
+    assert "pending_continuation" not in updates
+    assert "last_notified_state" not in updates
+    assert "agent_url" not in updates
+    assert "task_created_at" not in updates
+    assert "task_updated_at" not in updates
+    assert "task_content" not in updates
+    assert "has_task_tracking" not in updates
+    assert "parent_message_id" not in updates
+    assert "run_id" not in updates
+    assert "client_request_id" not in updates
+    assert "related_message_id" not in updates
+    assert "step_number" not in updates
+    assert "total_steps" not in updates
+    assert "extend_info" not in updates
+    assert "turn_id" not in updates
 
 
 @pytest.mark.asyncio
-async def test_message_repository_update_agent_message_treats_noop_match_as_success():
-    class NoOpMatchedCollection(FakeCollection):
+async def test_app_shell_store_generates_agent_message_id_when_empty():
+    from app_shell.repository_store import AppShellRepositoryStore
+    from models.room import RoomAgentMessage
+
+    class RecordingMessageRepository:
+        def __init__(self) -> None:
+            self.saved_docs: list[dict] = []
+
+        async def save_agent_message(self, doc):
+            self.saved_docs.append(doc)
+            return "saved"
+
+    message_repository = RecordingMessageRepository()
+    store = AppShellRepositoryStore(
+        mongo=FakeMongo(),
+        room_repository=object(),
+        message_repository=message_repository,
+        agent_repository=object(),
+    )
+    message = RoomAgentMessage(
+        room_id="r1",
+        message_id="",
+        message_type="agent",
+        agent_id="agent-1",
+        message_created_at=datetime(2026, 5, 11, tzinfo=UTC),
+        message_content={"message_text": "created"},
+    )
+
+    assert await store.add_room_agent_message(message)
+    assert message.message_id
+    assert message_repository.saved_docs[0]["message_id"] == message.message_id
+
+
+@pytest.mark.asyncio
+async def test_app_shell_store_task_tracking_writes_return_false_on_repository_error():
+    from app_shell.repository_store import AppShellRepositoryStore
+
+    class FailingMessageRepository:
+        async def update_agent_message(self, *args, **kwargs):
+            raise RuntimeError("database down")
+
+        async def update_agent_message_if_not_terminal(self, *args, **kwargs):
+            raise RuntimeError("database down")
+
+    store = AppShellRepositoryStore(
+        mongo=FakeMongo(),
+        room_repository=object(),
+        message_repository=FailingMessageRepository(),
+        agent_repository=object(),
+    )
+
+    assert (
+        await store.enable_task_tracking_on_message(
+            message_id="a1",
+            webhook_token_hash="hash",
+            agent_url="https://agent.example",
+            task_created_at=datetime(2026, 5, 11, tzinfo=UTC),
+            task_updated_at=datetime(2026, 5, 11, tzinfo=UTC),
+            task_data={"id": "task-1"},
+        )
+        is False
+    )
+    assert await store.update_task_on_message("a1", {"id": "task-1"}) is False
+    assert await store.update_webhook_token_hash_on_message("a1", "hash") is False
+
+
+@pytest.mark.asyncio
+async def test_app_shell_store_task_tracking_noop_successes_by_readback():
+    from app_shell.repository_store import AppShellRepositoryStore
+
+    class NoopTrackedMessageRepository:
+        async def update_agent_message(self, message_id, updates):
+            return False
+
+        async def get_agent_message_by_id(self, message_id):
+            return {
+                "message_id": message_id,
+                "has_task_tracking": True,
+                "webhook_token_hash": "hash",
+                "agent_url": "https://agent.example",
+                "message_content": {"message_task": {"id": "task-1"}},
+            }
+
+    store = AppShellRepositoryStore(
+        mongo=FakeMongo(),
+        room_repository=object(),
+        message_repository=NoopTrackedMessageRepository(),
+        agent_repository=object(),
+    )
+
+    assert (
+        await store.enable_task_tracking_on_message(
+            message_id="a1",
+            webhook_token_hash="hash",
+            agent_url="https://agent.example",
+            task_created_at=datetime(2026, 5, 11, tzinfo=UTC),
+            task_updated_at=datetime(2026, 5, 11, tzinfo=UTC),
+            task_data={"id": "task-1"},
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_app_shell_store_chat_context_mutations_succeed_on_no_exception():
+    from app_shell.repository_store import AppShellRepositoryStore
+    from models.memory import ChatContext
+
+    class NoopCollection(FakeCollection):
         async def update_one(self, query: dict, update: dict, **kwargs) -> bool:
             self.update_one_calls.append(
                 (deepcopy(query), deepcopy(update), deepcopy(kwargs))
             )
             return False
 
-    agent_messages = NoOpMatchedCollection(
-        [
+        async def delete_one(self, query: dict) -> bool:
+            self.delete_one_calls.append(deepcopy(query))
+            return False
+
+    chat_contexts = NoopCollection()
+    store = AppShellRepositoryStore(
+        mongo=FakeMongo({"chat_contexts": chat_contexts}),
+        room_repository=object(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+    context = ChatContext(memory_id="m1", user_name="User", session_id="s1")
+
+    assert await store.update_chat_context_by_session_id("s1", context) is True
+    assert await store.delete_chat_context_by_session_id("s1") is True
+    assert chat_contexts.update_one_calls
+    assert chat_contexts.delete_one_calls == [{"session_id": "s1"}]
+
+
+@pytest.mark.asyncio
+async def test_app_shell_store_generates_chat_context_memory_id_when_empty():
+    from app_shell.repository_store import AppShellRepositoryStore
+    from models.memory import ChatContext
+
+    chat_contexts = FakeCollection()
+    store = AppShellRepositoryStore(
+        mongo=FakeMongo({"chat_contexts": chat_contexts}),
+        room_repository=object(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+    context = ChatContext(memory_id="", user_name="User", session_id="s1")
+
+    assert await store.add_chat_context(context) is True
+    assert context.memory_id
+    assert chat_contexts.insert_one_calls[0]["memory_id"] == context.memory_id
+
+
+@pytest.mark.asyncio
+async def test_message_repository_combines_history_sorted_with_before_filter():
+    older = datetime(2026, 5, 10, tzinfo=UTC)
+    newer = datetime(2026, 5, 11, tzinfo=UTC)
+    repo, _, user_messages, agent_messages = _message_repo(
+        user_docs=[
+            {"message_id": "u2", "room_id": "r1", "message_created_at": newer},
+            {"message_id": "u1", "room_id": "r1", "message_created_at": older},
+        ],
+        agent_docs=[
             {
                 "message_id": "a1",
                 "room_id": "r1",
-                "message_content": {"message_text": "same"},
-            }
+                "message_created_at": older,
+                "step_number": 2,
+            },
+            {
+                "message_id": "a0",
+                "room_id": "r1",
+                "message_created_at": older,
+                "step_number": 1,
+            },
+        ],
+    )
+
+    history = await repo.get_for_room("r1", limit=3, before=newer)
+
+    assert [doc["message_id"] for doc in history] == ["u1", "a0", "a1"]
+    assert [doc["message_type"] for doc in history] == ["user", "agent", "agent"]
+    assert user_messages.find_calls[-1] == (
+        {"room_id": "r1", "message_created_at": {"$lt": newer}},
+        {"limit": 100},
+    )
+    assert agent_messages.find_calls[-1] == (
+        {"room_id": "r1", "message_created_at": {"$lt": newer}},
+        {"limit": 100},
+    )
+
+
+@pytest.mark.asyncio
+async def test_message_repository_get_thread_walks_descendants_and_stops_cycles():
+    repo, _, _, _ = _message_repo(
+        agent_docs=[
+            {"message_id": "a1", "related_message_id": "u1"},
+            {"message_id": "a2", "parent_message_id": "a1"},
+            {
+                "message_id": "cycle",
+                "related_message_id": "a2",
+                "parent_message_id": "cycle",
+            },
+            {"message_id": "other", "related_message_id": "not-u1"},
         ]
     )
-    repo, _, _, _ = _message_repo(agent_docs=[])
-    repo._agent_messages = agent_messages
 
-    assert await repo.update_agent_message("a1", {"message_content.message_text": "same"})
+    thread = await repo.get_thread("u1")
+
+    assert [doc["message_id"] for doc in thread] == ["a1", "a2", "cycle"]
 
 
 @pytest.mark.asyncio
@@ -540,9 +722,10 @@ async def test_message_repository_update_status_sets_task_state_and_extra_fields
 
     assert await repo.update_status("a1", "completed", task_updated_at="now") is True
 
-    assert agent_messages.docs[0]["message_content"]["message_task"]["status"][
-        "state"
-    ] == "completed"
+    assert (
+        agent_messages.docs[0]["message_content"]["message_task"]["status"]["state"]
+        == "completed"
+    )
     assert agent_messages.docs[0]["task_updated_at"] == "now"
     assert agent_messages.update_one_calls == [
         (
@@ -581,7 +764,7 @@ async def test_message_repository_delete_for_room_deletes_both_collections():
     assert agent_messages.delete_many_calls == [{"room_id": "r1"}]
 
 
-def _matches(doc: dict, query: dict) -> bool:
+def _matches(doc: dict, query: dict) -> bool:  # noqa: C901
     for key, expected in query.items():
         if key == "$or":
             if not any(_matches(doc, item) for item in expected):
@@ -596,7 +779,13 @@ def _matches(doc: dict, query: dict) -> bool:
         if isinstance(expected, dict):
             if "$in" in expected and actual not in expected["$in"]:
                 return False
-            if "$lt" in expected and not (actual is not None and actual < expected["$lt"]):
+            if "$nin" in expected and actual in expected["$nin"]:
+                return False
+            if "$ne" in expected and actual == expected["$ne"]:
+                return False
+            if "$lt" in expected and not (
+                actual is not None and actual < expected["$lt"]
+            ):
                 return False
         elif actual != expected:
             return False
