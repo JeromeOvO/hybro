@@ -432,6 +432,7 @@ async def lifespan(app: FastAPI):
             from execution.dispatch.task_notifications import (
                 TaskNotificationAdapter,
                 _notify_task_update_impl,
+                bind_notification_store,
                 notify_task_update,
             )
             from execution.dispatch.task_notifications import (
@@ -460,14 +461,6 @@ async def lifespan(app: FastAPI):
             from execution.run_lifecycle import RunLifecycleAdapter
             from execution.run_lifecycle_service import bind_run_lifecycle_service
             from execution.run_queries import RunQueryAdapter
-            room_center.bind_room_dependencies(
-                center=AppShellRoomCenter(),
-                store=_db_svc,
-                selection_service=agent_selection_service,
-            )
-            a2a_tasks.bind_a2a_task_dependencies(_db_svc)
-            agent_group.bind_agent_group_dependencies(_db_svc)
-            sse.bind_sse_dependencies(_db_svc, sse_manager)
             _execution_repos = create_execution_repositories(mongo=mongo_dal)
             run_command_handler = RunCommandHandler(
                 run_repository=_execution_repos["run_repository"],
@@ -600,6 +593,17 @@ async def lifespan(app: FastAPI):
             membership_source.bind_store(app_shell_store)
             debate_service.bind_store(app_shell_store)
             room_coordinator_service.bind_store(app_shell_store)
+            chat_memory_service.bind_store(app_shell_store)
+            room_memory_service.bind_store(app_shell_store)
+            bind_notification_store(app_shell_store)
+            room_center.bind_room_dependencies(
+                center=AppShellRoomCenter(),
+                store=app_shell_store,
+                selection_service=agent_selection_service,
+            )
+            a2a_tasks.bind_a2a_task_dependencies(app_shell_store)
+            agent_group.bind_agent_group_dependencies(app_shell_store)
+            sse.bind_sse_dependencies(app_shell_store, sse_manager)
             room_runtime.bind_facade(_room_facade)
             room_runtime.bind_s3_service(s3_service)
             room_center.room_center.bind_facade(_room_facade)

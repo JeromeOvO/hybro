@@ -272,6 +272,13 @@ class ContextMemoryFacade:
     ) -> dict | None:
         return await self.memory_repository.get_room_memory_by_memory_id(memory_id)
 
+    async def legacy_update_room_memory_by_memory_id(
+        self, memory_id: str, memory_doc: dict
+    ) -> bool:
+        return await self.memory_repository.update_room_memory_by_memory_id(
+            memory_id, memory_doc
+        )
+
     async def legacy_delete_room_memory_by_room_id(self, room_id: str) -> bool:
         return await self.delete_room_memory(room_id)
 

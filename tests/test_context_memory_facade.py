@@ -656,11 +656,16 @@ async def test_facade_legacy_crud_helpers():
     created = await service.legacy_create_room_memory({"room_id": "r1"})
     fetched = await service.legacy_get_room_memory_by_room_id("r1")
     updated = await service.legacy_update_room_memory_by_room_id("r1", {"extra": "value"})
+    updated_by_memory_id = await service.legacy_update_room_memory_by_memory_id(
+        created["memory_id"],
+        {"extra": "by-memory-id"},
+    )
 
     assert created["memory_id"] == "id-1"
     assert fetched["room_id"] == "r1"
     assert updated is True
-    assert repo.doc["extra"] == "value"
+    assert updated_by_memory_id is True
+    assert repo.doc["extra"] == "by-memory-id"
 
 
 @pytest.mark.asyncio
