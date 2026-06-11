@@ -48,13 +48,14 @@ class _UnboundDependency:
 
     def __getattr__(self, attr: str):
         async def _missing(*_args, **_kwargs):
-            raise RuntimeError(f"Stale task checker dependency {self._name} is not bound")
+            raise RuntimeError(
+                f"Stale task checker dependency {self._name} is not bound"
+            )
 
         return _missing
 
 
 store: Any = _UnboundDependency("store")
-_legacy_mongo: Any = _UnboundDependency("_legacy_mongo")
 a2a_service: Any = _UnboundDependency("a2a_service")
 
 
@@ -169,7 +170,7 @@ class StaleTaskChecker:
             return self._runtime_deps
         return StaleTaskCheckerDeps(
             store=store,
-            rooms_collection=getattr(_legacy_mongo, "rooms_collection", None),
+            rooms_collection=None,
             notify_task_update=notify_task_update,
             increment_counter=increment_counter,
             a2a_service=a2a_service,
@@ -429,7 +430,9 @@ class StaleTaskChecker:
             )
 
         # Task was never acknowledged by agent
-        if agent_task_id.startswith("pending") or agent_task_id.startswith("relay-pending"):
+        if agent_task_id.startswith("pending") or agent_task_id.startswith(
+            "relay-pending"
+        ):
             logger.warning(
                 f"Task for message {message_id} never acknowledged, marking failed"
             )
@@ -486,8 +489,11 @@ class StaleTaskChecker:
                 and current_task.status.state == CommonTaskState.COMPLETED
             ):
                 from common.utils.a2a_helpers import extract_text_from_artifacts
+
                 if current_task.artifacts:
-                    task_text = extract_text_from_artifacts(current_task.artifacts) or None
+                    task_text = (
+                        extract_text_from_artifacts(current_task.artifacts) or None
+                    )
             await self._store.update_task_on_message(
                 message_id,
                 current_task.model_dump(mode="json"),
@@ -564,7 +570,9 @@ class StaleTaskChecker:
             logger.warning(
                 "Auto-failing HITL task for message %s after %.1f hours "
                 "(HITL threshold: %dh)",
-                message_id, age_hours, self.HITL_EXPIRY_HOURS,
+                message_id,
+                age_hours,
+                self.HITL_EXPIRY_HOURS,
             )
 
         threshold = self.HITL_EXPIRY_HOURS if is_interactive else self.task_expiry_hours
@@ -661,7 +669,8 @@ class StaleTaskChecker:
         except Exception as e:
             logger.warning(
                 "stale_task_checker: Failed to cancel HITL requests for %s: %s",
-                message_id, e,
+                message_id,
+                e,
             )
 
         await self._notify_task_update(
@@ -693,12 +702,15 @@ class StaleTaskChecker:
             flt["room_id"] = {"$nin": busy}
         try:
             coll = self._rooms_collection
+            if coll is None:
+                raise RuntimeError("rooms_collection is not bound")
             res = await coll.update_many(flt, {"$set": {"processing_message_id": None}})
-            if res.modified_count:
+            modified_count = getattr(res, "modified_count", res)
+            if modified_count:
                 logger.info(
                     "legacy processing_message_id cleanup: nulled field on %d rooms "
                     "(no non-terminal runs)",
-                    res.modified_count,
+                    modified_count,
                 )
         except Exception as e:
             logger.warning("legacy processing_message_id cleanup failed: %s", e)
@@ -780,9 +792,7 @@ class StaleTaskChecker:
                     request,
                     reason="orphan",
                 )
-                task.add_done_callback(
-                    lambda _task: self._recovery_semaphore.release()
-                )
+                task.add_done_callback(lambda _task: self._recovery_semaphore.release())
 
             except Exception as e:
                 logger.error(
@@ -844,9 +854,7 @@ class StaleTaskChecker:
 
             # Atomically claim this trajectory so no other worker (or
             # subsequent check cycle) can recover it concurrently.
-            claimed = await self._store.claim_stuck_supervisor_trajectory(
-                message_id
-            )
+            claimed = await self._store.claim_stuck_supervisor_trajectory(message_id)
             if not claimed:
                 logger.info(
                     "supervisor_recovery: message %s already claimed by another worker",
@@ -871,9 +879,7 @@ class StaleTaskChecker:
                     request,
                     reason="supervisor",
                 )
-                task.add_done_callback(
-                    lambda _task: self._recovery_semaphore.release()
-                )
+                task.add_done_callback(lambda _task: self._recovery_semaphore.release())
             except Exception as e:
                 logger.error(
                     "supervisor_recovery: failed to trigger recovery for %s: %s",

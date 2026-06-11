@@ -34,6 +34,7 @@ from a2a.types import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_agent_card(push_capable: bool = True) -> AgentCard:
     """Minimal AgentCard for testing."""
     return AgentCard(
@@ -94,7 +95,6 @@ class TestSendMessageTrackedAgentWebhookFallback:
     @pytest.mark.asyncio
     async def test_webhook_url_set_uses_push_notification(self):
         """When webhook_base_url is configured, push config is built and blocking=False."""
-        import app_shell.database_service as db_module
         from app_shell.a2a_runtime import A2AService
 
         captured_payload = {}
@@ -111,17 +111,22 @@ class TestSendMessageTrackedAgentWebhookFallback:
             yield fake_client
 
         service = A2AService.__new__(A2AService)
+        mock_db = MagicMock()
+        mock_db.update_task_on_message = AsyncMock()
+        service.bind_task_db(mock_db)
 
         with (
-            patch.object(service, "has_push_notification_capability", return_value=True),
+            patch.object(
+                service, "has_push_notification_capability", return_value=True
+            ),
             patch.object(service, "create_a2a_client", fake_client_ctx),
-            patch.object(service, "_resolve_accepted_modes", return_value=["text/plain"]),
+            patch.object(
+                service, "_resolve_accepted_modes", return_value=["text/plain"]
+            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
             patch("app_shell.a2a_runtime.settings") as mock_settings,
-            patch.object(db_module, "db_service") as mock_db,
         ):
             mock_settings.webhook_base_url = "https://api.example.com"
-            mock_db.update_task_on_message = AsyncMock()
 
             await service.send_message_to_tracked_agent(
                 agent_card=_make_agent_card(push_capable=True),
@@ -133,13 +138,15 @@ class TestSendMessageTrackedAgentWebhookFallback:
 
         cfg: MessageSendConfiguration = captured_payload["params"].configuration
         assert cfg.push_notification_config is not None
-        assert "https://api.example.com/api/v1/webhooks/a2a/msg-001" == cfg.push_notification_config.url
+        assert (
+            "https://api.example.com/api/v1/webhooks/a2a/msg-001"
+            == cfg.push_notification_config.url
+        )
         assert cfg.blocking is False
 
     @pytest.mark.asyncio
     async def test_no_webhook_url_uses_blocking_true(self):
         """When webhook_base_url is empty, blocking=True and no push_config."""
-        import app_shell.database_service as db_module
         from app_shell.a2a_runtime import A2AService
 
         captured_payload = {}
@@ -156,17 +163,22 @@ class TestSendMessageTrackedAgentWebhookFallback:
             yield fake_client
 
         service = A2AService.__new__(A2AService)
+        mock_db = MagicMock()
+        mock_db.update_task_on_message = AsyncMock()
+        service.bind_task_db(mock_db)
 
         with (
-            patch.object(service, "has_push_notification_capability", return_value=True),
+            patch.object(
+                service, "has_push_notification_capability", return_value=True
+            ),
             patch.object(service, "create_a2a_client", fake_client_ctx),
-            patch.object(service, "_resolve_accepted_modes", return_value=["text/plain"]),
+            patch.object(
+                service, "_resolve_accepted_modes", return_value=["text/plain"]
+            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
             patch("app_shell.a2a_runtime.settings") as mock_settings,
-            patch.object(db_module, "db_service") as mock_db,
         ):
             mock_settings.webhook_base_url = ""
-            mock_db.update_task_on_message = AsyncMock()
 
             await service.send_message_to_tracked_agent(
                 agent_card=_make_agent_card(push_capable=True),
@@ -183,7 +195,6 @@ class TestSendMessageTrackedAgentWebhookFallback:
     @pytest.mark.asyncio
     async def test_trailing_slash_stripped_from_webhook_url(self):
         """Trailing slash is stripped from webhook_base_url to avoid double-slash URLs."""
-        import app_shell.database_service as db_module
         from app_shell.a2a_runtime import A2AService
 
         captured_payload = {}
@@ -200,17 +211,22 @@ class TestSendMessageTrackedAgentWebhookFallback:
             yield fake_client
 
         service = A2AService.__new__(A2AService)
+        mock_db = MagicMock()
+        mock_db.update_task_on_message = AsyncMock()
+        service.bind_task_db(mock_db)
 
         with (
-            patch.object(service, "has_push_notification_capability", return_value=True),
+            patch.object(
+                service, "has_push_notification_capability", return_value=True
+            ),
             patch.object(service, "create_a2a_client", fake_client_ctx),
-            patch.object(service, "_resolve_accepted_modes", return_value=["text/plain"]),
+            patch.object(
+                service, "_resolve_accepted_modes", return_value=["text/plain"]
+            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
             patch("app_shell.a2a_runtime.settings") as mock_settings,
-            patch.object(db_module, "db_service") as mock_db,
         ):
             mock_settings.webhook_base_url = "https://api.example.com/"
-            mock_db.update_task_on_message = AsyncMock()
 
             await service.send_message_to_tracked_agent(
                 agent_card=_make_agent_card(push_capable=True),
@@ -223,12 +239,14 @@ class TestSendMessageTrackedAgentWebhookFallback:
         cfg: MessageSendConfiguration = captured_payload["params"].configuration
         assert cfg.push_notification_config is not None
         assert "//api/v1" not in cfg.push_notification_config.url
-        assert cfg.push_notification_config.url == "https://api.example.com/api/v1/webhooks/a2a/msg-003"
+        assert (
+            cfg.push_notification_config.url
+            == "https://api.example.com/api/v1/webhooks/a2a/msg-003"
+        )
 
     @pytest.mark.asyncio
     async def test_agent_without_push_capability_uses_blocking_true(self):
         """Agent without push-notification capability → blocking=True even if webhook URL is set."""
-        import app_shell.database_service as db_module
         from app_shell.a2a_runtime import A2AService
 
         captured_payload = {}
@@ -245,17 +263,22 @@ class TestSendMessageTrackedAgentWebhookFallback:
             yield fake_client
 
         service = A2AService.__new__(A2AService)
+        mock_db = MagicMock()
+        mock_db.update_task_on_message = AsyncMock()
+        service.bind_task_db(mock_db)
 
         with (
-            patch.object(service, "has_push_notification_capability", return_value=False),
+            patch.object(
+                service, "has_push_notification_capability", return_value=False
+            ),
             patch.object(service, "create_a2a_client", fake_client_ctx),
-            patch.object(service, "_resolve_accepted_modes", return_value=["text/plain"]),
+            patch.object(
+                service, "_resolve_accepted_modes", return_value=["text/plain"]
+            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
             patch("app_shell.a2a_runtime.settings") as mock_settings,
-            patch.object(db_module, "db_service") as mock_db,
         ):
             mock_settings.webhook_base_url = "https://api.example.com"
-            mock_db.update_task_on_message = AsyncMock()
 
             await service.send_message_to_tracked_agent(
                 agent_card=_make_agent_card(push_capable=False),
@@ -272,7 +295,6 @@ class TestSendMessageTrackedAgentWebhookFallback:
     @pytest.mark.asyncio
     async def test_timeout_is_long_when_blocking(self):
         """With blocking=True, the a2a_client is created with DEFAULT_REQUEST_TIMEOUT."""
-        import app_shell.database_service as db_module
         from app_shell.a2a_runtime import A2AService
 
         captured_timeout = {}
@@ -285,17 +307,22 @@ class TestSendMessageTrackedAgentWebhookFallback:
             yield fake_client
 
         service = A2AService.__new__(A2AService)
+        mock_db = MagicMock()
+        mock_db.update_task_on_message = AsyncMock()
+        service.bind_task_db(mock_db)
 
         with (
-            patch.object(service, "has_push_notification_capability", return_value=True),
+            patch.object(
+                service, "has_push_notification_capability", return_value=True
+            ),
             patch.object(service, "create_a2a_client", fake_client_ctx),
-            patch.object(service, "_resolve_accepted_modes", return_value=["text/plain"]),
+            patch.object(
+                service, "_resolve_accepted_modes", return_value=["text/plain"]
+            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
             patch("app_shell.a2a_runtime.settings") as mock_settings,
-            patch.object(db_module, "db_service") as mock_db,
         ):
             mock_settings.webhook_base_url = ""
-            mock_db.update_task_on_message = AsyncMock()
 
             await service.send_message_to_tracked_agent(
                 agent_card=_make_agent_card(push_capable=True),
@@ -312,7 +339,10 @@ class TestSendMessageTrackedAgentWebhookFallback:
 # Helpers for reply_to_task (HITL) tests
 # ---------------------------------------------------------------------------
 
-def _make_room_agent_message(agent_url: str = "http://remote-agent:8080/", agent_id: str = "agent-001"):
+
+def _make_room_agent_message(
+    agent_url: str = "http://remote-agent:8080/", agent_id: str = "agent-001"
+):
     """Minimal RoomAgentMessage-like object returned by db_service."""
     msg = MagicMock()
     msg.agent_url = agent_url
@@ -358,6 +388,7 @@ class TestReplyToTaskWebhookFallback:
             return_value=_make_agent_record(push_capable=True)
         )
         mock_db.update_task_on_message = AsyncMock()
+        service.bind_task_db(mock_db)
 
         with (
             patch("app_shell.a2a_runtime.settings") as mock_settings,
@@ -367,25 +398,31 @@ class TestReplyToTaskWebhookFallback:
             mock_settings.webhook_base_url = "https://api.example.com"
 
             mock_client_instance = AsyncMock()
-            mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(return_value=mock_client_instance)
-            mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(
+                return_value=mock_client_instance
+            )
+            mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(
+                return_value=False
+            )
 
             with patch("app_shell.a2a_runtime.A2AClient") as MockA2AClient:
                 mock_a2a = AsyncMock()
                 mock_a2a.send_message = capture_send
                 MockA2AClient.return_value = mock_a2a
 
-                with patch("app_shell.database_service.db_service", mock_db):
-                    await service.reply_to_task(
-                        message_id="msg-hitl-001",
-                        task_id="task-hitl-001",
-                        context_id="ctx-hitl-001",
-                        user_input="yes, proceed",
-                    )
+                await service.reply_to_task(
+                    message_id="msg-hitl-001",
+                    task_id="task-hitl-001",
+                    context_id="ctx-hitl-001",
+                    user_input="yes, proceed",
+                )
 
         cfg: MessageSendConfiguration = captured_request["params"].configuration
         assert cfg.push_notification_config is not None
-        assert cfg.push_notification_config.url == "https://api.example.com/api/v1/webhooks/a2a/msg-hitl-001"
+        assert (
+            cfg.push_notification_config.url
+            == "https://api.example.com/api/v1/webhooks/a2a/msg-hitl-001"
+        )
         assert cfg.push_notification_config.token == "tok-hitl-001"
         assert cfg.blocking is False
 
@@ -409,6 +446,7 @@ class TestReplyToTaskWebhookFallback:
             return_value=_make_agent_record(push_capable=True)
         )
         mock_db.update_task_on_message = AsyncMock()
+        service.bind_task_db(mock_db)
 
         async def capture_send(request):
             captured_request["params"] = request.params
@@ -421,21 +459,24 @@ class TestReplyToTaskWebhookFallback:
             mock_settings.webhook_base_url = ""
 
             mock_client_instance = AsyncMock()
-            mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(return_value=mock_client_instance)
-            mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(
+                return_value=mock_client_instance
+            )
+            mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(
+                return_value=False
+            )
 
             with patch("app_shell.a2a_runtime.A2AClient") as MockA2AClient:
                 mock_a2a = AsyncMock()
                 mock_a2a.send_message = capture_send
                 MockA2AClient.return_value = mock_a2a
 
-                with patch("app_shell.database_service.db_service", mock_db):
-                    await service.reply_to_task(
-                        message_id="msg-hitl-002",
-                        task_id="task-hitl-002",
-                        context_id="ctx-hitl-002",
-                        user_input="no thanks",
-                    )
+                await service.reply_to_task(
+                    message_id="msg-hitl-002",
+                    task_id="task-hitl-002",
+                    context_id="ctx-hitl-002",
+                    user_input="no thanks",
+                )
 
         cfg: MessageSendConfiguration = captured_request["params"].configuration
         assert cfg.push_notification_config is None
@@ -461,6 +502,7 @@ class TestReplyToTaskWebhookFallback:
             return_value=_make_agent_record(push_capable=False)
         )
         mock_db.update_task_on_message = AsyncMock()
+        service.bind_task_db(mock_db)
 
         async def capture_send(request):
             captured_request["params"] = request.params
@@ -473,21 +515,24 @@ class TestReplyToTaskWebhookFallback:
             mock_settings.webhook_base_url = "https://api.example.com"
 
             mock_client_instance = AsyncMock()
-            mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(return_value=mock_client_instance)
-            mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(
+                return_value=mock_client_instance
+            )
+            mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(
+                return_value=False
+            )
 
             with patch("app_shell.a2a_runtime.A2AClient") as MockA2AClient:
                 mock_a2a = AsyncMock()
                 mock_a2a.send_message = capture_send
                 MockA2AClient.return_value = mock_a2a
 
-                with patch("app_shell.database_service.db_service", mock_db):
-                    await service.reply_to_task(
-                        message_id="msg-hitl-003",
-                        task_id="task-hitl-003",
-                        context_id="ctx-hitl-003",
-                        user_input="try again",
-                    )
+                await service.reply_to_task(
+                    message_id="msg-hitl-003",
+                    task_id="task-hitl-003",
+                    context_id="ctx-hitl-003",
+                    user_input="try again",
+                )
 
         cfg: MessageSendConfiguration = captured_request["params"].configuration
         assert cfg.push_notification_config is None
@@ -511,6 +556,7 @@ class TestReplyToTaskWebhookFallback:
         mock_db.update_webhook_token_hash_on_message = AsyncMock(return_value=True)
         mock_db.get_agent_by_agent_id = AsyncMock(return_value=None)
         mock_db.update_task_on_message = AsyncMock()
+        service.bind_task_db(mock_db)
 
         async def capture_send(request):
             captured_request["params"] = request.params
@@ -523,21 +569,24 @@ class TestReplyToTaskWebhookFallback:
             mock_settings.webhook_base_url = "https://api.example.com"
 
             mock_client_instance = AsyncMock()
-            mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(return_value=mock_client_instance)
-            mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(
+                return_value=mock_client_instance
+            )
+            mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(
+                return_value=False
+            )
 
             with patch("app_shell.a2a_runtime.A2AClient") as MockA2AClient:
                 mock_a2a = AsyncMock()
                 mock_a2a.send_message = capture_send
                 MockA2AClient.return_value = mock_a2a
 
-                with patch("app_shell.database_service.db_service", mock_db):
-                    await service.reply_to_task(
-                        message_id="msg-hitl-004",
-                        task_id="task-hitl-004",
-                        context_id="ctx-hitl-004",
-                        user_input="hello",
-                    )
+                await service.reply_to_task(
+                    message_id="msg-hitl-004",
+                    task_id="task-hitl-004",
+                    context_id="ctx-hitl-004",
+                    user_input="hello",
+                )
 
         cfg: MessageSendConfiguration = captured_request["params"].configuration
         assert cfg.push_notification_config is None
@@ -570,7 +619,6 @@ class TestSendMessageTrackedAgentPersistedFlag:
     @pytest.mark.asyncio
     async def test_persisted_true_on_successful_db_write(self):
         """update_task_on_message returns True → response has persisted=True."""
-        import app_shell.database_service as db_module
         from app_shell.a2a_runtime import A2AService
 
         @asynccontextmanager
@@ -580,17 +628,22 @@ class TestSendMessageTrackedAgentPersistedFlag:
             yield fake_client
 
         service = A2AService.__new__(A2AService)
+        mock_db = MagicMock()
+        mock_db.update_task_on_message = AsyncMock(return_value=True)
+        service.bind_task_db(mock_db)
 
         with (
-            patch.object(service, "has_push_notification_capability", return_value=False),
+            patch.object(
+                service, "has_push_notification_capability", return_value=False
+            ),
             patch.object(service, "create_a2a_client", fake_client_ctx),
-            patch.object(service, "_resolve_accepted_modes", return_value=["text/plain"]),
+            patch.object(
+                service, "_resolve_accepted_modes", return_value=["text/plain"]
+            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
             patch("app_shell.a2a_runtime.settings") as mock_settings,
-            patch.object(db_module, "db_service") as mock_db,
         ):
             mock_settings.webhook_base_url = ""
-            mock_db.update_task_on_message = AsyncMock(return_value=True)
 
             result = await service.send_message_to_tracked_agent(
                 agent_card=_make_agent_card(push_capable=False),
@@ -606,7 +659,6 @@ class TestSendMessageTrackedAgentPersistedFlag:
     @pytest.mark.asyncio
     async def test_persisted_false_on_failed_db_write(self):
         """update_task_on_message returns False → response has persisted=False."""
-        import app_shell.database_service as db_module
         from app_shell.a2a_runtime import A2AService
 
         @asynccontextmanager
@@ -616,17 +668,22 @@ class TestSendMessageTrackedAgentPersistedFlag:
             yield fake_client
 
         service = A2AService.__new__(A2AService)
+        mock_db = MagicMock()
+        mock_db.update_task_on_message = AsyncMock(return_value=False)
+        service.bind_task_db(mock_db)
 
         with (
-            patch.object(service, "has_push_notification_capability", return_value=False),
+            patch.object(
+                service, "has_push_notification_capability", return_value=False
+            ),
             patch.object(service, "create_a2a_client", fake_client_ctx),
-            patch.object(service, "_resolve_accepted_modes", return_value=["text/plain"]),
+            patch.object(
+                service, "_resolve_accepted_modes", return_value=["text/plain"]
+            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
             patch("app_shell.a2a_runtime.settings") as mock_settings,
-            patch.object(db_module, "db_service") as mock_db,
         ):
             mock_settings.webhook_base_url = ""
-            mock_db.update_task_on_message = AsyncMock(return_value=False)
 
             result = await service.send_message_to_tracked_agent(
                 agent_card=_make_agent_card(push_capable=False),
@@ -638,4 +695,3 @@ class TestSendMessageTrackedAgentPersistedFlag:
 
         assert result["type"] == "message"
         assert result["persisted"] is False
-
