@@ -998,15 +998,24 @@ async def lifespan(app: FastAPI):
             RelayHubLivenessReader,
             init_relay_service,
         )
+        from app_shell.relay_store import AppShellRelayHubStore
         from app_shell.room_lock import RedisRoomDistributedLock
         from execution.facade import hub_agent_response_internal_to_agent_event
+        from hub_runtime_bridge.adapters.legacy_failure import (
+            RelayOfflineFailureAdapter,
+        )
+        from hub_runtime_bridge.repository.mongo import HubMongoRepository
 
-        _db_svc = importlib.import_module("app_shell.database_service").db_service
         _rmc = get_bound_room_message_center()
         _rmc.set_room_distributed_lock(RedisRoomDistributedLock(_redis_service))
+        relay_hub_store = AppShellRelayHubStore(
+            mongo=mongo_dal,
+            hub_repository=HubMongoRepository(mongo_dal),
+            agent_repository=_agent_deps.agent_repository,
+        )
         _relay_svc = init_relay_service(
-            mongo=_legacy_mongo,
-            db=_db_svc,
+            mongo=relay_hub_store,
+            db=app_shell_store,
             sse_manager=sse_manager,
             room_message_center=_rmc,
             hitl_coordinator=hitl_service,
@@ -1015,6 +1024,10 @@ async def lifespan(app: FastAPI):
                 _delivery_facade.instance_id if _delivery_facade is not None else None
             ),
             response_converter=hub_agent_response_internal_to_agent_event,
+            offline_failure_port=RelayOfflineFailureAdapter(
+                app_shell_store,
+                sse_manager,
+            ),
         )
         app.state.relay_service = _relay_svc
         relay.bind_relay_dependencies(_relay_svc)

@@ -15,6 +15,11 @@ class _SSEManager:
     pass
 
 
+class _OfflineFailurePort:
+    async def mark_hub_message_failed(self, command) -> None:
+        pass
+
+
 class _Mongo:
     async def get_hub(self, hub_id: str):
         return {"hub_id": hub_id, "user_id": "owner-1"}
@@ -67,6 +72,7 @@ def service(monkeypatch):
         mongo=None,
         legacy_store=_DatabaseService(),
         sse_manager=_SSEManager(),
+        offline_failure_port=_OfflineFailurePort(),
     )
     spy = _FacadeSpy()
     relay._facade = spy

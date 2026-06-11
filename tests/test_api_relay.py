@@ -69,6 +69,7 @@ def _make_relay_service(
     mongo=None,
     db_service=None,
     sse_manager=None,
+    offline_failure_port=None,
 ) -> RelayService:
     if mongo is None:
         mongo = MagicMock()
@@ -100,11 +101,15 @@ def _make_relay_service(
         sse_manager.send_task_submitted = AsyncMock()
         sse_manager.send_processing_status = AsyncMock()
         sse_manager.send_error = AsyncMock()
+    if offline_failure_port is None:
+        offline_failure_port = MagicMock()
+        offline_failure_port.mark_hub_message_failed = AsyncMock()
 
     svc = RelayService(
         mongo=mongo,
         db=db_service,
         sse_manager=sse_manager,
+        offline_failure_port=offline_failure_port,
     )
 
     # Wire up RelayTransport for publish event delegation
@@ -122,6 +127,30 @@ def _make_relay_service(
     return svc
 
 
+@pytest.mark.asyncio
+async def test_relay_service_uses_injected_offline_failure_port():
+    offline_failure_port = MagicMock()
+    offline_failure_port.mark_hub_message_failed = AsyncMock()
+    svc = _make_relay_service(offline_failure_port=offline_failure_port)
+
+    await svc._fail_offline_message(
+        RelayToHubEvent(
+            type="user_message",
+            room_id="room-1",
+            agent_message_id="agent-message-1",
+            agent_id="agent-1",
+            task_id="task-1",
+        ),
+        "Agent is offline",
+    )
+
+    offline_failure_port.mark_hub_message_failed.assert_awaited_once()
+    command = offline_failure_port.mark_hub_message_failed.await_args.args[0]
+    assert command.room_id == "room-1"
+    assert command.agent_message_id == "agent-message-1"
+    assert command.error_text == "Agent is offline"
+
+
 def test_init_relay_service_binds_hitl_coordinator_to_publish_handler():
     mongo = MagicMock()
     db_service = MagicMock()
@@ -135,29 +164,38 @@ def test_init_relay_service_binds_hitl_coordinator_to_publish_handler():
         sse_manager=sse_manager,
         room_message_center=room_message_center,
         hitl_coordinator=hitl_coordinator,
+        offline_failure_port=MagicMock(),
     )
 
     assert svc._response_handler.hitl_coordinator is hitl_coordinator
 
 
-def test_init_relay_service_fallback_response_handler_can_handle_publish_events():
+def test_init_relay_service_requires_injected_response_handler():
     mongo = MagicMock()
     db_service = MagicMock()
     sse_manager = MagicMock()
     room_message_center = SimpleNamespace()
     hitl_coordinator = MagicMock()
 
-    svc = init_relay_service(
-        mongo=mongo,
-        db=db_service,
-        sse_manager=sse_manager,
-        room_message_center=room_message_center,
-        hitl_coordinator=hitl_coordinator,
-    )
+    with pytest.raises(ValueError, match="agent_response_handler"):
+        init_relay_service(
+            mongo=mongo,
+            db=db_service,
+            sse_manager=sse_manager,
+            room_message_center=room_message_center,
+            hitl_coordinator=hitl_coordinator,
+            offline_failure_port=MagicMock(),
+        )
 
-    handler = svc._response_handler
-    assert handler.hitl_coordinator is hitl_coordinator
-    assert callable(handler.handle)
+
+def test_init_relay_service_requires_offline_failure_port():
+    with pytest.raises(ValueError, match="offline_failure_port"):
+        init_relay_service(
+            mongo=MagicMock(),
+            db=MagicMock(),
+            sse_manager=MagicMock(),
+            room_message_center=MagicMock(agent_response_handler=MagicMock()),
+        )
 
 
 def test_init_relay_service_binds_processor_relay_path():
@@ -180,6 +218,7 @@ def test_init_relay_service_binds_processor_relay_path():
         sse_manager=sse_manager,
         room_message_center=room_message_center,
         hitl_coordinator=hitl_coordinator,
+        offline_failure_port=MagicMock(),
     )
 
     assert svc.relay_transport is None
@@ -204,6 +243,7 @@ def test_init_relay_service_wires_hub_worker_and_event_publisher():
         event_publisher=publisher,
         worker_id="worker-123",
         response_converter=converter,
+        offline_failure_port=MagicMock(),
     )
 
     assert svc.worker_id == "worker-123"

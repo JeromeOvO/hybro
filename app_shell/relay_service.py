@@ -7,7 +7,6 @@ runtime implementation behind the proxy.
 from __future__ import annotations
 
 import asyncio
-import importlib
 import time
 from collections import deque
 from collections.abc import AsyncGenerator, Callable
@@ -27,7 +26,6 @@ from common.dto import (
 )
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from hub_runtime_bridge.adapters.legacy_failure import LegacyOfflineFailureAdapter
 from hub_runtime_bridge.config import config_from_settings
 from hub_runtime_bridge.facade import HubFacade
 from models.api_key import APIKey
@@ -197,6 +195,7 @@ class RelayService:
         event_publisher: Any | None = None,
         worker_id: str | None = None,
         response_converter: Callable[[Any], Any] | None = None,
+        offline_failure_port: Any,
     ) -> None:
         self._mongo = mongo
         self._mongo = (
@@ -226,6 +225,7 @@ class RelayService:
         self._response_handler: Any | None = None
         self._internal_response_dispatcher: Any | None = None
         self._response_converter = response_converter or _default_hub_response_converter
+        self._offline_failure_port = offline_failure_port
         self.agent_call_counter = (
             mongo
             if callable(getattr(mongo, "increment_agent_call_count", None))
@@ -243,7 +243,7 @@ class RelayService:
             event_publisher=event_publisher,
             publish_authorization_reader=_RelayPublishAuthorizationReader(self._db),
             cancellation_reader=_RelayCancellationReader(self._db),
-            offline_failure_port=LegacyOfflineFailureAdapter(self._db, sse_manager),
+            offline_failure_port=self._offline_failure_port,
         )
 
     @property
@@ -559,8 +559,7 @@ class RelayService:
     async def _fail_offline_message(
         self, event: RelayToHubEvent, error_text: str | None = None
     ) -> None:
-        port = LegacyOfflineFailureAdapter(self._db, self._sse)
-        await port.mark_hub_message_failed(
+        await self._offline_failure_port.mark_hub_message_failed(
             OfflineHubFailureCommand(
                 room_id=event.room_id,
                 agent_message_id=event.agent_message_id,
@@ -820,10 +819,13 @@ def init_relay_service(
     event_publisher: Any | None = None,
     worker_id: str | None = None,
     response_converter: Callable[[Any], Any] | None = None,
+    offline_failure_port: Any | None = None,
 ) -> RelayService:
     resolved_db = db if db is not None else legacy_store
     if resolved_db is None:
         raise ValueError("init_relay_service requires db or legacy_store")
+    if offline_failure_port is None:
+        raise ValueError("init_relay_service requires offline_failure_port")
     global relay_service
     relay_service = RelayService(
         mongo=mongo,
@@ -832,21 +834,12 @@ def init_relay_service(
         event_publisher=event_publisher,
         worker_id=worker_id,
         response_converter=response_converter,
+        offline_failure_port=offline_failure_port,
     )
     response_handler = getattr(room_message_center, "agent_response_handler", None)
     if response_handler is None:
-        handler_module = importlib.import_module("execution.dispatch.response_handler")
-        handler_cls = getattr(handler_module, "Agent" + "ResponseHandler")
-        response_handler = handler_cls(
-            message_writer=resolved_db,
-            task_writer=resolved_db,
-            continuation_store=resolved_db,
-            client_request_resolver=resolved_db,
-            room_reader=resolved_db,
-            hitl_reader=resolved_db,
-            sse_manager=sse_manager,
-            room_message_center=room_message_center,
-            hitl_coordinator=hitl_coordinator,
+        raise ValueError(
+            "init_relay_service requires room_message_center.agent_response_handler"
         )
     elif hitl_coordinator is not None:
         response_handler.hitl_coordinator = hitl_coordinator
