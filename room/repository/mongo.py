@@ -127,6 +127,13 @@ class MessageMongoRepository:
         query = _room_message_query(room_id, before)
         return await self._agent_messages.find(query)
 
+    async def get_agent_messages_by_related_message_id(
+        self, related_message_id: str
+    ) -> list[dict]:
+        return await self._agent_messages.find(
+            {"related_message_id": related_message_id}
+        )
+
     async def get_thread(self, parent_message_id: str) -> list[dict]:
         thread: list[dict[str, Any]] = []
         frontier = [parent_message_id]

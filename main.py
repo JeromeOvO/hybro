@@ -265,6 +265,7 @@ async def lifespan(app: FastAPI):
                 create_agent_resolver_repository,
                 create_agent_viewset_vector_index,
                 create_api_key_store,
+                create_app_shell_repository_store,
                 create_context_memory_deps,
                 create_context_memory_facade,
                 create_delivery_cancellation_collection,
@@ -584,12 +585,21 @@ async def lifespan(app: FastAPI):
                 _DomainAliasSvc(repository=_agent_deps.agent_repository)
             )
 
+            membership_source = LegacyRoomMembershipSeedSource()
             _room_deps = create_room_deps(
                 mongo=mongo_dal,
                 agent_registry=_agent_deps.agent_registry,
-                membership_source=LegacyRoomMembershipSeedSource(),
+                membership_source=membership_source,
             )
             _room_facade = _room_deps.room_registry
+            app_shell_store = create_app_shell_repository_store(
+                mongo=mongo_dal,
+                room_deps=_room_deps,
+                agent_deps=_agent_deps,
+            )
+            membership_source.bind_store(app_shell_store)
+            debate_service.bind_store(app_shell_store)
+            room_coordinator_service.bind_store(app_shell_store)
             room_runtime.bind_facade(_room_facade)
             room_runtime.bind_s3_service(s3_service)
             room_center.room_center.bind_facade(_room_facade)

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
+from app_shell.debate_service import DebateService
 from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
 
 
@@ -102,6 +105,13 @@ class TestSequentialDebateDispatcher:
         assert "Provide your own perspective" in result
         assert "Focus on adding value" in result
         assert "Execute your task and deliver concrete results" in result
+
+
+def test_debate_service_default_constructor_does_not_import_database_service():
+    with patch("importlib.import_module", side_effect=AssertionError("legacy import attempted")):
+        svc = DebateService()
+
+    assert svc._store is not None
 
     def test_prior_response_exactly_at_max_chars_boundary(self):
         """Prior response exactly at max_chars boundary (no truncation marker)."""

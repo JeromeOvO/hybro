@@ -11,7 +11,7 @@ race condition where relay agents' DB messages are not yet written when the
 coordinator tries to read them.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -299,3 +299,12 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
         )
 
         coordinator._create_and_emit_summary_message.assert_not_awaited()
+
+
+def test_room_coordinator_default_constructor_does_not_import_database_service():
+    from app_shell.room_coordinator_service import RoomCoordinatorService
+
+    with patch("importlib.import_module", side_effect=AssertionError("legacy import attempted")):
+        svc = RoomCoordinatorService()
+
+    assert svc._store is not None

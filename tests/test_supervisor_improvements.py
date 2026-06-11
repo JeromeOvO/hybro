@@ -5,7 +5,7 @@ Tests for Supervisor Improvements:
 """
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -23,6 +23,13 @@ from models.supervisor import (
     SupervisorTrajectory,
     TrajectoryEntry,
 )
+
+
+def test_room_supervisor_default_constructor_does_not_import_database_service():
+    with patch("importlib.import_module", side_effect=AssertionError("legacy import attempted")):
+        service = RoomSupervisorService()
+
+    assert service._supervisor_service is None
 
 # =============================================================================
 # Part 1a: Trajectory response preview (3000-char cap)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app_shell.agent_service import agent_service
+from app_shell.runtime_store import UNBOUND_RUNTIME_STORE
 from common.dto import AgentInfo, SavedAgentGroupSnapshot
 from common.utils.logger import get_logger
 from models.request import AgentCenterRequest
@@ -17,11 +18,11 @@ class LegacyRoomMembershipSeedSource:
         membership_store=None,
         agent_service_adapter=agent_service,
     ) -> None:
-        if membership_store is None:
-            import importlib
-            membership_store = getattr(importlib.import_module("app_shell.database_service"), "db_service")
-        self._store = membership_store
+        self._store = membership_store or UNBOUND_RUNTIME_STORE
         self._agent_service = agent_service_adapter
+
+    def bind_store(self, membership_store) -> None:
+        self._store = membership_store
 
     async def get_saved_group(self, group_id: str) -> SavedAgentGroupSnapshot | None:
         group = await self._store.get_agent_group_by_id(group_id)
