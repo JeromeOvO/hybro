@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from models.room import MessageContent, RoomAgentMessage
 from room.repository import MessageMongoRepository, RoomMongoRepository
 
 
@@ -451,6 +452,79 @@ async def test_app_shell_store_returns_parsed_task_messages_for_routes():
 
     assert [message.message_id for message in room_tasks] == ["a1"]
     assert [message.message_id for message in user_tasks] == ["a2"]
+
+
+@pytest.mark.asyncio
+async def test_app_shell_store_preserves_none_task_tracking_fields_on_agent_update():
+    from app_shell.repository_store import AppShellRepositoryStore
+
+    class FakeMessageRepository:
+        def __init__(self):
+            self.updates = []
+
+        async def update_agent_message(self, message_id: str, updates: dict) -> bool:
+            self.updates.append((message_id, deepcopy(updates)))
+            return True
+
+    message_repository = FakeMessageRepository()
+    store = AppShellRepositoryStore(
+        mongo=FakeMongo(),
+        room_repository=object(),
+        message_repository=message_repository,
+        agent_repository=object(),
+    )
+    message = RoomAgentMessage(
+        room_id="r1",
+        user_id="u1",
+        message_id="a1",
+        agent_id="agent-1",
+        message_content=MessageContent(message_text="same"),
+        webhook_token_hash=None,
+        pending_continuation=None,
+        last_notified_state=None,
+        agent_url=None,
+        task_created_at=None,
+        task_updated_at=None,
+        task_content=None,
+    )
+
+    assert await store.update_room_agent_message_by_message_id("a1", message) is True
+
+    _, update = message_repository.updates[-1]
+    for field in {
+        "webhook_token_hash",
+        "pending_continuation",
+        "last_notified_state",
+        "agent_url",
+        "task_created_at",
+        "task_updated_at",
+        "task_content",
+    }:
+        assert field not in update
+
+
+@pytest.mark.asyncio
+async def test_message_repository_update_agent_message_treats_noop_match_as_success():
+    class NoOpMatchedCollection(FakeCollection):
+        async def update_one(self, query: dict, update: dict, **kwargs) -> bool:
+            self.update_one_calls.append(
+                (deepcopy(query), deepcopy(update), deepcopy(kwargs))
+            )
+            return False
+
+    agent_messages = NoOpMatchedCollection(
+        [
+            {
+                "message_id": "a1",
+                "room_id": "r1",
+                "message_content": {"message_text": "same"},
+            }
+        ]
+    )
+    repo, _, _, _ = _message_repo(agent_docs=[])
+    repo._agent_messages = agent_messages
+
+    assert await repo.update_agent_message("a1", {"message_content.message_text": "same"})
 
 
 @pytest.mark.asyncio

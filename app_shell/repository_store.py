@@ -194,9 +194,10 @@ class AppShellRepositoryStore:
         self, message_id: str, room_agent_message: RoomAgentMessage
     ) -> bool:
         try:
+            update_data = _agent_message_update_payload(room_agent_message)
             return await self._message_repository.update_agent_message(
                 message_id,
-                room_agent_message.model_dump(exclude_unset=True, mode="json"),
+                update_data,
             )
         except Exception:
             logger.error("Failed to update room agent message", exc_info=True)
@@ -390,6 +391,24 @@ def _safe_parse_agent_message(doc: dict | None) -> RoomAgentMessage | None:
     except Exception:
         logger.warning("Invalid room agent message document", exc_info=True)
         return None
+
+
+def _agent_message_update_payload(room_agent_message: RoomAgentMessage) -> dict:
+    update_data = room_agent_message.model_dump(mode="json")
+    task_tracking_fields = {
+        "webhook_token_hash",
+        "pending_continuation",
+        "last_notified_state",
+        "agent_url",
+        "task_created_at",
+        "task_updated_at",
+        "task_content",
+        "has_task_tracking",
+    }
+    for field in task_tracking_fields:
+        if update_data.get(field) is None:
+            update_data.pop(field, None)
+    return update_data
 
 
 def _safe_parse_chat_context(doc: dict | None) -> ChatContext | None:

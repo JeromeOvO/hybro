@@ -198,10 +198,13 @@ class MessageMongoRepository:
         )
 
     async def update_agent_message(self, message_id: str, updates: dict) -> bool:
-        return await self._agent_messages.update_one(
+        updated = await self._agent_messages.update_one(
             {"message_id": message_id},
             {"$set": dict(updates)},
         )
+        if updated:
+            return True
+        return await self._agent_messages.find_one({"message_id": message_id}) is not None
 
     async def delete_for_room(self, room_id: str) -> dict[str, int]:
         user_count = await self._user_messages.delete_many({"room_id": room_id})
