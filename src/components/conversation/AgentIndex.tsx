@@ -14,7 +14,6 @@ import {
 } from '@/lib/room-timeline/turn-live-shell'
 import { useResultStreamDisplay } from '@/hooks/useStreamBuffer'
 import { AgentCard } from './AgentCard'
-import { AgentResultContent } from './AgentResultContent'
 import { cn } from '@/lib/utils'
 
 interface AgentIndexProps {
@@ -84,9 +83,7 @@ export function AgentIndex({
 
   if (stripResults.length === 0) return null
 
-  // No-synthesis DONE: show full agent bodies in the index. LLM synthesis keeps compact rows.
-  const showFullBodies = finalAnswer.kind === 'deterministic_done'
-  const listMaxHeight = showFullBodies ? 0 : getActivityStripListMaxHeight(stripResults.length)
+  const listMaxHeight = getActivityStripListMaxHeight(stripResults.length)
 
   return (
     <Collapsible
@@ -115,22 +112,12 @@ export function AgentIndex({
           }}
         >
           {stripResults.map(result => (
-            showFullBodies ? (
-              <AgentResultContent
-                key={result.messageId}
-                result={result}
-                showAttribution={stripResults.length > 1}
-                selected={result.messageId === selectedAgentMessageId}
-                onOpenDetail={onOpenDetail}
-              />
-            ) : (
-              <IndexRow
-                key={result.messageId}
-                result={result}
-                selected={result.messageId === selectedAgentMessageId}
-                onOpenDetail={onOpenDetail}
-              />
-            )
+            <IndexRow
+              key={result.messageId}
+              result={result}
+              selected={result.messageId === selectedAgentMessageId}
+              onOpenDetail={onOpenDetail}
+            />
           ))}
         </div>
       </CollapsibleContent>

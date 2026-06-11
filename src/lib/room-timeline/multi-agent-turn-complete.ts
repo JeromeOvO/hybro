@@ -113,6 +113,17 @@ export function isBackendRunConfirmedNonSynthesisCompletion(
     return false
   }
 
+  // Modern runs will explicitly set turnCompletionKind when they finish.
+  // If we have live processing logs, we know this is a modern live run.
+  // Do not guess it is a deterministic completion; wait for the backend's explicit SSE event.
+  if (
+    turnCompletionKind === undefined
+    && !isDeterministicSummary(summary)
+    && (turn.processingStatusLogs?.length ?? 0) > 0
+  ) {
+    return false
+  }
+
   if (turnCompletionKind === 'synthesis') return false
   if (real.length < 2 || !allRealTerminal(real)) return false
   if (turnHasSubstantiveLlmSynthesis(turn)) return false

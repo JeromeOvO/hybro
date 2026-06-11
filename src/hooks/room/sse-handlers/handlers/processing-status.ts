@@ -307,7 +307,7 @@ export function handleProcessingStatus(
       const incomingKind: 'synthesis' | 'deterministic' | undefined =
         rawKind === 'synthesis' || rawKind === 'deterministic' ? rawKind : undefined
 
-      if (!existingUserMsg.turnTerminalStatus) {
+      if (!existingUserMsg.turnTerminalStatus || (incomingKind && !existingUserMsg.turnCompletionKind)) {
         store.upsertMessage({
           id: resolvedTerminalUserMsgId,
           roomId,
@@ -315,8 +315,8 @@ export function handleProcessingStatus(
           content: existingUserMsg.content,
           senderName: existingUserMsg.senderName,
           timestamp: existingUserMsg.timestamp,
-          turnTerminalStatus: terminalStatus,
-          turnCompletionKind: incomingKind,
+          turnTerminalStatus: existingUserMsg.turnTerminalStatus || terminalStatus,
+          turnCompletionKind: existingUserMsg.turnCompletionKind || incomingKind,
         }, 'sse')
       } else if (
         existingUserMsg.turnCompletionKind === 'deterministic'
