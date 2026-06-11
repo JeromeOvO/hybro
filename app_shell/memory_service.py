@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from app_shell.runtime_store import UNBOUND_RUNTIME_STORE
 from common.dto import ChatContextGenerationInput
 from common.utils.context_utils import (
     add_turn_to_history,
@@ -22,11 +23,11 @@ logger = get_logger(__name__)
 # Chat Memory Service Manager
 class ChatMemoryService:
     def __init__(self, *, context_store=None):
-        if context_store is None:
-            import importlib
-            context_store = getattr(importlib.import_module("app_shell.database_service"), "db_service")
-        self._store = context_store
+        self._store = context_store or UNBOUND_RUNTIME_STORE
         self.room_memory_llm_service = None
+
+    def bind_store(self, context_store) -> None:
+        self._store = context_store
 
     def bind_room_memory_llm_service(self, service) -> None:
         self.room_memory_llm_service = service
@@ -216,13 +217,13 @@ class ChatMemoryService:
 
 class RoomMemoryService:
     def __init__(self, *, room_memory_store=None):
-        if room_memory_store is None:
-            import importlib
-            room_memory_store = getattr(importlib.import_module("app_shell.database_service"), "db_service")
-        self._store = room_memory_store
+        self._store = room_memory_store or UNBOUND_RUNTIME_STORE
         self.turn_notes_llm_provider = None
         self._facade = None
         self._bound = False
+
+    def bind_store(self, room_memory_store) -> None:
+        self._store = room_memory_store
 
     def bind_turn_notes_llm_provider(self, provider) -> None:
         self.turn_notes_llm_provider = provider
@@ -359,17 +360,18 @@ class RoomMemoryService:
         """
         facade = self._require_facade()
         try:
-            doc = await facade.legacy_get_room_memory_for_update_by_memory_id(
-                request.memory_id
+            doc = request.memory.model_dump(mode="json") if request.memory else {}
+            ok = await facade.legacy_update_room_memory_by_memory_id(
+                request.memory_id,
+                doc,
             )
-            memory = _room_memory_from_doc(doc) if doc else None
             return RoomCenterMemoryResponse(
                 room_id=request.room_id,
-                memory_id=memory.memory_id if memory else request.memory_id,
-                memory=memory,
-                success=memory is not None,
-                error=None if memory else "Room memory not found",
-                status_code=200 if memory else 404,
+                memory_id=request.memory_id,
+                memory=request.memory if ok else None,
+                success=ok,
+                error=None if ok else "Room memory not found",
+                status_code=200 if ok else 404,
             )
         except Exception as exc:
             return _room_memory_error_response(
@@ -485,8 +487,11 @@ class RoomMemoryService:
                 provider=self.turn_notes_llm_provider,
             )
             if enriched_notes and enriched_notes != heuristic_notes:
-                await self._store.update_turn_notes(
-                    room_id, turn_id, enriched_notes,
+                facade = self._require_facade()
+                await facade.memory_repository.update_turn_notes(
+                    room_id,
+                    turn_id,
+                    enriched_notes,
                 )
         except Exception as e:
             logger.debug(
@@ -598,7 +603,11 @@ room_memory_service = RoomMemoryService()
 def _room_memory_from_doc(doc: dict | None) -> RoomMemory | None:
     if not doc:
         return None
-    return RoomMemory(**doc)
+    try:
+        return RoomMemory.model_validate(doc)
+    except Exception:
+        logger.warning("Invalid room memory document", exc_info=True)
+        return None
 
 
 def _strip_internal_memory_flags(doc: dict | None) -> dict | None:

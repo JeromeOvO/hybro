@@ -134,6 +134,28 @@ class MessageMongoRepository:
             {"related_message_id": related_message_id}
         )
 
+    async def get_task_messages_for_room(self, room_id: str, limit: int) -> list[dict]:
+        return await self._agent_messages.find(
+            {
+                "room_id": room_id,
+                "has_task_tracking": True,
+            },
+            sort=[("task_created_at", -1)],
+            limit=limit,
+        )
+
+    async def get_pending_task_messages_for_user(
+        self, user_id: str, states: list[str]
+    ) -> list[dict]:
+        return await self._agent_messages.find(
+            {
+                "user_id": user_id,
+                "has_task_tracking": True,
+                "message_content.message_task.status.state": {"$in": list(states)},
+            },
+            sort=[("task_created_at", -1)],
+        )
+
     async def get_thread(self, parent_message_id: str) -> list[dict]:
         thread: list[dict[str, Any]] = []
         frontier = [parent_message_id]

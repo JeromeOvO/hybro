@@ -1,12 +1,21 @@
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app_shell.memory_service import ChatMemoryService
+from app_shell.memory_service import ChatMemoryService, RoomMemoryService
 from common.dto import ChatContextGenerationInput
 from models.memory import ChatContext, ContextData
 from models.request import ChatMemoryRequest
+
+
+def test_memory_service_default_constructors_do_not_import_database_service():
+    with patch("importlib.import_module", side_effect=AssertionError("legacy import attempted")):
+        chat_service = ChatMemoryService()
+        room_service = RoomMemoryService()
+
+    assert chat_service._store is not None
+    assert room_service._store is not None
 
 
 @pytest.mark.asyncio

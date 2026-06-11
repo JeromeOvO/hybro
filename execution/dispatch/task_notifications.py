@@ -61,6 +61,13 @@ logger = get_logger(__name__)
 
 ProcessingStatusEmitter = Callable[..., Awaitable[dict[str, Any] | None]]
 _processing_status_emitter: ProcessingStatusEmitter | None = None
+_notification_store: TaskNotificationStore | None = None
+
+
+def bind_notification_store(notification_store: TaskNotificationStore) -> None:
+    global _notification_store
+
+    _notification_store = notification_store
 
 
 def bind_processing_status_emitter(
@@ -509,17 +516,13 @@ async def notify_task_update(
     (``stale_task_checker``) and safety-net paths (``RoomMessageCenter``)
     that have no handler context.
     """
-    import sys
-    import importlib
     from app_shell.delivery_runtime import sse_manager
     from app_shell.notification_service import notification_service
 
-    db_module = sys.modules.get('app_shell.database_service')
-    if db_module is None:
-        db_module = importlib.import_module('app_shell.database_service')
-    _db_svc = db_module.db_service
+    if _notification_store is None:
+        raise RuntimeError("Task notification store dependency has not been bound")
     return await _notify_task_update_impl(
-        _db_svc,
+        _notification_store,
         notification_service,
         sse_manager,
         message_id=message_id,
@@ -534,6 +537,7 @@ async def notify_task_update(
 
 __all__ = [
     "TaskNotificationAdapter",
+    "bind_notification_store",
     "_map_task_state_to_processing_status",
     "_notify_task_update_impl",
     "notify_task_update",

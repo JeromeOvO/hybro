@@ -41,6 +41,13 @@ class FakeCollection:
     async def find(self, query: dict, **kwargs) -> list[dict]:
         self.find_calls.append((deepcopy(query), deepcopy(kwargs)))
         matches = [deepcopy(doc) for doc in self.docs if _matches(doc, query)]
+        sort = kwargs.get("sort")
+        if sort:
+            for field, direction in reversed(sort):
+                matches.sort(
+                    key=lambda doc: _get_dotted(doc, field),
+                    reverse=direction < 0,
+                )
         limit = kwargs.get("limit")
         return matches[:limit] if limit else matches
 
@@ -320,6 +327,130 @@ async def test_message_repository_get_thread_walks_descendants_and_stops_cycles(
     thread = await repo.get_thread("u1")
 
     assert [doc["message_id"] for doc in thread] == ["a1", "a2", "cycle"]
+
+
+@pytest.mark.asyncio
+async def test_message_repository_task_room_query_filters_sorts_and_limits():
+    older = datetime(2026, 5, 10, tzinfo=UTC)
+    newer = datetime(2026, 5, 11, tzinfo=UTC)
+    repo, _, _, agent_messages = _message_repo(
+        agent_docs=[
+            {
+                "message_id": "tracked-old",
+                "room_id": "r1",
+                "has_task_tracking": True,
+                "task_created_at": older,
+            },
+            {
+                "message_id": "tracked-new",
+                "room_id": "r1",
+                "has_task_tracking": True,
+                "task_created_at": newer,
+            },
+            {
+                "message_id": "untracked",
+                "room_id": "r1",
+                "has_task_tracking": False,
+                "task_created_at": newer,
+            },
+        ]
+    )
+
+    docs = await repo.get_task_messages_for_room("r1", limit=1)
+
+    assert [doc["message_id"] for doc in docs] == ["tracked-new"]
+    assert agent_messages.find_calls[-1] == (
+        {"room_id": "r1", "has_task_tracking": True},
+        {"sort": [("task_created_at", -1)], "limit": 1},
+    )
+
+
+@pytest.mark.asyncio
+async def test_message_repository_pending_user_tasks_filters_and_sorts():
+    older = datetime(2026, 5, 10, tzinfo=UTC)
+    newer = datetime(2026, 5, 11, tzinfo=UTC)
+    repo, _, _, agent_messages = _message_repo(
+        agent_docs=[
+            {
+                "message_id": "old",
+                "user_id": "u1",
+                "has_task_tracking": True,
+                "task_created_at": older,
+                "message_content": {"message_task": {"status": {"state": "working"}}},
+            },
+            {
+                "message_id": "new",
+                "user_id": "u1",
+                "has_task_tracking": True,
+                "task_created_at": newer,
+                "message_content": {"message_task": {"status": {"state": "working"}}},
+            },
+            {
+                "message_id": "done",
+                "user_id": "u1",
+                "has_task_tracking": True,
+                "task_created_at": newer,
+                "message_content": {"message_task": {"status": {"state": "completed"}}},
+            },
+        ]
+    )
+
+    docs = await repo.get_pending_task_messages_for_user("u1", ["working"])
+
+    assert [doc["message_id"] for doc in docs] == ["new", "old"]
+    assert agent_messages.find_calls[-1] == (
+        {
+            "user_id": "u1",
+            "has_task_tracking": True,
+            "message_content.message_task.status.state": {"$in": ["working"]},
+        },
+        {"sort": [("task_created_at", -1)]},
+    )
+
+
+@pytest.mark.asyncio
+async def test_app_shell_store_returns_parsed_task_messages_for_routes():
+    from app_shell.repository_store import AppShellRepositoryStore
+
+    class FakeMessageRepository:
+        async def get_task_messages_for_room(self, room_id: str, limit: int):
+            assert (room_id, limit) == ("r1", 5)
+            return [
+                {
+                    "message_id": "a1",
+                    "room_id": "r1",
+                    "user_id": "u1",
+                    "agent_id": "agent-1",
+                    "message_content": {"message_text": "task"},
+                    "has_task_tracking": True,
+                }
+            ]
+
+        async def get_pending_task_messages_for_user(self, user_id: str, states: list[str]):
+            assert (user_id, states) == ("u1", ["working"])
+            return [
+                {
+                    "message_id": "a2",
+                    "room_id": "r1",
+                    "user_id": "u1",
+                    "agent_id": "agent-2",
+                    "message_content": {"message_text": "pending"},
+                    "has_task_tracking": True,
+                }
+            ]
+
+    store = AppShellRepositoryStore(
+        mongo=FakeMongo(),
+        room_repository=object(),
+        message_repository=FakeMessageRepository(),
+        agent_repository=object(),
+    )
+
+    room_tasks = await store.get_task_messages_for_room("r1", limit=5)
+    user_tasks = await store.get_pending_task_messages_for_user("u1", ["working"])
+
+    assert [message.message_id for message in room_tasks] == ["a1"]
+    assert [message.message_id for message in user_tasks] == ["a2"]
 
 
 @pytest.mark.asyncio
