@@ -478,20 +478,6 @@ async def lifespan(app: FastAPI):
                 kwargs["state"] = coerce_task_state(state)
                 return await notify_task_update(**kwargs)
 
-            bind_hitl_service(
-                create_hitl_service(
-                    store=_db_svc,
-                    delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
-                    a2a_service=a2a_service,
-                    continuation=A2AHITLContinuationAdapter(
-                        a2a_service,
-                        lambda: execution_room_message_center,
-                    ),
-                    task_notifications=HITLTaskNotificationAdapter(
-                        notify_task_update_with_string_state
-                    ),
-                )
-            )
             run_lifecycle = RunLifecycleAdapter(
                 command_handler=run_command_handler,
                 run_repository=_execution_repos["run_repository"],
@@ -603,6 +589,20 @@ async def lifespan(app: FastAPI):
             app.state.execution_client_request_id_resolver = (
                 app_shell_client_request_id_resolver
             )
+            bind_hitl_service(
+                create_hitl_service(
+                    store=app_shell_store,
+                    delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
+                    a2a_service=a2a_service,
+                    continuation=A2AHITLContinuationAdapter(
+                        a2a_service,
+                        lambda: execution_room_message_center,
+                    ),
+                    task_notifications=HITLTaskNotificationAdapter(
+                        notify_task_update_with_string_state
+                    ),
+                )
+            )
             room_center.bind_room_dependencies(
                 center=AppShellRoomCenter(),
                 store=app_shell_store,
@@ -658,7 +658,7 @@ async def lifespan(app: FastAPI):
                     continuation_store=app_shell_store,
                     client_request_resolver=app_shell_store,
                     room_reader=app_shell_store,
-                    hitl_reader=_db_svc,
+                    hitl_reader=app_shell_store,
                     sse_manager=sse_manager,
                     room_message_center=execution_room_message_center,
                     hitl_coordinator=hitl_service,
@@ -818,10 +818,7 @@ async def lifespan(app: FastAPI):
                     logger.info("startup heal: healed %s diverged run(s)", healed)
         if settings.webhook_signing_key:
             await _legacy_mongo.create_task_tracking_indexes()
-            _hitl_db_svc = importlib.import_module(
-                "app_shell.database_service"
-            ).db_service
-            await _hitl_db_svc.ensure_hitl_indexes()
+            await app_shell_store.ensure_hitl_indexes()
 
         # Init app-shell Redis subsystems before the guard. Delivery-owned
         # Pub/Sub/KV clients are constructed through container.py above.

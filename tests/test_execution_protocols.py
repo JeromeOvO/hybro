@@ -254,12 +254,22 @@ def test_execution_scaffold_adapters_are_available():
     assert BoundRoomMessageCenterProxy.__name__ == "BoundRoomMessageCenterProxy"
     assert RoomLockManager.__name__ == "RoomLockManager"
     db = object()
-    hitl = create_hitl_service(database_service=db)
+    hitl = create_hitl_service(store=db)
     assert hitl._store is db
     runtime = create_room_message_center(database_service=db, debate_rounds=7)
     assert runtime._store is db
     assert runtime.debate_rounds == 7
     assert isinstance(room_message_center, BoundRoomMessageCenterProxy)
+
+
+def test_hitl_factory_does_not_accept_legacy_database_aliases():
+    from execution.hitl.factory import create_hitl_service
+
+    db = object()
+    with pytest.raises(TypeError, match="database_service"):
+        create_hitl_service(database_service=db)
+    with pytest.raises(TypeError, match="db_service"):
+        create_hitl_service(db_service=db)
 
 
 def test_room_message_center_factory_propagates_overrides_to_children():
@@ -308,7 +318,9 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.direct_transport.sse_manager is deps["sse_manager"]
     assert runtime.direct_transport.a2a_service is deps["a2a_service"]
     assert runtime.direct_transport.task_service is deps["task_service"]
-    assert runtime.agent_message_processor._room_memory_reader is deps["database_service"]
+    assert (
+        runtime.agent_message_processor._room_memory_reader is deps["database_service"]
+    )
     assert runtime.agent_message_processor._task_tracker is deps["database_service"]
     assert runtime.agent_message_processor.sse_manager is deps["sse_manager"]
     assert runtime.queue_executor._store is deps["database_service"]

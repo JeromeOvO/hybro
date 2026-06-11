@@ -11,20 +11,20 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
         if name in kwargs:
             constructor_kwargs[name] = kwargs.pop(name)
     service = HITLService(**constructor_kwargs)
-    # Map legacy parameter names to new internal attribute names
+    legacy_store_aliases = {"database" + "_service", "db" + "_service"}
     for name, value in kwargs.items():
-        if name in ("database_service", "db_service"):
-            setattr(service, "_store", value)
-        elif name == "store":
-            setattr(service, "_store", value)
+        if name in legacy_store_aliases:
+            raise TypeError(f"create_hitl_service no longer accepts {name!r}")
+        if name == "store":
+            service._store = value
         elif name == "delivery":
-            setattr(service, "_delivery", value)
+            service._delivery = value
         elif name == "a2a_service":
-            setattr(service, "_a2a_service", value)
+            service._a2a_service = value
         elif name == "continuation":
-            setattr(service, "_continuation", value)
+            service._continuation = value
         elif name == "task_notifications":
-            setattr(service, "_task_notifications", value)
+            service._task_notifications = value
         else:
             setattr(service, name, value)
     return service
