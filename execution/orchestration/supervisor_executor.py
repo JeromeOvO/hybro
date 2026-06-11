@@ -924,7 +924,10 @@ class SupervisorExecutor:
                                 status=SSEProcessingStatus.PROCESSING,
                                 message_id=user_message_id,
                                 lifecycle_message_id=user_message_id,
-                                details="Synthesizing responses...",
+                                details={
+                                    "turn_phase": "synthesizing",
+                                    "message": "Synthesizing responses...",
+                                },
                             )
                         except Exception:
                             logger.debug("SSE stage notification failed (synthesizing)", exc_info=True)
@@ -1187,7 +1190,10 @@ class SupervisorExecutor:
                         status=SSEProcessingStatus.PROCESSING,
                         message_id=user_message_id,
                         lifecycle_message_id=user_message_id,
-                        details="Synthesizing responses...",
+                        details={
+                            "turn_phase": "synthesizing",
+                            "message": "Synthesizing responses...",
+                        },
                     )
                 except Exception:
                     logger.debug("SSE stage notification failed (budget synthesis)", exc_info=True)

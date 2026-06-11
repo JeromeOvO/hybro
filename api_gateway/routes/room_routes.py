@@ -195,15 +195,19 @@ async def inquiry_active_runs(
     """List non-terminal orchestration runs for a room — same auth as inquiryRoomSetting."""
     request_data = await request.json()
     room_id = request_data.get("room_id")
+    trigger_message_id = request_data.get("trigger_message_id")
 
     await verify_room_ownership(room_id, user)
 
-    runs = await _require_execution_engine().get_runs_for_room(room_id)
-    return RoomCenterActiveRunsResponse(
-        success=True,
+    room_center_request = RoomCenterRoomSettingRequest(
         room_id=room_id,
-        active_runs=[_run_info_to_active_run_ref(run) for run in runs],
+        requesting_user_id=user.user_id,
+        trigger_message_id=trigger_message_id,
     )
+    room_center_response = await _require_room_center().inquiry_active_runs(
+        room_center_request
+    )
+    return room_center_response
 
 
 @router.post("/roomCenter/inquiryRoomsByRoomOwnerId")

@@ -26,6 +26,7 @@ from models.response import (
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
     RoomCenterUserMessageResponse,
+    RoomCenterActiveRunsResponse,
 )
 
 JsonScalar: TypeAlias = str | int | float | bool | None
@@ -220,6 +221,9 @@ class RoomCenterRouteOwner(Protocol):
     async def inquiry_room_setting(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse: ...
+    async def inquiry_active_runs(
+        self, request: RoomCenterRoomSettingRequest
+    ) -> RoomCenterActiveRunsResponse: ...
     async def update_room_setting(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse: ...
