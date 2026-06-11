@@ -91,6 +91,9 @@ class MessageRepository(Protocol):
     async def get_agent_messages_for_room(
         self, room_id: str, limit: int = 100, before: datetime | None = None
     ) -> list[dict]: ...
+    async def get_agent_messages_by_related_message_id(
+        self, related_message_id: str
+    ) -> list[dict]: ...
 
 
 @runtime_checkable

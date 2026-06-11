@@ -250,6 +250,63 @@ async def test_message_repository_combines_history_sorted_with_before_filter():
 
 
 @pytest.mark.asyncio
+async def test_message_repository_get_agent_messages_by_related_message_id_queries_agent_messages():
+    repo, _, _, agent_messages = _message_repo(
+        agent_docs=[
+            {
+                "message_id": "a1",
+                "room_id": "r1",
+                "agent_id": "agent-1",
+                "related_message_id": "u1",
+                "message_content": {"message_text": "first"},
+            },
+            {
+                "message_id": "a2",
+                "room_id": "r1",
+                "agent_id": "agent-2",
+                "related_message_id": "u2",
+                "message_content": {"message_text": "second"},
+            },
+        ]
+    )
+
+    docs = await repo.get_agent_messages_by_related_message_id("u1")
+
+    assert [doc["message_id"] for doc in docs] == ["a1"]
+    assert agent_messages.find_calls[-1] == ({"related_message_id": "u1"}, {})
+
+
+@pytest.mark.asyncio
+async def test_app_shell_repository_store_returns_related_agent_messages():
+    from app_shell.repository_store import AppShellRepositoryStore
+
+    class FakeMessageRepository:
+        async def get_agent_messages_by_related_message_id(self, related_message_id: str):
+            assert related_message_id == "u1"
+            return [
+                {
+                    "message_id": "a1",
+                    "room_id": "r1",
+                    "agent_id": "agent-1",
+                    "related_message_id": "u1",
+                    "message_content": {"message_text": "first"},
+                }
+            ]
+
+    store = AppShellRepositoryStore(
+        mongo=FakeMongo(),
+        room_repository=object(),
+        message_repository=FakeMessageRepository(),
+        agent_repository=object(),
+    )
+
+    messages = await store.get_room_agent_messages_by_related_message_id("u1")
+
+    assert [message.message_id for message in messages] == ["a1"]
+    assert messages[0].message_content.message_text == "first"
+
+
+@pytest.mark.asyncio
 async def test_message_repository_get_thread_walks_descendants_and_stops_cycles():
     repo, _, _, _ = _message_repo(
         agent_docs=[
