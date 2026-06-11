@@ -110,6 +110,7 @@ def _make_service(mongo=None, streams=None):
         mongo=mongo,
         legacy_store=db_service,
         sse_manager=sse_manager,
+        offline_failure_port=MagicMock(mark_hub_message_failed=AsyncMock()),
     )
     if streams is not None:
         svc.set_stream_service(streams)

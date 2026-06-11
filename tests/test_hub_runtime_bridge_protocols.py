@@ -335,15 +335,15 @@ async def test_hub_mongo_repository_supports_async_dal_find_results() -> None:
 
 @pytest.mark.asyncio
 async def test_hub_mongo_repository_treats_matched_noop_update_as_success() -> None:
-    class Result:
-        matched_count = 1
-        modified_count = 0
-
     class Collection:
-        async def update_one(self, query, update):
+        async def find_one_and_update(self, query, update):
             assert query == {"hub_id": "hub-1", "connection_id": "conn-1"}
             assert update == {"$set": {"is_online": False}}
-            return Result()
+            return {
+                "hub_id": "hub-1",
+                "connection_id": "conn-1",
+                "is_online": False,
+            }
 
     class Mongo:
         def collection(self, name):

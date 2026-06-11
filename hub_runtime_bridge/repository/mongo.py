@@ -72,15 +72,10 @@ class HubMongoRepository:
                     hub_id, connection_id=connection_id, **fields
                 )
             )
-        result = await self._collection().update_one(
+        doc = await self._collection().find_one_and_update(
             {"hub_id": hub_id, "connection_id": connection_id}, {"$set": fields}
         )
-        if isinstance(result, bool):
-            return result
-        matched_count = getattr(result, "matched_count", None)
-        if matched_count is not None:
-            return bool(matched_count)
-        return bool(getattr(result, "modified_count", 0))
+        return doc is not None
 
     def _collection(self) -> Any:
         if hasattr(self._mongo, "hubs_collection"):

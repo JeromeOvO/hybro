@@ -4,7 +4,7 @@ from a2a_adapter.task_status import build_failed_task_status
 from common.dto import OfflineHubFailureCommand
 
 
-class LegacyOfflineFailureAdapter:
+class RelayOfflineFailureAdapter:
     def __init__(self, db, sse_manager) -> None:
         self._db = db
         self._sse = sse_manager
@@ -39,4 +39,7 @@ class LegacyOfflineFailureAdapter:
             )
 
 
-__all__ = ["LegacyOfflineFailureAdapter"]
+LegacyOfflineFailureAdapter = RelayOfflineFailureAdapter
+
+
+__all__ = ["RelayOfflineFailureAdapter", "LegacyOfflineFailureAdapter"]

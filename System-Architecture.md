@@ -329,8 +329,10 @@ This module is used by:
 agent sync, liveness, offline queue behavior, task ownership, and internal hub
 response routing. `app_shell.relay_service.RelayService` remains as a
 compatibility adapter for legacy route imports and APIKey/request adaptation; it
-delegates Hub behavior through facade public methods and does not construct Hub
-repositories or inspect `HubRuntimeBridgeDeps`.
+delegates Hub behavior through facade public methods. Its runtime binding uses
+`AppShellRelayHubStore`, `HubMongoRepository`, `AgentRepository`, and an
+injected relay offline-failure port instead of the broad legacy Mongo/database
+singletons.
 
 Hub relay responsibilities:
 
@@ -416,10 +418,9 @@ Examples:
 - `app_shell.database_service`: app-shell database facade over
   `database.mongodb` and Pinecone.
 - `app_shell.relay_service`: relay route surface over
-  `hub_runtime_bridge`. It may still host temporary adapters to legacy
-  database/response-handler surfaces, but Hub-owned liveness, stream binding,
-  agent sync, ownership, and internal response router setup are handled by
-  `HubFacade`.
+  `hub_runtime_bridge`. Hub-owned liveness, stream binding, agent sync,
+  ownership, and internal response router setup are handled by `HubFacade`;
+  persistence reaches Mongo through repository-backed app-shell adapters.
 - `execution.dispatch.task_notifications`: terminal task update notifications.
 - `app_shell.hitl_service`: HITL lifecycle and response handling.
 
@@ -563,8 +564,10 @@ cancellation persistence, and stale-task cleanup is routed through
 `AppShellRepositoryStore` backed by module repositories and `MongoDAL`
 collections. HITL lifecycle persistence, CAS/fencing updates, continuation
 metadata, stale-processing recovery, and HITL index creation also use
-`AppShellRepositoryStore`. Relay migration remains a separate phase while relay
-service bindings still use legacy compatibility adapters.
+`AppShellRepositoryStore`. Relay route registration, hub status, liveness, and
+offline failure persistence now use explicit repository-backed app-shell
+adapters; remaining migration phases continue with room orchestration and memory
+paths.
 
 **Agent display text:** Terminal `message_text` and artifact text parts are persisted as received from agents. List/section markdown repair runs only in the frontend remark plugin pipeline (`hybro-frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown render time. Hybro-controlled LLM paths (supervisor synthesis, `SummaryLLMService`) append `HYBRO_MARKDOWN_RESPONSE_FORMAT` so synthesis uses `###` section headers; third-party agent text is still stored as-is. Backend terminal helpers in `common/utils/a2a_helpers.py` (`prepare_terminal_agent_content`, `resolve_terminal_sse_content`, `sync_artifact_dicts_to_canonical_text`) resolve canonical text from artifacts and align artifact payloads without transforming markdown. Terminal resolution is owned by `update_task_state_on_message`; streaming text parts collapse to a single canonical text part while file/data parts are preserved. SSE terminal `content` is authoritative for display text; `parts` carries only non-text payloads.
 

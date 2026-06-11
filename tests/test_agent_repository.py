@@ -403,6 +403,24 @@ async def test_mark_hub_agents_offline_marks_active_hub_agents():
     assert (await repo.get_by_id("a1"))["agent_status"] == "inactive"
 
 
+@pytest.mark.asyncio
+async def test_count_hub_agents_counts_only_explicit_inactive_as_inactive():
+    repo, collection = _repo(
+        [
+            {"agent_id": "a1", "hub_id": "hub-1", "agent_status": "active"},
+            {"agent_id": "a2", "hub_id": "hub-1", "agent_status": "inactive"},
+            {"agent_id": "a3", "hub_id": "hub-1", "agent_status": "deleted"},
+            {"agent_id": "a4", "hub_id": "hub-1"},
+        ]
+    )
+
+    assert await repo.count_hub_agents("hub-1") == (1, 1)
+    assert collection.count_calls == [
+        {"hub_id": "hub-1", "agent_status": "active"},
+        {"hub_id": "hub-1", "agent_status": "inactive"},
+    ]
+
+
 def _matches(doc: dict, query: dict) -> bool:
     return all(_matches_field(doc, key, expected) for key, expected in query.items())
 
