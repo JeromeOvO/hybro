@@ -190,6 +190,13 @@ def test_legacy_membership_source_warns_for_missing_critical_agent_fields():
     logger.warning.assert_called_once()
 
 
+def test_legacy_membership_source_default_constructor_does_not_import_database_service():
+    with patch("importlib.import_module", side_effect=AssertionError("legacy import attempted")):
+        source = LegacyRoomMembershipSeedSource()
+
+    assert source._store is not None
+
+
 def test_message_graph_sort_thread_and_status_payload_helpers():
     older = datetime(2026, 5, 10, tzinfo=UTC)
     newer = datetime(2026, 5, 11, tzinfo=UTC)

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from common.utils.logger import get_logger
 from common.prompts.markdown_response_format import HYBRO_MARKDOWN_RESPONSE_FORMAT
+from common.utils.logger import get_logger
 from llm_gateway.errors import LLMModelRoutingError, LLMServiceNotBoundError
 from models.supervisor import (
     ActionType,
@@ -212,19 +212,8 @@ class RoomSupervisorService:
         bedrock_service: object | None = None,
         store = None,
     ):
-        _ = openai_service, bedrock_service
+        _ = openai_service, bedrock_service, store
         self._supervisor_service = supervisor_service
-
-        if store is None:
-            import sys
-            import importlib
-
-            db_module = sys.modules.get('app_shell.database_service')
-            if db_module is None:
-                db_module = importlib.import_module('app_shell.database_service')
-            self._store = db_module.db_service
-        else:
-            self._store = store
 
     def bind_supervisor_service(
         self, supervisor_service: SupervisorLLMService

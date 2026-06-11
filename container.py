@@ -690,3 +690,19 @@ def create_api_key_store(*, mongo: MongoDAL):
     from platform_module.api_keys import MongoAPIKeyStore
 
     return MongoAPIKeyStore(mongo=mongo)
+
+
+def create_app_shell_repository_store(
+    *,
+    mongo: MongoDAL,
+    room_deps: RoomDeps,
+    agent_deps: AgentDeps,
+):
+    from app_shell.repository_store import AppShellRepositoryStore
+
+    return AppShellRepositoryStore(
+        mongo=mongo,
+        room_repository=room_deps.room_repository,
+        message_repository=room_deps.message_repository,
+        agent_repository=agent_deps.agent_repository,
+    )

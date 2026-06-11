@@ -6,6 +6,7 @@ from uuid import uuid4
 from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
 
 from app_shell.delivery_runtime import sse_manager
+from app_shell.runtime_store import UNBOUND_RUNTIME_STORE
 from common.dto import RoomMessageSummary
 from common.utils.a2a_helpers import extract_agent_text_from_room_message
 from common.utils.logger import get_logger
@@ -32,12 +33,12 @@ class RoomCoordinatorService:
     """
 
     def __init__(self, *, message_store=None) -> None:
-        if message_store is None:
-            import importlib
-            message_store = getattr(importlib.import_module("app_shell.database_service"), "db_service")
-        self._store = message_store
+        self._store = message_store or UNBOUND_RUNTIME_STORE
         self.summary_service = None
         self.sse_manager = sse_manager
+
+    def bind_store(self, message_store) -> None:
+        self._store = message_store
 
     def bind_summary_service(self, service) -> None:
         self.summary_service = service
