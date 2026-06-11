@@ -35,7 +35,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 
 def _make_supervisor_executor():
     se = object.__new__(SupervisorExecutor)
-    se.database_service = AsyncMock()
+    se._store = AsyncMock()
     se.sse_manager = MagicMock()
     se.room_runtime = MagicMock()
     se.supervisor_service = MagicMock()
@@ -107,21 +107,21 @@ class TestCheckpointTrajectory:
         se = _make_supervisor_executor()
         user_message = MagicMock()
         user_message.extend_info = {}
-        se.database_service.get_room_user_message_by_message_id.return_value = (
+        se._store.get_room_user_message_by_message_id.return_value = (
             user_message
         )
-        se.database_service.update_room_user_message_by_message_id.return_value = True
+        se._store.update_room_user_message_by_message_id.return_value = True
 
         trajectory = SupervisorTrajectory()
         result = await se._checkpoint_trajectory("msg-1", trajectory)
 
         assert result is user_message
-        se.database_service.update_room_user_message_by_message_id.assert_called_once()
+        se._store.update_room_user_message_by_message_id.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_returns_none_when_message_not_found(self):
         se = _make_supervisor_executor()
-        se.database_service.get_room_user_message_by_message_id.return_value = None
+        se._store.get_room_user_message_by_message_id.return_value = None
 
         trajectory = SupervisorTrajectory()
         result = await se._checkpoint_trajectory("msg-missing", trajectory)
@@ -133,23 +133,23 @@ class TestCheckpointTrajectory:
         se = _make_supervisor_executor()
         cached = MagicMock()
         cached.extend_info = {}
-        se.database_service.update_room_user_message_by_message_id.return_value = True
+        se._store.update_room_user_message_by_message_id.return_value = True
 
         trajectory = SupervisorTrajectory()
         result = await se._checkpoint_trajectory("msg-1", trajectory, cached)
 
         assert result is cached
-        se.database_service.get_room_user_message_by_message_id.assert_not_called()
+        se._store.get_room_user_message_by_message_id.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_initializes_extend_info_if_not_dict(self):
         se = _make_supervisor_executor()
         user_message = MagicMock()
         user_message.extend_info = None
-        se.database_service.get_room_user_message_by_message_id.return_value = (
+        se._store.get_room_user_message_by_message_id.return_value = (
             user_message
         )
-        se.database_service.update_room_user_message_by_message_id.return_value = True
+        se._store.update_room_user_message_by_message_id.return_value = True
 
         trajectory = SupervisorTrajectory()
         result = await se._checkpoint_trajectory("msg-1", trajectory)
@@ -161,7 +161,7 @@ class TestCheckpointTrajectory:
     async def test_does_not_raise_on_db_error(self):
         """Checkpoint failures should be logged but not abort the loop."""
         se = _make_supervisor_executor()
-        se.database_service.get_room_user_message_by_message_id.side_effect = (
+        se._store.get_room_user_message_by_message_id.side_effect = (
             RuntimeError("DB connection lost")
         )
 
@@ -209,8 +209,8 @@ class TestClarifyCleanupCompensation:
 
         agent_msg = MagicMock(message_id="msg-agent-1")
         se.room_runtime.create_agent_message.return_value = agent_msg
-        se.database_service.add_room_agent_message = AsyncMock()
-        se.database_service.delete_room_agent_message_by_message_id = AsyncMock()
+        se._store.add_room_agent_message = AsyncMock()
+        se._store.delete_room_agent_message_by_message_id = AsyncMock()
 
         action = SupervisorAction(
             action=ActionType.CLARIFY,
@@ -259,8 +259,8 @@ class TestClarifyCleanupCompensation:
 
         agent_msg = MagicMock(message_id="msg-agent-1")
         se.room_runtime.create_agent_message.return_value = agent_msg
-        se.database_service.add_room_agent_message = AsyncMock()
-        se.database_service.delete_room_agent_message_by_message_id = AsyncMock()
+        se._store.add_room_agent_message = AsyncMock()
+        se._store.delete_room_agent_message_by_message_id = AsyncMock()
 
         action = SupervisorAction(
             action=ActionType.CLARIFY,
@@ -287,7 +287,7 @@ class TestClarifyCleanupCompensation:
         assert result.status == "failed"
         assert hitl_mock.cancel_request.await_count == 1
         hitl_mock.cancel_request.assert_awaited_once_with("req-a", "room-1")
-        assert se.database_service.delete_room_agent_message_by_message_id.await_count == 2
+        assert se._store.delete_room_agent_message_by_message_id.await_count == 2
 
 
 class TestProcessingStatusLifecycleOrder:
@@ -421,10 +421,10 @@ class TestProcessingStatusLifecycleOrder:
         se.room_runtime.create_agent_message.return_value = SimpleNamespace(
             message_id="hitl-agent-msg"
         )
-        se.database_service.resolve_client_request_id_for_message_id = AsyncMock(
+        se._store.resolve_client_request_id_for_message_id = AsyncMock(
             return_value="cr-1"
         )
-        se.database_service.add_room_agent_message = AsyncMock()
+        se._store.add_room_agent_message = AsyncMock()
         se._save_interrupted_state = AsyncMock(return_value=True)
         hitl_mock = AsyncMock()
         hitl_mock.request_input = AsyncMock(

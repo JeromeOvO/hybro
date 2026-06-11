@@ -53,7 +53,7 @@ def hitl_service():
     """Create a fresh HITLService instance for testing."""
     service = HITLService()
     # Reset lazy-loaded dependencies
-    service._db_service = None
+    service._store = None
     service._delivery = None
     service._sse_manager = None
     service._a2a_service = None
@@ -166,7 +166,7 @@ class TestRequestInput:
         self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager
     ):
         """Should create and persist HITL request."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         
         result = await hitl_service.request_input(
@@ -191,7 +191,7 @@ class TestRequestInput:
         self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager
     ):
         """Should emit SSE event when request is created."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         
         await hitl_service.request_input(
@@ -213,7 +213,7 @@ class TestRequestInput:
         self, hitl_service, mock_hitl_db_service
     ):
         """Should return None when max HITL rounds exceeded."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         mock_hitl_db_service.count_hitl_requests_for_message.return_value = MAX_HITL_ROUNDS
         
         result = await hitl_service.request_input(
@@ -232,7 +232,7 @@ class TestRequestInput:
         self, hitl_service, mock_hitl_db_service
     ):
         """Should return None when database save fails."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         mock_hitl_db_service.create_hitl_request.return_value = False
         
         result = await hitl_service.request_input(
@@ -249,7 +249,7 @@ class TestRequestInput:
         self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager
     ):
         """Should create request with choice options."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         
         choices = ["Option A", "Option B", "Option C"]
@@ -280,7 +280,7 @@ class TestGetPendingRequests:
         self, hitl_service, mock_hitl_db_service, sample_hitl_request
     ):
         """Should return pending requests for a room."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         
         request_doc = sample_hitl_request.model_dump(mode="json")
         mock_hitl_db_service.get_pending_hitl_requests.return_value = [request_doc]
@@ -295,7 +295,7 @@ class TestGetPendingRequests:
         self, hitl_service, mock_hitl_db_service
     ):
         """Should return empty list when no pending requests."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         mock_hitl_db_service.get_pending_hitl_requests.return_value = []
         
         result = await hitl_service.get_pending_requests("room-123")
@@ -311,7 +311,7 @@ class TestGetPendingRequestsForMessage:
         self, hitl_service, mock_hitl_db_service, sample_hitl_request
     ):
         """Should return pending requests for a specific message."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         
         request_doc = sample_hitl_request.model_dump(mode="json")
         mock_hitl_db_service.get_pending_hitl_requests_for_message.return_value = [
@@ -336,7 +336,7 @@ class TestCancelRequest:
         self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
         """Should cancel a pending HITL request."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         
         request_doc = sample_hitl_request.model_dump(mode="json")
@@ -358,7 +358,7 @@ class TestCancelRequest:
         self, hitl_service, mock_hitl_db_service
     ):
         """Should raise 404 when request doesn't exist."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         mock_hitl_db_service.get_hitl_request.return_value = None
         
         with pytest.raises(HITLNotFoundError) as exc_info:
@@ -371,7 +371,7 @@ class TestCancelRequest:
         self, hitl_service, mock_hitl_db_service, sample_hitl_request
     ):
         """Should raise 403 when room_id doesn't match."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         
         request_doc = sample_hitl_request.model_dump(mode="json")
         mock_hitl_db_service.get_hitl_request.return_value = request_doc
@@ -389,7 +389,7 @@ class TestCancelRequest:
         self, hitl_service, mock_hitl_db_service, sample_hitl_request
     ):
         """Should be no-op when request is already resolved."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         
         # Set status to RESPONDED (already resolved)
         sample_hitl_request.status = HITLStatus.RESPONDED
@@ -405,7 +405,7 @@ class TestCancelRequest:
     async def test_cancel_uses_pending_cas_before_clearing_or_emitting(
         self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         request_doc = sample_hitl_request.model_dump(mode="json")
         mock_hitl_db_service.get_hitl_request.return_value = request_doc
@@ -428,7 +428,7 @@ class TestCancelRequest:
     async def test_cancel_does_not_clear_or_emit_when_pending_cas_loses(
         self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         request_doc = sample_hitl_request.model_dump(mode="json")
         mock_hitl_db_service.get_hitl_request.return_value = request_doc
@@ -448,7 +448,7 @@ class TestCancelRequest:
         self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
         """Should emit SSE cancel event."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         
         request_doc = sample_hitl_request.model_dump(mode="json")
@@ -473,7 +473,7 @@ class TestCancelRequestsForMessage:
         self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager
     ):
         """Should cancel all pending requests for a message."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         
         # Create two pending requests
@@ -522,7 +522,7 @@ class TestHandleResponseErrors:
     async def test_raises_execution_not_found_when_claim_missing_request(
         self, hitl_service, mock_hitl_db_service
     ):
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         mock_hitl_db_service.claim_hitl_request.return_value = None
         mock_hitl_db_service.get_hitl_request.return_value = None
 
@@ -540,7 +540,7 @@ class TestHandleResponseErrors:
     async def test_raises_execution_conflict_when_claim_already_resolved(
         self, hitl_service, mock_hitl_db_service, sample_hitl_request
     ):
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         mock_hitl_db_service.claim_hitl_request.return_value = None
         doc = sample_hitl_request.model_dump(mode="json")
         doc["status"] = HITLStatus.RESPONDED.value
@@ -560,7 +560,7 @@ class TestHandleResponseErrors:
     async def test_handle_response_marks_display_message_completed(
         self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         mock_hitl_db_service.persist_hitl_user_answer = AsyncMock()
         mock_hitl_db_service.update_agent_message_task_state = AsyncMock()
@@ -602,7 +602,7 @@ class TestGroupedHandleResponse:
     async def test_first_group_answer_waits_for_remaining_answers(
         self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         request = sample_hitl_request.model_copy(
             update={
@@ -634,7 +634,7 @@ class TestGroupedHandleResponse:
     async def test_last_group_answer_routes_supervisor_response(
         self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         request = sample_hitl_request.model_copy(
             update={
@@ -670,7 +670,7 @@ class TestGroupedHandleResponse:
     async def test_concurrent_group_answer_routes_after_finalize_when_group_completes(
         self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         request = sample_hitl_request.model_copy(
             update={
@@ -706,7 +706,7 @@ class TestGroupedHandleResponse:
     async def test_group_route_failure_releases_claim_for_retry(
         self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         request = sample_hitl_request.model_copy(
             update={
@@ -748,7 +748,7 @@ class TestGroupedHandleResponse:
     async def test_room_mismatch_is_rejected_before_claim(
         self, hitl_service, mock_hitl_db_service, sample_hitl_request
     ):
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         doc = sample_hitl_request.model_dump(mode="json")
         mock_hitl_db_service.get_hitl_request.return_value = doc
 
@@ -767,7 +767,7 @@ class TestGroupedHandleResponse:
     async def test_wrong_room_resolved_request_does_not_leak_status(
         self, hitl_service, mock_hitl_db_service, sample_hitl_request
     ):
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         doc = sample_hitl_request.model_dump(mode="json")
         doc["status"] = HITLStatus.RESPONDED.value
         mock_hitl_db_service.get_hitl_request.return_value = doc
@@ -797,7 +797,7 @@ class TestEmitHitlEvent:
         self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
         """Should emit correct data for INPUT_REQUESTED event."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         
         await hitl_service._emit_hitl_event(
@@ -820,7 +820,7 @@ class TestEmitHitlEvent:
         self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
         """Should emit correct data for status update events."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         
         await hitl_service._emit_hitl_event(
@@ -838,7 +838,7 @@ class TestEmitHitlEvent:
         self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
         """Should include error message for ERROR events."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
         
         await hitl_service._emit_hitl_event(
@@ -862,7 +862,7 @@ class TestEmitHitlEvent:
         mock_hitl_db_service.resolve_client_request_id_for_message_id = AsyncMock(
             return_value="cr-resolved-via-message-id"
         )
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
 
         req = sample_hitl_request.model_copy(
@@ -895,7 +895,7 @@ class TestEmitHitlEvent:
         mock_hitl_db_service.resolve_client_request_id_for_message_id = AsyncMock(
             return_value="cr-from-resolver"
         )
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
 
         req = sample_hitl_request.model_copy(
@@ -917,7 +917,7 @@ class TestEmitHitlEvent:
         self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
     ):
         """HITL events should include related_message_id for frontend resume correlation."""
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
         hitl_service._sse_manager = mock_hitl_sse_manager
 
         await hitl_service._emit_hitl_event(
@@ -954,7 +954,7 @@ class TestRecoverStaleProcessing:
         mock_hitl_db_service.mongo = MagicMock(
             db=MagicMock(hitl_requests=hitl_requests)
         )
-        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._store = mock_hitl_db_service
 
         recovered = await hitl_service.recover_stale_processing()
 

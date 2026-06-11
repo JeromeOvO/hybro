@@ -18,8 +18,9 @@ def _make_dispatcher():
     """Create an AgentDispatcher with mocked dependencies."""
     d = object.__new__(AgentDispatcher)
     d.agent_resolver = MagicMock()
-    d.database_service = MagicMock()
-    d.tsm = MagicMock()
+    d._message_writer = MagicMock()
+    d._agent_lookup = MagicMock()
+    d._agent_group_reader = MagicMock()
     return d
 
 
@@ -125,7 +126,7 @@ class TestResolveAllowedAgentIds:
         d = _make_dispatcher()
         group = MagicMock()
         group.agents = ["a3", "a4"]
-        d.database_service.get_agent_group_by_id = AsyncMock(return_value=group)
+        d._agent_group_reader.get_agent_group_by_id = AsyncMock(return_value=group)
 
         msg = MagicMock()
         msg.extend_info = {
@@ -138,12 +139,12 @@ class TestResolveAllowedAgentIds:
     @pytest.mark.asyncio
     async def test_skips_builtin_groups(self):
         d = _make_dispatcher()
-        d.database_service.get_agent_group_by_id = AsyncMock()
+        d._agent_group_reader.get_agent_group_by_id = AsyncMock()
 
         msg = MagicMock()
         msg.extend_info = {"target_group": "all_agents"}
         await d._resolve_allowed_agent_ids(msg)
-        d.database_service.get_agent_group_by_id.assert_not_called()
+        d._agent_group_reader.get_agent_group_by_id.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_handles_group_as_list(self):
@@ -152,7 +153,7 @@ class TestResolveAllowedAgentIds:
         g1.agents = ["a1"]
         g2 = MagicMock()
         g2.agents = ["a2"]
-        d.database_service.get_agent_group_by_id = AsyncMock(side_effect=[g1, g2])
+        d._agent_group_reader.get_agent_group_by_id = AsyncMock(side_effect=[g1, g2])
 
         msg = MagicMock()
         msg.extend_info = {"target_group": ["grp-1", "grp-2"]}
@@ -162,7 +163,7 @@ class TestResolveAllowedAgentIds:
     @pytest.mark.asyncio
     async def test_handles_group_load_error_gracefully(self):
         d = _make_dispatcher()
-        d.database_service.get_agent_group_by_id = AsyncMock(
+        d._agent_group_reader.get_agent_group_by_id = AsyncMock(
             side_effect=RuntimeError("DB down")
         )
         msg = MagicMock()

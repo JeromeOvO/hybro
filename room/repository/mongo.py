@@ -109,6 +109,12 @@ class MessageMongoRepository:
         agent_messages = await self.get_agent_messages_for_room(room_id, before=before)
         return normalize_history_rows(user_messages, agent_messages)[:limit]
 
+    async def get_user_message_by_id(self, message_id: str) -> dict | None:
+        return await self._user_messages.find_one({"message_id": message_id})
+
+    async def get_agent_message_by_id(self, message_id: str) -> dict | None:
+        return await self._agent_messages.find_one({"message_id": message_id})
+
     async def get_user_messages_for_room(
         self, room_id: str, limit: int = 100, before: datetime | None = None
     ) -> list[dict]:
@@ -154,6 +160,18 @@ class MessageMongoRepository:
         return await self._agent_messages.update_one(
             {"message_id": message_id},
             {"$set": payload},
+        )
+
+    async def update_user_message(self, message_id: str, updates: dict) -> bool:
+        return await self._user_messages.update_one(
+            {"message_id": message_id},
+            {"$set": dict(updates)},
+        )
+
+    async def update_agent_message(self, message_id: str, updates: dict) -> bool:
+        return await self._agent_messages.update_one(
+            {"message_id": message_id},
+            {"$set": dict(updates)},
         )
 
     async def delete_for_room(self, room_id: str) -> dict[str, int]:

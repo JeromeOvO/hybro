@@ -5,7 +5,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service"
+      "get_task_store"
     ],
     "methods": [
       "GET"
@@ -359,7 +359,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service"
+      "get_agent_group_store"
     ],
     "methods": [
       "GET"
@@ -383,7 +383,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service"
+      "get_agent_group_store"
     ],
     "methods": [
       "POST"
@@ -406,7 +406,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service"
+      "get_agent_group_store"
     ],
     "methods": [
       "DELETE"
@@ -430,7 +430,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service"
+      "get_agent_group_store"
     ],
     "methods": [
       "GET"
@@ -454,7 +454,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service"
+      "get_agent_group_store"
     ],
     "methods": [
       "PUT"
@@ -1433,7 +1433,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service"
+      "get_task_store"
     ],
     "methods": [
       "GET"
@@ -1535,7 +1535,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service",
+      "get_sse_store",
       "get_execution_engine"
     ],
     "methods": [
@@ -1563,7 +1563,7 @@
     ],
     "dependencies": [
       "get_current_user_with_query_token",
-      "get_db_service",
+      "get_sse_store",
       "get_sse_manager"
     ],
     "methods": [
@@ -1591,7 +1591,7 @@
     ],
     "dependencies": [
       "get_current_user_with_query_token",
-      "get_db_service",
+      "get_sse_store",
       "get_sse_manager"
     ],
     "methods": [
@@ -1627,7 +1627,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service"
+      "get_task_store"
     ],
     "methods": [
       "GET"

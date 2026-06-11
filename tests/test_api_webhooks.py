@@ -318,7 +318,13 @@ def _make_webhook_transport(*, db=None, handler=None):
         db = MagicMock()
         db.verify_webhook_token_for_task = AsyncMock(return_value=(True, None))
         db.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
-    return WebhookTransport(response_handler=handler, db=db)
+        db.is_message_cancelled = AsyncMock(return_value=False)
+    return WebhookTransport(
+        response_handler=handler,
+        webhook_auth=db,
+        message_reader=db,
+        cancellation_reader=db,
+    )
 
 
 def _make_tracked_message(room_id="room-001", state=None, agent_id="agent-001"):

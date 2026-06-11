@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -39,12 +40,27 @@ from common.a2a_constants import (
 )
 from common.config.settings import settings
 from common.utils.logger import get_logger
-from database.mongodb import mongodb
 from models.error import A2AServiceError, IllgalParameterError
 from models.response import InsepectionCenterConnectionValidationResponse
 from models.room import RoomAgentMessage
 
 logger = get_logger(__name__)
+
+_mongodb_backend: Any | None = None
+_legacy_mongo: Any | None = None
+
+
+def __getattr__(name: str) -> Any:
+    if name == "mongodb":
+        return _mongodb_backend
+    raise AttributeError(name)
+
+
+def _bind_mongodb_backend(value: Any | None = None) -> None:
+    global _mongodb_backend
+    _mongodb_backend = value
+    global _legacy_mongo
+    _legacy_mongo = value
 
 
 PLATFORM_SUPPORTED_MODES = {
@@ -81,7 +97,21 @@ MODE_TO_MIMES: dict[str, set[str]] = {
 
 class A2AService:
     def __init__(self):
-        pass
+        self._task_db = None
+
+    def bind_task_db(self, task_db: Any) -> None:
+        self._task_db = task_db
+
+    @staticmethod
+    def _resolve_legacy_task_db() -> Any | None:
+        legacy_module = sys.modules.get("app_shell.database_service")
+        return getattr(legacy_module, "db_service", None) if legacy_module else None
+
+    def _get_task_db(self) -> Any | None:
+        task_db = getattr(self, "_task_db", None)
+        if task_db is not None:
+            return task_db
+        return self._resolve_legacy_task_db()
 
     def _resolve_accepted_modes(self, agent_card: AgentCard) -> list[str]:
         """Intersect agent's output modes with platform capabilities."""
@@ -234,7 +264,9 @@ class A2AService:
         Returns:
             Dict with message_id, created_at, context_id, webhook_token, step_number, total_steps
         """
-        from app_shell.database_service import db_service
+        task_db = self._get_task_db()
+        if task_db is None:
+            raise A2AServiceError("Task DB is unavailable for task tracking")
         from common.a2a_constants import NON_TERMINAL_STATES
         from common.utils.time import utcnow
 
@@ -245,7 +277,7 @@ class A2AService:
         # Check task limits before creating
         non_terminal_state_values = [s.value for s in NON_TERMINAL_STATES]
         try:
-            await db_service.check_task_limits(
+            await task_db.check_task_limits(
                 user_id, room_id, non_terminal_state_values
             )
         except ValueError as e:
@@ -254,8 +286,8 @@ class A2AService:
         if not message_id:
             raise A2AServiceError("message_id is required for task tracking")
 
-        webhook_token = db_service.generate_webhook_token()
-        webhook_token_hash = db_service.hash_webhook_token(webhook_token)
+        webhook_token = task_db.generate_webhook_token()
+        webhook_token_hash = task_db.hash_webhook_token(webhook_token)
 
         # Create placeholder task
         context_id = message.context_id or str(uuid4())
@@ -268,7 +300,7 @@ class A2AService:
         now = utcnow()
 
         # Enable task tracking on the existing room_agent_message
-        update_success = await db_service.enable_task_tracking_on_message(
+        update_success = await task_db.enable_task_tracking_on_message(
             message_id=message_id,
             webhook_token_hash=webhook_token_hash,
             agent_url=agent_card.url,
@@ -305,10 +337,47 @@ class A2AService:
         """Atomically increment call_count (and call_success_count) for an agent."""
         if not agent_id:
             return
+        task_db = self._get_task_db()
+        if task_db is None:
+            task_db = _legacy_mongo
+        legacy_db = _legacy_mongo
+
+        def _supports_increment(db: Any) -> bool:
+            try:
+                candidate = getattr(db, "increment_agent_call_count", None)
+            except Exception:
+                return False
+            return callable(candidate)
+
+        if _supports_increment(task_db) is False and legacy_db is not None:
+            task_db = legacy_db
+        if task_db is None:
+            return
+
+        increment_agent_call_count = None
         try:
-            await mongodb.increment_agent_call_count(agent_id, success=success)
-        except Exception as e:
-            logger.warning("Failed to record agent call for %s: %s", agent_id, e)
+            increment_agent_call_count = getattr(
+                task_db,
+                "increment_agent_call_count",
+                None,
+            )
+        except Exception:
+            increment_agent_call_count = None
+
+        if not callable(increment_agent_call_count):
+            try:
+                increment_agent_call_count = task_db.mongo.increment_agent_call_count
+            except Exception:
+                increment_agent_call_count = None
+
+        if callable(increment_agent_call_count):
+            try:
+                await increment_agent_call_count(agent_id, success=success)
+            except Exception as e:
+                logger.warning("Failed to record agent call for %s: %s", agent_id, e)
+            return
+
+        logger.warning("Failed to record agent call for %s", agent_id)
 
     async def send_message_to_tracked_agent(
         self,
@@ -338,7 +407,9 @@ class A2AService:
             For Task response: {"type": "task", "message_id": "...", "status": "..."}
             For Interactive states: {"type": "task", "status": "input_required", ...}
         """
-        from app_shell.database_service import db_service
+        task_db = self._get_task_db()
+        if task_db is None:
+            raise A2AServiceError("Task DB is unavailable for tracked send")
 
         # Build request with push notification config.
         # Push notifications require a publicly reachable WEBHOOK_BASE_URL. When
@@ -418,7 +489,7 @@ class A2AService:
                     ),
                 ),
             )
-            await db_service.update_task_on_message(
+            await task_db.update_task_on_message(
                 message_id, failed_task.model_dump(mode="json")
             )
             logger.error(f"Failed to send message to agent: {e}")
@@ -440,7 +511,7 @@ class A2AService:
                     ),
                 ),
             )
-            await db_service.update_task_on_message(
+            await task_db.update_task_on_message(
                 message_id, failed_task.model_dump(mode="json")
             )
             raise A2AServiceError(error_msg)
@@ -479,7 +550,7 @@ class A2AService:
                 )
 
             message_text = self._extract_text_from_message(result)
-            persisted = await db_service.update_task_on_message(
+            persisted = await task_db.update_task_on_message(
                 message_id,
                 completed_task.model_dump(mode="json"),
                 message_text=message_text or None,
@@ -515,7 +586,7 @@ class A2AService:
             task_text = self._extract_text_from_task(result) if is_terminal_state(state) else None
 
             # Update with real task from agent
-            persisted = await db_service.update_task_on_message(
+            persisted = await task_db.update_task_on_message(
                 message_id,
                 result.model_dump(mode="json"),
                 message_text=task_text or None,
@@ -1002,9 +1073,11 @@ class A2AService:
         Uses the same task_id and context_id to continue the conversation
         rather than starting a new task.
         """
-        from app_shell.database_service import db_service
+        task_db = self._get_task_db()
+        if task_db is None:
+            raise ValueError("Task DB is unavailable for HITL reply handling")
 
-        msg = await db_service.get_room_agent_message_by_message_id(message_id)
+        msg = await task_db.get_room_agent_message_by_message_id(message_id)
         if not msg:
             raise ValueError(f"Agent message {message_id} not found")
 
@@ -1015,9 +1088,9 @@ class A2AService:
             )
 
         # Generate a NEW webhook token (original plaintext was never stored)
-        webhook_token = db_service.generate_webhook_token()
-        webhook_token_hash = db_service.hash_webhook_token(webhook_token)
-        token_updated = await db_service.update_webhook_token_hash_on_message(
+        webhook_token = task_db.generate_webhook_token()
+        webhook_token_hash = task_db.hash_webhook_token(webhook_token)
+        token_updated = await task_db.update_webhook_token_hash_on_message(
             message_id, webhook_token_hash
         )
         if not token_updated:
@@ -1034,7 +1107,7 @@ class A2AService:
 
         has_capability = False
         if webhook_url and msg.agent_id:
-            agent_record = await db_service.get_agent_by_agent_id(msg.agent_id)
+            agent_record = await task_db.get_agent_by_agent_id(msg.agent_id)
             if agent_record and agent_record.agent_card:
                 has_capability = self.has_push_notification_capability(agent_record.agent_card)
             else:
@@ -1145,7 +1218,7 @@ class A2AService:
 
         # --- Persist task + message_text together ---
         if task_obj:
-            await db_service.update_task_on_message(
+            await task_db.update_task_on_message(
                 message_id,
                 task_obj.model_dump(mode="json"),
                 message_text=response_text,

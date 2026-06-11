@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from app_shell.agent_service import agent_service
-from app_shell.database_service import db_service
 from common.utils.a2a_helpers import extract_agent_text_from_room_message
 from common.utils.logger import get_logger
 from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
@@ -11,16 +10,19 @@ logger = get_logger(__name__)
 
 
 class DebateService:
-    def __init__(self):
+    def __init__(self, *, message_store=None):
+        if message_store is None:
+            import importlib
+            message_store = getattr(importlib.import_module("app_shell.database_service"), "db_service")
         self.agent_service = agent_service
-        self.db_service = db_service
+        self._store = message_store
         self.active_debates = {}  # Store active debate sessions
 
     async def inject_short_debate_for_agent_message(
         self, agent_messsage: RoomAgentMessage
     ) -> RoomAgentMessage:
         """Inject short debate for agent message."""
-        related_message = await self.db_service.get_room_agent_message_by_message_id(
+        related_message = await self._store.get_room_agent_message_by_message_id(
             agent_messsage.related_message_id
         )
         if related_message is None:
@@ -29,7 +31,7 @@ class DebateService:
         if related_message.message_content.message_task is None:
             return agent_messsage
 
-        related_messsage_agent_name = await self.db_service.get_agent_name_by_agent_id(
+        related_messsage_agent_name = await self._store.get_agent_name_by_agent_id(
             related_message.agent_id
         )
 
@@ -64,13 +66,13 @@ class DebateService:
             message_text=agent_messsage.message_content.message_text,  # Preserve the original message_text
         )
 
-        update_result = await self.db_service.update_room_agent_message_with_new_message_content_by_message_id(
+        update_result = await self._store.update_room_agent_message_with_new_message_content_by_message_id(
             agent_messsage.message_id, new_message_content
         )
         if not update_result:
             return agent_messsage
 
-        new_agent_message = await self.db_service.get_room_agent_message_by_message_id(
+        new_agent_message = await self._store.get_room_agent_message_by_message_id(
             agent_messsage.message_id
         )
         return new_agent_message

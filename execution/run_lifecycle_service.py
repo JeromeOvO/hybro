@@ -11,6 +11,9 @@ from execution.run_command_handler import (
     feature_run_dual_write_enabled,
     run_event_sse_enabled,
 )
+from execution.run_command_handler import (
+    run_command_handler as _default_run_command_handler,
+)
 
 
 class RunLifecycleService:
@@ -41,7 +44,7 @@ class RunLifecycleService:
         )
 
 
-run_command_handler = RunCommandHandler()
+run_command_handler = _default_run_command_handler
 run_lifecycle_service = RunLifecycleService()
 
 

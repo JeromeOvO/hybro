@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from app_shell.agent_service import agent_service
-from app_shell.database_service import db_service
 from common.dto import AgentInfo, SavedAgentGroupSnapshot
 from common.utils.logger import get_logger
 from models.request import AgentCenterRequest
@@ -15,14 +14,17 @@ class LegacyRoomMembershipSeedSource:
     def __init__(
         self,
         *,
-        database_service=db_service,
+        membership_store=None,
         agent_service_adapter=agent_service,
     ) -> None:
-        self._database_service = database_service
+        if membership_store is None:
+            import importlib
+            membership_store = getattr(importlib.import_module("app_shell.database_service"), "db_service")
+        self._store = membership_store
         self._agent_service = agent_service_adapter
 
     async def get_saved_group(self, group_id: str) -> SavedAgentGroupSnapshot | None:
-        group = await self._database_service.get_agent_group_by_id(group_id)
+        group = await self._store.get_agent_group_by_id(group_id)
         if group is None:
             return None
         return SavedAgentGroupSnapshot(
@@ -50,7 +52,7 @@ class LegacyRoomMembershipSeedSource:
                 exc,
             )
 
-        agents = await self._database_service.get_all_active_agents(user_id=user_id)
+        agents = await self._store.get_all_active_agents(user_id=user_id)
         return [self.agent_info_from_legacy(agent) for agent in agents or []]
 
     @staticmethod

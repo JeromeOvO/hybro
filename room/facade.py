@@ -19,6 +19,7 @@ from common.dto import (
 from common.observability import NoopTracingProvider
 from common.protocols import (
     AgentRegistry,
+    AttachmentMetadataReader,
     MessageRepository,
     RoomMembershipSeedSource,
     RoomRepository,
@@ -48,6 +49,8 @@ class RoomFacade:
         message_repository: MessageRepository,
         agent_registry: AgentRegistry,
         membership_source: RoomMembershipSeedSource,
+        quote_repository: Any | None = None,
+        attachment_metadata_reader: AttachmentMetadataReader | None = None,
         id_factory: Callable[[], str],
         now: Callable[[], datetime],
         tracer: Any | None = None,
@@ -56,6 +59,8 @@ class RoomFacade:
         self._message_repository = message_repository
         self._agent_registry = agent_registry
         self._membership_source = membership_source
+        self._quote_repository = quote_repository
+        self._attachment_metadata_reader = attachment_metadata_reader
         self._id_factory = id_factory
         self._now = now
         self._tracer = tracer or NoopTracingProvider()
@@ -193,6 +198,27 @@ class RoomFacade:
 
     async def delete_room_owned_messages(self, room_id: str) -> dict[str, int]:
         return await self._message_repository.delete_for_room(room_id)
+
+    async def delete_room_quote(self, quote_id: str) -> bool:
+        if self._quote_repository is None:
+            return False
+        return bool(await self._quote_repository.delete_by_id(quote_id))
+
+    async def get_attachment_for_room_file(
+        self, room_id: str, file_id: str
+    ) -> dict | None:
+        reader = self._attachment_metadata_reader
+        if reader is None:
+            return None
+        return await reader.get_for_room_file(room_id, file_id)
+
+    async def cleanup_room_owned_data(self, room_id: str) -> dict[str, int]:
+        result: dict[str, int] = await self._message_repository.delete_for_room(
+            room_id
+        )
+        if self._quote_repository is not None:
+            result["quotes"] = await self._quote_repository.delete_for_room(room_id)
+        return result
 
     async def save_user_message(
         self, room_id: str, message: UserMessageInput

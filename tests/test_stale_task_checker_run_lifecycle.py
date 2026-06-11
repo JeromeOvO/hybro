@@ -23,7 +23,7 @@ async def test_watchdog_broadcasts_pre_recorded_payload_before_failed_status(mon
 
     monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
     monkeypatch.setattr(
-        mod.db_service,
+        mod.store,
         "find_stale_non_terminal_runs",
         AsyncMock(
             return_value=[
@@ -70,7 +70,7 @@ async def test_watchdog_payload_none_suppresses_metric_and_delivery(monkeypatch)
 
     monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
     monkeypatch.setattr(
-        mod.db_service,
+        mod.store,
         "find_stale_non_terminal_runs",
         AsyncMock(return_value=[{"room_id": "room-1", "run_id": "run-1"}]),
     )
@@ -105,7 +105,7 @@ async def test_watchdog_dual_write_disabled_sends_failed_without_lifecycle(
 
     monkeypatch.setenv("FEATURE_RUN_DUAL_WRITE", "0")
     monkeypatch.setattr(
-        mod.db_service,
+        mod.store,
         "find_stale_non_terminal_runs",
         AsyncMock(
             return_value=[

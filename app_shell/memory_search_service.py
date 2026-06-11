@@ -15,13 +15,11 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §8 for design specification.
 import asyncio
 import math
 from datetime import datetime
-
-from pinecone.exceptions import NotFoundException as PineconeNotFoundException
+from typing import Any
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from database.mongodb import mongodb
-from database.pinecone_db import pinecone_db
+from context_memory.search_adapter import ContextMemorySearchAdapter
 from llm_gateway.errors import LLMServiceNotBoundError
 from models.context_config import memory_search_config
 from models.memory import ConversationTurn
@@ -32,6 +30,26 @@ from models.search import (
 )
 
 logger = get_logger(__name__)
+_mongodb_backend: Any | None = None
+_pinecone_backend: Any | None = None
+
+
+def __getattr__(name: str) -> Any:
+    if name == "mongodb":
+        return _mongodb_backend
+    if name == "pinecone":
+        return _pinecone_backend
+    raise AttributeError(name)
+
+
+def bind_mongo_backend(mongo_backend: Any | None = None) -> None:
+    global _mongodb_backend
+    _mongodb_backend = mongo_backend
+
+
+def bind_pinecone_backend(pinecone_backend: Any | None = None) -> None:
+    global _pinecone_backend
+    _pinecone_backend = pinecone_backend
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -66,14 +84,17 @@ class MemorySearchService:
 
     def __init__(self):
         self.embedding_service = None
-        self.pinecone = pinecone_db
+        self.pinecone = None
         self._index_available: bool | None = None
         self._facade = None
         self._bound = False
+        self._search_adapter = ContextMemorySearchAdapter()
+        self._content_collection_override = None
 
     def bind_facade(self, facade) -> None:
         self._facade = facade
         self._bound = True
+        self._search_adapter.bind_facade(facade)
 
     def bind_embedding_service(self, service) -> None:
         self.embedding_service = service
@@ -97,7 +118,22 @@ class MemorySearchService:
     @property
     def _pinecone_index(self):
         """Lazily-connected Pinecone index for memory search."""
-        return self.pinecone.get_index(self.config.index_name)
+        source = self.pinecone
+        if source is None:
+            source = globals().get("pinecone")
+        if source is None:
+            raise RuntimeError(
+                "MemorySearchService pinecone backend is unavailable; "
+                "bind memory search backend before calling search backends."
+            )
+        return source.get_index(self.config.index_name)
+
+    @staticmethod
+    def _is_not_found_error(exc: Exception) -> bool:
+        return (
+            exc.__class__.__name__ == "NotFoundException"
+            or "not found" in str(exc).lower()
+        )
 
     def _is_index_available(self) -> bool:
         """Check (and cache) whether the Pinecone index exists.
@@ -116,14 +152,15 @@ class MemorySearchService:
                 "MemorySearch: Pinecone index '%s' is available",
                 self.config.index_name,
             )
-        except PineconeNotFoundException:
-            self._index_available = False
-            logger.warning(
-                "MemorySearch: Pinecone index '%s' not found — "
-                "vector search/indexing will be skipped until restart",
-                self.config.index_name,
-            )
         except Exception as e:
+            if self._is_not_found_error(e):
+                self._index_available = False
+                logger.warning(
+                    "MemorySearch: Pinecone index '%s' not found — "
+                    "vector search/indexing will be skipped until restart",
+                    self.config.index_name,
+                )
+                return self._index_available
             logger.warning(
                 "MemorySearch: failed to probe Pinecone index '%s': %s — "
                 "will retry on next request",
@@ -136,7 +173,20 @@ class MemorySearchService:
     @property
     def _content_collection(self):
         """MongoDB conversation_content collection."""
-        return mongodb.conversation_content_collection
+        source = self._content_collection_override
+        if source is not None:
+            return source
+        source = globals().get("mongodb")
+        if source is None:
+            raise RuntimeError(
+                "MemorySearchService mongodb backend is unavailable; "
+                "bind mongo backend before calling keyword search."
+            )
+        return source.conversation_content_collection
+
+    @_content_collection.setter
+    def _content_collection(self, value: Any) -> None:
+        self._content_collection_override = value
 
     # =========================================================================
     # Public API: Search
@@ -163,14 +213,13 @@ class MemorySearchService:
         facade = self._require_facade()
         facade_config = getattr(facade, "search_config", None)
         max_results = getattr(facade_config, "max_results", self.config.max_results)
-        return _legacy_search_response(
-            await facade.legacy_search(
-                query,
-                room_id,
-                user_id=user_id,
-                limit=max_results,
-            )
+        payload = await self._search_adapter.search(
+            query,
+            room_id,
+            user_id=user_id,
+            limit=max_results,
         )
+        return _legacy_search_response(payload)
 
     # =========================================================================
     # Public API: Indexing (write path)
@@ -194,9 +243,8 @@ class MemorySearchService:
         Returns:
             True if indexed successfully, False otherwise
         """
-        facade = self._require_facade()
         turn_doc = turn.model_dump(mode="json") if hasattr(turn, "model_dump") else turn
-        return await facade.index_turn_for_search(room_id, turn_doc)
+        return await self._search_adapter.index_turn_for_search(room_id, turn_doc)
 
     async def delete_room_index(self, room_id: str) -> bool:
         """Delete all indexed vectors for a room.
@@ -207,8 +255,7 @@ class MemorySearchService:
         Returns:
             True if deletion succeeded, False otherwise
         """
-        facade = self._require_facade()
-        return await facade.delete_room_index(room_id)
+        return await self._search_adapter.delete_room_index(room_id)
 
     # =========================================================================
     # Private: Result hydration
@@ -274,11 +321,17 @@ class MemorySearchService:
                 include_metadata=True,
                 filter={"room_id": {"$eq": room_id}},
             )
-        except PineconeNotFoundException:
-            logger.debug(
-                "MemorySearch: Pinecone index '%s' not found — skipping vector search",
-                self.config.index_name,
-            )
+        except Exception as e:
+            if self._is_not_found_error(e):
+                logger.debug(
+                    "MemorySearch: Pinecone index '%s' not found — skipping vector search",
+                    self.config.index_name,
+                )
+            else:
+                logger.debug(
+                    "MemorySearch: vector search failed: %s",
+                    e,
+                )
             return []
 
         matches = getattr(results, "matches", []) if results else []

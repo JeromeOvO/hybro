@@ -33,7 +33,16 @@ def _make_handler(*, db=None, sse=None, rmc=None):
     if rmc is None:
         rmc = MagicMock()
         rmc.resume_queue_from_continuation = AsyncMock(return_value=True)
-    return AgentResponseHandler(db=db, sse=sse, room_message_center=rmc)
+    return AgentResponseHandler(
+        message_writer=db,
+        task_writer=db,
+        continuation_store=db,
+        client_request_resolver=db,
+        room_reader=db,
+        hitl_reader=db,
+        sse_manager=sse,
+        room_message_center=rmc,
+    )
 
 
 def _base(**overrides):
@@ -107,10 +116,10 @@ class TestMultiEventSequenceWithPersist:
         assert h._sse.send_artifact_update.await_count == 3
 
         # All three artifact_update events with artifacts trigger DB accumulation
-        assert h._db.accumulate_artifact_on_message.await_count == 3
+        assert h._message_writer.accumulate_artifact_on_message.await_count == 3
 
         # response persists "completed" state via update_task_state_on_message
-        h._db.update_task_state_on_message.assert_awaited_once_with(
+        h._task_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001", "completed",
             message_text="Hello world", artifacts=None,
         )
@@ -149,8 +158,8 @@ class TestMultiEventSequenceSkipPersist:
         h._sse.send_agent_response.assert_not_awaited()
 
         # DB writes are skipped
-        h._db.update_task_state_on_message.assert_not_awaited()
-        h._db.accumulate_artifact_on_message.assert_not_awaited()
+        h._task_writer.update_task_state_on_message.assert_not_awaited()
+        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
 
         # Orchestration resume still fires
         h._rmc.resume_queue_from_continuation.assert_awaited_once()
@@ -210,7 +219,7 @@ class TestErrorEventParity:
             )
             await h.handle(event)
 
-        h._db.update_task_state_on_message.assert_awaited_once_with(
+        h._task_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001", "failed", message_text="agent crashed",
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
@@ -233,7 +242,7 @@ class TestErrorEventParity:
             )
             await h.handle(event)
 
-        h._db.update_task_state_on_message.assert_not_awaited()
+        h._task_writer.update_task_state_on_message.assert_not_awaited()
         h._rmc.resume_queue_from_continuation.assert_awaited_once()
 
 
@@ -255,7 +264,7 @@ class TestCanceledEventParity:
             )
             await h.handle(event)
 
-        h._db.update_task_state_on_message.assert_awaited_once_with(
+        h._task_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001", "canceled", message_text="user stopped",
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
@@ -277,5 +286,5 @@ class TestCanceledEventParity:
             )
             await h.handle(event)
 
-        h._db.update_task_state_on_message.assert_not_awaited()
+        h._task_writer.update_task_state_on_message.assert_not_awaited()
         h._rmc.resume_queue_from_continuation.assert_awaited_once()

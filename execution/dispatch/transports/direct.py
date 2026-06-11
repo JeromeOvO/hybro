@@ -9,7 +9,7 @@ Mid-stream SSE uses ``send_artifact_update`` (A2A-standard).
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from a2a_adapter.message_factory import build_message_from_parts, from_sdk_task
 from a2a_adapter.task_artifacts import materialize_non_text_parts_as_artifact
@@ -51,6 +51,25 @@ from models.room import RoomAgentMessage
 logger = get_logger(__name__)
 
 
+if TYPE_CHECKING:
+    class DirectMessageReader(Protocol):
+        async def get_room_agent_message_by_message_id(self, message_id: str): ...
+
+    class DirectArtifactStore(Protocol):
+        async def accumulate_artifact_on_message(
+            self, message_id: str, artifact: dict, *, append: bool = False
+        ) -> bool: ...
+
+    class DirectTaskUpdatePort(Protocol):
+        async def update_task_on_message(
+            self,
+            message_id: str,
+            task_data: dict,
+            *,
+            message_text: str | None = None,
+        ) -> bool: ...
+
+
 @dataclass
 class MessageStreamingState:
     """Tracks mutable streaming state across sub-handlers during a single streaming session."""
@@ -80,7 +99,9 @@ class DirectTransport(AgentTransport):
         a2a_service,
         task_service,
         sse_manager,
-        database_service,
+        message_reader: "DirectMessageReader",
+        artifact_store: "DirectArtifactStore",
+        task_updater: "DirectTaskUpdatePort",
         s3_service=None,
         capability_issue_service=None,
     ) -> None:
@@ -89,7 +110,9 @@ class DirectTransport(AgentTransport):
         self.sse_manager = sse_manager
         self.a2a_service = a2a_service
         self.task_service = task_service
-        self.database_service = database_service
+        self._message_reader = message_reader
+        self._artifact_store = artifact_store
+        self._task_updater = task_updater
         self._s3_service = s3_service
         self.capability_issue_service = capability_issue_service
 
@@ -309,7 +332,7 @@ class DirectTransport(AgentTransport):
             return ProcessingResult(ProcessingStatus.SUCCESS)
 
         message = (
-            await self.database_service.get_room_agent_message_by_message_id(
+            await self._message_reader.get_room_agent_message_by_message_id(
                 message.message_id
             )
         )
@@ -983,7 +1006,7 @@ class DirectTransport(AgentTransport):
             ))
         else:
             # No SSE but still persist via atomic op (replaces full-doc persist_message)
-            await self.database_service.accumulate_artifact_on_message(
+            await self._artifact_store.accumulate_artifact_on_message(
                 ctx.current_message.message_id, artifact_dict, append=append,
             )
 
@@ -1125,7 +1148,7 @@ class DirectTransport(AgentTransport):
             logger.error("DirectTransport: process_a2a_response returned None")
             return False
 
-        if message_data.kind == "task":
+        if getattr(message_data, "kind", None) == "task":
             existing_task = get_task(room_agent_message)
             if (
                 existing_task
@@ -1157,7 +1180,7 @@ class DirectTransport(AgentTransport):
                 room_agent_message.message_content.message_task = from_sdk_task(message_data)
             return await self.tsm.persist_message(room_agent_message)
 
-        if message_data.kind == "message":
+        if getattr(message_data, "kind", None) == "message":
             task = get_task(room_agent_message)
             if task:
                 if task.history is None:
@@ -1625,7 +1648,7 @@ class DirectTransport(AgentTransport):
             if current_message.message_content:
                 current_message.message_content.message_task = from_sdk_task(completed_task)
             if task_info:
-                await self.database_service.update_task_on_message(
+                await self._task_updater.update_task_on_message(
                     message_id,
                     completed_task.model_dump(mode="json"),
                 )
@@ -1649,7 +1672,7 @@ class DirectTransport(AgentTransport):
             # This is the last caller of the full-document update_task_on_message;
             # the polled task has a complete Task model that doesn't yet fit the
             # incremental pattern.
-            await self.database_service.update_task_on_message(
+            await self._task_updater.update_task_on_message(
                 message_id,
                 completed_task.model_dump(mode="json"),
                 message_text=final_content or None,

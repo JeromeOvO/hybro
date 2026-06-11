@@ -11,16 +11,22 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
         if name in kwargs:
             constructor_kwargs[name] = kwargs.pop(name)
     service = HITLService(**constructor_kwargs)
-    dependency_attrs = {
-        "database_service": "_db_service",
-        "db_service": "_db_service",
-        "delivery": "_delivery",
-        "a2a_service": "_a2a_service",
-        "continuation": "_continuation",
-        "task_notifications": "_task_notifications",
-    }
+    # Map legacy parameter names to new internal attribute names
     for name, value in kwargs.items():
-        setattr(service, dependency_attrs.get(name, name), value)
+        if name in ("database_service", "db_service"):
+            setattr(service, "_store", value)
+        elif name == "store":
+            setattr(service, "_store", value)
+        elif name == "delivery":
+            setattr(service, "_delivery", value)
+        elif name == "a2a_service":
+            setattr(service, "_a2a_service", value)
+        elif name == "continuation":
+            setattr(service, "_continuation", value)
+        elif name == "task_notifications":
+            setattr(service, "_task_notifications", value)
+        else:
+            setattr(service, name, value)
     return service
 
 

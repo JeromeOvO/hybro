@@ -44,8 +44,8 @@ def missing_gateway_route_bindings() -> list[str]:
     from api_gateway.viewsets import base as viewset
 
     bindings = {
-        "api_gateway.routes.a2a_task_routes": (a2a_task_routes, ("db_service",)),
-        "api_gateway.routes.agent_group_routes": (agent_group_routes, ("db_service",)),
+        "api_gateway.routes.a2a_task_routes": (a2a_task_routes, ("task_store",)),
+        "api_gateway.routes.agent_group_routes": (agent_group_routes, ("agent_group_store",)),
         "api_gateway.routes.agent_routes": (
             agent_routes,
             (
@@ -85,11 +85,11 @@ def missing_gateway_route_bindings() -> list[str]:
         "api_gateway.routes.relay_routes": (relay_routes, ("relay_service",)),
         "api_gateway.routes.room_routes": (
             room_routes,
-            ("room_center", "db_service", "agent_selection_service", "execution_engine"),
+            ("room_center", "room_store", "agent_selection_service", "execution_engine"),
         ),
         "api_gateway.routes.sse_routes": (
             sse_routes,
-            ("execution_engine", "db_service", "sse_manager"),
+            ("execution_engine", "sse_store", "sse_manager"),
         ),
         "api_gateway.routes.webhook_routes": (
             webhook_routes,

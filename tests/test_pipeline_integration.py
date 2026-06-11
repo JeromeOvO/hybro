@@ -127,7 +127,7 @@ async def test_room_team_bypasses_matcher():
 
         # Create RoomServices and call _resolve_explicit_target_scope
         room_runtime = RoomServices()
-        room_runtime.database_service = mock_db
+        room_runtime._store = mock_db
 
         result = await room_runtime._resolve_explicit_target_scope(
             room=room,
@@ -437,9 +437,9 @@ async def test_debate_service_uses_shared_dispatcher():
     )
 
     # Mock database calls
-    with patch.object(debate_service.db_service, "get_room_agent_message_by_message_id", new_callable=AsyncMock) as mock_get_msg, \
-         patch.object(debate_service.db_service, "get_agent_name_by_agent_id", new_callable=AsyncMock) as mock_get_name, \
-         patch.object(debate_service.db_service, "update_room_agent_message_with_new_message_content_by_message_id", new_callable=AsyncMock) as mock_update:
+    with patch.object(debate_service._store, "get_room_agent_message_by_message_id", new_callable=AsyncMock) as mock_get_msg, \
+         patch.object(debate_service._store, "get_agent_name_by_agent_id", new_callable=AsyncMock) as mock_get_name, \
+         patch.object(debate_service._store, "update_room_agent_message_with_new_message_content_by_message_id", new_callable=AsyncMock) as mock_update:
 
         mock_get_msg.side_effect = [prior_message, current_message]
         mock_get_name.return_value = "PriorAgent"

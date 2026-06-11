@@ -47,6 +47,29 @@ def test_dal_implementations_satisfy_runtime_protocols():
     assert isinstance(IndexRegistryImpl(mongo=MagicMock()), IndexRegistry)
 
 
+def test_mongo_collection_protocol_covers_repository_operations():
+    required = {
+        "find_one",
+        "find",
+        "find_one_and_update",
+        "insert_one",
+        "insert_many",
+        "update_one",
+        "update_many",
+        "delete_one",
+        "delete_many",
+        "count",
+        "aggregate",
+        "create_index",
+        "create_indexes",
+        "bulk_write",
+        "distinct",
+        "find_one_by_stable_or_native_id",
+        "watch",
+    }
+    assert required.issubset(set(MongoCollection.__dict__))
+
+
 def test_mongo_change_stream_protocol_is_exported():
     import common.protocols as protocols
     from common.protocols import dal_protocols

@@ -59,13 +59,16 @@ class TestInlineBase64ConversionErrors:
     async def test_s3_upload_failure_logs_error(self):
         from execution.dispatch.transports.direct import DirectTransport
 
+        db = MagicMock()
         processor = DirectTransport(
             response_handler=MagicMock(),
             tsm=MagicMock(),
             sse_manager=MagicMock(),
             a2a_service=MagicMock(),
             task_service=MagicMock(),
-            database_service=MagicMock(),
+            message_reader=db,
+            artifact_store=db,
+            task_updater=db,
         )
         processor._s3_service = AsyncMock()
         processor._s3_service.upload_file = AsyncMock(side_effect=Exception("S3 down"))
@@ -110,13 +113,16 @@ class TestSharedInlineConversionCap:
             return_value="https://s3.example.com/presigned"
         )
 
+        db = MagicMock()
         processor = DirectTransport(
             response_handler=MagicMock(),
             tsm=MagicMock(),
             sse_manager=MagicMock(),
             a2a_service=MagicMock(),
             task_service=MagicMock(),
-            database_service=MagicMock(),
+            message_reader=db,
+            artifact_store=db,
+            task_updater=db,
             s3_service=mock_s3,
         )
 
@@ -181,9 +187,11 @@ class TestMissingFileId:
         svc.sse_manager = MagicMock()
         svc.room_memory_service = MagicMock()
 
-        with patch("database.mongodb.mongodb") as mock_db:
-            mock_db.file_uploads_collection.find_one = AsyncMock(return_value=None)
-            result = await svc._resolve_attachments(["nonexistent"], "room1")
+        reader = MagicMock()
+        reader.get_for_room_file = AsyncMock(return_value=None)
+        svc.bind_attachment_metadata_reader(reader)
+
+        result = await svc._resolve_attachments(["nonexistent"], "room1")
 
         assert isinstance(result, RoomCenterUserMessageResponse)
         assert result.status_code == 404

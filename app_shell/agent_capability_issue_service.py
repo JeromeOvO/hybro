@@ -1,67 +1,56 @@
-"""
-Agent Capability Issue Service
+"""Compatibility facade for capability-issue services.
 
-Tracks capability errors (agent returns errors for tasks it claims to support)
-and provides an exclusion set for Pinecone searches so agents with repeated
-failures are skipped in favour of working alternatives.
-
-Key design choices:
-- Agents are excluded after `capability_issue_threshold` (default 2) open issues.
-  A single error is tolerated as a possible transient failure.
-- Exclusion set is cached in-memory with ~60s TTL to avoid per-search DB hits.
-- Issues are NOT auto-resolved — the agent owner must resolve via API.
+The production implementation moved to ``agent.capability_issue`` and a
+module-owned repository in ``agent.repository.capability_issue_mongo``.
+This shim keeps the historical ``app_shell.agent_capability_issue_service``
+shape so current startup and route wiring can continue incrementally.
 """
 
-import uuid
-from time import monotonic
+from __future__ import annotations
 
-from pymongo import ReturnDocument
+from typing import Any
 
-from common.config.settings import settings
+from agent.capability_issue import AgentCapabilityIssueService as _DomainIssueService
+from agent.repository.capability_issue_mongo import AgentCapabilityIssueMongoRepository
 from common.utils.logger import get_logger
-from common.utils.time import utcnow
-from database.mongodb import mongodb
 from models.agent import AgentCapabilityIssue, IssueStatus
 
 logger = get_logger(__name__)
 
-# Cache TTL in seconds
-_EXCLUSION_CACHE_TTL: float = 60.0
 
-# Field length limits to prevent unbounded storage
-_MAX_ERROR_MESSAGE_LEN: int = 2000
-_MAX_QUERY_TEXT_LEN: int = 1000
+class AgentCapabilityIssueServiceNotBound(RuntimeError):
+    """Raised when DAL-backed capability-issue storage has not been bound."""
 
 
-class _ExclusionCache:
-    """In-memory TTL cache for the set of excluded agent IDs."""
+class AgentCapabilityIssueServiceAdapter:
+    """Backward-compatible capability-issue service facade."""
 
-    def __init__(self, ttl: float = _EXCLUSION_CACHE_TTL):
-        self._ttl = ttl
-        self._data: frozenset[str] | None = None
-        self._timestamp: float = 0.0
+    def __init__(self, delegate: _DomainIssueService | None = None) -> None:
+        self._service = delegate
 
-    def get(self) -> frozenset[str] | None:
-        if self._data is not None and (monotonic() - self._timestamp) < self._ttl:
-            return self._data
-        return None
+    def bind(self, delegate: _DomainIssueService) -> None:
+        self._service = delegate
 
-    def set(self, data: set[str]) -> None:
-        self._data = frozenset(data)
-        self._timestamp = monotonic()
+    def bind_repository(self, repository: Any) -> None:
+        """Backwards-compat binder retained for phased migration."""
+        self._service = _DomainIssueService(repository=repository)
 
-    def clear(self) -> None:
-        self._data = None
-        self._timestamp = 0.0
+    def bind_mongo(self, mongo: Any, collection_name: str = "agent_capability_issues") -> None:
+        """Bind a MongoDAL directly."""
+        self.bind_repository(
+            AgentCapabilityIssueMongoRepository(
+                mongo=mongo,
+                collection_name=collection_name,
+            )
+        )
 
-
-class AgentCapabilityIssueService:
-    def __init__(self):
-        self._cache = _ExclusionCache()
-
-    @property
-    def _collection(self):
-        return mongodb.agent_capability_issues_collection
+    def _get_service(self) -> _DomainIssueService:
+        if self._service is None:
+            raise AgentCapabilityIssueServiceNotBound(
+                "Capability-issue service is not bound. Call bind_repository/bind_mongo "
+                "during startup before resolution paths use it."
+            )
+        return self._service
 
     async def record_issue(
         self,
@@ -71,63 +60,19 @@ class AgentCapabilityIssueService:
         room_id: str | None = None,
         message_id: str | None = None,
     ) -> AgentCapabilityIssue:
-        """Record a new capability issue for an agent."""
-        issue = AgentCapabilityIssue(
-            issue_id=str(uuid.uuid4()),
+        return await self._get_service().record_issue(
             agent_id=agent_id,
-            error_message=error_message[:_MAX_ERROR_MESSAGE_LEN],
-            query_text=query_text[:_MAX_QUERY_TEXT_LEN],
+            error_message=error_message,
+            query_text=query_text,
             room_id=room_id,
             message_id=message_id,
-            status=IssueStatus.open,
-            created_at=utcnow(),
         )
-        await self._collection.insert_one(issue.model_dump(mode="json"))
-        self._cache.clear()
-        logger.info(
-            "Recorded capability issue %s for agent %s",
-            issue.issue_id,
-            agent_id,
-        )
-        return issue
 
     async def get_excluded_agent_ids(self) -> frozenset[str]:
-        """Return agent IDs with open issue count >= threshold.
+        return await self._get_service().get_excluded_agent_ids()
 
-        Uses an in-memory cache (~60s TTL) to avoid hitting MongoDB on every
-        search request.
-        """
-        cached = self._cache.get()
-        if cached is not None:
-            return cached
-
-        threshold = settings.capability_issue_threshold
-        pipeline = [
-            {"$match": {"status": IssueStatus.open.value}},
-            {"$group": {"_id": "$agent_id", "count": {"$sum": 1}}},
-            {"$match": {"count": {"$gte": threshold}}},
-        ]
-        cursor = self._collection.aggregate(pipeline)
-        excluded = set()
-        async for doc in cursor:
-            excluded.add(doc["_id"])
-
-        self._cache.set(excluded)
-        if excluded:
-            logger.info(
-                "Capability issue exclusion set: %d agent(s) excluded", len(excluded)
-            )
-        return self._cache.get()
-
-    async def get_issue_by_id(
-        self, issue_id: str
-    ) -> AgentCapabilityIssue | None:
-        """Return a single issue by its issue_id, or None."""
-        doc = await self._collection.find_one({"issue_id": issue_id})
-        if not doc:
-            return None
-        doc.pop("_id", None)
-        return AgentCapabilityIssue.model_validate(doc)
+    async def get_issue_by_id(self, issue_id: str) -> AgentCapabilityIssue | None:
+        return await self._get_service().get_issue_by_id(issue_id)
 
     async def get_issues_for_agent(
         self,
@@ -136,80 +81,40 @@ class AgentCapabilityIssueService:
         limit: int = 100,
         offset: int = 0,
     ) -> list[AgentCapabilityIssue]:
-        """Return issues for a specific agent, optionally filtered by status."""
-        query: dict = {"agent_id": agent_id}
-        if status is not None:
-            query["status"] = status.value
-        cursor = (
-            self._collection.find(query)
-            .sort("created_at", -1)
-            .skip(offset)
-            .limit(limit)
+        return await self._get_service().get_issues_for_agent(
+            agent_id=agent_id,
+            status=status,
+            limit=limit,
+            offset=offset,
         )
-        issues = []
-        async for doc in cursor:
-            doc.pop("_id", None)
-            issues.append(AgentCapabilityIssue.model_validate(doc))
-        return issues
 
     async def resolve_issue(
         self,
         issue_id: str,
         provider_id: str,
     ) -> AgentCapabilityIssue | None:
-        """Mark a single issue as resolved. Returns the updated issue or None."""
-        now = utcnow()
-        result = await self._collection.find_one_and_update(
-            {"issue_id": issue_id, "status": IssueStatus.open.value},
-            {
-                "$set": {
-                    "status": IssueStatus.resolved.value,
-                    "resolved_at": now,
-                    "resolved_by": provider_id,
-                }
-            },
-            return_document=ReturnDocument.AFTER,
-        )
-        if result:
-            self._cache.clear()
-            result.pop("_id", None)
-            return AgentCapabilityIssue.model_validate(result)
-        return None
+        return await self._get_service().resolve_issue(issue_id, provider_id)
 
     async def resolve_all_for_agent(
         self,
         agent_id: str,
         provider_id: str,
     ) -> int:
-        """Bulk resolve all open issues for an agent. Returns count resolved."""
-        now = utcnow()
-        result = await self._collection.update_many(
-            {"agent_id": agent_id, "status": IssueStatus.open.value},
-            {
-                "$set": {
-                    "status": IssueStatus.resolved.value,
-                    "resolved_at": now,
-                    "resolved_by": provider_id,
-                }
-            },
+        return await self._get_service().resolve_all_for_agent(
+            agent_id=agent_id,
+            provider_id=provider_id,
         )
-        if result.modified_count > 0:
-            self._cache.clear()
-            logger.info(
-                "Resolved %d issues for agent %s",
-                result.modified_count,
-                agent_id,
-            )
-        return result.modified_count
 
 
 class CapabilityIssueExclusionReader:
-    def __init__(self, service: AgentCapabilityIssueService | None = None) -> None:
+    def __init__(
+        self,
+        service: AgentCapabilityIssueServiceAdapter | None = None,
+    ) -> None:
         self._service = service or capability_issue_service
 
     async def get_excluded_agent_ids(self) -> frozenset[str]:
         return await self._service.get_excluded_agent_ids()
 
 
-# Singleton
-capability_issue_service = AgentCapabilityIssueService()
+capability_issue_service = AgentCapabilityIssueServiceAdapter()

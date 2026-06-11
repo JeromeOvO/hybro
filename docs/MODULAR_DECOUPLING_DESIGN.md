@@ -115,7 +115,7 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 | # | Module | Responsibility | Current Source |
 |---|--------|---------------|----------------|
 | 1 | **Common** | Protocols, DTOs, auth, config, utils, errors | `common/`, `models/` |
-| 2 | **DAL** | Unified data access clients (split by concern) | `database/`, app-shell Redis and object-storage adapters |
+| 2 | **DAL** | Unified data access clients (split by concern) | `dal/`, `database/` (legacy migrations only) |
 | 3 | **A2A Protocol Adapter** | Anti-corruption for a2a-sdk, internal model ↔ A2A types | `app_shell/a2a_runtime.py`, `common/client/` |
 | 4 | **LLM Gateway** | Unified LLM invocation, provider routing, capability registry | `app_shell/openai_service.py`, `app_shell/gemini_service.py`, `app_shell/bedrock_service.py` |
 | 5 | **Agent** | Agent lifecycle, health, matching, discovery | `app_shell/agent_*.py`, `api/agent.py`, `api/discovery.py` |
@@ -2097,6 +2097,11 @@ Rules:
 **Complexity note:** mongodb.py is ~101KB with 200+ methods. This phase wraps the Motor client in MongoDAL/MongoCollection — it does NOT refactor queries. Individual modules will own their queries later.
 
 **Gate:** Container instantiates full DAL. Old singletons delegate to new DAL. All tests pass.
+
+**Implemented DAL convergence note (2026-06-05):** Production startup constructs
+DAL adapters directly from the composition root. Agent, Room, Execution,
+ContextMemory, Platform, HubRuntimeBridge, and Jobs use module-owned repositories
+or protocols rather than `database.mongodb` or `app_shell.database_service`.
 
 #### Phase 2: Adapter Layer (2.5 weeks)
 

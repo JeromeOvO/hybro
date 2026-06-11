@@ -99,8 +99,8 @@ class TestIdempotencyGuardInRoomMessageCenter:
         from execution.orchestration.room_message_center import RoomMessageCenter
 
         rmc = object.__new__(RoomMessageCenter)
-        rmc.database_service = MagicMock()
-        rmc.database_service.claim_user_message_for_processing = AsyncMock(return_value=False)
+        rmc._store = MagicMock()
+        rmc._store.claim_user_message_for_processing = AsyncMock(return_value=False)
         rmc.sse_manager = MagicMock()
 
         request = OrchestrationRequest(
@@ -120,8 +120,8 @@ class TestIdempotencyGuardInRoomMessageCenter:
         from execution.orchestration.room_message_center import RoomMessageCenter
 
         rmc = object.__new__(RoomMessageCenter)
-        rmc.database_service = MagicMock()
-        rmc.database_service.claim_or_reclaim_user_message = AsyncMock(return_value=False)
+        rmc._store = MagicMock()
+        rmc._store.claim_or_reclaim_user_message = AsyncMock(return_value=False)
         rmc.sse_manager = MagicMock()
 
         request = OrchestrationRequest(
@@ -134,7 +134,7 @@ class TestIdempotencyGuardInRoomMessageCenter:
         result = await rmc.process_room_user_message(request)
         assert result.success is False
         assert result.status_code == 409
-        rmc.database_service.claim_or_reclaim_user_message.assert_called_once()
+        rmc._store.claim_or_reclaim_user_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_recovery_threshold_uses_orphan_threshold(self):
@@ -143,8 +143,8 @@ class TestIdempotencyGuardInRoomMessageCenter:
         from execution.orchestration.room_message_center import RoomMessageCenter
 
         rmc = object.__new__(RoomMessageCenter)
-        rmc.database_service = MagicMock()
-        rmc.database_service.claim_or_reclaim_user_message = AsyncMock(return_value=False)
+        rmc._store = MagicMock()
+        rmc._store.claim_or_reclaim_user_message = AsyncMock(return_value=False)
         rmc.sse_manager = MagicMock()
 
         request = OrchestrationRequest(
@@ -159,7 +159,7 @@ class TestIdempotencyGuardInRoomMessageCenter:
             mock_settings.processing_status_expiry_minutes = 30
             await rmc.process_room_user_message(request)
 
-        call_args = rmc.database_service.claim_or_reclaim_user_message.call_args
+        call_args = rmc._store.claim_or_reclaim_user_message.call_args
         threshold_arg = call_args[0][1]
         now = real_utcnow()
         # The threshold should be ~2 minutes ago (orphan), not ~30 minutes ago
@@ -202,7 +202,7 @@ class TestStaleTaskCheckerSemaphore:
             StaleRecoveryDeps(schedule_recovery=schedule_recovery)
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_orphaned_agent_messages",
             AsyncMock(
                 return_value=[
@@ -216,7 +216,7 @@ class TestStaleTaskCheckerSemaphore:
             ),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_agent_by_agent_id",
             AsyncMock(return_value=None),
         )
@@ -238,12 +238,12 @@ class TestStaleTaskCheckerSemaphore:
 
         checker = StaleTaskChecker()
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_orphaned_agent_messages",
             AsyncMock(return_value=[MagicMock()]),
         )
         get_agent = AsyncMock()
-        monkeypatch.setattr(mod.db_service, "get_agent_by_agent_id", get_agent)
+        monkeypatch.setattr(mod.store, "get_agent_by_agent_id", get_agent)
 
         await checker._recover_orphaned_messages()
 
@@ -265,17 +265,17 @@ class TestStaleTaskCheckerSemaphore:
             StaleRecoveryDeps(schedule_recovery=schedule_recovery)
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_stuck_supervisor_trajectory_messages",
             AsyncMock(return_value=[{"message_id": "msg-1", "room_id": "room-1"}]),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "is_message_cancelled",
             AsyncMock(return_value=False),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "claim_stuck_supervisor_trajectory",
             AsyncMock(return_value=True),
         )
@@ -301,37 +301,37 @@ class TestStaleTaskCheckerSemaphore:
             )
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_stale_task_messages",
             AsyncMock(return_value=[]),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_expired_task_messages",
             AsyncMock(return_value=[]),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_orphaned_agent_messages",
             AsyncMock(return_value=[]),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_room_ids_with_non_terminal_runs",
             AsyncMock(return_value=[]),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_non_tracked_stale_task_messages",
             AsyncMock(return_value=[]),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_stuck_supervisor_trajectory_messages",
             AsyncMock(return_value=[]),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "find_stale_non_terminal_runs",
             AsyncMock(return_value=[]),
         )
@@ -360,17 +360,17 @@ class TestStaleTaskCheckerSemaphore:
         msg.room_id = "room-1"
         msg.user_id = "user-1"
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "update_task_on_message",
             AsyncMock(),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_and_clear_continuation_on_message",
             AsyncMock(),
         )
         monkeypatch.setattr(
-            mod.db_service,
+            mod.store,
             "get_and_clear_continuation_on_user_message",
             AsyncMock(),
         )

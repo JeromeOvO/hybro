@@ -16,10 +16,10 @@ async def test_cleanup_stuck_processing_status_nulls_when_no_busy_rooms():
     )
     with (
         patch(
-            "jobs.stale_task_checker.db_service.get_room_ids_with_non_terminal_runs",
+            "jobs.stale_task_checker.store.get_room_ids_with_non_terminal_runs",
             AsyncMock(return_value=[]),
         ),
-        patch("jobs.stale_task_checker.mongodb") as m,
+        patch("jobs.stale_task_checker._legacy_mongo") as m,
     ):
         m.rooms_collection = mock_coll
         await checker._cleanup_stuck_processing_status()
@@ -36,10 +36,10 @@ async def test_cleanup_stuck_processing_status_excludes_busy_room_ids():
     mock_coll.update_many = AsyncMock(return_value=MagicMock(modified_count=0))
     with (
         patch(
-            "jobs.stale_task_checker.db_service.get_room_ids_with_non_terminal_runs",
+            "jobs.stale_task_checker.store.get_room_ids_with_non_terminal_runs",
             AsyncMock(return_value=["room-a", "room-b"]),
         ),
-        patch("jobs.stale_task_checker.mongodb") as m,
+        patch("jobs.stale_task_checker._legacy_mongo") as m,
     ):
         m.rooms_collection = mock_coll
         await checker._cleanup_stuck_processing_status()

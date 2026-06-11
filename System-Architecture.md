@@ -362,16 +362,18 @@ Execution transports call this layer rather than building A2A payloads inline.
 
 ### `dal` and `database`
 
-`dal` contains newer protocol-oriented adapters:
+`dal` owns production database, vector, object-storage, and Redis adapter access.
+Business modules use module-scoped repositories built from `MongoDAL`,
+`VectorDAL`, and `ObjectStorageDAL`. Adapters:
 
 - `dal.mongo`: generic Mongo collection/DAL adapter.
 - `dal.pinecone`: vector adapter.
 - `dal.redis`: Redis KV, Pub/Sub, and related support.
 - `dal.s3`: object storage adapter.
+- `dal.index_registry`: startup index registration across modules.
 
-`database.mongodb.MongoDB` is the concrete Mongo service and still owns many
-collection helpers, indexes, and compatibility methods used by app-shell
-runtimes.
+`database/mongodb.py` remains only for operational migration scripts and legacy
+data migration helpers; it is not a production module dependency.
 
 Important Mongo collections include:
 

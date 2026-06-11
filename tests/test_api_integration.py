@@ -144,7 +144,7 @@ class TestRoomCenterHTTPIntegration:
             )
         )
 
-        with patch(PATCH["room_center.db_service"], mock_db):
+        with patch(PATCH["room_center.room_store"], mock_db):
             with patch(PATCH["room_center.room_center"], mock_rc):
                 resp = await http_client.post(
                     "/api/v1/roomCenter/inquiryRoomMessagesByRoomId",

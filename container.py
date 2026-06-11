@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -12,6 +14,7 @@ from common.config.settings import (
     get_pinecone_index_name,
     settings,
 )
+from common.dto import VectorRecord
 from common.observability import MetricsCollector, traced_create_task
 from common.protocols import (
     AgentCallCounter,
@@ -21,6 +24,7 @@ from common.protocols import (
     AgentMatcher,
     AgentRegistry,
     AgentRegistryWriter,
+    AgentRepository,
     AgentTransport,
     ContentStorageRepository,
     ContextAssembler,
@@ -79,6 +83,16 @@ from platform_module.adapters import (
 )
 from platform_module.deps import DiscoveryQueryExpander, LoggerLike
 from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
+from room.repository import RoomQuoteMongoRepository
+
+
+def create_execution_repositories(*, mongo: MongoDAL):
+    from execution.repository.mongo import RunEventMongoRepository, RunMongoRepository
+
+    return {
+        "run_repository": RunMongoRepository(mongo),
+        "run_event_repository": RunEventMongoRepository(mongo),
+    }
 
 
 @dataclass(frozen=True)
@@ -88,6 +102,7 @@ class AgentDeps:
     agent_management: AgentManagement
     agent_registry_writer: AgentRegistryWriter
     agent_call_counter: AgentCallCounter
+    agent_repository: AgentRepository
 
 
 @dataclass(frozen=True)
@@ -97,6 +112,7 @@ class RoomDeps:
     room_message_store: RoomMessageStore
     room_history_reader: RoomHistoryReader
     room_ownership_reader: RoomOwnershipReader
+    room_quote_repository: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -128,16 +144,133 @@ class HubDeps:
     hub_facade: Any
 
 
-def create_mongo_dal(*, database: Any) -> MongoDAL:
+def create_mongo_dal() -> MongoDAL:
     from dal.mongo import MongoDALImpl
 
-    return MongoDALImpl(database=database)
+    return MongoDALImpl()
 
 
 def create_vector_dal() -> VectorDAL:
     from dal.pinecone import VectorDALImpl
 
     return VectorDALImpl()
+
+
+class AgentViewsetVectorIndexAdapter:
+    def __init__(
+        self,
+        *,
+        vector_dal: VectorDAL,
+        index: str,
+    ) -> None:
+        self._vector_dal = vector_dal
+        self._index = index
+
+    def upsert(self, vectors: list[dict]) -> None:
+        records = [
+            VectorRecord(
+                id=item["id"],
+                vector=item.get("values", []),
+                metadata=item.get("metadata", {}),
+            )
+            for item in vectors
+        ]
+        self._dispatch(self._vector_dal.upsert(self._index, records))
+
+    def delete(self, ids: list[str]) -> None:
+        self._dispatch(self._vector_dal.delete(self._index, ids))
+
+    def _dispatch(self, operation: Awaitable[None]) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(operation)
+        else:
+            loop.create_task(operation).add_done_callback(self._handle_task_error)
+
+    @staticmethod
+    def _handle_task_error(task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None:
+            return
+        logging.getLogger(__name__).error(
+            "Vector index update failed",
+            exc_info=(exc.__class__, exc, exc.__traceback__),
+        )
+
+
+def create_agent_viewset_vector_index(*, vector: VectorDAL) -> AgentViewsetVectorIndexAdapter:
+    index_name = get_pinecone_index_name()
+    return AgentViewsetVectorIndexAdapter(vector_dal=vector, index=index_name)
+
+
+def create_agent_capability_issue_repository(mongo: MongoDAL) -> Any:
+    from agent.repository.capability_issue_mongo import (
+        AgentCapabilityIssueMongoRepository,
+    )
+
+    return AgentCapabilityIssueMongoRepository(mongo=mongo)
+
+
+def create_agent_capability_issue_service(*, repository: Any) -> Any:
+    from agent.capability_issue import AgentCapabilityIssueService
+
+    return AgentCapabilityIssueService(repository=repository)
+
+
+def create_agent_resolver_repository(*, service) -> Any:
+    from models.request import AgentCenterRequest
+
+    class _ResolverRepository:
+        async def query_similar_agents(
+            self,
+            query_text: str,
+            count: int,
+            allowed_agent_ids: list[str] | None,
+            excluded_agent_ids: set[str],
+            active_only: bool,
+            user_id: str | None = None,
+        ) -> list[Any]:
+            del active_only  # compatibility with repository protocol
+            request = AgentCenterRequest(
+                query_text=query_text,
+                user_id=user_id,
+                agent_count=count,
+            )
+            response = await service.query_similar_agents(request)
+            if response.success is False:
+                return []
+            candidates = response.agents or []
+            if allowed_agent_ids is not None:
+                allowed = set(allowed_agent_ids)
+                candidates = [agent for agent in candidates if agent.agent_id in allowed]
+            if excluded_agent_ids:
+                candidates = [
+                    agent
+                    for agent in candidates
+                    if agent.agent_id not in excluded_agent_ids
+                ]
+            return candidates
+
+        async def get_agents_with_conditions_visible(
+            self,
+            user_id: str | None,
+            query: dict,
+            limit: int = 0,
+        ) -> list[Any]:
+            request = AgentCenterRequest(
+                user_id=user_id,
+                query=query,
+                limit=limit,
+            )
+            response = await service.get_agents_with_conditions(request)
+            if response.success is False:
+                return []
+            return response.agents or []
+
+    return _ResolverRepository()
 
 
 def create_object_storage_dal() -> ObjectStorageDAL:
@@ -437,6 +570,7 @@ def create_agent_deps(
         agent_management=facade,
         agent_registry_writer=facade,
         agent_call_counter=facade,
+        agent_repository=repository,
     )
 
 
@@ -448,11 +582,13 @@ def create_room_deps(
 ) -> RoomDeps:
     repository = RoomMongoRepository(mongo=mongo)
     message_repository = MessageMongoRepository(mongo=mongo)
+    quote_repository = RoomQuoteMongoRepository(mongo=mongo)
     facade = RoomFacade(
         repository=repository,
         message_repository=message_repository,
         agent_registry=agent_registry,
         membership_source=membership_source,
+        quote_repository=quote_repository,
         id_factory=lambda: uuid4().hex,
         now=utcnow,
     )
@@ -462,6 +598,7 @@ def create_room_deps(
         room_message_store=facade,
         room_history_reader=facade,
         room_ownership_reader=facade,
+        room_quote_repository=quote_repository,
     )
 
 
@@ -542,3 +679,10 @@ def _legacy_compaction_concurrency() -> int:
         return max(1, int(os.getenv("COMPACTION_CONCURRENCY", "5")))
     except (TypeError, ValueError):
         return 5
+
+
+def create_api_key_store(*, mongo: MongoDAL):
+    """Create Platform-owned API key store."""
+    from platform_module.api_keys import MongoAPIKeyStore
+
+    return MongoAPIKeyStore(mongo=mongo)

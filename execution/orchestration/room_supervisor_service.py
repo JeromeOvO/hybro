@@ -24,7 +24,6 @@ from models.supervisor import (
 )
 
 if TYPE_CHECKING:
-    from app_shell.database_service import DatabaseService
     from llm_gateway.services import SupervisorLLMService
 
 logger = get_logger(__name__)
@@ -211,17 +210,21 @@ class RoomSupervisorService:
         openai_service: object | None = None,
         supervisor_service: SupervisorLLMService | None = None,
         bedrock_service: object | None = None,
-        database_service: DatabaseService | None = None,
+        store = None,
     ):
         _ = openai_service, bedrock_service
         self._supervisor_service = supervisor_service
 
-        if database_service is None:
-            from app_shell.database_service import db_service
+        if store is None:
+            import sys
+            import importlib
 
-            self._database_service = db_service
+            db_module = sys.modules.get('app_shell.database_service')
+            if db_module is None:
+                db_module = importlib.import_module('app_shell.database_service')
+            self._store = db_module.db_service
         else:
-            self._database_service = database_service
+            self._store = store
 
     def bind_supervisor_service(
         self, supervisor_service: SupervisorLLMService

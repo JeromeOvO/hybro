@@ -189,7 +189,7 @@ class TestCancelMessage:
         """Should raise 404 when message doesn't exist."""
         mock_db_service.get_room_user_message_by_message_id.return_value = None
 
-        with patch(PATCH["sse.db_service"], mock_db_service):
+        with patch(PATCH["sse.sse_store"], mock_db_service):
             with pytest.raises(HTTPException) as exc_info:
                 await cancel_message("nonexistent-message", mock_user)
 
@@ -203,7 +203,7 @@ class TestCancelMessage:
         mock_db_service.get_room_user_message_by_message_id.return_value = sample_user_message
         mock_db_service.get_room_by_room_id.return_value = None
 
-        with patch(PATCH["sse.db_service"], mock_db_service):
+        with patch(PATCH["sse.sse_store"], mock_db_service):
             with pytest.raises(HTTPException) as exc_info:
                 await cancel_message(sample_user_message.message_id, mock_user)
 
@@ -217,7 +217,7 @@ class TestCancelMessage:
         mock_db_service.get_room_user_message_by_message_id.return_value = sample_user_message
         mock_db_service.get_room_by_room_id.return_value = sample_room
 
-        with patch(PATCH["sse.db_service"], mock_db_service):
+        with patch(PATCH["sse.sse_store"], mock_db_service):
             with pytest.raises(HTTPException) as exc_info:
                 await cancel_message(sample_user_message.message_id, mock_user_2)
 

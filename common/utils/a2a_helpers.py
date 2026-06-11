@@ -176,6 +176,7 @@ def get_message_from_task(task: Any) -> Any | None:
         if all_parts:
             logger.debug("Found %d parts in task.artifacts", len(all_parts))
             message = SimpleNamespace(
+                kind="message",
                 role="agent",
                 message_id=str(uuid.uuid4()),
                 task_id=task.id,

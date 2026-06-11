@@ -1,7 +1,6 @@
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from app_shell.database_service import db_service
 from common.dto import ChatContextGenerationInput
 from common.utils.context_utils import (
     add_turn_to_history,
@@ -22,8 +21,11 @@ logger = get_logger(__name__)
 
 # Chat Memory Service Manager
 class ChatMemoryService:
-    def __init__(self):
-        self.database_service = db_service  # Use singleton
+    def __init__(self, *, context_store=None):
+        if context_store is None:
+            import importlib
+            context_store = getattr(importlib.import_module("app_shell.database_service"), "db_service")
+        self._store = context_store
         self.room_memory_llm_service = None
 
     def bind_room_memory_llm_service(self, service) -> None:
@@ -51,7 +53,7 @@ class ChatMemoryService:
                 updated_at=utcnow(),
                 extend_info=[],
             )
-            success = await self.database_service.add_chat_context(new_chat_context)
+            success = await self._store.add_chat_context(new_chat_context)
             if success:
                 return ChatMemoryResponse(
                     user_name=request.user_name,
@@ -86,7 +88,7 @@ class ChatMemoryService:
             raise SessionIdRequiredError()
 
         try:
-            chat_context = await self.database_service.get_chat_context_by_session_id(
+            chat_context = await self._store.get_chat_context_by_session_id(
                 request.session_id
             )
             if chat_context:
@@ -123,7 +125,7 @@ class ChatMemoryService:
             raise SessionIdRequiredError()
 
         try:
-            chat_context = await self.database_service.get_chat_context_by_session_id(
+            chat_context = await self._store.get_chat_context_by_session_id(
                 request.session_id
             )
         except Exception as e:
@@ -154,7 +156,7 @@ class ChatMemoryService:
                 updated_at=utcnow(),
                 extend_info=chat_context.extend_info,
             )
-            success = await self.database_service.update_chat_context_by_session_id(
+            success = await self._store.update_chat_context_by_session_id(
                 request.session_id, chat_context
             )
             if success:
@@ -186,7 +188,7 @@ class ChatMemoryService:
         Delete a chat context by session_id
         """
         try:
-            success = await self.database_service.delete_chat_context_by_session_id(
+            success = await self._store.delete_chat_context_by_session_id(
                 request.session_id
             )
             if success:
@@ -213,8 +215,11 @@ class ChatMemoryService:
 
 
 class RoomMemoryService:
-    def __init__(self):
-        self.database_service = db_service  # Use singleton
+    def __init__(self, *, room_memory_store=None):
+        if room_memory_store is None:
+            import importlib
+            room_memory_store = getattr(importlib.import_module("app_shell.database_service"), "db_service")
+        self._store = room_memory_store
         self.turn_notes_llm_provider = None
         self._facade = None
         self._bound = False
@@ -440,7 +445,7 @@ class RoomMemoryService:
         if not user_id:
             return
         try:
-            await self.database_service.increment_user_interactions(user_id)
+            await self._store.increment_user_interactions(user_id)
         except Exception as e:
             logger.debug("UserMemory tracking skipped: %s", e)
 
@@ -452,7 +457,7 @@ class RoomMemoryService:
     ) -> None:
         """Fire-and-forget: record agent call outcome in AgentMemory (§4.4)."""
         try:
-            await self.database_service.record_agent_call(
+            await self._store.record_agent_call(
                 agent_id=agent_id,
                 success=success,
                 response_time_ms=response_time_ms,
@@ -480,7 +485,7 @@ class RoomMemoryService:
                 provider=self.turn_notes_llm_provider,
             )
             if enriched_notes and enriched_notes != heuristic_notes:
-                await self.database_service.update_turn_notes(
+                await self._store.update_turn_notes(
                     room_id, turn_id, enriched_notes,
                 )
         except Exception as e:

@@ -165,7 +165,7 @@ async def test_legacy_membership_source_logs_agent_service_fallback():
         public_url=None,
     )
     source = LegacyRoomMembershipSeedSource(
-        database_service=SimpleNamespace(
+        membership_store=SimpleNamespace(
             get_all_active_agents=AsyncMock(return_value=[agent])
         ),
         agent_service_adapter=SimpleNamespace(

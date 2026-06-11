@@ -103,7 +103,7 @@ def _make_relay_service(
 
     svc = RelayService(
         mongo=mongo,
-        database_service=db_service,
+        db=db_service,
         sse_manager=sse_manager,
     )
 
@@ -113,7 +113,8 @@ def _make_relay_service(
     relay_transport = RelayTransport(
         response_handler=handler,
         relay_service=svc,
-        db=db_service,
+        task_tracker=db_service,
+        call_counter=db_service,
         sse_manager=sse_manager,
     )
     svc.set_relay_transport(relay_transport)
@@ -130,7 +131,7 @@ def test_init_relay_service_binds_hitl_coordinator_to_publish_handler():
 
     svc = init_relay_service(
         mongo=mongo,
-        database_service=db_service,
+        db=db_service,
         sse_manager=sse_manager,
         room_message_center=room_message_center,
         hitl_coordinator=hitl_coordinator,
@@ -148,7 +149,7 @@ def test_init_relay_service_fallback_response_handler_can_handle_publish_events(
 
     svc = init_relay_service(
         mongo=mongo,
-        database_service=db_service,
+        db=db_service,
         sse_manager=sse_manager,
         room_message_center=room_message_center,
         hitl_coordinator=hitl_coordinator,
@@ -175,7 +176,7 @@ def test_init_relay_service_binds_processor_relay_path():
 
     svc = init_relay_service(
         mongo=mongo,
-        database_service=db_service,
+        db=db_service,
         sse_manager=sse_manager,
         room_message_center=room_message_center,
         hitl_coordinator=hitl_coordinator,
@@ -197,7 +198,7 @@ def test_init_relay_service_wires_hub_worker_and_event_publisher():
     converter = MagicMock()
     svc = init_relay_service(
         mongo=MagicMock(),
-        database_service=MagicMock(),
+        db=MagicMock(),
         sse_manager=MagicMock(),
         room_message_center=MagicMock(agent_response_handler=MagicMock()),
         event_publisher=publisher,

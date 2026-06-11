@@ -43,6 +43,12 @@ class APIKeyStore(Protocol):
 
 
 @runtime_checkable
+class APIKeyValidationStore(Protocol):
+    async def get_api_key_by_hash(self, key_hash: str) -> APIKeyRecord | None: ...
+    async def update_api_key_usage(self, key_hash: str) -> bool: ...
+
+
+@runtime_checkable
 class GatewayDiscoveryProvider(Protocol):
     async def discover_agents(
         self, query: str, limit: int | None = None
@@ -93,14 +99,27 @@ class FileStorage(Protocol):
     async def list_for_room(self, room_id: str) -> list[FileInfo]: ...
 
 
+@runtime_checkable
+class AttachmentMetadataReader(Protocol):
+    async def get_for_room_file(self, room_id: str, file_id: str) -> dict | None: ...
+
+
+@runtime_checkable
+class AttachmentCleanupPort(Protocol):
+    async def delete_for_room(self, room_id: str) -> int: ...
+
+
 __all__ = [
     "APIKeyAuthenticator",
     "APIKeyRateLimiter",
     "APIKeyPrincipal",
     "APIKeyRecord",
     "APIKeyStore",
+    "APIKeyValidationStore",
     "FileStorage",
     "GatewayDiscoveryProvider",
+    "AttachmentCleanupPort",
+    "AttachmentMetadataReader",
     "GatewayService",
     "RateLimiter",
 ]

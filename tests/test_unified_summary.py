@@ -17,6 +17,7 @@ def rmc():
     center = RoomMessageCenter.__new__(RoomMessageCenter)
     center.sse_manager = AsyncMock()
     center.database_service = AsyncMock()
+    center._store = center.database_service
     center.room_coordinator_service = AsyncMock()
     center.room_runtime = AsyncMock()
     center.summary_service = AsyncMock()

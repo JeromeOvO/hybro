@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import Any, Protocol, runtime_checkable
 
 from models.quote import (
     MAX_QUOTE_TEXT_LENGTH,
@@ -12,8 +12,19 @@ from models.quote import (
     UserQuoteCreatePayload,
 )
 
-if TYPE_CHECKING:
-    from app_shell.database_service import DatabaseService
+
+@runtime_checkable
+class QuoteSourceReader(Protocol):
+    async def get_room_user_message_by_message_id(self, message_id: str) -> Any | None: ...
+
+    async def get_room_agent_message_by_message_id(
+        self, message_id: str
+    ) -> Any | None: ...
+
+
+@runtime_checkable
+class QuoteWriter(Protocol):
+    async def insert_quoted_snippet(self, snippet: QuotedSnippet) -> str: ...
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +34,7 @@ class QuoteValidationError(ValueError):
 
 
 async def validate_quote_source(
-    db: DatabaseService,
+    source_reader: QuoteSourceReader,
     *,
     room_id: str,
     payload: UserQuoteCreatePayload,
@@ -38,23 +49,24 @@ async def validate_quote_source(
         return
 
     if kind == QuoteSourceKind.USER_TURN:
-        um = await db.get_room_user_message_by_message_id(mid)
+        um = await source_reader.get_room_user_message_by_message_id(mid)
         if not um or um.room_id != room_id:
             raise QuoteValidationError("Invalid quote source (user_turn)")
         return
 
     # agent | synthesis — both stored as agent messages
-    am = await db.get_room_agent_message_by_message_id(mid)
+    am = await source_reader.get_room_agent_message_by_message_id(mid)
     if not am or am.room_id != room_id:
         raise QuoteValidationError("Invalid quote source (agent/synthesis)")
 
 
 async def create_quoted_snippet(
-    db: DatabaseService,
+    source_reader: QuoteSourceReader,
     *,
     room_id: str,
     created_by_user_id: str,
     payload: UserQuoteCreatePayload,
+    writer: QuoteWriter | None = None,
 ) -> str:
     """Validate, insert snippet, return ``quote_id``."""
     text = payload.text.strip()
@@ -65,7 +77,9 @@ async def create_quoted_snippet(
             f"Quote text exceeds maximum length of {MAX_QUOTE_TEXT_LENGTH} characters"
         )
 
-    await validate_quote_source(db, room_id=room_id, payload=payload)
+    await validate_quote_source(source_reader, room_id=room_id, payload=payload)
+
+    snippet_writer = writer or source_reader
 
     snippet = QuotedSnippet(
         room_id=room_id,
@@ -76,4 +90,4 @@ async def create_quoted_snippet(
         source_agent_id=payload.source_agent_id,
         sender_display_name=payload.sender_display_name,
     )
-    return await db.insert_quoted_snippet(snippet)
+    return await snippet_writer.insert_quoted_snippet(snippet)

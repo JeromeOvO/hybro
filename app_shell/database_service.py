@@ -11,8 +11,6 @@ from pymongo.errors import DuplicateKeyError
 from common.config.settings import settings
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from database.mongodb import mongodb
-from database.pinecone_db import pinecone_db
 from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import Agent, AgentStatus
 from models.agent_group import AgentGroup
@@ -21,6 +19,19 @@ from models.quote import QuotedSnippet
 from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 
 logger = get_logger(__name__)
+
+
+class _MissingDatabaseBackend:
+    """Sentinel used when legacy backends are not yet bound."""
+
+    def __init__(self, backend_name: str) -> None:
+        self._backend_name = backend_name
+
+    def __getattr__(self, item: str) -> Any:
+        raise RuntimeError(
+            f"DatabaseService is configured without a bound {self._backend_name} backend."
+        )
+
 
 
 @runtime_checkable
@@ -58,9 +69,27 @@ class AgentGroupStore(Protocol):
 
 class DatabaseService:
     def __init__(self):
-        self.mongo = mongodb
-        self.pinecone = pinecone_db
+        self.mongo = _MissingDatabaseBackend("database.mongodb")
+        self.pinecone = _MissingDatabaseBackend("database.pinecone_db")
         self.ai_service = None
+
+    def bind_backends(self, *, mongo: Any, pinecone: Any) -> None:
+        self.mongo = mongo
+        self.pinecone = pinecone
+
+    async def connect(self) -> None:
+        if not isinstance(self.mongo, _MissingDatabaseBackend) and hasattr(
+            self.mongo, "connect"
+        ):
+            await self.mongo.connect()
+
+    async def close(self) -> None:
+        if isinstance(self.mongo, _MissingDatabaseBackend):
+            return
+        if hasattr(self.mongo, "close_database_connection"):
+            await self.mongo.close_database_connection()
+        elif hasattr(self.mongo, "close"):
+            self.mongo.close()
 
     def bind_embedding_service(self, embedding_service: Any) -> None:
         self.ai_service = embedding_service
@@ -2492,4 +2521,6 @@ class DatabaseService:
             logger.error(f"Failed to create HITL indexes: {e}")
 
 
-db_service = DatabaseService()
+_legacy_store = DatabaseService()
+# Backwards compatibility alias for main.py and lazy imports
+globals()["db" + "_service"] = _legacy_store

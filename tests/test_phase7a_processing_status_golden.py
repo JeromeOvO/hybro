@@ -38,6 +38,7 @@ def _make_rmc_for_supervisor_result(manager: SSEManager) -> RoomMessageCenter:
         get_room_by_room_id=AsyncMock(return_value=SimpleNamespace(extend_info={})),
         update_room_by_room_id=AsyncMock(),
     )
+    rmc._store = rmc.database_service
     rmc.room_coordinator_service = SimpleNamespace(
         emit_synthesis_message=AsyncMock()
     )
@@ -165,6 +166,7 @@ async def test_golden_hitl_resolve_resume_completion_order(monkeypatch):
         save_continuation_on_message=AsyncMock(),
         get_room_by_room_id=AsyncMock(return_value=SimpleNamespace(extend_info={})),
     )
+    rmc._store = rmc.database_service
     rmc.queue_executor = SimpleNamespace(
         resume_from_continuation=AsyncMock(
             return_value=SimpleNamespace(

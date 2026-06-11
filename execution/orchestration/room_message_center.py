@@ -38,7 +38,7 @@ from models.supervisor import (
 
 a2a_service = None
 agent_resolver_service = None
-db_service = None
+_legacy_store = None
 debate_service = None
 room_memory_service = None
 notification_service = None
@@ -96,7 +96,7 @@ class RoomMessageCenter:
         self,
         *,
         room_services,
-        database_service,
+        store,
         sse_manager,
         room_coordinator_service,
         summary_service=None,
@@ -125,7 +125,7 @@ class RoomMessageCenter:
         cloud_health_check_timeout: float = 5.0,
     ):
         self.room_runtime = room_services
-        self.database_service = database_service
+        self._store = store
         self.sse_manager = sse_manager
         self.room_coordinator_service = room_coordinator_service
         self.summary_service = summary_service
@@ -145,13 +145,20 @@ class RoomMessageCenter:
         self.tsm = TaskStateManager(self.room_runtime, notification_service)
         self.agent_dispatcher = AgentDispatcher(
             agent_resolver=agent_resolver_service,
-            database_service=self.database_service,
+            message_writer=self._store,
+            agent_lookup=self._store,
+            agent_group_reader=self._store,
         )
 
         # Shared result handler used by all transports
         self.agent_response_handler = AgentResponseHandler(
-            db=self.database_service,
-            sse=self.sse_manager,
+            message_writer=self._store,
+            task_writer=self._store,
+            continuation_store=self._store,
+            client_request_resolver=self._store,
+            room_reader=self._store,
+            hitl_reader=self._store,
+            sse_manager=self.sse_manager,
             room_message_center=self,
             hitl_coordinator=hitl_coordinator,
             notification_service=notification_service,
@@ -165,7 +172,9 @@ class RoomMessageCenter:
             a2a_service=a2a_service,
             task_service=task_service,
             sse_manager=self.sse_manager,
-            database_service=self.database_service,
+            message_reader=self._store,
+            artifact_store=self._store,
+            task_updater=self._store,
             s3_service=s3_service,
             capability_issue_service=capability_issue_service,
         )
@@ -176,7 +185,8 @@ class RoomMessageCenter:
         self.agent_message_processor = AgentMessageProcessor(
             sse_manager=self.sse_manager,
             room_services=self.room_runtime,
-            database_service=self.database_service,
+            room_memory_reader=self._store,
+            task_tracker=self._store,
             transports={"direct": self.direct_transport},
             health_service=agent_health_service,
             cloud_health_cache_ttl=cloud_health_cache_ttl,
@@ -188,7 +198,7 @@ class RoomMessageCenter:
             a2a_service=a2a_service,
             room_services=self.room_runtime,
             room_memory_service=room_memory_service,
-            database_service=self.database_service,
+            store=self._store,
             debate_service=debate_service,
             rate_limit_service=rate_limit_service,
             agent_dispatcher=self.agent_dispatcher,
@@ -201,7 +211,7 @@ class RoomMessageCenter:
             room_services=self.room_runtime,
             tsm=self.tsm,
             sse_manager=self.sse_manager,
-            database_service=self.database_service,
+            store=self._store,
             room_memory_service=room_memory_service,
             rate_limit_service=rate_limit_service,
             agent_dispatcher=self.agent_dispatcher,
@@ -292,7 +302,7 @@ class RoomMessageCenter:
         """
         try:
             user_msg = (
-                await self.database_service.get_room_user_message_by_message_id(
+                await self._store.get_room_user_message_by_message_id(
                     user_message_id
                 )
             )
@@ -300,7 +310,7 @@ class RoomMessageCenter:
                 if not isinstance(user_msg.extend_info, dict):
                     user_msg.extend_info = {}
                 user_msg.extend_info["turn_completion_kind"] = turn_completion_kind
-                await self.database_service.update_room_user_message_by_message_id(
+                await self._store.update_room_user_message_by_message_id(
                     user_message_id, user_msg
                 )
         except Exception:
@@ -515,11 +525,11 @@ class RoomMessageCenter:
                     settings.orphan_threshold_minutes,
                 )
             )
-            claimed = await self.database_service.claim_or_reclaim_user_message(
+            claimed = await self._store.claim_or_reclaim_user_message(
                 request.room_user_message_id, stale_threshold
             )
         else:
-            claimed = await self.database_service.claim_user_message_for_processing(
+            claimed = await self._store.claim_user_message_for_processing(
                 request.room_user_message_id
             )
 
@@ -551,7 +561,7 @@ class RoomMessageCenter:
             )
             # Release the claim so the message can be retried (by user or
             # stale-recovery) instead of staying permanently orphaned.
-            await self.database_service.unclaim_user_message(
+            await self._store.unclaim_user_message(
                 room_user_message_id
             )
             # Fail any descendant agent messages created during the
@@ -583,7 +593,7 @@ class RoomMessageCenter:
         # stale task checker (orphan_threshold_minutes=2 min) might consider
         # the message orphaned.  Touching the timestamp here resets the clock
         # so processing won't be reclaimed prematurely.
-        await self.database_service.refresh_processing_claim(
+        await self._store.refresh_processing_claim(
             room_user_message_id
         )
 
@@ -630,12 +640,12 @@ class RoomMessageCenter:
         # Get user_id from the user message for rate limiting.
         # Fall back to the request-level user_id (from auth) if the stored
         # message is missing or has no user_id.
-        user_message = await self.database_service.get_room_user_message_by_message_id(
+        user_message = await self._store.get_room_user_message_by_message_id(
             room_user_message_id
         )
         if user_message and self._turn_event_appender:
             try:
-                already_started = await self.database_service.turn_exists(
+                already_started = await self._store.turn_exists(
                     room_id, room_user_message_id
                 )
                 if not already_started:
@@ -669,7 +679,7 @@ class RoomMessageCenter:
             )
 
             try:
-                _tc = await load_turn_context(self.database_service, user_message)
+                _tc = await load_turn_context(self._store, user_message)
                 quoted_text = _tc.quoted_text
             except TurnQuoteMissingError as e:
                 logger.error("RoomMessageCenter: %s", e)
@@ -739,7 +749,7 @@ class RoomMessageCenter:
         # pre-created agent messages (e.g. @mentions).  This catches genuine
         # bugs where _prepare_for_supervisor was skipped.
         if not has_pending_agent_messages and user_message:
-            room = await self.database_service.get_room_by_room_id(room_id)
+            room = await self._store.get_room_by_room_id(room_id)
             if room and isinstance(room.extend_info, dict) and room.extend_info.get("use_supervisor"):
                 logger.error(
                     "RoomMessageCenter: Room %s has use_supervisor=True but user "
@@ -791,7 +801,7 @@ class RoomMessageCenter:
             # Cancel DB-only descendants (step 2, 3, …) downstream in the
             # related_message_id chain from these step-1 messages.
             for mid in step1_ids:
-                await self.database_service.cancel_descendants(mid)
+                await self._store.cancel_descendants(mid)
             if getattr(self, '_turn_event_appender', None):
                 try:
                     await self._turn_event_appender.append(
@@ -866,7 +876,7 @@ class RoomMessageCenter:
             )
 
         # QueueResult.COMPLETED — emit unified summary + completion.
-        room = await self.database_service.get_room_by_room_id(room_id)
+        room = await self._store.get_room_by_room_id(room_id)
         is_debate = bool(
             room and isinstance(room.extend_info, dict)
             and room.extend_info.get("debateMode", False)
@@ -920,7 +930,7 @@ class RoomMessageCenter:
         """
         try:
             agent_messages = (
-                await self.database_service
+                await self._store
                 .get_room_agent_messages_by_related_message_id(user_message_id)
             )
         except Exception:
@@ -1160,27 +1170,27 @@ class RoomMessageCenter:
                     )
                     resumed_trajectory.status = TrajectoryStatus.CLARIFYING
                     resumed_trajectory.clarify_user_reply = None
-                    room = await self.database_service.get_room_by_room_id(room_id)
+                    room = await self._store.get_room_by_room_id(room_id)
                     if room:
                         if room.extend_info is None:
                             room.extend_info = {}
                         room.extend_info["pending_clarification_message_id"] = (
                             original_msg_id
                         )
-                        await self.database_service.update_room_by_room_id(
+                        await self._store.update_room_by_room_id(
                             room_id, room
                         )
                     # Persist the restored trajectory on the original message
                     # so the DB status is consistent with the room state.
                     try:
-                        orig_msg = await self.database_service.get_room_user_message_by_message_id(
+                        orig_msg = await self._store.get_room_user_message_by_message_id(
                             original_msg_id
                         )
                         if orig_msg and isinstance(orig_msg.extend_info, dict):
                             orig_msg.extend_info["supervisor_trajectory"] = (
                                 resumed_trajectory.model_dump(mode="json")
                             )
-                            await self.database_service.update_room_user_message_by_message_id(
+                            await self._store.update_room_user_message_by_message_id(
                                 original_msg_id, orig_msg
                             )
                     except Exception as persist_err:
@@ -1341,12 +1351,12 @@ class RoomMessageCenter:
                 load_turn_context,
             )
 
-            um = await self.database_service.get_room_user_message_by_message_id(
+            um = await self._store.get_room_user_message_by_message_id(
                 user_message_id
             )
             if um:
                 try:
-                    _tc = await load_turn_context(self.database_service, um)
+                    _tc = await load_turn_context(self._store, um)
                     quoted_text = _tc.quoted_text
                 except TurnQuoteMissingError:
                     logger.error(
@@ -1446,9 +1456,9 @@ class RoomMessageCenter:
             # HITLService._handle_supervisor_response(). Re-fetch
             # conversation_context to avoid staleness.
             try:
-                room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+                room_memory = await self._store.get_room_memory_by_room_id(room_id)
                 if room_memory and self.context_assembly_service is not None:
-                    room_tmp = await self.database_service.get_room_by_room_id(room_id)
+                    room_tmp = await self._store.get_room_by_room_id(room_id)
                     agent_dicts = [
                         {"agent_id": aid, "agent_name": aname}
                         for aid, aname in ((room_tmp.room_agent_set or {}).items() if room_tmp else [])
@@ -1494,7 +1504,7 @@ class RoomMessageCenter:
                 ).strip()
 
         # 5. Refresh agent registry from database (not serialized)
-        room = await self.database_service.get_room_by_room_id(room_id)
+        room = await self._store.get_room_by_room_id(room_id)
         if not room:
             logger.error(
                 "RoomMessageCenter: Supervisor resume room not found: %s", room_id
@@ -1519,7 +1529,7 @@ class RoomMessageCenter:
         # appends the hitl_block — a second refresh would overwrite the user's reply.
         if interrupt_kind != InterruptKind.HITL_SUPERVISOR:
             try:
-                room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+                room_memory = await self._store.get_room_memory_by_room_id(room_id)
                 if room_memory and self.context_assembly_service is not None:
                     agent_dicts = [
                         {"agent_id": aid, "agent_name": aname}
@@ -1564,7 +1574,7 @@ class RoomMessageCenter:
         if room_agent_items:
             agents = await asyncio.gather(
                 *(
-                    self.database_service.get_agent_by_agent_id(aid)
+                    self._store.get_agent_by_agent_id(aid)
                     for aid, _ in room_agent_items
                 )
             )
@@ -1841,7 +1851,7 @@ class RoomMessageCenter:
         try:
             msg = user_message
             if msg is None:
-                msg = await self.database_service.get_room_user_message_by_message_id(
+                msg = await self._store.get_room_user_message_by_message_id(
                     user_message_id
                 )
             if msg and isinstance(msg.extend_info, dict):
@@ -1853,7 +1863,7 @@ class RoomMessageCenter:
                     msg.extend_info["supervisor_trajectory"] = (
                         trajectory.model_dump(mode="json")
                     )
-                await self.database_service.update_room_user_message_by_message_id(
+                await self._store.update_room_user_message_by_message_id(
                     user_message_id, msg
                 )
         except Exception as e:
@@ -1882,7 +1892,7 @@ class RoomMessageCenter:
         """
         if user_message is None:
             user_message = (
-                await self.database_service.get_room_user_message_by_message_id(
+                await self._store.get_room_user_message_by_message_id(
                     user_message_id
                 )
             )
@@ -1899,7 +1909,7 @@ class RoomMessageCenter:
             user_message.extend_info["supervisor_trajectory"] = (
                 result.trajectory.model_dump(mode="json")
             )
-            await self.database_service.update_room_user_message_by_message_id(
+            await self._store.update_room_user_message_by_message_id(
                 user_message_id, user_message
             )
 
@@ -1908,7 +1918,7 @@ class RoomMessageCenter:
         if original_clarify_message_id and original_clarify_message_id != user_message_id:
             try:
                 orig_msg = (
-                    await self.database_service.get_room_user_message_by_message_id(
+                    await self._store.get_room_user_message_by_message_id(
                         original_clarify_message_id
                     )
                 )
@@ -1916,7 +1926,7 @@ class RoomMessageCenter:
                     orig_traj = orig_msg.extend_info.get("supervisor_trajectory")
                     if isinstance(orig_traj, dict):
                         orig_traj["status"] = result.trajectory.status
-                        await self.database_service.update_room_user_message_by_message_id(
+                        await self._store.update_room_user_message_by_message_id(
                             original_clarify_message_id, orig_msg
                         )
             except Exception as e:
@@ -1997,14 +2007,14 @@ class RoomMessageCenter:
 
             case RunStatus.CLARIFYING:
                 if room is None:
-                    room = await self.database_service.get_room_by_room_id(room_id)
+                    room = await self._store.get_room_by_room_id(room_id)
                 if room:
                     if room.extend_info is None:
                         room.extend_info = {}
                     room.extend_info["pending_clarification_message_id"] = (
                         user_message_id
                     )
-                    await self.database_service.update_room_by_room_id(
+                    await self._store.update_room_by_room_id(
                         room_id, room
                     )
                 if result.clarification_question:
@@ -2044,11 +2054,11 @@ class RoomMessageCenter:
                     for step_result in entry.results:
                         if step_result.agent_message_id:
                             canceled_parent_ids.append(step_result.agent_message_id)
-                            await self.database_service.cancel_descendants(
+                            await self._store.cancel_descendants(
                                 step_result.agent_message_id
                             )
                 if canceled_parent_ids:
-                    await self.database_service.cancel_agent_messages_by_ids(
+                    await self._store.cancel_agent_messages_by_ids(
                         canceled_parent_ids
                     )
                 # Emit turn_canceled event
@@ -2077,11 +2087,11 @@ class RoomMessageCenter:
                     for step_result in entry.results:
                         if step_result.agent_message_id:
                             failed_parent_ids.append(step_result.agent_message_id)
-                            await self.database_service.cancel_descendants(
+                            await self._store.cancel_descendants(
                                 step_result.agent_message_id
                             )
                 if failed_parent_ids:
-                    await self.database_service.cancel_agent_messages_by_ids(
+                    await self._store.cancel_agent_messages_by_ids(
                         failed_parent_ids
                     )
                 # Emit turn_failed event
@@ -2213,14 +2223,14 @@ class RoomMessageCenter:
         # first; if present, we handle it here instead of delegating to the
         # V1 QueueExecutor path.
         continuation = (
-            await self.database_service.get_and_clear_continuation_on_message(
+            await self._store.get_and_clear_continuation_on_message(
                 message_id
             )
         )
         # Also check user messages (HITL_SUPERVISOR stores continuations there)
         if not continuation:
             continuation = (
-                await self.database_service.get_and_clear_continuation_on_user_message(
+                await self._store.get_and_clear_continuation_on_user_message(
                     message_id
                 )
             )
@@ -2250,11 +2260,11 @@ class RoomMessageCenter:
                 from models.hitl import InterruptKind
                 interrupt_kind_raw = continuation.get("interrupt_kind")
                 if interrupt_kind_raw == InterruptKind.HITL_SUPERVISOR.value:
-                    await self.database_service.save_continuation_on_user_message(
+                    await self._store.save_continuation_on_user_message(
                         message_id, continuation
                     )
                 else:
-                    await self.database_service.save_continuation_on_message(
+                    await self._store.save_continuation_on_message(
                         message_id, continuation
                     )
                 return False
@@ -2288,11 +2298,11 @@ class RoomMessageCenter:
             # Use the correct collection based on interrupt_kind.
             interrupt_kind = continuation.get("interrupt_kind", "push_notification")
             if interrupt_kind == "hitl_supervisor":
-                await self.database_service.save_continuation_on_user_message(
+                await self._store.save_continuation_on_user_message(
                     message_id, continuation
                 )
             else:
-                await self.database_service.save_continuation_on_message(
+                await self._store.save_continuation_on_message(
                     message_id, continuation
                 )
             try:
@@ -2308,11 +2318,11 @@ class RoomMessageCenter:
                     RunStatus.PAUSED,
                 ):
                     if interrupt_kind == "hitl_supervisor":
-                        await self.database_service.get_and_clear_continuation_on_user_message(
+                        await self._store.get_and_clear_continuation_on_user_message(
                             message_id
                         )
                     else:
-                        await self.database_service.get_and_clear_continuation_on_message(
+                        await self._store.get_and_clear_continuation_on_message(
                             message_id
                         )
                 return resume_status != RunStatus.FAILED
@@ -2326,7 +2336,7 @@ class RoomMessageCenter:
 
         # V1 path: re-save the continuation so QueueExecutor can read it
         # (we already consumed it with get_and_clear above).
-        await self.database_service.save_continuation_on_message(
+        await self._store.save_continuation_on_message(
             message_id, continuation
         )
 
@@ -2340,7 +2350,7 @@ class RoomMessageCenter:
             return False
 
         if result.needs_completion and result.room_id and result.user_message_id:
-            room = await self.database_service.get_room_by_room_id(result.room_id)
+            room = await self._store.get_room_by_room_id(result.room_id)
             is_debate = bool(
                 room and isinstance(room.extend_info, dict)
                 and room.extend_info.get("debateMode", False)
@@ -2439,7 +2449,7 @@ class RoomMessageCenter:
         )
 
         try:
-            user_message = await self.database_service.get_room_user_message_by_message_id(
+            user_message = await self._store.get_room_user_message_by_message_id(
                 user_message_id
             )
             user_id = user_message.user_id if user_message else None
@@ -2472,7 +2482,7 @@ class RoomMessageCenter:
                 task_content=content,
             )
 
-            await self.database_service.upsert_room_agent_message(summary_agent_message)
+            await self._store.upsert_room_agent_message(summary_agent_message)
 
             await self.sse_manager.send_agent_response(
                 room_id,
@@ -2514,7 +2524,7 @@ class RoomMessageCenter:
         summary_client_request_id: str | None = None
 
         try:
-            user_message = await self.database_service.get_room_user_message_by_message_id(
+            user_message = await self._store.get_room_user_message_by_message_id(
                 user_message_id
             )
             user_id = user_message.user_id if user_message else None
@@ -2581,7 +2591,7 @@ class RoomMessageCenter:
                         )
                         text = extract_agent_text_from_room_message(msg)
                         if text and msg.agent_id:
-                            agent_name = await self.database_service.get_agent_name_by_agent_id(
+                            agent_name = await self._store.get_agent_name_by_agent_id(
                                 msg.agent_id
                             )
                             agent_responses.append(
@@ -2652,7 +2662,7 @@ class RoomMessageCenter:
                 task_content=content,
             )
 
-            await self.database_service.upsert_room_agent_message(summary_agent_message)
+            await self._store.upsert_room_agent_message(summary_agent_message)
 
             # 4. Emit final SSE
             await self.sse_manager.send_agent_response(
@@ -2688,7 +2698,7 @@ class RoomMessageCenter:
 
     async def _log_room_memory_stats(self, room_id: str) -> None:
         """Log room memory stats after processing (debug/monitoring only)."""
-        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+        room_memory = await self._store.get_room_memory_by_room_id(room_id)
         if room_memory and room_memory.memory_content:
             stats = get_context_stats(room_memory.memory_content)
             logger.info(

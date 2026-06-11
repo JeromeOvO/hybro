@@ -5,8 +5,8 @@ from common.dto import OfflineHubFailureCommand
 
 
 class LegacyOfflineFailureAdapter:
-    def __init__(self, *, database_service, sse_manager) -> None:
-        self._db = database_service
+    def __init__(self, db, sse_manager) -> None:
+        self._db = db
         self._sse = sse_manager
 
     async def mark_hub_message_failed(self, command: OfflineHubFailureCommand) -> None:

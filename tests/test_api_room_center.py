@@ -80,7 +80,7 @@ class TestVerifyRoomOwnership:
         """Should raise 404 when room doesn't exist."""
         mock_db_service.get_room_by_room_id.return_value = None
         
-        with patch(PATCH["room_center.db_service"], mock_db_service):
+        with patch(PATCH["room_center.room_store"], mock_db_service):
             with pytest.raises(HTTPException) as exc_info:
                 await verify_room_ownership("nonexistent-room", mock_user)
         
@@ -95,7 +95,7 @@ class TestVerifyRoomOwnership:
         # Room owned by mock_user, but mock_user_2 is trying to access
         mock_db_service.get_room_by_room_id.return_value = sample_room
         
-        with patch(PATCH["room_center.db_service"], mock_db_service):
+        with patch(PATCH["room_center.room_store"], mock_db_service):
             with pytest.raises(HTTPException) as exc_info:
                 await verify_room_ownership(sample_room.room_id, mock_user_2)
         
@@ -109,7 +109,7 @@ class TestVerifyRoomOwnership:
         """Should pass without exception when user is the owner."""
         mock_db_service.get_room_by_room_id.return_value = sample_room
         
-        with patch(PATCH["room_center.db_service"], mock_db_service):
+        with patch(PATCH["room_center.room_store"], mock_db_service):
             # Should not raise
             await verify_room_ownership(sample_room.room_id, mock_user)
 
@@ -214,7 +214,7 @@ class TestInquiryRoomSetting:
         
         mock_db_service.get_room_by_room_id.return_value = sample_room
         
-        with patch(PATCH["room_center.db_service"], mock_db_service):
+        with patch(PATCH["room_center.room_store"], mock_db_service):
             with pytest.raises(HTTPException) as exc_info:
                 await inquiry_room_setting(mock_request, mock_user_2)
         
@@ -269,7 +269,7 @@ class TestInquiryActiveRuns:
 
         mock_db_service.get_room_by_room_id.return_value = sample_room
 
-        with patch(PATCH["room_center.db_service"], mock_db_service):
+        with patch(PATCH["room_center.room_store"], mock_db_service):
             with pytest.raises(HTTPException) as exc_info:
                 await inquiry_active_runs(mock_request, mock_user_2)
 
@@ -421,7 +421,7 @@ class TestUpdateEndpointsRejectNonOwner:
         mock_request.json = AsyncMock(return_value=payload)
         mock_db_service.get_room_by_room_id.return_value = sample_room
 
-        with patch(PATCH["room_center.db_service"], mock_db_service):
+        with patch(PATCH["room_center.room_store"], mock_db_service):
             with pytest.raises(HTTPException) as exc_info:
                 await endpoint_fn(mock_request, mock_user_2)
 
