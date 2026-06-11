@@ -218,6 +218,9 @@ async def lifespan(app: FastAPI):
 
         _mongodb_mod = importlib.import_module("database.mongodb")
         _legacy_mongo = _mongodb_mod.mongodb
+        # TODO: Remove this dual MongoDB startup path after remaining legacy
+        # database.mongodb consumers move to MongoDALImpl. Until then, the
+        # legacy singleton and DAL each maintain their own Motor client pool.
         await _legacy_mongo.connect()
 
         if _legacy_mongo.client is not None:
