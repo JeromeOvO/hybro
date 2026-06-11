@@ -112,6 +112,8 @@ class RoomDeps:
     room_message_store: RoomMessageStore
     room_history_reader: RoomHistoryReader
     room_ownership_reader: RoomOwnershipReader
+    room_repository: Any
+    message_repository: Any
     room_quote_repository: Any | None = None
 
 
@@ -598,6 +600,8 @@ def create_room_deps(
         room_message_store=facade,
         room_history_reader=facade,
         room_ownership_reader=facade,
+        room_repository=repository,
+        message_repository=message_repository,
         room_quote_repository=quote_repository,
     )
 
