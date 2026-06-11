@@ -36,9 +36,23 @@ from models.supervisor import (
     TrajectoryStatus,
 )
 
+
+class _UnboundRoomMessageCenterStore:
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("__"):
+            raise AttributeError(name) from None
+
+        def _missing_dependency(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError(
+                "RoomMessageCenter store dependency has not been bound"
+            ) from None
+
+        return _missing_dependency
+
+
 a2a_service = None
 agent_resolver_service = None
-_legacy_store = None
+default_store = _UnboundRoomMessageCenterStore()
 debate_service = None
 room_memory_service = None
 notification_service = None

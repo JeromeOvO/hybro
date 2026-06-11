@@ -306,6 +306,15 @@ async def test_room_services_processing_status_uses_bound_execution_emitter():
     assert emitter.await_args.kwargs["client_request_id"] == "cr-1"
 
 
+def test_room_services_bind_store_sets_runtime_store():
+    svc = object.__new__(RoomServices)
+    store = object()
+
+    svc.bind_store(store)
+
+    assert svc._store is store
+
+
 @pytest.mark.asyncio
 async def test_room_services_delegated_methods_fail_before_bind():
     svc = object.__new__(RoomServices)
