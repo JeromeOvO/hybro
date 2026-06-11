@@ -991,7 +991,7 @@ describe('deriveTurnPhase', () => {
     expect(deriveTurnPhase(turns[0])).toBe('synthesizing')
   })
 
-  it('returns synthesizing during pre-synthesis gap after all agents finish', () => {
+  it('does not enter synthesizing phase when only delegation logs exist after agents finish', () => {
     const user = makeUserEntity({
       id: 'u1',
       processingStatusLogs: [
@@ -1011,8 +1011,8 @@ describe('deriveTurnPhase', () => {
       content: 'B',
     })
     const turns = buildTurns(entitiesToMap([user, agentA, agentB]), ['u1', 'a1', 'a2'], [])
-    expect(turns[0].status).toBe('active')
-    expect(deriveTurnPhase(turns[0])).toBe('synthesizing')
+    expect(turns[0].status).toBe('completed')
+    expect(deriveTurnPhase(turns[0])).not.toBe('synthesizing')
   })
 })
 
@@ -1135,6 +1135,76 @@ describe('primaryStreamMessageId', () => {
       ['u1', 'a1', 'a2', 'e1'],
       [],
     )
+    expect(turns[0].status).toBe('active')
+  })
+
+  it('stays pending during pre-synthesis gap on active supervisor multi-agent turn before synthesis signals arrive', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const supervisor = makeAgentEntity({
+      id: 's1',
+      agentId: 'supervisor_synthesis',
+      taskStatus: 'completed',
+      content: '',
+      timestamp: '2026-01-01T00:00:03Z',
+    })
+    const agentA = makeAgentEntity({
+      id: 'a1',
+      agentId: 'agent-a',
+      taskStatus: 'completed',
+      content: 'A response',
+      timestamp: '2026-01-01T00:00:01Z',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      agentId: 'agent-b',
+      taskStatus: 'completed',
+      content: 'B response',
+      timestamp: '2026-01-01T00:00:02Z',
+    })
+    const turns = buildTurns(
+      entitiesToMap([user, supervisor, agentA, agentB]),
+      ['u1', 's1', 'a1', 'a2'],
+      [],
+    )
+    expect(turns[0].status).toBe('active')
+    expect(turns[0].finalAnswer.kind).toBe('pending')
+  })
+
+  it('detects isSupervisorTurn=true and stays active when supervisor is ephemeral (and suppressed) after real agents complete', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const ephemeralSupervisor = makeEntity({
+      id: 'e1',
+      messageType: 'agent',
+      senderName: 'HYBRO AI',
+      isEphemeral: true,
+      agentId: 'supervisor_hitl',
+      taskStatus: 'completed',
+      taskContent: 'Orchestrating...',
+      timestamp: '2026-01-01T00:00:03Z',
+    })
+    const agentA = makeAgentEntity({
+      id: 'a1',
+      agentId: 'agent-a',
+      taskStatus: 'completed',
+      content: 'A response',
+      timestamp: '2026-01-01T00:00:01Z',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      agentId: 'agent-b',
+      taskStatus: 'completed',
+      content: 'B response',
+      timestamp: '2026-01-01T00:00:02Z',
+    })
+    const turns = buildTurns(
+      entitiesToMap([user, ephemeralSupervisor, agentA, agentB]),
+      ['u1', 'e1', 'a1', 'a2'],
+      [],
+    )
+    // The ephemeral supervisor should be suppressed from agentResults
+    expect(turns[0].agentResults.some(r => r.isEphemeral)).toBe(false)
+    // But isSupervisorTurn should remain true, and status should be active
+    expect(turns[0].isSupervisorTurn).toBe(true)
     expect(turns[0].status).toBe('active')
     expect(turns[0].finalAnswer.kind).toBe('pending')
   })

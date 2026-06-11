@@ -3,9 +3,12 @@ import { isCanceledMultiAgentTurn, isFailedMultiAgentTurn } from './derive-final
 import {
   hasActiveSupervisorPlanningEphemeral,
   hasActiveSynthesisGap,
-  hasSynthesisSignalInProcessingLogs,
-  isPreSynthesisGap,
+  isBackendRunConfirmedNonSynthesisCompletion,
+  isMixedTerminalMultiAgentTurn,
+  turnHasSubstantiveLlmSynthesis,
 } from './multi-agent-turn-complete'
+import type { TaskState } from '@/lib/types/sse'
+import { TASK_STATE } from '@/lib/types/sse'
 import { getStripSourceResults } from './turn-live-shell'
 import type { AgentResultViewModel, TurnViewModel } from './types'
 import { findProcessingStatusUserEntity } from '@/hooks/room/processing-status-log'
@@ -44,6 +47,7 @@ export function canStampTurnTerminalFromEntityState(
   if (real.some(r => r.status === 'working')) return false
 
   if (backendRunActive === true) return false
+  if (turnHasSubstantiveLlmSynthesis(turn)) return false
 
   const summary = turn.agentResults.find(r => r.isSummaryAgent)
 
@@ -55,22 +59,7 @@ export function canStampTurnTerminalFromEntityState(
     ) {
       return false
     }
-    if (turnCompletionKind === 'synthesis') return false
-    if (turnCompletionKind === 'deterministic') return true
-    if (summary && !isDeterministicSummary(summary) && summary.content.trim().length > 0) {
-      return true
-    }
-    if (
-      summary
-      && isDeterministicSummary(summary)
-      && (summary.status === 'working' || summary.content.trim().length > 0)
-    ) {
-      return true
-    }
-    if (hasActiveSynthesisGap(turn)) return false
-    if (hasSynthesisSignalInProcessingLogs(turn)) return false
-    if (isPreSynthesisGap(turn, real)) return false
-    return false
+    return isBackendRunConfirmedNonSynthesisCompletion(turn, real, turnCompletionKind)
   }
 
   if (hasActiveSynthesisGap(turn)) return false
@@ -141,8 +130,8 @@ function writeTurnTerminalStatus(
   }, 'sse')
 
   if (
-    terminalStatus === 'completed'
-    && isActiveLifecycleTurn(lifecycle, user.id, clientRequestId)
+    isActiveLifecycleTurn(lifecycle, user.id, clientRequestId)
+    && (terminalStatus === 'completed' || terminalStatus === 'failed' || terminalStatus === 'canceled')
   ) {
     lifecycle.markProcessingResolved()
     lifecycle.stopProcessing({ clearMessageId: false })
@@ -150,6 +139,55 @@ function writeTurnTerminalStatus(
     store.removeMessage(lifecycle.placeholderId(roomId))
     lifecycle.dismissPlaceholder()
   }
+}
+
+export function buildTurnForRecoveryHint(
+  roomId: string,
+  hint: {
+    clientRequestId?: string | null
+    relatedMessageId?: string | null
+  },
+): TurnViewModel | undefined {
+  const store = useMessageStore.getState()
+  if (store.roomId !== roomId) return undefined
+
+  const user = findProcessingStatusUserEntity(roomId, {
+    messageId: hint.relatedMessageId,
+    clientRequestId: hint.clientRequestId,
+    preferClientRequestId: true,
+  })
+  if (!user) return undefined
+
+  return buildTurnForUser(roomId, user.id)
+}
+
+/**
+ * Gate debounced backend-truth recovery so synthesis turns are not stamped deterministic.
+ */
+export function shouldScheduleTurnTerminalRecovery(
+  turn: TurnViewModel | undefined,
+  taskStatus: TaskState,
+): boolean {
+  if (turn) {
+    if (turnHasSubstantiveLlmSynthesis(turn)) return false
+    if (hasActiveSynthesisGap(turn)) return false
+    if (turn.turnCompletionKind === 'synthesis') return false
+  }
+
+  if (
+    taskStatus === TASK_STATE.FAILED
+    || taskStatus === TASK_STATE.REJECTED
+    || taskStatus === TASK_STATE.CANCELED
+  ) {
+    return true
+  }
+
+  if (taskStatus === TASK_STATE.COMPLETED && turn) {
+    const real = getStripSourceResults(turn)
+    return allRealTerminal(real)
+  }
+
+  return false
 }
 
 function buildTurnForUser(roomId: string, userId: string): TurnViewModel | undefined {
@@ -198,13 +236,22 @@ export function stampTurnTerminalFromBackendTruth(
     return false
   }
 
+  const resolvedCompletionKind =
+    turnCompletionKind
+    ?? (
+      backendRunActive === false
+      && isBackendRunConfirmedNonSynthesisCompletion(turn, real, turnCompletionKind)
+        ? 'deterministic'
+        : undefined
+    )
+
   writeTurnTerminalStatus(
     roomId,
     user,
     terminalStatusForTurn(turn),
     lifecycle,
     user.clientRequestId ?? hint.clientRequestId,
-    turnCompletionKind,
+    resolvedCompletionKind,
   )
   return true
 }

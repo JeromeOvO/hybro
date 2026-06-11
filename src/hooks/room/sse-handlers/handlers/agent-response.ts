@@ -14,6 +14,30 @@ import type { SSEHandlerDeps } from '../types'
 import type { CorrelationResult } from '../correlation'
 import { getResolvedMessageId } from '../pending-turn-buffer'
 
+function isSummaryAgentResponse(agentId: string | undefined, messageId: string): boolean {
+  if (messageId.startsWith('summary-')) return true
+  return agentId ? isSummarySystemAgent(agentId) : false
+}
+
+function maybeScheduleTurnTerminalRecovery(
+  ctx: SSEHandlerDeps,
+  hint: {
+    clientRequestId?: string | null
+    relatedMessageId?: string | null
+  },
+  messageId: string,
+  agentId: string | undefined,
+): void {
+  if (isSummaryAgentResponse(agentId, messageId)) return
+
+  scheduleTurnTerminalBackendTruthCheck(
+    ctx.roomId,
+    ctx.lifecycle,
+    hint,
+    ctx.getToken,
+  )
+}
+
 const PARTIAL_STREAM_ARTIFACT_SUFFIX = '-partial-stream'
 
 function partialStreamArtifactId(messageId: string): string {
@@ -123,15 +147,10 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
         relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
       })
       if (!stamped) {
-        scheduleTurnTerminalBackendTruthCheck(
-          ctx.roomId,
-          ctx.lifecycle,
-          {
-            clientRequestId: existing.clientRequestId || sseMessage.data.client_request_id,
-            relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
-          },
-          ctx.getToken,
-        )
+        maybeScheduleTurnTerminalRecovery(ctx, {
+          clientRequestId: existing.clientRequestId || sseMessage.data.client_request_id,
+          relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
+        }, messageId, existing.agentId)
       }
       return
     }
@@ -177,14 +196,9 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
     relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id,
   })
   if (!stamped) {
-    scheduleTurnTerminalBackendTruthCheck(
-      ctx.roomId,
-      ctx.lifecycle,
-      {
-        clientRequestId: entity?.clientRequestId || sseMessage.data.client_request_id,
-        relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id,
-      },
-      ctx.getToken,
-    )
+    maybeScheduleTurnTerminalRecovery(ctx, {
+      clientRequestId: entity?.clientRequestId || sseMessage.data.client_request_id,
+      relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id,
+    }, messageId, agentId)
   }
 }

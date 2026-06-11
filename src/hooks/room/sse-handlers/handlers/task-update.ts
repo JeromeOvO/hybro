@@ -9,7 +9,11 @@ import { partsToArtifacts } from '../artifacts'
 import { applyRoomCommands } from '../apply-commands'
 import type { CorrelationResult } from '../correlation'
 import { stampLiveTurnTerminalIfInferable } from '@/lib/room-timeline/stamp-live-turn-terminal'
-import { scheduleTurnTerminalBackendTruthCheck } from '@/lib/room-timeline/turn-terminal-stamp'
+import {
+  buildTurnForRecoveryHint,
+  scheduleTurnTerminalBackendTruthCheck,
+  shouldScheduleTurnTerminalRecovery,
+} from '@/lib/room-timeline/turn-terminal-stamp'
 import type { SSEHandlerDeps } from '../types'
 
 function maybeScheduleTurnTerminalRecovery(
@@ -18,7 +22,11 @@ function maybeScheduleTurnTerminalRecovery(
     clientRequestId?: string | null
     relatedMessageId?: string | null
   },
+  taskStatus: TaskState,
 ): void {
+  const turn = buildTurnForRecoveryHint(ctx.roomId, hint)
+  if (!shouldScheduleTurnTerminalRecovery(turn, taskStatus)) return
+
   scheduleTurnTerminalBackendTruthCheck(
     ctx.roomId,
     ctx.lifecycle,
@@ -144,11 +152,11 @@ export async function handleTaskUpdate(
       clientRequestId: sseMessage.data.client_request_id,
       relatedMessageId: sseMessage.data.related_message_id,
     })
-    if (!stamped && status === TASK_STATE.COMPLETED) {
+    if (!stamped) {
       maybeScheduleTurnTerminalRecovery(ctx, {
         clientRequestId: sseMessage.data.client_request_id,
         relatedMessageId: sseMessage.data.related_message_id,
-      })
+      }, status)
     }
   } else {
     store.upsertMessage({

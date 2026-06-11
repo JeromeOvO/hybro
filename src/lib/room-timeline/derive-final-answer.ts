@@ -9,8 +9,9 @@ import type {
 } from './types'
 import {
   hasActiveSynthesisGap,
+  hasSynthesisSignalInProcessingLogs,
   isMultiAgentTurnReadyForDeterministicDone,
-  isPreSynthesisGap,
+  turnHasSubstantiveLlmSynthesis,
 } from './multi-agent-turn-complete'
 import { getStripSourceResults } from './turn-live-shell'
 
@@ -101,9 +102,30 @@ function shouldHoldPendingForSynthesisGap(turn: TurnViewModel, real: AgentResult
     return false
   }
 
+  if (
+    real.some(r => r.status === 'failed')
+    && allRealTerminal(real)
+    && !hasLlmSynthesisContent(summary)
+    && !hasDeterministicSummaryEntity(summary)
+  ) {
+    return false
+  }
+
   if (hasActiveSynthesisGap(turn)) return true
-  if (turn.turnCompletionKind === 'synthesis') return true
-  return isPreSynthesisGap(turn, real)
+
+  if (turn.turnCompletionKind === 'synthesis') {
+    const llmSummary = turn.agentResults.find(
+      r => r.isSummaryAgent && r.summaryOrigin !== 'deterministic',
+    )
+    if (
+      llmSummary?.status === 'working'
+      && llmSummary.content.trim().length === 0
+    ) {
+      return true
+    }
+  }
+
+  return false
 }
 
 function isTurnTerminal(status: TurnViewModel['status']): boolean {
@@ -264,17 +286,42 @@ export function deriveFinalAnswer(
     return buildDeterministicDoneFinalAnswer(turn, real, agentMessageIds, summary)
   }
 
-  if (hasLlmSynthesisContent(summary)) {
+  if (hasLlmSynthesisContent(summary) || turnHasSubstantiveLlmSynthesis(turn)) {
+    const llmSummary = turn.agentResults.find(
+      r => r.isSummaryAgent && r.summaryOrigin !== 'deterministic',
+    )
     return {
       kind: 'llm_synthesis',
       label: 'Synthesized',
       summaryOrigin: 'llm',
-      primaryMessageId: summary!.messageId,
+      primaryMessageId: llmSummary?.messageId ?? summary?.messageId,
     }
+  }
+
+  if (
+    turn.turnCompletionKind === 'deterministic'
+    && real.length >= 2
+    && allRealTerminal(real)
+    && !hasActiveSynthesisGap(turn)
+    && !turnHasSubstantiveLlmSynthesis(turn)
+  ) {
+    return buildDeterministicDoneFinalAnswer(turn, real, agentMessageIds, summary)
   }
 
   if (shouldHoldPendingForSynthesisGap(turn, real)) {
     return { kind: 'pending', label: 'Working' }
+  }
+
+  // Backend may persist turn_completion_kind=synthesis even when no LLM step runs.
+  if (
+    turn.turnCompletionKind === 'synthesis'
+    && real.length >= 2
+    && allRealTerminal(real)
+    && !hasActiveSynthesisGap(turn)
+    && !hasSynthesisSignalInProcessingLogs(turn)
+    && !hasLlmSynthesisContent(summary)
+  ) {
+    return buildDeterministicDoneFinalAnswer(turn, real, agentMessageIds, summary)
   }
 
   if (real.length === 1) {

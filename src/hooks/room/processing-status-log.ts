@@ -1,5 +1,10 @@
 import { useMessageStore } from '@/stores/message-store'
-import type { MessageEntity, MessageSource, ProcessingStatusLogEntry } from '@/stores/message-store/types'
+import type {
+  MessageEntity,
+  MessageSource,
+  ProcessingStatusLogEntry,
+  TurnPhaseLog,
+} from '@/stores/message-store/types'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 
 export const INITIAL_PROCESSING_STATUS_MESSAGE = 'Thinking...'
@@ -112,12 +117,24 @@ export function processingDetailsToLogMessage(
   return json === '{}' ? undefined : json
 }
 
+export function parseTurnPhaseFromDetails(
+  details: unknown,
+): TurnPhaseLog | undefined {
+  if (!details || typeof details !== 'object') return undefined
+  const phase = (details as { turn_phase?: unknown }).turn_phase
+  if (phase === 'collecting' || phase === 'synthesizing' || phase === 'terminal') {
+    return phase
+  }
+  return undefined
+}
+
 export function appendProcessingStatusLog(
   roomId: string,
   userEntity: MessageEntity | undefined,
   message: unknown,
   timestamp = new Date().toISOString(),
   source: MessageSource = 'optimistic',
+  options?: { turnPhase?: ProcessingStatusLogEntry['turnPhase'] },
 ): void {
   const trimmed = normalizeProcessingDetails(message)
   if (!trimmed || !userEntity) return
@@ -139,6 +156,7 @@ export function appendProcessingStatusLog(
         id: `processing-log-${timestamp}-${existing.length}`,
         message: trimmed,
         timestamp,
+        ...(options?.turnPhase ? { turnPhase: options.turnPhase } : {}),
       },
     ],
   }, source)

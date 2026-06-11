@@ -84,13 +84,8 @@ export function AgentIndex({
 
   if (stripResults.length === 0) return null
 
-  // No-synthesis supervisor DONE: primary surface is only the digest intro — show full
-  // agent bodies here. LLM synthesis keeps compact rows; synthesis lives in primary surface.
-  // Require a real deterministic summary entity (primaryMessageId) to avoid a flash when
-  // turnTerminalStatus is stamped before the synthesis entity arrives.
-  const showFullBodies =
-    finalAnswer.kind === 'deterministic_done'
-    && !!finalAnswer.primaryMessageId
+  // No-synthesis DONE: show full agent bodies in the index. LLM synthesis keeps compact rows.
+  const showFullBodies = finalAnswer.kind === 'deterministic_done'
   const listMaxHeight = showFullBodies ? 0 : getActivityStripListMaxHeight(stripResults.length)
 
   return (

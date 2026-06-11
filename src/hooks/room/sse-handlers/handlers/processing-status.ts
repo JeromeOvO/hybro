@@ -6,6 +6,7 @@ import type { MessageEntity } from '@/stores/message-store/types'
 import {
   appendProcessingStatusLog,
   findProcessingStatusUserEntity,
+  parseTurnPhaseFromDetails,
   processingDetailsToLogMessage,
 } from '../../processing-status-log'
 import { getResolvedMessageId } from '../pending-turn-buffer'
@@ -200,6 +201,7 @@ export function handleProcessingStatus(
       processingDetailsToLogMessage(sseMessage.data.details),
       sseMessage.timestamp,
       'sse',
+      { turnPhase: parseTurnPhaseFromDetails(sseMessage.data.details) },
     )
 
     lifecycle.startProcessing(processingUserEntity?.id ?? lifecycleMessageId ?? userMsgId)
@@ -294,7 +296,7 @@ export function handleProcessingStatus(
 
   if (resolvedTerminalUserMsgId) {
     const existingUserMsg = store.entities[resolvedTerminalUserMsgId]
-    if (existingUserMsg && !existingUserMsg.turnTerminalStatus) {
+    if (existingUserMsg) {
       const terminalStatus =
         status === PROCESSING_STATUS.CANCELED ? 'canceled' :
         status === PROCESSING_STATUS.FAILED ||
@@ -302,18 +304,35 @@ export function handleProcessingStatus(
         status === PROCESSING_STATUS.REJECTED ||
         status === PROCESSING_STATUS.RATE_LIMITED ? 'failed' : 'completed'
       const rawKind = sseMessage.data.details?.turn_completion_kind
-      const turnCompletionKind: 'synthesis' | 'deterministic' | undefined =
+      const incomingKind: 'synthesis' | 'deterministic' | undefined =
         rawKind === 'synthesis' || rawKind === 'deterministic' ? rawKind : undefined
-      store.upsertMessage({
-        id: resolvedTerminalUserMsgId,
-        roomId,
-        messageType: existingUserMsg.messageType,
-        content: existingUserMsg.content,
-        senderName: existingUserMsg.senderName,
-        timestamp: existingUserMsg.timestamp,
-        turnTerminalStatus: terminalStatus,
-        turnCompletionKind,
-      }, 'sse')
+
+      if (!existingUserMsg.turnTerminalStatus) {
+        store.upsertMessage({
+          id: resolvedTerminalUserMsgId,
+          roomId,
+          messageType: existingUserMsg.messageType,
+          content: existingUserMsg.content,
+          senderName: existingUserMsg.senderName,
+          timestamp: existingUserMsg.timestamp,
+          turnTerminalStatus: terminalStatus,
+          turnCompletionKind: incomingKind,
+        }, 'sse')
+      } else if (
+        existingUserMsg.turnCompletionKind === 'deterministic'
+        && incomingKind === 'synthesis'
+        && terminalStatus === 'completed'
+      ) {
+        store.upsertMessage({
+          id: resolvedTerminalUserMsgId,
+          roomId,
+          messageType: existingUserMsg.messageType,
+          content: existingUserMsg.content,
+          senderName: existingUserMsg.senderName,
+          timestamp: existingUserMsg.timestamp,
+          turnCompletionKind: 'synthesis',
+        }, 'sse')
+      }
     }
   }
 

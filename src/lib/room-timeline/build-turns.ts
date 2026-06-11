@@ -205,8 +205,13 @@ function assembleTurn(
   const dedupedResults = deduplicateAgentResults(rawAgentResults)
   const agentResults = suppressEphemeralResults(dedupedResults, entities, scaffold.userEntity)
 
+  // Supervisor detection (spec §5.2)
+  // Check against all results (including suppressed ephemerals) to preserve supervisor turn
+  // status during pre-synthesis gap (anti-flashing).
+  const isSupervisorTurn = dedupedResults.some(r => isSupervisorSystemAgent(r.agentId))
+
   const status = deriveTurnStatus(agentResults, {
-    isSupervisorTurn: agentResults.some(r => isSupervisorSystemAgent(r.agentId)),
+    isSupervisorTurn,
     turnTerminalStatus: scaffold.userEntity?.turnTerminalStatus,
     turnCompletionKind: scaffold.userEntity?.turnCompletionKind,
     processingStatusLogs: scaffold.userEntity?.processingStatusLogs ?? [],
@@ -216,9 +221,6 @@ function assembleTurn(
     .filter((r) => r.status !== 'completed' && r.status !== 'failed')
     .map((r) => r.agentId)
     .filter((id): id is string => id !== undefined)
-
-  // Supervisor detection (spec §5.2)
-  const isSupervisorTurn = agentResults.some(r => isSupervisorSystemAgent(r.agentId))
 
   // Supervisor stage from latest entity with step/stage data.
   let supervisorStage: TurnViewModel['supervisorStage']
@@ -603,12 +605,12 @@ function deriveTurnStatus(
       entry.message.toLowerCase().includes('synthesiz'),
     )
 
-  const awaitingOrchestrator =
-    (opts.processingStatusLogs?.length ?? 0) > 0
-    || opts.isSupervisorTurn
+  const hasPlanningEphemeral = agentResults.some(
+    r => r.isEphemeral && r.status === 'working' && !isSynthesisGapEphemeral(r),
+  )
 
   const preOrchestrationGap =
-    awaitingOrchestrator
+    hasPlanningEphemeral
     && real.length >= 2
     && allRealAgentsTerminal(agentResults)
     && !hasSummaryContent

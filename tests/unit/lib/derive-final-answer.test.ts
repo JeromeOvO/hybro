@@ -271,7 +271,7 @@ describe('deriveFinalAnswer', () => {
     expect(deriveFinalAnswer(turn, ['a1', 'a2']).kind).toBe('pending')
   })
 
-  it('stays pending when all agents terminal but turnTerminalStatus is unset (pre-synthesis gap)', () => {
+  it('stays pending when all agents terminal but no completion signal yet', () => {
     const turn = makeTurn({
       status: 'completed',
       turnTerminalStatus: undefined,
@@ -282,6 +282,21 @@ describe('deriveFinalAnswer', () => {
       ],
     })
     expect(deriveFinalAnswer(turn, ['a1', 'a2']).kind).toBe('pending')
+  })
+
+  it('returns deterministic_done when turnCompletionKind is deterministic before terminal stamp', () => {
+    const turn = makeTurn({
+      status: 'active',
+      turnCompletionKind: 'deterministic',
+      isSupervisorTurn: true,
+      agentResults: [
+        makeAgent({ messageId: 'a1', agentId: 'agent-a', content: 'A' }),
+        makeAgent({ messageId: 'a2', agentId: 'agent-b', content: 'B' }),
+      ],
+    })
+    const result = deriveFinalAnswer(turn, ['a1', 'a2'])
+    expect(result.kind).toBe('deterministic_done')
+    expect(result.deterministicIntro).toContain('2 agents')
   })
 
   it('returns canceled when turnTerminalStatus is canceled', () => {
@@ -399,6 +414,115 @@ describe('deriveFinalAnswer', () => {
       ],
     })
     expect(deriveFinalAnswer(turn, ['a1', 'a2']).kind).toBe('pending')
+  })
+
+  it('returns deterministic_done for mixed terminal agents without turn stamp', () => {
+    const turn = makeTurn({
+      status: 'partial',
+      processingStatusLogs: [{ id: 'l1', message: 'Synthesizing responses...', timestamp: '2026-01-01T00:00:03Z' }],
+      agentResults: [
+        makeAgent({ messageId: 'a1', agentId: 'agent-a', status: 'completed', content: 'A' }),
+        makeAgent({ messageId: 'a2', agentId: 'agent-b', status: 'failed', content: 'Error' }),
+      ],
+    })
+    const result = deriveFinalAnswer(turn, ['a1', 'a2'])
+    expect(result.kind).toBe('deterministic_done')
+    expect(result.sections?.map(s => s.messageId)).toEqual(['a1', 'a2'])
+  })
+
+  it('returns deterministic_done for mixed terminal when turnTerminalStatus is completed', () => {
+    const turn = makeTurn({
+      status: 'partial',
+      turnTerminalStatus: 'completed',
+      agentResults: [
+        makeAgent({ messageId: 'a1', status: 'completed', content: 'A' }),
+        makeAgent({ messageId: 'a2', status: 'failed', content: 'Error' }),
+      ],
+    })
+    expect(deriveFinalAnswer(turn, ['a1', 'a2']).kind).toBe('deterministic_done')
+  })
+
+  it('resolves to deterministic_done for completed supervisor turn when completion kind is undefined (no synthesis)', () => {
+    const turn = makeTurn({
+      status: 'active',
+      isSupervisorTurn: true,
+      turnTerminalStatus: 'completed',
+      agentResults: [
+        makeAgent({ messageId: 'a1', agentId: 'agent-a', status: 'completed', content: 'A' }),
+        makeAgent({ messageId: 'a2', agentId: 'agent-b', status: 'completed', content: 'B' }),
+      ],
+    })
+    expect(deriveFinalAnswer(turn, ['a1', 'a2']).kind).toBe('deterministic_done')
+  })
+
+  it('stays pending after agents finish when synthesis is actively in flight', () => {
+    const turn = makeTurn({
+      status: 'active',
+      turnCompletionKind: 'synthesis',
+      processingStatusLogs: [{ id: 'l1', message: 'Synthesizing responses...', timestamp: '2026-01-01T00:00:03.000Z' }],
+      agentResults: [
+        makeAgent({ messageId: 'a1', agentId: 'agent-a', status: 'completed', content: 'A' }),
+        makeAgent({ messageId: 'a2', agentId: 'agent-b', status: 'completed', content: 'B' }),
+      ],
+    })
+    expect(deriveFinalAnswer(turn, ['a1', 'a2']).kind).toBe('pending')
+  })
+
+  it('returns deterministic_done when synthesis kind is set but no synthesis ran', () => {
+    const turn = makeTurn({
+      status: 'active',
+      turnCompletionKind: 'synthesis',
+      agentResults: [
+        makeAgent({ messageId: 'a1', agentId: 'agent-a', status: 'completed', content: 'A' }),
+        makeAgent({ messageId: 'a2', agentId: 'agent-b', status: 'completed', content: 'B' }),
+      ],
+    })
+    expect(deriveFinalAnswer(turn, ['a1', 'a2']).kind).toBe('deterministic_done')
+  })
+
+  it('returns deterministic_done for supervisor turn after backend stamps deterministic kind', () => {
+    const turn = makeTurn({
+      status: 'active',
+      isSupervisorTurn: true,
+      turnTerminalStatus: 'completed',
+      turnCompletionKind: 'deterministic',
+      agentResults: [
+        makeAgent({ messageId: 'a1', agentId: 'agent-a', status: 'completed', content: 'A' }),
+        makeAgent({ messageId: 'a2', agentId: 'agent-b', status: 'completed', content: 'B' }),
+      ],
+    })
+    expect(deriveFinalAnswer(turn, ['a1', 'a2']).kind).toBe('deterministic_done')
+  })
+
+  it('returns llm_synthesis when LLM summary exists despite stamped deterministic kind', () => {
+    const turn = makeTurn({
+      status: 'completed',
+      turnTerminalStatus: 'completed',
+      turnCompletionKind: 'deterministic',
+      agentResults: [
+        makeAgent({ messageId: 'a1', agentId: 'agent-a', status: 'completed', content: 'A' }),
+        makeAgent({ messageId: 'a2', agentId: 'agent-b', status: 'completed', content: 'B' }),
+        makeAgent({
+          messageId: 'summary-u1',
+          agentId: 'summary',
+          isSummaryAgent: true,
+          status: 'completed',
+          content: 'Synthesized combined answer with detailed findings.',
+        }),
+      ],
+    })
+    expect(deriveFinalAnswer(turn, ['a1', 'a2', 'summary-u1']).kind).toBe('llm_synthesis')
+  })
+
+  it('returns failed when all agents failed without turn stamp (stuck Working regression)', () => {
+    const turn = makeTurn({
+      status: 'failed',
+      agentResults: [
+        makeAgent({ messageId: 'a1', status: 'failed', content: 'timeout' }),
+        makeAgent({ messageId: 'a2', status: 'failed', content: 'timeout' }),
+      ],
+    })
+    expect(deriveFinalAnswer(turn, ['a1', 'a2']).kind).toBe('failed')
   })
 })
 
