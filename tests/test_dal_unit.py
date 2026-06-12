@@ -42,6 +42,8 @@ async def test_mongo_collection_adapter_maps_basic_operations():
     collection.delete_many = AsyncMock(return_value=SimpleNamespace(deleted_count=3))
     collection.count_documents = AsyncMock(return_value=4)
     collection.create_index = AsyncMock(return_value="idx")
+    collection.index_information = AsyncMock(return_value={"idx": {}})
+    collection.drop_index = AsyncMock()
     watcher = FakeMongoChangeStream()
     collection.watch.return_value = watcher
 
@@ -56,6 +58,8 @@ async def test_mongo_collection_adapter_maps_basic_operations():
     assert await adapter.delete_many({"a": 1}) == 3
     assert await adapter.count({"a": 1}) == 4
     assert await adapter.create_index([("a", 1)], unique=True) == "idx"
+    assert await adapter.index_information() == {"idx": {}}
+    await adapter.drop_index("idx")
     async with adapter.watch() as stream:
         assert stream is watcher
 
@@ -99,6 +103,85 @@ async def test_mongo_collection_adapter_materializes_find_and_aggregate():
     find_cursor.limit.assert_called_once_with(10)
     find_cursor.to_list.assert_awaited_once_with(length=10)
     aggregate_cursor.to_list.assert_awaited_once_with(length=1000)
+
+
+@pytest.mark.asyncio
+async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
+    from container import ensure_runtime_indexes
+
+    collections: dict[str, MagicMock] = {}
+
+    def _collection(name: str):
+        if name not in collections:
+            collection = MagicMock()
+            collection.create_index = AsyncMock(return_value=f"{name}_idx")
+            collection.index_information = AsyncMock(return_value={})
+            collection.drop_index = AsyncMock()
+            collections[name] = collection
+        return collections[name]
+
+    mongo = MagicMock()
+    mongo.collection.side_effect = _collection
+    collections["agents"] = _collection("agents")
+    collections["agents"].index_information.return_value = {
+        "unique_normalized_url": {
+            "partialFilterExpression": {"normalized_url": {"$exists": True}}
+        }
+    }
+
+    await ensure_runtime_indexes(mongo=mongo)
+
+    assert set(collections) >= {
+        "agent_capability_issues",
+        "agent_memories",
+        "agents",
+        "conversation_content",
+        "room_agent_messages",
+        "room_memories",
+        "room_quotes",
+        "run_events",
+        "runs",
+        "user_memories",
+    }
+    collections["agents"].drop_index.assert_awaited_once_with("unique_normalized_url")
+    assert _has_create_index(
+        collections["agents"],
+        [("normalized_url", 1)],
+        unique=True,
+        name="unique_normalized_url",
+        partialFilterExpression={"normalized_url": {"$type": "string"}},
+    )
+    assert _has_create_index(
+        collections["conversation_content"],
+        [("room_id", 1), ("turn_id", 1)],
+        unique=True,
+        name="room_turn_unique",
+    )
+    assert _has_create_index(
+        collections["conversation_content"],
+        [
+            ("content", "text"),
+            ("turn_notes.keywords", "text"),
+            ("turn_notes.entities", "text"),
+            ("turn_notes.one_liner", "text"),
+        ],
+        unique=False,
+        name="turn_notes_text",
+    )
+    assert _has_create_index(
+        collections["room_agent_messages"],
+        [("room_id", 1), ("has_task_tracking", 1), ("task_created_at", -1)],
+        unique=False,
+        name="room_task_created_sparse",
+        sparse=True,
+    )
+
+
+def _has_create_index(collection: MagicMock, keys, **kwargs) -> bool:
+    return any(
+        call.args == (keys,) and call.kwargs == kwargs
+        for call in collection.create_index.call_args_list
+    )
 
 
 @pytest.mark.asyncio
