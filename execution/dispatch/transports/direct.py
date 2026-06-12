@@ -33,6 +33,7 @@ from common.a2a_constants import (
     CommonTaskState,
     SyntheticTaskId,
     is_failure_state,
+    is_interactive_state,
     is_terminal_state,
 )
 from common.utils.a2a_helpers import (
@@ -294,23 +295,19 @@ class DirectTransport(AgentTransport):
 
         if full_response_text is None and paused_message_id:
             task = get_task(message)
-            if task and task.status and task.status.state == CommonTaskState.INPUT_REQUIRED:
+            if task and task.status and is_interactive_state(task.status.state):
                 logger.info(
                     "DirectTransport.dispatch: Agent returned interactive state %s for message %s",
                     task.status.state,
                     paused_message_id,
                 )
                 task_data = task.model_dump(mode="json") if hasattr(task, "model_dump") else {}
-                status_msg = None
-                if task.status and task.status.message:
-                    parts = task.status.message.parts or []
-                    for p in parts:
-                        if hasattr(p, "root") and hasattr(p.root, "text"):
-                            status_msg = p.root.text
-                            break
-                        if hasattr(p, "text"):
-                            status_msg = p.text
-                            break
+                status_msg = get_text_from_message(task.status.message) or None
+                if (
+                    not status_msg
+                    and state_str(task.status.state) == CommonTaskState.AUTH_REQUIRED.value
+                ):
+                    status_msg = "Authentication required"
                 return ProcessingResult(
                     ProcessingStatus.AWAITING_INPUT,
                     response_text="",

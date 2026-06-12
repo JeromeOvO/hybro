@@ -13,13 +13,18 @@ import pytest
 from a2a.types import (
     JSONRPCError,
     JSONRPCErrorResponse,
+    Message,
+    Part,
+    Role,
     Task,
     TaskState,
     TaskStatus,
     TextPart,
 )
 
+from common.a2a_constants import CommonTaskState
 from common.utils.a2a_helpers import get_text_from_message
+from execution.dispatch.dispatch_middleware import DispatchContext
 from execution.dispatch.transports.direct import DirectTransport, MessageStreamingState
 from models.error import A2AServiceError
 from models.processing import ProcessingContext, ProcessingStatus
@@ -1041,3 +1046,71 @@ class TestHandleSyncResponseInteractive:
         task = current_message.message_content.message_task
         assert task is not None
         assert task.status.message is None
+
+
+class TestDispatchInteractive:
+    """dispatch() maps interactive task states to AWAITING_INPUT for HITL."""
+
+    @pytest.mark.asyncio
+    async def test_dispatch_auth_required_returns_awaiting_input_with_prompt(self):
+        proc = _make_processor()
+        message = _make_room_agent_message()
+        task = message.message_content.message_task
+        assert task is not None
+        task.status.state = TaskState.auth_required
+        task.status.message = Message(
+            message_id="status-msg-1",
+            role=Role.agent,
+            parts=[Part(root=TextPart(kind="text", text="Please provide your OAuth token."))],
+        )
+
+        proc.a2a_service.has_streaming_capability = MagicMock(return_value=False)
+        proc.handle_sync_response = AsyncMock(
+            return_value=(True, None, message.message_id, "agent-task-auth")
+        )
+
+        agent = MagicMock()
+        agent.agent_card = MagicMock()
+        ctx = DispatchContext(
+            agent=agent,
+            room_agent_message=message,
+            room_id="room-1",
+            user_message_id="user-msg-1",
+            prepared_message=MagicMock(),
+        )
+
+        result = await proc.dispatch(ctx, message)
+
+        assert result.status == ProcessingStatus.AWAITING_INPUT
+        assert result.message_id == message.message_id
+        assert result.a2a_task_id == "agent-task-auth"
+        assert result.status_message == "Please provide your OAuth token."
+
+    @pytest.mark.asyncio
+    async def test_dispatch_auth_required_without_message_uses_default_prompt(self):
+        proc = _make_processor()
+        message = _make_room_agent_message()
+        task = message.message_content.message_task
+        assert task is not None
+        task.status.state = CommonTaskState.AUTH_REQUIRED
+        task.status.message = None
+
+        proc.a2a_service.has_streaming_capability = MagicMock(return_value=False)
+        proc.handle_sync_response = AsyncMock(
+            return_value=(True, None, message.message_id, "agent-task-auth")
+        )
+
+        agent = MagicMock()
+        agent.agent_card = MagicMock()
+        ctx = DispatchContext(
+            agent=agent,
+            room_agent_message=message,
+            room_id="room-1",
+            user_message_id="user-msg-1",
+            prepared_message=MagicMock(),
+        )
+
+        result = await proc.dispatch(ctx, message)
+
+        assert result.status == ProcessingStatus.AWAITING_INPUT
+        assert result.status_message == "Authentication required"

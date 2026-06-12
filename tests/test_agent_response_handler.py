@@ -533,6 +533,66 @@ class TestInteractiveEvent:
         h._sse.send_processing_status.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_creates_hitl_request_for_async_auth_required_continuation(self):
+        mock_impl = AsyncMock(return_value=True)
+        db = MagicMock()
+        db.update_task_state_on_message = AsyncMock(return_value=(True, None))
+        db.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        db.get_pending_continuation_on_message = AsyncMock(
+            return_value={"user_message_id": "user-msg-001"}
+        )
+        db.get_pending_hitl_requests_for_message = AsyncMock(return_value=[])
+        db.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=SimpleNamespace(message_id="display-msg-001")
+        )
+        db.get_room_by_room_id = AsyncMock(
+            return_value=SimpleNamespace(room_agent_set={"agent-001": "Agent X"})
+        )
+        hitl = SimpleNamespace(
+            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
+        )
+        h = _make_handler(
+            db=db,
+            hitl_coordinator=hitl,
+            task_notification_impl=mock_impl,
+        )
+        event = AgentEvent(
+            kind="interactive", **_base_event(),
+            text="Please authenticate.", state="auth-required",
+            task_id="t-1", context_id="c-1",
+        )
+        emitter = AsyncMock()
+        h.bind_execution_event_deps(emitter)
+
+        await h.handle(event)
+
+        mock_impl.assert_awaited_once()
+        task_update_call = mock_impl.call_args.kwargs
+        assert task_update_call["emit_processing_status"] is False
+        hitl.request_input.assert_awaited_once_with(
+            room_id="room-001",
+            user_message_id="user-msg-001",
+            source="agent",
+            prompt="Please authenticate.",
+            agent_id="agent-001",
+            agent_name="Agent X",
+            a2a_task_id="t-1",
+            a2a_context_id="c-1",
+            continuation_message_id="msg-001",
+            display_message_id="display-msg-001",
+        )
+        emitter.assert_awaited_once_with(
+            room_id="room-001",
+            status="awaiting_input",
+            message_id="user-msg-001",
+            lifecycle_message_id="user-msg-001",
+            record_lifecycle=True,
+            client_request_id=None,
+            details=None,
+            error_message=None,
+        )
+
+    @pytest.mark.asyncio
     async def test_skips_duplicate_hitl_request_for_existing_async_pending(self):
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=(True, None))
