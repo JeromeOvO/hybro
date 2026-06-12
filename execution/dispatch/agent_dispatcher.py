@@ -51,9 +51,9 @@ class AgentDispatcher:
         self,
         *,
         agent_resolver: AgentResolverService,
-        message_writer: "DispatchMessageWriter",
-        agent_lookup: "DispatchAgentLookup",
-        agent_group_reader: "DispatchAgentGroupReader",
+        message_writer: DispatchMessageWriter,
+        agent_lookup: DispatchAgentLookup,
+        agent_group_reader: DispatchAgentGroupReader,
     ) -> None:
         self.agent_resolver = agent_resolver
         self._message_writer = message_writer

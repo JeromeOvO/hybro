@@ -11,18 +11,20 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from a2a.types import (
+    Part,
     JSONRPCError,
     JSONRPCErrorResponse,
+)
+
+from common.a2a_constants import CommonTaskState
+from common.types import (
     Message,
-    Part,
-    Role,
+    MessageRole,
     Task,
     TaskState,
     TaskStatus,
     TextPart,
 )
-
-from common.a2a_constants import CommonTaskState
 from common.utils.a2a_helpers import get_text_from_message
 from execution.dispatch.dispatch_middleware import DispatchContext
 from execution.dispatch.transports.direct import DirectTransport, MessageStreamingState
@@ -482,7 +484,7 @@ class TestMessageChunkEmitsArtifactUpdate:
     """_handle_stream_message_chunk emits send_artifact_update."""
 
     @pytest.mark.asyncio
-    async def test_message_chunk_emits_artifact_update(self):
+    async def test_message_chunk_emits_artifact_update(self, monkeypatch):
         proc = _make_processor()
         proc.sse_manager.send_artifact_update = AsyncMock()
         proc.tsm.persist_message = AsyncMock(return_value=True)
@@ -503,14 +505,13 @@ class TestMessageChunkEmitsArtifactUpdate:
 
         streaming_state = MessageStreamingState()
 
-        text_part = TextPart(kind="text", text="Hello")
+        text_part = {"text": "Hello"}
 
         result = MagicMock()
         result.parts = [text_part]
-        result.role = "agent"
+        result.role = MessageRole.AGENT
         result.message_id = "a2a-msg-1"
 
-        monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setattr(
             "common.utils.a2a_helpers.extract_parts",
             lambda parts: MagicMock(text="Hello", has_non_text=False, file_parts=[], data_parts=[]),
@@ -529,7 +530,7 @@ class TestMessageChunkEmitsArtifactUpdate:
         assert call_args[1]["append"] is True or call_args[0][4] is True
 
     @pytest.mark.asyncio
-    async def test_message_chunk_skips_empty_content(self):
+    async def test_message_chunk_skips_empty_content(self, monkeypatch):
         """Empty text content should not emit any SSE event."""
         proc = _make_processor()
         proc.sse_manager.send_artifact_update = AsyncMock()
@@ -553,10 +554,9 @@ class TestMessageChunkEmitsArtifactUpdate:
 
         result = MagicMock()
         result.parts = []
-        result.role = "agent"
+        result.role = MessageRole.AGENT
         result.message_id = "a2a-msg-1"
 
-        monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setattr(
             "common.utils.a2a_helpers.extract_parts",
             lambda parts: MagicMock(text="", has_non_text=False, file_parts=[], data_parts=[]),
@@ -1152,8 +1152,8 @@ class TestDispatchInteractive:
         task.status.state = TaskState.auth_required
         task.status.message = Message(
             message_id="status-msg-1",
-            role=Role.agent,
-            parts=[Part(root=TextPart(kind="text", text="Please provide your OAuth token."))],
+            role=MessageRole.AGENT,
+            parts=[TextPart(kind="text", text="Please provide your OAuth token.")],
         )
 
         proc.a2a_service.has_streaming_capability = MagicMock(return_value=False)

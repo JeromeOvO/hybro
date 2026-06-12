@@ -1,4 +1,5 @@
 import json
+from datetime import UTC
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -457,8 +458,14 @@ def test_clarifying_path_emits_turn_completed_via_turn_event_appender():
 @pytest.mark.asyncio
 async def test_supervisor_completed_emits_turn_completion_kind_in_details():
     """COMPLETED processing_status must include turn_completion_kind in details."""
-    from models.supervisor import ActionType, TrajectoryEntry, SupervisorAction, StepResult
-    from datetime import datetime, timezone
+    from datetime import datetime
+
+    from models.supervisor import (
+        ActionType,
+        StepResult,
+        SupervisorAction,
+        TrajectoryEntry,
+    )
 
     manager = make_bound_manager()
     conn = await manager.add_connection("room-1")
@@ -483,7 +490,7 @@ async def test_supervisor_completed_emits_turn_completion_kind_in_details():
                         response_text="answer",
                         success=True,
                     )],
-                    started_at=datetime.now(timezone.utc),
+                    started_at=datetime.now(UTC),
                 )
             ],
         ),
@@ -514,8 +521,14 @@ async def test_supervisor_completed_emits_turn_completion_kind_in_details():
 @pytest.mark.asyncio
 async def test_supervisor_synthesis_completed_emits_synthesis_kind():
     """Synthesis path emits turn_completion_kind='synthesis' in details."""
-    from models.supervisor import ActionType, TrajectoryEntry, SupervisorAction, StepResult
-    from datetime import datetime, timezone
+    from datetime import datetime
+
+    from models.supervisor import (
+        ActionType,
+        StepResult,
+        SupervisorAction,
+        TrajectoryEntry,
+    )
 
     manager = make_bound_manager()
     conn = await manager.add_connection("room-1")
@@ -539,7 +552,7 @@ async def test_supervisor_synthesis_completed_emits_synthesis_kind():
                         response_text="answer",
                         success=True,
                     )],
-                    started_at=datetime.now(timezone.utc),
+                    started_at=datetime.now(UTC),
                 )
             ],
         ),

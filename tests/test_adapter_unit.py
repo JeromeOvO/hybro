@@ -14,6 +14,7 @@ from common.dto import (
     LLMUsage,
     ModelInfo,
 )
+from common.types import MessageRole
 
 
 def test_translator_internal_message_to_a2a_preserves_message_fields():
@@ -21,7 +22,7 @@ def test_translator_internal_message_to_a2a_preserves_message_fields():
 
     message = InternalAgentMessage(
         agent_id="agent-1",
-        role="user",
+        role=MessageRole.USER,
         parts=[{"kind": "text", "text": "hello"}],
         metadata={"trace_id": "trace-1"},
     )
@@ -36,9 +37,8 @@ def test_translator_internal_message_to_a2a_preserves_message_fields():
 
 
 def test_completed_text_task_factory_builds_sdk_task_payload():
-    from a2a.types import TaskState
-
     from a2a_adapter.task_status import build_completed_text_task
+    from common.types import TaskState
 
     task = build_completed_text_task(
         task_id="summary-1",
@@ -59,9 +59,8 @@ def test_completed_text_task_factory_builds_sdk_task_payload():
 
 
 def test_failed_text_task_factory_builds_sdk_task_payload():
-    from a2a.types import TaskState
-
     from a2a_adapter.task_status import build_failed_text_task
+    from common.types import TaskState
 
     task = build_failed_text_task(
         task_id="task-1",
@@ -80,7 +79,7 @@ def test_failed_text_task_factory_builds_sdk_task_payload():
 
 
 def test_get_task_request_helpers_keep_sdk_details_in_adapter():
-    from a2a.types import GetTaskRequest
+    from a2a.types import Part, GetTaskRequest
 
     from a2a_adapter.task_requests import build_get_task_request
 
@@ -94,7 +93,7 @@ def test_get_task_request_helpers_keep_sdk_details_in_adapter():
 def test_get_task_response_helper_returns_none_for_jsonrpc_errors():
     from types import SimpleNamespace
 
-    from a2a.types import JSONRPCError, JSONRPCErrorResponse
+    from a2a.types import Part, JSONRPCError, JSONRPCErrorResponse
 
     from a2a_adapter.task_requests import (
         extract_get_task_result,
@@ -113,14 +112,13 @@ def test_get_task_response_helper_returns_none_for_jsonrpc_errors():
 
 
 def test_message_factory_builds_sdk_message_from_parts():
-    from a2a.types import TextPart
-
     from a2a_adapter.message_factory import build_message_from_parts
+    
 
     message = build_message_from_parts(
-        role="agent",
+        role=MessageRole.AGENT,
         message_id="msg-1",
-        parts=[TextPart(text="hello")],
+        parts=[{"text": "hello"}],
     )
 
     assert message.role == "agent"
@@ -253,7 +251,7 @@ def test_transport_send_request_includes_accepted_output_modes():
     request = _build_send_request(
         InternalAgentMessage(
             agent_id="agent-1",
-            role="user",
+            role=MessageRole.USER,
             parts=[{"kind": "text", "text": "hello"}],
         ),
         streaming=False,
@@ -271,7 +269,7 @@ def test_transport_stream_request_includes_accepted_output_modes():
     request = _build_send_request(
         InternalAgentMessage(
             agent_id="agent-1",
-            role="user",
+            role=MessageRole.USER,
             parts=[{"kind": "text", "text": "hello"}],
         ),
         streaming=True,
@@ -472,7 +470,7 @@ async def test_transport_send_message_posts_a2a_request_and_returns_task_result(
     transport = AgentTransportImpl(timeout=1, client=client)
     message = InternalAgentMessage(
         agent_id="agent-1",
-        role="user",
+        role=MessageRole.USER,
         parts=[{"kind": "text", "text": "hello"}],
         metadata={"trace_id": "trace-1"},
     )
@@ -506,7 +504,7 @@ async def test_transport_send_message_preserves_jsonrpc_envelope_id():
     transport = AgentTransportImpl(timeout=1, client=client)
     message = InternalAgentMessage(
         agent_id="agent-1",
-        role="user",
+        role=MessageRole.USER,
         parts=[{"kind": "text", "text": "hello"}],
     )
 
@@ -525,7 +523,7 @@ async def test_transport_send_message_returns_error_result_on_http_error():
     transport = AgentTransportImpl(timeout=1, client=client)
     message = InternalAgentMessage(
         agent_id="agent-1",
-        role="user",
+        role=MessageRole.USER,
         parts=[{"kind": "text", "text": "hello"}],
     )
 
@@ -588,7 +586,7 @@ async def test_transport_stream_message_yields_one_event_per_sse_frame(monkeypat
     transport = transport_module.AgentTransportImpl(timeout=1, client=MagicMock())
     message = InternalAgentMessage(
         agent_id="agent-1",
-        role="user",
+        role=MessageRole.USER,
         parts=[{"kind": "text", "text": "hello"}],
     )
 
@@ -627,7 +625,7 @@ async def test_transport_stream_message_unwraps_jsonrpc_sse_results(monkeypatch)
     transport = transport_module.AgentTransportImpl(timeout=1, client=MagicMock())
     message = InternalAgentMessage(
         agent_id="agent-1",
-        role="user",
+        role=MessageRole.USER,
         parts=[{"kind": "text", "text": "hello"}],
     )
 
@@ -665,7 +663,7 @@ async def test_transport_stream_message_preserves_jsonrpc_sse_errors(monkeypatch
     transport = transport_module.AgentTransportImpl(timeout=1, client=MagicMock())
     message = InternalAgentMessage(
         agent_id="agent-1",
-        role="user",
+        role=MessageRole.USER,
         parts=[{"kind": "text", "text": "hello"}],
     )
 
@@ -697,7 +695,7 @@ async def test_transport_stream_message_yields_error_event_before_first_frame(mo
     transport = transport_module.AgentTransportImpl(timeout=1, client=MagicMock())
     message = InternalAgentMessage(
         agent_id="agent-1",
-        role="user",
+        role=MessageRole.USER,
         parts=[{"kind": "text", "text": "hello"}],
     )
 
@@ -727,7 +725,7 @@ async def test_transport_stream_message_yields_error_event_after_first_frame(mon
     transport = transport_module.AgentTransportImpl(timeout=1, client=MagicMock())
     message = InternalAgentMessage(
         agent_id="agent-1",
-        role="user",
+        role=MessageRole.USER,
         parts=[{"kind": "text", "text": "hello"}],
     )
 

@@ -1,3 +1,4 @@
+
 """
 Unit tests for Compaction Service and Content Storage Service.
 
@@ -22,6 +23,7 @@ from app_shell.compaction_service import (
     CompactionService,
 )
 from common.dto import CompactionResult as DtoCompactionResult
+from common.types import MessageRole
 from common.utils.time import utcnow
 from models.compaction import (
     ContentReference,
@@ -1545,7 +1547,7 @@ class TestCompactTurnEviction:
         for i in range(MAX_HISTORY_TURNS):
             add_turn_to_history(
                 memory_content=memory,
-                role="user",
+                role=MessageRole.USER,
                 content=f"Message {i}",
             )
 

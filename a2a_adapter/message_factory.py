@@ -6,6 +6,7 @@ from uuid import uuid4
 from a2a.types import Message, Part, Role, Task, TextPart
 
 from common import types as internal
+from common.types import MessageRole
 
 
 def build_user_text_message(
@@ -15,7 +16,7 @@ def build_user_text_message(
 ) -> Message:
     return Message(
         message_id=uuid4().hex,
-        role="user",
+        role=MessageRole.USER,
         parts=[TextPart(text=text)],
         metadata=metadata,
     )
@@ -43,8 +44,8 @@ def build_agent_text_message(
 ) -> Message:
     return Message(
         message_id=message_id or uuid4().hex,
-        role=Role.agent,
-        parts=[Part(root=TextPart(kind="text", text=text))],
+        role=MessageRole.AGENT,
+        parts=[TextPart(text=text)],
     )
 
 
@@ -85,9 +86,9 @@ def to_sdk_task(task: Any) -> Task:
     return Task.model_validate(data)
 
 
-def from_sdk_message(msg: Any) -> internal.Message:
+def from_sdk_message(msg: Any) -> Message:
     """Convert an a2a-sdk Message (or dict) to an internal Message."""
-    if isinstance(msg, internal.Message):
+    if isinstance(msg, Message):
         return msg
     if isinstance(msg, dict):
         data = msg
@@ -95,7 +96,7 @@ def from_sdk_message(msg: Any) -> internal.Message:
         data = msg.model_dump(mode="json")
     else:
         data = dict(msg)
-    return internal.Message.model_validate(data)
+    return Message.model_validate(data)
 
 
 def from_sdk_task(task: Any) -> internal.Task:

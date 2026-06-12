@@ -89,12 +89,12 @@ class AgentResponseHandler:
 
     def __init__(
         self,
-        message_writer: "ResponseMessageWriter",
-        task_writer: "ResponseTaskWriter",
-        continuation_store: "ResponseContinuationStore",
-        client_request_resolver: "ResponseClientRequestResolver",
-        room_reader: "ResponseRoomReader",
-        hitl_reader: "ResponseHITLReader",
+        message_writer: ResponseMessageWriter,
+        task_writer: ResponseTaskWriter,
+        continuation_store: ResponseContinuationStore,
+        client_request_resolver: ResponseClientRequestResolver,
+        room_reader: ResponseRoomReader,
+        hitl_reader: ResponseHITLReader,
         sse_manager: object,
         room_message_center: object,
         slot_lifecycle=None,

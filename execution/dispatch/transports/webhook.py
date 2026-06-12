@@ -60,9 +60,9 @@ class WebhookTransport(AgentTransport):
     def __init__(
         self,
         response_handler: AgentResponseHandler,
-        webhook_auth: "WebhookAuthPort",
-        message_reader: "WebhookMessageReader",
-        cancellation_reader: "WebhookCancellationReader",
+        webhook_auth: WebhookAuthPort,
+        message_reader: WebhookMessageReader,
+        cancellation_reader: WebhookCancellationReader,
         task_notifier=None,
     ) -> None:
         super().__init__(response_handler)
