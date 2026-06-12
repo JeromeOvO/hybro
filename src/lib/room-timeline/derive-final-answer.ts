@@ -12,6 +12,7 @@ import {
   hasSynthesisSignalInProcessingLogs,
   isMultiAgentTurnReadyForDeterministicDone,
   isPreSynthesisGap,
+  shouldShowSynthesizingPhase,
   turnHasSubstantiveLlmSynthesis,
 } from './multi-agent-turn-complete'
 import { getStripSourceResults } from './turn-live-shell'
@@ -298,7 +299,7 @@ export function deriveFinalAnswer(
   if (orchestrator) {
     if (orchestrator.status === "working") {
       const hasRealWorking = real.some(r => r.status === "working")
-      const isSynthesizing = (real.length > 0 && !hasRealWorking)
+      const isSynthesizing = shouldShowSynthesizingPhase(turn, real)
         || orchestrator.taskStatusMessage?.toLowerCase().includes('synthesiz')
         || turn.processingStatusLogs.some(log => log.message.toLowerCase().includes('synthesiz'))
 
