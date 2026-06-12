@@ -18,6 +18,7 @@ from common.protocols import (
 )
 from common.utils.a2a_helpers import (
     sanitize_artifact_parts,
+    sanitize_task_dict,
 )
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -1755,44 +1756,15 @@ def _safe_parse_agent_message(doc: dict | None) -> RoomAgentMessage | None:
     if doc is None:
         return None
     try:
-        _sanitize_agent_message_task(doc)
+        mc = doc.get("message_content")
+        if mc and isinstance(mc, dict):
+            task = mc.get("message_task")
+            if task and isinstance(task, dict):
+                sanitize_task_dict(task)
         return RoomAgentMessage.model_validate(doc)
     except Exception:
         logger.warning("Invalid room agent message document", exc_info=True)
         return None
-
-
-def _sanitize_parts(parts: list[dict]) -> list[dict]:
-    return sanitize_artifact_parts(parts)
-
-
-def _sanitize_task_dict(task: dict) -> dict:
-    for artifact in task.get("artifacts") or []:
-        parts = artifact.get("parts")
-        if parts and isinstance(parts, list):
-            artifact["parts"] = _sanitize_parts(parts)
-
-    for message in task.get("history") or []:
-        parts = message.get("parts")
-        if parts and isinstance(parts, list):
-            message["parts"] = _sanitize_parts(parts)
-
-    status = task.get("status") or {}
-    status_message = status.get("message") or {}
-    parts = status_message.get("parts")
-    if parts and isinstance(parts, list):
-        status_message["parts"] = _sanitize_parts(parts)
-
-    return task
-
-
-def _sanitize_agent_message_task(doc: dict) -> None:
-    message_content = doc.get("message_content")
-    if not isinstance(message_content, dict):
-        return
-    task = message_content.get("message_task")
-    if isinstance(task, dict):
-        _sanitize_task_dict(task)
 
 
 def _strip_unset_task_tracking_fields(update_data: dict[str, Any]) -> dict[str, Any]:

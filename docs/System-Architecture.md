@@ -453,19 +453,21 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
 
 8. Queue path:
    - Fetch agent messages related to the user message.
+   - Emits a unified orchestrator task (`system:hybro`) to represent the workflow state.
    - Process them sequentially through `QueueExecutor`.
    - Each item uses `AgentDispatcher` for agent assignment and
      `AgentMessageProcessor` for transport selection and dispatch.
-   - On success, emit unified summary and terminal `completed` status.
+   - On success, emit unified summary and terminal `completed` status to the `system:hybro` task.
 
 9. Supervisor path:
    - Build agent registry and room config.
    - Assemble room/conversation context.
+   - Emits a unified orchestrator task (`system:hybro`) to represent the workflow state.
    - Run the adaptive `SupervisorExecutor` loop.
-   - The supervisor decides when to delegate, ask for clarification, continue,
+   - The supervisor decides when to delegate, ask for clarification (via `system:clarifier`), continue,
      synthesize, or finish.
    - Agent messages are created dynamically instead of being pre-generated.
-   - Terminal status is emitted after synthesis or final failure/cancellation.
+   - Terminal status is emitted after synthesis or final failure/cancellation to the `system:hybro` task.
 
 10. Agent responses flow into `AgentResponseHandler`, which:
     - persists artifact updates,
