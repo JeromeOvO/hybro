@@ -349,12 +349,12 @@ describe('ConsumerAgentProfilePage', () => {
 
   describe('system agent', () => {
     it('renders static profile without calling getAgent', async () => {
-      mockParamId.mockReturnValue('supervisor_hitl')
+      mockParamId.mockReturnValue('system:clarifier')
 
       render(<ConsumerAgentProfilePage />)
 
       await waitFor(() => {
-        expect(screen.getByText('Question & Answer')).toBeInTheDocument()
+        expect(screen.getByText('HYBRO AI')).toBeInTheDocument()
       })
       expect(screen.getByText('Built-in System Agent')).toBeInTheDocument()
       expect(mockGetAgent).not.toHaveBeenCalled()

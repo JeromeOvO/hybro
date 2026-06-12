@@ -1,7 +1,7 @@
 /**
  * Built-in system agents that are not real A2A agents in the database.
  * These are synthetic agent IDs created by the backend's RoomCoordinatorService
- * to author summary messages.
+ * to orchestrate and author system messages.
  */
 
 export interface SystemAgentInfo {
@@ -10,62 +10,33 @@ export interface SystemAgentInfo {
 }
 
 export const SYSTEM_AGENTS: Record<string, SystemAgentInfo> = {
-  supervisor_hitl: {
-    name: 'Question & Answer',
+  'system:hybro': {
+    name: 'HYBRO AI',
+    description:
+      'The built-in platform agent that orchestrates workflows, summarizes debates, and asks clarifying questions.',
+  },
+  'system:clarifier': {
+    name: 'HYBRO AI',
     description:
       'A built-in agent that facilitates human-in-the-loop interactions, collecting clarifications and confirmations from the user.',
   },
-  summary: {
-    name: 'HYBRO AI',
-    description:
-      'A built-in agent that summarizes responses from multiple agents in a room.',
-  },
-  // Historical backward compatibility — all map to "HYBRO AI"
-  supervisor_synthesis: {
-    name: 'HYBRO AI',
-    description:
-      'A built-in agent that summarizes responses from multiple agents in a room.',
-  },
-  debate_summary: {
-    name: 'HYBRO AI',
-    description:
-      'A built-in agent that summarizes responses from multiple agents in a room.',
-  },
-  non_debate_summary: {
-    name: 'HYBRO AI',
-    description:
-      'A built-in agent that summarizes responses from multiple agents in a room.',
-  },
 }
 
-/** Supervisor-specific system agent IDs. Used for isSupervisorTurn derivation. */
-const SUPERVISOR_SYSTEM_AGENT_IDS = new Set(['supervisor_hitl', 'supervisor_synthesis'])
-
-/** Summary-family system agent IDs. Used for HYBRO AI visual treatment.
- *  Excludes supervisor_hitl which is NOT a summary agent. */
-const SUMMARY_SYSTEM_AGENT_IDS = new Set([
-  'supervisor_synthesis',
-  'debate_summary',
-  'non_debate_summary',
-  'summary',
-])
-
 export function isSystemAgent(agentId: string | undefined): boolean {
-  return !!agentId && agentId in SYSTEM_AGENTS
+  return !!agentId && (agentId.startsWith('system:') || agentId in SYSTEM_AGENTS)
 }
 
 export function isSupervisorSystemAgent(agentId: string | undefined): boolean {
-  return !!agentId && SUPERVISOR_SYSTEM_AGENT_IDS.has(agentId)
+  return !!agentId && agentId.startsWith('system:')
 }
 
 export function isSummarySystemAgent(agentId: string | undefined): boolean {
-  return !!agentId && SUMMARY_SYSTEM_AGENT_IDS.has(agentId)
+  return agentId === 'system:hybro' || agentId === 'summary' || agentId === 'debate_summary'
 }
 
 /** True for supervisor agents that issue HITL clarification questions (not synthesis). */
 export function isSupervisorClarifyAgent(agentId: string | undefined): boolean {
-  return agentId === 'supervisor_hitl' || agentId === 'supervisor_clarify'
-    || (!!agentId && SUPERVISOR_SYSTEM_AGENT_IDS.has(agentId) && !agentId.includes('synthesis'))
+  return agentId === 'system:clarifier'
 }
 
 export function getSystemAgentName(agentId: string): string | undefined {

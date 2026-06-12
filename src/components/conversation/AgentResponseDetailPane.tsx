@@ -112,7 +112,7 @@ function AgentResponseDetailHeader({
       <div className="conversation-detail-agent-main">
         <div className="conversation-detail-agent-name">
           <Link
-            href={`/c/agents/${detail.agentId}`}
+            href={`/c/agents/${encodeURIComponent(detail.agentId)}`}
             className="hover:underline focus-visible:outline-none truncate"
           >
             {detail.agentName}

@@ -43,6 +43,7 @@ function makeAgent(
     isSummaryAgent: false,
     isEphemeral: false,
     artifacts: [],
+    isSummaryAgent: false,
     ...overrides,
   }
 }
@@ -72,7 +73,7 @@ describe('deriveFinalAnswer', () => {
       agentResults: [
         makeAgent({
           messageId: 'c1',
-          agentId: 'supervisor_clarify',
+          agentId: 'system:clarifier',
           agentName: 'HYBRO AI',
           content: 'Which city?',
         }),
@@ -104,7 +105,7 @@ describe('deriveFinalAnswer', () => {
         makeAgent({ messageId: 'a2' }),
         makeAgent({
           messageId: 's1',
-          agentId: 'supervisor_synthesis',
+          agentId: 'system:hybro',
           isSummaryAgent: true,
           content: 'Combined answer',
         }),
@@ -143,7 +144,7 @@ describe('deriveFinalAnswer', () => {
         makeAgent({ messageId: 'a2' }),
         makeAgent({
           messageId: 's1',
-          agentId: 'supervisor_synthesis',
+          agentId: 'system:hybro',
           isSummaryAgent: true,
           summaryOrigin: 'deterministic',
           content: '2 agents responded.',

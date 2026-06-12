@@ -20,11 +20,15 @@ import {
 } from '@/hooks/room/sse-handlers/pending-turn-buffer'
 
 // Capture the onMessage callback passed to useRoomSSE
-let capturedOnMessage: ((msg: AnySSEFrame) => void) | undefined
+const capturedOnMessage = (msg: AnySSEFrame) => {
+  const cb = (globalThis as any).capturedOnMessage
+  if (!cb) throw new Error('capturedOnMessage is not defined')
+  return cb(msg)
+}
 
 vi.mock('@/hooks/useRoomSSE', () => ({
   useRoomSSE: vi.fn((opts: { onMessage?: (msg: AnySSEFrame) => void }) => {
-    capturedOnMessage = opts.onMessage
+    (globalThis as any).capturedOnMessage = opts.onMessage
     return { connected: true, connecting: false, error: null }
   }),
 }))
@@ -93,8 +97,8 @@ describe('useRoomWebhook SSE message handling', () => {
 
     vi.clearAllMocks()
     vi.mocked(SendMessage).mockReset()
-    vi.mocked(SendMessage).mockResolvedValue({ success: true, message_id: 'msg-1' })
-    capturedOnMessage = undefined
+    vi.mocked(SendMessage).mockResolvedValue({ success: true, message_id: 'msg-1' });
+    (globalThis as any).capturedOnMessage = undefined
     resetPendingTurnBufferForTests()
     useMessageStore.getState().clearRoom()
     useMessageStore.getState().setRoom('room-1')

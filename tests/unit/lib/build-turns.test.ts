@@ -265,7 +265,7 @@ describe('buildTurns – core construction', () => {
       })
       const supervisorAgent = makeAgentEntity({
         id: 'a2',
-        agentId: 'supervisor_synthesis',
+        agentId: 'system:hybro',
         senderName: 'Summary Agent',
         taskStatus: 'completed',
         content: '# Summary\nThe team has completed the analysis.',
@@ -552,7 +552,7 @@ describe('buildTurns – V2 data model', () => {
       messageType: 'agent',
       senderName: 'HYBRO AI',
       isEphemeral: true,
-      agentId: 'supervisor_synthesis',
+      agentId: 'system:hybro',
       clientRequestId: 'cr-1',
       taskStatus: 'working' as any,
       taskContent: 'Synthesizing responses...',
@@ -573,7 +573,7 @@ describe('buildTurns – V2 data model', () => {
       messageType: 'agent',
       senderName: 'HYBRO AI',
       isEphemeral: true,
-      agentId: 'supervisor_synthesis',
+      agentId: 'system:hybro',
       taskStatus: 'working' as any,
       taskContent: 'Dispatching agents',
       stepNumber: 2,
@@ -583,7 +583,7 @@ describe('buildTurns – V2 data model', () => {
     const supervisorAgent = makeAgentEntity({
       id: 'a1',
       timestamp: '2026-01-01T00:00:02Z',
-      agentId: 'supervisor_synthesis',
+      agentId: 'system:hybro',
       senderName: 'Summary Agent',
       taskStatus: 'completed',
       content: 'Summary result',
@@ -636,11 +636,11 @@ describe('buildTurns – V2 data model', () => {
     })
   })
 
-  it('supervisor_hitl with user answer is completed, not working', () => {
+  it('system:clarifier with user answer is completed, not working', () => {
     const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
     const clarify = makeAgentEntity({
       id: 'hitl-1',
-      agentId: 'supervisor_hitl',
+      agentId: 'system:clarifier',
       senderName: 'Question & Answer',
       timestamp: '2026-01-01T00:00:01Z',
       taskStatus: 'input-required' as any,
@@ -676,24 +676,24 @@ describe('buildTurns – V2 data model', () => {
 
   // ── isSupervisorTurn ──────────────────────────────────────
 
-  it('turn with supervisor_synthesis entity has isSupervisorTurn=true', () => {
+  it('turn with system:hybro entity has isSupervisorTurn=true', () => {
     const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
     const agent = makeAgentEntity({
       id: 'a1',
       timestamp: '2026-01-01T00:00:01Z',
-      agentId: 'supervisor_synthesis',
+      agentId: 'system:hybro',
       senderName: 'Summary Agent',
     })
     const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
     expect(turns[0].isSupervisorTurn).toBe(true)
   })
 
-  it('turn with supervisor_hitl entity has isSupervisorTurn=true', () => {
+  it('turn with system:clarifier entity has isSupervisorTurn=true', () => {
     const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
     const agent = makeAgentEntity({
       id: 'a1',
       timestamp: '2026-01-01T00:00:01Z',
-      agentId: 'supervisor_hitl',
+      agentId: 'system:clarifier',
       senderName: 'Question & Answer',
     })
     const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
@@ -725,23 +725,23 @@ describe('buildTurns – V2 data model', () => {
 
   // ── isSummaryAgent ────────────────────────────────────────
 
-  it('supervisor_synthesis agent has isSummaryAgent=true', () => {
+  it('system:hybro agent has isSummaryAgent=true', () => {
     const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
     const agent = makeAgentEntity({
       id: 'a1',
       timestamp: '2026-01-01T00:00:01Z',
-      agentId: 'supervisor_synthesis',
+      agentId: 'system:hybro',
     })
     const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
     expect(turns[0].agentResults[0].isSummaryAgent).toBe(true)
   })
 
-  it('supervisor_hitl agent has isSummaryAgent=false', () => {
+  it('system:clarifier agent has isSummaryAgent=false', () => {
     const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
     const agent = makeAgentEntity({
       id: 'a1',
       timestamp: '2026-01-01T00:00:01Z',
-      agentId: 'supervisor_hitl',
+      agentId: 'system:clarifier',
     })
     const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
     expect(turns[0].agentResults[0].isSummaryAgent).toBe(false)
@@ -759,7 +759,7 @@ describe('buildTurns – V2 data model', () => {
 })
 
 describe('selectSummary – V2 fix', () => {
-  it('picks supervisor_synthesis over regular agents', () => {
+  it('picks system:hybro over regular agents', () => {
     const results = [
       {
         agentId: 'agent-1',
@@ -771,7 +771,7 @@ describe('selectSummary – V2 fix', () => {
         isSummaryAgent: false,
       },
       {
-        agentId: 'supervisor_synthesis',
+        agentId: 'system:hybro',
         agentName: 'Summary Agent',
         messageId: 'msg-2',
         status: 'completed' as const,
@@ -782,13 +782,13 @@ describe('selectSummary – V2 fix', () => {
     ]
     const summary = selectSummary(results)
     expect(summary).not.toBeNull()
-    expect(summary!.sourceAgentId).toBe('supervisor_synthesis')
+    expect(summary!.sourceAgentId).toBe('system:hybro')
   })
 
-  it('does NOT pick supervisor_hitl as summary', () => {
+  it('does NOT pick system:clarifier as summary', () => {
     const results = [
       {
-        agentId: 'supervisor_hitl',
+        agentId: 'system:clarifier',
         agentName: 'Question & Answer',
         messageId: 'msg-1',
         status: 'completed' as const,
@@ -808,7 +808,7 @@ describe('selectSummary – V2 fix', () => {
     ]
     const summary = selectSummary(results)
     expect(summary).not.toBeNull()
-    // Should pick agent-1 (first completed with content), NOT supervisor_hitl
+    // Should pick agent-1 (first completed with content), NOT system:clarifier
     expect(summary!.sourceAgentId).toBe('agent-1')
   })
 })
@@ -858,7 +858,7 @@ describe('displayMode from finalAnswer', () => {
     })
     const synthesis = makeAgentEntity({
       id: 'a3',
-      agentId: 'supervisor_synthesis',
+      agentId: 'system:hybro',
       senderName: 'HYBRO AI',
       taskStatus: 'completed',
       content: 'Combined synthesis answer',
@@ -896,7 +896,7 @@ describe('displayMode from finalAnswer', () => {
     const agentB = makeAgentEntity({ id: 'a2', agentId: 'agent-b', taskStatus: 'completed', content: 'B' })
     const emptySynthesis = makeAgentEntity({
       id: 'a3',
-      agentId: 'supervisor_synthesis',
+      agentId: 'system:hybro',
       taskStatus: 'completed',
       content: '   ',
     })
@@ -916,7 +916,7 @@ describe('buildTurnsIncremental – identity regression', () => {
     const agent = makeAgentEntity({
       id: 'a1',
       timestamp: '2026-01-01T00:00:01Z',
-      agentId: 'supervisor_synthesis',
+      agentId: 'system:hybro',
       senderName: 'Summary Agent',
       taskStatus: 'completed',
       content: '# Original Title\nBody text here',
@@ -983,7 +983,7 @@ describe('deriveTurnPhase', () => {
     const agent = makeAgentEntity({ id: 'a1', agentId: 'agent-a', taskStatus: 'completed', content: 'A' })
     const summary = makeAgentEntity({
       id: 's1',
-      agentId: 'supervisor_synthesis',
+      agentId: 'system:hybro',
       taskStatus: 'working',
       content: '',
     })
@@ -1030,7 +1030,7 @@ describe('primaryStreamMessageId', () => {
     const agent = makeAgentEntity({ id: 'a1', agentId: 'agent-a', taskStatus: 'completed', content: 'A' })
     const summary = makeAgentEntity({
       id: 's1',
-      agentId: 'supervisor_synthesis',
+      agentId: 'system:hybro',
       taskStatus: 'working',
       content: '',
     })
@@ -1095,7 +1095,7 @@ describe('primaryStreamMessageId', () => {
     })
     const supervisor = makeAgentEntity({
       id: 's0',
-      agentId: 'supervisor_hitl',
+      agentId: 'system:clarifier',
       taskStatus: 'completed',
       content: '',
     })
@@ -1142,7 +1142,7 @@ describe('primaryStreamMessageId', () => {
     const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
     const supervisor = makeAgentEntity({
       id: 's1',
-      agentId: 'supervisor_synthesis',
+      agentId: 'system:hybro',
       taskStatus: 'completed',
       content: '',
       timestamp: '2026-01-01T00:00:03Z',
@@ -1177,7 +1177,7 @@ describe('primaryStreamMessageId', () => {
       messageType: 'agent',
       senderName: 'HYBRO AI',
       isEphemeral: true,
-      agentId: 'supervisor_hitl',
+      agentId: 'system:clarifier',
       taskStatus: 'completed',
       taskContent: 'Orchestrating...',
       timestamp: '2026-01-01T00:00:03Z',

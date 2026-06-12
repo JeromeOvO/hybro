@@ -23,6 +23,7 @@ function makeAgent(overrides: Partial<AgentResultViewModel> = {}): AgentResultVi
     status: 'completed',
     content: 'Answer',
     artifacts: [],
+    isSummaryAgent: false,
     ...overrides,
   }
 }

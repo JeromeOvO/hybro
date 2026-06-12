@@ -7,24 +7,12 @@ import {
 } from '@/lib/system-agents'
 
 describe('isSupervisorSystemAgent', () => {
-  it('returns true for supervisor_hitl', () => {
-    expect(isSupervisorSystemAgent('supervisor_hitl')).toBe(true)
+  it('returns true for system:clarifier', () => {
+    expect(isSupervisorSystemAgent('system:clarifier')).toBe(true)
   })
 
-  it('returns true for supervisor_synthesis', () => {
-    expect(isSupervisorSystemAgent('supervisor_synthesis')).toBe(true)
-  })
-
-  it('returns false for debate_summary', () => {
-    expect(isSupervisorSystemAgent('debate_summary')).toBe(false)
-  })
-
-  it('returns false for non_debate_summary', () => {
-    expect(isSupervisorSystemAgent('non_debate_summary')).toBe(false)
-  })
-
-  it('returns false for summary', () => {
-    expect(isSupervisorSystemAgent('summary')).toBe(false)
+  it('returns true for system:hybro', () => {
+    expect(isSupervisorSystemAgent('system:hybro')).toBe(true)
   })
 
   it('returns false for undefined', () => {
@@ -37,24 +25,12 @@ describe('isSupervisorSystemAgent', () => {
 })
 
 describe('isSummarySystemAgent', () => {
-  it('returns true for supervisor_synthesis', () => {
-    expect(isSummarySystemAgent('supervisor_synthesis')).toBe(true)
+  it('returns true for system:hybro', () => {
+    expect(isSummarySystemAgent('system:hybro')).toBe(true)
   })
 
-  it('returns true for debate_summary', () => {
-    expect(isSummarySystemAgent('debate_summary')).toBe(true)
-  })
-
-  it('returns true for non_debate_summary', () => {
-    expect(isSummarySystemAgent('non_debate_summary')).toBe(true)
-  })
-
-  it('returns true for summary', () => {
-    expect(isSummarySystemAgent('summary')).toBe(true)
-  })
-
-  it('returns false for supervisor_hitl', () => {
-    expect(isSummarySystemAgent('supervisor_hitl')).toBe(false)
+  it('returns false for system:clarifier', () => {
+    expect(isSummarySystemAgent('system:clarifier')).toBe(false)
   })
 
   it('returns false for undefined', () => {

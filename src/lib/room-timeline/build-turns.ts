@@ -272,9 +272,26 @@ function assembleTurn(
 
 function buildAgentResult(
   entity: MessageEntity | undefined,
-  turnEvents: readonly RawTimelineEvent[],
+  turnEvents: RawTimelineEvent[],
 ): AgentResultViewModel | null {
   if (!entity) return null
+
+  // Empty placeholder mapping
+  if (entity.id.startsWith('empty-placeholder-')) {
+    return {
+      agentId: entity.agentId ?? entity.id,
+      agentName: entity.senderName,
+      agentSource: entity.agentSource,
+      messageId: entity.id,
+      clientRequestId: entity.clientRequestId,
+      status: 'working',
+      content: '',
+      artifacts: [],
+      isSummaryAgent: isSummarySystemAgent(entity.agentId),
+      taskStatusMessage: entity.taskContent,
+      isEphemeral: true,
+    }
+  }
 
   if (entity.isEphemeral) {
     return {
@@ -522,12 +539,24 @@ function suppressEphemeralResults(
 // ── Turn phase derivation ──────────────────────────────────────
 
 export function deriveTurnPhase(turn: TurnViewModel): TurnPhase {
-  const summaryResult = turn.agentResults.find(r => r.isSummaryAgent)
+  const orchestrator = turn.agentResults.find(r => r.agentId === "system:hybro")
   const real = getStripSourceResults(turn)
   const allRealTerminal =
     real.length > 0
-    && real.every(r => r.status === 'completed' || r.status === 'failed')
+    && real.every(r => r.status === "completed" || r.status === "failed")
 
+  if (orchestrator) {
+    if (turn.status === "completed" || turn.status === "failed" || turn.status === "partial") return "completed"
+    if (turn.status === "awaiting_input" || turn.finalAnswer.kind === "hitl") return "collecting"
+    
+    if (real.length === 0) return "collecting"
+    if (real.some(r => r.status === "working")) return "collecting"
+    
+    if (orchestrator.status === "working") return "synthesizing"
+    return "answering"
+  }
+
+  const summaryResult = turn.agentResults.find(r => r.isSummaryAgent)
   if (
     summaryResult?.status === 'working'
     || (allRealTerminal && hasActiveSynthesisGap(turn))
@@ -575,6 +604,16 @@ function deriveTurnStatus(
   },
 ): TurnStatus {
   const substantive = agentResults.filter(r => !r.isEphemeral)
+  const hasAwaitingInput = substantive.some((r) => r.status === 'awaiting_input')
+  const hasFailed = substantive.some((r) => r.status === 'failed')
+  const hasCompleted = substantive.some((r) => r.status === 'completed')
+
+  const orchestrator = agentResults.find(r => r.agentId === "system:hybro")
+  if (orchestrator) {
+    if (orchestrator.status === "working") return "active"
+    if (orchestrator.status === "awaiting_input" || hasAwaitingInput) return "awaiting_input"
+  }
+
   if (substantive.length === 0) {
     if (agentResults.length === 0) return 'active'
     return agentResults.some(r => r.status === 'working') ? 'active' : 'completed'
@@ -582,9 +621,6 @@ function deriveTurnStatus(
 
   const real = substantive.filter(r => !r.isSummaryAgent)
   const hasWorking = substantive.some((r) => r.status === 'working' && !isSupervisorClarifyAgent(r.agentId))
-  const hasAwaitingInput = substantive.some((r) => r.status === 'awaiting_input')
-  const hasFailed = substantive.some((r) => r.status === 'failed')
-  const hasCompleted = substantive.some((r) => r.status === 'completed')
   const allFailed = substantive.every((r) => r.status === 'failed')
   const allCompleted = substantive.every((r) => r.status === 'completed')
 
@@ -650,7 +686,7 @@ function deriveTurnStatus(
 /**
  * Select the best agent result as the turn summary.
  * Priority:
- *   1. System summary agent (supervisor_synthesis, debate_summary, etc.)
+ *   1. System summary agent (system:hybro, etc.)
  *   2. Highest-priority completed agent (first completed with content)
  *   3. Latest completed non-empty agent
  * Returns null if no agent has completed with content.

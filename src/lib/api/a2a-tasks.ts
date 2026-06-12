@@ -29,6 +29,10 @@ export interface A2ATaskStatus {
       name: string
       parts: Array<{ text?: string }>
     }>
+    history?: Array<{
+      role: string
+      parts: Array<{ text?: string }>
+    }>
   }
   agent_name?: string
   agent_id?: string
@@ -157,23 +161,38 @@ export async function listUserPendingTasks(
  * Extract text content from task artifacts.
  */
 export function extractTaskContent(task: A2ATaskStatus['task']): string | undefined {
-  if (!task.artifacts) {
-    return undefined
-  }
-  
   const texts: string[] = []
-  for (const artifact of task.artifacts) {
-    for (const part of artifact.parts || []) {
-      // Handle both direct text and root-wrapped text (Pydantic RootModel)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const anyPart = part as any
-      const text = anyPart.text || anyPart.root?.text
-      if (text) {
-        texts.push(text)
+
+  if (task.artifacts) {
+    for (const artifact of task.artifacts) {
+      for (const part of artifact.parts || []) {
+        // Handle both direct text and root-wrapped text (Pydantic RootModel)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const anyPart = part as any
+        const text = anyPart.text || anyPart.root?.text
+        if (text) {
+          texts.push(text)
+        }
       }
     }
   }
-  
+
+  // Fallback to history for streaming agents that accumulate content
+  if (texts.length === 0 && task.history) {
+    const agentMessages = task.history.filter(m => m.role === 'agent')
+    if (agentMessages.length > 0) {
+      const latestAgentMessage = agentMessages[agentMessages.length - 1]
+      for (const part of latestAgentMessage.parts || []) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const anyPart = part as any
+        const text = anyPart.text || anyPart.root?.text
+        if (text) {
+          texts.push(text)
+        }
+      }
+    }
+  }
+
   return texts.length > 0 ? texts.join('') : undefined
 }
 

@@ -139,7 +139,7 @@ describe('stampInferredTurnTerminalStatus', () => {
     const a1 = makeAgent('a1', 'u1', { agentId: 'agent-a' })
     const a2 = makeAgent('a2', 'u1', { agentId: 'agent-b' })
     const summary = makeAgent('s1', 'u1', {
-      agentId: 'summary',
+      agentId: 'system:hybro',
       content: '2 agents responded.',
       summaryOrigin: 'deterministic',
     })

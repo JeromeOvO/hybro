@@ -18,6 +18,7 @@ function makeAgent(overrides: Partial<AgentResultViewModel> = {}): AgentResultVi
     status: 'completed',
     content: 'Answer',
     artifacts: [],
+    isSummaryAgent: false,
     ...overrides,
   }
 }
@@ -108,7 +109,7 @@ describe('isMultiAgentTurnReadyForDeterministicDone', () => {
         makeAgent({ messageId: 'a2', agentId: 'agent-b' }),
         makeAgent({
           messageId: 'summary-1',
-          agentId: 'supervisor_synthesis',
+          agentId: 'system:hybro',
           isSummaryAgent: true,
           summaryOrigin: 'deterministic',
           content: '2 agents responded',

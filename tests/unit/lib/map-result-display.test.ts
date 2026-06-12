@@ -10,6 +10,7 @@ function makeResult(overrides: Partial<AgentResultViewModel> = {}): AgentResultV
     status: 'working',
     content: '',
     artifacts: [],
+    isSummaryAgent: false,
     ...overrides,
   }
 }

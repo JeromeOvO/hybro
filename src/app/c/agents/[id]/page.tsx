@@ -137,7 +137,7 @@ export default function ConsumerAgentProfilePage() {
   const params = useParams()
   const router = useRouter()
   const { userId } = useAuth()
-  const agentId = params.id as string
+  const agentId = decodeURIComponent(params.id as string)
   const [techOpen, setTechOpen] = useState(false)
   const ctaRef = useRef<HTMLDivElement>(null)
   const [showStickyBar, setShowStickyBar] = useState(false)
