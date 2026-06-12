@@ -27,6 +27,7 @@ class FakeCollection:
         self.find_calls: list[tuple[dict, dict]] = []
         self.insert_one_calls: list[dict] = []
         self.update_one_calls: list[tuple[dict, dict, dict]] = []
+        self.replace_one_calls: list[tuple[dict, dict, dict]] = []
         self.find_one_and_update_calls: list[tuple[dict, dict, dict]] = []
         self.delete_one_calls: list[dict] = []
         self.delete_many_calls: list[dict] = []
@@ -65,6 +66,27 @@ class FakeCollection:
                 _apply_update(doc, update)
                 return True
         return False
+
+    async def replace_one(self, query: dict, replacement: dict, **kwargs) -> bool:
+        self.replace_one_calls.append(
+            (deepcopy(query), deepcopy(replacement), deepcopy(kwargs))
+        )
+        for index, doc in enumerate(self.docs):
+            if _matches(doc, query):
+                self.docs[index] = deepcopy(replacement)
+                return True
+        if kwargs.get("upsert"):
+            self.docs.append(deepcopy(replacement))
+            return True
+        return False
+
+    async def update_many(self, query: dict, update: dict) -> int:
+        count = 0
+        for doc in self.docs:
+            if _matches(doc, query):
+                _apply_update(doc, update)
+                count += 1
+        return count
 
     async def find_one_and_update(
         self, query: dict, update: dict, **kwargs
@@ -648,6 +670,247 @@ async def test_app_shell_store_generates_chat_context_memory_id_when_empty():
     assert await store.add_chat_context(context) is True
     assert context.memory_id
     assert chat_contexts.insert_one_calls[0]["memory_id"] == context.memory_id
+
+
+@pytest.mark.asyncio
+async def test_app_shell_store_room_runtime_methods_use_repositories_and_dal():
+    from app_shell.repository_store import AppShellRepositoryStore
+    from models.room import Room, RoomUserMessage
+
+    room_repo, mongo, rooms = _room_repo(
+        [
+            {
+                "room_id": "r1",
+                "room_owner_id": "owner-1",
+                "room_owner_name": "Owner",
+                "room_name": "Room",
+            }
+        ]
+    )
+    message_repo = MessageMongoRepository(mongo=mongo)
+    agents = FakeCollection(
+        [
+            {
+                "agent_id": "agent-1",
+                "agent_card": {
+                    "name": "Agent",
+                    "url": "https://agent.example/.well-known/agent.json",
+                    "version": "1.0",
+                    "capabilities": {},
+                    "skills": [],
+                },
+                "is_public": True,
+            }
+        ]
+    )
+    room_memories = FakeCollection(
+        [{"memory_id": "mem-1", "room_id": "r1", "room_memory": "summary"}]
+    )
+    runs = FakeCollection(
+        [
+            {
+                "run_id": "old",
+                "room_id": "r1",
+                "state": "processing",
+                "updated_at": 1,
+            },
+            {"run_id": "new", "room_id": "r1", "state": "queued", "updated_at": 2},
+            {"run_id": "done", "room_id": "r1", "state": "completed", "updated_at": 3},
+        ]
+    )
+    mongo.collections.update(
+        {
+            "agents": agents,
+            "room_memories": room_memories,
+            "runs": runs,
+        }
+    )
+    store = AppShellRepositoryStore(
+        mongo=mongo,
+        room_repository=room_repo,
+        message_repository=message_repo,
+        agent_repository=object(),
+    )
+
+    assert [room.room_id for room in await store.get_rooms_by_room_owner_id("owner-1")] == [
+        "r1"
+    ]
+    room = Room(
+        room_id="r1",
+        room_owner_id="owner-1",
+        room_owner_name="Owner",
+        room_name="Renamed",
+    )
+    assert await store.update_room_by_room_id("r1", room) is True
+    assert rooms.docs[0]["room_name"] == "Renamed"
+    user_message = RoomUserMessage(
+        room_id="r1",
+        message_id="u1",
+        message_type="user",
+        user_id="owner-1",
+        message_created_at=datetime(2026, 5, 11, tzinfo=UTC),
+        message_content={"message_text": "hello"},
+    )
+
+    assert await store.add_room_user_message(user_message) is True
+    assert [msg.message_id for msg in await store.get_room_user_messages_by_room_id("r1")] == [
+        "u1"
+    ]
+    user_message.message_content.message_text = "updated"
+    assert await store.update_room_user_message_by_message_id("u1", user_message)
+    assert mongo.collections["room_user_messages"].docs[0]["message_content"][
+        "message_text"
+    ] == "updated"
+    assert [agent.agent_id for agent in await store.get_agents_with_conditions()] == [
+        "agent-1"
+    ]
+    assert (await store.get_room_memory_by_room_id("r1")).memory_id == "mem-1"
+    assert [run["run_id"] for run in await store.get_active_runs_by_room_id("r1")] == [
+        "new",
+        "old",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_app_shell_store_room_update_noop_succeeds_when_room_exists():
+    from app_shell.repository_store import AppShellRepositoryStore
+    from models.room import Room
+
+    class NoopRoomRepository:
+        async def update(self, room_id: str, updates: dict) -> bool:
+            return False
+
+        async def get_by_id(self, room_id: str) -> dict | None:
+            return {
+                "room_id": room_id,
+                "room_owner_id": "owner-1",
+                "room_owner_name": "Owner",
+                "room_name": "Room",
+            }
+
+    store = AppShellRepositoryStore(
+        mongo=FakeMongo(),
+        room_repository=NoopRoomRepository(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+
+    assert await store.update_room_by_room_id(
+        "r1",
+        Room(
+            room_id="r1",
+            room_owner_id="owner-1",
+            room_owner_name="Owner",
+            room_name="Room",
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_app_shell_store_upsert_room_agent_message_replaces_full_document():
+    from app_shell.repository_store import AppShellRepositoryStore
+    from models.room import RoomAgentMessage
+
+    agent_messages = FakeCollection(
+        [
+            {
+                "message_id": "summary-1",
+                "room_id": "r1",
+                "message_type": "agent",
+                "agent_id": "agent-1",
+                "message_created_at": datetime(2026, 5, 11, tzinfo=UTC),
+                "message_content": {"message_text": "old"},
+                "orphan_field": "must be removed",
+            }
+        ]
+    )
+    store = AppShellRepositoryStore(
+        mongo=FakeMongo({"room_agent_messages": agent_messages}),
+        room_repository=object(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+
+    await store.upsert_room_agent_message(
+        RoomAgentMessage(
+            room_id="r1",
+            message_id="summary-1",
+            message_type="agent",
+            agent_id="agent-1",
+            message_created_at=datetime(2026, 5, 11, tzinfo=UTC),
+            message_content={"message_text": "new"},
+        )
+    )
+
+    assert agent_messages.replace_one_calls
+    assert agent_messages.docs[0]["message_content"]["message_text"] == "new"
+    assert "orphan_field" not in agent_messages.docs[0]
+
+
+@pytest.mark.asyncio
+async def test_app_shell_store_room_orchestration_claim_cancel_and_continuation():
+    from app_shell.repository_store import AppShellRepositoryStore
+
+    user_messages = FakeCollection(
+        [{"message_id": "u1", "room_id": "r1", "processing_claimed_at": None}]
+    )
+    agent_messages = FakeCollection(
+        [
+            {
+                "message_id": "a1",
+                "room_id": "r1",
+                "related_message_id": "u1",
+                "message_content": {
+                    "message_task": {"status": {"state": "working"}}
+                },
+            },
+            {
+                "message_id": "a2",
+                "room_id": "r1",
+                "related_message_id": "a1",
+                "message_content": {
+                    "message_task": {"status": {"state": "submitted"}}
+                },
+            },
+            {
+                "message_id": "done",
+                "room_id": "r1",
+                "related_message_id": "u1",
+                "message_content": {
+                    "message_task": {"status": {"state": "completed"}}
+                },
+            },
+        ]
+    )
+    mongo = FakeMongo(
+        {
+            "room_user_messages": user_messages,
+            "room_agent_messages": agent_messages,
+        }
+    )
+    store = AppShellRepositoryStore(
+        mongo=mongo,
+        room_repository=object(),
+        message_repository=MessageMongoRepository(mongo=mongo),
+        agent_repository=object(),
+    )
+
+    assert await store.claim_user_message_for_processing("u1") is True
+    assert user_messages.docs[0]["processing_claimed_at"] is not None
+    assert await store.refresh_processing_claim("u1") is True
+    assert await store.unclaim_user_message("u1") is True
+    assert user_messages.docs[0]["processing_claimed_at"] is None
+    assert await store.save_continuation_on_message("a1", {"next": "step"}) is True
+    assert agent_messages.docs[0]["pending_continuation"] == {"next": "step"}
+    assert await store.turn_exists("r1", "missing") is False
+
+    assert await store.cancel_descendants("u1") == 2
+    states = {
+        doc["message_id"]: doc["message_content"]["message_task"]["status"]["state"]
+        for doc in agent_messages.docs
+    }
+    assert states == {"a1": "canceled", "a2": "canceled", "done": "completed"}
+    assert await store.cancel_agent_messages_by_ids(["done"]) == 0
 
 
 @pytest.mark.asyncio

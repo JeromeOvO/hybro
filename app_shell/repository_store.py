@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Any
 
-from common.a2a_constants import TERMINAL_STATES
+from common.a2a_constants import TERMINAL_STATES, CommonTaskState
 from common.config.settings import settings
 from common.protocols import (
     AgentRepository,
@@ -23,7 +23,7 @@ from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from models.agent import Agent
 from models.agent_group import AgentGroup
-from models.memory import ChatContext
+from models.memory import ChatContext, RoomMemory
 from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 from models.run import NON_TERMINAL_RUN_STATE_VALUES
 from models.supervisor import TrajectoryStatus
@@ -47,8 +47,10 @@ class AppShellRepositoryStore:
     ) -> None:
         self._agent_groups = mongo.collection("agent_groups")
         self._chat_contexts = mongo.collection("chat_contexts")
+        self._agents = mongo.collection("agents")
         self._user_memories = mongo.collection("user_memories")
         self._agent_memories = mongo.collection("agent_memories")
+        self._room_memories = mongo.collection("room_memories")
         self._room_agent_messages = mongo.collection("room_agent_messages")
         self._room_user_messages = mongo.collection("room_user_messages")
         self._cancelled_messages = mongo.collection("cancelled_messages")
@@ -132,6 +134,22 @@ class AppShellRepositoryStore:
             logger.error("Failed to get agent", exc_info=True)
             return None
 
+    async def get_agents_with_conditions(
+        self,
+        query: dict[str, Any] | None = None,
+        limit: int = 0,
+    ) -> list[Agent]:
+        try:
+            # Legacy room selection accepts arbitrary agent predicates; use the
+            # DAL collection directly to preserve that query surface during
+            # migration instead of applying AgentRepository visibility filters.
+            docs = await self._agents.find(dict(query or {}), limit=limit or None)
+            agents = [_safe_parse_agent(doc) for doc in docs if doc is not None]
+            return [agent for agent in agents if agent is not None]
+        except Exception:
+            logger.error("Failed to get agents with conditions", exc_info=True)
+            return []
+
     async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> None:
         try:
             await self._agent_repository.increment_agent_call_count(
@@ -148,6 +166,30 @@ class AppShellRepositoryStore:
             logger.error("Failed to get room", exc_info=True)
             return None
 
+    async def get_rooms_by_room_owner_id(self, room_owner_id: str) -> list[Room]:
+        try:
+            docs = await self._room_repository.get_by_owner(room_owner_id)
+            rooms = [_safe_parse_room(doc) for doc in docs if doc is not None]
+            return [room for room in rooms if room is not None]
+        except Exception:
+            logger.error("Failed to get rooms by owner", exc_info=True)
+            return []
+
+    async def update_room_by_room_id(self, room_id: str, room: Room) -> bool:
+        try:
+            updates = room.model_dump(exclude_unset=True, mode="json")
+            updated = await self._room_repository.update(room_id, updates)
+            if updated:
+                return True
+            # MongoDAL update_one returns False for matched no-op writes because
+            # it only exposes modified/upserted state. Legacy database_service
+            # treated any matched room update as success, so confirm existence
+            # before reporting failure.
+            return await self._room_repository.get_by_id(room_id) is not None
+        except Exception:
+            logger.error("Failed to update room", exc_info=True)
+            return False
+
     async def get_room_user_message_by_message_id(
         self, message_id: str
     ) -> RoomUserMessage | None:
@@ -159,6 +201,20 @@ class AppShellRepositoryStore:
             logger.error("Failed to get room user message", exc_info=True)
             return None
 
+    async def get_room_user_messages_by_room_id(
+        self,
+        room_id: str,
+    ) -> list[RoomUserMessage]:
+        try:
+            docs = await self._message_repository.get_user_messages_for_room(room_id)
+            messages = [
+                _safe_parse_user_message(doc) for doc in docs if doc is not None
+            ]
+            return [message for message in messages if message is not None]
+        except Exception:
+            logger.error("Failed to get room user messages", exc_info=True)
+            return []
+
     async def get_room_agent_message_by_message_id(
         self, message_id: str
     ) -> RoomAgentMessage | None:
@@ -169,6 +225,20 @@ class AppShellRepositoryStore:
         except Exception:
             logger.error("Failed to get room agent message", exc_info=True)
             return None
+
+    async def get_room_agent_messages_by_room_id(
+        self,
+        room_id: str,
+    ) -> list[RoomAgentMessage]:
+        try:
+            docs = await self._message_repository.get_agent_messages_for_room(room_id)
+            messages = [
+                _safe_parse_agent_message(doc) for doc in docs if doc is not None
+            ]
+            return [message for message in messages if message is not None]
+        except Exception:
+            logger.error("Failed to get room agent messages", exc_info=True)
+            return []
 
     async def get_room_agent_messages_by_related_message_id(
         self, related_message_id: str
@@ -201,6 +271,50 @@ class AppShellRepositoryStore:
             logger.error("Failed to add room agent message", exc_info=True)
             return False
 
+    async def add_room_user_message(self, room_user_message: RoomUserMessage) -> bool:
+        try:
+            if room_user_message.message_id == "":
+                room_user_message.message_id = str(uuid.uuid4())
+            doc = room_user_message.model_dump(mode="json", exclude={"quote"})
+            _strip_file_urls(doc)
+            return bool(await self._message_repository.save_user_message(doc))
+        except Exception:
+            logger.error("Failed to add room user message", exc_info=True)
+            return False
+
+    async def update_room_user_message_by_message_id(
+        self, message_id: str, room_user_message: RoomUserMessage
+    ) -> bool:
+        try:
+            update_data = room_user_message.model_dump(exclude_unset=True, mode="json")
+            _strip_file_urls(update_data)
+            return await self._message_repository.update_user_message(
+                message_id,
+                update_data,
+            )
+        except Exception:
+            logger.error("Failed to update room user message", exc_info=True)
+            return False
+
+    async def upsert_room_agent_message(
+        self, room_agent_message: RoomAgentMessage
+    ) -> None:
+        try:
+            await self._room_agent_messages.replace_one(
+                {"message_id": room_agent_message.message_id},
+                room_agent_message.model_dump(mode="json"),
+                upsert=True,
+            )
+        except Exception:
+            logger.error("Failed to upsert room agent message", exc_info=True)
+
+    async def delete_room_agent_message_by_message_id(self, message_id: str) -> bool:
+        try:
+            return await self._room_agent_messages.delete_one({"message_id": message_id})
+        except Exception:
+            logger.error("Failed to delete room agent message", exc_info=True)
+            return False
+
     async def update_room_agent_message_by_message_id(
         self, message_id: str, room_agent_message: RoomAgentMessage
     ) -> bool:
@@ -214,6 +328,175 @@ class AppShellRepositoryStore:
             )
         except Exception:
             logger.error("Failed to update room agent message", exc_info=True)
+            return False
+
+    async def get_active_runs_by_room_id(self, room_id: str) -> list[dict]:
+        try:
+            return await self._runs.find(
+                {
+                    "room_id": room_id,
+                    "state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)},
+                },
+                sort=[("updated_at", -1)],
+            )
+        except Exception:
+            logger.error("Failed to get active runs for room", exc_info=True)
+            return []
+
+    async def get_room_memory_by_room_id(self, room_id: str) -> RoomMemory | None:
+        try:
+            return _safe_parse_room_memory(
+                await self._room_memories.find_one({"room_id": room_id})
+            )
+        except Exception:
+            logger.error("Failed to get room memory", exc_info=True)
+            return None
+
+    async def claim_user_message_for_processing(self, message_id: str) -> bool:
+        try:
+            doc = await self._room_user_messages.find_one_and_update(
+                {"message_id": message_id, "processing_claimed_at": None},
+                {"$set": {"processing_claimed_at": utcnow()}},
+            )
+            return doc is not None
+        except Exception:
+            logger.error("Failed to claim user message", exc_info=True)
+            return False
+
+    async def unclaim_user_message(self, message_id: str) -> bool:
+        try:
+            return await self._room_user_messages.update_one(
+                {"message_id": message_id},
+                {"$set": {"processing_claimed_at": None}},
+            )
+        except Exception:
+            logger.error("Failed to unclaim user message", exc_info=True)
+            return False
+
+    async def claim_or_reclaim_user_message(
+        self,
+        message_id: str,
+        stale_threshold: Any,
+    ) -> bool:
+        try:
+            doc = await self._room_user_messages.find_one_and_update(
+                {
+                    "message_id": message_id,
+                    "$or": [
+                        {"processing_claimed_at": None},
+                        {"processing_claimed_at": {"$lt": stale_threshold}},
+                    ],
+                },
+                {"$set": {"processing_claimed_at": utcnow()}},
+            )
+            return doc is not None
+        except Exception:
+            logger.error("Failed to claim or reclaim user message", exc_info=True)
+            return False
+
+    async def refresh_processing_claim(self, message_id: str) -> bool:
+        try:
+            return await self._room_user_messages.update_one(
+                {"message_id": message_id, "processing_claimed_at": {"$ne": None}},
+                {"$set": {"processing_claimed_at": utcnow()}},
+            )
+        except Exception:
+            logger.error("Failed to refresh processing claim", exc_info=True)
+            return False
+
+    async def turn_exists(self, room_id: str, turn_id: str) -> bool:
+        try:
+            user = await self._room_user_messages.find_one(
+                {"room_id": room_id, "turn_id": turn_id}
+            )
+            if user is not None:
+                return True
+            agent = await self._room_agent_messages.find_one(
+                {"room_id": room_id, "turn_id": turn_id}
+            )
+            return agent is not None
+        except Exception:
+            logger.error("Failed to check turn existence", exc_info=True)
+            return False
+
+    async def cancel_descendants(self, message_id: str) -> int:
+        terminal_statuses = sorted(state.value for state in TERMINAL_STATES)
+        to_visit = [message_id]
+        all_descendant_ids: list[str] = []
+
+        while to_visit:
+            children = await self._room_agent_messages.find(
+                {
+                    "related_message_id": {"$in": to_visit},
+                    "message_content.message_task": {"$ne": None},
+                    "message_content.message_task.status.state": {
+                        "$nin": terminal_statuses
+                    },
+                },
+                projection={"message_id": 1},
+            )
+            child_ids = [
+                str(child["message_id"])
+                for child in children
+                if child.get("message_id") is not None
+            ]
+            all_descendant_ids.extend(child_ids)
+            to_visit = child_ids
+
+        if not all_descendant_ids:
+            return 0
+
+        result = await self._room_agent_messages.update_many(
+            {"message_id": {"$in": all_descendant_ids}},
+            {
+                "$set": {
+                    "message_content.message_task.status.state": (
+                        CommonTaskState.CANCELED.value
+                    ),
+                }
+            },
+        )
+        return _modified_count(result)
+
+    async def cancel_agent_messages_by_ids(self, message_ids: list[str]) -> int:
+        if not message_ids:
+            return 0
+        terminal_statuses = sorted(state.value for state in TERMINAL_STATES)
+        result = await self._room_agent_messages.update_many(
+            {
+                "message_id": {"$in": list(message_ids)},
+                "message_content.message_task": {"$ne": None},
+                "message_content.message_task.status.state": {
+                    "$nin": terminal_statuses
+                },
+            },
+            {
+                "$set": {
+                    "message_content.message_task.status.state": (
+                        CommonTaskState.CANCELED.value
+                    ),
+                }
+            },
+        )
+        return _modified_count(result)
+
+    async def save_continuation_on_message(
+        self,
+        message_id: str,
+        continuation_data: dict,
+    ) -> bool:
+        try:
+            return await self._room_agent_messages.update_one(
+                {"message_id": message_id},
+                {
+                    "$set": {
+                        "pending_continuation": continuation_data,
+                        "task_updated_at": utcnow(),
+                    }
+                },
+            )
+        except Exception:
+            logger.error("Failed to save agent-message continuation", exc_info=True)
             return False
 
     async def update_room_agent_message_with_new_message_content_by_message_id(
@@ -1458,6 +1741,16 @@ def _safe_parse_room(doc: dict | None) -> Room | None:
         return None
 
 
+def _safe_parse_room_memory(doc: dict | None) -> RoomMemory | None:
+    if doc is None:
+        return None
+    try:
+        return RoomMemory.model_validate(doc)
+    except Exception:
+        logger.warning("Invalid room memory document", exc_info=True)
+        return None
+
+
 def _safe_parse_agent_message(doc: dict | None) -> RoomAgentMessage | None:
     if doc is None:
         return None
@@ -1523,6 +1816,17 @@ def _mongo_update_succeeded(result: Any) -> bool:
     return bool(result)
 
 
+def _modified_count(result: Any) -> int:
+    if isinstance(result, bool):
+        return int(result)
+    if isinstance(result, int):
+        return result
+    modified_count = getattr(result, "modified_count", None)
+    if modified_count is not None:
+        return int(modified_count)
+    return int(bool(result))
+
+
 def _safe_parse_user_message(doc: dict | None) -> RoomUserMessage | None:
     if doc is None:
         return None
@@ -1531,6 +1835,15 @@ def _safe_parse_user_message(doc: dict | None) -> RoomUserMessage | None:
     except Exception:
         logger.warning("Invalid room user message document", exc_info=True)
         return None
+
+
+def _strip_file_urls(doc: dict) -> None:
+    target = doc.get("$set", doc)
+    content = target.get("message_content")
+    if not content:
+        return
+    for attachment in content.get("attachments") or []:
+        attachment.pop("file_url", None)
 
 
 def _safe_parse_chat_context(doc: dict | None) -> ChatContext | None:

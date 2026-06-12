@@ -112,7 +112,7 @@ route -> app-shell route owner -> facade -> repository/DAL
 Examples:
 
 - `app_shell.room_runtime.AppShellRoomCenter` delegates to `app_shell.room_runtime`, which is bound to
-  `room.RoomFacade`.
+  `room.RoomFacade` and an explicit repository-backed app-shell store.
 - `app_shell.agent_runtime.AppShellAgentCenter` delegates to `app_shell.agent_service`, which is bound to
   `agent.AgentFacade`.
 - `app_shell.relay_service` exposes relay route behavior while delegating
@@ -565,9 +565,11 @@ cancellation persistence, and stale-task cleanup is routed through
 collections. HITL lifecycle persistence, CAS/fencing updates, continuation
 metadata, stale-processing recovery, and HITL index creation also use
 `AppShellRepositoryStore`. Relay route registration, hub status, liveness, and
-offline failure persistence now use explicit repository-backed app-shell
-adapters; remaining migration phases continue with room orchestration and memory
-paths.
+offline failure persistence use explicit repository-backed app-shell adapters.
+Room runtime, room message center, queue executor, and supervisor executor also
+receive `AppShellRepositoryStore` at startup, so orchestration reads, writes,
+continuation state, cancellation fan-out, and room memory lookups no longer bind
+to the broad legacy database service object.
 
 **Agent display text:** Terminal `message_text` and artifact text parts are persisted as received from agents. List/section markdown repair runs only in the frontend remark plugin pipeline (`hybro-frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown render time. Hybro-controlled LLM paths (supervisor synthesis, `SummaryLLMService`) append `HYBRO_MARKDOWN_RESPONSE_FORMAT` so synthesis uses `###` section headers; third-party agent text is still stored as-is. Backend terminal helpers in `common/utils/a2a_helpers.py` (`prepare_terminal_agent_content`, `resolve_terminal_sse_content`, `sync_artifact_dicts_to_canonical_text`) resolve canonical text from artifacts and align artifact payloads without transforming markdown. Terminal resolution is owned by `update_task_state_on_message`; streaming text parts collapse to a single canonical text part while file/data parts are preserved. SSE terminal `content` is authoritative for display text; `parts` carries only non-text payloads.
 
@@ -758,6 +760,9 @@ The current codebase has a mixed architecture:
   construction.
 - Some app-shell modules still use singleton-style process runtime objects.
 - `app_shell.database_service` and `database.mongodb` still expose broad APIs.
+- Room orchestration still has a compatibility store surface, but it is backed
+  by module repositories and DAL collections rather than the legacy database
+  singleton.
 - Some route modules bind dependencies via module-level globals during startup.
 - Compatibility layers are intentionally kept so the repo can migrate in phases
   without breaking existing route behavior.

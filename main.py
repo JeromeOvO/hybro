@@ -611,6 +611,7 @@ async def lifespan(app: FastAPI):
             a2a_tasks.bind_a2a_task_dependencies(app_shell_store)
             agent_group.bind_agent_group_dependencies(app_shell_store)
             sse.bind_sse_dependencies(app_shell_store, sse_manager)
+            room_runtime.bind_store(app_shell_store)
             room_runtime.bind_facade(_room_facade)
             room_runtime.bind_s3_service(s3_service)
             room_center.room_center.bind_facade(_room_facade)
@@ -618,7 +619,7 @@ async def lifespan(app: FastAPI):
             execution_room_message_center.bind(
                 create_room_message_center(
                     room_services=room_services,
-                    store=_db_svc,
+                    store=app_shell_store,
                     sse_manager=sse_manager,
                     room_coordinator_service=room_coordinator_service,
                     summary_service=summary_llm_service,

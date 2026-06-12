@@ -26,6 +26,7 @@ from app_shell.agent_selection_service import agent_selection_service
 from app_shell.agent_service import agent_service
 from app_shell.delivery_runtime import sse_manager
 from app_shell.memory_service import room_memory_service
+from app_shell.runtime_store import UNBOUND_RUNTIME_STORE
 from app_shell.task_service import task_service
 from common.a2a_constants import SSEProcessingStatus, is_terminal_state
 from common.dto import (
@@ -158,8 +159,7 @@ class _ResolvedAttachments:
 class RoomServices:
     def __init__(self, debate_rounds: int = 2, *, room_store=None):
         if room_store is None:
-            import importlib
-            room_store = getattr(importlib.import_module("app_shell.database_service"), "db_service")
+            room_store = UNBOUND_RUNTIME_STORE
         self._store = room_store
         self.agent_service = agent_service  # Use singleton
         self.message_parser_service = None
@@ -184,6 +184,10 @@ class RoomServices:
     def bind_s3_service(self, service) -> None:
         """Inject object-storage service (avoids lazy singleton import)."""
         self._s3_service = service
+
+    def bind_store(self, store) -> None:
+        """Inject the room runtime persistence store explicitly at startup."""
+        self._store = store
 
     @property
     def s3_service(self):
