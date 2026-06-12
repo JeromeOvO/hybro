@@ -286,7 +286,7 @@ export function deriveFinalAnswer(
   }
 
   // --- 3. Single Agent Fast-Path ---
-  if (real.length === 1 && !turnHasSubstantiveLlmSynthesis(turn) && !hasLlmSynthesisContent(summary)) {
+  if (real.length === 1) {
     return {
       kind: "single",
       label: "Working",

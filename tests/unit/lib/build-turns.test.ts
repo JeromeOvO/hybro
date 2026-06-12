@@ -1027,14 +1027,15 @@ describe('primaryStreamMessageId', () => {
 
   it('prefers summary agent when synthesizing', () => {
     const user = makeUserEntity({ id: 'u1' })
-    const agent = makeAgentEntity({ id: 'a1', agentId: 'agent-a', taskStatus: 'completed', content: 'A' })
+    const agentA = makeAgentEntity({ id: 'a1', agentId: 'agent-a', taskStatus: 'completed', content: 'A' })
+    const agentB = makeAgentEntity({ id: 'a2', agentId: 'agent-b', taskStatus: 'completed', content: 'B' })
     const summary = makeAgentEntity({
       id: 's1',
       agentId: 'system:hybro',
       taskStatus: 'working',
       content: '',
     })
-    const turns = buildTurns(entitiesToMap([user, agent, summary]), ['u1', 'a1', 's1'], [])
+    const turns = buildTurns(entitiesToMap([user, agentA, agentB, summary]), ['u1', 'a1', 'a2', 's1'], [])
     expect(derivePrimaryStreamFromFinalAnswer(turns[0].finalAnswer)).toBe('s1')
   })
 
