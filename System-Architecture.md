@@ -694,6 +694,11 @@ The design keeps current task context, recent conversation context, room summary
 memory search results, and quoted reply context separate so each can be bounded
 and tested independently.
 
+App-shell memory search is a compatibility adapter over `ContextMemoryFacade`.
+Vector retrieval goes through `VectorDAL`, and keyword search/hydration goes
+through the context-memory content repository rather than private
+`database.mongodb` or `database.pinecone_db` backends.
+
 ## Background Jobs
 
 Background jobs are initialized from `main.py` after Redis/leader election setup.

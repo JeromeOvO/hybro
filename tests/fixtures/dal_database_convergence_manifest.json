@@ -23,16 +23,11 @@
         "main.py:407:app_shell.database_service",
         "main.py:407:db_service",
         "main.py:416:_db_svc",
-        "main.py:511:_db_svc"
+        "main.py:502:_db_svc"
     ],
     "mongo_singleton_blockers": [
-        "app_shell/memory_search_service.py:179:globals().get(\"mongodb\")",
-        "app_shell/memory_search_service.py:33:_mongodb_backend",
-        "app_shell/memory_search_service.py:37:__getattr__:mongodb",
-        "app_shell/memory_search_service.py:39:_mongodb_backend",
-        "app_shell/memory_search_service.py:47:_mongodb_backend",
-        "main.py:1103:_legacy_mongo",
-        "main.py:1163:_legacy_mongo",
+        "main.py:1094:_legacy_mongo",
+        "main.py:1154:_legacy_mongo",
         "main.py:219:database.mongodb",
         "main.py:220:_legacy_mongo",
         "main.py:224:_legacy_mongo",
@@ -41,19 +36,16 @@
         "main.py:322:_legacy_mongo",
         "main.py:361:_legacy_mongo",
         "main.py:416:_legacy_mongo",
-        "main.py:418:bind_mongo_backend as _bind_mem_mongo",
-        "main.py:425:_legacy_mongo",
-        "main.py:425:bind_mongo_backend:_bind_mem_mongo",
-        "main.py:802:_legacy_mongo",
-        "main.py:803:_legacy_mongo",
-        "main.py:804:_legacy_mongo",
-        "main.py:805:_legacy_mongo",
-        "main.py:806:_legacy_mongo",
-        "main.py:821:_legacy_mongo",
-        "main.py:961:_legacy_mongo",
-        "main.py:962:_legacy_mongo",
-        "main.py:969:_legacy_mongo",
-        "main.py:970:_legacy_mongo"
+        "main.py:793:_legacy_mongo",
+        "main.py:794:_legacy_mongo",
+        "main.py:795:_legacy_mongo",
+        "main.py:796:_legacy_mongo",
+        "main.py:797:_legacy_mongo",
+        "main.py:812:_legacy_mongo",
+        "main.py:952:_legacy_mongo",
+        "main.py:953:_legacy_mongo",
+        "main.py:960:_legacy_mongo",
+        "main.py:961:_legacy_mongo"
     ],
     "database_repository_blockers": [
     "main.py:291:database.repository",
@@ -61,18 +53,10 @@
     "main.py:327:create_repository=Repository"
     ],
     "pinecone_singleton_blockers": [
-        "app_shell/memory_search_service.py:121:self.pinecone",
-        "app_shell/memory_search_service.py:34:_pinecone_backend",
-        "app_shell/memory_search_service.py:41:_pinecone_backend",
-        "app_shell/memory_search_service.py:52:_pinecone_backend",
-        "app_shell/memory_search_service.py:87:self.pinecone",
     "main.py:414:database.pinecone_db",
     "main.py:414:pinecone_db",
     "main.py:415:pinecone_db",
-    "main.py:416:pinecone_db",
-    "main.py:421:bind_pinecone_backend as _bind_mem_pinecone",
-    "main.py:426:bind_pinecone_backend:_bind_mem_pinecone",
-    "main.py:426:pinecone_db"
+    "main.py:416:pinecone_db"
     ],
     "direct_pinecone_blockers": [],
     "legacy_runtime_files": [
