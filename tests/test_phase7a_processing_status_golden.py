@@ -42,7 +42,7 @@ def _make_rmc_for_supervisor_result(manager: SSEManager) -> RoomMessageCenter:
     rmc.room_coordinator_service = SimpleNamespace(
         emit_synthesis_message=AsyncMock()
     )
-    rmc._emit_unified_summary = AsyncMock()
+    rmc._emit_unified_summary = AsyncMock(return_value=("synthesis", "summary content"))
     rmc._trigger_compaction_safe = AsyncMock()
     rmc._notify_all_non_terminal_tasks_failed = AsyncMock()
     rmc.build_turn_content = None
@@ -177,7 +177,7 @@ async def test_golden_hitl_resolve_resume_completion_order(monkeypatch):
             )
         )
     )
-    rmc._emit_unified_summary = AsyncMock(return_value="synthesis")
+    rmc._emit_unified_summary = AsyncMock(return_value=("synthesis", "summary content"))
     rmc._persist_turn_completion_kind = AsyncMock()
     rmc._log_room_memory_stats = AsyncMock()
 
@@ -227,7 +227,7 @@ async def test_resume_completion_uses_deterministic_kind_when_summary_skipped(mo
             )
         )
     )
-    rmc._emit_unified_summary = AsyncMock(return_value="deterministic")
+    rmc._emit_unified_summary = AsyncMock(return_value=("deterministic", None))
     rmc._persist_turn_completion_kind = AsyncMock()
     rmc._log_room_memory_stats = AsyncMock()
 
