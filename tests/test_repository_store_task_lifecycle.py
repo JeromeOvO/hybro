@@ -125,6 +125,63 @@ def _assert_terminal_state_filter(query: dict) -> None:
     assert set(state_filter["$nin"]) == {"completed", "canceled", "failed", "rejected"}
 
 
+@pytest.mark.asyncio
+async def test_check_task_limits_honors_compatibility_store_overrides():
+    class CountingMessageRepository:
+        async def count_agent_messages(self, query: dict) -> int:
+            return 1
+
+    store = AppShellRepositoryStore(
+        mongo=FakeMongo(),
+        room_repository=object(),
+        message_repository=CountingMessageRepository(),
+        agent_repository=object(),
+    )
+    store.MAX_TASKS_PER_USER = 1
+    store.MAX_TASKS_PER_ROOM = 1
+
+    with pytest.raises(ValueError, match="User has too many pending tasks"):
+        await store.check_task_limits("user-1", "room-1", ["working"])
+
+
+def test_webhook_token_helpers_do_not_require_repository_attributes():
+    store = object.__new__(AppShellRepositoryStore)
+
+    token = store.generate_webhook_token()
+
+    assert isinstance(token, str)
+    assert len(token) > 0
+
+
+def test_webhook_token_helpers_live_in_shared_module():
+    from app_shell.repository_parts import webhook_tokens
+
+    assert callable(webhook_tokens.generate_webhook_token)
+    assert callable(webhook_tokens.hash_webhook_token)
+    assert callable(webhook_tokens.verify_webhook_token)
+
+
+@pytest.mark.asyncio
+async def test_check_task_limits_passes_facade_limits_without_mutating_part():
+    class CountingMessageRepository:
+        async def count_agent_messages(self, query: dict) -> int:
+            return 1
+
+    store = AppShellRepositoryStore(
+        mongo=FakeMongo(),
+        room_repository=object(),
+        message_repository=CountingMessageRepository(),
+        agent_repository=object(),
+    )
+    store.MAX_TASKS_PER_USER = 2
+    store.MAX_TASKS_PER_ROOM = 2
+
+    await store.check_task_limits("user-1", "room-1", ["working"])
+
+    assert "MAX_TASKS_PER_USER" not in store.tasks.__dict__
+    assert "MAX_TASKS_PER_ROOM" not in store.tasks.__dict__
+
+
 class TestRepositoryStoreAccumulateArtifact:
     @pytest.mark.asyncio
     async def test_missing_artifact_id_pushes_new_artifact(self):
