@@ -80,7 +80,7 @@ class TestCompactionSweep:
 
     @pytest.mark.asyncio
     async def test_sweep_uses_correct_attribute_names(self, mock_compaction_config):
-        """Verify sweep accesses room_memories_collection and compacted_count."""
+        """Verify sweep uses repository room ids and compacted_count."""
         from jobs.compaction_sweep import CompactionSweep, CompactionSweepDeps
 
         sweep = CompactionSweep(interval_minutes=60)
@@ -93,19 +93,9 @@ class TestCompactionSweep:
         mock_compaction_svc = AsyncMock()
         mock_compaction_svc.compact_if_needed = AsyncMock(return_value=mock_result)
 
-        # Build a chainable cursor mock for room_memories_collection.find().batch_size()
-        async def _room_mem_docs():
-            yield {"room_id": "room_1"}
-
-        mock_mem_cursor = MagicMock()
-        mock_mem_cursor.batch_size.return_value = _room_mem_docs()
-
-        mock_mem_coll = MagicMock()
-        mock_mem_coll.find.return_value = mock_mem_cursor
-
         sweep.set_sweep_deps(
             CompactionSweepDeps(
-                room_memories_collection=mock_mem_coll,
+                list_room_ids_with_memory=AsyncMock(return_value=["room_1"]),
                 get_room_ids_with_non_terminal_runs=AsyncMock(return_value=[]),
                 compaction_service=mock_compaction_svc,
             )
@@ -132,20 +122,11 @@ class TestCompactionSweep:
         mock_compaction_svc = AsyncMock()
         mock_compaction_svc.compact_if_needed = AsyncMock(return_value=mock_result)
 
-        # Room memories cursor: 2 rooms (one active, one idle)
-        async def _room_mem_docs():
-            yield {"room_id": "active_room"}
-            yield {"room_id": "idle_room"}
-
-        mock_mem_cursor = MagicMock()
-        mock_mem_cursor.batch_size.return_value = _room_mem_docs()
-
-        mock_mem_coll = MagicMock()
-        mock_mem_coll.find.return_value = mock_mem_cursor
-
         sweep.set_sweep_deps(
             CompactionSweepDeps(
-                room_memories_collection=mock_mem_coll,
+                list_room_ids_with_memory=AsyncMock(
+                    return_value=["active_room", "idle_room"]
+                ),
                 get_room_ids_with_non_terminal_runs=AsyncMock(
                     return_value=["active_room"]
                 ),

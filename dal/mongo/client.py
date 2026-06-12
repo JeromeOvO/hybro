@@ -87,6 +87,12 @@ class MongoCollectionAdapter:
     async def create_indexes(self, indexes: list, **kwargs) -> list[str]:
         return await self._collection.create_indexes(indexes, **kwargs)
 
+    async def index_information(self) -> dict:
+        return await self._collection.index_information()
+
+    async def drop_index(self, name: str) -> None:
+        await self._collection.drop_index(name)
+
     async def bulk_write(self, operations: list, **kwargs) -> Any:
         result = await self._collection.bulk_write(operations, **kwargs)
         return result.raw_result if hasattr(result, "raw_result") else result

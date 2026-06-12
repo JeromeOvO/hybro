@@ -36,7 +36,7 @@ class LeaderGate(Protocol):
 
 @dataclass(frozen=True)
 class CompactionSweepDeps:
-    room_memories_collection: Any
+    list_room_ids_with_memory: Callable[[], Awaitable[list[str]]]
     get_room_ids_with_non_terminal_runs: Callable[[], Awaitable[list[str]]]
     compaction_service: Any
 
@@ -125,11 +125,6 @@ class CompactionSweep:
         deps = self._require_sweep_deps()
         stats = {"scanned": 0, "compacted": 0, "skipped": 0, "errors": 0}
 
-        collection = deps.room_memories_collection
-        if collection is None:
-            logger.warning("Compaction sweep: room_memory collection not available")
-            return stats
-
         # Pre-fetch room_ids with non-terminal runs (runs are source of truth)
         active_room_ids: set[str] = set()
         try:
@@ -169,9 +164,7 @@ class CompactionSweep:
 
         workers = [asyncio.create_task(_worker()) for _ in range(MAX_CONCURRENT_COMPACTIONS)]
 
-        cursor = collection.find({}, {"room_id": 1}).batch_size(100)
-        async for doc in cursor:
-            room_id = doc.get("room_id")
+        for room_id in await deps.list_room_ids_with_memory():
             if not room_id:
                 continue
             stats["scanned"] += 1

@@ -1,5 +1,4 @@
 import asyncio
-import importlib
 import logging
 import os
 import sys
@@ -69,7 +68,7 @@ from app_shell.agent_health_service import agent_health_service
 from app_shell.api_key_auth import MongoAPIKeyAuthenticator
 from app_shell.delivery_runtime import sse_manager
 from app_shell.health_check import AppShellHealthCheck, HealthCheck
-from app_shell.viewset import AppShellViewSetRepositoryProvider
+from app_shell.viewset import AppShellDALViewSetRepositoryProvider
 from common.api_key_auth import bind_api_key_authenticator
 from common.auth import bind_auth_config
 from common.config.settings import settings
@@ -216,14 +215,14 @@ async def lifespan(app: FastAPI):
     try:
         # ── Phase 1: Infrastructure (DB + Redis, no background work) ──
 
-        _mongodb_mod = importlib.import_module("database.mongodb")
-        _legacy_mongo = _mongodb_mod.mongodb
-        # TODO: Remove this dual MongoDB startup path after remaining legacy
-        # database.mongodb consumers move to MongoDALImpl. Until then, the
-        # legacy singleton and DAL each maintain their own Motor client pool.
-        await _legacy_mongo.connect()
+        from container import create_mongo_dal
 
-        if _legacy_mongo.client is not None:
+        mongo_dal = create_mongo_dal()
+        _mongo_dal = mongo_dal
+        app.state.mongo_dal = mongo_dal
+        await mongo_dal.connect()
+
+        if await mongo_dal.ping():
             from a2a_adapter import AgentCardResolverImpl, AgentTransportImpl
             from a2a_adapter import artifact_storage as a2a_artifact_storage
             from app_shell.agent_capability_issue_service import (
@@ -277,18 +276,15 @@ async def lifespan(app: FastAPI):
                 create_execution_deps,
                 create_execution_facade,
                 create_execution_repositories,
-                create_mongo_dal,
                 create_object_storage_dal,
                 create_platform_config,
                 create_platform_deps,
                 create_platform_facade,
                 create_room_deps,
                 create_vector_dal,
+                ensure_runtime_indexes,
             )
             from context_memory.config import ContextMemoryLLMConfig
-
-            get_db = _mongodb_mod.get_db
-            Repository = importlib.import_module("database.repository").Repository
             from execution.orchestration.room_supervisor_service import (
                 SupervisorPlanningError,
                 room_supervisor_service,
@@ -309,6 +305,7 @@ async def lifespan(app: FastAPI):
                 PlatformAttachmentCleanupPort,
                 PlatformAttachmentMetadataReader,
             )
+            from platform_module.adapters import RateLimitCollectionAdapter
             from platform_module.rate_limit import PlatformAgentRateLimiter
 
             a2a_artifact_storage.bind_a2a_storage_dependencies(
@@ -317,21 +314,21 @@ async def lifespan(app: FastAPI):
                 max_file_size_mb=settings.max_file_size_mb,
             )
             bind_a2a_artifact_storage(a2a_artifact_storage)
-            await _legacy_mongo.create_context_memory_indexes()
+            await ensure_runtime_indexes(mongo=mongo_dal)
             agent_rate_limiter = PlatformAgentRateLimiter(
-                collection=_legacy_mongo.agent_requests_collection,
+                collection=RateLimitCollectionAdapter(
+                    mongo_dal.collection("agent_requests"),
+                    "agent_requests",
+                ),
             )
             viewset.bind_viewset_dependencies(
-                provider=AppShellViewSetRepositoryProvider(
-                    db_provider=get_db,
-                    create_repository=Repository,
-                ),
+                provider=AppShellDALViewSetRepositoryProvider(mongo=mongo_dal),
             )
 
             class AppShellAgentAvatarManager:
-                def __init__(self, storage, agent_store) -> None:
+                def __init__(self, storage, agent_repository) -> None:
                     self._storage = storage
-                    self._agent_store = agent_store
+                    self._agent_repository = agent_repository
 
                 async def store_avatar(
                     self,
@@ -348,24 +345,14 @@ async def lifespan(app: FastAPI):
                         content_length=len(content),
                     )
                     icon_url = self._storage.get_public_url(s3_key)
-                    await self._agent_store.agents_collection.update_one(
-                        {"agent_id": agent_id},
-                        {"$set": {"agent_card.iconUrl": icon_url}},
+                    await self._agent_repository.update(
+                        agent_id,
+                        {"agent_card.iconUrl": icon_url},
                     )
                     return icon_url
 
-            agent.bind_agent_dependencies(
-                center=AppShellAgentCenter(),
-                service=agent_service,
-                issue_service=capability_issue_service,
-                avatar_manager=AppShellAgentAvatarManager(s3_service, _legacy_mongo),
-            )
             inspection_center.bind_inspection_dependencies(AppShellInspectionCenter())
             memory_center.bind_memory_dependencies(AppShellMemoryCenter())
-            mongo_dal = create_mongo_dal()
-            _mongo_dal = mongo_dal
-            app.state.mongo_dal = mongo_dal
-            await mongo_dal.connect()
             # Bind Platform-owned API key store after MongoDAL is created
             api_key_store = create_api_key_store(mongo=mongo_dal)
             discovery_api_keys.bind_api_key_store(api_key_store)
@@ -403,17 +390,12 @@ async def lifespan(app: FastAPI):
             from app_shell.a2a_runtime import (
                 a2a_service,
             )
-
-            _db_svc = importlib.import_module("app_shell.database_service").db_service
             from app_shell.hitl_service import (
                 bind_hitl_service,
                 create_hitl_service,
                 hitl_service,
             )
 
-            pinecone_db = importlib.import_module("database.pinecone_db").pinecone_db
-            pinecone_db.connect()
-            _db_svc.bind_backends(mongo=_legacy_mongo, pinecone=pinecone_db)
             capability_issue_service.bind_mongo(mongo_dal)
             from common.observability.run_metrics import increment_counter
             from execution.cancellation import (
@@ -499,7 +481,6 @@ async def lifespan(app: FastAPI):
                 llm_provider=llm_provider
             )
             room_memory_llm_service = RoomMemoryLLMService(llm_provider=llm_provider)
-            _db_svc.bind_embedding_service(embedding_llm_service)
             openai_service.bind_llm_gateway(
                 llm_provider,
                 llm_gateway_config,
@@ -546,6 +527,15 @@ async def lifespan(app: FastAPI):
             agent_matcher.bind_facade(_agent_facade)
             agent_selection_service.bind_facade(_agent_facade)
             agent_health_service.bind_repository(_agent_deps.agent_repository)
+            agent.bind_agent_dependencies(
+                center=AppShellAgentCenter(),
+                service=agent_service,
+                issue_service=capability_issue_service,
+                avatar_manager=AppShellAgentAvatarManager(
+                    s3_service,
+                    _agent_deps.agent_repository,
+                ),
+            )
             _resolver_repo = create_agent_resolver_repository(service=agent_service)
             agent_resolver_service.bind_repository(_resolver_repo)
             from agent.domain_alias import DomainAliasService as _DomainAliasSvc
@@ -788,28 +778,22 @@ async def lifespan(app: FastAPI):
             room_memory_service.bind_facade(context_memory_facade)
             room_runtime.bind_context_memory(_context_memory_deps.memory_manager)
         else:
-            logger.warning("AgentDeps binding skipped: MongoDB client is unavailable")
+            raise RuntimeError("MongoDAL ping failed after connect")
 
-        await _legacy_mongo.ensure_agent_indexes()
-        await _legacy_mongo.create_capability_issue_indexes()
-        await _legacy_mongo.create_run_lifecycle_indexes()
-        await _legacy_mongo.create_room_quotes_indexes()
-        if _legacy_mongo.client is not None:
-            if _execution_deps is None:
-                raise RuntimeError("ExecutionDeps have not been bound")
-            try:
-                healed = await _execution_deps.execution_engine.heal_diverged_runs(
-                    limit=500
-                )
-            except Exception:
-                logger.warning(
-                    "startup heal: failed; continuing startup", exc_info=True
-                )
-            else:
-                if healed:
-                    logger.info("startup heal: healed %s diverged run(s)", healed)
+        if _execution_deps is None:
+            raise RuntimeError("ExecutionDeps have not been bound")
+        try:
+            healed = await _execution_deps.execution_engine.heal_diverged_runs(
+                limit=500
+            )
+        except Exception:
+            logger.warning(
+                "startup heal: failed; continuing startup", exc_info=True
+            )
+        else:
+            if healed:
+                logger.info("startup heal: healed %s diverged run(s)", healed)
         if settings.webhook_signing_key:
-            await _legacy_mongo.create_task_tracking_indexes()
             await app_shell_store.ensure_hitl_indexes()
 
         # Init app-shell Redis subsystems before the guard. Delivery-owned
@@ -949,16 +933,22 @@ async def lifespan(app: FastAPI):
         compaction_sweep.set_leader_election(_leader)
         compaction_sweep.set_sweep_deps(
             CompactionSweepDeps(
-                room_memories_collection=_legacy_mongo.room_memories_collection,
-                get_room_ids_with_non_terminal_runs=_legacy_mongo.get_room_ids_with_non_terminal_runs,
+                list_room_ids_with_memory=(
+                    context_memory_facade.memory_repository.list_room_ids_with_memory
+                ),
+                get_room_ids_with_non_terminal_runs=(
+                    _execution_repos[
+                        "run_repository"
+                    ].get_room_ids_with_non_terminal_runs
+                ),
                 compaction_service=compaction_service,
             )
         )
         orphaned_upload_cleaner.set_leader_election(_leader)
         orphaned_upload_cleaner.set_cleanup_deps(
             OrphanedUploadCleanerDeps(
-                file_uploads_collection=_legacy_mongo.file_uploads_collection,
-                room_user_messages_collection=_legacy_mongo.room_user_messages_collection,
+                file_uploads_collection=mongo_dal.collection("file_uploads"),
+                room_user_messages_collection=mongo_dal.collection("room_user_messages"),
                 object_storage=s3_service,
             )
         )
@@ -1091,7 +1081,6 @@ async def lifespan(app: FastAPI):
             if _delivery_bound:
                 sse_manager.unbind_facade()
             app.state.delivery_facade = None
-        await _legacy_mongo.close_database_connection()
         raise
 
     # ── Phase 3: Serve + Normal Shutdown ──
@@ -1150,8 +1139,6 @@ async def lifespan(app: FastAPI):
         if _mongo_dal is not None:
             await _mongo_dal.close()
             app.state.mongo_dal = None
-
-        await _legacy_mongo.close_database_connection()
 
 
 app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")

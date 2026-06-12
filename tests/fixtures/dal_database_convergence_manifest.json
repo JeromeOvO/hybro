@@ -18,46 +18,10 @@
         "database/pinecone_db.py",
         "database/repository.py"
     ],
-    "database_service_blockers": [
-        "main.py:407:_db_svc",
-        "main.py:407:app_shell.database_service",
-        "main.py:407:db_service",
-        "main.py:416:_db_svc",
-        "main.py:502:_db_svc"
-    ],
-    "mongo_singleton_blockers": [
-        "main.py:1094:_legacy_mongo",
-        "main.py:1154:_legacy_mongo",
-        "main.py:219:database.mongodb",
-        "main.py:220:_legacy_mongo",
-        "main.py:224:_legacy_mongo",
-        "main.py:226:_legacy_mongo",
-        "main.py:320:_legacy_mongo",
-        "main.py:322:_legacy_mongo",
-        "main.py:361:_legacy_mongo",
-        "main.py:416:_legacy_mongo",
-        "main.py:793:_legacy_mongo",
-        "main.py:794:_legacy_mongo",
-        "main.py:795:_legacy_mongo",
-        "main.py:796:_legacy_mongo",
-        "main.py:797:_legacy_mongo",
-        "main.py:812:_legacy_mongo",
-        "main.py:952:_legacy_mongo",
-        "main.py:953:_legacy_mongo",
-        "main.py:960:_legacy_mongo",
-        "main.py:961:_legacy_mongo"
-    ],
-    "database_repository_blockers": [
-    "main.py:291:database.repository",
-    "main.py:326:db_provider=get_db",
-    "main.py:327:create_repository=Repository"
-    ],
-    "pinecone_singleton_blockers": [
-    "main.py:414:database.pinecone_db",
-    "main.py:414:pinecone_db",
-    "main.py:415:pinecone_db",
-    "main.py:416:pinecone_db"
-    ],
+    "database_service_blockers": [],
+    "mongo_singleton_blockers": [],
+    "database_repository_blockers": [],
+    "pinecone_singleton_blockers": [],
     "direct_pinecone_blockers": [],
     "legacy_runtime_files": [
         "app_shell/database_service.py",

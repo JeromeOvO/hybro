@@ -158,6 +158,276 @@ def create_vector_dal() -> VectorDAL:
     return VectorDALImpl()
 
 
+async def ensure_runtime_indexes(*, mongo: MongoDAL) -> None:
+    await _ensure_agent_indexes(mongo)
+    await _ensure_context_memory_indexes(mongo)
+    await _ensure_capability_issue_indexes(mongo)
+    await _ensure_run_lifecycle_indexes(mongo)
+    await _ensure_room_quote_indexes(mongo)
+    await _ensure_task_tracking_indexes(mongo)
+
+
+async def _ensure_agent_indexes(mongo: MongoDAL) -> None:
+    agents = mongo.collection("agents")
+    existing = await agents.index_information()
+    index = existing.get("unique_normalized_url")
+    needs_recreate = index is None or index.get("partialFilterExpression") != {
+        "normalized_url": {"$type": "string"}
+    }
+    if not needs_recreate:
+        return
+    try:
+        await agents.drop_index("unique_normalized_url")
+    except Exception:
+        pass
+    await agents.create_index(
+        [("normalized_url", 1)],
+        unique=True,
+        name="unique_normalized_url",
+        partialFilterExpression={"normalized_url": {"$type": "string"}},
+    )
+
+
+async def _create_index(
+    mongo: MongoDAL,
+    collection_name: str,
+    keys,
+    *,
+    name: str,
+    unique: bool = False,
+    critical: bool = False,
+    **kwargs,
+) -> None:
+    collection = mongo.collection(collection_name)
+    try:
+        await collection.create_index(keys, unique=unique, name=name, **kwargs)
+    except Exception as exc:
+        logger = logging.getLogger(__name__)
+        if unique and critical:
+            logger.error(
+                "Critical index creation failed for %s.%s",
+                collection_name,
+                name,
+                exc_info=True,
+            )
+            raise RuntimeError(
+                f"Critical index creation failed for {collection_name}.{name}"
+            ) from exc
+        logger.warning(
+            "Index creation failed for %s.%s",
+            collection_name,
+            name,
+            exc_info=True,
+        )
+
+
+async def _ensure_context_memory_indexes(mongo: MongoDAL) -> None:
+    await _create_index(
+        mongo,
+        "conversation_content",
+        [("room_id", 1), ("turn_id", 1)],
+        name="room_turn_unique",
+        unique=True,
+        critical=True,
+    )
+    await _create_index(
+        mongo,
+        "conversation_content",
+        [("document_id", 1)],
+        name="document_id_unique",
+        unique=True,
+        partialFilterExpression={"document_id": {"$exists": True}},
+    )
+    await _create_index(
+        mongo,
+        "conversation_content",
+        [("room_id", 1), ("stored_at", -1)],
+        name="room_stored_at",
+    )
+    await _create_index(
+        mongo,
+        "conversation_content",
+        [
+            ("content", "text"),
+            ("turn_notes.keywords", "text"),
+            ("turn_notes.entities", "text"),
+            ("turn_notes.one_liner", "text"),
+        ],
+        name="turn_notes_text",
+    )
+    await _create_index(
+        mongo,
+        "conversation_content",
+        [("expires_at", 1)],
+        name="content_ttl",
+        expireAfterSeconds=0,
+        sparse=True,
+    )
+    await _create_index(
+        mongo,
+        "user_memories",
+        [("user_id", 1)],
+        name="user_id_unique",
+        unique=True,
+        critical=True,
+    )
+    await _create_index(
+        mongo,
+        "agent_memories",
+        [("agent_id", 1)],
+        name="agent_id_unique",
+        unique=True,
+        critical=True,
+    )
+    await _create_index(
+        mongo,
+        "room_memories",
+        [("room_id", 1)],
+        name="room_id_unique",
+        unique=True,
+        critical=True,
+    )
+
+
+async def _ensure_capability_issue_indexes(mongo: MongoDAL) -> None:
+    await _create_index(
+        mongo,
+        "agent_capability_issues",
+        [("agent_id", 1), ("status", 1)],
+        name="agent_id_status",
+    )
+    await _create_index(
+        mongo,
+        "agent_capability_issues",
+        [("status", 1), ("agent_id", 1)],
+        name="status_agent_id",
+    )
+    await _create_index(
+        mongo,
+        "agent_capability_issues",
+        [("created_at", 1)],
+        name="created_at",
+    )
+    await _create_index(
+        mongo,
+        "agent_capability_issues",
+        [("issue_id", 1)],
+        name="issue_id_unique",
+        unique=True,
+    )
+
+
+async def _ensure_run_lifecycle_indexes(mongo: MongoDAL) -> None:
+    await _create_index(
+        mongo,
+        "runs",
+        [("run_id", 1)],
+        name="run_id_unique",
+        unique=True,
+    )
+    await _create_index(
+        mongo,
+        "runs",
+        [("room_id", 1), ("state", 1), ("updated_at", -1)],
+        name="room_state_updated_at",
+    )
+    await _create_index(
+        mongo,
+        "runs",
+        [("room_id", 1), ("client_request_id", 1), ("agent_id", 1)],
+        name="room_client_agent_idempotency",
+        unique=True,
+        partialFilterExpression={
+            "client_request_id": {"$type": "string"},
+            "agent_id": {"$type": "string"},
+        },
+    )
+    await _create_index(
+        mongo,
+        "run_events",
+        [("event_id", 1)],
+        name="event_id_unique",
+        unique=True,
+    )
+    await _create_index(
+        mongo,
+        "run_events",
+        [("run_id", 1), ("seq", 1)],
+        name="run_seq_unique",
+        unique=True,
+    )
+    await _create_index(
+        mongo,
+        "run_events",
+        [("room_id", 1), ("ts", -1)],
+        name="room_ts",
+    )
+
+
+async def _ensure_room_quote_indexes(mongo: MongoDAL) -> None:
+    await _create_index(
+        mongo,
+        "room_quotes",
+        [("quote_id", 1)],
+        name="quote_id_unique",
+        unique=True,
+    )
+    await _create_index(
+        mongo,
+        "room_quotes",
+        [("room_id", 1)],
+        name="room_id_lookup",
+    )
+
+
+async def _ensure_task_tracking_indexes(mongo: MongoDAL) -> None:
+    await _create_index(
+        mongo,
+        "room_agent_messages",
+        [("has_task_tracking", 1)],
+        name="has_task_tracking_sparse",
+        sparse=True,
+    )
+    await _create_index(
+        mongo,
+        "room_agent_messages",
+        [
+            ("task_updated_at", 1),
+            ("message_content.message_task.status.state", 1),
+        ],
+        name="task_updated_state_sparse",
+        sparse=True,
+    )
+    await _create_index(
+        mongo,
+        "room_agent_messages",
+        [
+            ("task_created_at", 1),
+            ("message_content.message_task.status.state", 1),
+        ],
+        name="task_created_state_sparse",
+        sparse=True,
+    )
+    await _create_index(
+        mongo,
+        "room_agent_messages",
+        [
+            ("user_id", 1),
+            ("message_content.message_task.status.state", 1),
+            ("has_task_tracking", 1),
+        ],
+        name="user_task_state_sparse",
+        sparse=True,
+    )
+    await _create_index(
+        mongo,
+        "room_agent_messages",
+        [("room_id", 1), ("has_task_tracking", 1), ("task_created_at", -1)],
+        name="room_task_created_sparse",
+        sparse=True,
+    )
+
+
 class AgentViewsetVectorIndexAdapter:
     def __init__(
         self,

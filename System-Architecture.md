@@ -374,8 +374,10 @@ Business modules use module-scoped repositories built from `MongoDAL`,
 - `dal.s3`: object storage adapter.
 - `dal.index_registry`: startup index registration across modules.
 
-`database/mongodb.py` remains only for operational migration scripts and legacy
-data migration helpers; it is not a production module dependency.
+`database/mongodb.py`, `database/pinecone_db.py`, `database/repository.py`, and
+`app_shell/database_service.py` remain as excluded legacy runtime files until
+the final deletion PR. Production startup wiring in `main.py` uses `MongoDAL`,
+`VectorDAL`, DAL-backed repositories, and narrow app-shell adapters directly.
 
 Important Mongo collections include:
 
@@ -415,8 +417,9 @@ Examples:
 - `app_shell.room_runtime`: room send-message preparation, target resolution,
   attachment resolution, supervisor preparation, and message parsing.
 - `app_shell.agent_service`: route-facing adapter over `AgentFacade`.
-- `app_shell.database_service`: app-shell database facade over
-  `database.mongodb` and Pinecone.
+- `app_shell.database_service`: legacy app-shell database facade retained only
+  until the final legacy file deletion PR; production wiring no longer imports
+  or binds it.
 - `app_shell.relay_service`: relay route surface over
   `hub_runtime_bridge`. Hub-owned liveness, stream binding, agent sync,
   ownership, and internal response router setup are handled by `HubFacade`;
@@ -764,7 +767,8 @@ The current codebase has a mixed architecture:
 - Newer modules use explicit facades, protocol interfaces, DTOs, and container
   construction.
 - Some app-shell modules still use singleton-style process runtime objects.
-- `app_shell.database_service` and `database.mongodb` still expose broad APIs.
+- Legacy database files still exist for the final deletion phase, but
+  production startup no longer imports or binds them.
 - Room orchestration still has a compatibility store surface, but it is backed
   by module repositories and DAL collections rather than the legacy database
   singleton.

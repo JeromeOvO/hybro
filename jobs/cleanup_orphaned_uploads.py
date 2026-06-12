@@ -7,6 +7,7 @@ Deletes file_uploads records (and their S3 objects) that are older than
 from __future__ import annotations
 
 import asyncio
+import inspect
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Protocol
@@ -114,11 +115,11 @@ class OrphanedUploadCleaner:
         """Delete file_uploads not referenced by any message after max_age_hours."""
         deps = self._require_cleanup_deps()
         cutoff = utcnow() - timedelta(hours=max_age_hours)
-        cursor = deps.file_uploads_collection.find(
-            {"uploaded_at": {"$lt": cutoff}}
-        )
+        cursor = deps.file_uploads_collection.find({"uploaded_at": {"$lt": cutoff}})
+        if inspect.isawaitable(cursor):
+            cursor = await cursor
         deleted = 0
-        async for doc in cursor:
+        async for doc in _aiter_documents(cursor):
             ref = await deps.room_user_messages_collection.find_one(
                 {"message_content.attachments.file_id": doc["file_id"]}
             )
@@ -135,6 +136,15 @@ class OrphanedUploadCleaner:
                 logger.info("Cleaned up orphaned upload: %s", doc["file_id"])
 
         return deleted
+
+
+async def _aiter_documents(cursor):
+    if hasattr(cursor, "__aiter__"):
+        async for doc in cursor:
+            yield doc
+        return
+    for doc in cursor:
+        yield doc
 
 
 orphaned_upload_cleaner = OrphanedUploadCleaner()
