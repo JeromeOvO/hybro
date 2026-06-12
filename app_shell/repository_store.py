@@ -140,6 +140,9 @@ class AppShellRepositoryStore:
         limit: int = 0,
     ) -> list[Agent]:
         try:
+            # Legacy room selection accepts arbitrary agent predicates; use the
+            # DAL collection directly to preserve that query surface during
+            # migration instead of applying AgentRepository visibility filters.
             docs = await self._agents.find(dict(query or {}), limit=limit or None)
             agents = [_safe_parse_agent(doc) for doc in docs if doc is not None]
             return [agent for agent in agents if agent is not None]
@@ -178,6 +181,10 @@ class AppShellRepositoryStore:
             updated = await self._room_repository.update(room_id, updates)
             if updated:
                 return True
+            # MongoDAL update_one returns False for matched no-op writes because
+            # it only exposes modified/upserted state. Legacy database_service
+            # treated any matched room update as success, so confirm existence
+            # before reporting failure.
             return await self._room_repository.get_by_id(room_id) is not None
         except Exception:
             logger.error("Failed to update room", exc_info=True)
@@ -264,16 +271,16 @@ class AppShellRepositoryStore:
             logger.error("Failed to add room agent message", exc_info=True)
             return False
 
-    async def add_room_user_message(self, room_user_message: RoomUserMessage) -> str:
+    async def add_room_user_message(self, room_user_message: RoomUserMessage) -> bool:
         try:
             if room_user_message.message_id == "":
                 room_user_message.message_id = str(uuid.uuid4())
             doc = room_user_message.model_dump(mode="json", exclude={"quote"})
             _strip_file_urls(doc)
-            return await self._message_repository.save_user_message(doc)
+            return bool(await self._message_repository.save_user_message(doc))
         except Exception:
             logger.error("Failed to add room user message", exc_info=True)
-            return ""
+            return False
 
     async def update_room_user_message_by_message_id(
         self, message_id: str, room_user_message: RoomUserMessage
@@ -293,9 +300,9 @@ class AppShellRepositoryStore:
         self, room_agent_message: RoomAgentMessage
     ) -> None:
         try:
-            await self._room_agent_messages.update_one(
+            await self._room_agent_messages.replace_one(
                 {"message_id": room_agent_message.message_id},
-                {"$set": room_agent_message.model_dump(mode="json")},
+                room_agent_message.model_dump(mode="json"),
                 upsert=True,
             )
         except Exception:

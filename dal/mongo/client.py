@@ -58,6 +58,10 @@ class MongoCollectionAdapter:
         result = await self._collection.update_one(query, update, **kwargs)
         return result.modified_count > 0 or result.upserted_id is not None
 
+    async def replace_one(self, query: dict, replacement: dict, **kwargs) -> bool:
+        result = await self._collection.replace_one(query, replacement, **kwargs)
+        return result.modified_count > 0 or result.upserted_id is not None
+
     async def update_many(self, query: dict, update: dict) -> int:
         result = await self._collection.update_many(query, update)
         return result.modified_count
