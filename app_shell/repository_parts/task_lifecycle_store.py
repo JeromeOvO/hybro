@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
-import secrets
 from datetime import timedelta
 from typing import Any
 
@@ -10,8 +7,13 @@ from app_shell.repository_parts.parsing import (
     _safe_parse_agent_message,
     _task_tracking_matches,
 )
+from app_shell.repository_parts.webhook_tokens import (
+    generate_webhook_token,
+    get_webhook_signing_key,
+    hash_webhook_token,
+    verify_webhook_token,
+)
 from common.a2a_constants import TERMINAL_STATES
-from common.config.settings import settings
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from models.room import RoomAgentMessage
@@ -21,32 +23,7 @@ from models.supervisor import TrajectoryStatus
 logger = get_logger(__name__)
 
 
-def _get_webhook_signing_key() -> bytes:
-    if not settings.webhook_signing_key:
-        raise RuntimeError("WEBHOOK_SIGNING_KEY not configured")
-    return settings.webhook_signing_key.encode()
-
-
-def _hash_webhook_token(token: str) -> str:
-    return hmac.new(
-        _get_webhook_signing_key(),
-        token.encode(),
-        hashlib.sha256,
-    ).hexdigest()
-
-
-def _verify_webhook_token(token: str, stored_hash: str) -> bool:
-    return hmac.compare_digest(_hash_webhook_token(token), stored_hash)
-
-
-def _generate_webhook_token() -> str:
-    return secrets.token_urlsafe(32)
-
-
 class AppShellTaskLifecycleStore:
-    MAX_TASKS_PER_USER = 100
-    MAX_TASKS_PER_ROOM = 50
-
     def __init__(
         self,
         *,
@@ -185,19 +162,25 @@ class AppShellTaskLifecycleStore:
         return [message for message in messages if message is not None]
 
     def _get_webhook_signing_key(self) -> bytes:
-        return _get_webhook_signing_key()
+        return get_webhook_signing_key()
 
     def hash_webhook_token(self, token: str) -> str:
-        return _hash_webhook_token(token)
+        return hash_webhook_token(token)
 
     def verify_webhook_token(self, token: str, stored_hash: str) -> bool:
-        return _verify_webhook_token(token, stored_hash)
+        return verify_webhook_token(token, stored_hash)
 
     def generate_webhook_token(self) -> str:
-        return _generate_webhook_token()
+        return generate_webhook_token()
 
     async def check_task_limits(
-        self, user_id: str, room_id: str, non_terminal_states: list[str]
+        self,
+        user_id: str,
+        room_id: str,
+        non_terminal_states: list[str],
+        *,
+        max_tasks_per_user: int,
+        max_tasks_per_room: int,
     ) -> None:
         user_count = await self._count_agent_messages(
             {
@@ -208,7 +191,7 @@ class AppShellTaskLifecycleStore:
                 "has_task_tracking": True,
             }
         )
-        if user_count >= self.MAX_TASKS_PER_USER:
+        if user_count >= max_tasks_per_user:
             raise ValueError(
                 f"User has too many pending tasks ({user_count}). "
                 "Please wait for some to complete."
@@ -223,7 +206,7 @@ class AppShellTaskLifecycleStore:
                 "has_task_tracking": True,
             }
         )
-        if room_count >= self.MAX_TASKS_PER_ROOM:
+        if room_count >= max_tasks_per_room:
             raise ValueError(
                 f"Room has too many pending tasks ({room_count}). "
                 "Please wait for some to complete."

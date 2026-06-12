@@ -24,10 +24,10 @@ from app_shell.repository_parts.parsing import (
     _strip_unset_task_tracking_fields,
     _task_tracking_matches,
 )
-from app_shell.repository_parts.task_lifecycle_store import (
-    _generate_webhook_token,
-    _hash_webhook_token,
-    _verify_webhook_token,
+from app_shell.repository_parts.webhook_tokens import (
+    generate_webhook_token,
+    hash_webhook_token,
+    verify_webhook_token,
 )
 from common.protocols import (
     AgentRepository,
@@ -300,21 +300,24 @@ class AppShellRepositoryStore:
         )
 
     def hash_webhook_token(self, token: str) -> str:
-        return _hash_webhook_token(token)
+        return hash_webhook_token(token)
 
     def verify_webhook_token(self, token: str, stored_hash: str) -> bool:
-        return _verify_webhook_token(token, stored_hash)
+        return verify_webhook_token(token, stored_hash)
 
     def generate_webhook_token(self) -> str:
-        return _generate_webhook_token()
+        return generate_webhook_token()
 
     async def check_task_limits(
         self, user_id: str, room_id: str, non_terminal_states: list[str]
     ) -> None:
-        task_store = self._task_delegate()
-        task_store.MAX_TASKS_PER_USER = self.MAX_TASKS_PER_USER
-        task_store.MAX_TASKS_PER_ROOM = self.MAX_TASKS_PER_ROOM
-        return await task_store.check_task_limits(user_id, room_id, non_terminal_states)
+        return await self._task_delegate().check_task_limits(
+            user_id,
+            room_id,
+            non_terminal_states,
+            max_tasks_per_user=self.MAX_TASKS_PER_USER,
+            max_tasks_per_room=self.MAX_TASKS_PER_ROOM,
+        )
 
     async def enable_task_tracking_on_message(
         self,
