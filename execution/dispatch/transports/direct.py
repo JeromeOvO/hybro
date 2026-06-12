@@ -24,6 +24,7 @@ from a2a.types import (
     TaskState,
     TaskStatus,
     TextPart,
+)
 from a2a_adapter.message_factory import build_message_from_parts, from_sdk_task
 from a2a_adapter.task_artifacts import materialize_non_text_parts_as_artifact
 from a2a_adapter.task_requests import (
