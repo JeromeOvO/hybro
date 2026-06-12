@@ -5,10 +5,9 @@ from fastapi.params import Depends as DependsParam
 
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from app_shell.bound import AgentSelectionSuggester, RoomCenterRouteOwner
-from app_shell.database_service import A2ATaskReader
 from common.auth import ClerkUser, get_current_user
 from common.dto import ExecutionRequest, RunInfo
-from common.protocols import ExecutionEngine
+from common.protocols import A2ATaskReader, ExecutionEngine
 from models.file_upload import MAX_ATTACHMENT_REFS_PER_REQUEST
 from models.request import (
     RoomCenterRoomMessageRequest,
@@ -22,7 +21,7 @@ from models.response import (
 
 router = APIRouter()
 room_center: RoomCenterRouteOwner | None = None
-db_service: A2ATaskReader | None = None
+room_store: A2ATaskReader | None = None
 agent_selection_service: AgentSelectionSuggester | None = None
 execution_engine: ExecutionEngine | None = None
 
@@ -30,13 +29,13 @@ execution_engine: ExecutionEngine | None = None
 def bind_room_dependencies(
     *,
     center: RoomCenterRouteOwner,
-    database_service: A2ATaskReader,
+    store: A2ATaskReader,
     selection_service: AgentSelectionSuggester,
 ) -> None:
-    global room_center, db_service, agent_selection_service
+    global room_center, room_store, agent_selection_service
 
     room_center = center
-    db_service = database_service
+    room_store = store
     agent_selection_service = selection_service
 
 
@@ -51,10 +50,10 @@ def _require_room_center() -> RoomCenterRouteOwner:
     return room_center
 
 
-def _require_db_service() -> A2ATaskReader:
-    if db_service is None:
+def _require_room_store() -> A2ATaskReader:
+    if room_store is None:
         raise RuntimeError("Room database dependency has not been bound")
-    return db_service
+    return room_store
 
 
 def get_agent_selection_service() -> AgentSelectionSuggester:
@@ -136,7 +135,7 @@ async def verify_room_ownership(room_id: str, user: ClerkUser) -> None:
     if not room_id:
         raise HTTPException(status_code=400, detail="room_id is required")
 
-    room = await _require_db_service().get_room_by_room_id(room_id)
+    room = await _require_room_store().get_room_by_room_id(room_id)
 
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
@@ -196,15 +195,19 @@ async def inquiry_active_runs(
     """List non-terminal orchestration runs for a room — same auth as inquiryRoomSetting."""
     request_data = await request.json()
     room_id = request_data.get("room_id")
+    trigger_message_id = request_data.get("trigger_message_id")
 
     await verify_room_ownership(room_id, user)
 
-    runs = await _require_execution_engine().get_runs_for_room(room_id)
-    return RoomCenterActiveRunsResponse(
-        success=True,
+    room_center_request = RoomCenterRoomSettingRequest(
         room_id=room_id,
-        active_runs=[_run_info_to_active_run_ref(run) for run in runs],
+        requesting_user_id=user.user_id,
+        trigger_message_id=trigger_message_id,
     )
+    room_center_response = await _require_room_center().inquiry_active_runs(
+        room_center_request
+    )
+    return room_center_response
 
 
 @router.post("/roomCenter/inquiryRoomsByRoomOwnerId")

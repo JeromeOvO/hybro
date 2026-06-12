@@ -5,15 +5,15 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app_shell.compaction_service import CompactionService
+from app_shell.context_assembly_service import ContextAssemblyService
+from app_shell.memory_search_service import MemorySearchService
+from app_shell.memory_service import RoomMemoryService
 from common.dto import AssembledContext, CompactionResult, MemorySearchResult
 from context_memory import ContextMemoryFacade
 from context_memory.config import CompactionConfig, MemorySearchConfig
 from models.memory import ConversationTurn, RoomMemory, TurnRole
 from models.request import RoomCenterMemoryRequest
-from app_shell.compaction_service import CompactionService
-from app_shell.context_assembly_service import ContextAssemblyService
-from app_shell.memory_search_service import MemorySearchService
-from app_shell.memory_service import RoomMemoryService
 
 NOW = datetime(2026, 5, 13, tzinfo=UTC)
 
@@ -22,6 +22,7 @@ class FakeFacade:
     def __init__(self):
         self.calls = []
         self.created_doc = None
+        self.doc = None
 
     def assemble_supervisor_context_from_memory(self, room_memory_doc, current_task, **kwargs):
         self.calls.append(("assemble_supervisor", room_memory_doc, current_task, kwargs))
@@ -70,6 +71,7 @@ class FakeFacade:
     async def legacy_create_room_memory(self, memory_doc: dict) -> dict:
         self.calls.append(("legacy_create_room_memory", memory_doc["room_id"]))
         self.created_doc = memory_doc
+        self.doc = memory_doc
         memory_doc.setdefault("memory_id", "m1")
         memory_doc.setdefault("memory_content", {"conversation_history": []})
         memory_doc.setdefault("conversation_history", [])
@@ -77,6 +79,20 @@ class FakeFacade:
         memory_doc.setdefault("room_facts", [])
         memory_doc.setdefault("memory_created_at", NOW)
         return memory_doc
+
+    async def legacy_get_room_memory_by_memory_id(self, memory_id: str):
+        if self.doc and self.doc.get("memory_id") == memory_id:
+            return self.doc
+        return None
+
+    async def legacy_update_room_memory_by_memory_id(
+        self, memory_id: str, updates: dict
+    ) -> bool:
+        self.calls.append(("legacy_update_room_memory_by_memory_id", memory_id, updates))
+        if not self.doc or self.doc.get("memory_id") != memory_id:
+            return False
+        self.doc.update(updates)
+        return True
 
     async def content_upsert_full_content(self, **kwargs) -> str:
         self.calls.append(("content_upsert_full_content", kwargs["room_id"], kwargs["turn_id"]))
@@ -96,7 +112,7 @@ class RaisingRoomMemoryFacade(FakeFacade):
     async def legacy_update_room_memory_by_room_id(self, room_id: str, doc: dict):
         raise RuntimeError("facade update failed")
 
-    async def legacy_get_room_memory_for_update_by_memory_id(self, memory_id: str):
+    async def legacy_update_room_memory_by_memory_id(self, memory_id: str, doc: dict):
         raise RuntimeError("facade memory-id update failed")
 
     async def legacy_delete_room_memory_by_memory_id(self, memory_id: str):
@@ -178,6 +194,12 @@ class RealFacadeMemoryRepository:
             return False
         self.doc.update(updates)
         return True
+
+    async def legacy_update_room_memory_by_memory_id(
+        self, memory_id: str, updates: dict
+    ) -> bool:
+        self.calls.append(("legacy_update_room_memory_by_memory_id", memory_id, updates))
+        return await self.update_room_memory_by_memory_id(memory_id, updates)
 
     async def delete_room_memory_by_memory_id(self, memory_id: str) -> bool:
         self.doc = None
@@ -622,6 +644,47 @@ async def test_room_memory_service_get_by_memory_id_translates_facade_exception(
     assert response.success is False
     assert response.status_code == 500
     assert response.error == "facade memory-id read failed"
+
+
+@pytest.mark.asyncio
+async def test_room_memory_service_get_by_memory_id_treats_malformed_doc_as_not_found():
+    class MalformedFacade(FakeFacade):
+        async def legacy_get_room_memory_by_memory_id(self, memory_id: str):
+            return {"memory_id": memory_id}
+
+    service = RoomMemoryService()
+    service.bind_facade(MalformedFacade())
+
+    response = await service.get_room_memory_by_memory_id(
+        RoomCenterMemoryRequest(memory_id="m1")
+    )
+
+    assert response.success is False
+    assert response.status_code == 404
+    assert response.error == "Room memory not found"
+
+
+@pytest.mark.asyncio
+async def test_room_memory_service_update_by_memory_id_persists_request_memory():
+    facade = FakeFacade()
+    facade.doc = {
+        "room_id": "r1",
+        "memory_id": "m1",
+        "conversation_history": [],
+    }
+    service = RoomMemoryService()
+    service.bind_facade(facade)
+    updated = room_memory().model_copy(update={"conversation_history": []})
+
+    response = await service.update_room_memory_by_memory_id(
+        RoomCenterMemoryRequest(memory_id="m1", room_id="r1", memory=updated)
+    )
+
+    assert response.success is True
+    assert response.memory == updated
+    assert facade.calls[-1][0] == "legacy_update_room_memory_by_memory_id"
+    assert facade.doc["memory_id"] == "m1"
+    assert facade.doc["room_id"] == "r1"
 
 
 @pytest.mark.asyncio

@@ -32,7 +32,7 @@ def _make_handler(
 ):
     if db is None:
         db = MagicMock()
-        db.update_task_state_on_message = AsyncMock(return_value=True)
+        db.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
         db.get_pending_continuation_on_message = AsyncMock(return_value=None)
     if sse is None:
@@ -49,8 +49,13 @@ def _make_handler(
     if notification_service is None:
         notification_service = MagicMock()
     return AgentResponseHandler(
-        db=db,
-        sse=sse,
+        message_writer=db,
+        task_writer=db,
+        continuation_store=db,
+        client_request_resolver=db,
+        room_reader=db,
+        hitl_reader=db,
+        sse_manager=sse,
         room_message_center=rmc,
         hitl_coordinator=hitl_coordinator,
         notification_service=notification_service,
@@ -123,7 +128,7 @@ class TestArtifactUpdateEvent:
             text="chunk", artifacts=[{"id": "a1"}],
         )
         await h.handle(event)
-        h._db.accumulate_artifact_on_message.assert_awaited_once_with(
+        h._message_writer.accumulate_artifact_on_message.assert_awaited_once_with(
             "msg-001", {"id": "a1"}, append=False,
         )
         h._sse.send_artifact_update.assert_awaited_once_with(
@@ -143,7 +148,7 @@ class TestArtifactUpdateEvent:
             text="chunk", artifacts=[{"id": "a1"}], skip_persist=True,
         )
         await h.handle(event)
-        h._db.accumulate_artifact_on_message.assert_not_awaited()
+        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
         h._sse.send_artifact_update.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -154,7 +159,7 @@ class TestArtifactUpdateEvent:
             text="chunk", artifacts=[{"id": "a1"}], append=True,
         )
         await h.handle(event)
-        h._db.accumulate_artifact_on_message.assert_awaited_once_with(
+        h._message_writer.accumulate_artifact_on_message.assert_awaited_once_with(
             "msg-001", {"id": "a1"}, append=True,
         )
         h._sse.send_artifact_update.assert_awaited_once()
@@ -181,7 +186,7 @@ class TestArtifactUpdateEvent:
             text="chunk", artifacts=None, append=True, last_chunk=False,
         )
         await h.handle(event)
-        h._db.accumulate_artifact_on_message.assert_not_awaited()
+        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
         h._sse.send_artifact_update.assert_awaited_once()
         call_kwargs = h._sse.send_artifact_update.call_args.kwargs
         assert call_kwargs["artifact"]["artifact_id"] == "msg-001-stream"
@@ -195,7 +200,7 @@ class TestArtifactUpdateEvent:
             text="", artifacts=None,
         )
         await h.handle(event)
-        h._db.accumulate_artifact_on_message.assert_not_awaited()
+        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
         h._sse.send_artifact_update.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -220,7 +225,7 @@ class TestArtifactUpdateEvent:
             await h.handle(event)
 
         h._sse.send_artifact_update.assert_awaited_once()
-        h._db.accumulate_artifact_on_message.assert_awaited_once()
+        h._message_writer.accumulate_artifact_on_message.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_s3_converted_flag_skips_conversion(self):
@@ -248,7 +253,7 @@ class TestArtifactUpdateEvent:
         mock_convert.assert_not_awaited()
         # But SSE and DB should still fire
         h._sse.send_artifact_update.assert_awaited_once()
-        h._db.accumulate_artifact_on_message.assert_awaited_once()
+        h._message_writer.accumulate_artifact_on_message.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_s3_conversion_failure_does_not_block_sse(self):
@@ -274,7 +279,7 @@ class TestArtifactUpdateEvent:
         # SSE should still be sent despite S3 failure
         h._sse.send_artifact_update.assert_awaited_once()
         # DB persist should still happen
-        h._db.accumulate_artifact_on_message.assert_awaited_once()
+        h._message_writer.accumulate_artifact_on_message.assert_awaited_once()
 
 
 # =============================================================================
@@ -296,10 +301,35 @@ class TestResponseEvent:
             )
             await h.handle(event)
 
-        h._db.update_task_state_on_message.assert_awaited_once_with(
+        h._message_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001", "completed", message_text="Done!", artifacts=None,
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_uses_resolved_terminal_text_from_database_layer(self):
+        db = MagicMock()
+        db.update_task_state_on_message = AsyncMock(
+            return_value=(True, "resolved from artifacts")
+        )
+        db.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        db.get_pending_continuation_on_message = AsyncMock(return_value=None)
+        h = _make_handler(db=db)
+        event = AgentEvent(kind="response", **_base_event(), text=None)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(event)
+
+        h._task_writer.update_task_state_on_message.assert_awaited_once_with(
+            "msg-001", "completed", message_text=None, artifacts=None,
+        )
+        h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
+            message_id="msg-001", task_result_text="resolved from artifacts", failed=False,
+        )
 
     @pytest.mark.asyncio
     async def test_skip_persist_response(self):
@@ -316,7 +346,7 @@ class TestResponseEvent:
             )
             await h.handle(event)
 
-        h._db.update_task_state_on_message.assert_not_awaited()
+        h._message_writer.update_task_state_on_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_sends_agent_response_for_parts(self):
@@ -358,7 +388,7 @@ class TestErrorEvent:
             )
             await h.handle(event)
 
-        h._db.update_task_state_on_message.assert_awaited_once_with(
+        h._message_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001", "failed", message_text="boom",
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
@@ -380,7 +410,7 @@ class TestErrorEvent:
             )
             await h.handle(event)
 
-        h._db.update_task_state_on_message.assert_awaited_once_with(
+        h._message_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001", "rejected", message_text="nope",
         )
 
@@ -403,7 +433,7 @@ class TestCanceledEvent:
             )
             await h.handle(event)
 
-        h._db.update_task_state_on_message.assert_awaited_once_with(
+        h._message_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001", "canceled", message_text="stopped",
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
@@ -433,7 +463,7 @@ class TestInteractiveEvent:
             )
             await h.handle(event)
 
-        h._db.update_task_state_on_message.assert_awaited_once_with(
+        h._message_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001", "input-required",
             message_text="need input", task_id="t-1", context_id="c-1",
         )
@@ -443,7 +473,7 @@ class TestInteractiveEvent:
     async def test_creates_hitl_request_for_async_interactive_continuation(self):
         mock_impl = AsyncMock(return_value=True)
         db = MagicMock()
-        db.update_task_state_on_message = AsyncMock(return_value=True)
+        db.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
         db.get_pending_continuation_on_message = AsyncMock(
             return_value={"user_message_id": "user-msg-001"}
@@ -505,7 +535,7 @@ class TestInteractiveEvent:
     @pytest.mark.asyncio
     async def test_skips_duplicate_hitl_request_for_existing_async_pending(self):
         db = MagicMock()
-        db.update_task_state_on_message = AsyncMock(return_value=True)
+        db.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
         db.get_pending_continuation_on_message = AsyncMock(
             return_value={"user_message_id": "user-msg-001"}
@@ -545,7 +575,7 @@ class TestInteractiveEvent:
     @pytest.mark.asyncio
     async def test_logs_agent_name_lookup_failure_without_blocking_hitl(self):
         db = MagicMock()
-        db.update_task_state_on_message = AsyncMock(return_value=True)
+        db.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
         db.get_pending_continuation_on_message = AsyncMock(
             return_value={"user_message_id": "user-msg-001"}
@@ -597,7 +627,7 @@ class TestSubmittedEvent:
         )
         await h.handle(event)
         h._sse.send_task_submitted.assert_awaited_once()
-        h._db.update_task_state_on_message.assert_not_awaited()
+        h._message_writer.update_task_state_on_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_sends_sse_submitted_with_resolved_client_request_id(self):
@@ -844,8 +874,8 @@ class TestHandlerNotifyTaskUpdate:
         assert result is True
         mock_impl.assert_awaited_once()
         call_args = mock_impl.call_args
-        # First positional arg is the handler's db instance
-        assert call_args[0][0] is h._db
+        # First positional arg is the handler's notification store
+        assert call_args[0][0] is h._task_writer
         # Third positional arg is the handler's sse instance
         assert call_args[0][2] is h._sse
         assert call_args.kwargs["emit_processing_status"] is True

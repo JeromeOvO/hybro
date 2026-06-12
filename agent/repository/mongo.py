@@ -116,7 +116,7 @@ class AgentMongoRepository:
     async def count_hub_agents(self, hub_id: str) -> tuple[int, int]:
         active = await self._agents.count({"hub_id": hub_id, "agent_status": "active"})
         inactive = await self._agents.count(
-            {"hub_id": hub_id, "agent_status": {"$ne": "active"}}
+            {"hub_id": hub_id, "agent_status": "inactive"}
         )
         return active, inactive
 

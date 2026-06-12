@@ -16,6 +16,8 @@ from app_shell.agent_resolver_service import (
     ResolveResult,
     _HealthCache,
 )
+from llm_gateway.errors import LLMModelRoutingError, LLMServiceNotBoundError
+from models.agent import AgentStatus
 
 # =============================================================================
 # _HealthCache Tests
@@ -66,8 +68,8 @@ class TestPickFirstHealthy:
     @pytest.fixture
     def resolver(self):
         svc = object.__new__(AgentResolverService)
-        svc.database_service = MagicMock()
-        svc.openai_service = MagicMock()
+        svc._resolution_repository = MagicMock()
+        svc.agent_selection_service = None
         svc._health_cache = _HealthCache(ttl=60.0)
         return svc
 
@@ -122,6 +124,49 @@ class TestPickFirstHealthy:
         assert len(result.tried_agents) == 2
 
 
+@pytest.mark.asyncio
+async def test_reorder_by_llm_uses_bound_agent_selection_service():
+    svc = object.__new__(AgentResolverService)
+    svc.agent_selection_service = MagicMock()
+    svc.agent_selection_service.select_best_agent_for_task = AsyncMock(
+        return_value="a2"
+    )
+    a1 = _make_agent("a1", "Alpha")
+    a2 = _make_agent("a2", "Beta")
+    a1.agent_status = a2.agent_status = AgentStatus.active
+
+    result = await svc._reorder_by_llm("query", [a1, a2])
+
+    assert result == [a2, a1]
+    svc.agent_selection_service.select_best_agent_for_task.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reorder_by_llm_raises_when_agent_selection_service_unbound():
+    svc = object.__new__(AgentResolverService)
+    svc.agent_selection_service = None
+    a1 = _make_agent("a1", "Alpha")
+    a2 = _make_agent("a2", "Beta")
+
+    with pytest.raises(LLMServiceNotBoundError):
+        await svc._reorder_by_llm("query", [a1, a2])
+
+
+@pytest.mark.asyncio
+async def test_reorder_by_llm_propagates_routing_errors():
+    svc = object.__new__(AgentResolverService)
+    svc.agent_selection_service = MagicMock()
+    svc.agent_selection_service.select_best_agent_for_task = AsyncMock(
+        side_effect=LLMModelRoutingError("unregistered model")
+    )
+    a1 = _make_agent("a1", "Alpha")
+    a2 = _make_agent("a2", "Beta")
+    a1.agent_status = a2.agent_status = AgentStatus.active
+
+    with pytest.raises(LLMModelRoutingError):
+        await svc._reorder_by_llm("query", [a1, a2])
+
+
 # =============================================================================
 # resolve Tests
 # =============================================================================
@@ -131,8 +176,8 @@ class TestResolve:
     @pytest.fixture
     def resolver(self):
         svc = object.__new__(AgentResolverService)
-        svc.database_service = MagicMock()
-        svc.openai_service = MagicMock()
+        svc._resolution_repository = MagicMock()
+        svc.agent_selection_service = None
         svc._health_cache = _HealthCache(ttl=60.0)
         return svc
 
@@ -147,7 +192,7 @@ class TestResolve:
     @pytest.mark.asyncio
     async def test_returns_failure_when_no_candidates(self, resolver):
         resolver._sanitize_allowed_ids = AsyncMock(return_value=None)
-        resolver.database_service.query_similar_agents = AsyncMock(return_value=[])
+        resolver._resolution_repository.query_similar_agents = AsyncMock(return_value=[])
 
         result = await resolver.resolve("test query")
         assert result.agent is None
@@ -160,14 +205,14 @@ class TestResolve:
         result = await resolver.resolve("test", allowed_agent_ids=["a1"])
         assert result.agent is None
         assert "currently available" in result.failure_reason
-        resolver.database_service.query_similar_agents = AsyncMock()
-        resolver.database_service.query_similar_agents.assert_not_called()
+        resolver._resolution_repository.query_similar_agents = AsyncMock()
+        resolver._resolution_repository.query_similar_agents.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_returns_top_candidate_when_health_disabled(self, resolver):
         a1 = _make_agent("a1", "Alpha")
         resolver._sanitize_allowed_ids = AsyncMock(return_value=None)
-        resolver.database_service.query_similar_agents = AsyncMock(return_value=[a1])
+        resolver._resolution_repository.query_similar_agents = AsyncMock(return_value=[a1])
 
         with patch("app_shell.agent_resolver_service.settings") as mock_settings:
             mock_settings.agent_health_check_enabled = False
@@ -179,7 +224,7 @@ class TestResolve:
     async def test_delegates_to_pick_first_healthy_when_enabled(self, resolver):
         a1 = _make_agent("a1", "Alpha")
         resolver._sanitize_allowed_ids = AsyncMock(return_value=None)
-        resolver.database_service.query_similar_agents = AsyncMock(return_value=[a1])
+        resolver._resolution_repository.query_similar_agents = AsyncMock(return_value=[a1])
         resolver._pick_first_healthy = AsyncMock(
             return_value=ResolveResult(agent=a1, tried_agents=["Alpha"])
         )
@@ -200,12 +245,12 @@ class TestResolve:
         )
         a1 = _make_agent("a1", "Alpha")
         resolver._sanitize_allowed_ids = AsyncMock(return_value=None)
-        resolver.database_service.query_similar_agents = AsyncMock(return_value=[a1])
+        resolver._resolution_repository.query_similar_agents = AsyncMock(return_value=[a1])
 
         with patch("app_shell.agent_resolver_service.settings") as mock_settings:
             mock_settings.agent_health_check_enabled = False
             result = await resolver.resolve("test query")
 
         assert result.agent is a1
-        call_kwargs = resolver.database_service.query_similar_agents.call_args
+        call_kwargs = resolver._resolution_repository.query_similar_agents.call_args
         assert call_kwargs.kwargs["excluded_agent_ids"] == {"bad-agent"}

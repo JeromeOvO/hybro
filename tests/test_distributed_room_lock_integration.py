@@ -10,8 +10,8 @@ import asyncio
 
 import pytest
 
-from app_shell.room_lock import RedisRoomDistributedLock
 from app_shell.redis_runtime import AppShellRedisService
+from app_shell.room_lock import RedisRoomDistributedLock
 from execution.orchestration.room_message_center import (
     ROOM_LOCK_HOLD_TTL_SECONDS,
     RoomMessageCenter,

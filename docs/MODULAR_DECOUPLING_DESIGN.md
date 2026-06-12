@@ -1,7 +1,7 @@
 # Modular Decoupling Design Document
 
-> **Status**: Proposal (v3)
-> **Date**: 2026-05-04
+> **Status**: Proposal (v3) with implemented LLM Gateway migration notes
+> **Date**: 2026-06-05
 > **Scope**: Refactor hybro-multi-agents-backend into interface-driven modular architecture
 > **Constraint**: All existing features remain unchanged; no new technology stack; zero backend breaking changes (except explicitly decommissioned legacy workflow endpoints after Phase 0d deprecation)
 
@@ -115,7 +115,7 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 | # | Module | Responsibility | Current Source |
 |---|--------|---------------|----------------|
 | 1 | **Common** | Protocols, DTOs, auth, config, utils, errors | `common/`, `models/` |
-| 2 | **DAL** | Unified data access clients (split by concern) | `database/`, app-shell Redis and object-storage adapters |
+| 2 | **DAL** | Unified data access clients (split by concern) | `dal/`, `database/` (legacy migrations only) |
 | 3 | **A2A Protocol Adapter** | Anti-corruption for a2a-sdk, internal model ↔ A2A types | `app_shell/a2a_runtime.py`, `common/client/` |
 | 4 | **LLM Gateway** | Unified LLM invocation, provider routing, capability registry | `app_shell/openai_service.py`, `app_shell/gemini_service.py`, `app_shell/bedrock_service.py` |
 | 5 | **Agent** | Agent lifecycle, health, matching, discovery | `app_shell/agent_*.py`, `api/agent.py`, `api/discovery.py` |
@@ -1003,19 +1003,30 @@ class AgentCardResolver(Protocol):
 # common/protocols/llm_protocols.py
 
 @runtime_checkable
-class LLMProvider(Protocol):
-    """Unified LLM invocation — used by Execution, Context & Memory, Agent."""
+class LLMProviderAdapter(Protocol):
+    """Provider adapter implemented only by llm_gateway/providers."""
 
     async def generate(
-        self, messages: list[dict], model: str | None = None, **kwargs
+        self, messages: list[dict], model: str, **kwargs
     ) -> LLMResponse: ...
 
     async def generate_structured(
-        self, messages: list[dict], schema: dict, model: str | None = None, **kwargs
+        self, messages: list[dict], schema: dict | None = None, model: str | None = None, **kwargs
     ) -> LLMStructuredResponse: ...
 
+    async def embed(self, text: str, model: str) -> list[float]: ...
+    async def embed_batch(self, texts: list[str], model: str) -> list[list[float]]: ...
+
+
+@runtime_checkable
+class LLMGateway(Protocol):
+    """Provider-neutral gateway used by focused services and compatibility adapters."""
+
+    async def generate(self, messages: list[dict], model: str | None = None, **kwargs) -> LLMResponse: ...
+    async def generate_structured(self, messages: list[dict], schema: dict | None = None, model: str | None = None, **kwargs) -> LLMStructuredResponse: ...
     async def embed(self, text: str, model: str | None = None) -> list[float]: ...
     async def embed_batch(self, texts: list[str], model: str | None = None) -> list[list[float]]: ...
+    def generate_stream(self, messages: list[dict], model: str | None = None, **kwargs) -> AsyncIterator[str]: ...
 
 
 @runtime_checkable
@@ -1056,6 +1067,12 @@ class ModelInfo(BaseModel):
     max_context_tokens: int
     embedding_dimensions: int | None = None
 ```
+
+**Implemented LLM workflow DTOs:** `common/dto/llm_workflows.py` now carries
+domain-neutral request shapes such as `AgentRoutingCandidate`,
+`ParsedUserMessageRequest`, `RoomMessageSummary`,
+`ChatContextGenerationInput`, and `RoomMemoryGenerationInput`. Focused gateway
+services accept these DTOs or primitives rather than importing `models.*`.
 
 ### 4.9 DAL Protocols (B4 fix: split by concern)
 
@@ -2081,13 +2098,27 @@ Rules:
 
 **Gate:** Container instantiates full DAL. Old singletons delegate to new DAL. All tests pass.
 
+**Implemented DAL convergence note (2026-06-05):** Production startup constructs
+DAL adapters directly from the composition root. Agent, Room, Execution,
+ContextMemory, Platform, HubRuntimeBridge, and Jobs use module-owned repositories
+or protocols rather than `database.mongodb` or `app_shell.database_service`.
+
 #### Phase 2: Adapter Layer (2.5 weeks)
 
 - `a2a_adapter/` with all translators (InternalAgentMessage ↔ a2a.Message, etc.)
 - `llm_gateway/` with OpenAI/Gemini/Bedrock providers + ModelRegistry + retry/fallback
 - Verify: no business module imports `a2a`, `openai`, `google.genai`, `aioboto3`
 
-**Complexity note:** `openai_service.py` has 18+ distinct LLM call points each with different prompt/schema/model selection. The gateway wraps the *calling convention*, not the prompts.
+**Implemented LLM migration note (2026-06-05):** `LLMGatewayImpl` now owns
+logical model routing, retry/timeout behavior, structured JSON-object mode, and
+streaming. Provider adapters own SDK translation only. Legacy
+`app_shell/openai_service.py`, `app_shell/gemini_service.py`, and
+`app_shell/bedrock_service.py` are gateway-backed compatibility adapters with no
+direct provider SDK or LLM env reads. Focused services under
+`llm_gateway/services/` cover supervisor, embeddings, discovery, summary, agent
+selection, message parsing, room memory, and debate workflows. `main.py`
+constructs a single gateway and binds these focused services into production
+consumers.
 
 **Gate:** All LLM and A2A calls route through adapters. Import linter passes for SDK confinement rules.
 
@@ -2278,10 +2309,11 @@ class AgentService:
 | Redis Streams relay | `app_shell/redis_runtime.py` | HubRuntimeBridge | `transport/relay_transport.py` |
 | Hub agent sync | `app_shell/relay_service.py` | HubRuntimeBridge -> Agent | via `AgentRegistryWriter` |
 | **LLM Gateway** | | | |
-| OpenAI calls | `app_shell/openai_service.py` | LLM Gateway | `providers/openai_provider.py` |
-| Gemini calls | `app_shell/gemini_service.py` | LLM Gateway | `providers/gemini_provider.py` |
-| Bedrock calls | `app_shell/bedrock_service.py` | LLM Gateway | `providers/bedrock_provider.py` |
-| Embedding generation | `app_shell/openai_service.py` | LLM Gateway | `gateway.py` (embed) |
+| OpenAI SDK calls | `app_shell/openai_service.py` | LLM Gateway | `providers/openai_provider.py` |
+| Gemini SDK calls | `app_shell/gemini_service.py` | LLM Gateway | `providers/gemini_provider.py` |
+| Bedrock SDK calls | `app_shell/bedrock_service.py` | LLM Gateway | `providers/bedrock_provider.py` |
+| Embedding generation | `app_shell/openai_service.py`, memory/search adapters | LLM Gateway | `EmbeddingLLMService` + `gateway.py` |
+| Supervisor, summary, parsing, memory prompts | legacy app-shell prompt owners | LLM Gateway services | `llm_gateway/services/` |
 | **A2A Adapter** | | | |
 | A2A message send/stream | `app_shell/a2a_runtime.py` | A2A Adapter | `transport.py` |
 | A2A card resolution | `common/client/card_resolver.py` | A2A Adapter | `card_resolver.py` |
@@ -2725,7 +2757,7 @@ async def test_send_message_response_contract(client, seeded_room):
 | 3 | Facade per module | Clear API surface; easy mock | Fine-grained exports |
 | 4 | Thin API layer separate from modules | Zero HTTP knowledge in modules | Routes inside modules (bypass risk) |
 | 5 | A2A Adapter independent module | a2a-sdk version isolation | Inline (leaks SDK types) |
-| 6 | LLM Gateway with registry + routing + retry | Provider swap without business change | Direct calls (current state) |
+| 6 | LLM Gateway with registry + routing + retry | Provider swap without business change | Direct provider calls (legacy state before 2026-06-05 migration) |
 | 7 | HubRuntimeBridge doesn't own agent data | Single truth for agents | Hub owns its agents (split truth) |
 | 8 | Context & Memory reads Room via Protocol | No dual canonical source | C&M owns turns (dual truth) |
 | 9 | Mixed Protocol inside Execution | Core seams testable; helpers simple | All Protocol (forest) / all direct |

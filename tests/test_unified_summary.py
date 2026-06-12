@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from common.dto import RoomMessageSummary
+from llm_gateway.errors import LLMServiceNotBoundError
 from models.room import CoordinatorAgentId
 
 
@@ -15,9 +17,10 @@ def rmc():
     center = RoomMessageCenter.__new__(RoomMessageCenter)
     center.sse_manager = AsyncMock()
     center.database_service = AsyncMock()
+    center._store = center.database_service
     center.room_coordinator_service = AsyncMock()
     center.room_runtime = AsyncMock()
-    center.openai_service = AsyncMock()
+    center.summary_service = AsyncMock()
     return center
 
 
@@ -65,12 +68,12 @@ class TestEmitUnifiedSummary:
         )
 
         # OpenAI should NOT be called
-        rmc.openai_service.summarize_agent_responses.assert_not_awaited()
+        rmc.summary_service.summarize_agent_responses.assert_not_awaited()
         # DB upsert should be called with deterministic message_id
         rmc.database_service.upsert_room_agent_message.assert_awaited_once()
         saved_msg = rmc.database_service.upsert_room_agent_message.call_args[0][0]
         assert saved_msg.message_id == "summary-msg-1"
-        assert saved_msg.agent_id == CoordinatorAgentId.SUMMARY
+        assert saved_msg.agent_id == CoordinatorAgentId.SYSTEM_HYBRO
         assert saved_msg.extend_info["summary_origin"] == "supervisor"
         # SSE agent_response should be sent
         rmc.sse_manager.send_agent_response.assert_awaited_once()
@@ -117,10 +120,13 @@ class TestEmitUnifiedSummary:
         rmc.database_service.upsert_room_agent_message = AsyncMock(return_value=True)
         rmc.database_service.get_room_user_message_by_message_id = AsyncMock(return_value=None)
 
+        seen_agent_responses = []
+
         async def mock_stream(agent_responses, mode="non_debate", user_question=None):
+            seen_agent_responses.extend(agent_responses)
             yield "OpenAI summary."
 
-        rmc.openai_service.summarize_agent_responses_stream = mock_stream
+        rmc.summary_service.summarize_agent_responses_stream = mock_stream
 
         await rmc._emit_unified_summary(
             room_id="room-1",
@@ -133,10 +139,26 @@ class TestEmitUnifiedSummary:
         )
 
         rmc.sse_manager.send_artifact_update.assert_awaited()
+        assert all(isinstance(item, RoomMessageSummary) for item in seen_agent_responses)
+        assert seen_agent_responses[0].agent_name == "A"
         assert rmc.sse_manager.send_artifact_update.await_count >= 2
         saved_msg = rmc.database_service.upsert_room_agent_message.call_args[0][0]
         assert saved_msg.extend_info["summary_origin"] == "coordinator"
         assert saved_msg.extend_info["summary_type"] == "debate"
+
+    @pytest.mark.asyncio
+    async def test_missing_summary_service_fails_fast(self, rmc):
+        rmc.summary_service = None
+
+        with pytest.raises(LLMServiceNotBoundError):
+            await rmc._emit_unified_summary(
+                room_id="room-1",
+                user_message_id="msg-1",
+                trajectory_responses=[
+                    {"agent_name": "A", "message": "text A"},
+                    {"agent_name": "B", "message": "text B"},
+                ],
+            )
 
     @pytest.mark.asyncio
     async def test_fewer_than_2_trajectory_responses_skips_silently(self, rmc):
@@ -190,7 +212,7 @@ class TestEmitUnifiedSummary:
         # No DB write
         rmc.database_service.upsert_room_agent_message.assert_not_awaited()
         # OpenAI should NOT be called
-        rmc.openai_service.summarize_agent_responses.assert_not_awaited()
+        rmc.summary_service.summarize_agent_responses.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_zero_agents_from_db_skips_silently(self, rmc):
@@ -225,7 +247,7 @@ class TestEmitUnifiedSummary:
         async def mock_stream(agent_responses, mode="non_debate", user_question=None):
             yield "Combined summary."
 
-        rmc.openai_service.summarize_agent_responses_stream = mock_stream
+        rmc.summary_service.summarize_agent_responses_stream = mock_stream
         rmc.database_service.upsert_room_agent_message = AsyncMock(return_value=True)
         rmc.database_service.get_room_user_message_by_message_id = AsyncMock(
             return_value=None

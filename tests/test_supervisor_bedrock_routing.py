@@ -1,238 +1,222 @@
-"""Test supervisor service routing between OpenAI and Bedrock.
-
-Verifies that the USE_BEDROCK_SUPERVISOR feature flag correctly routes
-LLM calls to either Bedrock (Claude Opus 4.6) or OpenAI (gpt-4o-mini).
-"""
-
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from common.config.settings import settings
+from common.dto import LLMResponse, LLMStructuredResponse
+from common.utils.time import utcnow
 from execution.orchestration.room_supervisor_service import RoomSupervisorService
+from llm_gateway.errors import LLMModelRoutingError, LLMServiceNotBoundError
+from llm_gateway.gateway import LLMGatewayImpl
+from llm_gateway.model_registry import ModelRegistryImpl
+from llm_gateway.services import SupervisorLLMService
+from models.supervisor import (
+    ActionType,
+    RoomConfig,
+    StepResult,
+    SupervisorAction,
+    SupervisorTrajectory,
+    TrajectoryEntry,
+)
 
 
-def _text_stream_mock(text: str):
-    """Build an async text stream factory for synthesis routing tests."""
+class FakeGatewayProvider:
+    def __init__(self, structured_data=None) -> None:
+        self.generate_calls = []
+        self.structured_calls = []
+        self.stream_calls = []
+        self.structured_data = structured_data or {
+            "action": "done",
+            "reasoning": "provider response",
+        }
 
-    async def _stream(system_prompt: str, user_prompt: str, model: str | None = None):
-        yield text
+    async def generate(self, messages, model: str, **kwargs):
+        self.generate_calls.append({"messages": messages, "model": model, **kwargs})
+        return LLMResponse(content="text", model=model)
 
-    return MagicMock(side_effect=_stream)
+    async def generate_structured(
+        self,
+        messages,
+        model: str,
+        schema=None,
+        json_mode: bool = False,
+        **kwargs,
+    ):
+        self.structured_calls.append(
+            {
+                "messages": messages,
+                "model": model,
+                "schema": schema,
+                "json_mode": json_mode,
+                **kwargs,
+            }
+        )
+        return LLMStructuredResponse(data=self.structured_data, model=model)
+
+    async def generate_stream(self, messages, model: str, **kwargs):
+        self.stream_calls.append({"messages": messages, "model": model, **kwargs})
+        yield "focused stream"
+
+    async def embed(self, text: str, model: str):
+        return [1.0]
+
+    async def embed_batch(self, texts, model: str):
+        return [[1.0] for _ in texts]
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_supervisor_service_fails_fast_when_llm_service_unbound():
+    service = RoomSupervisorService(store=AsyncMock())
 
-@pytest.fixture
-def mock_openai():
-    """Mock OpenAIService."""
-    svc = AsyncMock()
-    svc.call_supervisor_llm_json = AsyncMock(return_value={"action": "done", "reasoning": "OpenAI response"})
-    svc.call_supervisor_llm_text_stream = _text_stream_mock("OpenAI synthesis text")
-    return svc
+    with pytest.raises(LLMServiceNotBoundError):
+        await service._call_supervisor_llm("system", "user")
 
+    with pytest.raises(LLMServiceNotBoundError):
+        await service._call_supervisor_llm_text("system", "user")
 
-@pytest.fixture
-def mock_bedrock():
-    """Mock BedrockService."""
-    svc = AsyncMock()
-    svc.call_claude_json = AsyncMock(return_value={"action": "done", "reasoning": "Bedrock response"})
-    svc.call_claude_text_stream = _text_stream_mock("Bedrock synthesis text")
-    return svc
+    with pytest.raises(LLMServiceNotBoundError):
+        async for _token in service.synthesize_stream(SupervisorTrajectory(), ""):
+            pass
 
-
-@pytest.fixture
-def mock_db():
-    """Mock DatabaseService."""
-    return AsyncMock()
+    with pytest.raises(LLMServiceNotBoundError):
+        await service.decide_next(
+            message_text="help",
+            agent_registry=[],
+            room_config=RoomConfig(),
+            trajectory=SupervisorTrajectory(),
+        )
 
 
-@pytest.fixture
-def supervisor_svc(mock_openai, mock_bedrock, mock_db):
-    """Create RoomSupervisorService with mocked dependencies."""
-    svc = RoomSupervisorService(
-        openai_service=mock_openai,
-        bedrock_service=mock_bedrock,
-        database_service=mock_db,
+@pytest.mark.asyncio
+async def test_supervisor_decide_next_propagates_routing_errors():
+    service = RoomSupervisorService(store=AsyncMock())
+    service._call_supervisor_llm = AsyncMock(
+        side_effect=LLMModelRoutingError("unregistered model")
     )
-    return svc
+
+    with pytest.raises(LLMModelRoutingError):
+        await service.decide_next(
+            message_text="help",
+            agent_registry=[],
+            room_config=RoomConfig(),
+            trajectory=SupervisorTrajectory(),
+        )
 
 
-# ---------------------------------------------------------------------------
-# Test: Feature flag routing for JSON calls
-# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_supervisor_synthesize_stream_propagates_routing_errors():
+    async def error_stream():
+        raise LLMModelRoutingError("unregistered model")
+        yield "unreachable"
 
-class TestSupervisorLLMRouting:
-    """Test that supervisor LLM calls route correctly based on feature flag."""
-
-    @pytest.mark.asyncio
-    async def test_routes_to_openai_when_flag_disabled(self, supervisor_svc, mock_openai, mock_bedrock):
-        """When USE_BEDROCK_SUPERVISOR=false, should call OpenAI."""
-        with patch('common.config.settings.settings') as mock_settings:
-            mock_settings.use_bedrock_supervisor = False
-
-            result = await supervisor_svc._call_supervisor_llm(
-                system_prompt="Test system",
-                user_prompt="Test user",
+    service = RoomSupervisorService(store=AsyncMock())
+    service._supervisor_llm_text_stream = MagicMock(return_value=error_stream())
+    trajectory = SupervisorTrajectory(
+        entries=[
+            TrajectoryEntry(
+                step_number=1,
+                action=SupervisorAction(
+                    action=ActionType.DELEGATE,
+                    reasoning="test",
+                ),
+                results=[
+                    StepResult(
+                        step_number=1,
+                        agent_id="agent-a",
+                        agent_name="Agent A",
+                        task="answer",
+                        response_text="result",
+                    )
+                ],
+                started_at=utcnow(),
             )
+        ]
+    )
 
-            # Verify OpenAI was called
-            mock_openai.call_supervisor_llm_json.assert_awaited_once_with(
-                system_prompt="Test system",
-                user_prompt="Test user",
-            )
-
-            # Verify Bedrock was NOT called
-            mock_bedrock.call_claude_json.assert_not_awaited()
-
-            # Verify response came from OpenAI
-            assert result["reasoning"] == "OpenAI response"
-
-    @pytest.mark.asyncio
-    async def test_routes_to_bedrock_when_flag_enabled(self, supervisor_svc, mock_openai, mock_bedrock):
-        """When USE_BEDROCK_SUPERVISOR=true, should call Bedrock."""
-        with patch('common.config.settings.settings') as mock_settings:
-            mock_settings.use_bedrock_supervisor = True
-            mock_settings.bedrock_supervisor_model = "anthropic.claude-opus-4-6-20250514-v1:0"
-
-            result = await supervisor_svc._call_supervisor_llm(
-                system_prompt="Test system",
-                user_prompt="Test user",
-            )
-
-            # Verify Bedrock was called
-            mock_bedrock.call_claude_json.assert_awaited_once_with(
-                system_prompt="Test system",
-                user_prompt="Test user",
-                model="anthropic.claude-opus-4-6-20250514-v1:0",
-            )
-
-            # Verify OpenAI was NOT called
-            mock_openai.call_supervisor_llm_json.assert_not_awaited()
-
-            # Verify response came from Bedrock
-            assert result["reasoning"] == "Bedrock response"
+    with pytest.raises(LLMModelRoutingError):
+        async for _token in service.synthesize_stream(trajectory, ""):
+            pass
 
 
-# ---------------------------------------------------------------------------
-# Test: Feature flag routing for text calls (synthesis)
-# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_supervisor_service_delegates_json_to_focused_service():
+    supervisor = AsyncMock()
+    supervisor.call_json = AsyncMock(
+        return_value={"action": "done", "reasoning": "Focused response"}
+    )
+    service = RoomSupervisorService(
+        supervisor_service=supervisor,
+        store=AsyncMock(),
+    )
 
-class TestSupervisorLLMTextRouting:
-    """Test that supervisor text calls route correctly based on feature flag."""
+    result = await service._call_supervisor_llm("system", "user")
 
-    @pytest.mark.asyncio
-    async def test_routes_to_openai_when_flag_disabled(self, supervisor_svc, mock_openai, mock_bedrock):
-        """When USE_BEDROCK_SUPERVISOR=false, should call OpenAI."""
-        with patch('common.config.settings.settings') as mock_settings:
-            mock_settings.use_bedrock_supervisor = False
-
-            result = await supervisor_svc._call_supervisor_llm_text(
-                system_prompt="Synthesize results",
-                user_prompt="Agent A: ..., Agent B: ...",
-            )
-
-            # Verify OpenAI stream was called
-            mock_openai.call_supervisor_llm_text_stream.assert_called_once_with(
-                system_prompt="Synthesize results",
-                user_prompt="Agent A: ..., Agent B: ...",
-            )
-
-            # Verify Bedrock was NOT called
-            mock_bedrock.call_claude_text_stream.assert_not_called()
-
-            # Verify response came from OpenAI
-            assert result == "OpenAI synthesis text"
-
-    @pytest.mark.asyncio
-    async def test_routes_to_bedrock_when_flag_enabled(self, supervisor_svc, mock_openai, mock_bedrock):
-        """When USE_BEDROCK_SUPERVISOR=true, should call Bedrock."""
-        with patch('common.config.settings.settings') as mock_settings:
-            mock_settings.use_bedrock_supervisor = True
-            mock_settings.bedrock_supervisor_model = "anthropic.claude-opus-4-6-20250514-v1:0"
-
-            result = await supervisor_svc._call_supervisor_llm_text(
-                system_prompt="Synthesize results",
-                user_prompt="Agent A: ..., Agent B: ...",
-            )
-
-            # Verify Bedrock stream was called
-            mock_bedrock.call_claude_text_stream.assert_called_once_with(
-                system_prompt="Synthesize results",
-                user_prompt="Agent A: ..., Agent B: ...",
-                model="anthropic.claude-opus-4-6-20250514-v1:0",
-            )
-
-            # Verify OpenAI was NOT called
-            mock_openai.call_supervisor_llm_text_stream.assert_not_called()
-
-            # Verify response came from Bedrock
-            assert result == "Bedrock synthesis text"
+    assert result["reasoning"] == "Focused response"
+    supervisor.call_json.assert_awaited_once_with(
+        system_prompt="system",
+        user_prompt="user",
+    )
 
 
-# ---------------------------------------------------------------------------
-# Test: Multiple sequential calls maintain routing
-# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_supervisor_service_delegates_text_stream_to_focused_service():
+    async def stream(system_prompt: str, user_prompt: str):
+        yield f"{system_prompt}:{user_prompt}"
 
-class TestRoutingConsistency:
-    """Test that routing remains consistent across multiple calls."""
+    supervisor = AsyncMock()
+    supervisor.call_text_stream = MagicMock(side_effect=stream)
+    service = RoomSupervisorService(
+        supervisor_service=supervisor,
+        store=AsyncMock(),
+    )
 
-    @pytest.mark.asyncio
-    async def test_multiple_calls_use_same_backend(self, supervisor_svc, mock_openai, mock_bedrock):
-        """Multiple calls should consistently use the same backend."""
-        with patch('common.config.settings.settings') as mock_settings:
-            mock_settings.use_bedrock_supervisor = True
-            mock_settings.bedrock_supervisor_model = "anthropic.claude-opus-4-6-20250514-v1:0"
+    result = await service._call_supervisor_llm_text("system", "user")
 
-            # First call (JSON)
-            await supervisor_svc._call_supervisor_llm(
-                system_prompt="System 1",
-                user_prompt="User 1",
-            )
+    assert result == "system:user"
+    supervisor.call_text_stream.assert_called_once_with(
+        system_prompt="system",
+        user_prompt="user",
+    )
 
-            # Second call (text)
-            await supervisor_svc._call_supervisor_llm_text(
-                system_prompt="System 2",
-                user_prompt="User 2",
-            )
 
-            # Third call (JSON)
-            await supervisor_svc._call_supervisor_llm(
-                system_prompt="System 3",
-                user_prompt="User 3",
-            )
+@pytest.mark.asyncio
+async def test_focused_supervisor_routes_to_bedrock_provider_when_flag_enabled(
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "use_bedrock_supervisor", True)
+    monkeypatch.setattr(
+        settings,
+        "bedrock_supervisor_model",
+        "anthropic.claude-opus-test",
+    )
+    openai_provider = FakeGatewayProvider()
+    bedrock_provider = FakeGatewayProvider(
+        structured_data={
+            "action": "done",
+            "reasoning": "Bedrock provider response",
+        }
+    )
+    gateway = LLMGatewayImpl(
+        model_registry=ModelRegistryImpl(),
+        providers={
+            "openai": openai_provider,
+            "bedrock": bedrock_provider,
+            "gemini": FakeGatewayProvider(),
+        },
+    )
+    service = RoomSupervisorService(
+        supervisor_service=SupervisorLLMService(gateway),
+        store=AsyncMock(),
+    )
 
-            # Verify all calls went to Bedrock
-            assert mock_bedrock.call_claude_json.await_count == 2
-            assert mock_bedrock.call_claude_text_stream.call_count == 1
+    result = await service._call_supervisor_llm(
+        system_prompt="Test system",
+        user_prompt="Test user",
+    )
 
-            # Verify no calls went to OpenAI
-            mock_openai.call_supervisor_llm_json.assert_not_awaited()
-            mock_openai.call_supervisor_llm_text_stream.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_flag_change_switches_backend(self, supervisor_svc, mock_openai, mock_bedrock):
-        """Changing flag should switch backend for subsequent calls."""
-        # First call with Bedrock
-        with patch('common.config.settings.settings') as mock_settings:
-            mock_settings.use_bedrock_supervisor = True
-            mock_settings.bedrock_supervisor_model = "anthropic.claude-opus-4-6-20250514-v1:0"
-
-            await supervisor_svc._call_supervisor_llm(
-                system_prompt="System 1",
-                user_prompt="User 1",
-            )
-
-        # Second call with OpenAI (flag changed)
-        with patch('common.config.settings.settings') as mock_settings:
-            mock_settings.use_bedrock_supervisor = False
-
-            await supervisor_svc._call_supervisor_llm(
-                system_prompt="System 2",
-                user_prompt="User 2",
-            )
-
-        # Verify both were called once
-        assert mock_bedrock.call_claude_json.await_count == 1
-        assert mock_openai.call_supervisor_llm_json.await_count == 1
+    assert result["reasoning"] == "Bedrock provider response"
+    assert bedrock_provider.structured_calls[0]["model"] == (
+        "anthropic.claude-opus-test"
+    )
+    assert bedrock_provider.structured_calls[0]["json_mode"] is True
+    assert openai_provider.structured_calls == []

@@ -132,9 +132,9 @@ class HITLServicePort(Protocol):
 def _thaw_hub_payload_value(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {key: _thaw_hub_payload_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return [_thaw_hub_payload_value(item) for item in value]
-    if isinstance(value, (set, frozenset)):
+    if isinstance(value, set | frozenset):
         return [_thaw_hub_payload_value(item) for item in value]
     return deepcopy(value)
 
@@ -142,10 +142,14 @@ def _thaw_hub_payload_value(value: Any) -> Any:
 def _hub_payload_kind(payload: dict[str, Any]) -> str:
     raw = payload.get("kind") or payload.get("event_type")
     if raw is None or raw == "":
-        raise ValueError("HubAgentResponseInternal payload missing required field: kind")
+        raise ValueError(
+            "HubAgentResponseInternal payload missing required field: kind"
+        )
     raw_kind = str(raw)
     if raw_kind in UNSUPPORTED_PHASE7B_HUB_EVENT_TYPES:
-        raise ValueError(f"Unsupported non-terminal Hub AgentEvent event_type: {raw_kind}")
+        raise ValueError(
+            f"Unsupported non-terminal Hub AgentEvent event_type: {raw_kind}"
+        )
     kind = LEGACY_COMMON_AGENT_EVENT_KIND_MAP.get(raw_kind, raw_kind)
     if kind not in AGENT_EVENT_KINDS:
         raise ValueError(f"Unsupported AgentEvent kind from Hub payload: {kind}")
@@ -244,11 +248,15 @@ def _validate_hub_payload_for_kind(kind: str, payload: dict[str, Any]) -> None:
         raise ValueError("processing_status Hub payload requires state")
     if kind == "error" and not (error_text or text):
         raise ValueError("error Hub payload requires error_text or text")
-    if payload.get("is_final") is not None and not isinstance(payload.get("is_final"), bool):
+    if payload.get("is_final") is not None and not isinstance(
+        payload.get("is_final"), bool
+    ):
         raise ValueError("Hub AgentEvent field is_final must be a boolean")
     verified = payload.get("lifecycle_message_id_verified")
     if verified is not None and not isinstance(verified, bool):
-        raise ValueError("Hub AgentEvent field lifecycle_message_id_verified must be a boolean")
+        raise ValueError(
+            "Hub AgentEvent field lifecycle_message_id_verified must be a boolean"
+        )
 
 
 def _validate_hub_event_consistency(
@@ -274,9 +282,7 @@ def _validate_hub_event_consistency(
 def _hub_payload_lifecycle_message_id(kind: str, payload: dict[str, Any]) -> str | None:
     value = _optional_hub_str(payload, "lifecycle_message_id")
     if kind == "processing_status" and value is None:
-        raise ValueError(
-            "Hub processing_status requires verified lifecycle_message_id"
-        )
+        raise ValueError("Hub processing_status requires verified lifecycle_message_id")
     if (
         value is not None
         and kind == "processing_status"
@@ -407,7 +413,9 @@ class ExecutionFacade:
         *,
         reason: str,
     ) -> asyncio.Task[Any]:
-        message_id = request.room_user_message_id or request.room_agent_message_id or "unknown"
+        message_id = (
+            request.room_user_message_id or request.room_agent_message_id or "unknown"
+        )
         return self._spawn_orchestration(
             self._room_message_center.process_room_user_message(request),
             name=f"execution-recovery-{reason}-{message_id}",

@@ -1,10 +1,10 @@
 """Integration tests for multimodal flows (upload -> sendMessage -> verify)."""
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from models.room import UserAttachment
 from app_shell.room_runtime import RoomServices
+from models.room import UserAttachment
 
 
 @pytest.fixture
@@ -15,6 +15,11 @@ def room_svc():
     svc.room_memory_service = MagicMock()
     svc._s3_service = AsyncMock()
     svc._s3_service.generate_presigned_url = AsyncMock(return_value="https://s3/presigned")
+    reader = MagicMock()
+    reader.get_for_room_file = AsyncMock(
+        side_effect=lambda room_id, file_id: _file_meta(file_id, room_id)
+    )
+    svc.bind_attachment_metadata_reader(reader)
     return svc
 
 
@@ -33,9 +38,7 @@ class TestUploadToSendFlow:
     """Tests the flow: file uploaded -> attachment referenced in message -> resolved."""
 
     async def test_resolve_builds_user_attachment(self, room_svc):
-        with patch("database.mongodb.mongodb") as mock_db:
-            mock_db.file_uploads_collection.find_one = AsyncMock(return_value=_file_meta("f1"))
-            result = await room_svc._resolve_attachments(["f1"], "room1")
+        result = await room_svc._resolve_attachments(["f1"], "room1")
 
         from app_shell.room_runtime import _ResolvedAttachments
         assert isinstance(result, _ResolvedAttachments)
@@ -46,9 +49,7 @@ class TestUploadToSendFlow:
         assert att.mime_type == "image/png"
 
     async def test_content_summary_has_images(self, room_svc):
-        with patch("database.mongodb.mongodb") as mock_db:
-            mock_db.file_uploads_collection.find_one = AsyncMock(return_value=_file_meta("f1"))
-            result = await room_svc._resolve_attachments(["f1"], "room1")
+        result = await room_svc._resolve_attachments(["f1"], "room1")
 
         from app_shell.room_runtime import _ResolvedAttachments
         assert isinstance(result, _ResolvedAttachments)
@@ -60,11 +61,14 @@ class TestUploadToSendFlow:
         pdf_meta["mime_type"] = "application/pdf"
         pdf_meta["file_name"] = "doc.pdf"
 
-        with patch("database.mongodb.mongodb") as mock_db:
-            mock_db.file_uploads_collection.find_one = AsyncMock(
-                side_effect=lambda q: _file_meta(q["file_id"]) if q["file_id"] == "f1" else pdf_meta
-            )
-            result = await room_svc._resolve_attachments(["f1", "f2"], "room1")
+        async def mixed_reader(room_id, file_id):
+            if file_id == "f1":
+                return _file_meta(file_id, room_id)
+            return pdf_meta
+
+        room_svc._attachment_metadata_reader.get_for_room_file = AsyncMock(side_effect=mixed_reader)
+
+        result = await room_svc._resolve_attachments(["f1", "f2"], "room1")
 
         from app_shell.room_runtime import _ResolvedAttachments
         assert isinstance(result, _ResolvedAttachments)

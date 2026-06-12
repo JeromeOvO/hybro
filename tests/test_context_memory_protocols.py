@@ -402,7 +402,7 @@ def test_non_protocol_helper_call_boundary():
             "legacy_get_room_memory_by_room_id",
             "legacy_get_room_memory_by_memory_id",
             "legacy_update_room_memory_by_room_id",
-            "legacy_get_room_memory_for_update_by_memory_id",
+            "legacy_update_room_memory_by_memory_id",
             "legacy_delete_room_memory_by_room_id",
             "legacy_delete_room_memory_by_memory_id",
             "initialize_or_update_room_memory",

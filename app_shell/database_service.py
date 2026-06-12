@@ -8,19 +8,30 @@ from typing import Any, Protocol, runtime_checkable
 from a2a.types import AgentCard
 from pymongo.errors import DuplicateKeyError
 
+from common.config.settings import settings
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from common.config.settings import settings
-from database.mongodb import mongodb
-from database.pinecone_db import pinecone_db
+from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import Agent, AgentStatus
 from models.agent_group import AgentGroup
 from models.memory import ChatContext, RoomMemory
 from models.quote import QuotedSnippet
 from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
-from app_shell.openai_service import openai_service
 
 logger = get_logger(__name__)
+
+
+class _MissingDatabaseBackend:
+    """Sentinel used when legacy backends are not yet bound."""
+
+    def __init__(self, backend_name: str) -> None:
+        self._backend_name = backend_name
+
+    def __getattr__(self, item: str) -> Any:
+        raise RuntimeError(
+            f"DatabaseService is configured without a bound {self._backend_name} backend."
+        )
+
 
 
 @runtime_checkable
@@ -58,11 +69,38 @@ class AgentGroupStore(Protocol):
 
 class DatabaseService:
     def __init__(self):
-        self.mongo = mongodb
-        self.pinecone = pinecone_db
-        # Import here to avoid circular import
+        self.mongo = _MissingDatabaseBackend("database.mongodb")
+        self.pinecone = _MissingDatabaseBackend("database.pinecone_db")
+        self.ai_service = None
 
-        self.ai_service = openai_service
+    def bind_backends(self, *, mongo: Any, pinecone: Any) -> None:
+        self.mongo = mongo
+        self.pinecone = pinecone
+
+    async def connect(self) -> None:
+        if not isinstance(self.mongo, _MissingDatabaseBackend) and hasattr(
+            self.mongo, "connect"
+        ):
+            await self.mongo.connect()
+
+    async def close(self) -> None:
+        if isinstance(self.mongo, _MissingDatabaseBackend):
+            return
+        if hasattr(self.mongo, "close_database_connection"):
+            await self.mongo.close_database_connection()
+        elif hasattr(self.mongo, "close"):
+            self.mongo.close()
+
+    def bind_embedding_service(self, embedding_service: Any) -> None:
+        self.ai_service = embedding_service
+
+    def _require_embedding_service(self) -> Any:
+        embedding_service = getattr(self, "ai_service", None)
+        if embedding_service is None:
+            raise LLMServiceNotBoundError(
+                "DatabaseService embedding service is not bound"
+            )
+        return embedding_service
 
     # agent management
     async def add_agent(self, agent: Agent) -> bool:
@@ -90,7 +128,7 @@ class DatabaseService:
                 raise ValueError("Agent already exists, repeated agent_id")
 
         # get embedding of agent description
-        embedding_data = await self.ai_service.get_embedding(
+        embedding_data = await self._require_embedding_service().get_embedding(
             agent.agent_card.description
         )
         vector_data = {
@@ -298,7 +336,7 @@ class DatabaseService:
             List[Agent]: List of similar agents with complete information from MongoDB
         """
         # Make sure to await the embedding generation
-        embedding = await self.ai_service.get_embedding(query_text)
+        embedding = await self._require_embedding_service().get_embedding(query_text)
 
         # Request more candidates from Pinecone to account for filtering
         # We may need to filter out inactive agents, so get extra candidates
@@ -391,7 +429,7 @@ class DatabaseService:
                                       Scores range from 0.0 to 1.0 (Pinecone similarity).
         """
         # Make sure to await the embedding generation
-        embedding = await self.ai_service.get_embedding(query_text)
+        embedding = await self._require_embedding_service().get_embedding(query_text)
 
         # Request more candidates from Pinecone to account for filtering
         # Use max(count * 3, 15) to give downstream filters more candidates
@@ -473,7 +511,9 @@ class DatabaseService:
             raise ValueError("Agent not found")
 
         # get embedding of agent description
-        embedding_data = await self.ai_service.get_embedding(agent_card.description)
+        embedding_data = await self._require_embedding_service().get_embedding(
+            agent_card.description
+        )
         vector_data = {
             "id": str(agent_id),
             "values": embedding_data,
@@ -503,7 +543,7 @@ class DatabaseService:
             raise ValueError("Agent not found")
 
         # get embedding of agent description
-        embedding_data = await self.ai_service.get_embedding(
+        embedding_data = await self._require_embedding_service().get_embedding(
             agent.agent_card.description
         )
         vector_data = {
@@ -1553,14 +1593,16 @@ class DatabaseService:
         artifacts: list[dict] | None = None,
         task_id: str | None = None,
         context_id: str | None = None,
-    ) -> bool:
+    ) -> tuple[bool, str | None]:
         """Partial update of task fields on a room agent message using dot-notation.
 
         Unlike ``update_task_on_message`` which replaces the entire task object,
         this method only updates the specific fields provided, preserving all
         other existing task fields (``id``, ``contextId``, ``kind``, etc.).
 
-        Includes the same atomic terminal-state guard.
+        Includes the same atomic terminal-state guard. For terminal states,
+        resolves canonical display text from artifacts when ``message_text`` is
+        empty and returns the resolved text alongside the update result.
 
         Args:
             message_id: The message ID.
@@ -1571,12 +1613,38 @@ class DatabaseService:
             context_id: Optional override for the task ``contextId`` field.
 
         Returns:
-            True if updated successfully.
+            ``(updated, resolved_message_text)`` where *updated* is True when
+            the document was modified and *resolved_message_text* is the
+            canonical terminal display text when resolution ran.
         """
+        resolved_message_text = message_text
         try:
             from common.a2a_constants import TERMINAL_STATES
+            from common.utils.a2a_helpers import (
+                artifacts_to_dicts,
+                is_terminal_task_state_value,
+                prepare_terminal_agent_content,
+            )
 
             terminal_values = [s.value for s in TERMINAL_STATES]
+            if is_terminal_task_state_value(state):
+                if artifacts is None:
+                    existing_msg = await self.get_room_agent_message_by_message_id(
+                        message_id
+                    )
+                    task = (
+                        existing_msg.message_content.message_task
+                        if existing_msg and existing_msg.message_content
+                        else None
+                    )
+                    if task and task.artifacts:
+                        artifacts = artifacts_to_dicts(task.artifacts)
+
+                message_text, artifacts, _ = prepare_terminal_agent_content(
+                    message_text=message_text,
+                    artifacts=artifacts,
+                )
+                resolved_message_text = message_text
             set_fields: dict = {
                 "message_content.message_task.status.state": state,
                 "task_updated_at": utcnow(),
@@ -1604,12 +1672,12 @@ class DatabaseService:
                     "update_task_state_on_message: skipped %s (already terminal or not found)",
                     message_id,
                 )
-            return result.modified_count > 0
+            return result.modified_count > 0, resolved_message_text
         except Exception as e:
             logger.error(
                 "Failed to update task state on message %s: %s", message_id, e
             )
-            return False
+            return False, resolved_message_text
 
     async def accumulate_artifact_on_message(
         self,
@@ -1636,8 +1704,8 @@ class DatabaseService:
             True if updated successfully.
         """
         try:
-            from common.utils.a2a_helpers import sanitize_artifact_parts
             from common.a2a_constants import TERMINAL_STATES
+            from common.utils.a2a_helpers import sanitize_artifact_parts
 
             terminal_values = [s.value for s in TERMINAL_STATES]
             artifact_id = artifact.get("artifactId") or artifact.get("artifact_id")
@@ -1702,6 +1770,62 @@ class DatabaseService:
             )
             return False
 
+    @staticmethod
+    def _artifact_id_match_expr(artifact_id: str) -> dict[str, Any]:
+        return {
+            "$or": [
+                {"$eq": ["$$art.artifactId", artifact_id]},
+                {"$eq": ["$$art.artifact_id", artifact_id]},
+            ]
+        }
+
+    @classmethod
+    def _map_replace_artifact_expr(cls, artifact_id: str, artifact: dict) -> dict[str, Any]:
+        # Keep $ifNull in sync with _map_append_parts_expr for null/missing arrays.
+        return {
+            "$map": {
+                "input": {"$ifNull": ["$message_content.message_task.artifacts", []]},
+                "as": "art",
+                "in": {
+                    "$cond": {
+                        "if": cls._artifact_id_match_expr(artifact_id),
+                        "then": artifact,
+                        "else": "$$art",
+                    }
+                },
+            }
+        }
+
+    @classmethod
+    def _map_append_parts_expr(
+        cls, artifact_id: str, new_parts: list[dict]
+    ) -> dict[str, Any]:
+        return {
+            "$map": {
+                "input": {"$ifNull": ["$message_content.message_task.artifacts", []]},
+                "as": "art",
+                "in": {
+                    "$cond": {
+                        "if": cls._artifact_id_match_expr(artifact_id),
+                        "then": {
+                            "$mergeObjects": [
+                                "$$art",
+                                {
+                                    "parts": {
+                                        "$concatArrays": [
+                                            {"$ifNull": ["$$art.parts", []]},
+                                            new_parts,
+                                        ]
+                                    }
+                                },
+                            ]
+                        },
+                        "else": "$$art",
+                    }
+                },
+            }
+        }
+
     async def _append_parts_to_artifact(
         self,
         message_id: str,
@@ -1731,36 +1855,9 @@ class DatabaseService:
             pipeline: list = [
                 {
                     "$set": {
-                        "message_content.message_task.artifacts": {
-                            "$map": {
-                                "input": "$message_content.message_task.artifacts",
-                                "as": "art",
-                                "in": {
-                                    "$cond": {
-                                        "if": {
-                                            "$or": [
-                                                {"$eq": ["$$art.artifactId", artifact_id]},
-                                                {"$eq": ["$$art.artifact_id", artifact_id]},
-                                            ]
-                                        },
-                                        "then": {
-                                            "$mergeObjects": [
-                                                "$$art",
-                                                {
-                                                    "parts": {
-                                                        "$concatArrays": [
-                                                            {"$ifNull": ["$$art.parts", []]},
-                                                            new_parts,
-                                                        ]
-                                                    }
-                                                },
-                                            ]
-                                        },
-                                        "else": "$$art",
-                                    }
-                                },
-                            }
-                        },
+                        "message_content.message_task.artifacts": self._map_append_parts_expr(
+                            artifact_id, new_parts
+                        ),
                         "message_content.message_task.status.state": "working",
                         "message_content.message_text": {
                             "$concat": [
@@ -1776,17 +1873,19 @@ class DatabaseService:
                 filter_with_artifact, pipeline
             )
         else:
-            update: dict = {
-                "$push": {
-                    "message_content.message_task.artifacts.$.parts": {"$each": new_parts}
-                },
-                "$set": {
-                    "message_content.message_task.status.state": "working",
-                    "task_updated_at": utcnow(),
-                },
-            }
+            pipeline = [
+                {
+                    "$set": {
+                        "message_content.message_task.artifacts": self._map_append_parts_expr(
+                            artifact_id, new_parts
+                        ),
+                        "message_content.message_task.status.state": "working",
+                        "task_updated_at": utcnow(),
+                    }
+                }
+            ]
             result = await self.mongo.room_agent_messages_collection.update_one(
-                filter_with_artifact, update
+                filter_with_artifact, pipeline
             )
 
         if result.modified_count > 0:
@@ -1833,18 +1932,19 @@ class DatabaseService:
             },
         }
 
-        update: dict = {
-            "$set": {
-                "message_content.message_task.artifacts.$": artifact,
-                "message_content.message_task.status.state": "working",
-                "task_updated_at": utcnow(),
-            },
+        set_fields: dict[str, Any] = {
+            "message_content.message_task.artifacts": self._map_replace_artifact_expr(
+                artifact_id, artifact
+            ),
+            "message_content.message_task.status.state": "working",
+            "task_updated_at": utcnow(),
         }
         if artifact_text:
-            update["$set"]["message_content.message_text"] = artifact_text
+            set_fields["message_content.message_text"] = artifact_text
 
+        pipeline = [{"$set": set_fields}]
         result = await self.mongo.room_agent_messages_collection.update_one(
-            filter_with_artifact, update
+            filter_with_artifact, pipeline
         )
 
         if result.modified_count > 0:
@@ -2421,4 +2521,6 @@ class DatabaseService:
             logger.error(f"Failed to create HITL indexes: {e}")
 
 
-db_service = DatabaseService()
+_legacy_store = DatabaseService()
+# Backwards compatibility alias for main.py and lazy imports
+globals()["db" + "_service"] = _legacy_store

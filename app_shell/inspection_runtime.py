@@ -3,12 +3,12 @@ from __future__ import annotations
 import httpx
 from a2a.client import A2AClient
 
+from app_shell.a2a_runtime import a2a_service
+from app_shell.agent_service import agent_service
 from common.utils.logger import get_logger
 from models.error import AgentNotFoundError
 from models.request import InspectionCenterRequest
 from models.response import InspectionCenterResponse
-from app_shell.a2a_runtime import a2a_service
-from app_shell.agent_service import agent_service
 
 logger = get_logger(__name__)
 

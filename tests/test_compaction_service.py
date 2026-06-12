@@ -18,6 +18,9 @@ from uuid import uuid4
 
 import pytest
 
+from app_shell.compaction_service import (
+    CompactionService,
+)
 from common.dto import CompactionResult as DtoCompactionResult
 from common.utils.time import utcnow
 from models.compaction import (
@@ -35,9 +38,6 @@ from models.memory import (
 from platform_module.content_storage import (
     ContentExpiredError,
     hash_content,
-)
-from app_shell.compaction_service import (
-    CompactionService,
 )
 
 # =============================================================================
@@ -169,13 +169,13 @@ class BoundCompactionFacade:
         self.service = service
 
     async def should_compact(self, room_id: str) -> bool:
-        from models.context_config import compaction_config
         from app_shell import compaction_service as compaction_module
+        from models.context_config import compaction_config
 
         config = compaction_config
         if not config.enabled:
             return False
-        room_memory = await self.service.db_service.get_room_memory_by_room_id(room_id)
+        room_memory = await self.service._store.get_room_memory_by_room_id(room_id)
         if not room_memory:
             return False
         history = room_memory.get_conversation_history()
@@ -196,8 +196,8 @@ class BoundCompactionFacade:
         room_id: str,
         room_memory_doc: dict | RoomMemory | None = None,
     ):
-        from models.context_config import compaction_config
         from app_shell import compaction_service as compaction_module
+        from models.context_config import compaction_config
 
         config = compaction_config
         if not config.enabled:
@@ -212,7 +212,7 @@ class BoundCompactionFacade:
         if isinstance(room_memory, dict):
             room_memory = RoomMemory(**room_memory)
         if not room_memory:
-            room_memory = await self.service.db_service.get_room_memory_by_room_id(room_id)
+            room_memory = await self.service._store.get_room_memory_by_room_id(room_id)
         if not room_memory:
             return DtoCompactionResult(
                 room_id=room_id,
@@ -265,7 +265,7 @@ class BoundCompactionFacade:
         errors = [error for _entry, _saved, error in prepared if error]
 
         if compacted_entries:
-            save_success = await self.service.db_service.compact_turns_bulk(
+            save_success = await self.service._store.compact_turns_bulk(
                 room_id,
                 compacted_entries,
             )
@@ -299,7 +299,7 @@ class BoundCompactionFacade:
         )
 
     async def fetch_turn_content(self, turn_id: str, room_id: str) -> str:
-        room_memory = await self.service.db_service.get_room_memory_by_room_id(room_id)
+        room_memory = await self.service._store.get_room_memory_by_room_id(room_id)
         if not room_memory:
             return f"[Error: Room {room_id} not found]"
         turn = next(
@@ -500,7 +500,7 @@ class TestCompactionService:
     ):
         """Should return False when room memory doesn't exist."""
         with patch.object(
-            service.db_service, "get_room_memory_by_room_id", return_value=None
+            service._store, "get_room_memory_by_room_id", return_value=None
         ):
             result = await service.should_compact("room-123")
 
@@ -514,7 +514,7 @@ class TestCompactionService:
         mock_settings.compaction_max_full_turns = 5  # Lower threshold
 
         with patch.object(
-            service.db_service,
+            service._store,
             "get_room_memory_by_room_id",
             return_value=sample_room_memory,
         ):
@@ -531,7 +531,7 @@ class TestCompactionService:
         mock_settings.compaction_max_total_tokens = 100  # Low token threshold
 
         with patch.object(
-            service.db_service,
+            service._store,
             "get_room_memory_by_room_id",
             return_value=sample_room_memory,
         ):
@@ -562,12 +562,12 @@ class TestCompactionService:
         mock_upsert = AsyncMock(return_value="doc-id-123")
 
         with patch.object(
-            service.db_service,
+            service._store,
             "get_room_memory_by_room_id",
             return_value=sample_room_memory,
         ):
             with patch.object(
-                service.db_service,
+                service._store,
                 "compact_turns_bulk",
                 return_value=True,
             ):
@@ -615,12 +615,12 @@ class TestCompactionService:
         mock_compact = AsyncMock(return_value=True)
 
         with patch.object(
-            service.db_service,
+            service._store,
             "get_room_memory_by_room_id",
             return_value=room_memory,
         ):
             with patch.object(
-                service.db_service,
+                service._store,
                 "compact_turns_bulk",
                 mock_compact,
             ):
@@ -649,12 +649,12 @@ class TestCompactionService:
         mock_upsert = AsyncMock(return_value="doc-id-123")
 
         with patch.object(
-            service.db_service,
+            service._store,
             "get_room_memory_by_room_id",
             return_value=sample_room_memory,
         ):
             with patch.object(
-                service.db_service,
+                service._store,
                 "compact_turns_bulk",
                 return_value=True,
             ):
@@ -766,7 +766,7 @@ class TestCompactionService:
         turn_id = sample_room_memory.memory_content.conversation_history[0].turn_id
 
         with patch.object(
-            service.db_service,
+            service._store,
             "get_room_memory_by_room_id",
             return_value=sample_room_memory,
         ):
@@ -781,7 +781,7 @@ class TestCompactionService:
         service._facade.fetch_turn_content = AsyncMock(return_value="Facade content")
 
         with patch.object(
-            service.db_service,
+            service._store,
             "get_room_memory_by_room_id",
             AsyncMock(side_effect=AssertionError("legacy DB should not be used")),
         ):
@@ -797,7 +797,7 @@ class TestCompactionService:
     async def test_fetch_turn_content_returns_error_for_missing_room(self, service):
         """Should return error message for missing room."""
         with patch.object(
-            service.db_service, "get_room_memory_by_room_id", return_value=None
+            service._store, "get_room_memory_by_room_id", return_value=None
         ):
             content = await service.fetch_turn_content("turn-123", "missing-room")
 
@@ -810,7 +810,7 @@ class TestCompactionService:
     ):
         """Should return error message for missing turn."""
         with patch.object(
-            service.db_service,
+            service._store,
             "get_room_memory_by_room_id",
             return_value=sample_room_memory,
         ):
@@ -838,7 +838,7 @@ class TestCompactionService:
         )
 
         with patch.object(
-            service.db_service,
+            service._store,
             "get_room_memory_by_room_id",
             return_value=sample_room_memory,
         ):
@@ -871,7 +871,7 @@ class TestCompactionService:
         mock_expand = AsyncMock(return_value="S3 content")
 
         with patch.object(
-            service.db_service,
+            service._store,
             "get_room_memory_by_room_id",
             return_value=sample_room_memory,
         ):
@@ -942,13 +942,13 @@ class TestCompactionRoundTrip:
         mock_settings.compaction_preserve_recent = 0  # Compact all
 
         with patch.object(
-            service.db_service,
+            service._store,
             "get_room_memory_by_room_id",
             return_value=room_memory,
         ):
             mock_compact = AsyncMock(return_value=True)
             with patch.object(
-                service.db_service,
+                service._store,
                 "compact_turns_bulk",
                 mock_compact,
             ):
@@ -1030,12 +1030,12 @@ class TestCompactionRoundTrip:
             return room_memory if call_count == 1 else room_memory_after
 
         with patch.object(
-            service.db_service,
+            service._store,
             "get_room_memory_by_room_id",
             side_effect=get_room_memory_side_effect,
         ):
             with patch.object(
-                service.db_service,
+                service._store,
                 "compact_turns_bulk",
                 return_value=True,
             ):
@@ -1103,12 +1103,12 @@ class TestTokenSavings:
             return "doc-id"
 
         with patch.object(
-            service.db_service,
+            service._store,
             "get_room_memory_by_room_id",
             return_value=room_memory,
         ):
             with patch.object(
-                service.db_service,
+                service._store,
                 "compact_turns_bulk",
                 return_value=True,
             ):
@@ -1180,12 +1180,12 @@ class TestErrorHandling:
             return f"doc-{call_count}"
 
         with patch.object(
-            service.db_service,
+            service._store,
             "get_room_memory_by_room_id",
             return_value=room_memory,
         ):
             with patch.object(
-                service.db_service,
+                service._store,
                 "compact_turns_bulk",
                 return_value=True,
             ):
@@ -1227,7 +1227,7 @@ class TestErrorHandling:
         mock_memory_search.index_turn_for_search = AsyncMock(return_value=False)
 
         with patch.object(
-            service.db_service,
+            service._store,
             "get_room_memory_by_room_id",
             return_value=room_memory,
         ):
@@ -1237,7 +1237,7 @@ class TestErrorHandling:
                 AsyncMock(return_value="doc-123"),
             ):
                 with patch.object(
-                    service.db_service,
+                    service._store,
                     "compact_turns_bulk",
                     return_value=True,
                 ):
@@ -1437,12 +1437,12 @@ class TestWriteBackPath:
         mock_compact = AsyncMock(return_value=True)
 
         with patch.object(
-            service.db_service,
+            service._store,
             "get_room_memory_by_room_id",
             return_value=room_memory,
         ):
             with patch.object(
-                service.db_service,
+                service._store,
                 "compact_turns_bulk",
                 mock_compact,
             ):
@@ -1489,12 +1489,12 @@ class TestWriteBackPath:
         mock_compact = AsyncMock(return_value=True)
 
         with patch.object(
-            service.db_service,
+            service._store,
             "get_room_memory_by_room_id",
             return_value=room_memory,
         ):
             with patch.object(
-                service.db_service,
+                service._store,
                 "compact_turns_bulk",
                 mock_compact,
             ):

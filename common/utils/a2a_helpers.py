@@ -176,6 +176,7 @@ def get_message_from_task(task: Any) -> Any | None:
         if all_parts:
             logger.debug("Found %d parts in task.artifacts", len(all_parts))
             message = SimpleNamespace(
+                kind="message",
                 role="agent",
                 message_id=str(uuid.uuid4()),
                 task_id=task.id,
@@ -281,17 +282,75 @@ def task_has_visible_content(task: Any) -> bool:
     return bool(extracted.text or extracted.has_non_text)
 
 
+def _normalize_part_root(root: dict) -> dict | None:
+    """Normalize a raw part dict so Pydantic's ``kind`` discriminator validates."""
+    kind = root.get("kind")
+
+    if kind == "text":
+        if "text" not in root or root.get("text") is None:
+            return None
+        return root
+
+    if kind == "file":
+        if "file" not in root or root.get("file") is None:
+            return None
+        return root
+
+    if kind == "data":
+        if "data" not in root or root.get("data") is None:
+            return None
+        return root
+
+    if "text" in root and root.get("text") is not None:
+        out: dict[str, Any] = {"kind": "text", "text": root["text"]}
+        if "metadata" in root:
+            out["metadata"] = root["metadata"]
+        return out
+
+    if "file" in root and root.get("file") is not None:
+        out = {"kind": "file", "file": root["file"]}
+        if "metadata" in root:
+            out["metadata"] = root["metadata"]
+        return out
+
+    if "data" in root and root.get("data") is not None:
+        out = {"kind": "data", "data": root["data"]}
+        if "metadata" in root:
+            out["metadata"] = root["metadata"]
+        return out
+
+    if "url" in root or "raw" in root:
+        file_info: dict[str, Any] = {}
+        if "raw" in root:
+            file_info["bytes"] = root["raw"]
+        if "url" in root:
+            file_info["uri"] = root["url"]
+        media_type = root.get("mime_type") or root.get("mimeType") or root.get("mediaType")
+        if media_type:
+            file_info["mimeType"] = media_type
+        filename = root.get("filename") or root.get("name")
+        if filename:
+            file_info["name"] = filename
+        if not file_info:
+            return None
+        out = {"kind": "file", "file": file_info}
+        if "metadata" in root:
+            out["metadata"] = root["metadata"]
+        return out
+
+    return None
+
+
 def sanitize_artifact_parts(parts: list[dict]) -> list[dict]:
-    """Remove malformed part dicts before persisting to MongoDB.
+    """Remove malformed part dicts and normalize legacy shapes before persistence/read.
 
     Each A2A Part variant requires its discriminator + payload:
       - TextPart:  kind='text' + text (str)
       - FilePart:  kind='file' + file (dict)
       - DataPart:  kind='data' + data (dict)
 
-    ``text`` / ``file`` / ``data`` must be present and non-None; otherwise
-    Pydantic rejects the whole Task on read (e.g. ``{"kind": "text"}`` or
-    ``{"kind": "text", "text": null}``).
+    Legacy rows may omit ``kind`` (e.g. ``{"text": "hello"}``); those are
+    coerced to the canonical shape so Pydantic validation succeeds on read.
 
     Returns a new list with invalid entries stripped.
     """
@@ -304,24 +363,36 @@ def sanitize_artifact_parts(parts: list[dict]) -> list[dict]:
         if not isinstance(root, dict):
             logger.warning("Dropping artifact part with non-dict root: %r", p)
             continue
-        kind = root.get("kind")
-        if kind == "text":
-            if "text" not in root or root.get("text") is None:
-                logger.debug("Dropping malformed TextPart (missing or null 'text')")
-                continue
-        elif kind == "file":
-            if "file" not in root or root.get("file") is None:
-                logger.warning("Dropping malformed FilePart (missing or null 'file')")
-                continue
-        elif kind == "data":
-            if "data" not in root or root.get("data") is None:
-                logger.warning("Dropping malformed DataPart (missing or null 'data')")
-                continue
-        elif not any(k in root for k in ("text", "file", "data", "url", "raw")):
-            logger.warning("Dropping unrecognizable artifact part: %r", p)
+        normalized_root = _normalize_part_root(root)
+        if normalized_root is None:
+            logger.debug("Dropping unrecognizable artifact part: %r", p)
             continue
-        cleaned.append(p)
+        if "root" in p and p.get("root") is root:
+            cleaned.append({**p, "root": normalized_root})
+        else:
+            cleaned.append(normalized_root)
     return cleaned
+
+
+def sanitize_task_dict(task: dict) -> dict:
+    """Sanitize a raw Task dict from MongoDB before Pydantic validation."""
+    for artifact in task.get("artifacts") or []:
+        parts = artifact.get("parts")
+        if parts and isinstance(parts, list):
+            artifact["parts"] = sanitize_artifact_parts(parts)
+
+    for msg in task.get("history") or []:
+        parts = msg.get("parts")
+        if parts and isinstance(parts, list):
+            msg["parts"] = sanitize_artifact_parts(parts)
+
+    status = task.get("status") or {}
+    status_msg = status.get("message") or {}
+    parts = status_msg.get("parts")
+    if parts and isinstance(parts, list):
+        status_msg["parts"] = sanitize_artifact_parts(parts)
+
+    return task
 
 
 def append_artifact_to_task_dict(
@@ -417,3 +488,156 @@ async def convert_pydantic_artifacts_to_s3(
         message_id,
         converted_so_far=converted_so_far,
     )
+
+
+def _state_value(state: Any) -> str:
+    value = getattr(state, "value", state)
+    return str(value)
+
+
+def is_terminal_task_state_value(state: Any) -> bool:
+    from common.a2a_constants import TERMINAL_STATES
+
+    if state is None:
+        return False
+    return _state_value(state) in {item.value for item in TERMINAL_STATES}
+
+
+def _part_dict_is_text(part: dict) -> bool:
+    root = part.get("root", part)
+    if isinstance(root, dict):
+        kind = root.get("kind")
+        if kind == "text":
+            return True
+        if "text" in root and kind not in ("file", "data"):
+            return True
+    kind = part.get("kind") if isinstance(part, dict) else None
+    if kind == "text":
+        return True
+    if isinstance(part, dict) and "text" in part and kind not in ("file", "data"):
+        return True
+    return False
+
+
+def filter_non_text_parts(parts: list[dict] | None) -> list[dict] | None:
+    """Drop text parts so SSE ``parts`` carries only file/data payloads."""
+    if not parts:
+        return parts
+    kept = [part for part in parts if not _part_dict_is_text(part)]
+    return kept or None
+
+
+def prepare_terminal_agent_content(
+    *,
+    message_text: str | None = None,
+    artifacts: list[dict] | None = None,
+    task_data: dict | None = None,
+) -> tuple[str | None, list[dict] | None, dict | None]:
+    """Resolve terminal message_text and sync artifact text parts (no markdown transform).
+
+    Terminal contract: one canonical text part holds the full display body per
+    artifact. Streaming chunks are collapsed; file/data parts are preserved.
+    """
+    import copy
+
+    resolved_text = message_text
+    if (not resolved_text or not resolved_text.strip()) and artifacts:
+        resolved_text = extract_text_from_artifact_dicts(artifacts)
+
+    resolved_artifacts = artifacts
+    if resolved_text and resolved_artifacts:
+        resolved_artifacts = sync_artifact_dicts_to_canonical_text(
+            resolved_artifacts,
+            resolved_text,
+        )
+
+    resolved_task = task_data
+    if resolved_task is not None and resolved_artifacts is not None:
+        resolved_task = copy.deepcopy(task_data)
+        resolved_task["artifacts"] = resolved_artifacts
+
+    return resolved_text, resolved_artifacts, resolved_task
+
+
+def artifacts_to_dicts(artifacts: list | None) -> list[dict]:
+    """Convert persisted A2A artifact models to plain dicts."""
+    if not artifacts:
+        return []
+    result: list[dict] = []
+    for artifact in artifacts:
+        if isinstance(artifact, dict):
+            result.append(artifact)
+        elif hasattr(artifact, "model_dump"):
+            result.append(artifact.model_dump(mode="json", by_alias=True))
+    return result
+
+
+def extract_text_from_artifact_dicts(artifacts: list[dict] | None) -> str | None:
+    """Concatenate text parts from serialized artifact dicts."""
+    if not artifacts:
+        return None
+    chunks: list[str] = []
+    for artifact in artifacts:
+        for part in artifact.get("parts") or []:
+            root = part.get("root", part)
+            if isinstance(root, dict):
+                text = root.get("text")
+            else:
+                text = part.get("text") if isinstance(part, dict) else None
+            if isinstance(text, str) and text:
+                chunks.append(text)
+    combined = "".join(chunks)
+    return combined if combined else None
+
+
+def sync_artifact_dicts_to_canonical_text(
+    artifacts: list[dict],
+    canonical_text: str,
+) -> list[dict]:
+    """Align artifact text payload with canonical terminal display text.
+
+    Collapses multi-part streaming text into a single text part and removes
+    empty text slots. Non-text parts (file, data) are preserved as-is.
+    """
+    import copy
+
+    if not canonical_text.strip():
+        return artifacts
+
+    out = copy.deepcopy(artifacts)
+    canonical_written = False
+
+    for artifact in out:
+        parts = artifact.get("parts") or []
+        non_text_parts = [part for part in parts if not _part_dict_is_text(part)]
+        if not canonical_written:
+            non_text_parts.insert(0, {"kind": "text", "text": canonical_text})
+            canonical_written = True
+        artifact["parts"] = non_text_parts
+
+    if canonical_written:
+        return out
+
+    first = out[0] if out else {"artifactId": "response", "name": "response", "parts": []}
+    if not out:
+        out = [first]
+    first.setdefault("parts", []).insert(0, {"kind": "text", "text": canonical_text})
+    return out
+
+
+def resolve_terminal_sse_content(
+    state: Any,
+    *,
+    message_text: str | None,
+    artifact_text: str | None,
+) -> str | None:
+    """Pick terminal content for SSE (message_text wins on completed)."""
+    from common.a2a_constants import CommonTaskState
+
+    stored = message_text.strip() if message_text and message_text.strip() else None
+    extracted = (
+        artifact_text.strip() if artifact_text and artifact_text.strip() else None
+    )
+    if _state_value(state) == CommonTaskState.COMPLETED.value and stored:
+        return stored
+    return stored or extracted

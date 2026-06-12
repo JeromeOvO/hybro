@@ -23,8 +23,8 @@ from execution.dispatch.dispatch_middleware import DispatchContext
 from models.agent import AgentStatus
 
 if TYPE_CHECKING:
-    from models.processing import ProcessingResult
     from app_shell.agent_health_service import AgentHealthService
+    from models.processing import ProcessingResult
 
 logger = get_logger(__name__)
 

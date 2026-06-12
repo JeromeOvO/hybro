@@ -48,13 +48,14 @@ class _UnboundDependency:
 
     def __getattr__(self, attr: str):
         async def _missing(*_args, **_kwargs):
-            raise RuntimeError(f"Stale task checker dependency {self._name} is not bound")
+            raise RuntimeError(
+                f"Stale task checker dependency {self._name} is not bound"
+            )
 
         return _missing
 
 
-db_service: Any = _UnboundDependency("db_service")
-mongodb: Any = _UnboundDependency("mongodb")
+store: Any = _UnboundDependency("store")
 a2a_service: Any = _UnboundDependency("a2a_service")
 
 
@@ -87,7 +88,7 @@ class StaleHITLDeps:
 
 @dataclass(frozen=True)
 class StaleTaskCheckerDeps:
-    db_service: Any
+    store: Any
     rooms_collection: Any
     notify_task_update: Callable[..., Awaitable[Any]]
     increment_counter: Callable[[str], Any]
@@ -168,16 +169,16 @@ class StaleTaskChecker:
         if self._runtime_deps is not None:
             return self._runtime_deps
         return StaleTaskCheckerDeps(
-            db_service=db_service,
-            rooms_collection=getattr(mongodb, "rooms_collection", None),
+            store=store,
+            rooms_collection=None,
             notify_task_update=notify_task_update,
             increment_counter=increment_counter,
             a2a_service=a2a_service,
         )
 
     @property
-    def _db_service(self) -> Any:
-        return self._deps().db_service
+    def _store(self) -> Any:
+        return self._deps().store
 
     @property
     def _rooms_collection(self) -> Any:
@@ -260,7 +261,7 @@ class StaleTaskChecker:
         non_terminal_state_values = [s.value for s in NON_TERMINAL_STATES]
 
         # 1. Check stale tasks (not updated recently)
-        stale_messages = await self._db_service.get_stale_task_messages(
+        stale_messages = await self._store.get_stale_task_messages(
             self.stale_check_minutes, non_terminal_state_values
         )
         logger.info(f"Found {len(stale_messages)} stale tasks to check")
@@ -269,7 +270,7 @@ class StaleTaskChecker:
             await self._process_stale_task(msg)
 
         # 2. Auto-fail expired tasks (been pending too long)
-        expired_messages = await self._db_service.get_expired_task_messages(
+        expired_messages = await self._store.get_expired_task_messages(
             self.task_expiry_hours, non_terminal_state_values
         )
         logger.info(f"Found {len(expired_messages)} expired tasks to auto-fail")
@@ -294,7 +295,7 @@ class StaleTaskChecker:
             CommonTaskState.SUBMITTED.value,
             CommonTaskState.WORKING.value,
         ]
-        non_tracked_stale = await self._db_service.get_non_tracked_stale_task_messages(
+        non_tracked_stale = await self._store.get_non_tracked_stale_task_messages(
             self.task_expiry_hours, non_tracked_state_values
         )
         if non_tracked_stale:
@@ -340,7 +341,7 @@ class StaleTaskChecker:
             return
         stale_mins = int(os.environ.get("RUN_WATCHDOG_STALE_MINUTES", "90"))
         try:
-            stale = await self._db_service.find_stale_non_terminal_runs(
+            stale = await self._store.find_stale_non_terminal_runs(
                 stale_mins,
                 limit=100,
             )
@@ -429,7 +430,9 @@ class StaleTaskChecker:
             )
 
         # Task was never acknowledged by agent
-        if agent_task_id.startswith("pending") or agent_task_id.startswith("relay-pending"):
+        if agent_task_id.startswith("pending") or agent_task_id.startswith(
+            "relay-pending"
+        ):
             logger.warning(
                 f"Task for message {message_id} never acknowledged, marking failed"
             )
@@ -444,14 +447,14 @@ class StaleTaskChecker:
             logger.warning(
                 f"Task for message {message_id} has no agent_url, touching timestamp"
             )
-            await self._db_service.touch_task_message(message_id)
+            await self._store.touch_task_message(message_id)
             return
 
         try:
             # Check if the message was cancelled while the agent was processing
-            is_cancelled = await self._db_service.is_message_cancelled(message_id)
+            is_cancelled = await self._store.is_message_cancelled(message_id)
             if not is_cancelled and msg.related_message_id:
-                is_cancelled = await self._db_service.is_message_cancelled(
+                is_cancelled = await self._store.is_message_cancelled(
                     msg.related_message_id
                 )
             if is_cancelled:
@@ -476,7 +479,7 @@ class StaleTaskChecker:
                 logger.warning(
                     f"Task for message {message_id} not found on agent, touching timestamp"
                 )
-                await self._db_service.touch_task_message(message_id)
+                await self._store.touch_task_message(message_id)
                 return
 
             # Update our record
@@ -486,9 +489,12 @@ class StaleTaskChecker:
                 and current_task.status.state == CommonTaskState.COMPLETED
             ):
                 from common.utils.a2a_helpers import extract_text_from_artifacts
+
                 if current_task.artifacts:
-                    task_text = extract_text_from_artifacts(current_task.artifacts) or None
-            await self._db_service.update_task_on_message(
+                    task_text = (
+                        extract_text_from_artifacts(current_task.artifacts) or None
+                    )
+            await self._store.update_task_on_message(
                 message_id,
                 current_task.model_dump(mode="json"),
                 message_text=task_text,
@@ -498,9 +504,9 @@ class StaleTaskChecker:
             new_state = current_task.status.state
             if is_terminal_state(new_state) or new_state in INTERACTIVE_STATES:
                 # Re-check cancellation — user may have cancelled between poll and now
-                re_cancelled = await self._db_service.is_message_cancelled(message_id)
+                re_cancelled = await self._store.is_message_cancelled(message_id)
                 if not re_cancelled and msg.related_message_id:
-                    re_cancelled = await self._db_service.is_message_cancelled(
+                    re_cancelled = await self._store.is_message_cancelled(
                         msg.related_message_id
                     )
                 if re_cancelled:
@@ -521,7 +527,7 @@ class StaleTaskChecker:
             logger.warning(f"Failed to poll stale task for message {message_id}: {e}")
             # Don't fail the task yet - might be transient network issue
             # Touch timestamp to prevent immediate re-check
-            await self._db_service.touch_task_message(message_id)
+            await self._store.touch_task_message(message_id)
 
     async def _get_task_from_agent(self, agent_card, task_id: str) -> Any | None:
         """Get task status from agent."""
@@ -564,7 +570,9 @@ class StaleTaskChecker:
             logger.warning(
                 "Auto-failing HITL task for message %s after %.1f hours "
                 "(HITL threshold: %dh)",
-                message_id, age_hours, self.HITL_EXPIRY_HOURS,
+                message_id,
+                age_hours,
+                self.HITL_EXPIRY_HOURS,
             )
 
         threshold = self.HITL_EXPIRY_HOURS if is_interactive else self.task_expiry_hours
@@ -634,14 +642,14 @@ class StaleTaskChecker:
             error_text=error,
         )
 
-        await self._db_service.update_task_on_message(
+        await self._store.update_task_on_message(
             message_id, failed_task.model_dump(mode="json")
         )
 
         # Clear any orphaned continuation (on both agent and user messages)
-        await self._db_service.get_and_clear_continuation_on_message(message_id)
+        await self._store.get_and_clear_continuation_on_message(message_id)
         if msg.related_message_id:
-            await self._db_service.get_and_clear_continuation_on_user_message(
+            await self._store.get_and_clear_continuation_on_user_message(
                 msg.related_message_id
             )
 
@@ -661,7 +669,8 @@ class StaleTaskChecker:
         except Exception as e:
             logger.warning(
                 "stale_task_checker: Failed to cancel HITL requests for %s: %s",
-                message_id, e,
+                message_id,
+                e,
             )
 
         await self._notify_task_update(
@@ -679,7 +688,7 @@ class StaleTaskChecker:
         Mongo values using the same predicate as compaction (runs-only busy).
         """
         try:
-            busy_ids = await self._db_service.get_room_ids_with_non_terminal_runs()
+            busy_ids = await self._store.get_room_ids_with_non_terminal_runs()
         except Exception as e:
             logger.warning(
                 "legacy processing_message_id cleanup: could not list active rooms: %s",
@@ -693,12 +702,15 @@ class StaleTaskChecker:
             flt["room_id"] = {"$nin": busy}
         try:
             coll = self._rooms_collection
+            if coll is None:
+                raise RuntimeError("rooms_collection is not bound")
             res = await coll.update_many(flt, {"$set": {"processing_message_id": None}})
-            if res.modified_count:
+            modified_count = getattr(res, "modified_count", res)
+            if modified_count:
                 logger.info(
                     "legacy processing_message_id cleanup: nulled field on %d rooms "
                     "(no non-terminal runs)",
-                    res.modified_count,
+                    modified_count,
                 )
         except Exception as e:
             logger.warning("legacy processing_message_id cleanup failed: %s", e)
@@ -716,7 +728,7 @@ class StaleTaskChecker:
         Recovery groups orphaned messages by their related_message_id (user message)
         and triggers processing for each unique user message.
         """
-        orphaned_messages = await self._db_service.get_orphaned_agent_messages(
+        orphaned_messages = await self._store.get_orphaned_agent_messages(
             self.orphan_threshold_minutes
         )
 
@@ -739,7 +751,7 @@ class StaleTaskChecker:
             # Skip hub-sourced agents — their timeouts are managed by the
             # relay offline queue TTL, not the orphan recovery job.
             agent = (
-                await self._db_service.get_agent_by_agent_id(msg.agent_id)
+                await self._store.get_agent_by_agent_id(msg.agent_id)
                 if msg.agent_id
                 else None
             )
@@ -780,9 +792,7 @@ class StaleTaskChecker:
                     request,
                     reason="orphan",
                 )
-                task.add_done_callback(
-                    lambda _task: self._recovery_semaphore.release()
-                )
+                task.add_done_callback(lambda _task: self._recovery_semaphore.release())
 
             except Exception as e:
                 logger.error(
@@ -801,7 +811,7 @@ class StaleTaskChecker:
         Only messages older than ``orphan_threshold_minutes`` are recovered
         to avoid racing with actively running trajectories.
         """
-        stuck_messages = await self._db_service.get_stuck_supervisor_trajectory_messages(
+        stuck_messages = await self._store.get_stuck_supervisor_trajectory_messages(
             self.orphan_threshold_minutes
         )
 
@@ -835,7 +845,7 @@ class StaleTaskChecker:
             # Respect persistent cancellation before claiming: if the user
             # canceled during the crash window, the in-memory token was lost
             # but the cancelled_messages DB record survives.
-            if await self._db_service.is_message_cancelled(message_id):
+            if await self._store.is_message_cancelled(message_id):
                 logger.info(
                     "supervisor_recovery: skipping message %s — cancelled by user",
                     message_id,
@@ -844,9 +854,7 @@ class StaleTaskChecker:
 
             # Atomically claim this trajectory so no other worker (or
             # subsequent check cycle) can recover it concurrently.
-            claimed = await self._db_service.claim_stuck_supervisor_trajectory(
-                message_id
-            )
+            claimed = await self._store.claim_stuck_supervisor_trajectory(message_id)
             if not claimed:
                 logger.info(
                     "supervisor_recovery: message %s already claimed by another worker",
@@ -871,9 +879,7 @@ class StaleTaskChecker:
                     request,
                     reason="supervisor",
                 )
-                task.add_done_callback(
-                    lambda _task: self._recovery_semaphore.release()
-                )
+                task.add_done_callback(lambda _task: self._recovery_semaphore.release())
             except Exception as e:
                 logger.error(
                     "supervisor_recovery: failed to trigger recovery for %s: %s",

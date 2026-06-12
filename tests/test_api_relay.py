@@ -15,7 +15,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app_shell.relay_service import (
+    RelayService,
+    _LegacyPublishSink,
+    _RelayPublishAuthorizationReader,
+    init_relay_service,
+)
+from common.dto import HubDispatchCommand
 from common.dto.agent import SyncedHubAgent
+from execution.dispatch.agent_event import AgentEvent
+from execution.dispatch.response_handler import AgentResponseHandler
+from execution.dispatch.transports.relay import RelayTransport
 from models.api_key import APIKey
 from models.hub import (
     HubAgentSync,
@@ -24,15 +34,6 @@ from models.hub import (
     RelayToHubEvent,
 )
 from models.room import MessageContent, Room, RoomAgentMessage
-from execution.dispatch.agent_event import AgentEvent
-from execution.dispatch.response_handler import AgentResponseHandler
-from execution.dispatch.transports.relay import RelayTransport
-from app_shell.relay_service import (
-    RelayService,
-    _LegacyPublishSink,
-    _RelayPublishAuthorizationReader,
-    init_relay_service,
-)
 from tests.conftest import FROZEN_TIME
 
 # ===========================================================================
@@ -68,6 +69,7 @@ def _make_relay_service(
     mongo=None,
     db_service=None,
     sse_manager=None,
+    offline_failure_port=None,
 ) -> RelayService:
     if mongo is None:
         mongo = MagicMock()
@@ -86,8 +88,10 @@ def _make_relay_service(
         db_service = MagicMock()
         db_service.get_room_by_room_id = AsyncMock(return_value=None)
         db_service.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
-        db_service.update_room_agent_message_by_message_id = AsyncMock(return_value=True)
-        db_service.update_task_state_on_message = AsyncMock(return_value=True)
+        db_service.update_room_agent_message_by_message_id = AsyncMock(
+            return_value=True
+        )
+        db_service.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db_service.is_message_cancelled = AsyncMock(return_value=False)
         db_service.ai_service.get_embedding = AsyncMock(return_value=[0.0] * 128)
         db_service.pinecone.upsert = MagicMock()
@@ -97,11 +101,15 @@ def _make_relay_service(
         sse_manager.send_task_submitted = AsyncMock()
         sse_manager.send_processing_status = AsyncMock()
         sse_manager.send_error = AsyncMock()
+    if offline_failure_port is None:
+        offline_failure_port = MagicMock()
+        offline_failure_port.mark_hub_message_failed = AsyncMock()
 
     svc = RelayService(
         mongo=mongo,
-        database_service=db_service,
+        db=db_service,
         sse_manager=sse_manager,
+        offline_failure_port=offline_failure_port,
     )
 
     # Wire up RelayTransport for publish event delegation
@@ -110,12 +118,37 @@ def _make_relay_service(
     relay_transport = RelayTransport(
         response_handler=handler,
         relay_service=svc,
-        db=db_service,
+        task_tracker=db_service,
+        call_counter=db_service,
         sse_manager=sse_manager,
     )
     svc.set_relay_transport(relay_transport)
 
     return svc
+
+
+@pytest.mark.asyncio
+async def test_relay_service_uses_injected_offline_failure_port():
+    offline_failure_port = MagicMock()
+    offline_failure_port.mark_hub_message_failed = AsyncMock()
+    svc = _make_relay_service(offline_failure_port=offline_failure_port)
+
+    await svc._fail_offline_message(
+        RelayToHubEvent(
+            type="user_message",
+            room_id="room-1",
+            agent_message_id="agent-message-1",
+            agent_id="agent-1",
+            task_id="task-1",
+        ),
+        "Agent is offline",
+    )
+
+    offline_failure_port.mark_hub_message_failed.assert_awaited_once()
+    command = offline_failure_port.mark_hub_message_failed.await_args.args[0]
+    assert command.room_id == "room-1"
+    assert command.agent_message_id == "agent-message-1"
+    assert command.error_text == "Agent is offline"
 
 
 def test_init_relay_service_binds_hitl_coordinator_to_publish_handler():
@@ -127,33 +160,42 @@ def test_init_relay_service_binds_hitl_coordinator_to_publish_handler():
 
     svc = init_relay_service(
         mongo=mongo,
-        database_service=db_service,
+        db=db_service,
         sse_manager=sse_manager,
         room_message_center=room_message_center,
         hitl_coordinator=hitl_coordinator,
+        offline_failure_port=MagicMock(),
     )
 
     assert svc._response_handler.hitl_coordinator is hitl_coordinator
 
 
-def test_init_relay_service_fallback_response_handler_can_handle_publish_events():
+def test_init_relay_service_requires_injected_response_handler():
     mongo = MagicMock()
     db_service = MagicMock()
     sse_manager = MagicMock()
     room_message_center = SimpleNamespace()
     hitl_coordinator = MagicMock()
 
-    svc = init_relay_service(
-        mongo=mongo,
-        database_service=db_service,
-        sse_manager=sse_manager,
-        room_message_center=room_message_center,
-        hitl_coordinator=hitl_coordinator,
-    )
+    with pytest.raises(ValueError, match="agent_response_handler"):
+        init_relay_service(
+            mongo=mongo,
+            db=db_service,
+            sse_manager=sse_manager,
+            room_message_center=room_message_center,
+            hitl_coordinator=hitl_coordinator,
+            offline_failure_port=MagicMock(),
+        )
 
-    handler = svc._response_handler
-    assert handler.hitl_coordinator is hitl_coordinator
-    assert callable(handler.handle)
+
+def test_init_relay_service_requires_offline_failure_port():
+    with pytest.raises(ValueError, match="offline_failure_port"):
+        init_relay_service(
+            mongo=MagicMock(),
+            db=MagicMock(),
+            sse_manager=MagicMock(),
+            room_message_center=MagicMock(agent_response_handler=MagicMock()),
+        )
 
 
 def test_init_relay_service_binds_processor_relay_path():
@@ -172,10 +214,11 @@ def test_init_relay_service_binds_processor_relay_path():
 
     svc = init_relay_service(
         mongo=mongo,
-        database_service=db_service,
+        db=db_service,
         sse_manager=sse_manager,
         room_message_center=room_message_center,
         hitl_coordinator=hitl_coordinator,
+        offline_failure_port=MagicMock(),
     )
 
     assert svc.relay_transport is None
@@ -194,12 +237,13 @@ def test_init_relay_service_wires_hub_worker_and_event_publisher():
     converter = MagicMock()
     svc = init_relay_service(
         mongo=MagicMock(),
-        database_service=MagicMock(),
+        db=MagicMock(),
         sse_manager=MagicMock(),
         room_message_center=MagicMock(agent_response_handler=MagicMock()),
         event_publisher=publisher,
         worker_id="worker-123",
         response_converter=converter,
+        offline_failure_port=MagicMock(),
     )
 
     assert svc.worker_id == "worker-123"
@@ -309,9 +353,7 @@ async def test_relay_publish_authorization_walks_agent_parent_chain_to_root_user
         related_message_id="umsg-root",
         message_content=MessageContent(message_text=""),
     )
-    db.get_room_agent_message_by_message_id = AsyncMock(
-        side_effect=[msg, parent]
-    )
+    db.get_room_agent_message_by_message_id = AsyncMock(side_effect=[msg, parent])
     db.get_room_user_message_by_message_id = AsyncMock(
         side_effect=[None, MagicMock(message_type="user")]
     )
@@ -483,7 +525,10 @@ class TestRelayServiceAgentSync:
         svc.bind_agent_registry_writer(writer)
 
         synced = await svc.sync_agents(
-            "hub-001", [], _make_api_key(), prune_missing=True,
+            "hub-001",
+            [],
+            _make_api_key(),
+            prune_missing=True,
         )
 
         assert synced == []
@@ -500,7 +545,10 @@ class TestRelayServiceAgentSync:
         svc.bind_agent_registry_writer(writer)
 
         synced = await svc.sync_agents(
-            "hub-001", [], _make_api_key(), prune_missing=False,
+            "hub-001",
+            [],
+            _make_api_key(),
+            prune_missing=False,
         )
 
         assert synced == []
@@ -712,6 +760,35 @@ async def test_reply_to_relay_task_uses_in_memory_live_queue_without_streams():
     assert event["reply_text"] == "yes"
 
 
+@pytest.mark.asyncio
+async def test_send_to_hub_uses_in_memory_live_queue_without_streams():
+    import asyncio
+
+    svc = _make_relay_service()
+    q = asyncio.Queue()
+    svc._hub_queues["hub-001"] = q
+
+    result = await svc.send_to_hub(
+        HubDispatchCommand(
+            hub_id="hub-001",
+            agent_id="agent-1",
+            local_agent_id="local-1",
+            room_id="room-1",
+            user_message_id="user-msg-1",
+            agent_message_id="agent-msg-1",
+            payload={"text": "hello"},
+            task_id="task-1",
+        )
+    )
+
+    event = await q.get()
+    assert result.accepted is True
+    assert event["type"] == "user_message"
+    assert event["task_id"] == "task-1"
+    assert event["agent_message_id"] == "agent-msg-1"
+    assert event["message"] == {"text": "hello"}
+
+
 # ===========================================================================
 # RelayService — Publish
 # ===========================================================================
@@ -731,7 +808,9 @@ class TestRelayServicePublish:
     @pytest.mark.asyncio
     async def test_publish_rejects_wrong_room_owner(self):
         mongo = MagicMock()
-        mongo.get_hub = AsyncMock(return_value={"hub_id": "hub-001", "user_id": "user-A"})
+        mongo.get_hub = AsyncMock(
+            return_value={"hub_id": "hub-001", "user_id": "user-A"}
+        )
         db_service = MagicMock()
         room = Room(
             room_id="room-1",
@@ -773,8 +852,10 @@ class TestRelayServicePublish:
         db_service.get_room_agent_message_by_message_id = AsyncMock(
             return_value=agent_msg
         )
-        db_service.update_room_agent_message_by_message_id = AsyncMock(return_value=True)
-        db_service.update_task_state_on_message = AsyncMock(return_value=True)
+        db_service.update_room_agent_message_by_message_id = AsyncMock(
+            return_value=True
+        )
+        db_service.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db_service.is_message_cancelled = AsyncMock(return_value=False)
         agent_mock = MagicMock()
         agent_mock.hub_id = "hub-001"
@@ -823,6 +904,8 @@ class TestRelayServiceStatus:
         result = await svc.get_hub_status("user-001")
         assert len(result) == 1
         assert result[0].hub_id == "hub-001"
+        assert result[0].is_online is False
+        assert result[0].last_connected_at is None
         assert result[0].agent_count == 4
         assert result[0].active_agent_count == 3
         assert result[0].inactive_agent_count == 1

@@ -500,7 +500,7 @@ def test_api_key_management_routes_are_owned_by_store_protocol():
 def test_agent_viewset_mutations_record_vector_side_effect_protocols():
     routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
     expected = {
-        "app_shell.bound.EmbeddingProvider",
+        "common.protocols.EmbeddingServiceProtocol",
         "app_shell.bound.VectorIndex",
     }
     violations: list[str] = []
@@ -531,8 +531,8 @@ def test_room_center_route_inventory_records_live_protocol_owners():
     }
     expected = {
         "inquiry_active_runs": {
-            "owner": "common.protocols.ExecutionEngine",
-            "supporting": {"app_shell.database_service.A2ATaskReader"},
+            "owner": "app_shell.bound.RoomCenterRouteOwner",
+            "supporting": set(),
         },
         "send_message": {
             "owner": "common.protocols.ExecutionEngine",
@@ -566,8 +566,8 @@ def test_room_center_protocol_inventory_matches_handler_calls():
 
     expectations = {
         "inquiry_active_runs": (
-            "common.protocols.ExecutionEngine",
-            ["get_runs_for_room"],
+            "app_shell.bound.RoomCenterRouteOwner",
+            ["inquiry_active_runs"],
         ),
         "send_message": (
             "common.protocols.ExecutionEngine",

@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app_shell.room_runtime import RoomServices
 from models.request import RoomCenterUserMessageRequest
 from models.room import (
     MessageContent,
@@ -9,13 +10,12 @@ from models.room import (
     RoomUserMessage,
     UserAttachment,
 )
-from app_shell.room_runtime import RoomServices
 
 
 @pytest.fixture
 def room_runtime():
     svc = RoomServices()
-    svc.database_service = MagicMock()
+    svc._store = MagicMock()
     svc.sse_manager = MagicMock()
     svc.room_memory_service = MagicMock()
     return svc
@@ -35,7 +35,7 @@ def _make_msg_with_attachment(s3_key="uploads/r/f1/photo.png"):
 class TestMessageRetrieval:
     async def test_presigned_url_injected(self, room_runtime):
         msg = _make_msg_with_attachment()
-        room_runtime.database_service.get_room_user_messages_by_room_id = AsyncMock(return_value=[msg])
+        room_runtime._store.get_room_user_messages_by_room_id = AsyncMock(return_value=[msg])
 
         with patch("app_shell.s3_service.s3_service") as mock_s3:
             mock_s3.batch_presigned_urls = AsyncMock(return_value={"uploads/r/f1/photo.png": "https://presigned"})
@@ -51,7 +51,7 @@ class TestMessageRetrieval:
             room_id="room1", message_id="msg1", message_type="user",
             message_content=MessageContent(message_text="hi"),
         )
-        room_runtime.database_service.get_room_user_messages_by_room_id = AsyncMock(return_value=[msg])
+        room_runtime._store.get_room_user_messages_by_room_id = AsyncMock(return_value=[msg])
 
         result = await room_runtime.inquiry_user_messages_by_room_id(
             RoomCenterUserMessageRequest(room_id="room1")

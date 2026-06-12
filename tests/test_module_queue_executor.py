@@ -16,8 +16,12 @@ import pytest
 from a2a.types import TaskState
 
 from common.utils.cancellation import CancellationToken
+from execution.orchestration.queue_executor import (
+    QueueExecutor,
+    QueueProcessingResult,
+    QueueResult,
+)
 from models.processing import ProcessingResult, ProcessingStatus
-from execution.orchestration.queue_executor import QueueExecutor, QueueProcessingResult, QueueResult
 
 # =============================================================================
 # QueueResult Tests
@@ -50,7 +54,11 @@ def _make_queue_executor():
     qe.sse_manager = MagicMock()
     qe.tsm = MagicMock()
     qe.database_service = MagicMock()
+    qe._store = qe.database_service
     qe.database_service.get_room_user_message_by_message_id = AsyncMock(
+        return_value=None
+    )
+    qe.database_service.resolve_client_request_id_for_message_id = AsyncMock(
         return_value=None
     )
     qe.a2a_service = MagicMock()

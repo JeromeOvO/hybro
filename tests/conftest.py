@@ -45,23 +45,23 @@ FROZEN_TIME = datetime(2026, 1, 15, 12, 0, 0)
 # Keep all patch target strings here so import path refactors only break one place.
 
 PATCH = {
-    "room_center.db_service": "api.room_center.db_service",
+    "room_center.room_store": "api.room_center.room_store",
     "room_center.room_center": "api.room_center.room_center",
     "agent.agent_center": "api.agent.agent_center",
     "agent.agent_service": "api.agent.agent_service",
     "hitl.verify_room_ownership": "api.hitl.verify_room_ownership",
     "hitl.hitl_service": "api.hitl.hitl_service",
-    "sse.db_service": "api.sse.db_service",
+    "sse.sse_store": "api.sse.sse_store",
     "sse.sse_manager": "api.sse.sse_manager",
     "sse.mongodb": "api.sse.mongodb",
-    "a2a_tasks.db_service": "api.a2a_tasks.db_service",
+    "a2a_tasks.task_store": "api.a2a_tasks.task_store",
     "agent_selection_service": "api.room_center.agent_selection_service",
     "hitl_service_singleton": "app_shell.hitl_service.hitl_service",
     # Webhook endpoints
     "webhooks.db_service": "api.webhooks.db_service",
     "webhooks.sse_manager": "api.webhooks.sse_manager",
     # Agent group endpoints
-    "agent_group.db_service": "api.agent_group.db_service",
+    "agent_group.agent_group_store": "api.agent_group.agent_group_store",
     # Discovery endpoints
     "discovery.discovery_service": "api.discovery.discovery_service",
     "discovery.discovery_rate_limit_service": "api.discovery.discovery_rate_limit_service",
@@ -180,7 +180,7 @@ def mock_db_service():
     mock.get_room_messages_by_room_id = AsyncMock(return_value=[])
     mock.get_task_messages_for_room = AsyncMock(return_value=[])
     mock.get_pending_task_messages_for_user = AsyncMock(return_value=[])
-    mock.update_task_state_on_message = AsyncMock(return_value=True)
+    mock.update_task_state_on_message = AsyncMock(return_value=(True, None))
     mock.is_message_cancelled = AsyncMock(return_value=False)
     
     # Memory operations
@@ -571,7 +571,7 @@ def patch_sse_deps(mock_db_service, mock_sse_manager, mock_mongodb, mock_hitl_se
     """Patch all SSE endpoint dependencies at once."""
     from contextlib import ExitStack
     with ExitStack() as stack:
-        stack.enter_context(patch(PATCH["sse.db_service"], mock_db_service))
+        stack.enter_context(patch(PATCH["sse.sse_store"], mock_db_service))
         stack.enter_context(patch(PATCH["sse.sse_manager"], mock_sse_manager))
         stack.enter_context(patch(PATCH["hitl_service_singleton"], mock_hitl_service))
         execution_engine = MagicMock()
@@ -593,7 +593,7 @@ def patch_room_center_deps(mock_db_service, mock_room_center):
 
     from common.dto import ExecutionAck
     with ExitStack() as stack:
-        stack.enter_context(patch(PATCH["room_center.db_service"], mock_db_service))
+        stack.enter_context(patch(PATCH["room_center.room_store"], mock_db_service))
         stack.enter_context(patch(PATCH["room_center.room_center"], mock_room_center))
         execution_engine = MagicMock()
         execution_engine.execute = AsyncMock(

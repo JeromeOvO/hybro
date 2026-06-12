@@ -34,7 +34,7 @@ from common.protocols import (
     AgentExclusionReader,
     AgentRepository,
     HubLivenessReader,
-    LLMProvider,
+    LLMEmbeddingGateway,
     VectorDAL,
 )
 from common.protocols.hub_protocols import validate_hub_liveness_reader
@@ -56,7 +56,7 @@ class AgentFacade:
         *,
         repository: AgentRepository,
         vector: VectorDAL,
-        llm_provider: LLMProvider,
+        llm_provider: LLMEmbeddingGateway,
         card_resolver: AgentCardResolver,
         agent_index: str,
         hub_liveness: HubLivenessReader | None = None,

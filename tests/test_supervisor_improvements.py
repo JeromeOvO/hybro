@@ -5,24 +5,31 @@ Tests for Supervisor Improvements:
 """
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from execution.orchestration.room_supervisor_service import RoomSupervisorService
+from execution.orchestration.supervisor_executor import SupervisorExecutor
 from models.supervisor import (
     ActionType,
     AgentProfile,
     DelegateTarget,
     RoomConfig,
     RunStatus,
+    StepResult,
     StepStatus,
     SupervisorAction,
     SupervisorTrajectory,
     TrajectoryEntry,
-    StepResult,
 )
-from execution.orchestration.supervisor_executor import SupervisorExecutor
-from execution.orchestration.room_supervisor_service import RoomSupervisorService
+
+
+def test_room_supervisor_default_constructor_does_not_import_database_service():
+    with patch("importlib.import_module", side_effect=AssertionError("legacy import attempted")):
+        service = RoomSupervisorService()
+
+    assert service._supervisor_service is None
 
 # =============================================================================
 # Part 1a: Trajectory response preview (3000-char cap)
@@ -107,13 +114,17 @@ class TestQualityEvaluationPrompt:
     """Verify the system prompt includes quality evaluation instructions."""
 
     def test_system_prompt_contains_quality_evaluation_block(self):
-        from execution.orchestration.room_supervisor_service import SUPERVISOR_SYSTEM_PROMPT
+        from execution.orchestration.room_supervisor_service import (
+            SUPERVISOR_SYSTEM_PROMPT,
+        )
 
         assert "QUALITY EVALUATION" in SUPERVISOR_SYSTEM_PROMPT
         assert "unsatisfactory" in SUPERVISOR_SYSTEM_PROMPT
 
     def test_system_prompt_mentions_re_delegation_criteria(self):
-        from execution.orchestration.room_supervisor_service import SUPERVISOR_SYSTEM_PROMPT
+        from execution.orchestration.room_supervisor_service import (
+            SUPERVISOR_SYSTEM_PROMPT,
+        )
 
         assert "couldn't\n  find anything" in SUPERVISOR_SYSTEM_PROMPT or \
                "couldn't find anything" in SUPERVISOR_SYSTEM_PROMPT or \
@@ -128,7 +139,7 @@ class TestQualityEvaluationPrompt:
 def _make_executor() -> SupervisorExecutor:
     """Create a SupervisorExecutor with all dependencies mocked."""
     se = object.__new__(SupervisorExecutor)
-    se.database_service = AsyncMock()
+    se._store = AsyncMock()
     se.sse_manager = AsyncMock()
     se.room_runtime = MagicMock()
     se.supervisor_service = AsyncMock()
@@ -290,7 +301,7 @@ class TestSupervisorSSEStageNotifications:
             ),
         ])
         se._checkpoint_trajectory = AsyncMock(return_value=None)
-        se.database_service.resolve_client_request_id_for_message_id = AsyncMock(
+        se._store.resolve_client_request_id_for_message_id = AsyncMock(
             return_value=None
         )
 

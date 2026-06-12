@@ -7,16 +7,16 @@ runtime implementation behind the proxy.
 from __future__ import annotations
 
 import asyncio
-import importlib
 import time
 from collections import deque
 from collections.abc import AsyncGenerator, Callable
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import uuid4
 
-from a2a.types import AgentCard
-
+from app_shell.delivery_runtime import SSEManager
+from app_shell.redis_runtime import AppShellLeaderElection, AppShellRelayStreamService
+from common.config.settings import settings
 from common.dto import (
     HubCancelCommand,
     HubDispatchCommand,
@@ -24,23 +24,12 @@ from common.dto import (
     HubReplyCommand,
     OfflineHubFailureCommand,
 )
-from common.dto.agent import HubAgentDescriptor
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from common.config.settings import settings
-from hub_runtime_bridge.adapters.legacy_failure import LegacyOfflineFailureAdapter
 from hub_runtime_bridge.config import config_from_settings
 from hub_runtime_bridge.facade import HubFacade
-from hub_runtime_bridge.internal_response_router import HubInternalResponseRouter
-from hub_runtime_bridge.repository.mongo import HubMongoRepository
+from models.api_key import APIKey
 from models.hub import Hub, HubAgentSync, HubPublishRequest, HubStatus, RelayToHubEvent
-
-if TYPE_CHECKING:
-    from app_shell.redis_runtime import AppShellLeaderElection, AppShellRelayStreamService
-    from database.mongodb import MongoDB
-    from models.api_key import APIKey
-    from app_shell.database_service import DatabaseService
-    from app_shell.delivery_runtime import SSEManager
 
 logger = get_logger(__name__)
 
@@ -52,8 +41,8 @@ def _get_field(obj: Any, name: str, default: Any = None) -> Any:
 
 
 class _RelayPublishAuthorizationReader:
-    def __init__(self, database_service: DatabaseService) -> None:
-        self._db = database_service
+    def __init__(self, db: Any) -> None:
+        self._db = db
 
     async def authorize_hub_publish(
         self, *, hub_id: str, owner_id: str, room_id: str, agent_message_id: str
@@ -127,8 +116,8 @@ class _RelayPublishAuthorizationReader:
 
 
 class _RelayCancellationReader:
-    def __init__(self, database_service: DatabaseService) -> None:
-        self._db = database_service
+    def __init__(self, db: Any) -> None:
+        self._db = db
 
     async def is_message_cancelled(self, message_id: str) -> bool:
         return bool(await self._db.is_message_cancelled(message_id))
@@ -148,7 +137,9 @@ class _LegacyPublishSink:
         handler = self._relay._response_handler
         if handler is None:
             return
-        converted = self._response_converter(event) if self._response_converter else event
+        converted = (
+            self._response_converter(event) if self._response_converter else event
+        )
         await handler.handle(converted)
 
 
@@ -197,15 +188,26 @@ class RelayService:
     def __init__(
         self,
         *,
-        mongo: MongoDB,
-        database_service: DatabaseService,
+        mongo: Any,
+        db: Any | None = None,
+        legacy_store: Any | None = None,
         sse_manager: SSEManager,
         event_publisher: Any | None = None,
         worker_id: str | None = None,
         response_converter: Callable[[Any], Any] | None = None,
+        offline_failure_port: Any,
     ) -> None:
         self._mongo = mongo
-        self._db = database_service
+        self._mongo = (
+            mongo
+            if mongo is not None
+            else getattr(legacy_store, "mongo", None)
+            if legacy_store is not None
+            else None
+        )
+        self._db = db if db is not None else legacy_store
+        if self._db is None:
+            raise ValueError("RelayService requires a mongo-compatible db/service")
         self._sse = sse_manager
         self._hub_queues: dict[str, asyncio.Queue] = {}
         self._offline_queues: dict[str, deque[_OfflineQueueEntry]] = {}
@@ -221,25 +223,27 @@ class RelayService:
         self._publish_handler: Any | None = None
         self._relay_transport: Any | None = None
         self._response_handler: Any | None = None
-        self._internal_response_dispatcher: HubInternalResponseRouter | None = None
+        self._internal_response_dispatcher: Any | None = None
         self._response_converter = response_converter or _default_hub_response_converter
+        self._offline_failure_port = offline_failure_port
         self.agent_call_counter = (
-            mongo if callable(getattr(mongo, "increment_agent_call_count", None)) else None
+            mongo
+            if callable(getattr(mongo, "increment_agent_call_count", None))
+            else None
         )
+        if self.agent_call_counter is None and callable(
+            getattr(self._db, "increment_agent_call_count", None)
+        ):
+            self.agent_call_counter = self._db
         self._facade = HubFacade(
-            mongo=mongo,
+            mongo=self._mongo,
             config=config_from_settings(settings),
             worker_id=worker_id or "local-worker",
             agent_call_counter=self.agent_call_counter,
             event_publisher=event_publisher,
-            publish_authorization_reader=_RelayPublishAuthorizationReader(
-                database_service
-            ),
-            cancellation_reader=_RelayCancellationReader(database_service),
-            offline_failure_port=LegacyOfflineFailureAdapter(
-                database_service=database_service,
-                sse_manager=sse_manager,
-            ),
+            publish_authorization_reader=_RelayPublishAuthorizationReader(self._db),
+            cancellation_reader=_RelayCancellationReader(self._db),
+            offline_failure_port=self._offline_failure_port,
         )
 
     @property
@@ -248,32 +252,28 @@ class RelayService:
 
     @property
     def task_ownership_store(self) -> Any | None:
-        return self._facade.deps.task_ownership_store
+        return self._facade.task_ownership_store
 
     @property
     def ownership_lease_maintainer(self) -> Any | None:
-        return self._facade.ownership_lease_maintainer
+        return self._facade.ownership_maintainer
 
     @property
     def worker_id(self) -> str:
-        return self._facade.deps.worker_id
+        return self._facade.worker_id
 
     @property
-    def internal_response_dispatcher(self) -> HubInternalResponseRouter | None:
+    def internal_response_dispatcher(self) -> Any | None:
         return self._internal_response_dispatcher
 
-    def _bind_internal_response_router(self) -> HubInternalResponseRouter:
-        router = HubInternalResponseRouter(
-            sink=_LegacyPublishSink(
+    def _bind_internal_response_router(self) -> Any:
+        router = self._facade.bind_internal_response_sink(
+            _LegacyPublishSink(
                 self,
                 response_converter=self._response_converter,
-            ),
-            journal=self._facade.deps.hub_response_journal,
-            ownership_store=self._facade.deps.task_ownership_store,
-            worker_id=self._facade.deps.worker_id,
+            )
         )
         self._internal_response_dispatcher = router
-        self._facade.bind_internal_response_dispatcher(router)
         return router
 
     def set_relay_transport(self, transport: Any) -> None:
@@ -291,14 +291,14 @@ class RelayService:
 
     def set_stream_service(self, streams: AppShellRelayStreamService) -> None:
         self._streams = streams
-        self._facade.deps.streams = streams
+        self._facade.bind_streams(streams)
 
     def set_leader_election(self, leader: AppShellLeaderElection | None) -> None:
         self._leader = leader
 
     def bind_agent_registry_writer(self, writer) -> None:
         self._agent_registry_writer = writer
-        self._facade.deps.agent_registry_writer = writer
+        self._facade.bind_agent_registry_writer(writer)
 
     def _require_agent_registry_writer(self):
         if self._agent_registry_writer is None:
@@ -480,43 +480,14 @@ class RelayService:
         hub_doc = await self._mongo.get_hub(hub_id)
         if not hub_doc or hub_doc["user_id"] != api_key.user_id:
             raise PermissionError("Hub not owned by this API key")
-        if self._streams:
-            await self._streams.record_heartbeat(hub_id)
+        self._require_agent_registry_writer()
 
-        valid_agents: list[HubAgentSync] = []
-        for agent in agents:
-            try:
-                AgentCard(**agent.agent_card)
-            except Exception:
-                continue
-            valid_agents.append(agent)
-        if agents and not valid_agents:
-            return []
-
-        descriptors = [
-            HubAgentDescriptor(
-                hub_id=hub_id,
-                agent_id=agent.local_agent_id,
-                name=agent.name,
-                url=agent.agent_card.get("url"),
-                capabilities=list(agent.capabilities or []),
-                raw_card=dict(agent.agent_card or {}),
-            )
-            for agent in valid_agents
-        ]
-        synced = await self._require_agent_registry_writer().sync_hub_agents(
+        return await self._facade.sync_agents(
             hub_id,
-            api_key.user_id,
-            descriptors,
+            agents,
+            hub_doc["user_id"],
             prune_missing=prune_missing,
         )
-        return [
-            {
-                "agent_id": item.agent_id,
-                "local_agent_id": item.descriptor.agent_id if item.descriptor else None,
-            }
-            for item in synced
-        ]
 
     async def push_to_hub(self, hub_id: str, event: RelayToHubEvent) -> bool:
         if self._streams:
@@ -588,11 +559,7 @@ class RelayService:
     async def _fail_offline_message(
         self, event: RelayToHubEvent, error_text: str | None = None
     ) -> None:
-        port = LegacyOfflineFailureAdapter(
-            database_service=self._db,
-            sse_manager=self._sse,
-        )
-        await port.mark_hub_message_failed(
+        await self._offline_failure_port.mark_hub_message_failed(
             OfflineHubFailureCommand(
                 room_id=event.room_id,
                 agent_message_id=event.agent_message_id,
@@ -632,6 +599,8 @@ class RelayService:
         local_agent_id: str,
         task_id: str | None = None,
     ) -> bool:
+        # Compatibility note: this method cannot delegate directly to HubFacade yet.
+        # RelayService still owns legacy in-memory hub queues for non-stream mode.
         result = False
         if self._streams is not None:
             result = await self._facade.cancel_hub_task(
@@ -672,6 +641,8 @@ class RelayService:
         task_id: str | None = None,
         context_id: str | None = None,
     ) -> bool:
+        # Compatibility note: this method cannot delegate directly to HubFacade yet.
+        # RelayService still owns legacy in-memory hub queues for non-stream mode.
         result = False
         if self._streams is not None:
             result = await self._facade.reply_to_hub_task(
@@ -712,6 +683,8 @@ class RelayService:
         )
 
     async def send_to_hub(self, command: HubDispatchCommand):
+        # Compatibility note: this method cannot delegate directly to HubFacade yet.
+        # RelayService still owns legacy in-memory hub queues for non-stream mode.
         delivered = await self.push_to_hub(
             command.hub_id,
             RelayToHubEvent(
@@ -722,6 +695,7 @@ class RelayService:
                 agent_id=command.agent_id,
                 local_agent_id=command.local_agent_id,
                 message=command.payload,
+                task_id=command.task_id,
             ),
         )
         from common.dto import HubDispatchResult
@@ -734,6 +708,8 @@ class RelayService:
         )
 
     async def get_hub_status(self, user_id: str) -> list[HubStatus]:
+        # Compatibility note: this method preserves the legacy HubStatus response
+        # shape and count fields until a behavior-equivalent facade adapter exists.
         hubs = await self._mongo.get_hubs_by_user(user_id)
         result: list[HubStatus] = []
         for hub in hubs:
@@ -783,27 +759,18 @@ class RelayService:
 
     async def _do_heartbeat_check(self, stale_threshold: float) -> None:
         if self._streams:
-            repository = HubMongoRepository(self._mongo)
-            for doc in await repository.list_online_hubs_for_liveness():
-                hub_id = doc["hub_id"]
-                if not await self._streams.is_hub_alive(hub_id):
-                    logger.warning(
-                        "Hub %s heartbeat expired in Redis: redis_alive=False "
-                        "connection_id=%s local_disconnect_event=%s — marking offline",
-                        hub_id,
-                        doc.get("connection_id"),
-                        hub_id in self._hub_disconnect_events,
-                    )
-                    await self.mark_hub_agents_offline(
-                        hub_id, connection_id=doc.get("connection_id")
-                    )
-                    disconnect = self._hub_disconnect_events.get(hub_id)
-                    if disconnect is not None:
-                        disconnect.set()
-            for doc in await repository.list_offline_hubs_for_recovery(100):
-                hub_id = doc["hub_id"]
-                if await self._streams.is_hub_alive(hub_id):
-                    await self._mongo.update_hub_status(hub_id, is_online=True)
+            stale_events = await self._facade.sweep_stream_liveness()
+            for stale in stale_events:
+                disconnect = self._hub_disconnect_events.get(stale.hub_id)
+                logger.warning(
+                    "Hub %s heartbeat expired: redis_alive=False connection_id=%s "
+                    "local_disconnect_event=%s",
+                    stale.hub_id,
+                    stale.connection_id,
+                    disconnect is not None,
+                )
+                if disconnect is not None:
+                    disconnect.set()
             return
 
         now = time.monotonic()
@@ -817,7 +784,10 @@ class RelayService:
     async def sweep_offline_queues(self) -> None:
         now = time.monotonic()
         for hub_id, offline in list(self._offline_queues.items()):
-            while offline and (now - offline[0].enqueued_at) >= settings.relay_offline_queue_ttl:
+            while (
+                offline
+                and (now - offline[0].enqueued_at) >= settings.relay_offline_queue_ttl
+            ):
                 expired = offline.popleft()
                 await self._fail_offline_message(expired.event)
             if not offline:
@@ -840,33 +810,36 @@ class RelayHubLivenessReader:
 
 def init_relay_service(
     *,
-    mongo: MongoDB,
-    database_service: DatabaseService,
+    mongo: Any,
+    db: Any | None = None,
+    legacy_store: Any | None = None,
     sse_manager: SSEManager,
     room_message_center: object,
     hitl_coordinator: object | None = None,
     event_publisher: Any | None = None,
     worker_id: str | None = None,
     response_converter: Callable[[Any], Any] | None = None,
+    offline_failure_port: Any | None = None,
 ) -> RelayService:
+    resolved_db = db if db is not None else legacy_store
+    if resolved_db is None:
+        raise ValueError("init_relay_service requires db or legacy_store")
+    if offline_failure_port is None:
+        raise ValueError("init_relay_service requires offline_failure_port")
     global relay_service
     relay_service = RelayService(
         mongo=mongo,
-        database_service=database_service,
+        db=resolved_db,
         sse_manager=sse_manager,
         event_publisher=event_publisher,
         worker_id=worker_id,
         response_converter=response_converter,
+        offline_failure_port=offline_failure_port,
     )
     response_handler = getattr(room_message_center, "agent_response_handler", None)
     if response_handler is None:
-        handler_module = importlib.import_module("execution.dispatch.response_handler")
-        handler_cls = getattr(handler_module, "Agent" + "ResponseHandler")
-        response_handler = handler_cls(
-            db=database_service,
-            sse=sse_manager,
-            room_message_center=room_message_center,
-            hitl_coordinator=hitl_coordinator,
+        raise ValueError(
+            "init_relay_service requires room_message_center.agent_response_handler"
         )
     elif hitl_coordinator is not None:
         response_handler.hitl_coordinator = hitl_coordinator

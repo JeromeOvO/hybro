@@ -5,7 +5,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service"
+      "get_task_store"
     ],
     "methods": [
       "GET"
@@ -359,7 +359,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service"
+      "get_agent_group_store"
     ],
     "methods": [
       "GET"
@@ -383,7 +383,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service"
+      "get_agent_group_store"
     ],
     "methods": [
       "POST"
@@ -406,7 +406,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service"
+      "get_agent_group_store"
     ],
     "methods": [
       "DELETE"
@@ -430,7 +430,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service"
+      "get_agent_group_store"
     ],
     "methods": [
       "GET"
@@ -454,7 +454,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service"
+      "get_agent_group_store"
     ],
     "methods": [
       "PUT"
@@ -520,7 +520,7 @@
     "status_code": 201,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.EmbeddingProvider",
+      "common.protocols.EmbeddingServiceProtocol",
       "app_shell.bound.VectorIndex"
     ]
   },
@@ -548,7 +548,7 @@
     "status_code": 204,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.EmbeddingProvider",
+      "common.protocols.EmbeddingServiceProtocol",
       "app_shell.bound.VectorIndex"
     ]
   },
@@ -600,7 +600,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.EmbeddingProvider",
+      "common.protocols.EmbeddingServiceProtocol",
       "app_shell.bound.VectorIndex"
     ]
   },
@@ -628,7 +628,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.EmbeddingProvider",
+      "common.protocols.EmbeddingServiceProtocol",
       "app_shell.bound.VectorIndex"
     ]
   },
@@ -1237,15 +1237,12 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "common.protocols.ExecutionEngine",
+    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
     "path": "/api/v1/roomCenter/inquiryActiveRuns",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "app_shell.database_service.A2ATaskReader"
-    ]
+    "streaming_response": null
   },
   {
     "auth_dependencies": [
@@ -1433,7 +1430,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service"
+      "get_task_store"
     ],
     "methods": [
       "GET"
@@ -1535,7 +1532,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service",
+      "get_sse_store",
       "get_execution_engine"
     ],
     "methods": [
@@ -1563,7 +1560,7 @@
     ],
     "dependencies": [
       "get_current_user_with_query_token",
-      "get_db_service",
+      "get_sse_store",
       "get_sse_manager"
     ],
     "methods": [
@@ -1591,7 +1588,7 @@
     ],
     "dependencies": [
       "get_current_user_with_query_token",
-      "get_db_service",
+      "get_sse_store",
       "get_sse_manager"
     ],
     "methods": [
@@ -1627,7 +1624,7 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_db_service"
+      "get_task_store"
     ],
     "methods": [
       "GET"

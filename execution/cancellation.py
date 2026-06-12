@@ -42,12 +42,12 @@ class AgentTaskCleanupAdapter:
     def __init__(
         self,
         *,
-        db_service,
+        store,
         get_agent_card_from_url,
         cancel_remote_task,
         notify_task_update: Callable[..., Awaitable[bool]],
     ) -> None:
-        self._db = db_service
+        self._db = store
         self._get_agent_card_from_url = get_agent_card_from_url
         self._cancel_remote_task = cancel_remote_task
         self._notify_task_update = notify_task_update

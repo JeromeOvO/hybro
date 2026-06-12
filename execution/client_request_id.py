@@ -2,8 +2,8 @@ from __future__ import annotations
 
 
 class SSEClientRequestIdResolver:
-    def __init__(self, db_service) -> None:
-        self._db_service = db_service
+    def __init__(self, resolver) -> None:
+        self._resolver = resolver
 
     async def resolve_client_request_id(
         self,
@@ -14,4 +14,4 @@ class SSEClientRequestIdResolver:
             return provided_client_request_id
         if not message_id:
             return None
-        return await self._db_service.resolve_client_request_id_for_message_id(message_id)
+        return await self._resolver.resolve_client_request_id_for_message_id(message_id)

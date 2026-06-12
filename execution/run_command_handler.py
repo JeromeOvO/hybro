@@ -7,15 +7,35 @@ from typing import Any
 
 from pymongo.errors import DuplicateKeyError
 
-from common.utils.logger import get_logger
-from common.utils.time import utcnow
 from common.a2a_constants import SSEProcessingStatus
 from common.observability.run_metrics import increment_counter
+from common.protocols import RunEventRepository, RunRepository
+from common.utils.logger import get_logger
+from common.utils.time import utcnow
 from execution.run_reducer import RunTransitionError, ensure_transition_allowed
 from models.run import TERMINAL_RUN_STATES, Run, RunEvent, RunEventType, RunState
 
 logger = get_logger(__name__)
-mongodb = None
+_UNBOUND_MESSAGE = "RunCommandHandler has not been bound"
+
+
+class _UnboundRunRepository:
+    async def find_one(self, *args, **kwargs):  # pragma: no cover - guardrail
+        raise RuntimeError(_UNBOUND_MESSAGE)
+
+    async def insert_one(self, *args, **kwargs):  # pragma: no cover - guardrail
+        raise RuntimeError(_UNBOUND_MESSAGE)
+
+    async def update_one(self, *args, **kwargs):  # pragma: no cover - guardrail
+        raise RuntimeError(_UNBOUND_MESSAGE)
+
+
+class _UnboundRunEventRepository:
+    async def find_one(self, *args, **kwargs):  # pragma: no cover - guardrail
+        raise RuntimeError(_UNBOUND_MESSAGE)
+
+    async def insert_one(self, *args, **kwargs):  # pragma: no cover - guardrail
+        raise RuntimeError(_UNBOUND_MESSAGE)
 
 
 def feature_run_dual_write_enabled() -> bool:
@@ -30,25 +50,14 @@ def _feature_run_dual_write_enabled() -> bool:
 class RunCommandHandler:
     """Append-only run lifecycle + materialized head (orchestration runs only in v1)."""
 
-    def __init__(self, *, runs_collection=None, run_events_collection=None) -> None:
-        self._runs = runs_collection
-        self._run_events = run_events_collection
-
-    @property
-    def _runs_collection(self):
-        if self._runs is not None:
-            return self._runs
-        if mongodb is None:
-            raise RuntimeError("RunCommandHandler requires runs_collection")
-        return mongodb.runs_collection
-
-    @property
-    def _run_events_collection(self):
-        if self._run_events is not None:
-            return self._run_events
-        if mongodb is None:
-            raise RuntimeError("RunCommandHandler requires run_events_collection")
-        return mongodb.run_events_collection
+    def __init__(
+        self,
+        *,
+        run_repository: RunRepository,
+        run_event_repository: RunEventRepository,
+    ) -> None:
+        self._runs = run_repository
+        self._run_events = run_event_repository
 
     def _normalize_status(self, status: Any) -> str:
         return status.value if hasattr(status, "value") else str(status)
@@ -154,13 +163,13 @@ class RunCommandHandler:
         where run_events has a terminal event committed but the runs head
         update was lost (crash / timeout between the two writes).
         """
-        run_doc = await self._runs_collection.find_one({"run_id": run_id})
+        run_doc = await self._runs.find_one({"run_id": run_id})
         if not run_doc:
             return False
 
         head_seq = int(run_doc.get("seq", 0))
 
-        latest_event = await self._run_events_collection.find_one(
+        latest_event = await self._run_events.find_one(
             {"run_id": run_id, "seq": {"$gt": head_seq}},
             sort=[("seq", -1)],
         )
@@ -217,7 +226,7 @@ class RunCommandHandler:
             updates["error_code"] = payload.get("error_code")
             updates["error_message"] = payload.get("error_message")
 
-        await self._runs_collection.update_one(
+        await self._runs.update_one(
             {"run_id": run_id},
             {"$set": updates},
         )
@@ -254,7 +263,7 @@ class RunCommandHandler:
         if await self.heal_head_from_events(run_id):
             return None
 
-        run_doc = await self._runs_collection.find_one({"run_id": run_id})
+        run_doc = await self._runs.find_one({"run_id": run_id})
         if not run_doc or str(run_doc.get("room_id")) != room_id:
             return None
         trigger = str(run_doc.get("trigger_message_id") or run_id)
@@ -277,7 +286,7 @@ class RunCommandHandler:
         client_request_id: str | None,
     ) -> dict[str, Any]:
         """Return an up-to-date run_doc, creating the run + RUN_CREATED event if needed."""
-        run_doc = await self._runs_collection.find_one({"run_id": run_id})
+        run_doc = await self._runs.find_one({"run_id": run_id})
         if run_doc:
             return run_doc
 
@@ -291,10 +300,10 @@ class RunCommandHandler:
             seq=0,
         )
         try:
-            await self._runs_collection.insert_one(run.model_dump(mode="json"))
+            await self._runs.insert_one(run.model_dump(mode="json"))
         except DuplicateKeyError:
             pass
-        run_doc = await self._runs_collection.find_one({"run_id": run_id}) or run.model_dump(
+        run_doc = await self._runs.find_one({"run_id": run_id}) or run.model_dump(
             mode="json"
         )
         await self._append_event_and_project(
@@ -303,7 +312,7 @@ class RunCommandHandler:
             next_state=RunState.QUEUED,
             payload={},
         )
-        return await self._runs_collection.find_one({"run_id": run_id}) or run_doc
+        return await self._runs.find_one({"run_id": run_id}) or run_doc
 
     async def _record_active(
         self,
@@ -421,7 +430,7 @@ class RunCommandHandler:
         )
         dumped = event.model_dump(mode="json")
         try:
-            await self._run_events_collection.insert_one(dumped)
+            await self._run_events.insert_one(dumped)
         except DuplicateKeyError:
             return None
 
@@ -437,7 +446,7 @@ class RunCommandHandler:
             updates["error_code"] = payload.get("error_code")
             updates["error_message"] = payload.get("error_message")
 
-        await self._runs_collection.update_one(
+        await self._runs.update_one(
             {"run_id": run_id},
             {"$set": updates},
         )
@@ -463,4 +472,7 @@ def run_event_sse_enabled() -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
-run_command_handler = RunCommandHandler()
+run_command_handler = RunCommandHandler(
+    run_repository=_UnboundRunRepository(),
+    run_event_repository=_UnboundRunEventRepository(),
+)

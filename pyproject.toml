@@ -58,6 +58,7 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.12.0",
+    "ruff>=0.8.0",
 ]
 
 [tool.pytest.ini_options]
@@ -95,6 +96,87 @@ exclude = [
 [tool.ruff.lint]
 select = ["E", "F", "B", "I", "UP", "C90"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Temporary legacy lint baseline. Global rules stay enabled so new files and
+# newly introduced violations outside these exact files are still checked.
+"a2a_adapter/artifact_storage.py" = ["C901"]
+"a2a_adapter/webhook_payloads.py" = ["C901"]
+"agent/facade.py" = ["C901"]
+"api_gateway/registry.py" = ["C901"]
+"api_gateway/routes/a2a_task_routes.py" = ["B008"]
+"api_gateway/routes/agent_group_routes.py" = ["B008"]
+"api_gateway/routes/agent_routes.py" = ["B008", "C901"]
+"api_gateway/routes/discovery_api_key_routes.py" = ["B008"]
+"api_gateway/routes/discovery_routes.py" = ["B008"]
+"api_gateway/routes/files_routes.py" = ["B008"]
+"api_gateway/routes/hitl_routes.py" = ["B008"]
+"api_gateway/routes/hub_routes.py" = ["B008"]
+"api_gateway/routes/inspection_routes.py" = ["B008"]
+"api_gateway/routes/memory_routes.py" = ["B008"]
+"api_gateway/routes/platform_gateway_routes.py" = ["B008"]
+"api_gateway/routes/relay_routes.py" = ["B008"]
+"api_gateway/routes/room_routes.py" = ["B008", "C901"]
+"api_gateway/routes/sse_routes.py" = ["B008"]
+"api_gateway/routes/webhook_routes.py" = ["B008"]
+"api_gateway/viewsets/agent.py" = ["B008"]
+"api_gateway/viewsets/base.py" = ["B008"]
+"app_shell/a2a_runtime.py" = ["C901"]
+"app_shell/agent_health_service.py" = ["C901"]
+"app_shell/agent_selection_service.py" = ["UP042"]
+"app_shell/agent_service.py" = ["C901"]
+"app_shell/bound.py" = ["UP040"]
+"app_shell/context_assembly_service.py" = ["C901", "UP042"]
+"app_shell/memory_search_service.py" = ["C901"]
+"app_shell/openai_service.py" = ["C901"]
+"app_shell/relay_service.py" = ["C901"]
+"app_shell/room_coordinator_service.py" = ["C901"]
+"app_shell/room_runtime.py" = ["C901", "UP042"]
+"common/a2a_constants.py" = ["UP042"]
+"common/dto/execution.py" = ["UP042"]
+"common/observability/tracing.py" = ["UP035"]
+"common/protocols/hub_protocols.py" = ["UP040"]
+"common/types.py" = ["UP042"]
+"common/utils/a2a_helpers.py" = ["C901"]
+"common/utils/context_utils.py" = ["C901", "UP047"]
+"common/utils/remote_agent_connection.py" = ["C901"]
+"context_memory/assembly.py" = ["C901"]
+"context_memory/compaction.py" = ["C901"]
+"context_memory/models.py" = ["UP042"]
+"database/migration/backfill_agent_call_counts.py" = ["C901"]
+"database/migration/deduplicate_agents.py" = ["C901"]
+"database/migration/migrate_room_memories.py" = ["C901"]
+"database/migration/rename_supervisor_v2_fields.py" = ["C901"]
+"delivery/translator.py" = ["C901"]
+"execution/dispatch/task_notifications.py" = ["C901"]
+"execution/dispatch/transports/direct.py" = ["C901"]
+"execution/dispatch/transports/webhook.py" = ["C901"]
+"execution/hitl/service.py" = ["C901"]
+"execution/orchestration/queue_executor.py" = ["C901", "UP042"]
+"execution/orchestration/room_message_center.py" = ["C901"]
+"execution/orchestration/room_supervisor_service.py" = ["C901"]
+"execution/orchestration/supervisor_executor.py" = ["C901"]
+"hub_runtime_bridge/facade.py" = ["C901"]
+"hub_runtime_bridge/service/hub_publish.py" = ["C901"]
+"jobs/compaction_sweep.py" = ["C901"]
+"jobs/stale_task_checker.py" = ["C901"]
+"main.py" = ["B008", "C901"]
+"models/agent.py" = ["UP042"]
+"models/compaction.py" = ["UP042"]
+"models/hitl.py" = ["UP042"]
+"models/memory.py" = ["UP042"]
+"models/response.py" = ["UP046"]
+"models/search.py" = ["UP042"]
+"platform_module/gateway.py" = ["C901"]
+"scripts/_discovery_client.py" = ["C901"]
+"tests/test_api_thin_adapters.py" = ["C901"]
+"tests/test_compaction_service.py" = ["C901"]
+"tests/test_context_memory_repository.py" = ["C901"]
+"tests/test_delivery_protocols.py" = ["C901"]
+"tests/test_execution_protocols.py" = ["C901"]
+"tests/test_phase7a_processing_status_gate.py" = ["C901"]
+"tests/test_phase9_cleanup_gate.py" = ["C901"]
+"tests/test_platform_module_protocols.py" = ["C901"]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -149,6 +231,7 @@ packages = [
     "a2a_adapter",
     "llm_gateway",
     "llm_gateway.providers",
+    "llm_gateway.services",
     "database",
     "database.migration",
     "jobs",

@@ -5,13 +5,14 @@ from uuid import uuid4
 
 from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
 
+from app_shell.delivery_runtime import sse_manager
+from app_shell.runtime_store import UNBOUND_RUNTIME_STORE
+from common.dto import RoomMessageSummary
 from common.utils.a2a_helpers import extract_agent_text_from_room_message
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from llm_gateway.errors import LLMServiceNotBoundError
 from models.room import CoordinatorAgentId, MessageContent, Room, RoomAgentMessage
-from app_shell.database_service import db_service
-from app_shell.openai_service import openai_service
-from app_shell.delivery_runtime import sse_manager
 
 logger = get_logger(__name__)
 
@@ -31,10 +32,16 @@ class RoomCoordinatorService:
     - Be extended later to route follow-up questions and manage per-room policies
     """
 
-    def __init__(self) -> None:
-        self.database_service = db_service
-        self.openai_service = openai_service
+    def __init__(self, *, message_store=None) -> None:
+        self._store = message_store or UNBOUND_RUNTIME_STORE
+        self.summary_service = None
         self.sse_manager = sse_manager
+
+    def bind_store(self, message_store) -> None:
+        self._store = message_store
+
+    def bind_summary_service(self, service) -> None:
+        self.summary_service = service
 
     async def on_room_user_message_completed(
         self,
@@ -82,7 +89,7 @@ class RoomCoordinatorService:
         summary_client_request_id: str | None = None
 
         try:
-            room: Room | None = await self.database_service.get_room_by_room_id(room_id)
+            room: Room | None = await self._store.get_room_by_room_id(room_id)
             if room is None:
                 logger.warning(
                     "RoomCoordinatorService: Room %s not found, skipping coordination",
@@ -128,12 +135,9 @@ class RoomCoordinatorService:
                         and isinstance(msg.extend_info, dict)
                         and msg.extend_info.get("is_coordinator_summary")
                     ) or msg.agent_id in (
-                        "debate_summary",
-                        "non_debate_summary",
-                        "summary",
-                        "supervisor_synthesis",
-                        "supervisor_error",
-                        "supervisor_clarify",
+                        CoordinatorAgentId.SYSTEM_HYBRO,
+                        CoordinatorAgentId.SYSTEM_CLARIFIER,
+                        CoordinatorAgentId.SUPERVISOR_ERROR,
                     ):
                         continue
                     task = msg.message_content and msg.message_content.message_task
@@ -142,7 +146,7 @@ class RoomCoordinatorService:
                     text = extract_agent_text_from_room_message(msg)
                     if text and msg.agent_id:
                         # Get agent name from database
-                        agent_name = await self.database_service.get_agent_name_by_agent_id(
+                        agent_name = await self._store.get_agent_name_by_agent_id(
                             msg.agent_id
                         )
                         agent_responses.append(
@@ -158,15 +162,13 @@ class RoomCoordinatorService:
 
             # Use different summary approach based on mode
             summary_mode = "debate" if is_debate_mode else "non_debate"
-            coordinator_agent_id = (
-                CoordinatorAgentId.DEBATE_SUMMARY if is_debate_mode else CoordinatorAgentId.NON_DEBATE_SUMMARY
-            )
+            coordinator_agent_id = CoordinatorAgentId.SYSTEM_HYBRO
 
             # Pre-generate message_id and emit a "working" indicator so the
             # frontend shows a spinner while the LLM summarisation runs.
             summary_message_id = str(uuid4())
             summary_dispatched_at = utcnow().isoformat()
-            root_user_message = await self.database_service.get_room_user_message_by_message_id(
+            root_user_message = await self._store.get_room_user_message_by_message_id(
                 room_user_message_id
             )
             summary_client_request_id = (
@@ -195,9 +197,21 @@ class RoomCoordinatorService:
                 client_request_id=summary_client_request_id,
             )
 
-            summary_text = await self.openai_service.summarize_agent_responses(
-                agent_responses, mode=summary_mode, user_question=user_question_text
-            )
+            summary_service = getattr(self, "summary_service", None)
+            if summary_service is None:
+                raise LLMServiceNotBoundError("SummaryLLMService is not bound")
+            summary_inputs = [
+                _room_message_summary_from_item(item) for item in agent_responses
+            ]
+            chunks = [
+                chunk
+                async for chunk in summary_service.summarize_agent_responses_stream(
+                    summary_inputs,
+                    mode=summary_mode,
+                    user_question=user_question_text,
+                )
+            ]
+            summary_text = "".join(chunks)
 
             if not summary_text:
                 # Dismiss the working indicator by sending a completed-empty update
@@ -215,6 +229,8 @@ class RoomCoordinatorService:
                 message_id=summary_message_id,
             )
 
+        except LLMServiceNotBoundError:
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.error(
                 "RoomCoordinatorService: Failed to coordinate room %s user message %s: %s",
@@ -250,7 +266,7 @@ class RoomCoordinatorService:
         visited: set[str] = set()
 
         initial_children = (
-            await self.database_service.get_room_agent_messages_by_related_message_id(  # noqa: E501
+            await self._store.get_room_agent_messages_by_related_message_id(  # noqa: E501
                 root_user_message_id
             )
         )
@@ -267,7 +283,7 @@ class RoomCoordinatorService:
             visited.add(msg.message_id)
             all_messages.append(msg)
 
-            children = await self.database_service.get_room_agent_messages_by_related_message_id(  # noqa: E501
+            children = await self._store.get_room_agent_messages_by_related_message_id(  # noqa: E501
                 msg.message_id
             )
             if not children:
@@ -284,7 +300,7 @@ class RoomCoordinatorService:
         room_id: str,
         room_user_message_id: str,
         synthesis_text: str,
-        coordinator_agent_id: str = CoordinatorAgentId.SUPERVISOR_SYNTHESIS,
+        coordinator_agent_id: str = CoordinatorAgentId.SYSTEM_HYBRO,
         message_id: str | None = None,
     ) -> None:
         """Emit a synthesis/summary message to the room.
@@ -312,7 +328,7 @@ class RoomCoordinatorService:
         room_id: str,
         room_user_message_id: str,
         summary_text: str,
-        coordinator_agent_id: str = CoordinatorAgentId.NON_DEBATE_SUMMARY,
+        coordinator_agent_id: str = CoordinatorAgentId.SYSTEM_HYBRO,
         message_id: str | None = None,
     ) -> None:
         """
@@ -355,7 +371,7 @@ class RoomCoordinatorService:
 
         summary_content = MessageContent(message_task=summary_task)
 
-        user_message = await self.database_service.get_room_user_message_by_message_id(
+        user_message = await self._store.get_room_user_message_by_message_id(
             room_user_message_id
         )
         user_id = user_message.user_id if user_message else None
@@ -374,13 +390,12 @@ class RoomCoordinatorService:
                 "is_coordinator_summary": True,
                 "source_user_message_id": room_user_message_id,
                 "summary_type": "debate"
-                if coordinator_agent_id == CoordinatorAgentId.DEBATE_SUMMARY
+                if coordinator_agent_id == CoordinatorAgentId.SYSTEM_HYBRO
                 else "non_debate",
             },
-            task_content=summary_text,
         )
 
-        await self.database_service.add_room_agent_message(summary_agent_message)
+        await self._store.add_room_agent_message(summary_agent_message)
 
         await self.sse_manager.send_agent_response(
             room_id,
@@ -393,3 +408,13 @@ class RoomCoordinatorService:
 
 
 room_coordinator_service = RoomCoordinatorService()
+
+
+def _room_message_summary_from_item(item) -> RoomMessageSummary:
+    if isinstance(item, RoomMessageSummary):
+        return item
+    return RoomMessageSummary(
+        agent_id=item.get("agent_id"),
+        agent_name=item.get("agent_name", "Unknown Agent"),
+        message=item.get("message", ""),
+    )

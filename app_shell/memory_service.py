@@ -1,17 +1,18 @@
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from app_shell.runtime_store import UNBOUND_RUNTIME_STORE
+from common.dto import ChatContextGenerationInput
 from common.utils.context_utils import (
     add_turn_to_history,
 )
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from llm_gateway.errors import LLMServiceNotBoundError
 from models.error import SessionIdRequiredError
 from models.memory import ChatContext, ContextData, MemoryContent, RoomMemory
 from models.request import ChatMemoryRequest, RoomCenterMemoryRequest
 from models.response import ChatMemoryResponse, RoomCenterMemoryResponse
-from app_shell.database_service import db_service
-from app_shell.openai_service import openai_service
 
 if TYPE_CHECKING:
     from models.supervisor import SupervisorTrajectory
@@ -21,9 +22,15 @@ logger = get_logger(__name__)
 
 # Chat Memory Service Manager
 class ChatMemoryService:
-    def __init__(self):
-        self.database_service = db_service  # Use singleton
-        self.openai_service = openai_service  # Use singleton
+    def __init__(self, *, context_store=None):
+        self._store = context_store or UNBOUND_RUNTIME_STORE
+        self.room_memory_llm_service = None
+
+    def bind_store(self, context_store) -> None:
+        self._store = context_store
+
+    def bind_room_memory_llm_service(self, service) -> None:
+        self.room_memory_llm_service = service
 
     # Chat Contexts
     async def create_chat_context(
@@ -47,7 +54,7 @@ class ChatMemoryService:
                 updated_at=utcnow(),
                 extend_info=[],
             )
-            success = await self.database_service.add_chat_context(new_chat_context)
+            success = await self._store.add_chat_context(new_chat_context)
             if success:
                 return ChatMemoryResponse(
                     user_name=request.user_name,
@@ -82,7 +89,7 @@ class ChatMemoryService:
             raise SessionIdRequiredError()
 
         try:
-            chat_context = await self.database_service.get_chat_context_by_session_id(
+            chat_context = await self._store.get_chat_context_by_session_id(
                 request.session_id
             )
             if chat_context:
@@ -119,7 +126,7 @@ class ChatMemoryService:
             raise SessionIdRequiredError()
 
         try:
-            chat_context = await self.database_service.get_chat_context_by_session_id(
+            chat_context = await self._store.get_chat_context_by_session_id(
                 request.session_id
             )
         except Exception as e:
@@ -130,8 +137,14 @@ class ChatMemoryService:
                 status_code=500,
             )
 
-        new_context_data = await self.openai_service.generate_chat_context(
-            request.user_input, request.agent_response, chat_context.context_data
+        if self.room_memory_llm_service is None:
+            raise LLMServiceNotBoundError("RoomMemoryLLMService is not bound")
+        new_context_data = await self.room_memory_llm_service.generate_chat_context(
+            ChatContextGenerationInput(
+                user_input=request.user_input,
+                agent_response=request.agent_response,
+                existing_context=chat_context.context_data.context_content,
+            )
         )
 
         try:
@@ -144,7 +157,7 @@ class ChatMemoryService:
                 updated_at=utcnow(),
                 extend_info=chat_context.extend_info,
             )
-            success = await self.database_service.update_chat_context_by_session_id(
+            success = await self._store.update_chat_context_by_session_id(
                 request.session_id, chat_context
             )
             if success:
@@ -176,7 +189,7 @@ class ChatMemoryService:
         Delete a chat context by session_id
         """
         try:
-            success = await self.database_service.delete_chat_context_by_session_id(
+            success = await self._store.delete_chat_context_by_session_id(
                 request.session_id
             )
             if success:
@@ -203,11 +216,17 @@ class ChatMemoryService:
 
 
 class RoomMemoryService:
-    def __init__(self):
-        self.database_service = db_service  # Use singleton
-        self.openai_service = openai_service  # Use singleton
+    def __init__(self, *, room_memory_store=None):
+        self._store = room_memory_store or UNBOUND_RUNTIME_STORE
+        self.turn_notes_llm_provider = None
         self._facade = None
         self._bound = False
+
+    def bind_store(self, room_memory_store) -> None:
+        self._store = room_memory_store
+
+    def bind_turn_notes_llm_provider(self, provider) -> None:
+        self.turn_notes_llm_provider = provider
 
     def bind_facade(self, facade) -> None:
         self._facade = facade
@@ -341,17 +360,18 @@ class RoomMemoryService:
         """
         facade = self._require_facade()
         try:
-            doc = await facade.legacy_get_room_memory_for_update_by_memory_id(
-                request.memory_id
+            doc = request.memory.model_dump(mode="json") if request.memory else {}
+            ok = await facade.legacy_update_room_memory_by_memory_id(
+                request.memory_id,
+                doc,
             )
-            memory = _room_memory_from_doc(doc) if doc else None
             return RoomCenterMemoryResponse(
                 room_id=request.room_id,
-                memory_id=memory.memory_id if memory else request.memory_id,
-                memory=memory,
-                success=memory is not None,
-                error=None if memory else "Room memory not found",
-                status_code=200 if memory else 404,
+                memory_id=request.memory_id,
+                memory=request.memory if ok else None,
+                success=ok,
+                error=None if ok else "Room memory not found",
+                status_code=200 if ok else 404,
             )
         except Exception as exc:
             return _room_memory_error_response(
@@ -427,7 +447,7 @@ class RoomMemoryService:
         if not user_id:
             return
         try:
-            await self.database_service.increment_user_interactions(user_id)
+            await self._store.increment_user_interactions(user_id)
         except Exception as e:
             logger.debug("UserMemory tracking skipped: %s", e)
 
@@ -439,7 +459,7 @@ class RoomMemoryService:
     ) -> None:
         """Fire-and-forget: record agent call outcome in AgentMemory (§4.4)."""
         try:
-            await self.database_service.record_agent_call(
+            await self._store.record_agent_call(
                 agent_id=agent_id,
                 success=success,
                 response_time_ms=response_time_ms,
@@ -460,12 +480,18 @@ class RoomMemoryService:
         try:
             from common.utils.context_utils import extract_turn_notes_llm
 
+            if self.turn_notes_llm_provider is None:
+                raise LLMServiceNotBoundError("Turn notes LLM provider is not bound")
             enriched_notes = await extract_turn_notes_llm(
-                content, provider=self.openai_service
+                content,
+                provider=self.turn_notes_llm_provider,
             )
             if enriched_notes and enriched_notes != heuristic_notes:
-                await self.database_service.update_turn_notes(
-                    room_id, turn_id, enriched_notes,
+                facade = self._require_facade()
+                await facade.memory_repository.update_turn_notes(
+                    room_id,
+                    turn_id,
+                    enriched_notes,
                 )
         except Exception as e:
             logger.debug(
@@ -577,7 +603,11 @@ room_memory_service = RoomMemoryService()
 def _room_memory_from_doc(doc: dict | None) -> RoomMemory | None:
     if not doc:
         return None
-    return RoomMemory(**doc)
+    try:
+        return RoomMemory.model_validate(doc)
+    except Exception:
+        logger.warning("Invalid room memory document", exc_info=True)
+        return None
 
 
 def _strip_internal_memory_flags(doc: dict | None) -> dict | None:

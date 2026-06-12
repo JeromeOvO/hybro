@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import httpx
 from a2a.types import AgentCard
@@ -12,9 +12,8 @@ from a2a.utils.constants import (
 )
 from loguru import logger
 
-from common.types import AgentCard as CommonAgentCard
 from common.config.settings import settings
-from database.mongodb import mongodb
+from common.types import AgentCard as CommonAgentCard
 from jobs.constants import AGENT_HEALTH_CHECKER
 from models.agent import (
     AGENT_CARD_HEALTH_NO_SYNC,
@@ -25,6 +24,14 @@ from models.agent import (
 
 if TYPE_CHECKING:
     from app_shell.redis_runtime import AppShellLeaderElection
+
+
+class AgentHealthRepositoryPort(Protocol):
+    async def get_by_id(self, agent_id: str) -> dict | None: ...
+
+    async def list_visible(self, *, query: dict | None = None, **kwargs) -> list[dict]: ...
+
+    async def update(self, agent_id: str, updates: dict) -> dict | None: ...
 
 
 class AgentHealthService:
@@ -41,6 +48,8 @@ class AgentHealthService:
 
     def __init__(
         self,
+        *,
+        repository: AgentHealthRepositoryPort | None = None,
         check_interval_seconds: int = int(
             os.getenv("AGENT_HEALTH_CHECK_INTERVAL", "3600")
         ),
@@ -74,21 +83,25 @@ class AgentHealthService:
         # Track active retry tasks per agent to avoid duplicates
         self._retry_tasks: dict[str, asyncio.Task] = {}
         self._leader: AppShellLeaderElection | None = None
-        self._facade = None
+        self._repository = repository
 
     def set_leader_election(self, leader: AppShellLeaderElection | None) -> None:
         """Attach a leader election instance for distributed leader gating."""
         self._leader = leader
 
-    def bind_facade(self, facade) -> None:
-        self._facade = facade
+    def bind_repository(self, repository) -> None:
+        self._repository = repository
 
-    def _require_facade(self):
-        if self._facade is None:
+    def _require_repository(self):
+        if self._repository is None:
             raise RuntimeError(
-                "AgentHealthService.bind_facade() not called - startup incomplete"
+                "AgentHealthService.bind_repository() not called - startup incomplete"
             )
-        return self._facade
+        return self._repository
+
+    @staticmethod
+    def _coerce_agent(agent: dict | Agent) -> Agent:
+        return agent if isinstance(agent, Agent) else Agent.model_validate(agent)
 
     async def check_agent_health(
         self, agent: Agent, *, timeout: float | None = None
@@ -196,9 +209,9 @@ class AgentHealthService:
                 )
                 return
 
-            await mongodb.agents_collection.update_one(
-                {"agent_id": agent.agent_id},
-                {"$set": partial_set},
+            await self._require_repository().update(
+                agent.agent_id,
+                partial_set,
             )
             logger.debug(
                 f"Agent card updated for {agent.agent_id} ({fetched_card.name})"
@@ -219,12 +232,9 @@ class AgentHealthService:
         Returns:
             bool: True if update was successful
         """
-        facade = self._require_facade()
+        repo = self._require_repository()
         try:
-            await facade.update_health(
-                agent_id,
-                new_status == AgentStatus.active,
-            )
+            await repo.update(agent_id, {"agent_status": new_status.value})
             logger.info(
                 f"Agent {agent_id} status updated to {new_status.value}"
             )
@@ -261,8 +271,11 @@ class AgentHealthService:
                 await asyncio.sleep(delay)
 
                 # Re-fetch agent to get current state
-                agent = await mongodb.get_agent_by_agent_id(agent_id)
-                if not agent or agent.agent_status == AgentStatus.deleted:
+                repo_agent = await self._require_repository().get_by_id(agent_id)
+                if not repo_agent:
+                    break
+                agent = self._coerce_agent(repo_agent)
+                if agent.agent_status == AgentStatus.deleted:
                     break
 
                 is_healthy, fetched_card = await self.check_agent_health(agent)
@@ -311,7 +324,7 @@ class AgentHealthService:
     async def run_health_check_cycle(self):
         """Run a single health check cycle for all agents."""
         try:
-            agents = await mongodb.get_agents_with_conditions(
+            raw_agents = await self._require_repository().list_visible(
                 query={
                     "agent_status": {"$ne": AgentStatus.deleted.value},
                     "$or": [
@@ -320,6 +333,7 @@ class AgentHealthService:
                     ],
                 }
             )
+            agents = [self._coerce_agent(agent) for agent in raw_agents]
 
             logger.info(f"Running health check for {len(agents)} agents")
 

@@ -3,8 +3,9 @@ from pydantic import BaseModel
 
 from api_gateway.viewsets import base as viewset
 from api_gateway.viewsets.base import REPO_ACTIONS_MAP
-from app_shell.bound import EmbeddingProvider, VectorIndex
+from app_shell.bound import VectorIndex
 from common.auth import ClerkUser, get_current_user, get_optional_user
+from common.protocols import EmbeddingServiceProtocol
 from models.request import (
     AgentCreate,
     AgentPatch,
@@ -14,13 +15,13 @@ from models.request import (
 )
 from models.response import AgentResponse, PaginatedResponse, PaginationMeta
 
-embedding_provider: EmbeddingProvider | None = None
+embedding_provider: EmbeddingServiceProtocol | None = None
 vector_index: VectorIndex | None = None
 
 
 def bind_agent_viewset_dependencies(
     *,
-    embedding_source: EmbeddingProvider,
+    embedding_source: EmbeddingServiceProtocol,
     vector_index_service: VectorIndex,
 ) -> None:
     global embedding_provider, vector_index
@@ -29,7 +30,7 @@ def bind_agent_viewset_dependencies(
     vector_index = vector_index_service
 
 
-def _require_embedding_provider() -> EmbeddingProvider:
+def _require_embedding_provider() -> EmbeddingServiceProtocol:
     if embedding_provider is None:
         raise RuntimeError("AgentViewSet embedding dependency has not been bound")
     return embedding_provider

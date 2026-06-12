@@ -26,6 +26,7 @@ from models.response import (
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
     RoomCenterUserMessageResponse,
+    RoomCenterActiveRunsResponse,
 )
 
 JsonScalar: TypeAlias = str | int | float | bool | None
@@ -187,11 +188,6 @@ class AgentSelectionSuggester(Protocol):
 
 
 @runtime_checkable
-class EmbeddingProvider(Protocol):
-    async def get_embedding(self, text: str) -> list[float] | None: ...
-
-
-@runtime_checkable
 class VectorIndex(Protocol):
     def upsert(self, vectors: list[dict[str, JsonValue]]) -> VectorIndexResult: ...
     def delete(self, ids: list[str]) -> VectorIndexResult: ...
@@ -225,6 +221,9 @@ class RoomCenterRouteOwner(Protocol):
     async def inquiry_room_setting(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse: ...
+    async def inquiry_active_runs(
+        self, request: RoomCenterRoomSettingRequest
+    ) -> RoomCenterActiveRunsResponse: ...
     async def update_room_setting(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse: ...
@@ -255,7 +254,6 @@ __all__ = [
     "AgentLivenessChecker",
     "AgentLookup",
     "AgentSelectionSuggester",
-    "EmbeddingProvider",
     "InspectionCenter",
     "LegacyMemoryCenter",
     "RoomCenterRouteOwner",

@@ -36,10 +36,12 @@ HITL_PATCH = "app_shell.room_runtime.hitl_service"
 @pytest.fixture
 def room_center():
     rc = object.__new__(RoomServices)
-    rc.database_service = AsyncMock()
-    rc.database_service.get_agent_by_agent_id = AsyncMock(return_value=None)
-    rc.database_service.get_agent_group_by_id = AsyncMock(return_value=None)
-    rc.database_service.get_room_by_room_id = AsyncMock(return_value=None)
+    rc._store = AsyncMock()
+    rc._store.get_agent_by_agent_id = AsyncMock(return_value=None)
+    rc._store.get_agent_group_by_id = AsyncMock(return_value=None)
+    rc._store.get_room_by_room_id = AsyncMock(return_value=None)
+    # Backwards compatibility alias
+    rc.database_service = rc._store
     rc.agent_service = MagicMock()
     rc.openai_service = MagicMock()
     rc.a2a_service = MagicMock()

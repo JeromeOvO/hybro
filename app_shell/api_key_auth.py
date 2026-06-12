@@ -1,15 +1,9 @@
-from typing import Protocol
-
 from fastapi import HTTPException, status
 from loguru import logger
 
 from common.api_key_auth import hash_api_key
+from common.protocols import APIKeyValidationStore
 from models.api_key import APIKey
-
-
-class APIKeyValidationStore(Protocol):
-    async def get_api_key_by_hash(self, key_hash: str) -> APIKey | None: ...
-    async def update_api_key_usage(self, key_hash: str) -> bool: ...
 
 
 class MongoAPIKeyAuthenticator:
@@ -53,4 +47,4 @@ class MongoAPIKeyAuthenticator:
         return api_key_doc
 
 
-__all__ = ["APIKeyValidationStore", "MongoAPIKeyAuthenticator"]
+__all__ = ["MongoAPIKeyAuthenticator"]

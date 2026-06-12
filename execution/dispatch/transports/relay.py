@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from common.dto import HubCancelCommand, HubDispatchCommand, HubReplyCommand
 from common.utils.logger import get_logger
@@ -13,14 +13,31 @@ from execution.dispatch.transports.base import AgentTransport
 from models.processing import ProcessingResult, ProcessingStatus
 
 if TYPE_CHECKING:
+    from app_shell.delivery_runtime import SSEManager
     from execution.dispatch.dispatch_middleware import DispatchContext
     from execution.dispatch.response_handler import AgentResponseHandler
     from models.room import RoomAgentMessage
-    from app_shell.database_service import DatabaseService
-    from app_shell.delivery_runtime import SSEManager
 
 logger = get_logger(__name__)
-mongodb = None
+
+
+@runtime_checkable
+class RelayTaskTracker(Protocol):
+    async def enable_task_tracking_on_message(
+        self,
+        message_id: str,
+        *,
+        webhook_token_hash: str | None,
+        agent_url: str | None,
+        task_created_at,
+        task_updated_at,
+        task_data: dict,
+    ) -> bool: ...
+
+
+@runtime_checkable
+class RelayAgentCallCounter(Protocol):
+    async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> bool: ...
 
 
 class RelayTransport(AgentTransport):
@@ -28,16 +45,16 @@ class RelayTransport(AgentTransport):
         self,
         response_handler: AgentResponseHandler,
         relay_service: Any,
-        db: DatabaseService,
+        task_tracker: RelayTaskTracker,
         sse_manager: SSEManager,
-        call_counter: Any | None = None,
+        call_counter: RelayAgentCallCounter | None = None,
         ownership_store: Any | None = None,
         ownership_lease_maintainer: Any | None = None,
         worker_id: str = "local-worker",
     ) -> None:
         super().__init__(response_handler)
         self.relay_service = relay_service
-        self._db = db
+        self._task_tracker = task_tracker
         self._sse = sse_manager
         self._call_counter = call_counter
         self._ownership_store = ownership_store
@@ -66,7 +83,7 @@ class RelayTransport(AgentTransport):
         elif hasattr(ctx.agent, "agent_card") and isinstance(ctx.agent.agent_card, dict):
             agent_url = ctx.agent.agent_card.get("url", "")
 
-        await self._db.enable_task_tracking_on_message(
+        await self._task_tracker.enable_task_tracking_on_message(
             message_id=message.message_id,
             webhook_token_hash="",
             agent_url=agent_url,
@@ -124,14 +141,11 @@ class RelayTransport(AgentTransport):
             result = await delivery if inspect.isawaitable(delivery) else delivery
         delivered = bool(getattr(result, "accepted", result))
 
-        counter = (
-            self._call_counter
-            or mongodb
-            or getattr(self.relay_service, "agent_call_counter", None)
-        )
-        if counter is not None:
+        if self._call_counter is not None:
             try:
-                await counter.increment_agent_call_count(ctx.agent.agent_id, success=delivered)
+                await self._call_counter.increment_agent_call_count(
+                    ctx.agent.agent_id, success=delivered
+                )
             except Exception as exc:
                 logger.warning(
                     "Failed to record hub agent call for %s: %s",

@@ -16,16 +16,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app_shell.room_runtime import RoomServices
 from common.dto import RoomInfo
 from models.request import RoomCenterRoomSettingRequest
-from app_shell.room_runtime import RoomServices
 
 
 @pytest.fixture
 def room_center():
     """Create a RoomCenter with mocked dependencies."""
     rc = object.__new__(RoomServices)
-    rc.database_service = MagicMock()
+    rc._store = MagicMock()
+    # Backwards compatibility alias
+    rc.database_service = rc._store
     rc.agent_service = MagicMock()
     rc.openai_service = MagicMock()
     rc.a2a_service = MagicMock()
@@ -304,6 +306,15 @@ async def test_room_services_processing_status_uses_bound_execution_emitter():
     assert emitter.await_args.kwargs["client_request_id"] == "cr-1"
 
 
+def test_room_services_bind_store_sets_runtime_store():
+    svc = object.__new__(RoomServices)
+    store = object()
+
+    svc.bind_store(store)
+
+    assert svc._store is store
+
+
 @pytest.mark.asyncio
 async def test_room_services_delegated_methods_fail_before_bind():
     svc = object.__new__(RoomServices)
@@ -320,8 +331,8 @@ async def test_room_services_delegated_methods_fail_before_bind():
 @pytest.mark.asyncio
 async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
     svc = object.__new__(RoomServices)
-    svc.database_service = MagicMock()
-    svc.database_service.get_active_runs_by_room_id = AsyncMock(return_value=[])
+    svc._store = MagicMock()
+    svc._store.get_active_runs_by_room_id = AsyncMock(return_value=[])
     svc._bound = False
     svc._facade = None
     facade = AsyncMock()
@@ -401,8 +412,8 @@ async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
 @pytest.mark.asyncio
 async def test_delete_room_does_not_cleanup_when_requester_is_not_owner():
     svc = object.__new__(RoomServices)
-    svc.database_service = MagicMock()
-    svc.database_service.get_active_runs_by_room_id = AsyncMock(return_value=[])
+    svc._store = MagicMock()
+    svc._store.get_active_runs_by_room_id = AsyncMock(return_value=[])
     svc._bound = False
     svc._facade = None
     svc._s3_service = SimpleNamespace(delete_prefix=AsyncMock())
@@ -427,8 +438,8 @@ async def test_delete_room_does_not_cleanup_when_requester_is_not_owner():
 @pytest.mark.asyncio
 async def test_delete_room_success_when_post_delete_context_memory_cleanup_fails():
     svc = object.__new__(RoomServices)
-    svc.database_service = MagicMock()
-    svc.database_service.get_active_runs_by_room_id = AsyncMock(return_value=[])
+    svc._store = MagicMock()
+    svc._store.get_active_runs_by_room_id = AsyncMock(return_value=[])
     svc._bound = False
     svc._facade = None
     svc._s3_service = SimpleNamespace(delete_prefix=AsyncMock())

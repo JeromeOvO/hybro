@@ -129,7 +129,7 @@ class TestRoomLifecycleFlow:
         )
         mock_execution_engine.start_orchestration = AsyncMock()
 
-        with patch(PATCH["room_center.db_service"], mock_db):
+        with patch(PATCH["room_center.room_store"], mock_db):
             with patch(PATCH["room_center.room_center"], mock_rc):
                 with patch("api.room_center.execution_engine", mock_execution_engine):
                     # Step 1: Create room (real endpoint parses request JSON,
@@ -206,7 +206,7 @@ class TestRoomLifecycleFlow:
         mock_db = MagicMock()
         mock_db.get_room_by_room_id = AsyncMock(return_value=mock_room)
 
-        with patch(PATCH["room_center.db_service"], mock_db):
+        with patch(PATCH["room_center.room_store"], mock_db):
             for endpoint_fn in [
                 inquiry_room_setting,
                 inquiry_active_runs,
@@ -321,8 +321,8 @@ class TestAgentLifecycleFlow:
     @pytest.mark.asyncio
     async def test_private_agent_visibility(self, flow_user):
         """Private agent: owner sees it, others get 404."""
-        from models.request import AgentCenterRequest
         from app_shell.agent_service import AgentService
+        from models.request import AgentCenterRequest
 
         agent_id = "private-flow-001"
 
@@ -412,7 +412,7 @@ class TestHITLFlow:
         mock_delivery.emit = AsyncMock()
 
         svc = HITLService()
-        svc._db_service = mock_db
+        svc._store = mock_db
         svc._delivery = mock_delivery
 
         # Step 1: request_input
@@ -449,7 +449,7 @@ class TestHITLFlow:
         mock_db.count_hitl_requests_for_message = AsyncMock(
             return_value=MAX_HITL_ROUNDS,
         )
-        svc._db_service = mock_db
+        svc._store = mock_db
 
         result = await svc.request_input(
             room_id="r", user_message_id="m", source="supervisor",
@@ -494,7 +494,7 @@ class TestA2ATaskFlow:
             return_value=mock_msg,
         )
 
-        with patch(PATCH["a2a_tasks.db_service"], mock_db):
+        with patch(PATCH["a2a_tasks.task_store"], mock_db):
             result = await get_task_status(msg_id, flow_user)
 
         assert result["message_id"] == msg_id
@@ -528,7 +528,7 @@ class TestA2ATaskFlow:
             return_value=msgs,
         )
 
-        with patch(PATCH["a2a_tasks.db_service"], mock_db):
+        with patch(PATCH["a2a_tasks.task_store"], mock_db):
             result = await list_user_pending_tasks(flow_user)
 
         assert len(result["tasks"]) == 3
@@ -567,7 +567,7 @@ class TestMessageCancellationFlow:
         mock_db.get_room_user_message_by_message_id = AsyncMock(return_value=mock_msg)
         mock_db.get_room_by_room_id = AsyncMock(return_value=mock_room)
         mock_db.get_room_agent_messages_by_related_message_id = AsyncMock(return_value=[])
-        mock_db.update_task_state_on_message = AsyncMock(return_value=True)
+        mock_db.update_task_state_on_message = AsyncMock(return_value=(True, None))
 
         mock_mongodb = MagicMock()
         mock_mongodb.cancel_message = AsyncMock(return_value=True)
@@ -581,7 +581,7 @@ class TestMessageCancellationFlow:
         mock_execution_engine = MagicMock()
         mock_execution_engine.cancel = AsyncMock(return_value=True)
 
-        with patch(PATCH["sse.db_service"], mock_db):
+        with patch(PATCH["sse.sse_store"], mock_db):
             with patch("api.sse.execution_engine", mock_execution_engine):
                 result = await cancel_message(msg_id, flow_user)
 
@@ -604,8 +604,8 @@ class TestErrorHandlingFlow:
 
     @pytest.mark.asyncio
     async def test_graceful_db_error_handling(self):
-        from models.request import AgentCenterRequest
         from app_shell.agent_service import AgentService
+        from models.request import AgentCenterRequest
 
         svc = AgentService()
         facade = MagicMock()
@@ -637,7 +637,7 @@ class TestErrorHandlingFlow:
         mock_db = MagicMock()
         mock_db.get_room_by_room_id = AsyncMock(return_value=mock_room)
 
-        with patch(PATCH["room_center.db_service"], mock_db):
+        with patch(PATCH["room_center.room_store"], mock_db):
             with pytest.raises(HTTPException) as exc:
                 await verify_room_ownership("r", other_user)
             assert exc.value.status_code == 403

@@ -18,15 +18,15 @@ import pytest
 from a2a.types import TaskState
 
 from common.a2a_constants import CommonTaskState, SSEProcessingStatus
+from execution.orchestration.room_message_center import RoomMessageCenter
 from models.supervisor import (
     ActionType,
+    StepResult,
     StepStatus,
     SupervisorAction,
     SupervisorTrajectory,
     TrajectoryEntry,
-    StepResult,
 )
-from execution.orchestration.room_message_center import RoomMessageCenter
 
 # =============================================================================
 # _validate_room_message_request Tests
@@ -108,6 +108,7 @@ async def test_process_room_user_message_cancelled_error_emits_canceled_and_rera
         claim_user_message_for_processing=AsyncMock(return_value=True),
         refresh_processing_claim=AsyncMock(),
     )
+    rmc._store = rmc.database_service
     rmc._acquire_room_lock = AsyncMock(return_value="owner-1")
     rmc._release_room_lock = AsyncMock()
     rmc._process_room_user_message_locked = AsyncMock(
@@ -535,6 +536,7 @@ async def test_failed_room_lock_still_emits_terminal_status_when_task_transition
             return_value=[agent_message]
         ),
     )
+    rmc._store = rmc.database_service
     rmc._acquire_room_lock = AsyncMock(return_value=None)
     rmc.tsm = SimpleNamespace(
         transition_task=AsyncMock(side_effect=RuntimeError("task db unavailable"))

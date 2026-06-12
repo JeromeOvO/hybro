@@ -14,70 +14,65 @@ from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
 
 
-class _DatabaseServiceLike(Protocol):
+class ResponseMessageWriter(Protocol):
     async def accumulate_artifact_on_message(
         self,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
+        message_id: str,
+        artifact: dict,
+        *,
+        append: bool = False,
+    ) -> bool:
         ...
 
+
+class ResponseTaskWriter(Protocol):
     async def update_task_state_on_message(
         self,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
+        message_id: str,
+        state: str,
+        *,
+        message_text: str | None = None,
+        artifacts: list[dict] | None = None,
+        task_id: str | None = None,
+        context_id: str | None = None,
+    ) -> tuple[bool, str | None]:
         ...
 
+
+class ResponseContinuationStore(Protocol):
     async def get_pending_continuation_on_message(
         self,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
+        message_id: str,
+    ) -> dict | None:
+        ...
+
+
+class ResponseClientRequestResolver(Protocol):
+    async def resolve_client_request_id_for_message_id(
+        self, message_id: str
+    ) -> str | None:
         ...
 
     async def get_room_agent_message_by_message_id(
-        self,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
+        self, message_id: str
+    ):
         ...
 
-    async def get_room_by_room_id(
-        self,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
+    async def resolve_client_request_id_for_agent_message(
+        self, room_agent_message
+    ) -> str | None:
         ...
 
 
-class _SSEManagerLike(Protocol):
-    async def send_artifact_update(
-        self,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
+class ResponseRoomReader(Protocol):
+    async def get_room_by_room_id(self, room_id: str):
         ...
 
-    async def send_task_submitted(
-        self,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
-        ...
 
-    async def send_task_update(
-        self,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
-        ...
-
-    async def send_processing_status(
-        self,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
+class ResponseHITLReader(Protocol):
+    async def get_pending_hitl_requests_for_message(
+        self, user_message_id: str
+    ) -> list[dict]:
         ...
 
 
@@ -93,16 +88,26 @@ class AgentResponseHandler:
 
     def __init__(
         self,
-        db: _DatabaseServiceLike,
-        sse: _SSEManagerLike,
+        message_writer: "ResponseMessageWriter",
+        task_writer: "ResponseTaskWriter",
+        continuation_store: "ResponseContinuationStore",
+        client_request_resolver: "ResponseClientRequestResolver",
+        room_reader: "ResponseRoomReader",
+        hitl_reader: "ResponseHITLReader",
+        sse_manager: object,
         room_message_center: object,
         slot_lifecycle=None,
         hitl_coordinator=None,
         notification_service=None,
         task_notification_impl=None,
     ) -> None:
-        self._db = db
-        self._sse = sse
+        self._message_writer = message_writer
+        self._task_writer = task_writer
+        self._continuation_store = continuation_store
+        self._client_request_resolver = client_request_resolver
+        self._room_reader = room_reader
+        self._hitl_reader = hitl_reader
+        self._sse = sse_manager
         self._rmc = room_message_center
         self._slot_lifecycle = slot_lifecycle
         self.hitl_coordinator = hitl_coordinator
@@ -123,7 +128,7 @@ class AgentResponseHandler:
             return None
 
         resolve_from_message_id = getattr(
-            self._db, "resolve_client_request_id_for_message_id", None
+            self._client_request_resolver, "resolve_client_request_id_for_message_id", None
         )
         if callable(resolve_from_message_id):
             maybe_resolved = resolve_from_message_id(message_id)
@@ -133,9 +138,9 @@ class AgentResponseHandler:
             if isinstance(resolved, str) and resolved.strip():
                 return resolved.strip()
 
-        get_agent_message = getattr(self._db, "get_room_agent_message_by_message_id", None)
+        get_agent_message = getattr(self._client_request_resolver, "get_room_agent_message_by_message_id", None)
         resolve_from_agent_message = getattr(
-            self._db, "resolve_client_request_id_for_agent_message", None
+            self._client_request_resolver, "resolve_client_request_id_for_agent_message", None
         )
         if callable(get_agent_message) and callable(resolve_from_agent_message):
             maybe_room_agent_message = get_agent_message(message_id)
@@ -239,7 +244,7 @@ class AgentResponseHandler:
                 e.message_id,
                 e.append,
             )
-            await self._db.accumulate_artifact_on_message(
+            await self._message_writer.accumulate_artifact_on_message(
                 e.message_id,
                 artifact,
                 append=e.append,
@@ -324,30 +329,35 @@ class AgentResponseHandler:
                         }
                     ]
 
+        display_text = e.text
+        display_artifacts = e.artifacts
+
         if not e.skip_persist:
-            await self._db.update_task_state_on_message(
+            _, resolved_text = await self._task_writer.update_task_state_on_message(
                 e.message_id,
                 "completed",
                 message_text=e.text,
                 artifacts=artifacts_for_db,
             )
+            if resolved_text:
+                display_text = resolved_text
         await self._notify(e, coerce_task_state("completed"))
         await self._terminate_slot(
             e,
             "completed",
-            content=e.text,
-            artifacts=e.artifacts,
+            content=display_text,
+            artifacts=display_artifacts,
         )
         # NOTE: send_agent_response removed — _notify() above already delivers
         # content + parts via task_update SSE. The redundant agent_response SSE
         # created a duplicate message entity in the frontend.
-        await self._resume_orchestration(e.message_id, e.text)
+        await self._resume_orchestration(e.message_id, display_text or "")
 
     async def _on_error(self, e: AgentEvent) -> None:
         error = e.error_text or e.text or "Unknown agent error"
         state = e.state or "failed"
         if not e.skip_persist:
-            await self._db.update_task_state_on_message(
+            await self._task_writer.update_task_state_on_message(
                 e.message_id,
                 state,
                 message_text=error,
@@ -365,7 +375,7 @@ class AgentResponseHandler:
 
     async def _on_canceled(self, e: AgentEvent) -> None:
         if not e.skip_persist:
-            await self._db.update_task_state_on_message(
+            await self._task_writer.update_task_state_on_message(
                 e.message_id,
                 "canceled",
                 message_text=e.text or "Task was canceled",
@@ -377,7 +387,7 @@ class AgentResponseHandler:
     async def _on_interactive(self, e: AgentEvent) -> None:
         state = e.state or "input-required"
         if not e.skip_persist:
-            await self._db.update_task_state_on_message(
+            await self._task_writer.update_task_state_on_message(
                 e.message_id,
                 state,
                 message_text=e.text or None,
@@ -404,7 +414,7 @@ class AgentResponseHandler:
         which proves this is an async callback — not an inline direct dispatch
         where QueueExecutor handles HITL creation itself.
         """
-        continuation = await self._db.get_pending_continuation_on_message(e.message_id)
+        continuation = await self._continuation_store.get_pending_continuation_on_message(e.message_id)
         if not continuation:
             return
 
@@ -426,11 +436,11 @@ class AgentResponseHandler:
             )
             return
 
-        msg = await self._db.get_room_agent_message_by_message_id(e.message_id)
+        msg = await self._client_request_resolver.get_room_agent_message_by_message_id(e.message_id)
         agent_name = e.agent_name
         if not agent_name and msg:
             try:
-                room = await self._db.get_room_by_room_id(e.room_id)
+                room = await self._room_reader.get_room_by_room_id(e.room_id)
                 if room and room.room_agent_set:
                     agent_name = room.room_agent_set.get(e.agent_id)
             except Exception:
@@ -464,7 +474,7 @@ class AgentResponseHandler:
     async def _has_pending_hitl_for_continuation(
         self, user_message_id: str, continuation_message_id: str
     ) -> bool:
-        get_pending = getattr(self._db, "get_pending_hitl_requests_for_message", None)
+        get_pending = getattr(self._hitl_reader, "get_pending_hitl_requests_for_message", None)
         if not callable(get_pending):
             return False
         result = get_pending(user_message_id)
@@ -539,7 +549,7 @@ class AgentResponseHandler:
                 _state_enum = coerce_task_state(e.state)
                 if _state_enum in TERMINAL_STATES:
                     try:
-                        await self._db.update_task_state_on_message(
+                        await self._task_writer.update_task_state_on_message(
                             e.message_id, e.state
                         )
                     except Exception:
@@ -635,7 +645,7 @@ class AgentResponseHandler:
             raise RuntimeError("Task notification dependencies have not been bound")
 
         return await self._task_notification_impl(
-            self._db,
+            self._task_writer,
             self._notification_service,
             self._sse,
             message_id=message_id,

@@ -2,7 +2,7 @@
 
 This document describes the current architecture and core workflows of the
 `multi-agents-backend` codebase. It is based on the repository state as of
-2026-05-31 and focuses on the code that is currently present, not on older
+2026-06-05 and focuses on the code that is currently present, not on older
 design documents that may have existed previously.
 
 ## High-Level Shape
@@ -112,7 +112,7 @@ route -> app-shell route owner -> facade -> repository/DAL
 Examples:
 
 - `app_shell.room_runtime.AppShellRoomCenter` delegates to `app_shell.room_runtime`, which is bound to
-  `room.RoomFacade`.
+  `room.RoomFacade` and an explicit repository-backed app-shell store.
 - `app_shell.agent_runtime.AppShellAgentCenter` delegates to `app_shell.agent_service`, which is bound to
   `agent.AgentFacade`.
 - `app_shell.relay_service` exposes relay route behavior while delegating
@@ -158,6 +158,37 @@ use API-key auth from `common.api_key_auth`.
 
 When adding new boundaries, prefer using `common.protocols` instead of importing
 concrete runtime singletons.
+
+### `llm_gateway`
+
+`llm_gateway` owns all LLM provider SDK access and LLM model routing. Provider
+adapters under `llm_gateway/providers/` are the only LLM code that imports
+OpenAI, Google GenAI, or Bedrock runtime SDKs. The public gateway layer resolves
+logical model names through `ModelRegistryImpl`, applies centralized retry and
+timeout policy through `LLMGatewayConfig`, and exposes text, structured JSON,
+embedding, and streaming operations through protocols in `common.protocols`.
+`LLMGatewayConfig.from_settings()` reads typed `LLM_GATEWAY_*` policy fields;
+`ModelRegistryImpl` remains responsible for mapping logical routes to concrete
+provider model IDs.
+
+Focused workflow services under `llm_gateway/services/` wrap prompt workflows
+without importing domain models:
+
+- `SupervisorLLMService`: supervisor JSON/text/stream calls through the
+  `supervisor_model` logical route, or Bedrock through the configured Bedrock
+  supervisor route.
+- `EmbeddingLLMService`: agent and memory embeddings through `embedding_model`.
+- `DiscoveryLLMService`: discovery query expansion.
+- `SummaryLLMService`: streaming synthesis of multi-agent responses (system prompt includes shared markdown formatting rules from `common/prompts/markdown_response_format.py`).
+- `AgentSelectionLLMService`, `MessageParserLLMService`, `RoomMemoryLLMService`,
+  and `DebateLLMService`: DTO-backed compatibility workflows for legacy app-shell
+  callers while migration continues.
+
+`main.py` constructs one `LLMGatewayImpl` and binds these focused services into
+production consumers. Legacy `app_shell.openai_service`,
+`app_shell.gemini_service`, and `app_shell.bedrock_service` remain as
+side-effect-free compatibility adapters, but they no longer construct provider
+SDK clients or read LLM environment variables directly.
 
 ### `agent`
 
@@ -236,7 +267,8 @@ The facade uses:
 
 - MongoDB for room memory and stored content documents.
 - Pinecone for memory search vectors.
-- `LLMGatewayImpl` for summary/turn-note generation.
+- `LLMGatewayImpl` and focused gateway services for embeddings, summary,
+  chat-context generation, and turn-note extraction.
 - `RoomHistoryReader` from `room.RoomFacade` for source message history.
 
 App-shell adapters such as `app_shell.context_assembly_service`,
@@ -293,9 +325,14 @@ This module is used by:
 
 ### `hub_runtime_bridge` and Relay
 
-`hub_runtime_bridge.HubFacade` is the current runtime owner for hub-connected
-local agents. `app_shell.relay_service.RelayService` is the app-shell surface
-that constructs and delegates to the hub facade.
+`hub_runtime_bridge.HubFacade` owns hub connection management, relay dispatch,
+agent sync, liveness, offline queue behavior, task ownership, and internal hub
+response routing. `app_shell.relay_service.RelayService` remains as a
+compatibility adapter for legacy route imports and APIKey/request adaptation; it
+delegates Hub behavior through facade public methods. Its runtime binding uses
+`AppShellRelayHubStore`, `HubMongoRepository`, `AgentRepository`, and an
+injected relay offline-failure port instead of the broad legacy Mongo/database
+singletons.
 
 Hub relay responsibilities:
 
@@ -327,16 +364,18 @@ Execution transports call this layer rather than building A2A payloads inline.
 
 ### `dal` and `database`
 
-`dal` contains newer protocol-oriented adapters:
+`dal` owns production database, vector, object-storage, and Redis adapter access.
+Business modules use module-scoped repositories built from `MongoDAL`,
+`VectorDAL`, and `ObjectStorageDAL`. Adapters:
 
 - `dal.mongo`: generic Mongo collection/DAL adapter.
 - `dal.pinecone`: vector adapter.
 - `dal.redis`: Redis KV, Pub/Sub, and related support.
 - `dal.s3`: object storage adapter.
+- `dal.index_registry`: startup index registration across modules.
 
-`database.mongodb.MongoDB` is the concrete Mongo service and still owns many
-collection helpers, indexes, and compatibility methods used by app-shell
-runtimes.
+`database/mongodb.py` remains only for operational migration scripts and legacy
+data migration helpers; it is not a production module dependency.
 
 Important Mongo collections include:
 
@@ -349,6 +388,8 @@ Important Mongo collections include:
 - `conversation_content`
 - `user_memories`
 - `agent_memories`
+- `cancelled_messages`
+- `runs`
 - `file_uploads`
 - `api_keys`
 - `hubs`
@@ -377,7 +418,9 @@ Examples:
 - `app_shell.database_service`: app-shell database facade over
   `database.mongodb` and Pinecone.
 - `app_shell.relay_service`: relay route surface over
-  `hub_runtime_bridge`.
+  `hub_runtime_bridge`. Hub-owned liveness, stream binding, agent sync,
+  ownership, and internal response router setup are handled by `HubFacade`;
+  persistence reaches Mongo through repository-backed app-shell adapters.
 - `execution.dispatch.task_notifications`: terminal task update notifications.
 - `app_shell.hitl_service`: HITL lifecycle and response handling.
 
@@ -516,6 +559,20 @@ This keeps all final task state, artifact persistence, and SSE emission logic
 in one response handler regardless of whether the response came from direct
 transport, relay, or webhook.
 
+Task lifecycle data access for A2A task submission, webhook token validation,
+cancellation persistence, and stale-task cleanup is routed through
+`AppShellRepositoryStore` backed by module repositories and `MongoDAL`
+collections. HITL lifecycle persistence, CAS/fencing updates, continuation
+metadata, stale-processing recovery, and HITL index creation also use
+`AppShellRepositoryStore`. Relay route registration, hub status, liveness, and
+offline failure persistence use explicit repository-backed app-shell adapters.
+Room runtime, room message center, queue executor, and supervisor executor also
+receive `AppShellRepositoryStore` at startup, so orchestration reads, writes,
+continuation state, cancellation fan-out, and room memory lookups no longer bind
+to the broad legacy database service object.
+
+**Agent display text:** Terminal `message_text` and artifact text parts are persisted as received from agents. List/section markdown repair runs only in the frontend remark plugin pipeline (`hybro-frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown render time. Hybro-controlled LLM paths (supervisor synthesis, `SummaryLLMService`) append `HYBRO_MARKDOWN_RESPONSE_FORMAT` so synthesis uses `###` section headers; third-party agent text is still stored as-is. Backend terminal helpers in `common/utils/a2a_helpers.py` (`prepare_terminal_agent_content`, `resolve_terminal_sse_content`, `sync_artifact_dicts_to_canonical_text`) resolve canonical text from artifacts and align artifact payloads without transforming markdown. Terminal resolution is owned by `update_task_state_on_message`; streaming text parts collapse to a single canonical text part while file/data parts are preserved. SSE terminal `content` is authoritative for display text; `parts` carries only non-text payloads.
+
 ## Hub Relay Workflow
 
 Hub-connected local agents use API-key authenticated relay endpoints.
@@ -615,6 +672,11 @@ Main responsibilities live in `app_shell.hitl_service` and execution adapters:
 `ExecutionFacade` exposes HITL operations through the `HITLManager` protocol so
 routes do not need to know app-shell runtime internals.
 
+HITL storage is exposed as explicit store methods on `AppShellRepositoryStore`
+instead of raw `database_service` or Mongo access. `HITLService` uses store
+ports for request creation, CAS/fenced updates, group routing claims,
+continuation persistence, and stale processing iteration.
+
 ## Context Memory Workflow
 
 Room memory is updated and used across turns.
@@ -631,6 +693,11 @@ Room memory is updated and used across turns.
 The design keeps current task context, recent conversation context, room summary,
 memory search results, and quoted reply context separate so each can be bounded
 and tested independently.
+
+App-shell memory search is a compatibility adapter over `ContextMemoryFacade`.
+Vector retrieval goes through `VectorDAL`, and keyword search/hydration goes
+through the context-memory content repository rather than private
+`database.mongodb` or `database.pinecone_db` backends.
 
 ## Background Jobs
 
@@ -698,6 +765,9 @@ The current codebase has a mixed architecture:
   construction.
 - Some app-shell modules still use singleton-style process runtime objects.
 - `app_shell.database_service` and `database.mongodb` still expose broad APIs.
+- Room orchestration still has a compatibility store surface, but it is backed
+  by module repositories and DAL collections rather than the legacy database
+  singleton.
 - Some route modules bind dependencies via module-level globals during startup.
 - Compatibility layers are intentionally kept so the repo can migrate in phases
   without breaking existing route behavior.

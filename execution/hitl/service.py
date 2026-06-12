@@ -57,7 +57,9 @@ _CONFIRMATION_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bconfirm\b.*\bcancel\b", re.IGNORECASE),
     re.compile(r"\bcancel\b.*\bconfirm\b", re.IGNORECASE),
     # Yes/No style
-    re.compile(r"\b(yes|no)\b.*\bto\s+(proceed|continue|confirm|cancel)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(yes|no)\b.*\bto\s+(proceed|continue|confirm|cancel)\b", re.IGNORECASE
+    ),
     # "Do you want to proceed/confirm/continue"
     re.compile(r"\bdo you (want|wish) to (proceed|continue|confirm)\b", re.IGNORECASE),
     # "Click Approve" / "Click Confirm" (markdown bold optional)
@@ -95,7 +97,7 @@ class HITLService:
     ) -> None:
         # Lazy imports to avoid circular dependencies at module load time.
         # Resolved on first method call.
-        self._db_service = None
+        self._store = None
         self._delivery = None
         self._sse_manager = None
         self._a2a_service = None
@@ -103,10 +105,10 @@ class HITLService:
         self._task_notifications = task_notifications
 
     @property
-    def database_service(self):
-        if self._db_service is None:
+    def _db(self):
+        if self._store is None:
             raise RuntimeError("HITL database service has not been bound")
-        return self._db_service
+        return self._store
 
     @property
     def delivery(self):
@@ -175,7 +177,7 @@ class HITLService:
             # are part of the same clarification round.
             is_first_in_group = group_id is None or group_index in (None, 0)
             if is_first_in_group:
-                existing = await self.database_service.count_hitl_requests_for_message(
+                existing = await self._db.count_hitl_requests_for_message(
                     continuation_message_id
                 )
                 if existing >= MAX_HITL_ROUNDS:
@@ -208,11 +210,9 @@ class HITLService:
 
         # 1. Persist FIRST (so it survives SSE drops)
         doc = request.model_dump(mode="json")
-        saved = await self.database_service.create_hitl_request(doc)
+        saved = await self._db.create_hitl_request(doc)
         if not saved:
-            logger.error(
-                "Failed to persist HITL request %s", request.request_id
-            )
+            logger.error("Failed to persist HITL request %s", request.request_id)
             return None
 
         # 1b. Mark the display agent message as input-required in DB
@@ -223,14 +223,15 @@ class HITLService:
         # Also persist group metadata for multi-question groups so
         # convertApiMessageToIncoming can reconstruct group context.
         if display_message_id:
-            await self.database_service.update_agent_message_task_state(
+            await self._db.update_agent_message_task_state(
                 display_message_id, "input-required"
             )
-            await self.database_service.persist_hitl_user_answer(
-                display_message_id, None,
+            await self._db.persist_hitl_user_answer(
+                display_message_id,
+                None,
             )
             if group_id is not None:
-                await self.database_service.persist_hitl_group_metadata(
+                await self._db.persist_hitl_group_metadata(
                     display_message_id,
                     group_id=group_id,
                     group_total=group_total,
@@ -243,7 +244,6 @@ class HITLService:
             event_type=HITLEventType.INPUT_REQUESTED,
             request=request,
         )
-
 
         logger.info(
             "hitl_request_created",
@@ -279,7 +279,7 @@ class HITLService:
         from uuid import uuid4
 
         claim_id = uuid4().hex
-        existing_doc = await self.database_service.get_hitl_request(request_id)
+        existing_doc = await self._db.get_hitl_request(request_id)
         if not existing_doc:
             raise HITLNotFoundError("HITL request not found")
         if existing_doc.get("room_id") != room_id:
@@ -290,7 +290,7 @@ class HITLService:
             )
 
         # Phase 1: Atomically claim pending -> processing with claim_id
-        claimed_doc = await self.database_service.claim_hitl_request(
+        claimed_doc = await self._db.claim_hitl_request(
             request_id,
             status=HITLStatus.PROCESSING.value,
             claim_id=claim_id,
@@ -299,7 +299,7 @@ class HITLService:
             responded_by_user_id=user_id,
         )
         if not claimed_doc:
-            doc = await self.database_service.get_hitl_request(request_id)
+            doc = await self._db.get_hitl_request(request_id)
             if not doc:
                 raise HITLNotFoundError("HITL request not found")
             if doc.get("room_id") != room_id:
@@ -308,8 +308,10 @@ class HITLService:
 
         request = HITLRequest(**{k: v for k, v in claimed_doc.items() if k != "_id"})
         if request.room_id != room_id:
-            await self.database_service.fenced_update_hitl_request(
-                request_id, claim_id, {
+            await self._db.fenced_update_hitl_request(
+                request_id,
+                claim_id,
+                {
                     "status": HITLStatus.PENDING.value,
                     "claim_id": None,
                     "user_input": None,
@@ -330,9 +332,7 @@ class HITLService:
         is_group = request.group_id is not None
         is_last_in_group = True
         if is_group:
-            remaining = await self.database_service.count_pending_in_hitl_group(
-                request.group_id
-            )
+            remaining = await self._db.count_pending_in_hitl_group(request.group_id)
             if remaining < 0:
                 logger.warning(
                     "Failed to count pending in HITL group %s — "
@@ -357,8 +357,9 @@ class HITLService:
         async def _lease_heartbeat() -> None:
             while True:
                 await asyncio.sleep(self.LEASE_HEARTBEAT_SECONDS)
-                await self.database_service.fenced_update_hitl_request(
-                    request_id, claim_id,
+                await self._db.fenced_update_hitl_request(
+                    request_id,
+                    claim_id,
                     responded_at=utcnow(),
                 )
 
@@ -367,7 +368,7 @@ class HITLService:
                 await self._handle_agent_response(request, user_input)
             elif request.source == "supervisor":
                 if is_group:
-                    group_docs = await self.database_service.get_hitl_group_requests(
+                    group_docs = await self._db.get_hitl_group_requests(
                         request.group_id
                     )
                     parts = []
@@ -390,16 +391,19 @@ class HITLService:
             except ContinuationLostError as exc:
                 logger.warning(
                     "HITL request %s — continuation lost, canceling: %s",
-                    request_id, exc,
+                    request_id,
+                    exc,
                 )
-                await self.database_service.fenced_update_hitl_request(
-                    request_id, claim_id, {
+                await self._db.fenced_update_hitl_request(
+                    request_id,
+                    claim_id,
+                    {
                         "status": HITLStatus.CANCELED.value,
                         "claim_id": None,
                     },
                 )
                 if is_group:
-                    await self.database_service.release_hitl_group_routing(
+                    await self._db.release_hitl_group_routing(
                         request.group_id,
                         claim_id,
                     )
@@ -412,8 +416,10 @@ class HITLService:
                     "The supervisor session has expired. Please send a new message.",
                 ) from exc
             except HITLError:
-                await self.database_service.fenced_update_hitl_request(
-                    request_id, claim_id, {
+                await self._db.fenced_update_hitl_request(
+                    request_id,
+                    claim_id,
+                    {
                         "status": HITLStatus.PENDING.value,
                         "claim_id": None,
                         "user_input": None,
@@ -422,7 +428,7 @@ class HITLService:
                     },
                 )
                 if is_group:
-                    await self.database_service.release_hitl_group_routing(
+                    await self._db.release_hitl_group_routing(
                         request.group_id,
                         claim_id,
                     )
@@ -434,8 +440,10 @@ class HITLService:
                     exc,
                     exc_info=True,
                 )
-                await self.database_service.fenced_update_hitl_request(
-                    request_id, claim_id, {
+                await self._db.fenced_update_hitl_request(
+                    request_id,
+                    claim_id,
+                    {
                         "status": HITLStatus.PENDING.value,
                         "claim_id": None,
                         "user_input": None,
@@ -444,7 +452,7 @@ class HITLService:
                     },
                 )
                 if is_group:
-                    await self.database_service.release_hitl_group_routing(
+                    await self._db.release_hitl_group_routing(
                         request.group_id,
                         claim_id,
                     )
@@ -465,22 +473,24 @@ class HITLService:
                     pass
 
             # Phase 2b: Stamp routing_completed_at (fenced).
-            stamped = await self.database_service.fenced_update_hitl_request(
-                request_id, claim_id,
+            stamped = await self._db.fenced_update_hitl_request(
+                request_id,
+                claim_id,
                 routing_completed_at=utcnow(),
             )
             if not stamped:
                 logger.warning(
                     "HITL request %s claim_id %s no longer matches — "
                     "reclaimed by recovery. Abandoning finalization.",
-                    request_id, claim_id,
+                    request_id,
+                    claim_id,
                 )
                 return False
             return True
 
         routed_response = False
         if is_group and is_last_in_group:
-            routed_response = await self.database_service.claim_hitl_group_routing(
+            routed_response = await self._db.claim_hitl_group_routing(
                 request.group_id,
                 claim_id,
             )
@@ -501,13 +511,15 @@ class HITLService:
                 return {"status": "ok", "request_id": request_id, "reclaimed": True}
 
         # Phase 3: Finalize processing -> responded (fenced).
-        finalized = await self.database_service.fenced_update_hitl_request(
-            request_id, claim_id,
+        finalized = await self._db.fenced_update_hitl_request(
+            request_id,
+            claim_id,
             status=HITLStatus.RESPONDED.value,
         )
         if not finalized:
-            finalized = await self.database_service.fenced_update_hitl_request(
-                request_id, claim_id,
+            finalized = await self._db.fenced_update_hitl_request(
+                request_id,
+                claim_id,
                 status=HITLStatus.RESPONDED.value,
             )
         if not finalized:
@@ -515,17 +527,16 @@ class HITLService:
                 "Failed to finalize HITL request %s (claim %s) to responded "
                 "after retry. recover_stale_processing will finalize it via "
                 "routing_completed_at.",
-                request_id, claim_id,
+                request_id,
+                claim_id,
             )
 
         if is_group and not routed_response and finalized:
-            remaining_after_finalize = (
-                await self.database_service.count_pending_in_hitl_group(
-                    request.group_id
-                )
+            remaining_after_finalize = await self._db.count_pending_in_hitl_group(
+                request.group_id
             )
             if remaining_after_finalize <= 0:
-                route_claimed = await self.database_service.claim_hitl_group_routing(
+                route_claimed = await self._db.claim_hitl_group_routing(
                     request.group_id,
                     claim_id,
                 )
@@ -544,13 +555,13 @@ class HITLService:
             request=request,
         )
 
-
         # Persist user's answer on the agent message for DB hydration
         if request.display_message_id:
-            await self.database_service.persist_hitl_user_answer(
-                request.display_message_id, user_input,
+            await self._db.persist_hitl_user_answer(
+                request.display_message_id,
+                user_input,
             )
-            await self.database_service.update_agent_message_task_state(
+            await self._db.update_agent_message_task_state(
                 request.display_message_id, "completed"
             )
 
@@ -586,9 +597,7 @@ class HITLService:
         next HITL cycle will handle.
         """
         # Reset last_notified_state so multi-round input_required works
-        await self.database_service.reset_last_notified_state(
-            request.continuation_message_id
-        )
+        await self._db.reset_last_notified_state(request.continuation_message_id)
 
         reply_result = await self.a2a_service.reply_to_task(
             message_id=request.continuation_message_id,
@@ -654,7 +663,7 @@ class HITLService:
         effective_state = task_state or "completed"
         if request.display_message_id:
             # Retrieve the agent message to get user_id for notification
-            agent_msg = await self.database_service.get_room_agent_message_by_message_id(
+            agent_msg = await self._db.get_room_agent_message_by_message_id(
                 request.display_message_id
             )
             if agent_msg:
@@ -697,7 +706,7 @@ class HITLService:
         self, request: HITLRequest, user_input: str
     ) -> None:
         """Resume supervisor loop with user's answer injected into trajectory."""
-        continuation = await self.database_service.get_pending_continuation_on_message(
+        continuation = await self._db.get_pending_continuation_on_message(
             request.continuation_message_id
         )
         if not continuation:
@@ -712,7 +721,7 @@ class HITLService:
             traj["hitl_original_message_id"] = continuation.get("user_message_id")
             continuation["trajectory"] = traj
 
-            saved = await self.database_service.save_continuation_on_user_message(
+            saved = await self._db.save_continuation_on_user_message(
                 request.continuation_message_id, continuation
             )
             if not saved:
@@ -737,33 +746,23 @@ class HITLService:
 
     async def get_pending_requests(self, room_id: str) -> list[HITLRequest]:
         """Get all pending HITL requests for a room (SSE reconnect catch-up)."""
-        docs = await self.database_service.get_pending_hitl_requests(room_id)
-        return [
-            HITLRequest(**{k: v for k, v in d.items() if k != "_id"})
-            for d in docs
-        ]
+        docs = await self._db.get_pending_hitl_requests(room_id)
+        return [HITLRequest(**{k: v for k, v in d.items() if k != "_id"}) for d in docs]
 
     async def get_pending_requests_for_message(
         self, user_message_id: str
     ) -> list[HITLRequest]:
         """Get pending HITL requests associated with a specific user message."""
-        docs = await self.database_service.get_pending_hitl_requests_for_message(
-            user_message_id
-        )
-        return [
-            HITLRequest(**{k: v for k, v in d.items() if k != "_id"})
-            for d in docs
-        ]
+        docs = await self._db.get_pending_hitl_requests_for_message(user_message_id)
+        return [HITLRequest(**{k: v for k, v in d.items() if k != "_id"}) for d in docs]
 
     # ------------------------------------------------------------------
     # Cancellation
     # ------------------------------------------------------------------
 
-    async def cancel_request(
-        self, request_id: str, room_id: str | None = None
-    ) -> None:
+    async def cancel_request(self, request_id: str, room_id: str | None = None) -> None:
         """Cancel a pending HITL request."""
-        doc = await self.database_service.get_hitl_request(request_id)
+        doc = await self._db.get_hitl_request(request_id)
         if not doc:
             raise HITLNotFoundError("HITL request not found")
         request = HITLRequest(**{k: v for k, v in doc.items() if k != "_id"})
@@ -772,7 +771,7 @@ class HITLService:
         if request.status != HITLStatus.PENDING:
             return  # Already resolved, no-op
 
-        canceled = await self.database_service.cas_update_hitl_request(
+        canceled = await self._db.cas_update_hitl_request(
             request_id,
             expected_status=HITLStatus.PENDING.value,
             status=HITLStatus.CANCELED.value,
@@ -782,11 +781,11 @@ class HITLService:
 
         # Clear the orphaned continuation
         if request.continuation_message_id:
-            await self.database_service.get_and_clear_continuation_on_message(
+            await self._db.get_and_clear_continuation_on_message(
                 request.continuation_message_id
             )
             # Also try clearing from user messages (HITL_SUPERVISOR)
-            await self.database_service.get_and_clear_continuation_on_user_message(
+            await self._db.get_and_clear_continuation_on_user_message(
                 request.continuation_message_id
             )
 
@@ -805,9 +804,7 @@ class HITLService:
             },
         )
 
-    async def cancel_requests_for_message(
-        self, user_message_id: str
-    ) -> None:
+    async def cancel_requests_for_message(self, user_message_id: str) -> None:
         """Cancel all pending HITL requests for a given user message."""
         pending = await self.get_pending_requests_for_message(user_message_id)
         for req in pending:
@@ -833,16 +830,13 @@ class HITLService:
         from datetime import timedelta
 
         cutoff = utcnow() - timedelta(seconds=self.PROCESSING_TIMEOUT_SECONDS)
-        cursor = self.database_service.mongo.db.hitl_requests.find(
-            {"status": "processing", "responded_at": {"$lt": cutoff}},
-        )
         recovered = 0
-        async for doc in cursor:
+        async for doc in self._db.iter_stale_processing_hitl_requests(cutoff):
             req_id = doc.get("request_id")
             routing_done = doc.get("routing_completed_at") is not None
 
             if routing_done:
-                ok = await self.database_service.cas_update_hitl_request(
+                ok = await self._db.cas_update_hitl_request(
                     req_id,
                     expected_status=HITLStatus.PROCESSING.value,
                     status=HITLStatus.RESPONDED.value,
@@ -863,11 +857,11 @@ class HITLService:
                 group_id = doc.get("group_id")
                 claim_id = doc.get("claim_id")
                 if group_id and claim_id:
-                    await self.database_service.release_hitl_group_routing(
+                    await self._db.release_hitl_group_routing(
                         group_id,
                         claim_id,
                     )
-                ok = await self.database_service.cas_update_hitl_request(
+                ok = await self._db.cas_update_hitl_request(
                     req_id,
                     expected_status=HITLStatus.PROCESSING.value,
                     status=HITLStatus.PENDING.value,
@@ -921,7 +915,7 @@ class HITLService:
             "related_message_id": request.user_message_id,
         }
         get_user_message = getattr(
-            self.database_service, "get_room_user_message_by_message_id", None
+            self._db, "get_room_user_message_by_message_id", None
         )
         user_message = None
         if callable(get_user_message):
@@ -944,7 +938,7 @@ class HITLService:
             mid = data.get("message_id")
             if isinstance(mid, str) and mid.strip():
                 resolve_fn = getattr(
-                    self.database_service,
+                    self._db,
                     "resolve_client_request_id_for_message_id",
                     None,
                 )

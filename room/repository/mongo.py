@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from common.protocols import MongoDAL
+from common.utils.time import utcnow
 from room.message_graph import normalize_history_rows, status_update_payload
 
 
@@ -22,7 +23,9 @@ class RoomMongoRepository:
         return str(room.get("room_id") or inserted_id)
 
     async def update(self, room_id: str, updates: dict) -> bool:
-        return await self._rooms.update_one({"room_id": room_id}, {"$set": dict(updates)})
+        return await self._rooms.update_one(
+            {"room_id": room_id}, {"$set": dict(updates)}
+        )
 
     async def update_fields(self, room_id: str, updates: dict) -> dict | None:
         return await self._rooms.find_one_and_update(
@@ -89,6 +92,21 @@ class MessageMongoRepository:
             await self._cancelled_messages.find_one({"message_id": message_id})
         ) is not None
 
+    async def cancel_message(self, message_id: str, user_id: str) -> bool:
+        if self._cancelled_messages is None:
+            self._cancelled_messages = self._mongo.collection("cancelled_messages")
+        return await self._cancelled_messages.update_one(
+            {"message_id": message_id},
+            {
+                "$setOnInsert": {
+                    "message_id": message_id,
+                    "user_id": user_id,
+                    "cancelled_at": utcnow(),
+                }
+            },
+            upsert=True,
+        )
+
     async def get_by_ids(self, message_ids: list[str]) -> list[dict]:
         if not message_ids:
             return []
@@ -109,17 +127,57 @@ class MessageMongoRepository:
         agent_messages = await self.get_agent_messages_for_room(room_id, before=before)
         return normalize_history_rows(user_messages, agent_messages)[:limit]
 
+    async def get_user_message_by_id(self, message_id: str) -> dict | None:
+        return await self._user_messages.find_one({"message_id": message_id})
+
+    async def get_agent_message_by_id(self, message_id: str) -> dict | None:
+        return await self._agent_messages.find_one({"message_id": message_id})
+
     async def get_user_messages_for_room(
         self, room_id: str, limit: int = 100, before: datetime | None = None
     ) -> list[dict]:
         query = _room_message_query(room_id, before)
-        return await self._user_messages.find(query)
+        return await self._user_messages.find(query, limit=limit)
 
     async def get_agent_messages_for_room(
         self, room_id: str, limit: int = 100, before: datetime | None = None
     ) -> list[dict]:
         query = _room_message_query(room_id, before)
-        return await self._agent_messages.find(query)
+        return await self._agent_messages.find(query, limit=limit)
+
+    async def get_agent_messages_by_related_message_id(
+        self, related_message_id: str
+    ) -> list[dict]:
+        return await self._agent_messages.find(
+            {"related_message_id": related_message_id}
+        )
+
+    async def get_agent_task_messages_for_user(
+        self, user_id: str, states: list[str]
+    ) -> list[dict]:
+        return await self.get_pending_task_messages_for_user(user_id, states)
+
+    async def get_task_messages_for_room(self, room_id: str, limit: int) -> list[dict]:
+        return await self._agent_messages.find(
+            {
+                "room_id": room_id,
+                "has_task_tracking": True,
+            },
+            sort=[("task_created_at", -1)],
+            limit=limit,
+        )
+
+    async def get_pending_task_messages_for_user(
+        self, user_id: str, states: list[str]
+    ) -> list[dict]:
+        return await self._agent_messages.find(
+            {
+                "user_id": user_id,
+                "has_task_tracking": True,
+                "message_content.message_task.status.state": {"$in": list(states)},
+            },
+            sort=[("task_created_at", -1)],
+        )
 
     async def get_thread(self, parent_message_id: str) -> list[dict]:
         thread: list[dict[str, Any]] = []
@@ -155,6 +213,39 @@ class MessageMongoRepository:
             {"message_id": message_id},
             {"$set": payload},
         )
+
+    async def update_user_message(self, message_id: str, updates: dict) -> bool:
+        return await self._user_messages.update_one(
+            {"message_id": message_id},
+            {"$set": dict(updates)},
+        )
+
+    async def update_agent_message(self, message_id: str, updates: dict) -> bool:
+        updated = await self._agent_messages.update_one(
+            {"message_id": message_id},
+            {"$set": dict(updates)},
+        )
+        if updated:
+            return True
+        return (
+            await self._agent_messages.find_one({"message_id": message_id}) is not None
+        )
+
+    async def update_agent_message_if_not_terminal(
+        self, message_id: str, updates: dict, terminal_states: list[str]
+    ) -> bool:
+        return await self._agent_messages.update_one(
+            {
+                "message_id": message_id,
+                "message_content.message_task.status.state": {
+                    "$nin": list(terminal_states)
+                },
+            },
+            {"$set": dict(updates)},
+        )
+
+    async def count_agent_messages(self, query: dict) -> int:
+        return await self._agent_messages.count(dict(query))
 
     async def delete_for_room(self, room_id: str) -> dict[str, int]:
         user_count = await self._user_messages.delete_many({"room_id": room_id})

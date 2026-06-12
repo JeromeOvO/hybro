@@ -184,6 +184,7 @@ class TestExtractTurnNotesLLM:
 
     @pytest.mark.asyncio
     async def test_calls_llm_and_parses_result(self):
+        from common.dto import LLMStructuredResponse
         from common.utils import context_utils
 
         long_content = "Discuss the deployment of React application " * 50
@@ -194,16 +195,26 @@ class TestExtractTurnNotesLLM:
             "one_liner": "Discussion about deploying React app",
         }
 
-        mock_openai = MagicMock()
-        mock_openai.call_supervisor_llm_json = AsyncMock(return_value=mock_response)
+        mock_gateway = MagicMock()
+        mock_gateway.generate_structured = AsyncMock(
+            return_value=LLMStructuredResponse(
+                data=mock_response,
+                model="gpt-4o-mini",
+            )
+        )
 
         result = await context_utils.extract_turn_notes_llm(
-            long_content, provider=mock_openai
+            long_content, provider=mock_gateway
         )
 
         assert result is not None
         assert "keywords" in result
         assert len(result["keywords"]) <= 10
+        mock_gateway.generate_structured.assert_awaited_once()
+        assert (
+            mock_gateway.generate_structured.await_args.kwargs["model"]
+            == "context_memory_legacy_json_model"
+        )
 
     @pytest.mark.asyncio
     async def test_falls_back_to_heuristic_on_llm_failure(self):
@@ -211,11 +222,11 @@ class TestExtractTurnNotesLLM:
 
         long_content = "Discuss deployment of the application system " * 50
 
-        mock_openai = MagicMock()
-        mock_openai.call_supervisor_llm_json = AsyncMock(side_effect=Exception("LLM error"))
+        mock_gateway = MagicMock()
+        mock_gateway.generate_structured = AsyncMock(side_effect=Exception("LLM error"))
 
         result = await context_utils.extract_turn_notes_llm(
-            long_content, provider=mock_openai
+            long_content, provider=mock_gateway
         )
 
         assert result is not None
@@ -232,8 +243,8 @@ class TestMemorySearchHydration:
 
     @pytest.mark.asyncio
     async def test_hydrates_empty_content_from_turn_notes(self, mock_compaction_config):
-        from models.search import MemorySearchResult, MemorySourceType
         from app_shell.memory_search_service import MemorySearchService
+        from models.search import MemorySearchResult, MemorySourceType
 
         service = MemorySearchService()
 
@@ -251,29 +262,32 @@ class TestMemorySearchHydration:
             ),
         ]
 
-        async def _mock_cursor():
-            yield {
-                "turn_id": "turn_1",
-                "turn_notes": {
-                    "keywords": ["React"],
-                    "one_liner": "Discussion about React deployment",
-                },
-            }
+        content_repository = MagicMock()
+        content_repository.hydrate_turn_notes = AsyncMock(
+            return_value=[
+                {
+                    "turn_id": "turn_1",
+                    "turn_notes": {
+                        "keywords": ["React"],
+                        "one_liner": "Discussion about React deployment",
+                    },
+                }
+            ]
+        )
+        service.bind_facade(MagicMock(content_repository=content_repository))
 
-        mock_coll = MagicMock()
-        mock_coll.find.return_value = _mock_cursor()
+        await service._hydrate_results_from_storage(results, "room_1")
 
-        with patch("app_shell.memory_search_service.mongodb") as mock_mongodb:
-            mock_mongodb.conversation_content_collection = mock_coll
-            await service._hydrate_results_from_storage(results, "room_1")
-
+        content_repository.hydrate_turn_notes.assert_awaited_once_with(
+            "room_1", ["turn_1"]
+        )
         assert results[0].content == "Discussion about React deployment"
         assert results[0].content_preview == "Discussion about React deployment"
 
     @pytest.mark.asyncio
     async def test_skips_results_that_already_have_content(self, mock_compaction_config):
-        from models.search import MemorySearchResult, MemorySourceType
         from app_shell.memory_search_service import MemorySearchService
+        from models.search import MemorySearchResult, MemorySourceType
 
         service = MemorySearchService()
 
@@ -290,13 +304,13 @@ class TestMemorySearchHydration:
             ),
         ]
 
-        mock_coll = MagicMock()
+        content_repository = MagicMock()
+        content_repository.hydrate_turn_notes = AsyncMock(return_value=[])
+        service.bind_facade(MagicMock(content_repository=content_repository))
 
-        with patch("app_shell.memory_search_service.mongodb") as mock_mongodb:
-            mock_mongodb.conversation_content_collection = mock_coll
-            await service._hydrate_results_from_storage(results, "room_1")
+        await service._hydrate_results_from_storage(results, "room_1")
 
-        mock_coll.find.assert_not_called()
+        content_repository.hydrate_turn_notes.assert_not_awaited()
 
 
 # =============================================================================
@@ -393,8 +407,8 @@ class TestSearchToContextIntegration:
     """Verify memory search results flow through to supervisor context output."""
 
     def test_search_results_appear_in_supervisor_context(self, mock_compaction_config):
-        from models.search import MemorySearchResult, MemorySourceType
         from app_shell.context_assembly_service import ContextAssemblyService
+        from models.search import MemorySearchResult, MemorySourceType
 
         mock_compaction_config.context_model_window = 32000
         mock_compaction_config.context_system_prompt_tokens = 2000

@@ -39,14 +39,35 @@ from common.utils.a2a_helpers import (
 from common.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from app_shell.database_service import DatabaseService
-    from app_shell.notification_service import NotificationService
+    from typing import Protocol
+
+    class TaskNotificationStore(Protocol):
+        async def update_last_notified_state(
+            self, message_id: str, state: str
+        ) -> bool: ...
+        async def get_room_agent_message_by_message_id(self, message_id: str): ...
+        async def update_room_agent_message_by_message_id(
+            self, message_id: str, room_agent_message
+        ) -> bool: ...
+        async def get_room_by_room_id(self, room_id: str): ...
+        async def resolve_client_request_id_for_agent_message(
+            self, room_agent_message
+        ) -> str | None: ...
+
     from app_shell.delivery_runtime import SSEManager
+    from app_shell.notification_service import NotificationService
 
 logger = get_logger(__name__)
 
 ProcessingStatusEmitter = Callable[..., Awaitable[dict[str, Any] | None]]
 _processing_status_emitter: ProcessingStatusEmitter | None = None
+_notification_store: TaskNotificationStore | None = None
+
+
+def bind_notification_store(notification_store: TaskNotificationStore) -> None:
+    global _notification_store
+
+    _notification_store = notification_store
 
 
 def bind_processing_status_emitter(
@@ -109,7 +130,7 @@ def _map_task_state_to_processing_status(state: TaskState) -> SSEProcessingStatu
 
 
 async def _notify_task_update_impl(
-    db: DatabaseService,
+    notification_store: TaskNotificationStore,
     notification_svc: NotificationService,
     sse: SSEManager,
     *,
@@ -141,7 +162,7 @@ async def _notify_task_update_impl(
     # notification anyway — a duplicate SSE is harmless whereas a missed SSE
     # causes a stuck bubble in the UI.
     try:
-        is_new = await db.update_last_notified_state(
+        is_new = await notification_store.update_last_notified_state(
             message_id, state_value
         )
     except Exception:
@@ -165,7 +186,7 @@ async def _notify_task_update_impl(
     room_agent_message = None
     for attempt in range(3):
         room_agent_message = (
-            await db.get_room_agent_message_by_message_id(message_id)
+            await notification_store.get_room_agent_message_by_message_id(message_id)
         )
         if room_agent_message and room_agent_message.has_task_tracking:
             break
@@ -342,7 +363,7 @@ async def _notify_task_update_impl(
                 needs_write = True
 
         if needs_write:
-            update_ok = await db.update_room_agent_message_by_message_id(
+            update_ok = await notification_store.update_room_agent_message_by_message_id(
                 room_agent_message.message_id, room_agent_message
             )
             if not update_ok:
@@ -356,7 +377,7 @@ async def _notify_task_update_impl(
     agent_id = room_agent_message.agent_id
     if agent_id:
         try:
-            room = await db.get_room_by_room_id(room_id)
+            room = await notification_store.get_room_by_room_id(room_id)
             if room and room.room_agent_set:
                 agent_name = room.room_agent_set.get(agent_id)
         except Exception:
@@ -374,7 +395,7 @@ async def _notify_task_update_impl(
     task_content = room_agent_message.task_content
     client_request_id = room_agent_message.client_request_id
     if not client_request_id:
-        resolver = getattr(db, "resolve_client_request_id_for_agent_message", None)
+        resolver = getattr(notification_store, "resolve_client_request_id_for_agent_message", None)
         if callable(resolver):
             resolved = resolver(room_agent_message)
             client_request_id = (
@@ -384,6 +405,27 @@ async def _notify_task_update_impl(
         client_request_id = None
 
     # --- Send the SSE -----------------------------------------------------
+    from common.utils.a2a_helpers import (
+        filter_non_text_parts,
+        is_terminal_task_state_value,
+        resolve_terminal_sse_content,
+    )
+
+    stored_text = (
+        room_agent_message.message_content.message_text
+        if room_agent_message.message_content
+        else None
+    )
+    if is_terminal_task_state_value(state):
+        content = resolve_terminal_sse_content(
+            state,
+            message_text=stored_text,
+            artifact_text=content,
+        )
+        # SSE text lives in ``content``; strip any text parts so ``parts`` is
+        # file/data only and cannot drift from the resolved terminal body.
+        parts = filter_non_text_parts(parts)
+
     # Convert any inline base64 file bytes to S3 URIs before broadcasting
     if parts:
         from common.utils.a2a_helpers import convert_inline_bytes_to_s3
@@ -474,12 +516,13 @@ async def notify_task_update(
     (``stale_task_checker``) and safety-net paths (``RoomMessageCenter``)
     that have no handler context.
     """
-    from app_shell.database_service import db_service
-    from app_shell.notification_service import notification_service
     from app_shell.delivery_runtime import sse_manager
+    from app_shell.notification_service import notification_service
 
+    if _notification_store is None:
+        raise RuntimeError("Task notification store dependency has not been bound")
     return await _notify_task_update_impl(
-        db_service,
+        _notification_store,
         notification_service,
         sse_manager,
         message_id=message_id,
@@ -494,6 +537,7 @@ async def notify_task_update(
 
 __all__ = [
     "TaskNotificationAdapter",
+    "bind_notification_store",
     "_map_task_state_to_processing_status",
     "_notify_task_update_impl",
     "notify_task_update",

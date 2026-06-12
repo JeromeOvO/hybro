@@ -1,5 +1,5 @@
-from models.room import UserAttachment
 from app_shell.room_runtime import _human_size, build_turn_content
+from models.room import UserAttachment
 
 
 class TestHumanSize:

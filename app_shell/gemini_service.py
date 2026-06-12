@@ -1,30 +1,43 @@
+import inspect
 import json
-import os
 import uuid
+from types import SimpleNamespace
 from typing import Any
 
 from a2a.types import Message, Part, Role, Task, TaskState, TaskStatus, TextPart
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 
 from common.utils.time import utcnow
-
-load_dotenv()
+from llm_gateway.errors import LLMServiceNotBoundError
 
 
 class GeminiService:
     def __init__(self):
         # Configure the Gemini API
-        self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        self._client = None
+
+    @property
+    def is_bound(self) -> bool:
+        return self._client is not None
+
+    @property
+    def client(self) -> Any:
+        if self._client is None:
+            raise LLMServiceNotBoundError("GeminiService LLM services are not bound")
+        return self._client
+
+    @client.setter
+    def client(self, value: Any) -> None:
+        self._client = value
+
+    def bind_llm_gateway(self, llm_provider: Any) -> None:
+        self.client = _GatewayGeminiCompatClient(llm_provider)
 
     async def get_embedding(self, text: str) -> list[float] | None:
         """Get embedding for text using Gemini"""
-        result = self.client.models.embed_content(
-            model=os.getenv("GEMINI_EMBEDDING_MODEL_NAME")
-            or "gemini-embedding-exp-03-07",
+        result = await _maybe_await(self.client.models.embed_content(
+            model="gemini_embedding_model_name",
             contents=[text],
-        )
+        ))
         return result.embeddings[0].values if result.embeddings else None
 
     async def generate_text(
@@ -35,10 +48,10 @@ class GeminiService:
         if context:
             full_prompt += f"\nContext: {json.dumps(context)}"
 
-        response = self.client.models.generate_content(
-            model=os.getenv("GEMINI_MODEL_NAME") or "gemini-2.0-flash",
+        response = await _maybe_await(self.client.models.generate_content(
+            model="gemini_model_name",
             contents=[full_prompt],
-        )
+        ))
         return response.text if response.text else ""
 
     async def lead_ai_completion(
@@ -51,15 +64,10 @@ class GeminiService:
         if context:
             prompt += f"\nContext: {json.dumps(context)}"
 
-        response = self.client.models.generate_content(
-            model=os.getenv("GEMINI_MODEL_NAME") or "gemini-2.0-flash",
+        response = await _maybe_await(self.client.models.generate_content(
+            model="gemini_model_name",
             contents=[prompt],
-            config=types.GenerateContentConfig(
-                thinking_config=types.ThinkingConfig(
-                    thinking_budget=0
-                )  # Disables thinking
-            ),
-        )
+        ))
 
         content = response.text if response.text else ""
         try:
@@ -106,10 +114,10 @@ class GeminiService:
         prompt += "\n".join(messages_content)
 
         # Generate response
-        response = self.client.models.generate_content(
-            model=os.getenv("GEMINI_MODEL_NAME") or "gemini-2.0-flash",
+        response = await _maybe_await(self.client.models.generate_content(
+            model="gemini_model_name",
             contents=[prompt],
-        )
+        ))
 
         # Create agent response message
         agent_message = Message(
@@ -139,11 +147,57 @@ class GeminiService:
         )
         prompt += f"Summarize the following agent output for use as input to another agent:\n\n{content}"
 
-        response = self.client.models.generate_content(
-            model=os.getenv("GEMINI_MODEL_NAME") or "gemini-2.0-flash",
+        response = await _maybe_await(self.client.models.generate_content(
+            model="gemini_model_name",
             contents=[prompt],
-        )
+        ))
         return response.text if response.text else ""
 
 
 gemini_service = GeminiService()
+
+
+async def _maybe_await(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+class _GatewayGeminiCompatClient:
+    def __init__(self, llm_provider: Any) -> None:
+        self.models = _GatewayGeminiModels(llm_provider)
+
+
+class _GatewayGeminiModels:
+    def __init__(self, llm_provider: Any) -> None:
+        self._llm_provider = llm_provider
+
+    async def generate_content(
+        self,
+        *,
+        model: str,
+        contents: list[str],
+        **kwargs: Any,
+    ) -> Any:
+        content = "\n".join(contents)
+        response = await self._llm_provider.generate(
+            [{"role": "user", "content": content}],
+            model=model,
+            **kwargs,
+        )
+        return SimpleNamespace(text=response.content)
+
+    async def embed_content(
+        self,
+        *,
+        model: str,
+        contents: list[str],
+        **kwargs: Any,
+    ) -> Any:
+        embeddings = await self._llm_provider.embed_batch(contents, model=model)
+        return SimpleNamespace(
+            embeddings=[
+                SimpleNamespace(values=embedding)
+                for embedding in embeddings
+            ]
+        )

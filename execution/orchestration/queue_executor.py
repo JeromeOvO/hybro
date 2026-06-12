@@ -27,18 +27,16 @@ from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
 from execution.state.task_state_manager import TaskStateManager
 from models.processing import ProcessingResult, ProcessingStatus
-from models.room import RoomAgentMessage
+from models.room import CoordinatorAgentId, RoomAgentMessage
 
 if TYPE_CHECKING:
-    from app_shell.rate_limit_service import RateLimitService
-
-    from execution.dispatch.response_handler import AgentResponseHandler
     from app_shell.a2a_runtime import A2AService
-    from app_shell.database_service import DatabaseService
     from app_shell.debate_service import DebateService
-    from app_shell.memory_service import RoomMemoryService
-    from app_shell.room_runtime import RoomServices
     from app_shell.delivery_runtime import SSEManager
+    from app_shell.memory_service import RoomMemoryService
+    from app_shell.rate_limit_service import RateLimitService
+    from app_shell.room_runtime import RoomServices
+    from execution.dispatch.response_handler import AgentResponseHandler
 
 logger = get_logger(__name__)
 
@@ -95,7 +93,7 @@ class QueueExecutor:
         a2a_service: A2AService,
         room_services: RoomServices,
         room_memory_service: RoomMemoryService,
-        database_service: DatabaseService,
+        store,
         debate_service: DebateService,
         rate_limit_service: RateLimitService,
         agent_dispatcher: AgentDispatcher,
@@ -110,7 +108,7 @@ class QueueExecutor:
         self.a2a_service = a2a_service
         self.room_runtime = room_services
         self.room_memory_service = room_memory_service
-        self.database_service = database_service
+        self._store = store
         self.debate_service = debate_service
         self.rate_limit_service = rate_limit_service
         self.agent_dispatcher = agent_dispatcher
@@ -200,9 +198,9 @@ class QueueExecutor:
                 canceled_ids = [msg.message_id for msg in message_queue]
                 message_queue.clear()
                 for mid in canceled_ids:
-                    await self.database_service.cancel_descendants(mid)
+                    await self._store.cancel_descendants(mid)
             if last_popped:
-                await self.database_service.cancel_descendants(last_popped[0])
+                await self._store.cancel_descendants(last_popped[0])
 
     # ------------------------------------------------------------------
     # Main queue loop
@@ -235,6 +233,42 @@ class QueueExecutor:
             "QueueExecutor: Starting to process message queue with %d messages",
             len(message_queue),
         )
+
+        sys_message_id = f"sys-{user_message_id}"
+        client_req_id = await self._store.resolve_client_request_id_for_message_id(user_message_id)
+
+        try:
+            # Phase 1/3: Emit system:hybro task on start if not already emitted
+            existing_sys_msg = await self._store.get_room_agent_message_by_message_id(sys_message_id)
+            if not existing_sys_msg:
+                from common.utils.time import utcnow
+                sys_msg = self.room_runtime.create_agent_message(
+                    room_id=room_id,
+                    related_message_id=user_message_id,
+                    agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+                    content="",
+                    user_id=request_user_id,
+                    step_number=0,
+                    task_content="Orchestrating workflow...",
+                    client_request_id=client_req_id,
+                )
+                sys_msg.message_id = sys_message_id
+                await self._store.add_room_agent_message(sys_msg)
+
+                await self.sse_manager.send_task_submitted(
+                    room_id=room_id,
+                    message_id=sys_message_id,
+                    task_id=sys_message_id,
+                    agent_name="HYBRO AI",
+                    agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+                    status="working",
+                    related_message_id=user_message_id,
+                    created_at=utcnow().isoformat(),
+                    task_content="Orchestrating workflow...",
+                    client_request_id=client_req_id,
+                )
+        except Exception:
+            logger.warning("Failed to emit system:hybro task", exc_info=True)
 
         queue_result = QueueResult.COMPLETED
         deferred_sse: tuple[SSEProcessingStatus, bool] | None = None
@@ -441,6 +475,26 @@ class QueueExecutor:
                 last_popped.clear()
 
         # Phase 2: deferred SSE notification
+        # Phase 3: Emit terminal state for system:hybro
+        if queue_result != QueueResult.PAUSED:
+            try:
+                task_status = "completed" if queue_result == QueueResult.COMPLETED else queue_result.value
+                await self.sse_manager.send_task_update(
+                    room_id=room_id,
+                    message_id=sys_message_id,
+                    status=task_status,
+                )
+                
+                db_msg = await self._store.get_room_agent_message_by_message_id(sys_message_id)
+                if db_msg and db_msg.message_content and db_msg.message_content.message_task:
+                    from common.types import TaskState
+                    db_msg.message_content.message_task.status.state = TaskState(task_status)
+                    await self._store.update_room_agent_message_with_new_message_content_by_message_id(
+                        db_msg.message_id, db_msg.message_content
+                    )
+            except Exception:
+                logger.warning("Failed to update terminal state for system:hybro", exc_info=True)
+
         if deferred_sse:
             sse_status, clear_cancel = deferred_sse
             if (
@@ -543,7 +597,7 @@ class QueueExecutor:
                 return None
             return agent
 
-        agent = await self.database_service.get_agent_by_agent_id(
+        agent = await self._store.get_agent_by_agent_id(
             current_message.agent_id
         )
         if agent is None:
@@ -742,7 +796,7 @@ class QueueExecutor:
             "current_agent_name": current_agent.agent_card.name,
         }
 
-        success = await self.database_service.save_continuation_on_message(
+        success = await self._store.save_continuation_on_message(
             message_id, continuation_data
         )
 
@@ -767,7 +821,7 @@ class QueueExecutor:
         post-completion logic (coordinator + COMPLETED SSE status).
         """
         continuation = (
-            await self.database_service.get_and_clear_continuation_on_message(
+            await self._store.get_and_clear_continuation_on_message(
                 message_id
             )
         )
@@ -801,7 +855,7 @@ class QueueExecutor:
             return ResumeResult(success=False)
 
         quoted_text_resume: str | None = None
-        um_resume = await self.database_service.get_room_user_message_by_message_id(
+        um_resume = await self._store.get_room_user_message_by_message_id(
             user_message_id
         )
         if um_resume:
@@ -811,7 +865,7 @@ class QueueExecutor:
             )
 
             try:
-                tc = await load_turn_context(self.database_service, um_resume)
+                tc = await load_turn_context(self._store, um_resume)
                 quoted_text_resume = tc.quoted_text
             except TurnQuoteMissingError:
                 logger.error(
@@ -896,7 +950,7 @@ class QueueExecutor:
             current_message.total_steps,
         )
         next_messages = (
-            await self.database_service.get_room_agent_messages_by_related_message_id(
+            await self._store.get_room_agent_messages_by_related_message_id(
                 current_message.message_id
             )
         )
@@ -907,7 +961,7 @@ class QueueExecutor:
         )
 
         is_debate_mode = False
-        room = await self.database_service.get_room_by_room_id(room_id)
+        room = await self._store.get_room_by_room_id(room_id)
         if room and room.extend_info and isinstance(room.extend_info, dict):
             is_debate_mode = bool(room.extend_info.get("debateMode", False))
 

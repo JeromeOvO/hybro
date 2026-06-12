@@ -12,19 +12,19 @@ Covers:
 
 from datetime import UTC, datetime
 
+from execution.orchestration.room_supervisor_service import RoomSupervisorService
 from models.supervisor import (
     ActionType,
     DelegateTarget,
+    StepResult,
     SupervisorAction,
     SupervisorTrajectory,
     TrajectoryEntry,
-    StepResult,
 )
-from execution.orchestration.room_supervisor_service import RoomSupervisorService
 
 
 def _make_service() -> RoomSupervisorService:
-    return RoomSupervisorService(openai_service=None, database_service=None)
+    return RoomSupervisorService(openai_service=None, store=None)
 
 
 def _target(agent_id: str, name: str, task: str = "do something") -> DelegateTarget:

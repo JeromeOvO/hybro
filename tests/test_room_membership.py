@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app_shell.room_membership_source import LegacyRoomMembershipSeedSource
 from common.dto import (
     AgentInfo,
     MembershipSeed,
@@ -21,7 +22,6 @@ from room.translators import (
     saved_user_message_from_doc,
     user_message_doc_from_input,
 )
-from app_shell.room_membership_source import LegacyRoomMembershipSeedSource
 
 
 def test_room_translator_maps_legacy_fields_and_defaults_provenance():
@@ -165,7 +165,7 @@ async def test_legacy_membership_source_logs_agent_service_fallback():
         public_url=None,
     )
     source = LegacyRoomMembershipSeedSource(
-        database_service=SimpleNamespace(
+        membership_store=SimpleNamespace(
             get_all_active_agents=AsyncMock(return_value=[agent])
         ),
         agent_service_adapter=SimpleNamespace(
@@ -188,6 +188,13 @@ def test_legacy_membership_source_warns_for_missing_critical_agent_fields():
 
     assert info.agent_id == "a1"
     logger.warning.assert_called_once()
+
+
+def test_legacy_membership_source_default_constructor_does_not_import_database_service():
+    with patch("importlib.import_module", side_effect=AssertionError("legacy import attempted")):
+        source = LegacyRoomMembershipSeedSource()
+
+    assert source._store is not None
 
 
 def test_message_graph_sort_thread_and_status_payload_helpers():

@@ -58,6 +58,10 @@ class MongoCollectionAdapter:
         result = await self._collection.update_one(query, update, **kwargs)
         return result.modified_count > 0 or result.upserted_id is not None
 
+    async def replace_one(self, query: dict, replacement: dict, **kwargs) -> bool:
+        result = await self._collection.replace_one(query, replacement, **kwargs)
+        return result.modified_count > 0 or result.upserted_id is not None
+
     async def update_many(self, query: dict, update: dict) -> int:
         result = await self._collection.update_many(query, update)
         return result.modified_count
@@ -80,6 +84,13 @@ class MongoCollectionAdapter:
     async def create_index(self, keys: list[tuple], **kwargs) -> str:
         return await self._collection.create_index(keys, **kwargs)
 
+    async def create_indexes(self, indexes: list, **kwargs) -> list[str]:
+        return await self._collection.create_indexes(indexes, **kwargs)
+
+    async def bulk_write(self, operations: list, **kwargs) -> Any:
+        result = await self._collection.bulk_write(operations, **kwargs)
+        return result.raw_result if hasattr(result, "raw_result") else result
+
     async def find_one_by_stable_or_native_id(
         self, stable_id_field: str, id_value: str
     ) -> dict | None:
@@ -95,6 +106,9 @@ class MongoCollectionAdapter:
         except Exception:
             return None
         return None
+
+    async def distinct(self, key: str, query: dict | None = None) -> list:
+        return await self._collection.distinct(key, query or {})
 
     def watch(
         self, pipeline: list[dict] | None = None, **kwargs

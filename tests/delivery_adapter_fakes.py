@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app_shell.delivery_runtime import SSEConnection, SSEManager
 from common.utils.cancellation import CancellationToken
 from common.utils.time import utcnow
 from delivery.translator import to_sse_frame
-from app_shell.delivery_runtime import SSEConnection, SSEManager
 
 TERMINAL_STATUSES = {
     "completed",

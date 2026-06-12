@@ -4,9 +4,9 @@ from a2a_adapter.task_status import build_failed_task_status
 from common.dto import OfflineHubFailureCommand
 
 
-class LegacyOfflineFailureAdapter:
-    def __init__(self, *, database_service, sse_manager) -> None:
-        self._db = database_service
+class RelayOfflineFailureAdapter:
+    def __init__(self, db, sse_manager) -> None:
+        self._db = db
         self._sse = sse_manager
 
     async def mark_hub_message_failed(self, command: OfflineHubFailureCommand) -> None:
@@ -39,4 +39,7 @@ class LegacyOfflineFailureAdapter:
             )
 
 
-__all__ = ["LegacyOfflineFailureAdapter"]
+LegacyOfflineFailureAdapter = RelayOfflineFailureAdapter
+
+
+__all__ = ["RelayOfflineFailureAdapter", "LegacyOfflineFailureAdapter"]

@@ -14,7 +14,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from execution.orchestration.room_message_center import ROOM_LOCK_HOLD_TTL_SECONDS, RoomMessageCenter
+from execution.orchestration.room_message_center import (
+    ROOM_LOCK_HOLD_TTL_SECONDS,
+    RoomMessageCenter,
+)
 
 
 def _make_rmc(redis=None):

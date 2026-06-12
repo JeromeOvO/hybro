@@ -7,6 +7,7 @@ from google.genai import types
 
 from common.config.settings import settings
 from common.dto import LLMResponse, LLMStructuredResponse, LLMUsage
+from llm_gateway.structured_generation import with_json_object_instruction
 
 
 class GeminiProvider:
@@ -14,34 +15,28 @@ class GeminiProvider:
         self,
         client: Any | None = None,
         api_key: str | None = None,
-        default_model: str | None = None,
-        default_embedding_model: str | None = None,
     ) -> None:
         self._client = client or genai.Client(
             api_key=api_key or settings.google_api_key or "missing"
-        )
-        self._default_model = default_model or settings.gemini_model_name
-        self._default_embedding_model = (
-            default_embedding_model or settings.gemini_embedding_model_name
         )
 
     async def generate(
         self,
         messages: list[dict],
-        model: str | None = None,
+        model: str,
         **kwargs,
     ) -> LLMResponse:
         models = _models_client(self._client)
         response = await _maybe_await(
             models.generate_content(
-                model=model or self._default_model,
+                model=model,
                 contents=_messages_to_contents(messages),
                 **kwargs,
             )
         )
         return LLMResponse(
             content=getattr(response, "text", "") or "",
-            model=model or self._default_model,
+            model=model,
             usage=_usage_from_gemini(response),
             raw_response=_raw_response(response),
         )
@@ -49,41 +44,63 @@ class GeminiProvider:
     async def generate_structured(
         self,
         messages: list[dict],
-        schema: dict,
+        *args,
         model: str | None = None,
+        schema: dict | None = None,
+        json_mode: bool = False,
         **kwargs,
     ) -> LLMStructuredResponse:
+        model, schema = _normalize_structured_args(
+            args,
+            model,
+            schema,
+        )
         kwargs = dict(kwargs)
         kwargs.setdefault("config", _json_config())
+        structured_messages = (
+            with_json_object_instruction(messages)
+            if schema is None and json_mode
+            else _with_schema_instruction(messages, schema or {})
+        )
         models = _models_client(self._client)
         response = await _maybe_await(
             models.generate_content(
-                model=model or self._default_model,
-                contents=_messages_to_contents(_with_schema_instruction(messages, schema)),
+                model=model,
+                contents=_messages_to_contents(structured_messages),
                 **kwargs,
             )
         )
         content = getattr(response, "text", "") or ""
         return LLMStructuredResponse(
             data=json.loads(content),
-            model=model or self._default_model,
+            model=model,
             usage=_usage_from_gemini(response),
             raw_response=_raw_response(response),
         )
 
-    async def embed(self, text: str, model: str | None = None) -> list[float]:
+    async def generate_stream(
+        self,
+        messages: list[dict],
+        model: str,
+        **kwargs,
+    ):
+        response = await self.generate(messages, model=model, **kwargs)
+        if response.content:
+            yield response.content
+
+    async def embed(self, text: str, model: str) -> list[float]:
         embeddings = await self.embed_batch([text], model=model)
         return embeddings[0] if embeddings else []
 
     async def embed_batch(
         self,
         texts: list[str],
-        model: str | None = None,
+        model: str,
     ) -> list[list[float]]:
         models = _models_client(self._client)
         response = await _maybe_await(
             models.embed_content(
-                model=model or self._default_embedding_model,
+                model=model,
                 contents=texts,
             )
         )
@@ -168,3 +185,23 @@ def _raw_response(response: Any) -> dict[str, Any]:
 
 
 __all__ = ["GeminiProvider"]
+
+
+def _normalize_structured_args(
+    args: tuple[Any, ...],
+    model: str | None,
+    schema: dict | str | None,
+) -> tuple[str, dict | None]:
+    if len(args) == 2:
+        legacy_schema, legacy_model = args
+        return str(legacy_model), legacy_schema if isinstance(legacy_schema, dict) else None
+    if len(args) == 1:
+        first = args[0]
+        if isinstance(first, dict):
+            if model is None:
+                raise TypeError("model is required")
+            return model, first
+        return str(first), schema if isinstance(schema, dict) else None
+    if model is None:
+        raise TypeError("model is required")
+    return model, schema if isinstance(schema, dict) else None

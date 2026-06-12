@@ -9,12 +9,12 @@ import pytest
 from a2a.types import Artifact, Part, Task, TaskState, TaskStatus, TextPart
 
 from common.a2a_constants import SSEProcessingStatus
-from models.room import MessageContent, Room, RoomAgentMessage
 from execution.dispatch.task_notifications import notify_task_update
+from models.room import MessageContent, Room, RoomAgentMessage
 
 FROZEN_TIME = datetime(2026, 1, 15, 12, 0, 0)
 
-PATCH_DB = "app_shell.database_service.db_service"
+PATCH_DB = "execution.dispatch.task_notifications._notification_store"
 PATCH_NOTIF = "app_shell.notification_service.notification_service"
 PATCH_SSE = "app_shell.delivery_runtime.sse_manager"
 PATCH_EXTRACT_ERR = "execution.dispatch.task_notifications.extract_error_message"

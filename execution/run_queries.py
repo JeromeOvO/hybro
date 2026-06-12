@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from common.dto import RunInfo
+from common.protocols import RunRepository
 from common.utils.logger import get_logger
-from models.run import NON_TERMINAL_RUN_STATE_VALUES
 
 logger = get_logger(__name__)
 
@@ -26,12 +26,12 @@ def run_doc_to_run_info(doc: dict[str, Any]) -> RunInfo:
 
 
 class RunQueryAdapter:
-    def __init__(self, runs_collection) -> None:
-        self._runs_collection = runs_collection
+    def __init__(self, run_repository: RunRepository) -> None:
+        self._run_repository = run_repository
 
     async def get_run(self, run_id: str) -> RunInfo | None:
         try:
-            doc = await self._runs_collection.find_one({"run_id": run_id})
+            doc = await self._run_repository.find_one({"run_id": run_id})
         except Exception:
             logger.warning("run lookup failed for run_id=%s", run_id, exc_info=True)
             return None
@@ -39,13 +39,7 @@ class RunQueryAdapter:
 
     async def get_runs_for_room(self, room_id: str) -> list[RunInfo]:
         try:
-            cursor = self._runs_collection.find(
-                {
-                    "room_id": room_id,
-                    "state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)},
-                }
-            ).sort("updated_at", -1)
-            docs = await cursor.to_list(length=None)
+            docs = await self._run_repository.get_active_for_room(room_id)
             return [run_doc_to_run_info(doc) for doc in docs]
         except Exception:
             logger.warning("active-run lookup failed for room_id=%s", room_id, exc_info=True)

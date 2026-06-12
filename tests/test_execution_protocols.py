@@ -254,11 +254,22 @@ def test_execution_scaffold_adapters_are_available():
     assert BoundRoomMessageCenterProxy.__name__ == "BoundRoomMessageCenterProxy"
     assert RoomLockManager.__name__ == "RoomLockManager"
     db = object()
-    hitl = create_hitl_service(database_service=db)
-    assert hitl._db_service is db
-    runtime = create_room_message_center(database_service=db)
-    assert runtime.database_service is db
+    hitl = create_hitl_service(store=db)
+    assert hitl._store is db
+    runtime = create_room_message_center(database_service=db, debate_rounds=7)
+    assert runtime._store is db
+    assert runtime.debate_rounds == 7
     assert isinstance(room_message_center, BoundRoomMessageCenterProxy)
+
+
+def test_hitl_factory_does_not_accept_legacy_database_aliases():
+    from execution.hitl.factory import create_hitl_service
+
+    db = object()
+    with pytest.raises(TypeError, match="database_service"):
+        create_hitl_service(database_service=db)
+    with pytest.raises(TypeError, match="db_service"):
+        create_hitl_service(db_service=db)
 
 
 def test_room_message_center_factory_propagates_overrides_to_children():
@@ -279,34 +290,44 @@ def test_room_message_center_factory_propagates_overrides_to_children():
             "rate_limit_service",
             "room_supervisor_service",
             "room_coordinator_service",
-            "openai_service",
+            "summary_service",
             "hitl_coordinator",
             "task_notifications",
         ]
     }
-    runtime = create_room_message_center(**deps)
+    runtime = create_room_message_center(**deps, debate_rounds=5)
 
-    assert runtime.database_service is deps["database_service"]
+    assert runtime._store is deps["database_service"]
     assert runtime.sse_manager is deps["sse_manager"]
     assert runtime.room_runtime is deps["room_services"]
-    assert runtime.openai_service is deps["openai_service"]
+    assert runtime.summary_service is deps["summary_service"]
     assert runtime.tsm.room_runtime is deps["room_services"]
     assert runtime.tsm.notification_service is deps["notification_service"]
-    assert runtime.agent_dispatcher.database_service is deps["database_service"]
+    assert runtime.agent_dispatcher._message_writer is deps["database_service"]
+    assert runtime.agent_dispatcher._agent_lookup is deps["database_service"]
+    assert runtime.agent_dispatcher._agent_group_reader is deps["database_service"]
+    assert runtime.debate_rounds == 5
+    assert runtime.supervisor_executor.debate_rounds == 5
     assert runtime.agent_dispatcher.agent_resolver is deps["agent_resolver_service"]
-    assert runtime.agent_response_handler._db is deps["database_service"]
+    assert runtime.agent_response_handler._message_writer is deps["database_service"]
+    assert runtime.agent_response_handler._task_writer is deps["database_service"]
     assert runtime.agent_response_handler._sse is deps["sse_manager"]
-    assert runtime.direct_transport.database_service is deps["database_service"]
+    assert runtime.direct_transport._message_reader is deps["database_service"]
+    assert runtime.direct_transport._artifact_store is deps["database_service"]
+    assert runtime.direct_transport._task_updater is deps["database_service"]
     assert runtime.direct_transport.sse_manager is deps["sse_manager"]
     assert runtime.direct_transport.a2a_service is deps["a2a_service"]
     assert runtime.direct_transport.task_service is deps["task_service"]
-    assert runtime.agent_message_processor.database_service is deps["database_service"]
+    assert (
+        runtime.agent_message_processor._room_memory_reader is deps["database_service"]
+    )
+    assert runtime.agent_message_processor._task_tracker is deps["database_service"]
     assert runtime.agent_message_processor.sse_manager is deps["sse_manager"]
-    assert runtime.queue_executor.database_service is deps["database_service"]
+    assert runtime.queue_executor._store is deps["database_service"]
     assert runtime.queue_executor.sse_manager is deps["sse_manager"]
     assert runtime.queue_executor.room_runtime is deps["room_services"]
     assert runtime.queue_executor.hitl_coordinator is deps["hitl_coordinator"]
-    assert runtime.supervisor_executor.database_service is deps["database_service"]
+    assert runtime.supervisor_executor._store is deps["database_service"]
     assert runtime.supervisor_executor.sse_manager is deps["sse_manager"]
     assert runtime.supervisor_executor.room_runtime is deps["room_services"]
     assert runtime.supervisor_executor.hitl_coordinator is deps["hitl_coordinator"]
@@ -328,7 +349,7 @@ def test_room_message_center_factory_owns_default_dependency_wiring():
         "database_service": MagicMock(),
         "sse_manager": MagicMock(),
         "room_coordinator_service": MagicMock(),
-        "openai_service": MagicMock(),
+        "summary_service": MagicMock(),
         "notification_service": MagicMock(),
         "agent_resolver_service": MagicMock(),
         "a2a_service": MagicMock(),
@@ -338,11 +359,12 @@ def test_room_message_center_factory_owns_default_dependency_wiring():
         "rate_limit_service": MagicMock(),
         "room_supervisor_service": MagicMock(),
     }
-    runtime = create_room_message_center(**deps)
+    runtime = create_room_message_center(**deps, debate_rounds=6)
 
-    assert runtime.database_service is deps["database_service"]
+    assert runtime._store is deps["database_service"]
     assert runtime.sse_manager is deps["sse_manager"]
     assert runtime.room_runtime is deps["room_services"]
+    assert runtime.debate_rounds == 6
 
 
 def test_room_message_center_constructor_requires_explicit_dependencies():
@@ -415,6 +437,7 @@ class _FakeRunsCollection:
         self.docs = docs or []
         self.find_error = find_error
         self.find_calls = []
+        self.get_active_calls = []
         self.find_one = AsyncMock()
         self.cursor = _FakeCursor(self.docs, error=find_error)
 
@@ -422,11 +445,14 @@ class _FakeRunsCollection:
         self.find_calls.append(query)
         return self.cursor
 
+    async def get_active_for_room(self, room_id: str) -> list[dict]:
+        self.get_active_calls.append(room_id)
+        return list(self.docs)
+
 
 @pytest.mark.asyncio
 async def test_run_query_adapter_filters_non_terminal_runs_and_preserves_trigger_message_id():
     from execution.run_queries import RunQueryAdapter
-    from models.run import NON_TERMINAL_RUN_STATE_VALUES
 
     collection = _FakeRunsCollection(
         docs=[
@@ -444,13 +470,7 @@ async def test_run_query_adapter_filters_non_terminal_runs_and_preserves_trigger
 
     runs = await adapter.get_runs_for_room("room-1")
 
-    assert collection.find_calls == [
-        {
-            "room_id": "room-1",
-            "state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)},
-        }
-    ]
-    assert collection.cursor.sort_calls == [("updated_at", -1)]
+    assert collection.get_active_calls == ["room-1"]
     assert runs[0].trigger_message_id == "user-msg-1"
     assert runs[0].seq == 4
 

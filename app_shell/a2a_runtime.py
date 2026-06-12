@@ -32,17 +32,16 @@ from a2a.utils.constants import (
 )
 
 from a2a_adapter.message_factory import from_sdk_task, to_sdk_message
-from common.utils.logger import get_logger
-from common.config.settings import settings
-from database.mongodb import mongodb
-from models.error import A2AServiceError, IllgalParameterError
-from models.response import InsepectionCenterConnectionValidationResponse
-from models.room import RoomAgentMessage
 from common.a2a_constants import (
     INTERACTIVE_STATES,
     SyntheticTaskId,
     is_terminal_state,
 )
+from common.config.settings import settings
+from common.utils.logger import get_logger
+from models.error import A2AServiceError, IllgalParameterError
+from models.response import InsepectionCenterConnectionValidationResponse
+from models.room import RoomAgentMessage
 
 logger = get_logger(__name__)
 
@@ -81,7 +80,13 @@ MODE_TO_MIMES: dict[str, set[str]] = {
 
 class A2AService:
     def __init__(self):
-        pass
+        self._task_db = None
+
+    def bind_task_db(self, task_db: Any) -> None:
+        self._task_db = task_db
+
+    def _get_task_db(self) -> Any | None:
+        return getattr(self, "_task_db", None)
 
     def _resolve_accepted_modes(self, agent_card: AgentCard) -> list[str]:
         """Intersect agent's output modes with platform capabilities."""
@@ -149,8 +154,12 @@ class A2AService:
             raise IllgalParameterError()
 
         try:
-            async with httpx.AsyncClient(timeout=self.AGENT_CARD_FETCH_TIMEOUT) as httpx_client:
-                card = await self._fetch_agent_card_with_fallback(httpx_client, agent_url)
+            async with httpx.AsyncClient(
+                timeout=self.AGENT_CARD_FETCH_TIMEOUT
+            ) as httpx_client:
+                card = await self._fetch_agent_card_with_fallback(
+                    httpx_client, agent_url
+                )
                 return card
 
         except Exception as e:
@@ -234,9 +243,11 @@ class A2AService:
         Returns:
             Dict with message_id, created_at, context_id, webhook_token, step_number, total_steps
         """
-        from common.utils.time import utcnow
+        task_db = self._get_task_db()
+        if task_db is None:
+            raise A2AServiceError("Task DB is unavailable for task tracking")
         from common.a2a_constants import NON_TERMINAL_STATES
-        from app_shell.database_service import db_service
+        from common.utils.time import utcnow
 
         room_id = current_message.room_id
         user_id = current_message.user_id or "unknown"
@@ -245,17 +256,15 @@ class A2AService:
         # Check task limits before creating
         non_terminal_state_values = [s.value for s in NON_TERMINAL_STATES]
         try:
-            await db_service.check_task_limits(
-                user_id, room_id, non_terminal_state_values
-            )
+            await task_db.check_task_limits(user_id, room_id, non_terminal_state_values)
         except ValueError as e:
             raise A2AServiceError(str(e)) from e
 
         if not message_id:
             raise A2AServiceError("message_id is required for task tracking")
 
-        webhook_token = db_service.generate_webhook_token()
-        webhook_token_hash = db_service.hash_webhook_token(webhook_token)
+        webhook_token = task_db.generate_webhook_token()
+        webhook_token_hash = task_db.hash_webhook_token(webhook_token)
 
         # Create placeholder task
         context_id = message.context_id or str(uuid4())
@@ -268,7 +277,7 @@ class A2AService:
         now = utcnow()
 
         # Enable task tracking on the existing room_agent_message
-        update_success = await db_service.enable_task_tracking_on_message(
+        update_success = await task_db.enable_task_tracking_on_message(
             message_id=message_id,
             webhook_token_hash=webhook_token_hash,
             agent_url=agent_card.url,
@@ -289,7 +298,9 @@ class A2AService:
 
         # Keep the in-memory object in sync with what was written to the DB.
         if current_message.message_content:
-            current_message.message_content.message_task = from_sdk_task(placeholder_task)
+            current_message.message_content.message_task = from_sdk_task(
+                placeholder_task
+            )
         current_message.has_task_tracking = True
 
         return {
@@ -305,10 +316,28 @@ class A2AService:
         """Atomically increment call_count (and call_success_count) for an agent."""
         if not agent_id:
             return
+        task_db = self._get_task_db()
+        if task_db is None:
+            return
+
+        increment_agent_call_count = None
         try:
-            await mongodb.increment_agent_call_count(agent_id, success=success)
-        except Exception as e:
-            logger.warning("Failed to record agent call for %s: %s", agent_id, e)
+            increment_agent_call_count = getattr(
+                task_db,
+                "increment_agent_call_count",
+                None,
+            )
+        except Exception:
+            increment_agent_call_count = None
+
+        if callable(increment_agent_call_count):
+            try:
+                await increment_agent_call_count(agent_id, success=success)
+            except Exception as e:
+                logger.warning("Failed to record agent call for %s: %s", agent_id, e)
+            return
+
+        logger.warning("Failed to record agent call for %s", agent_id)
 
     async def send_message_to_tracked_agent(
         self,
@@ -338,7 +367,9 @@ class A2AService:
             For Task response: {"type": "task", "message_id": "...", "status": "..."}
             For Interactive states: {"type": "task", "status": "input_required", ...}
         """
-        from app_shell.database_service import db_service
+        task_db = self._get_task_db()
+        if task_db is None:
+            raise A2AServiceError("Task DB is unavailable for tracked send")
 
         # Build request with push notification config.
         # Push notifications require a publicly reachable WEBHOOK_BASE_URL. When
@@ -347,7 +378,9 @@ class A2AService:
         # of posting to an unreachable localhost URL.
         push_config = None
         has_capability = self.has_push_notification_capability(agent_card)
-        webhook_url = settings.webhook_base_url.rstrip("/") if settings.webhook_base_url else ""
+        webhook_url = (
+            settings.webhook_base_url.rstrip("/") if settings.webhook_base_url else ""
+        )
 
         logger.info(
             f"Push notification check: has_capability={has_capability}, "
@@ -365,7 +398,11 @@ class A2AService:
                 f"(callback → {webhook_url}/api/v1/webhooks/a2a/{message_id})"
             )
         else:
-            reason = "Agent missing capability" if not has_capability else "WEBHOOK_BASE_URL not set — using blocking=True"
+            reason = (
+                "Agent missing capability"
+                if not has_capability
+                else "WEBHOOK_BASE_URL not set — using blocking=True"
+            )
             logger.warning(
                 f"Push notifications DISABLED for task {message_id}. Reason: {reason}"
             )
@@ -398,10 +435,13 @@ class A2AService:
         # Blocking agents hold the connection for the full task duration.
         try:
             dispatch_timeout = (
-                self.PUSH_NOTIFICATION_TIMEOUT if push_config
+                self.PUSH_NOTIFICATION_TIMEOUT
+                if push_config
                 else self.DEFAULT_REQUEST_TIMEOUT
             )
-            async with self.create_a2a_client(agent_card, timeout=dispatch_timeout) as a2a_client:
+            async with self.create_a2a_client(
+                agent_card, timeout=dispatch_timeout
+            ) as a2a_client:
                 response = await a2a_client.send_message(send_message_request)
         except Exception as e:
             await self._record_call(agent_id, success=False)
@@ -418,7 +458,7 @@ class A2AService:
                     ),
                 ),
             )
-            await db_service.update_task_on_message(
+            await task_db.update_task_on_message(
                 message_id, failed_task.model_dump(mode="json")
             )
             logger.error(f"Failed to send message to agent: {e}")
@@ -440,7 +480,7 @@ class A2AService:
                     ),
                 ),
             )
-            await db_service.update_task_on_message(
+            await task_db.update_task_on_message(
                 message_id, failed_task.model_dump(mode="json")
             )
             raise A2AServiceError(error_msg)
@@ -449,7 +489,11 @@ class A2AService:
         result = response.root.result
 
         # --- Diagnostic: log the raw response shape ---
-        _art_count = len(result.artifacts) if hasattr(result, "artifacts") and result.artifacts else 0
+        _art_count = (
+            len(result.artifacts)
+            if hasattr(result, "artifacts") and result.artifacts
+            else 0
+        )
         _parts_summary = ""
         if hasattr(result, "artifacts") and result.artifacts:
             _parts_summary = "; ".join(
@@ -462,7 +506,9 @@ class A2AService:
             "send_message_to_tracked_agent: response kind=%s, state=%s, "
             "artifacts=%d (%s) for message_id=%s",
             result.kind,
-            getattr(result.status, "state", "N/A") if hasattr(result, "status") else "N/A",
+            getattr(result.status, "state", "N/A")
+            if hasattr(result, "status")
+            else "N/A",
             _art_count,
             _parts_summary or "none",
             message_id,
@@ -473,13 +519,16 @@ class A2AService:
             # Create completed task with message as artifact
             completed_task = self._message_to_completed_task(result, context_id)
             from common.utils.a2a_helpers import convert_pydantic_artifacts_to_s3
+
             if completed_task.artifacts:
                 await convert_pydantic_artifacts_to_s3(
-                    completed_task.artifacts, room_id=room_id or message_id, message_id=message_id,
+                    completed_task.artifacts,
+                    room_id=room_id or message_id,
+                    message_id=message_id,
                 )
 
             message_text = self._extract_text_from_message(result)
-            persisted = await db_service.update_task_on_message(
+            persisted = await task_db.update_task_on_message(
                 message_id,
                 completed_task.model_dump(mode="json"),
                 message_text=message_text or None,
@@ -487,7 +536,11 @@ class A2AService:
 
             from common.utils.a2a_helpers import extract_parts_from_artifacts
 
-            extracted = extract_parts_from_artifacts(completed_task.artifacts) if completed_task.artifacts else None
+            extracted = (
+                extract_parts_from_artifacts(completed_task.artifacts)
+                if completed_task.artifacts
+                else None
+            )
             non_text_parts = None
             if extracted and extracted.has_non_text:
                 non_text_parts = extracted.file_parts + extracted.data_parts
@@ -508,14 +561,21 @@ class A2AService:
             # If already terminal, convert artifacts to S3 before persisting
             if is_terminal_state(state) and result.artifacts:
                 from common.utils.a2a_helpers import convert_pydantic_artifacts_to_s3
+
                 await convert_pydantic_artifacts_to_s3(
-                    result.artifacts, room_id=room_id or message_id, message_id=message_id,
+                    result.artifacts,
+                    room_id=room_id or message_id,
+                    message_id=message_id,
                 )
 
-            task_text = self._extract_text_from_task(result) if is_terminal_state(state) else None
+            task_text = (
+                self._extract_text_from_task(result)
+                if is_terminal_state(state)
+                else None
+            )
 
             # Update with real task from agent
-            persisted = await db_service.update_task_on_message(
+            persisted = await task_db.update_task_on_message(
                 message_id,
                 result.model_dump(mode="json"),
                 message_text=task_text or None,
@@ -525,7 +585,11 @@ class A2AService:
             if is_terminal_state(state):
                 from common.utils.a2a_helpers import extract_parts_from_artifacts
 
-                extracted = extract_parts_from_artifacts(result.artifacts) if result.artifacts else None
+                extracted = (
+                    extract_parts_from_artifacts(result.artifacts)
+                    if result.artifacts
+                    else None
+                )
                 non_text_parts = None
                 if extracted and extracted.has_non_text:
                     non_text_parts = extracted.file_parts + extracted.data_parts
@@ -662,7 +726,9 @@ class A2AService:
                     params=payload,
                 )
 
-                logger.debug(f"a2a_service: Sending sync message to agent: {agent_card}")
+                logger.debug(
+                    f"a2a_service: Sending sync message to agent: {agent_card}"
+                )
                 response = await a2a_client.send_message(send_message_request)
 
                 # Handle error
@@ -722,7 +788,9 @@ class A2AService:
                     params=payload,
                 )
 
-                logger.debug(f"a2a_service: Starting streaming from agent: {agent_card}")
+                logger.debug(
+                    f"a2a_service: Starting streaming from agent: {agent_card}"
+                )
                 response_stream = a2a_client.send_message_streaming(stream_request)
                 async for response in response_stream:
                     success = True
@@ -731,7 +799,10 @@ class A2AService:
             await self._record_call(agent_id, success=success)
 
     async def send_message(
-        self, agent_card: AgentCard, message: Message, agent_id: str | None = None,
+        self,
+        agent_card: AgentCard,
+        message: Message,
+        agent_id: str | None = None,
     ) -> AsyncGenerator[SendStreamingMessageResponse | SendMessageResponse, None]:
         """
         Send message to agent with automatic capability detection.
@@ -753,7 +824,9 @@ class A2AService:
         # Check agent capability and route to appropriate method
         if self.has_streaming_capability(agent_card):
             logger.debug(f"a2a_service: Agent supports streaming: {agent_card.url}")
-            async for event in self.send_message_streaming(agent_card, message, agent_id=agent_id):
+            async for event in self.send_message_streaming(
+                agent_card, message, agent_id=agent_id
+            ):
                 yield event
 
         else:
@@ -761,7 +834,9 @@ class A2AService:
                 f"a2a_service: Agent doesn't support streaming, using sync: {agent_card.url}"
             )
             try:
-                event = await self.send_message_sync(agent_card, message, agent_id=agent_id)
+                event = await self.send_message_sync(
+                    agent_card, message, agent_id=agent_id
+                )
                 yield event
 
             except Exception as e:
@@ -1002,22 +1077,22 @@ class A2AService:
         Uses the same task_id and context_id to continue the conversation
         rather than starting a new task.
         """
-        from app_shell.database_service import db_service
+        task_db = self._get_task_db()
+        if task_db is None:
+            raise ValueError("Task DB is unavailable for HITL reply handling")
 
-        msg = await db_service.get_room_agent_message_by_message_id(message_id)
+        msg = await task_db.get_room_agent_message_by_message_id(message_id)
         if not msg:
             raise ValueError(f"Agent message {message_id} not found")
 
         agent_url = msg.agent_url
         if not agent_url:
-            raise ValueError(
-                f"Agent message {message_id} has no agent_url"
-            )
+            raise ValueError(f"Agent message {message_id} has no agent_url")
 
         # Generate a NEW webhook token (original plaintext was never stored)
-        webhook_token = db_service.generate_webhook_token()
-        webhook_token_hash = db_service.hash_webhook_token(webhook_token)
-        token_updated = await db_service.update_webhook_token_hash_on_message(
+        webhook_token = task_db.generate_webhook_token()
+        webhook_token_hash = task_db.hash_webhook_token(webhook_token)
+        token_updated = await task_db.update_webhook_token_hash_on_message(
             message_id, webhook_token_hash
         )
         if not token_updated:
@@ -1030,13 +1105,17 @@ class A2AService:
         # agent can POST back asynchronously — but only if the agent advertises
         # push-notification capability (mirrors the check in send_message_to_tracked_agent).
         # Otherwise fall back to blocking=True.
-        webhook_url = settings.webhook_base_url.rstrip("/") if settings.webhook_base_url else ""
+        webhook_url = (
+            settings.webhook_base_url.rstrip("/") if settings.webhook_base_url else ""
+        )
 
         has_capability = False
         if webhook_url and msg.agent_id:
-            agent_record = await db_service.get_agent_by_agent_id(msg.agent_id)
+            agent_record = await task_db.get_agent_by_agent_id(msg.agent_id)
             if agent_record and agent_record.agent_card:
-                has_capability = self.has_push_notification_capability(agent_record.agent_card)
+                has_capability = self.has_push_notification_capability(
+                    agent_record.agent_card
+                )
             else:
                 logger.warning(
                     "hitl: could not load agent card for agent %s — disabling push notifications",
@@ -1061,7 +1140,8 @@ class A2AService:
             hitl_blocking = True
             hitl_timeout = self.DEFAULT_REQUEST_TIMEOUT
             reason = (
-                "WEBHOOK_BASE_URL not set" if not webhook_url
+                "WEBHOOK_BASE_URL not set"
+                if not webhook_url
                 else "agent missing push-notification capability"
             )
             logger.warning(
@@ -1118,6 +1198,7 @@ class A2AService:
                 task_obj = task_result
                 if task_obj.artifacts:
                     from common.utils.a2a_helpers import extract_text_from_artifacts
+
                     response_text = extract_text_from_artifacts(task_obj.artifacts)
             elif hasattr(task_result, "kind") and task_result.kind == "message":
                 parts = getattr(task_result, "parts", []) or []
@@ -1131,7 +1212,12 @@ class A2AService:
 
         # Fallback: check task.status.message for the agent's follow-up prompt
         # (e.g. when task is input_required / auth_required)
-        if not response_text and task_obj and hasattr(task_obj, "status") and task_obj.status:
+        if (
+            not response_text
+            and task_obj
+            and hasattr(task_obj, "status")
+            and task_obj.status
+        ):
             status_msg = getattr(task_obj.status, "message", None)
             if status_msg:
                 parts = getattr(status_msg, "parts", []) or []
@@ -1145,7 +1231,7 @@ class A2AService:
 
         # --- Persist task + message_text together ---
         if task_obj:
-            await db_service.update_task_on_message(
+            await task_db.update_task_on_message(
                 message_id,
                 task_obj.model_dump(mode="json"),
                 message_text=response_text,

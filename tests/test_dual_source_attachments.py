@@ -1,7 +1,8 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app_shell.room_runtime import RoomServices
 from models.file_upload import (
     MAX_ATTACHMENT_REFS_PER_REQUEST,
     MAX_ATTACHMENTS_PER_MESSAGE,
@@ -9,7 +10,6 @@ from models.file_upload import (
 from models.request import RoomCenterUserMessageRequest, UserAttachmentRequest
 from models.response import RoomCenterUserMessageResponse
 from models.room import MessageContent, RoomUserMessage
-from app_shell.room_runtime import RoomServices
 
 
 @pytest.fixture
@@ -18,6 +18,11 @@ def room_svc():
     svc.database_service = MagicMock()
     svc.sse_manager = MagicMock()
     svc.room_memory_service = MagicMock()
+    reader = MagicMock()
+    reader.get_for_room_file = AsyncMock(
+        side_effect=lambda room_id, file_id: _file_meta(file_id, room_id) if room_id == "room1" else None
+    )
+    svc.bind_attachment_metadata_reader(reader)
     return svc
 
 
@@ -49,11 +54,7 @@ class TestDualSourceMerge:
         )
         msg = _user_msg()
 
-        with patch("database.mongodb.mongodb") as mock_db:
-            mock_db.file_uploads_collection.find_one = AsyncMock(
-                return_value=_file_meta("f1")
-            )
-            err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._resolve_and_apply_attachments(request, msg)
 
         assert err is None
         assert len(msg.message_content.attachments) == 1
@@ -66,11 +67,7 @@ class TestDualSourceMerge:
         )
         msg = _user_msg()
 
-        with patch("database.mongodb.mongodb") as mock_db:
-            mock_db.file_uploads_collection.find_one = AsyncMock(
-                return_value=_file_meta("f1")
-            )
-            err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._resolve_and_apply_attachments(request, msg)
 
         assert err is None
         assert len(msg.message_content.attachments) == 1
@@ -83,11 +80,7 @@ class TestDualSourceMerge:
         )
         msg = _user_msg()
 
-        with patch("database.mongodb.mongodb") as mock_db:
-            mock_db.file_uploads_collection.find_one = AsyncMock(
-                return_value=_file_meta("f1")
-            )
-            err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._resolve_and_apply_attachments(request, msg)
 
         assert err is None
         assert len(msg.message_content.attachments) == 1
@@ -100,11 +93,7 @@ class TestDualSourceMerge:
         )
         msg = _user_msg()
 
-        with patch("database.mongodb.mongodb") as mock_db:
-            mock_db.file_uploads_collection.find_one = AsyncMock(
-                side_effect=lambda q: _file_meta(q["file_id"]) if q["room_id"] == "room1" else None
-            )
-            err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._resolve_and_apply_attachments(request, msg)
 
         assert err is None
         assert len(msg.message_content.attachments) == 2
@@ -119,15 +108,15 @@ class TestDualSourceMerge:
 
 class TestCrossRoomRejection:
     async def test_file_from_different_room_rejected(self, room_svc):
+        room_svc._attachment_metadata_reader.get_for_room_file = AsyncMock(return_value=None)
+
         request = RoomCenterUserMessageRequest(
             room_id="room1",
             attachments=[UserAttachmentRequest(file_id="f1")],
         )
         msg = _user_msg()
 
-        with patch("database.mongodb.mongodb") as mock_db:
-            mock_db.file_uploads_collection.find_one = AsyncMock(return_value=None)
-            err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._resolve_and_apply_attachments(request, msg)
 
         assert isinstance(err, RoomCenterUserMessageResponse)
         assert err.status_code == 404
@@ -143,9 +132,7 @@ class TestMergedLimitEnforcement:
         )
         msg = _user_msg()
 
-        with patch("database.mongodb.mongodb") as mock_db:
-            mock_db.file_uploads_collection.find_one = AsyncMock()
-            err = await room_svc._resolve_and_apply_attachments(request, msg)
+        err = await room_svc._resolve_and_apply_attachments(request, msg)
 
         assert isinstance(err, RoomCenterUserMessageResponse)
         assert err.status_code == 400
@@ -159,11 +146,7 @@ class TestContentSummary:
         )
         msg = _user_msg()
 
-        with patch("database.mongodb.mongodb") as mock_db:
-            mock_db.file_uploads_collection.find_one = AsyncMock(
-                return_value=_file_meta("f1")
-            )
-            await room_svc._resolve_and_apply_attachments(request, msg)
+        await room_svc._resolve_and_apply_attachments(request, msg)
 
         summary = msg.message_content.content_summary
         assert summary is not None

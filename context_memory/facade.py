@@ -15,7 +15,7 @@ from common.dto import (
 from common.observability import NoopTracingProvider
 from common.protocols import (
     ContentStorageRepository,
-    LLMProvider,
+    LLMGateway,
     MemoryRepository,
     RoomHistoryReader,
     VectorDAL,
@@ -50,7 +50,7 @@ class ContextMemoryFacade:
         content_repository: ContentStorageRepository,
         room_history_reader: RoomHistoryReader,
         vector: VectorDAL,
-        llm_provider: LLMProvider,
+        llm_provider: LLMGateway,
         id_factory: Callable[[], str],
         now: Callable[[], datetime],
         token_budget: TokenBudgetConfig | None = None,
@@ -271,6 +271,13 @@ class ContextMemoryFacade:
         self, memory_id: str
     ) -> dict | None:
         return await self.memory_repository.get_room_memory_by_memory_id(memory_id)
+
+    async def legacy_update_room_memory_by_memory_id(
+        self, memory_id: str, memory_doc: dict
+    ) -> bool:
+        return await self.memory_repository.update_room_memory_by_memory_id(
+            memory_id, memory_doc
+        )
 
     async def legacy_delete_room_memory_by_room_id(self, room_id: str) -> bool:
         return await self.delete_room_memory(room_id)

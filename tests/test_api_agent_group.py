@@ -46,7 +46,7 @@ class TestCreateAgentGroup:
             "agents": ["agent-1", "agent-2"],
         })
 
-        with patch(PATCH["agent_group.db_service"], mock_db_service):
+        with patch(PATCH["agent_group.agent_group_store"], mock_db_service):
             result = await create_agent_group(mock_request)
 
         assert result["success"] is True
@@ -88,7 +88,7 @@ class TestCreateAgentGroup:
             "owner_id": "user-001",
         })
 
-        with patch(PATCH["agent_group.db_service"], mock_db_service):
+        with patch(PATCH["agent_group.agent_group_store"], mock_db_service):
             result = await create_agent_group(mock_request)
 
         assert result["success"] is False
@@ -130,7 +130,7 @@ class TestListAgentGroups:
         )
         mock_db_service.get_agent_groups_by_owner = AsyncMock(return_value=[user_group])
 
-        with patch(PATCH["agent_group.db_service"], mock_db_service):
+        with patch(PATCH["agent_group.agent_group_store"], mock_db_service):
             result = await list_agent_groups(owner_id="user-001")
 
         assert result["success"] is True
@@ -190,7 +190,7 @@ class TestGetAgentGroup:
         )
         mock_db_service.get_agent_group_by_id = AsyncMock(return_value=group)
 
-        with patch(PATCH["agent_group.db_service"], mock_db_service):
+        with patch(PATCH["agent_group.agent_group_store"], mock_db_service):
             result = await get_agent_group("grp-001")
 
         assert result["success"] is True
@@ -214,7 +214,7 @@ class TestGetAgentGroup:
         """Should return 404 when group doesn't exist."""
         mock_db_service.get_agent_group_by_id = AsyncMock(return_value=None)
 
-        with patch(PATCH["agent_group.db_service"], mock_db_service):
+        with patch(PATCH["agent_group.agent_group_store"], mock_db_service):
             result = await get_agent_group("nonexistent")
 
         assert result["success"] is False
@@ -241,7 +241,7 @@ class TestUpdateAgentGroup:
         mock_request = MagicMock()
         mock_request.json = AsyncMock(return_value={"name": "Updated Name"})
 
-        with patch(PATCH["agent_group.db_service"], mock_db_service):
+        with patch(PATCH["agent_group.agent_group_store"], mock_db_service):
             result = await update_agent_group("grp-001", mock_request)
 
         assert result["success"] is True
@@ -288,7 +288,7 @@ class TestDeleteAgentGroup:
         )
         mock_db_service.delete_agent_group = AsyncMock(return_value=True)
 
-        with patch(PATCH["agent_group.db_service"], mock_db_service):
+        with patch(PATCH["agent_group.agent_group_store"], mock_db_service):
             result = await delete_agent_group("grp-001")
 
         assert result["success"] is True
@@ -313,7 +313,7 @@ class TestDeleteAgentGroup:
         )
         mock_db_service.delete_agent_group = AsyncMock(return_value=False)
 
-        with patch(PATCH["agent_group.db_service"], mock_db_service):
+        with patch(PATCH["agent_group.agent_group_store"], mock_db_service):
             result = await delete_agent_group("grp-001")
 
         assert result["success"] is False
