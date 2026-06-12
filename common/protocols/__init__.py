@@ -101,6 +101,13 @@ from common.protocols.room_protocols import (
     RoomOwnershipReader,
     RoomRegistry,
 )
+from common.protocols.runtime_store_protocols import (
+    RuntimeAgentRoomStore,
+    RuntimeHITLStore,
+    RuntimeMemoryStore,
+    RuntimeMessageStore,
+    RuntimeTaskLifecycleStore,
+)
 
 __all__ = [
     "AgentCallCounter",
@@ -188,6 +195,11 @@ __all__ = [
     "RoomRepository",
     "RunEventRepository",
     "RunRepository",
+    "RuntimeAgentRoomStore",
+    "RuntimeHITLStore",
+    "RuntimeMemoryStore",
+    "RuntimeMessageStore",
+    "RuntimeTaskLifecycleStore",
     "SSETransport",
     "VectorDAL",
 ]
