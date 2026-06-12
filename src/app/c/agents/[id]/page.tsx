@@ -230,6 +230,7 @@ export default function ConsumerAgentProfilePage() {
               <CardHeader className="text-center space-y-4 pt-10 pb-6">
                 <div className="mx-auto">
                   <Avatar className="h-24 w-24 border-4 border-background shadow-xl mx-auto">
+                    <AvatarImage src={getAgentAvatarUri(agentId)} alt={info.name} />
                     <AvatarFallback className="bg-primary/5 text-primary">
                       <ShieldCheck className="h-10 w-10" />
                     </AvatarFallback>
