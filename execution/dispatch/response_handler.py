@@ -10,6 +10,7 @@ import inspect
 from typing import Any, Protocol
 
 from a2a_adapter.task_status import coerce_task_state
+from common.a2a_constants import is_interactive_state
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
 
@@ -397,14 +398,14 @@ class AgentResponseHandler:
         await self._notify(
             e,
             coerce_task_state(state),
-            emit_processing_status=state != "input-required",
+            emit_processing_status=not is_interactive_state(state),
         )
 
         # For async transports (relay, webhook) the queue has already moved
         # to PAUSED before this callback fires, so QueueExecutor never sees
         # AWAITING_INPUT.  Create the HITL request here when a continuation
         # is already saved (indicates an async callback, not inline dispatch).
-        if state == "input-required":
+        if is_interactive_state(state):
             await self._maybe_create_hitl_for_async_interactive(e)
 
     async def _maybe_create_hitl_for_async_interactive(self, e: AgentEvent) -> None:
