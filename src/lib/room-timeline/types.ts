@@ -79,6 +79,7 @@ export type SummaryOrigin = 'llm' | 'deterministic'
 
 export type FinalAnswerLabel =
   | 'Synthesized'
+  | 'Synthesizing'
   | 'Combined agent responses'
   | 'Working'
   | 'Needs input'

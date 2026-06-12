@@ -43,7 +43,6 @@ function makeAgent(
     isSummaryAgent: false,
     isEphemeral: false,
     artifacts: [],
-    isSummaryAgent: false,
     ...overrides,
   }
 }
@@ -200,6 +199,32 @@ describe('deriveFinalAnswer', () => {
       ],
     })
     expect(deriveFinalAnswer(turn, ['a1', 'a2']).kind).toBe('pending')
+  })
+
+  it('returns active llm_synthesis while the orchestrator is synthesizing', () => {
+    const turn = makeTurn({
+      status: 'active',
+      isSupervisorTurn: true,
+      agentResults: [
+        makeAgent({ messageId: 'a1', agentId: 'agent-a', status: 'completed', content: 'A' }),
+        makeAgent({ messageId: 'a2', agentId: 'agent-b', status: 'completed', content: 'B' }),
+        makeAgent({
+          messageId: 'hybro-1',
+          agentId: 'system:hybro',
+          agentName: 'HYBRO AI',
+          isSummaryAgent: true,
+          summaryOrigin: 'llm',
+          status: 'working',
+          content: '',
+        }),
+      ],
+    })
+    expect(deriveFinalAnswer(turn, ['a1', 'a2'])).toMatchObject({
+      kind: 'llm_synthesis',
+      label: 'Synthesizing',
+      summaryOrigin: 'llm',
+      primaryMessageId: 'hybro-1',
+    })
   })
 
   it('returns deterministic_done when supervisor turn has no synthesis gap', () => {
