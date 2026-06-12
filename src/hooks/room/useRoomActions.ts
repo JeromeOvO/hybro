@@ -94,10 +94,6 @@ export function useRoomActions(
         if (!extendInfoResponse.success) {
           throw new Error(`Failed to update room settings: ${extendInfoResponse.error}`)
         }
-
-        console.log('Room extend_info updated:', {
-          debateMode: debateMode ? 'ENABLED' : 'DISABLED',
-        })
       }
 
       // Reload room settings to get updated data from backend
@@ -126,7 +122,6 @@ export function useRoomActions(
     try {
       setCancelling(true)
       lifecycle.setCancelTimedOut(false)
-      console.log('🛑 Cancelling message:', messageId)
       await cancelMessage(messageId, getToken)
 
       // Batch cancel all non-terminal tasks in the normalized store
@@ -223,7 +218,6 @@ export function useRoomActions(
     } catch (err) {
       // 409 Conflict = request already responded/processing — treat as success.
       if (err instanceof ApiError && err.status === 409) {
-        console.log('HITL respond returned 409 (already handled) — keeping optimistic state')
         return
       }
 
@@ -231,7 +225,6 @@ export function useRoomActions(
       // resume which can take 60-120s. Keep the optimistic state; the eventual
       // hitl_response SSE will reconcile.
       if (err instanceof Error && err.name === 'AbortError') {
-        console.log('HITL respond timed out — backend still processing, keeping optimistic state')
         return
       }
 
@@ -270,7 +263,6 @@ export function useRoomActions(
 
   // Manually refresh messages — delegates to reconcileWithDb (Gap 14)
   const refreshMessages = useCallback(async () => {
-    console.log('🔄 Manual message refresh requested')
     await reconcileWithDb(roomId)
   }, [roomId, reconcileWithDb])
 

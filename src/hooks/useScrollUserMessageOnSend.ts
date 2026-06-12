@@ -11,6 +11,7 @@ interface UseScrollUserMessageOnSendOptions {
   localSendSeq: number
   programmaticScrollRef: RefObject<boolean>
   userPausedRef: RefObject<boolean>
+  tailFollowRef?: RefObject<boolean>
 }
 
 function findStickyUserElement(frame: HTMLElement, userMessageId: string): HTMLElement | null {
@@ -28,6 +29,7 @@ export function useScrollUserMessageOnSend({
   localSendSeq,
   programmaticScrollRef,
   userPausedRef,
+  tailFollowRef,
 }: UseScrollUserMessageOnSendOptions) {
   const prevLocalSendSeqRef = useRef(localSendSeq)
   const prevLastUserMessageIdRef = useRef(lastUserMessageId)
@@ -42,10 +44,11 @@ export function useScrollUserMessageOnSend({
 
     programmaticScrollRef.current = true
     userPausedRef.current = false
+    if (tailFollowRef) tailFollowRef.current = false
     // Align sticky wrapper with scrollport top (matches `.conversation-user-sticky { top: 0 }`).
     scrollUserMessageToFocus(container, stickyEl, 0)
     return true
-  }, [scrollRef, frameRef, lastUserMessageId, programmaticScrollRef, userPausedRef])
+  }, [scrollRef, frameRef, lastUserMessageId, programmaticScrollRef, userPausedRef, tailFollowRef])
 
   const scheduleScrollRetries = useCallback(() => {
     let retries = 0

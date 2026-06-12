@@ -107,7 +107,6 @@ export async function overlayHitlForRoom(
 
   let pendingMessageIds = new Set<string>()
   if (hitlRes.requests?.length) {
-    console.log(`🔔 HITL overlay: ${hitlRes.requests.length} pending request(s) for room ${roomId}`)
     pendingMessageIds = await overlayPendingHitlRequests(roomId, hitlRes.requests, {
       getAgentName,
       getAgentSource,

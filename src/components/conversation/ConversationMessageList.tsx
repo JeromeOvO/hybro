@@ -28,6 +28,9 @@ interface ScrollMetrics {
   clientHeight: number
 }
 
+/** Skip tail-follow re-enable inference briefly after programmatic scroll — never blocks user cancel. */
+const PROGRAMMATIC_SCROLL_MS = 150
+
 function readMetrics(el: HTMLElement): ScrollMetrics {
   return { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop, clientHeight: el.clientHeight }
 }
@@ -47,10 +50,26 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
   const initialScrollResolvedRef = useRef(false)
 
   const userPausedRef = useRef(false)
+  const tailFollowRef = useRef(false)
   const pinnedToContentEndRef = useRef(false)
   const programmaticScrollRef = useRef(false)
+  const suppressScrollUntilRef = useRef(0)
   const prevMetricsRef = useRef<ScrollMetrics | null>(null)
   const primarySurfaceRef = useRef<HTMLDivElement>(null)
+
+  const markProgrammaticScroll = useCallback(() => {
+    if (!tailFollowRef.current) return
+    suppressScrollUntilRef.current = performance.now() + PROGRAMMATIC_SCROLL_MS
+  }, [])
+
+  const stopTailFollow = useCallback(() => {
+    if (!tailFollowRef.current && userPausedRef.current) return
+    tailFollowRef.current = false
+    userPausedRef.current = true
+    programmaticScrollRef.current = false
+    suppressScrollUntilRef.current = 0
+    setShowScrollBtn(true)
+  }, [])
 
   const lastTurn = turns[turns.length - 1]
   const primaryStreamMessageId = lastTurn?.primaryStreamMessageId
@@ -76,24 +95,28 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
     localSendSeq,
     programmaticScrollRef,
     userPausedRef,
+    tailFollowRef,
   })
 
   usePrimaryStreamScroll({
     scrollRef,
     primarySurfaceRef,
     primaryStreamMessageId,
-    userPausedRef,
+    tailFollowRef,
     programmaticScrollRef,
-    enabled: !turnLive,
+    markProgrammaticScroll,
+    enabled: turnLive || Boolean(primaryStreamMessageId),
   })
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const el = scrollRef.current
     if (!el) return
     programmaticScrollRef.current = true
+    markProgrammaticScroll()
     const targetScrollTop = contentEndScrollTop(el)
     scrollToContentEnd(el, behavior)
     userPausedRef.current = false
+    tailFollowRef.current = true
     pinnedToContentEndRef.current = true
     setHasNewContent(false)
     setShowScrollBtn(false)
@@ -115,7 +138,7 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
     }
 
     requestAnimationFrame(() => requestAnimationFrame(saveWhenSettled))
-  }, [roomId])
+  }, [roomId, markProgrammaticScroll])
 
   useEffect(() => {
     return () => {
@@ -132,8 +155,10 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
       prevHydrationSeqRef.current = 0
       initialScrollResolvedRef.current = false
       userPausedRef.current = false
+      tailFollowRef.current = false
       pinnedToContentEndRef.current = false
       programmaticScrollRef.current = false
+      suppressScrollUntilRef.current = 0
       prevMetricsRef.current = null
       setShowScrollBtn(false)
       setHasNewContent(false)
@@ -151,6 +176,7 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
           const metrics = readMetrics(el)
           prevMetricsRef.current = metrics
           pinnedToContentEndRef.current = isNearContentEnd(el)
+          tailFollowRef.current = turnLive && pinnedToContentEndRef.current
           setShowScrollBtn(!pinnedToContentEndRef.current)
           requestAnimationFrame(() => {
             programmaticScrollRef.current = false
@@ -176,6 +202,16 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
 
     if (prev && curr.scrollHeight !== prev.scrollHeight) {
       if (turnLive) {
+        if (tailFollowRef.current) {
+          programmaticScrollRef.current = true
+          markProgrammaticScroll()
+          scrollToContentEnd(el, 'auto')
+          prevMetricsRef.current = readMetrics(el)
+          return
+        }
+
+        setHasNewContent(true)
+        setShowScrollBtn(true)
         prevMetricsRef.current = curr
         return
       }
@@ -191,15 +227,46 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
     }
 
     prevMetricsRef.current = curr
-  }, [roomId, storeVersion, initialHydrationSeq, localSendSeq, scrollToBottom, turnLive])
+  }, [roomId, storeVersion, initialHydrationSeq, localSendSeq, scrollToBottom, turnLive, markProgrammaticScroll])
 
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
+
     const onScroll = () => {
       const m = readMetrics(el)
       const atBottom = isNearContentEnd(el)
       pinnedToContentEndRef.current = atBottom
+
+      if (turnLive) {
+        const prevTop = prevMetricsRef.current?.scrollTop ?? null
+        const userScrolledUp = prevTop !== null && m.scrollTop < prevTop - 1
+        const inferFromScrollPosition = performance.now() >= suppressScrollUntilRef.current
+
+        if (userScrolledUp && !programmaticScrollRef.current) {
+          stopTailFollow()
+        } else if (inferFromScrollPosition && atBottom) {
+          tailFollowRef.current = true
+          userPausedRef.current = false
+          setShowScrollBtn(false)
+          setHasNewContent(false)
+        } else if (inferFromScrollPosition) {
+          userPausedRef.current = !tailFollowRef.current
+          setShowScrollBtn(!tailFollowRef.current)
+        }
+
+        if (inferFromScrollPosition) {
+          useRoomUiStore.getState().saveConversationScroll(roomId, { scrollTop: m.scrollTop, atBottom })
+        }
+
+        if (programmaticScrollRef.current) {
+          programmaticScrollRef.current = false
+        }
+
+        prevMetricsRef.current = m
+        return
+      }
+
       const next = resolveScrollStateAfterEvent({
         atBottom,
         programmatic: programmaticScrollRef.current,
@@ -219,9 +286,35 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
         useRoomUiStore.getState().saveConversationScroll(roomId, { scrollTop: m.scrollTop, atBottom })
       }
     }
+
+    const onWheel = (e: WheelEvent) => {
+      if (!turnLive) return
+      if (tailFollowRef.current && e.deltaY !== 0) {
+        stopTailFollow()
+        return
+      }
+      if (e.deltaY > 0 && isNearContentEnd(el)) {
+        tailFollowRef.current = true
+        userPausedRef.current = false
+        setShowScrollBtn(false)
+        setHasNewContent(false)
+      }
+    }
+
+    const onTouchMove = () => {
+      if (!turnLive || !tailFollowRef.current) return
+      stopTailFollow()
+    }
+
     el.addEventListener('scroll', onScroll, { passive: true })
-    return () => el.removeEventListener('scroll', onScroll)
-  }, [roomId])
+    el.addEventListener('wheel', onWheel, { passive: true })
+    el.addEventListener('touchmove', onTouchMove, { passive: true })
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      el.removeEventListener('wheel', onWheel)
+      el.removeEventListener('touchmove', onTouchMove)
+    }
+  }, [roomId, turnLive, stopTailFollow])
 
   const handleOpenAgentDetail = useCallback((messageId: string) => {
     const store = useRoomUiStore.getState()

@@ -15,7 +15,7 @@ export interface StampInferredTurnTerminalOptions {
 
 function shouldStampTurnTerminal(
   turn: TurnViewModel,
-  activeRunTriggerMessageIds: ReadonlySet<string>,
+  activeRunTriggerMessageIds: ReadonlySet<string> | undefined,
 ): boolean {
   if (!turn.userMessageId) return false
 
@@ -24,7 +24,9 @@ function shouldStampTurnTerminal(
     return true
   }
 
-  const backendRunActive = activeRunTriggerMessageIds.has(turn.userMessageId)
+  const backendRunActive = activeRunTriggerMessageIds
+    ? activeRunTriggerMessageIds.has(turn.userMessageId)
+    : null
   return canStampTurnTerminalFromEntityState(turn, real, backendRunActive)
 }
 
@@ -36,7 +38,7 @@ export function stampInferredTurnTerminalStatus(
   roomId: string,
   options: StampInferredTurnTerminalOptions = {},
 ): void {
-  const activeRunTriggerMessageIds = options.activeRunTriggerMessageIds ?? new Set<string>()
+  const activeRunTriggerMessageIds = options.activeRunTriggerMessageIds
   const store = useMessageStore.getState()
   if (store.roomId !== roomId) return
 

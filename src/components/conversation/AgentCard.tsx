@@ -128,7 +128,7 @@ export function AgentCard({
       <div className={cn('flex items-center gap-2.5', compact && 'gap-2')} style={{ position: 'relative', zIndex: 1 }}>
         <AgentAvatar agentId={agentId} theme={theme} isAnimated={display.isAnimated} compact={compact} />
         <Link
-          href={`/c/agents/${agentId}`}
+          href={`/c/agents/${encodeURIComponent(agentId)}`}
           className="text-[13px] font-medium hover:underline focus-visible:outline-none"
           style={{ color: 'var(--conversation-text-primary)' }}
           onClick={(e) => e.stopPropagation()}

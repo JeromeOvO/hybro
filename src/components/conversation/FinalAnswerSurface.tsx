@@ -33,7 +33,7 @@ function CollectingBlock({
   processingStatusLogs?: TurnViewModel['processingStatusLogs']
   isRunning: boolean
 }) {
-  const theme = getAgentTheme('supervisor_synthesis', 'HYBRO AI')
+  const theme = getAgentTheme('system:hybro', 'HYBRO AI')
   const synthesizing = phase === 'synthesizing'
   const display = {
     label: synthesizing ? 'Synthesizing' : 'Working',
@@ -45,7 +45,7 @@ function CollectingBlock({
   return (
     <>
       <AgentCard
-        agentId="supervisor_synthesis"
+        agentId="system:hybro"
         agentName="HYBRO AI"
         taskDescription=""
         theme={theme}
@@ -68,11 +68,17 @@ function ResultHeader({
 }) {
   const theme = getAgentTheme(result.agentId, result.agentName)
   const display = mapResultDisplayProps(result, isStreaming, displayContent)
+  
+  let taskDescription = result.taskStatusMessage ?? ''
+  if (taskDescription.trim() === result.content.trim()) {
+    taskDescription = ''
+  }
+
   return (
     <AgentCard
       agentId={result.agentId ?? result.messageId}
       agentName={result.agentName}
-      taskDescription={result.taskStatusMessage ?? ''}
+      taskDescription={taskDescription}
       theme={theme}
       display={display}
       agentSource={result.agentSource}
@@ -82,7 +88,7 @@ function ResultHeader({
 }
 
 function FailedBlock({ intro, turnId }: { intro: string; turnId?: string }) {
-  const theme = getAgentTheme('supervisor_synthesis', 'HYBRO AI')
+  const theme = getAgentTheme('system:hybro', 'HYBRO AI')
   const display = {
     label: 'Failed',
     tone: 'danger' as const,
@@ -93,7 +99,7 @@ function FailedBlock({ intro, turnId }: { intro: string; turnId?: string }) {
   return (
     <>
       <AgentCard
-        agentId="supervisor_synthesis"
+        agentId="system:hybro"
         agentName="HYBRO AI"
         taskDescription=""
         theme={theme}
@@ -108,7 +114,7 @@ function FailedBlock({ intro, turnId }: { intro: string; turnId?: string }) {
 }
 
 function CanceledBlock({ intro, turnId }: { intro: string; turnId?: string }) {
-  const theme = getAgentTheme('supervisor_synthesis', 'HYBRO AI')
+  const theme = getAgentTheme('system:hybro', 'HYBRO AI')
   const display = {
     label: 'Canceled',
     tone: 'danger' as const,
@@ -119,7 +125,7 @@ function CanceledBlock({ intro, turnId }: { intro: string; turnId?: string }) {
   return (
     <>
       <AgentCard
-        agentId="supervisor_synthesis"
+        agentId="system:hybro"
         agentName="HYBRO AI"
         taskDescription=""
         theme={theme}
@@ -142,7 +148,7 @@ function DeterministicDoneBlock({
   summaryResult?: AgentResultViewModel
   turnId?: string
 }) {
-  const theme = getAgentTheme('supervisor_synthesis', 'HYBRO AI')
+  const theme = getAgentTheme('system:hybro', 'HYBRO AI')
   const display = {
     label: 'Combined agent responses',
     tone: 'muted' as const,
@@ -162,7 +168,7 @@ function DeterministicDoneBlock({
   return (
     <>
       <AgentCard
-        agentId="supervisor_synthesis"
+        agentId="system:hybro"
         agentName="HYBRO AI"
         taskDescription=""
         theme={theme}

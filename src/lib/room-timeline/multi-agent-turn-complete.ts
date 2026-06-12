@@ -16,28 +16,165 @@ function isDeterministicSummary(summary: AgentResultViewModel | undefined): bool
   return summary?.summaryOrigin === 'deterministic'
 }
 
-function hasDeterministicSummaryEntity(summary: AgentResultViewModel | undefined): boolean {
-  if (!summary) return false
-  if (!isDeterministicSummary(summary)) return false
-  return summary.status === 'working' || summary.content.trim().length > 0
+export function isMixedTerminalMultiAgentTurn(
+  real: AgentResultViewModel[],
+): boolean {
+  if (real.length < 2 || !allRealTerminal(real)) return false
+  return real.some(r => r.status === 'completed') && real.some(r => r.status === 'failed')
 }
 
-function hasLlmSynthesisStarted(summary: AgentResultViewModel | undefined): boolean {
-  if (!summary) return false
-  if (isDeterministicSummary(summary)) return false
-  return summary.status === 'working' || summary.content.trim().length > 0
+/**
+ * True when the turn should resolve to combined/deterministic done rather than
+ * waiting for LLM synthesis. Avoids flashing deterministic_done before synthesis
+ * signals arrive on supervisor / synthesis-planned turns.
+ */
+export function isDeterministicCompletionExpected(
+  turn: TurnViewModel,
+  real: AgentResultViewModel[] = getStripSourceResults(turn),
+  turnCompletionKind: TurnViewModel['turnCompletionKind'] = turn.turnCompletionKind,
+): boolean {
+  if (turnCompletionKind === 'synthesis') return false
+  if (turnCompletionKind === 'deterministic') return true
+
+  if (isMixedTerminalMultiAgentTurn(real)) {
+    return true
+  }
+
+  if (hasActiveSynthesisGap(turn)) return false
+  if (hasSynthesisSignalInProcessingLogs(turn)) return false
+
+  const summary = turn.agentResults.find(r => r.isSummaryAgent)
+  if (
+    summary
+    && isDeterministicSummary(summary)
+    && (summary.status === 'working' || summary.content.trim().length > 0)
+  ) {
+    return true
+  }
+  if (summary && !isDeterministicSummary(summary)) {
+    if (summary.content.trim().length > 0) return false
+    if (summary.status === 'working') return false
+  }
+
+  if (turn.turnTerminalStatus === 'failed' || turn.turnTerminalStatus === 'canceled') {
+    return true
+  }
+
+  if (real.length >= 2 && allRealTerminal(real) && real.every(r => r.status === 'failed')) {
+    return true
+  }
+
+  // Stamped or hydrated terminal turn with explicit non-synthesis completion.
+  if (
+    turn.turnTerminalStatus === 'completed'
+    && turn.turnCompletionKind !== 'synthesis'
+    && real.length >= 2
+    && allRealTerminal(real)
+    && !hasActiveSynthesisGap(turn)
+  ) {
+    return true
+  }
+
+  // Non-supervisor parallel rooms complete deterministically once terminal.
+  if (
+    turn.turnTerminalStatus === 'completed'
+    && !turn.isSupervisorTurn
+    && real.length >= 2
+    && allRealTerminal(real)
+    && real.every(r => r.status === 'completed')
+    && !hasActiveSynthesisGap(turn)
+  ) {
+    return true
+  }
+
+  return false
+}
+
+/**
+ * True when the backend reports no active run and there is no evidence that LLM
+ * synthesis is still in flight. Used for terminal stamping — broader than
+ * isDeterministicCompletionExpected so supervisor no-synthesis turns can complete
+ * when inquiry missed turn_completion_kind but the run is finished.
+ */
+export function isBackendRunConfirmedNonSynthesisCompletion(
+  turn: TurnViewModel,
+  real: AgentResultViewModel[] = getStripSourceResults(turn),
+  turnCompletionKind: TurnViewModel['turnCompletionKind'] = turn.turnCompletionKind,
+): boolean {
+  // Supervisor turns must have an explicit turnCompletionKind from the backend
+  // to be stamped (unless a deterministic digest is already present),
+  // otherwise they could be transitioning to synthesis.
+  const summary = turn.agentResults.find(r => r.isSummaryAgent)
+  if (
+    turn.isSupervisorTurn
+    && turnCompletionKind === undefined
+    && !isDeterministicSummary(summary)
+  ) {
+    return false
+  }
+
+  // Modern runs will explicitly set turnCompletionKind when they finish.
+  // If we have live processing logs, we know this is a modern live run.
+  // Do not guess it is a deterministic completion; wait for the backend's explicit SSE event.
+  if (
+    turnCompletionKind === undefined
+    && !isDeterministicSummary(summary)
+    && (turn.processingStatusLogs?.length ?? 0) > 0
+  ) {
+    return false
+  }
+
+  if (turnCompletionKind === 'synthesis') return false
+  if (real.length < 2 || !allRealTerminal(real)) return false
+  if (turnHasSubstantiveLlmSynthesis(turn)) return false
+  if (hasActiveSynthesisGap(turn)) return false
+  if (hasSynthesisSignalInProcessingLogs(turn)) return false
+
+  if (
+    summary?.status === 'working'
+    && !isDeterministicSummary(summary)
+    && summary.content.trim().length === 0
+  ) {
+    return false
+  }
+
+  return true
+}
+
+function logEntryIndicatesSynthesis(entry: { message: string; turnPhase?: string }): boolean {
+  if (entry.turnPhase === 'synthesizing') return true
+  const msg = entry.message.toLowerCase()
+  return msg.includes('synthesiz') || msg.includes('compiling summary')
 }
 
 /** Backend often signals synthesis via user processing_status logs before summary entities arrive. */
 export function hasSynthesisSignalInProcessingLogs(turn: TurnViewModel): boolean {
-  return (turn.processingStatusLogs ?? []).some(entry =>
-    entry.message.toLowerCase().includes('synthesiz'),
-  )
+  return (turn.processingStatusLogs ?? []).some(logEntryIndicatesSynthesis)
 }
 
 export function hasActiveSynthesisGap(turn: TurnViewModel): boolean {
   if (turn.turnTerminalStatus === 'failed' || turn.turnTerminalStatus === 'canceled') return false
   if (turn.turnTerminalStatus === 'completed' && turn.turnCompletionKind !== 'synthesis') return false
+
+  const real = getStripSourceResults(turn)
+  if (
+    real.length >= 2
+    && allRealTerminal(real)
+    && real.some(r => r.status === 'failed')
+  ) {
+    const summaryForFailure = turn.agentResults.find(r => r.isSummaryAgent)
+    const llmSynthesisInFlight =
+      summaryForFailure
+      && !isDeterministicSummary(summaryForFailure)
+      && summaryForFailure.status === 'working'
+      && summaryForFailure.content.trim().length === 0
+    const synthesisEphemeral = turn.agentResults.some(
+      r => r.isEphemeral && isSynthesisGapEphemeral(r),
+    )
+    if (!llmSynthesisInFlight && !synthesisEphemeral) {
+      return false
+    }
+  }
 
   const summary = turn.agentResults.find(r => r.isSummaryAgent)
   if (
@@ -58,8 +195,9 @@ export function hasActiveSynthesisGap(turn: TurnViewModel): boolean {
 }
 
 /**
- * All real agents finished but orchestration has not emitted synthesis or
- * turn-level terminal status yet (window before "Synthesizing…" ephemeral).
+ * Reserved for a narrow window before synthesis signals arrive. Delegation logs,
+ * supervisor mode, and generic work logs are not evidence of synthesis — only
+ * positive synthesis signals (see hasActiveSynthesisGap) should hold the turn.
  */
 export function isPreSynthesisGap(
   turn: TurnViewModel,
@@ -69,16 +207,15 @@ export function isPreSynthesisGap(
   if (!allRealTerminal(real)) return false
   if (real.some(r => r.status === 'working')) return false
   if (turn.turnTerminalStatus && turn.turnCompletionKind !== 'synthesis') return false
+  if (turn.turnCompletionKind === 'deterministic') return false
   if (hasActiveSynthesisGap(turn)) return false
 
   const summary = turn.agentResults.find(r => r.isSummaryAgent)
-  if (hasDeterministicSummaryEntity(summary)) return false
-  if (hasLlmSynthesisStarted(summary)) return false
+  if (summary && isDeterministicSummary(summary)) return false
+  if (summary && !isDeterministicSummary(summary) && hasLlmSummaryWithContent(summary)) return false
 
   const hasOrchestrationContext =
-    (turn.processingStatusLogs?.length ?? 0) > 0
-    || turn.isSupervisorTurn
-    || turn.turnCompletionKind === 'synthesis'
+    turn.isSupervisorTurn || turn.turnCompletionKind === 'synthesis'
   if (!hasOrchestrationContext) return false
 
   return true
@@ -161,6 +298,14 @@ function hasLlmSummaryWithContent(summary: AgentResultViewModel | undefined): bo
   return summary.status === 'working'
 }
 
+/** True when a non-deterministic summary agent has streamed or completed LLM synthesis. */
+export function turnHasSubstantiveLlmSynthesis(
+  turn: TurnViewModel,
+): boolean {
+  const summary = turn.agentResults.find(r => r.isSummaryAgent)
+  return hasLlmSummaryWithContent(summary)
+}
+
 /**
  * True when a multi-agent turn can show combined responses without waiting for
  * turn-level processing_status SSE (missed-frame recovery + anti-flash guard).
@@ -173,42 +318,14 @@ export function isMultiAgentTurnReadyForDeterministicDone(
   if (!allRealTerminal(real)) return false
   if (real.some(r => r.status === 'working')) return false
 
-  if (turn.turnTerminalStatus === 'completed') {
-    if (turn.turnCompletionKind === 'synthesis') return false
-    if (turn.turnCompletionKind === 'deterministic') return true
+  if (!isDeterministicCompletionExpected(turn, real)) return false
 
-    // Fallback when turnCompletionKind is undefined (truth-check didn't return it
-    // or old data without the field):
-    const summary = turn.agentResults.find(r => r.isSummaryAgent)
-
-    // No summary agent entity: if processing logs have synthesis signal,
-    // synthesis was planned but entity hasn't arrived yet → hold pending
-    if (!summary) {
-      if (hasSynthesisSignalInProcessingLogs(turn)) return false
-      return true
-    }
-
-    if (isDeterministicSummary(summary)) {
-      if (summary.status === 'working' || summary.content.trim().length > 0) return true
-    }
-
-    // Summary exists but is non-deterministic with no content → synthesis may be pending
+  const summary = turn.agentResults.find(r => r.isSummaryAgent)
+  if (summary && !isDeterministicSummary(summary) && hasLlmSummaryWithContent(summary)) {
     return false
   }
 
-  if (hasActiveSynthesisGap(turn)) return false
-  if (hasActiveSupervisorPlanningEphemeral(turn)) return false
-
-  const summary = turn.agentResults.find(r => r.isSummaryAgent)
-  if (summary?.status === 'working' && !isDeterministicSummary(summary)) return false
-
-  const deterministicSummary =
-    summary
-    && isDeterministicSummary(summary)
-    && (summary.status === 'working' || summary.content.trim().length > 0)
-  if (deterministicSummary) return true
-
-  return false
+  return true
 }
 
 export { hasLlmSummaryWithContent }

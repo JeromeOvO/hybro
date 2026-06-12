@@ -9,8 +9,10 @@ import type {
 } from './types'
 import {
   hasActiveSynthesisGap,
+  hasSynthesisSignalInProcessingLogs,
   isMultiAgentTurnReadyForDeterministicDone,
   isPreSynthesisGap,
+  turnHasSubstantiveLlmSynthesis,
 } from './multi-agent-turn-complete'
 import { getStripSourceResults } from './turn-live-shell'
 
@@ -101,9 +103,30 @@ function shouldHoldPendingForSynthesisGap(turn: TurnViewModel, real: AgentResult
     return false
   }
 
+  if (
+    real.some(r => r.status === 'failed')
+    && allRealTerminal(real)
+    && !hasLlmSynthesisContent(summary)
+    && !hasDeterministicSummaryEntity(summary)
+  ) {
+    return false
+  }
+
   if (hasActiveSynthesisGap(turn)) return true
-  if (turn.turnCompletionKind === 'synthesis') return true
-  return isPreSynthesisGap(turn, real)
+
+  if (turn.turnCompletionKind === 'synthesis') {
+    const llmSummary = turn.agentResults.find(
+      r => r.isSummaryAgent && r.summaryOrigin !== 'deterministic',
+    )
+    if (
+      llmSummary?.status === 'working'
+      && llmSummary.content.trim().length === 0
+    ) {
+      return true
+    }
+  }
+
+  return false
 }
 
 function isTurnTerminal(status: TurnViewModel['status']): boolean {
@@ -115,7 +138,7 @@ function buildHitlFinalAnswer(
   real: AgentResultViewModel[],
 ): FinalAnswerViewModel {
   const supervisorAgent = turn.agentResults.find(
-    r => r.agentId === 'supervisor_hitl' || r.agentId === 'supervisor_clarify',
+    r => r.agentId === 'system:clarifier',
   )
   const pendingAgents = real.filter(r => r.hitlPending)
 
@@ -123,7 +146,7 @@ function buildHitlFinalAnswer(
 
   if (turn.status === 'awaiting_input') {
     const clarifyAgent = turn.agentResults.find(
-      r => r.hitlPending || r.agentId === 'supervisor_hitl' || r.agentId === 'supervisor_clarify',
+      r => r.hitlPending || r.agentId === 'system:clarifier',
     )
     const prompt =
       clarifyAgent?.hitlPending?.prompt
@@ -243,50 +266,119 @@ export function deriveFinalAnswer(
 ): FinalAnswerViewModel {
   const real = getStripSourceResults(turn)
   const summary = turn.agentResults.find(r => r.isSummaryAgent)
+  const orchestrator = turn.agentResults.find(r => r.agentId === "system:hybro")
 
+  // --- 1. HITL Priority ---
   if (
-    turn.status === 'awaiting_input'
-    || real.some(r => r.hitlPending)
-    || turn.agentResults.some(r => r.hitlPending && !r.isSummaryAgent)
+    turn.status === "awaiting_input" ||
+    real.some(r => r.hitlPending) ||
+    turn.agentResults.some(r => r.hitlPending && !r.isSummaryAgent)
   ) {
     return buildHitlFinalAnswer(turn, real)
   }
 
+  // --- 2. Canceled/Failed (Hardware priority) ---
   if (isCanceledMultiAgentTurn(turn, real)) {
     return buildCanceledFinalAnswer()
   }
-
   if (isFailedMultiAgentTurn(turn, real)) {
     return buildFailedFinalAnswer()
   }
 
-  if (hasDeterministicSummaryEntity(summary)) {
-    return buildDeterministicDoneFinalAnswer(turn, real, agentMessageIds, summary)
-  }
-
-  if (hasLlmSynthesisContent(summary)) {
+  // --- 3. Single Agent Fast-Path ---
+  if (real.length === 1 && !turnHasSubstantiveLlmSynthesis(turn) && !hasLlmSynthesisContent(summary)) {
     return {
-      kind: 'llm_synthesis',
-      label: 'Synthesized',
-      summaryOrigin: 'llm',
-      primaryMessageId: summary!.messageId,
-    }
-  }
-
-  if (shouldHoldPendingForSynthesisGap(turn, real)) {
-    return { kind: 'pending', label: 'Working' }
-  }
-
-  if (real.length === 1) {
-    return {
-      kind: 'single',
-      label: 'Working',
+      kind: "single",
+      label: "Working",
       primaryMessageId: real[0].messageId,
     }
   }
 
-  if (real.some(r => r.status === 'working')) {
-    return { kind: 'pending', label: 'Working' }
+  // --- 4. Orchestrator-driven Derivation (New System Agent Architecture) ---
+  if (orchestrator) {
+    if (orchestrator.status === "working") {
+      const hasRealWorking = real.some(r => r.status === "working")
+      const isSynthesizing = (real.length > 0 && !hasRealWorking)
+        || orchestrator.taskStatusMessage?.toLowerCase().includes('synthesiz')
+        || turn.processingStatusLogs.some(log => log.message.toLowerCase().includes('synthesiz'))
+
+      if (isSynthesizing) {
+        const llmSummary = turn.agentResults.find(
+          r => r.isSummaryAgent && r.summaryOrigin !== "deterministic"
+        )
+        return {
+          kind: "llm_synthesis",
+          label: "Synthesizing",
+          summaryOrigin: "llm",
+          primaryMessageId: llmSummary?.messageId ?? summary?.messageId,
+        }
+      }
+      return { kind: "pending", label: "Working" }
+    }
+
+    if (hasLlmSynthesisContent(summary) || turnHasSubstantiveLlmSynthesis(turn)) {
+      const llmSummary = turn.agentResults.find(
+        r => r.isSummaryAgent && r.summaryOrigin !== "deterministic"
+      )
+      return {
+        kind: "llm_synthesis",
+        label: "Synthesized",
+        summaryOrigin: "llm",
+        primaryMessageId: llmSummary?.messageId ?? summary?.messageId,
+      }
+    }
+
+    if (isPreSynthesisGap(turn, real) || shouldHoldPendingForSynthesisGap(turn, real)) {
+      return { kind: "pending", label: "Working" }
+    }
+
+    return buildDeterministicDoneFinalAnswer(turn, real, agentMessageIds, summary)
+  }
+
+  // --- 5. Legacy Fallback (Backward Compatibility for old turns without system:hybro) ---
+  if (hasDeterministicSummaryEntity(summary)) {
+    return buildDeterministicDoneFinalAnswer(turn, real, agentMessageIds, summary)
+  }
+
+  if (hasLlmSynthesisContent(summary) || turnHasSubstantiveLlmSynthesis(turn)) {
+    const llmSummary = turn.agentResults.find(
+      r => r.isSummaryAgent && r.summaryOrigin !== "deterministic"
+    )
+    return {
+      kind: "llm_synthesis",
+      label: "Synthesized",
+      summaryOrigin: "llm",
+      primaryMessageId: llmSummary?.messageId ?? summary?.messageId,
+    }
+  }
+
+  if (
+    turn.turnCompletionKind === "deterministic" &&
+    real.length >= 2 &&
+    allRealTerminal(real) &&
+    !hasActiveSynthesisGap(turn) &&
+    !turnHasSubstantiveLlmSynthesis(turn)
+  ) {
+    return buildDeterministicDoneFinalAnswer(turn, real, agentMessageIds, summary)
+  }
+
+  if (shouldHoldPendingForSynthesisGap(turn, real)) {
+    return { kind: "pending", label: "Working" }
+  }
+
+  if (
+    turn.turnCompletionKind === "synthesis" &&
+    real.length >= 2 &&
+    allRealTerminal(real) &&
+    !hasActiveSynthesisGap(turn) &&
+    !hasSynthesisSignalInProcessingLogs(turn) &&
+    !hasLlmSynthesisContent(summary)
+  ) {
+    return buildDeterministicDoneFinalAnswer(turn, real, agentMessageIds, summary)
+  }
+
+  if (real.some(r => r.status === "working")) {
+    return { kind: "pending", label: "Working" }
   }
 
   if (isMultiAgentTurnReadyForDeterministicDone(turn, real)) {
@@ -294,10 +386,10 @@ export function deriveFinalAnswer(
   }
 
   if (real.length >= 2) {
-    return { kind: 'pending', label: 'Working' }
+    return { kind: "pending", label: "Working" }
   }
 
-  return { kind: 'pending', label: 'Working' }
+  return { kind: "pending", label: "Working" }
 }
 
 /** Map final answer kind to legacy displayMode for incremental migration. */

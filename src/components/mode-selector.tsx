@@ -1,5 +1,6 @@
 'use client'
 
+import { useState, useRef } from 'react'
 import { ChevronDown, Sparkles, Zap, Swords } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -61,17 +62,56 @@ export function ModeSelector({
   const current = MODE_CONFIG[mode]
   const CurrentIcon = current.icon
 
+  const [tooltipOpen, setTooltipOpen] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const ignoreTooltipRef = useRef(false)
+
+  const handleTooltipOpenChange = (isOpen: boolean) => {
+    if (menuOpen) {
+      setTooltipOpen(false)
+      return
+    }
+    if (isOpen && ignoreTooltipRef.current) {
+      setTooltipOpen(false)
+      return
+    }
+    setTooltipOpen(isOpen)
+  }
+
+  const handleModeSelect = (modeKey: ChatMode) => {
+    ignoreTooltipRef.current = true
+    setTooltipOpen(false)
+    setMenuOpen(false)
+    onModeChange(modeKey)
+    setTimeout(() => {
+      ignoreTooltipRef.current = false
+    }, 500)
+  }
+
   return (
     <div className={cn('flex items-center', className)}>
       <TooltipProvider delayDuration={100}>
-        <DropdownMenu>
-          <Tooltip>
+        <DropdownMenu open={menuOpen} onOpenChange={(open) => {
+          setMenuOpen(open)
+          if (open) {
+            setTooltipOpen(false)
+            ignoreTooltipRef.current = true
+          } else {
+            setTimeout(() => {
+              ignoreTooltipRef.current = false
+            }, 300)
+          }
+        }}>
+          <Tooltip open={menuOpen ? false : tooltipOpen} onOpenChange={handleTooltipOpenChange}>
             <TooltipTrigger asChild>
               <DropdownMenuTrigger asChild disabled={disabled}>
                 <Button
                   variant="ghost"
                   size="sm"
                   className="h-8 min-h-8 min-w-0 max-w-full px-3 gap-1.5 font-normal hover:bg-muted/50 flex items-center border-none shadow-none focus-visible:ring-0 focus-visible:border-transparent"
+                  onMouseLeave={() => {
+                    ignoreTooltipRef.current = false
+                  }}
                 >
                   <CurrentIcon className={cn('h-3.5 w-3.5 shrink-0', current.iconColor)} />
                   <span className="min-w-0 truncate font-medium">{current.label}</span>
@@ -95,7 +135,7 @@ export function ModeSelector({
                 <Tooltip key={modeKey} delayDuration={150}>
                   <TooltipTrigger asChild>
                     <DropdownMenuItem
-                      onClick={() => onModeChange(modeKey)}
+                      onClick={() => handleModeSelect(modeKey)}
                       className={cn(
                         'flex items-center gap-2.5 py-2',
                         mode === modeKey && 'bg-accent',
@@ -121,3 +161,4 @@ export function ModeSelector({
     </div>
   )
 }
+

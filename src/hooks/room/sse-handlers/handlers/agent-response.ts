@@ -14,6 +14,30 @@ import type { SSEHandlerDeps } from '../types'
 import type { CorrelationResult } from '../correlation'
 import { getResolvedMessageId } from '../pending-turn-buffer'
 
+function isSummaryAgentResponse(agentId: string | undefined, messageId: string): boolean {
+  if (messageId.startsWith('summary-')) return true
+  return agentId ? isSummarySystemAgent(agentId) : false
+}
+
+function maybeScheduleTurnTerminalRecovery(
+  ctx: SSEHandlerDeps,
+  hint: {
+    clientRequestId?: string | null
+    relatedMessageId?: string | null
+  },
+  messageId: string,
+  agentId: string | undefined,
+): void {
+  if (isSummaryAgentResponse(agentId, messageId)) return
+
+  scheduleTurnTerminalBackendTruthCheck(
+    ctx.roomId,
+    ctx.lifecycle,
+    hint,
+    ctx.getToken,
+  )
+}
+
 const PARTIAL_STREAM_ARTIFACT_SUFFIX = '-partial-stream'
 
 function partialStreamArtifactId(messageId: string): string {
@@ -76,7 +100,6 @@ export function handleAgentResponsePartial(
 }
 
 export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomSSEFrameMap['agent_response']): Promise<void> {
-  console.log('🤖 Agent response received via SSE')
   if (!sseMessage.data.message_id) return
 
   const store = useMessageStore.getState()
@@ -97,12 +120,6 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
     const looksDuplicateContent = incomingContent.length > 0
       && incomingContent === existingContent
       && artifactsEqual(existing.artifacts, incomingArtifacts)
-    const isAppendOnlyUpgrade = incomingContent.length > existingContent.length
-      && incomingContent.startsWith(existingContent)
-    const isDivergentRewrite = existingContent.length > 0
-      && incomingContent.length > 0
-      && !looksDuplicateContent
-      && !isAppendOnlyUpgrade
     if (hasExistingRenderable && looksDuplicateContent) {
       const canFinalizeExisting = !existing.taskStatus || !isTerminalState(existing.taskStatus)
       const needsStatusUpdate = existing.taskStatus !== TASK_STATE.COMPLETED
@@ -125,26 +142,17 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
         }, 'sse')
       }
       streaming.clear(messageId)
-      console.log('🔄 Skipping duplicate agent_response for', messageId, '— streamed content already present')
       const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
         clientRequestId: existing.clientRequestId || sseMessage.data.client_request_id,
         relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
       })
       if (!stamped) {
-        scheduleTurnTerminalBackendTruthCheck(
-          ctx.roomId,
-          ctx.lifecycle,
-          {
-            clientRequestId: existing.clientRequestId || sseMessage.data.client_request_id,
-            relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
-          },
-          ctx.getToken,
-        )
+        maybeScheduleTurnTerminalRecovery(ctx, {
+          clientRequestId: existing.clientRequestId || sseMessage.data.client_request_id,
+          relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
+        }, messageId, existing.agentId)
       }
       return
-    }
-    if (isDivergentRewrite) {
-      console.log('🔄 Applying final agent_response rewrite for', messageId)
     }
   }
 
@@ -188,14 +196,9 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
     relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id,
   })
   if (!stamped) {
-    scheduleTurnTerminalBackendTruthCheck(
-      ctx.roomId,
-      ctx.lifecycle,
-      {
-        clientRequestId: entity?.clientRequestId || sseMessage.data.client_request_id,
-        relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id,
-      },
-      ctx.getToken,
-    )
+    maybeScheduleTurnTerminalRecovery(ctx, {
+      clientRequestId: entity?.clientRequestId || sseMessage.data.client_request_id,
+      relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id,
+    }, messageId, agentId)
   }
 }

@@ -11,8 +11,6 @@ export async function handleHitlRequest(
   sseMessage: RoomSSEFrameMap['hitl_request'],
   correlation: CorrelationResult,
 ): Promise<void> {
-  console.log('🔔 HITL request via SSE:', sseMessage.data)
-
   const {
     request_id, message_id, prompt, prompt_type, choices,
     agent_name, agent_id, step_number, total_steps, expires_at,
@@ -112,8 +110,6 @@ export function handleHitlResponse(
   sseMessage: RoomSSEFrameMap['hitl_response'],
   correlation: CorrelationResult,
 ): void {
-  console.log('🔔 HITL response via SSE:', sseMessage.data)
-
   const { request_id, status: hitlStatus, error_message } = sseMessage.data
   if (!request_id) return
 
@@ -123,8 +119,6 @@ export function handleHitlResponse(
   if (!entity) return
 
   if (entity.hitlRequestId && entity.hitlRequestId !== request_id) {
-    console.log('🔔 Skipping stale hitl_response for', request_id,
-      '— entity now owns', entity.hitlRequestId)
     ctx.hitlRequestIndex.current.delete(request_id)
     return
   }

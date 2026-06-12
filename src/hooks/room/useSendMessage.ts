@@ -269,13 +269,6 @@ export function useSendMessage(
       lifecycle.clearSseDisconnection()
       lifecycle.disarmCancelTimeout()
 
-      console.log('📡 Message queued for processing, waiting for agent responses via SSE...',
-        lifecycle.isProcessingResolved() ? '(SSE already completed during HTTP round-trip)' : '')
-
-      if (!sseConnected) {
-        console.log('⚠️ SSE not connected, processing will complete but updates may be delayed')
-      }
-
       return true
 
     } catch (error) {
@@ -301,7 +294,6 @@ export function useSendMessage(
 
       // Reconcile to recover any messages that might have been lost
       try {
-        console.log('🔄 Reconciling messages after error to ensure sync...')
         await reconcileWithDb(roomId)
       } catch (reloadError) {
         console.error('Failed to reconcile messages after error:', reloadError)

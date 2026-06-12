@@ -17,13 +17,11 @@ export function useAgentCatalog(userId?: string, getToken?: () => Promise<string
     retry: 0,
     enabled: !!userId,
     queryFn: async ({ signal }): Promise<Agent[]> => {
-      console.log('🤖 Loading global agents catalog')
       try {
         const res = await getAllAgents(signal, 15000, getToken)
         if (!res.success || !res.agents) {
           throw new Error(res.error || 'Failed to load agents')
         }
-        console.log(`✅ Loaded ${res.agents.length} agents`)
         return res.agents
       } catch (error: unknown) {
         if (error instanceof Error && error.name === 'AbortError') {

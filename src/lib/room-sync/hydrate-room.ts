@@ -97,9 +97,6 @@ export async function hydrateRoomFromDb(options: HydrateRoomOptions): Promise<Hy
     }
   }
 
-  const startTime = Date.now()
-  console.log(`🔍 [room-sync] ${phase} for room: ${roomId}`)
-
   try {
     const fetched = await fetchAndNormalizeMessages(roomId, options)
     if ('fetchFailed' in fetched) {
@@ -128,10 +125,6 @@ export async function hydrateRoomFromDb(options: HydrateRoomOptions): Promise<Hy
         activeRunTriggerMessageIds: collectActiveRunTriggerMessageIds(options.room),
       })
       markInitialHydrationComplete(roomId)
-      console.log(
-        `[NormalizedStore] DB hydration: ${applyResult.appliedCount}/${applyResult.filteredCount} messages written ` +
-        `(${rawCount} raw, ${filtered.length} filtered) in ${Date.now() - startTime}ms`,
-      )
     } else {
       stampInferredTurnTerminalStatus(roomId, {
         activeRunTriggerMessageIds: collectActiveRunTriggerMessageIds(options.room),

@@ -18,10 +18,13 @@ export interface ArtifactData {
   isStreaming?: boolean
 }
 
+export type TurnPhaseLog = 'collecting' | 'synthesizing' | 'terminal'
+
 export interface ProcessingStatusLogEntry {
   id: string
   message: string
   timestamp: string
+  turnPhase?: TurnPhaseLog
 }
 
 /** Which pipeline last wrote this entity. */

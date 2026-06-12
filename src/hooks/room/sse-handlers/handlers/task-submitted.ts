@@ -11,7 +11,6 @@ export async function handleTaskSubmitted(
   sseMessage: RoomSSEFrameMap['task_submitted'],
   correlation: CorrelationResult,
 ): Promise<void> {
-  console.log('📋 Task submitted via SSE:', sseMessage.data)
   if (!sseMessage.data.message_id) return
 
   const messageId = sseMessage.data.message_id

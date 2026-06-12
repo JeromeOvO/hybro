@@ -67,9 +67,20 @@ export function getSupervisorStatusLine(turn: TurnViewModel): string | null {
   const ephemeral = turn.agentResults.find(
     r => r.isEphemeral && (r.taskStatusMessage?.trim().length ?? 0) > 0,
   )
-  return ephemeral?.taskStatusMessage?.trim()
+  const status = ephemeral?.taskStatusMessage?.trim()
     ?? turn.supervisorStage?.details?.trim()
     ?? null
+  
+  if (status && status.length > 200) {
+    return null
+  }
+  
+  const summary = turn.agentResults.find(r => r.isSummaryAgent)
+  if (summary && status === summary.content.trim()) {
+    return null
+  }
+
+  return status
 }
 
 /** Build dynamic progress label from agent results during collecting phase. */

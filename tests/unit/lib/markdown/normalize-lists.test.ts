@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  indentSubBulletsUnderOrderedItems,
-  normalizeConversationMarkdown,
-  normalizeOrderedListMarkers,
   preprocessConversationMarkdown,
   splitInlineOrderedListItems,
 } from '@/lib/markdown/normalize-conversation'
@@ -112,6 +109,50 @@ describe('splitInlineOrderedListItems', () => {
       '2. me',
     ].join('\n'))
   })
+
+  it('does not split prose sentences that mention numbered steps', () => {
+    const input = 'See step 1. For details 2. For more context on the rollout.'
+    expect(splitInlineOrderedListItems(input)).toBe(input)
+  })
+
+  it('skips inline ordered splits while streaming', () => {
+    const input = '1. "First" — 2 hours ago 2. "Second" — 3 hours ago'
+    expect(splitInlineOrderedListItems(input, { streaming: true })).toBe(input)
+  })
+})
+
+describe('normalizeAgentListMarkers', () => {
+  it('rewrites ordered unicode-bullet sub-fields to markdown dashes', () => {
+    const input = [
+      '1. Plain-language description',
+      '1. • Summary: Example model',
+      '• Target users: Developers',
+    ].join('\n')
+
+    expect(preprocessConversationMarkdown(input)).toBe([
+      '1. Plain-language description',
+      '- Summary: Example model',
+      '- Target users: Developers',
+    ].join('\n'))
+  })
+
+  it('does not rewrite markers inside fenced code blocks', () => {
+    const input = [
+      '```',
+      '1. • keep literal',
+      '• keep literal',
+      '```',
+      '1. • Summary: fix me',
+    ].join('\n')
+
+    expect(preprocessConversationMarkdown(input)).toBe([
+      '```',
+      '1. • keep literal',
+      '• keep literal',
+      '```',
+      '- Summary: fix me',
+    ].join('\n'))
+  })
 })
 
 describe('preprocessConversationMarkdown', () => {
@@ -145,7 +186,7 @@ describe('preprocessConversationMarkdown', () => {
     expect(out).not.toMatch(/^\s*###\s*$/m)
   })
 
-  it('only splits inline markers while streaming', () => {
+  it('does not change multi-line repeated list markers while streaming', () => {
     const input = [
       '1. Anthropic headline',
       '- Summary: Example',
@@ -153,20 +194,5 @@ describe('preprocessConversationMarkdown', () => {
     ].join('\n')
 
     expect(preprocessConversationMarkdown(input, { streaming: true })).toBe(input)
-  })
-})
-
-/** Deprecated aliases still exported for callers migrating gradually. */
-describe('deprecated normalize helpers', () => {
-  it('normalizeOrderedListMarkers delegates to preprocess', () => {
-    expect(normalizeOrderedListMarkers('1. A\n1. B')).toBe('1. A\n1. B')
-  })
-
-  it('indentSubBulletsUnderOrderedItems delegates to preprocess', () => {
-    expect(indentSubBulletsUnderOrderedItems('1. A\n- b')).toBe('1. A\n- b')
-  })
-
-  it('normalizeConversationMarkdown is an alias of preprocessConversationMarkdown', () => {
-    expect(normalizeConversationMarkdown('1. A 2. B')).toBe('1. A\n2. B')
   })
 })

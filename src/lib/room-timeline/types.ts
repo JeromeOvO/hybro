@@ -38,7 +38,7 @@ export interface TurnViewModel {
   agentResults: AgentResultViewModel[]
   activeAgentIds: string[]
   /** Whether this turn was dispatched via Supervisor orchestration.
-   *  Derived from presence of supervisor_hitl / supervisor_synthesis entities. */
+   *  Derived from presence of system:clarifier / system:hybro entities. */
   isSupervisorTurn: boolean
   /** Supervisor stage details (active turns only). */
   supervisorStage?: {
