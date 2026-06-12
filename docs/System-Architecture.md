@@ -64,9 +64,8 @@ Startup has three practical phases:
 
 1. Infrastructure setup:
    - Load settings and auth configuration.
-   - Connect MongoDB through `database.mongodb.mongodb`.
-   - Connect Pinecone through `database.pinecone_db.pinecone_db`.
-   - Build DAL/facade objects from `container.py`.
+   - Build `MongoDAL`, `VectorDAL`, Redis, object-storage adapters, facades,
+     and repositories through `container.py`.
    - Bind route modules and app-shell runtime adapters.
 
 2. Runtime guard and background services:
@@ -334,9 +333,9 @@ Execution transports call this layer rather than building A2A payloads inline.
 - `dal.redis`: Redis KV, Pub/Sub, and related support.
 - `dal.s3`: object storage adapter.
 
-`database.mongodb.MongoDB` is the concrete Mongo service and still owns many
-collection helpers, indexes, and compatibility methods used by app-shell
-runtimes.
+The legacy runtime database files have been removed. Production runtime uses
+`MongoDAL`, `VectorDAL`, module repositories, and narrow app-shell stores
+instead of `database.mongodb` / `database.pinecone_db` singletons.
 
 Important Mongo collections include:
 
@@ -695,8 +694,8 @@ The current codebase has a mixed architecture:
 - Newer modules use explicit facades, protocol interfaces, DTOs, and container
   construction.
 - Some app-shell modules still use singleton-style process runtime objects.
-- Legacy runtime database files have been deleted; operational scripts and
-  historical migrations that still reference them require DAL ports before use.
+- Legacy runtime database files and dependent historical scripts have been
+  deleted.
 - Some route modules bind dependencies via module-level globals during startup.
 - Compatibility layers are intentionally kept so the repo can migrate in phases
   without breaking existing route behavior.

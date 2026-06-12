@@ -2110,40 +2110,12 @@ The final legacy runtime deletion removed `database/mongodb.py`,
 `database/pinecone_db.py`, `database/repository.py`, and
 `app_shell/database_service.py`; production code must not reintroduce them.
 
-**Operational migration/script compatibility decision (2026-06-11):** Existing
-one-off scripts and historical migrations under `scripts/` and
-`database/migration/` that import `database.mongodb` are retired after the final
-legacy runtime deletion. They are excluded from production runtime gates. If any
-of these operations must run again, port that file to `MongoDAL`, module
-repositories, or a migration-local compatibility helper. Do not restore
-`database/mongodb.py`, `database/pinecone_db.py`, `database/repository.py`, or
-`app_shell/database_service.py` for script compatibility.
-
-Retired pending DAL port:
-
-- `scripts/backfill_room_agent_message_parts.py`
-- `scripts/backfill_timestamps_to_utc.py`
-- `scripts/generate_api_key.py`
-- `scripts/backfill_agent_status.py`
-- `database/migration/backfill_agent_call_counts.py`
-- `database/migration/fix_legacy_stale_tasks.py`
-- `database/migration/add_agent_requests_indexes.py`
-- `database/migration/rename_supervisor_v2_fields.py`
-- `database/migration/backfill_hub_agent_source.py`
-- `database/migration/add_run_lifecycle_indexes.py`
-- `database/migration/backfill_agent_message_client_request_id.py`
-- `database/migration/add_hub_indexes.py`
-- `database/migration/add_capability_issue_indexes.py`
-- `database/migration/backfill_user_message_client_request_id.py`
-- `database/migration/add_provider_legacy_flag.py`
-- `database/migration/purge_empty_artifact_parts.py`
-- `database/migration/add_discovery_api_requests_indexes.py`
-- `database/migration/add_cancelled_messages_indexes.py`
-- `database/migration/null_legacy_room_processing_message_id.py`
-- `database/migration/add_gateway_api_requests_indexes.py`
-- `database/migration/add_user_message_id_unique_index.py`
-- `database/migration/deduplicate_agents.py`
-- `database/migration/migrate_room_memory_to_conversation_history.py`
+**Operational migration/script compatibility decision (2026-06-11):** One-off
+scripts and historical migrations that imported `database.mongodb` were removed
+with the final legacy runtime deletion. New migration scripts must be standalone
+Motor/DAL scripts and must not restore `database/mongodb.py`,
+`database/pinecone_db.py`, `database/repository.py`, or
+`app_shell/database_service.py` for compatibility.
 
 #### Phase 2: Adapter Layer (2.5 weeks)
 

@@ -29,6 +29,32 @@ FORBIDDEN_PRODUCTION_IMPORT_PREFIXES = (
 )
 
 LEGACY_PACKAGES = {"config", "infrastructure", "modules", "services"}
+REMOVED_LEGACY_OPERATIONAL_SCRIPTS = {
+    "database/migration/add_agent_requests_indexes.py",
+    "database/migration/add_cancelled_messages_indexes.py",
+    "database/migration/add_capability_issue_indexes.py",
+    "database/migration/add_discovery_api_requests_indexes.py",
+    "database/migration/add_gateway_api_requests_indexes.py",
+    "database/migration/add_hub_indexes.py",
+    "database/migration/add_provider_legacy_flag.py",
+    "database/migration/add_run_lifecycle_indexes.py",
+    "database/migration/add_user_message_id_unique_index.py",
+    "database/migration/backfill_agent_call_counts.py",
+    "database/migration/backfill_agent_message_client_request_id.py",
+    "database/migration/backfill_hub_agent_source.py",
+    "database/migration/backfill_user_message_client_request_id.py",
+    "database/migration/deduplicate_agents.py",
+    "database/migration/fix_legacy_stale_tasks.py",
+    "database/migration/migrate_room_memories.py",
+    "database/migration/migrate_room_memory_to_conversation_history.py",
+    "database/migration/null_legacy_room_processing_message_id.py",
+    "database/migration/purge_empty_artifact_parts.py",
+    "database/migration/rename_supervisor_v2_fields.py",
+    "scripts/backfill_agent_status.py",
+    "scripts/backfill_room_agent_message_parts.py",
+    "scripts/backfill_timestamps_to_utc.py",
+    "scripts/generate_api_key.py",
+}
 LEGACY_RUNTIME_ROOTS = tuple(sorted(LEGACY_PACKAGES))
 PACKAGE_REMOVAL_RUNTIME_ROOTS = (
     "main.py",
@@ -925,6 +951,48 @@ def test_package_removal_runtime_scan_includes_shipped_legacy_roots():
     shipped_legacy = packages & LEGACY_PACKAGES
 
     assert shipped_legacy.issubset(roots)
+
+
+def test_legacy_database_dependent_operational_scripts_are_removed():
+    present = [
+        path
+        for path in sorted(REMOVED_LEGACY_OPERATIONAL_SCRIPTS)
+        if Path(path).exists()
+    ]
+
+    assert not present
+
+
+def test_remaining_operational_scripts_do_not_import_deleted_database_runtime():
+    forbidden = {
+        "app_shell.database_service",
+        "database.mongodb",
+        "database.pinecone_db",
+        "database.repository",
+    }
+    roots = (Path("database/migration"), Path("scripts"))
+    violations: list[str] = []
+
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*.py")):
+            imported = set(_import_modules_including_type_checking(path))
+            for module in sorted(forbidden & imported):
+                violations.append(f"{path}:{module}")
+
+    assert not violations
+
+
+def test_query_similar_agents_with_scores_has_no_runtime_callers():
+    token = "query_similar_agents_with_scores"
+    violations = [
+        path.as_posix()
+        for path in _production_python_files()
+        if token in path.read_text()
+    ]
+
+    assert not violations
 
 
 def test_dal_database_convergence_manifest_exists_and_has_no_unknown_sections():

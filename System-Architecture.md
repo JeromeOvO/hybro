@@ -64,9 +64,8 @@ Startup has three practical phases:
 
 1. Infrastructure setup:
    - Load settings and auth configuration.
-   - Connect MongoDB through `database.mongodb.mongodb`.
-   - Connect Pinecone through `database.pinecone_db.pinecone_db`.
-   - Build DAL/facade objects from `container.py`.
+   - Build `MongoDAL`, `VectorDAL`, Redis, object-storage adapters, facades,
+     and repositories through `container.py`.
    - Bind route modules and app-shell runtime adapters.
 
 2. Runtime guard and background services:
@@ -701,7 +700,7 @@ and tested independently.
 App-shell memory search is a compatibility adapter over `ContextMemoryFacade`.
 Vector retrieval goes through `VectorDAL`, and keyword search/hydration goes
 through the context-memory content repository rather than private
-`database.mongodb` or `database.pinecone_db` backends.
+legacy database runtime backends.
 
 ## Background Jobs
 
