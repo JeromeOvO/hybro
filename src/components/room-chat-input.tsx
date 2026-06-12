@@ -147,6 +147,39 @@ export function RoomChatInput({
   const suggestionsRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
+  const focusEditorAtEnd = () => {
+    setTimeout(() => {
+      if (editorRef.current) {
+        editorRef.current.focus()
+        try {
+          const range = document.createRange()
+          const selection = window.getSelection()
+          range.selectNodeContents(editorRef.current)
+          range.collapse(false)
+          selection?.removeAllRanges()
+          selection?.addRange(range)
+        } catch (err) {
+          console.error('Error setting caret position:', err)
+        }
+      }
+    }, 50)
+  }
+
+  const handleGroupChange = (groupId: string) => {
+    onGroupChange?.(groupId)
+    focusEditorAtEnd()
+  }
+
+  const handleChatModeChange = (mode: ChatMode) => {
+    onChatModeChange?.(mode)
+    focusEditorAtEnd()
+  }
+
+  const handleClearOverride = () => {
+    onClearOverride?.()
+    focusEditorAtEnd()
+  }
+
   const scopedAgents = useMemo(() => {
     if (selectedGroup === BUILTIN_GROUP_ALL_AGENTS) return agents
     if (selectedGroup === BUILTIN_GROUP_ROOM_TEAM) {
@@ -1046,7 +1079,7 @@ export function RoomChatInput({
                 <GroupSelector
                   className="min-w-0 max-w-[11rem] max-[520px]:max-w-[calc(50%-0.25rem)]"
                   selectedGroup={selectedGroup}
-                  onGroupChange={onGroupChange || (() => { })}
+                  onGroupChange={handleGroupChange}
                   groups={groups}
                   loadingGroups={loadingGroups}
                   roomAgentCount={roomAgentCount}
@@ -1058,14 +1091,14 @@ export function RoomChatInput({
                   agentNameMap={agentNameMap}
                   disabled={disabled}
                   isOverride={isOverride}
-                  onClearOverride={onClearOverride}
+                  onClearOverride={handleClearOverride}
                 />
               )}
               {onChatModeChange && (
                 <ModeSelector
                   className="min-w-0 max-w-[9rem] max-[520px]:max-w-[calc(50%-0.25rem)]"
                   mode={chatMode ?? DEFAULT_CHAT_MODE}
-                  onModeChange={onChatModeChange}
+                  onModeChange={handleChatModeChange}
                   disabled={disabled || sending || processing}
                 />
               )}

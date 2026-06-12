@@ -1,4 +1,5 @@
 'use client'
+import { useState, useRef } from 'react'
 import { ChevronDown, Globe, Users, X, Loader2, Pencil, Trash2, Plus } from 'lucide-react'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { Button } from '@/components/ui/button'
@@ -62,6 +63,44 @@ export function GroupSelector({
   onClearOverride,
 }: GroupSelectorProps) {
   const hasMentions = mentionedAgents.length > 0
+
+  const [tooltipOpen, setTooltipOpen] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const ignoreTooltipRef = useRef(false)
+
+  const handleTooltipOpenChange = (isOpen: boolean) => {
+    if (menuOpen) {
+      setTooltipOpen(false)
+      return
+    }
+    if (isOpen && ignoreTooltipRef.current) {
+      setTooltipOpen(false)
+      return
+    }
+    setTooltipOpen(isOpen)
+  }
+
+  const handleGroupSelect = (groupId: string) => {
+    ignoreTooltipRef.current = true
+    setTooltipOpen(false)
+    setMenuOpen(false)
+    onGroupChange(groupId)
+    setTimeout(() => {
+      ignoreTooltipRef.current = false
+    }, 500)
+  }
+
+  const handleClearOverrideSelect = () => {
+    ignoreTooltipRef.current = true
+    setTooltipOpen(false)
+    setMenuOpen(false)
+    if (onClearOverride) {
+      onClearOverride()
+    }
+    setTimeout(() => {
+      ignoreTooltipRef.current = false
+    }, 500)
+  }
 
   // Get the default display (Room Team if has agents, otherwise All Agents)
   const getDefaultDisplay = () => {
@@ -161,8 +200,18 @@ export function GroupSelector({
   return (
     <div className={cn("flex items-center gap-1", className)}>
       <TooltipProvider delayDuration={100}>
-        <DropdownMenu>
-          <Tooltip>
+        <DropdownMenu open={menuOpen} onOpenChange={(open) => {
+          setMenuOpen(open)
+          if (open) {
+            setTooltipOpen(false)
+            ignoreTooltipRef.current = true
+          } else {
+            setTimeout(() => {
+              ignoreTooltipRef.current = false
+            }, 300)
+          }
+        }}>
+          <Tooltip open={menuOpen ? false : tooltipOpen} onOpenChange={handleTooltipOpenChange}>
             <TooltipTrigger asChild>
               <DropdownMenuTrigger asChild disabled={disabled}>
                 <Button
@@ -172,6 +221,9 @@ export function GroupSelector({
                     "h-8 min-h-8 min-w-0 max-w-full px-3 gap-1.5 font-normal hover:bg-muted/50 flex items-center border-none shadow-none focus-visible:ring-0 focus-visible:border-transparent",
                     isOverride && "bg-primary/10"
                   )}
+                  onMouseLeave={() => {
+                    ignoreTooltipRef.current = false
+                  }}
                 >
                   <span className="shrink-0">{displayInfo.icon}</span>
                   <span className="min-w-0 truncate font-medium">{displayInfo.label}</span>
@@ -195,7 +247,7 @@ export function GroupSelector({
               <Tooltip delayDuration={150}>
                 <TooltipTrigger asChild>
                   <DropdownMenuItem
-                    onClick={() => onGroupChange(BUILTIN_GROUP_ALL_AGENTS)}
+                    onClick={() => handleGroupSelect(BUILTIN_GROUP_ALL_AGENTS)}
                     className={cn(
                       "flex items-start gap-3 py-2.5",
                       isOverride && selectedGroup === BUILTIN_GROUP_ALL_AGENTS && "bg-accent"
@@ -221,11 +273,7 @@ export function GroupSelector({
               {/* Room Default Agents — only visible when room has a snapshot */}
               {roomAgentCount > 0 && (
                 <DropdownMenuItem
-                  onClick={() => {
-                    if (onClearOverride) {
-                      onClearOverride()
-                    }
-                  }}
+                  onClick={handleClearOverrideSelect}
                   className={cn(
                     "flex items-start gap-3 py-2.5",
                     !isOverride && "bg-accent"
@@ -268,7 +316,7 @@ export function GroupSelector({
                     <Tooltip key={group.group_id} delayDuration={150}>
                       <TooltipTrigger asChild>
                         <DropdownMenuItem
-                          onClick={() => onGroupChange(group.group_id)}
+                          onClick={() => handleGroupSelect(group.group_id)}
                           className={cn(
                             "flex items-start gap-3 py-2.5",
                             isOverride && selectedGroup === group.group_id && "bg-accent"
