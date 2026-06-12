@@ -8,22 +8,9 @@ Mid-stream SSE uses ``send_artifact_update`` (A2A-standard).
 """
 
 import asyncio
-import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
-from a2a.types import (
-    AgentCard,
-    GetTaskRequest,
-    JSONRPCErrorResponse,
-    Message,
-    Part,
-    Role,
-    Task,
-    TaskQueryParams,
-    TaskState,
-    TaskStatus,
-    TextPart,
 from a2a_adapter.message_factory import build_message_from_parts, from_sdk_task
 from a2a_adapter.task_artifacts import materialize_non_text_parts_as_artifact
 from a2a_adapter.task_requests import (
@@ -1560,13 +1547,6 @@ class DirectTransport(AgentTransport):
             if response.get("requires_input") or response.get("requires_auth"):
                 task_obj = get_task(current_message)
                 if task_obj and task_obj.status:
-                    task_obj.status.state = TaskState(status) if isinstance(status, str) else status
-                    if msg_text := response.get("message"):
-                        task_obj.status.message = Message(
-                            message_id=uuid.uuid4().hex,
-                            role=Role.agent,
-                            parts=[Part(root=TextPart(kind="text", text=msg_text))],
-                        )
                     task_obj.status.state = CommonTaskState(status) if isinstance(status, str) else status
                 return True, None, message_id, response.get("task_id")
 
