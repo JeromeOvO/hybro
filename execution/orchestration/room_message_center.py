@@ -895,9 +895,9 @@ class RoomMessageCenter:
             room and isinstance(room.extend_info, dict)
             and room.extend_info.get("debateMode", False)
         )
-        await self._emit_unified_summary(
+        turn_completion_kind = await self._emit_unified_summary(
             room_id, room_user_message_id, is_debate=is_debate
-        )
+        ) or "deterministic"
 
         # Emit turn_completed event
         if self._turn_event_appender:
@@ -911,14 +911,17 @@ class RoomMessageCenter:
 
         # Send completion status
         await self._persist_turn_completion_kind(
-            room_user_message_id, "synthesis"
+            room_user_message_id, turn_completion_kind
         )
         await self._emit_processing_status(
             room_id=room_id,
             status=SSEProcessingStatus.COMPLETED,
             message_id=room_user_message_id,
             lifecycle_message_id=room_user_message_id,
-            details={"turn_completion_kind": "synthesis"},
+            details={
+                "turn_completion_kind": turn_completion_kind,
+                "turn_phase": "terminal",
+            },
         )
 
         # Log room memory stats (debug/monitoring)
@@ -2009,7 +2012,10 @@ class RoomMessageCenter:
                     status=SSEProcessingStatus.COMPLETED,
                     message_id=user_message_id,
                     lifecycle_message_id=user_message_id,
-                    details={"turn_completion_kind": turn_completion_kind},
+                    details={
+                        "turn_completion_kind": turn_completion_kind,
+                        "turn_phase": "terminal",
+                    },
                 )
 
             case RunStatus.PAUSED:
@@ -2369,9 +2375,9 @@ class RoomMessageCenter:
                 room and isinstance(room.extend_info, dict)
                 and room.extend_info.get("debateMode", False)
             )
-            await self._emit_unified_summary(
+            turn_completion_kind = await self._emit_unified_summary(
                 result.room_id, result.user_message_id, is_debate=is_debate
-            )
+            ) or "deterministic"
             if getattr(self, '_turn_event_appender', None):
                 try:
                     await self._turn_event_appender.append(
@@ -2383,14 +2389,17 @@ class RoomMessageCenter:
                 except Exception:
                     pass
             await self._persist_turn_completion_kind(
-                result.user_message_id, "synthesis"
+                result.user_message_id, turn_completion_kind
             )
             await self._emit_processing_status(
                 room_id=result.room_id,
                 status=SSEProcessingStatus.COMPLETED,
                 message_id=result.user_message_id,
                 lifecycle_message_id=result.user_message_id,
-                details={"turn_completion_kind": "synthesis"},
+                details={
+                    "turn_completion_kind": turn_completion_kind,
+                    "turn_phase": "terminal",
+                },
             )
             await self._log_room_memory_stats(result.room_id)
 
@@ -2415,7 +2424,10 @@ class RoomMessageCenter:
                 message_id=user_message_id,
                 lifecycle_message_id=user_message_id,
                 record_lifecycle=False,
-                details="Compiling summary\u2026",
+                details={
+                    "turn_phase": "synthesizing",
+                    "message": "Compiling summary\u2026",
+                },
             )
         except Exception:
             logger.debug("SSE stage notification failed (summary)", exc_info=True)
@@ -2424,7 +2436,7 @@ class RoomMessageCenter:
             message_id=summary_message_id,
             task_id=summary_message_id,
             agent_name="HYBRO AI",
-            agent_id=CoordinatorAgentId.SUMMARY,
+            agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
             status="working",
             related_message_id=user_message_id,
             task_content="Summarizing agent responses\u2026",
@@ -2443,7 +2455,7 @@ class RoomMessageCenter:
             self.sse_manager,
             room_id=room_id,
             message_id=summary_message_id,
-            agent_id=CoordinatorAgentId.SUMMARY,
+            agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
             token_stream=token_stream,
             client_request_id=summary_client_request_id,
         )
@@ -2482,7 +2494,7 @@ class RoomMessageCenter:
             summary_agent_message = RoomAgentMessage(
                 room_id=room_id,
                 message_id=summary_message_id,
-                agent_id=CoordinatorAgentId.SUMMARY,
+                agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
                 related_message_id=user_message_id,
                 user_id=user_id,
                 client_request_id=summary_client_request_id,
@@ -2493,7 +2505,6 @@ class RoomMessageCenter:
                     "source_user_message_id": user_message_id,
                     "summary_origin": "deterministic",
                 },
-                task_content=content,
             )
 
             await self._store.upsert_room_agent_message(summary_agent_message)
@@ -2501,7 +2512,7 @@ class RoomMessageCenter:
             await self.sse_manager.send_agent_response(
                 room_id,
                 summary_message_id,
-                CoordinatorAgentId.SUMMARY,
+                CoordinatorAgentId.SYSTEM_HYBRO,
                 content,
                 related_message_id=user_message_id,
                 client_request_id=summary_client_request_id,
@@ -2525,7 +2536,7 @@ class RoomMessageCenter:
         trajectory_responses: list[dict[str, str]] | None = None,
         is_debate: bool = False,
         working_already_emitted: bool = False,
-    ) -> None:
+    ) -> str | None:
         """Emit a single unified summary message for a user message turn.
 
         Routing logic:
@@ -2561,7 +2572,7 @@ class RoomMessageCenter:
                 # duplicate content in the UI.  This mirrors the < 2 guard
                 # on the non-synthesis (coordinator) path below.
                 if trajectory_responses is not None and len(trajectory_responses) < 2:
-                    return
+                    return "deterministic"
 
                 if not working_already_emitted:
                     await self._emit_summary_working(
@@ -2589,8 +2600,7 @@ class RoomMessageCenter:
                             and isinstance(msg.extend_info, dict)
                             and msg.extend_info.get("is_coordinator_summary")
                         ) or msg.agent_id in (
-                            "debate_summary", "non_debate_summary", "summary",
-                            "supervisor_synthesis", "supervisor_error", "supervisor_clarify",
+                            CoordinatorAgentId.SYSTEM_HYBRO, CoordinatorAgentId.SYSTEM_CLARIFIER, CoordinatorAgentId.SUPERVISOR_ERROR,
                         ):
                             continue
                         task = msg.message_content and msg.message_content.message_task
@@ -2618,7 +2628,7 @@ class RoomMessageCenter:
 
                 # Skip summary entirely when fewer than 2 agents responded
                 if len(agent_responses) < 2:
-                    return
+                    return "deterministic"
 
                 await self._emit_summary_working(
                     room_id, user_message_id, summary_message_id,
@@ -2643,11 +2653,11 @@ class RoomMessageCenter:
                 if not content:
                     await self.sse_manager.send_task_update(
                         room_id, summary_message_id, "failed",
-                        agent_id=CoordinatorAgentId.SUMMARY,
+                        agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
                         error="Summary generation returned empty",
                         client_request_id=summary_client_request_id,
                     )
-                    return
+                    return None
 
             # 2. Build and persist
             from models.room import MessageContent, RoomAgentMessage
@@ -2661,7 +2671,7 @@ class RoomMessageCenter:
             summary_agent_message = RoomAgentMessage(
                 room_id=room_id,
                 message_id=summary_message_id,
-                agent_id=CoordinatorAgentId.SUMMARY,
+                agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
                 related_message_id=user_message_id,
                 user_id=user_id,
                 client_request_id=summary_client_request_id,
@@ -2673,7 +2683,6 @@ class RoomMessageCenter:
                     "summary_type": "debate" if is_debate else "non_debate",
                     "summary_origin": origin,
                 },
-                task_content=content,
             )
 
             await self._store.upsert_room_agent_message(summary_agent_message)
@@ -2682,11 +2691,12 @@ class RoomMessageCenter:
             await self.sse_manager.send_agent_response(
                 room_id,
                 summary_message_id,
-                CoordinatorAgentId.SUMMARY,
+                CoordinatorAgentId.SYSTEM_HYBRO,
                 content,
                 related_message_id=user_message_id,
                 client_request_id=summary_client_request_id,
             )
+            return "synthesis"
 
         except LLMServiceNotBoundError:
             raise
@@ -2701,7 +2711,7 @@ class RoomMessageCenter:
                     room_id=room_id,
                     message_id=summary_message_id,
                     status="failed",
-                    agent_id=CoordinatorAgentId.SUMMARY,
+                    agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
                     client_request_id=summary_client_request_id,
                 )
             except Exception:

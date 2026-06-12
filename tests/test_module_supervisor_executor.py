@@ -76,21 +76,23 @@ def test_dispatch_targets_cancelled_error_handler_reraises():
 
 
 class TestLogAndReturn:
-    def test_returns_result_unchanged(self):
+    @pytest.mark.asyncio
+    async def test_returns_result_unchanged(self):
         trajectory = SupervisorTrajectory()
         result = SupervisorRunResult(status="completed", trajectory=trajectory)
-
-        returned = SupervisorExecutor._log_and_return(
+        se = _make_supervisor_executor()
+        returned = await se._log_and_return(
             "room-1", trajectory, result
         )
         assert returned is result
         assert returned.status == "completed"
 
-    def test_returns_result_in_debate_mode(self):
+    @pytest.mark.asyncio
+    async def test_returns_result_in_debate_mode(self):
         trajectory = SupervisorTrajectory()
         result = SupervisorRunResult(status="completed", trajectory=trajectory)
-
-        returned = SupervisorExecutor._log_and_return(
+        se = _make_supervisor_executor()
+        returned = await se._log_and_return(
             "room-1", trajectory, result, debate_mode=True
         )
         assert returned is result

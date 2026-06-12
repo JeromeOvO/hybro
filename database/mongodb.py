@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from common.config.settings import settings
-from common.utils.a2a_helpers import sanitize_artifact_parts as _sanitize_parts
+from common.utils.a2a_helpers import sanitize_task_dict as _sanitize_task_dict
 from common.utils.time import utcnow
 from models.agent import AGENT_CARD_HUB_NO_OVERWRITE, Agent
 from models.agent_group import AgentGroup
@@ -23,31 +23,6 @@ from models.supervisor import TrajectoryStatus
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-
-
-def _sanitize_task_dict(task: dict) -> dict:
-    """Sanitize a raw Task dict from MongoDB before Pydantic validation.
-
-    Walks artifacts and history to strip malformed parts that would cause
-    the entire RoomAgentMessage to fail validation.
-    """
-    for artifact in task.get("artifacts") or []:
-        parts = artifact.get("parts")
-        if parts and isinstance(parts, list):
-            artifact["parts"] = _sanitize_parts(parts)
-
-    for msg in task.get("history") or []:
-        parts = msg.get("parts")
-        if parts and isinstance(parts, list):
-            msg["parts"] = _sanitize_parts(parts)
-
-    status = task.get("status") or {}
-    status_msg = status.get("message") or {}
-    parts = status_msg.get("parts")
-    if parts and isinstance(parts, list):
-        status_msg["parts"] = _sanitize_parts(parts)
-
-    return task
 
 
 def _ensure_task_validation(msg: RoomAgentMessage) -> RoomAgentMessage:

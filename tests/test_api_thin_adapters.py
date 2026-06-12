@@ -531,8 +531,8 @@ def test_room_center_route_inventory_records_live_protocol_owners():
     }
     expected = {
         "inquiry_active_runs": {
-            "owner": "common.protocols.ExecutionEngine",
-            "supporting": {"app_shell.database_service.A2ATaskReader"},
+            "owner": "app_shell.bound.RoomCenterRouteOwner",
+            "supporting": set(),
         },
         "send_message": {
             "owner": "common.protocols.ExecutionEngine",
@@ -566,8 +566,8 @@ def test_room_center_protocol_inventory_matches_handler_calls():
 
     expectations = {
         "inquiry_active_runs": (
-            "common.protocols.ExecutionEngine",
-            ["get_runs_for_room"],
+            "app_shell.bound.RoomCenterRouteOwner",
+            ["inquiry_active_runs"],
         ),
         "send_message": (
             "common.protocols.ExecutionEngine",

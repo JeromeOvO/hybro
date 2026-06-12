@@ -282,17 +282,75 @@ def task_has_visible_content(task: Any) -> bool:
     return bool(extracted.text or extracted.has_non_text)
 
 
+def _normalize_part_root(root: dict) -> dict | None:
+    """Normalize a raw part dict so Pydantic's ``kind`` discriminator validates."""
+    kind = root.get("kind")
+
+    if kind == "text":
+        if "text" not in root or root.get("text") is None:
+            return None
+        return root
+
+    if kind == "file":
+        if "file" not in root or root.get("file") is None:
+            return None
+        return root
+
+    if kind == "data":
+        if "data" not in root or root.get("data") is None:
+            return None
+        return root
+
+    if "text" in root and root.get("text") is not None:
+        out: dict[str, Any] = {"kind": "text", "text": root["text"]}
+        if "metadata" in root:
+            out["metadata"] = root["metadata"]
+        return out
+
+    if "file" in root and root.get("file") is not None:
+        out = {"kind": "file", "file": root["file"]}
+        if "metadata" in root:
+            out["metadata"] = root["metadata"]
+        return out
+
+    if "data" in root and root.get("data") is not None:
+        out = {"kind": "data", "data": root["data"]}
+        if "metadata" in root:
+            out["metadata"] = root["metadata"]
+        return out
+
+    if "url" in root or "raw" in root:
+        file_info: dict[str, Any] = {}
+        if "raw" in root:
+            file_info["bytes"] = root["raw"]
+        if "url" in root:
+            file_info["uri"] = root["url"]
+        media_type = root.get("mime_type") or root.get("mimeType") or root.get("mediaType")
+        if media_type:
+            file_info["mimeType"] = media_type
+        filename = root.get("filename") or root.get("name")
+        if filename:
+            file_info["name"] = filename
+        if not file_info:
+            return None
+        out = {"kind": "file", "file": file_info}
+        if "metadata" in root:
+            out["metadata"] = root["metadata"]
+        return out
+
+    return None
+
+
 def sanitize_artifact_parts(parts: list[dict]) -> list[dict]:
-    """Remove malformed part dicts before persisting to MongoDB.
+    """Remove malformed part dicts and normalize legacy shapes before persistence/read.
 
     Each A2A Part variant requires its discriminator + payload:
       - TextPart:  kind='text' + text (str)
       - FilePart:  kind='file' + file (dict)
       - DataPart:  kind='data' + data (dict)
 
-    ``text`` / ``file`` / ``data`` must be present and non-None; otherwise
-    Pydantic rejects the whole Task on read (e.g. ``{"kind": "text"}`` or
-    ``{"kind": "text", "text": null}``).
+    Legacy rows may omit ``kind`` (e.g. ``{"text": "hello"}``); those are
+    coerced to the canonical shape so Pydantic validation succeeds on read.
 
     Returns a new list with invalid entries stripped.
     """
@@ -305,24 +363,36 @@ def sanitize_artifact_parts(parts: list[dict]) -> list[dict]:
         if not isinstance(root, dict):
             logger.warning("Dropping artifact part with non-dict root: %r", p)
             continue
-        kind = root.get("kind")
-        if kind == "text":
-            if "text" not in root or root.get("text") is None:
-                logger.debug("Dropping malformed TextPart (missing or null 'text')")
-                continue
-        elif kind == "file":
-            if "file" not in root or root.get("file") is None:
-                logger.warning("Dropping malformed FilePart (missing or null 'file')")
-                continue
-        elif kind == "data":
-            if "data" not in root or root.get("data") is None:
-                logger.warning("Dropping malformed DataPart (missing or null 'data')")
-                continue
-        elif not any(k in root for k in ("text", "file", "data", "url", "raw")):
-            logger.warning("Dropping unrecognizable artifact part: %r", p)
+        normalized_root = _normalize_part_root(root)
+        if normalized_root is None:
+            logger.debug("Dropping unrecognizable artifact part: %r", p)
             continue
-        cleaned.append(p)
+        if "root" in p and p.get("root") is root:
+            cleaned.append({**p, "root": normalized_root})
+        else:
+            cleaned.append(normalized_root)
     return cleaned
+
+
+def sanitize_task_dict(task: dict) -> dict:
+    """Sanitize a raw Task dict from MongoDB before Pydantic validation."""
+    for artifact in task.get("artifacts") or []:
+        parts = artifact.get("parts")
+        if parts and isinstance(parts, list):
+            artifact["parts"] = sanitize_artifact_parts(parts)
+
+    for msg in task.get("history") or []:
+        parts = msg.get("parts")
+        if parts and isinstance(parts, list):
+            msg["parts"] = sanitize_artifact_parts(parts)
+
+    status = task.get("status") or {}
+    status_msg = status.get("message") or {}
+    parts = status_msg.get("parts")
+    if parts and isinstance(parts, list):
+        status_msg["parts"] = sanitize_artifact_parts(parts)
+
+    return task
 
 
 def append_artifact_to_task_dict(

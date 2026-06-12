@@ -18,14 +18,9 @@ class CoordinatorAgentId(StrEnum):
     """
 
     SUPERVISOR_ERROR = "supervisor_error"
-    SUPERVISOR_SYNTHESIS = "supervisor_synthesis"
-    SUPERVISOR_CLARIFY = "supervisor_clarify"
-    SUMMARY = "summary"
     SYSTEM = "system"
-    # Deprecated — kept for historical data backward compatibility.
-    # New writes must use SUMMARY instead.
-    DEBATE_SUMMARY = "debate_summary"
-    NON_DEBATE_SUMMARY = "non_debate_summary"
+    SYSTEM_HYBRO = "system:hybro"
+    SYSTEM_CLARIFIER = "system:clarifier"
 
 
 class MembershipOrigin(StrEnum):

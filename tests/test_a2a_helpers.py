@@ -89,14 +89,25 @@ class TestSanitizeArtifactParts:
         assert sanitize_artifact_parts(parts) == []
 
     def test_unknown_kind_with_content_key_kept(self):
-        """A part with unknown kind but recognized content key passes."""
+        """Flat url-style parts are normalized to canonical FilePart shape."""
         parts = [{"kind": "custom", "url": "https://example.com/f.png"}]
-        assert sanitize_artifact_parts(parts) == parts
+        assert sanitize_artifact_parts(parts) == [
+            {"kind": "file", "file": {"uri": "https://example.com/f.png"}}
+        ]
 
     def test_url_part_without_kind_kept(self):
-        """Flat url-style part (no kind) passes the content-key check."""
+        """Flat url-style part (no kind) is normalized for Pydantic validation."""
         parts = [{"url": "https://example.com/doc.pdf"}]
-        assert sanitize_artifact_parts(parts) == parts
+        assert sanitize_artifact_parts(parts) == [
+            {"kind": "file", "file": {"uri": "https://example.com/doc.pdf"}}
+        ]
+
+    def test_text_part_without_kind_normalized(self):
+        """Legacy rows stored as {"text": "..."} gain the kind discriminator."""
+        parts = [{"text": "Hi, GPT-5-mini Agent here!"}]
+        assert sanitize_artifact_parts(parts) == [
+            {"kind": "text", "text": "Hi, GPT-5-mini Agent here!"}
+        ]
 
 
 # ---------------------------------------------------------------------------

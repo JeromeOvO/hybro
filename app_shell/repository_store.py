@@ -18,6 +18,7 @@ from common.protocols import (
 )
 from common.utils.a2a_helpers import (
     sanitize_artifact_parts,
+    sanitize_task_dict,
 )
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -1755,6 +1756,11 @@ def _safe_parse_agent_message(doc: dict | None) -> RoomAgentMessage | None:
     if doc is None:
         return None
     try:
+        mc = doc.get("message_content")
+        if mc and isinstance(mc, dict):
+            task = mc.get("message_task")
+            if task and isinstance(task, dict):
+                sanitize_task_dict(task)
         return RoomAgentMessage.model_validate(doc)
     except Exception:
         logger.warning("Invalid room agent message document", exc_info=True)

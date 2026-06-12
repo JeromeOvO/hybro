@@ -135,12 +135,9 @@ class RoomCoordinatorService:
                         and isinstance(msg.extend_info, dict)
                         and msg.extend_info.get("is_coordinator_summary")
                     ) or msg.agent_id in (
-                        "debate_summary",
-                        "non_debate_summary",
-                        "summary",
-                        "supervisor_synthesis",
-                        "supervisor_error",
-                        "supervisor_clarify",
+                        CoordinatorAgentId.SYSTEM_HYBRO,
+                        CoordinatorAgentId.SYSTEM_CLARIFIER,
+                        CoordinatorAgentId.SUPERVISOR_ERROR,
                     ):
                         continue
                     task = msg.message_content and msg.message_content.message_task
@@ -165,9 +162,7 @@ class RoomCoordinatorService:
 
             # Use different summary approach based on mode
             summary_mode = "debate" if is_debate_mode else "non_debate"
-            coordinator_agent_id = (
-                CoordinatorAgentId.DEBATE_SUMMARY if is_debate_mode else CoordinatorAgentId.NON_DEBATE_SUMMARY
-            )
+            coordinator_agent_id = CoordinatorAgentId.SYSTEM_HYBRO
 
             # Pre-generate message_id and emit a "working" indicator so the
             # frontend shows a spinner while the LLM summarisation runs.
@@ -305,7 +300,7 @@ class RoomCoordinatorService:
         room_id: str,
         room_user_message_id: str,
         synthesis_text: str,
-        coordinator_agent_id: str = CoordinatorAgentId.SUPERVISOR_SYNTHESIS,
+        coordinator_agent_id: str = CoordinatorAgentId.SYSTEM_HYBRO,
         message_id: str | None = None,
     ) -> None:
         """Emit a synthesis/summary message to the room.
@@ -333,7 +328,7 @@ class RoomCoordinatorService:
         room_id: str,
         room_user_message_id: str,
         summary_text: str,
-        coordinator_agent_id: str = CoordinatorAgentId.NON_DEBATE_SUMMARY,
+        coordinator_agent_id: str = CoordinatorAgentId.SYSTEM_HYBRO,
         message_id: str | None = None,
     ) -> None:
         """
@@ -395,10 +390,9 @@ class RoomCoordinatorService:
                 "is_coordinator_summary": True,
                 "source_user_message_id": room_user_message_id,
                 "summary_type": "debate"
-                if coordinator_agent_id == CoordinatorAgentId.DEBATE_SUMMARY
+                if coordinator_agent_id == CoordinatorAgentId.SYSTEM_HYBRO
                 else "non_debate",
             },
-            task_content=summary_text,
         )
 
         await self._store.add_room_agent_message(summary_agent_message)
