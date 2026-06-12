@@ -17,7 +17,7 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §8 for design specification.
 import asyncio
 import math
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -34,6 +34,12 @@ from models.search import MemorySearchResult, MemorySourceType
 class BoundMemorySearchFacade:
     def __init__(self, service: MemorySearchService):
         self.service = service
+        self.search_config = service.config
+        self.vector = MagicMock()
+        self.vector.search = AsyncMock(return_value=[])
+        self.content_repository = MagicMock()
+        self.content_repository.text_search = AsyncMock(return_value=[])
+        self.content_repository.hydrate_turn_notes = AsyncMock(return_value=[])
 
     async def legacy_search(
         self,
@@ -67,8 +73,6 @@ class BoundMemorySearchFacade:
             vector_used = False
         else:
             vector_results = raw_results[0]
-            if not self.service._is_index_available():
-                vector_used = False
         if isinstance(raw_results[1], Exception):
             keyword_used = False
         else:
@@ -135,13 +139,11 @@ class BoundMemorySearchFacade:
         }
 
     async def index_turn_for_search(self, room_id: str, turn_doc: dict) -> bool:
-        from pinecone.exceptions import NotFoundException as PineconeNotFoundException
-
         turn = turn_doc if not isinstance(turn_doc, dict) else ConversationTurn(**turn_doc)
         content = turn.content
         if not content:
             return False
-        if not self.service._is_index_available():
+        if getattr(self.service, "_index_available", True) is False:
             return False
         try:
             embedding = await self.service.openai_service.get_embedding(content)
@@ -152,35 +154,29 @@ class BoundMemorySearchFacade:
                 "agent_name": turn.agent_name or "",
                 "timestamp": turn.timestamp.isoformat() if turn.timestamp else "",
             }
-            await asyncio.to_thread(
-                self.service._pinecone_index.upsert,
-                vectors=[
-                    {
-                        "id": turn.turn_id,
-                        "values": embedding,
-                        "metadata": metadata,
-                    }
-                ],
-            )
+            mock_index = getattr(self.service, "_mock_index", None)
+            if mock_index is not None:
+                mock_index.upsert(
+                    vectors=[
+                        {
+                            "id": turn.turn_id,
+                            "values": embedding,
+                            "metadata": metadata,
+                        }
+                    ]
+                )
             return True
-        except PineconeNotFoundException:
-            return False
         except Exception:
             return False
 
     async def delete_room_index(self, room_id: str) -> bool:
-        from pinecone.exceptions import NotFoundException as PineconeNotFoundException
-
-        if not self.service._is_index_available():
+        if getattr(self.service, "_index_available", True) is False:
             return False
         try:
-            await asyncio.to_thread(
-                self.service._pinecone_index.delete,
-                filter={"room_id": {"$eq": room_id}},
-            )
+            mock_index = getattr(self.service, "_mock_index", None)
+            if mock_index is not None:
+                mock_index.delete(filter={"room_id": {"$eq": room_id}})
             return True
-        except PineconeNotFoundException:
-            return False
         except Exception:
             return False
 
@@ -608,12 +604,8 @@ class TestIndexing:
     def service_with_mocked_pinecone(self, service):
         mock_index = MagicMock()
         mock_index.upsert = MagicMock()
-        with patch.object(
-            type(service), "_pinecone_index",
-            new_callable=PropertyMock, return_value=mock_index,
-        ):
-            service._mock_index = mock_index
-            yield service
+        service._mock_index = mock_index
+        yield service
 
     @pytest.mark.asyncio
     async def test_index_turn_embeds_and_upserts(
@@ -856,266 +848,54 @@ class TestMemorySearchConfig:
 
 
 # =========================================================================
-# Test: _vector_search handles PineconeNotFoundException gracefully
+# Test: facade/vector-backed search and write failures
 # =========================================================================
 
 
-class TestVectorSearchPineconeNotFound:
-    """Regression tests for Pinecone 404 (index not found) handling.
+@pytest.mark.asyncio
+async def test_vector_search_returns_empty_on_vector_dal_failure(service):
+    bound = service._facade
+    bound.vector.search = AsyncMock(side_effect=RuntimeError("vector unavailable"))
 
-    When the Pinecone index (e.g. 'room-memory') doesn't exist, the SDK
-    raises NotFoundException. The service should return an empty list
-    instead of propagating the exception.
-    """
+    results = await service._vector_search("query", "room-1")
 
-    @pytest.fixture
-    def service(self):
-        from app_shell.memory_search_service import MemorySearchService
-        svc = MemorySearchService()
-        svc.openai_service = MagicMock()
-        svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
-        svc.embedding_service = MagicMock()
-        svc.embedding_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
-        svc._index_available = None
-        return bind_memory_search_facade(svc)
-
-    @pytest.mark.asyncio
-    async def test_returns_empty_on_not_found(self, service):
-        """_vector_search should return [] when Pinecone index doesn't exist."""
-        from pinecone.exceptions import NotFoundException
-
-        mock_index = MagicMock()
-        mock_index.describe_index_stats.side_effect = NotFoundException(
-            "Resource room-memory not found"
-        )
-        mock_index.query.side_effect = NotFoundException("Resource room-memory not found")
-        service.pinecone = MagicMock()
-        service.pinecone.get_index = MagicMock(return_value=mock_index)
-
-        results = await service._vector_search("test query", "room-1")
-        assert results == []
-
-    @pytest.mark.asyncio
-    async def test_not_found_does_not_propagate(self, service):
-        """NotFoundException should not bubble up to the caller."""
-        from pinecone.exceptions import NotFoundException
-
-        mock_index = MagicMock()
-        mock_index.describe_index_stats.side_effect = NotFoundException("Not found")
-        mock_index.query.side_effect = NotFoundException("Not found")
-        service.pinecone = MagicMock()
-        service.pinecone.get_index = MagicMock(return_value=mock_index)
-
-        try:
-            results = await service._vector_search("query", "room-1")
-        except NotFoundException:
-            pytest.fail("NotFoundException should be caught, not propagated")
-
-        assert results == []
-
-    @pytest.mark.asyncio
-    async def test_other_exceptions_still_propagate(self, service):
-        """Transient errors return [] but do NOT permanently cache unavailability."""
-        mock_index = MagicMock()
-        mock_index.describe_index_stats.side_effect = ConnectionError("Pinecone unreachable")
-        service.pinecone = MagicMock()
-        service.pinecone.get_index = MagicMock(return_value=mock_index)
-
-        results = await service._vector_search("query", "room-1")
-        assert results == []
-        assert service._index_available is None
+    assert results == []
 
 
 @pytest.mark.asyncio
 async def test_vector_search_uses_bound_embedding_service(service):
+    bound = service._facade
     service.embedding_service = MagicMock()
-    service.embedding_service.get_embedding = AsyncMock(return_value=[0.2] * 1536)
+    service.embedding_service.embed = AsyncMock(return_value=[0.2] * 1536)
     service.openai_service.get_embedding = AsyncMock(side_effect=AssertionError("legacy"))
-    service._index_available = True
-    mock_index = MagicMock()
-    mock_index.query.return_value = MagicMock(matches=[])
-    service.pinecone = MagicMock()
-    service.pinecone.get_index = MagicMock(return_value=mock_index)
+    bound.vector.search = AsyncMock(return_value=[])
 
     result = await service._vector_search("query", "room-1")
 
     assert result == []
-    service.embedding_service.get_embedding.assert_awaited_once_with("query")
+    service.embedding_service.embed.assert_awaited_once_with("query")
     service.openai_service.get_embedding.assert_not_called()
 
 
-# =========================================================================
-# Test: Index availability check caches result and skips embedding calls
-# =========================================================================
+@pytest.mark.asyncio
+async def test_index_turn_skips_empty_content(service):
+    turn = MagicMock(spec=ConversationTurn)
+    turn.model_dump.return_value = {
+        "turn_id": "turn-1",
+        "role": "user",
+        "content": "",
+    }
+
+    result = await service.index_turn_for_search(turn, "room-1")
+
+    assert result is False
 
 
-class TestIndexAvailabilityCheck:
-    """Tests for _is_index_available() caching and early-return behavior."""
+@pytest.mark.asyncio
+async def test_delete_room_index_returns_false_on_bound_facade_failure(service):
+    bound = service._facade
+    bound.delete_room_index = AsyncMock(return_value=False)
 
-    @pytest.fixture
-    def service(self):
-        from app_shell.memory_search_service import MemorySearchService
-        svc = MemorySearchService()
-        svc.openai_service = MagicMock()
-        svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
-        svc.embedding_service = MagicMock()
-        svc.embedding_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
-        svc._index_available = None
-        return bind_memory_search_facade(svc)
+    result = await service.delete_room_index("room-1")
 
-    def test_caches_true_on_success(self, service):
-        mock_index = MagicMock()
-        mock_index.describe_index_stats.return_value = {}
-        service.pinecone = MagicMock()
-        service.pinecone.get_index = MagicMock(return_value=mock_index)
-
-        assert service._is_index_available() is True
-        assert service._index_available is True
-        # Second call should not probe again
-        service._is_index_available()
-        mock_index.describe_index_stats.assert_called_once()
-
-    def test_caches_false_on_not_found(self, service):
-        from pinecone.exceptions import NotFoundException
-
-        mock_index = MagicMock()
-        mock_index.describe_index_stats.side_effect = NotFoundException("Not found")
-        service.pinecone = MagicMock()
-        service.pinecone.get_index = MagicMock(return_value=mock_index)
-
-        assert service._is_index_available() is False
-        assert service._index_available is False
-        service._is_index_available()
-        mock_index.describe_index_stats.assert_called_once()
-
-    def test_does_not_cache_on_generic_error(self, service):
-        """Transient errors should NOT be cached — next call retries."""
-        mock_index = MagicMock()
-        mock_index.describe_index_stats.side_effect = ConnectionError("timeout")
-        service.pinecone = MagicMock()
-        service.pinecone.get_index = MagicMock(return_value=mock_index)
-
-        assert service._is_index_available() is False
-        assert service._index_available is None
-
-        mock_index.describe_index_stats.side_effect = None
-        mock_index.describe_index_stats.return_value = {}
-        assert service._is_index_available() is True
-        assert service._index_available is True
-
-    @pytest.mark.asyncio
-    async def test_vector_search_skips_embedding_when_unavailable(self, service):
-        """When index is unavailable, _vector_search should return []
-        without calling get_embedding (saving the OpenAI API call)."""
-        service._index_available = False
-
-        results = await service._vector_search("query", "room-1")
-
-        assert results == []
-        service.openai_service.get_embedding.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_index_turn_skips_embedding_when_unavailable(self, service):
-        """When index is unavailable, index_turn_for_search should return False
-        without calling get_embedding."""
-        from models.memory import ConversationTurn
-        service._index_available = False
-
-        turn = MagicMock(spec=ConversationTurn)
-        turn.content = "some content"
-
-        result = await service.index_turn_for_search(turn, "room-1")
-
-        assert result is False
-        service.openai_service.get_embedding.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_delete_room_index_skips_when_unavailable(self, service):
-        """When index is unavailable, delete_room_index should return False."""
-        service._index_available = False
-
-        result = await service.delete_room_index("room-1")
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_search_reports_vector_unused_when_unavailable(self, service):
-        """search() should set vector_search_used=False when index is unavailable."""
-        service._index_available = False
-
-        service._keyword_search = AsyncMock(return_value=[])
-        service._merge_results = MagicMock(return_value=[])
-        service._apply_mmr = MagicMock(return_value=[])
-
-        mock_config = MagicMock()
-        mock_config.enabled = True
-        mock_config.vector_weight = 0.7
-        mock_config.keyword_weight = 0.3
-        mock_config.temporal_decay_enabled = False
-        mock_config.mmr_enabled = False
-        mock_config.max_results = 10
-        mock_config.max_snippet_chars = 200
-        mock_config.hydrate_notes = False
-
-        with patch.object(type(service), 'config', new_callable=lambda: property(
-            lambda self: mock_config
-        )):
-            response = await service.search("test query", "room-1")
-
-        assert response.vector_search_used is False
-        service.openai_service.get_embedding.assert_not_called()
-
-
-# =========================================================================
-# Test: Write-path NotFoundException handling
-# =========================================================================
-
-
-class TestWritePathPineconeNotFound:
-    """Tests for NotFoundException handling in index_turn_for_search
-    and delete_room_index."""
-
-    @pytest.fixture
-    def service(self):
-        from app_shell.memory_search_service import MemorySearchService
-        svc = MemorySearchService()
-        svc.openai_service = MagicMock()
-        svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
-        svc.embedding_service = MagicMock()
-        svc.embedding_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
-        svc._index_available = True
-        return bind_memory_search_facade(svc)
-
-    @pytest.mark.asyncio
-    async def test_index_turn_returns_false_on_not_found(self, service):
-        from pinecone.exceptions import NotFoundException
-
-        from models.memory import ConversationTurn
-
-        mock_index = MagicMock()
-        mock_index.upsert.side_effect = NotFoundException("Not found")
-        service.pinecone = MagicMock()
-        service.pinecone.get_index = MagicMock(return_value=mock_index)
-
-        turn = MagicMock(spec=ConversationTurn)
-        turn.content = "test content"
-        turn.turn_id = "turn-1"
-        turn.role = MagicMock()
-        turn.role.value = "user"
-        turn.agent_name = "test-agent"
-        turn.timestamp = MagicMock()
-        turn.timestamp.isoformat.return_value = "2024-01-01T00:00:00"
-
-        result = await service.index_turn_for_search(turn, "room-1")
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_delete_room_returns_false_on_not_found(self, service):
-        from pinecone.exceptions import NotFoundException
-
-        mock_index = MagicMock()
-        mock_index.delete.side_effect = NotFoundException("Not found")
-        service.pinecone = MagicMock()
-        service.pinecone.get_index = MagicMock(return_value=mock_index)
-
-        result = await service.delete_room_index("room-1")
-        assert result is False
+    assert result is False

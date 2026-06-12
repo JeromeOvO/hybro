@@ -12,13 +12,12 @@ Implements:
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §8 for design specification.
 """
 
-import asyncio
 import math
-from datetime import datetime
-from typing import Any
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from context_memory import search as memory_search_ops
+from context_memory.models import SearchRankingRecord
 from context_memory.search_adapter import ContextMemorySearchAdapter
 from llm_gateway.errors import LLMServiceNotBoundError
 from models.context_config import memory_search_config
@@ -30,26 +29,6 @@ from models.search import (
 )
 
 logger = get_logger(__name__)
-_mongodb_backend: Any | None = None
-_pinecone_backend: Any | None = None
-
-
-def __getattr__(name: str) -> Any:
-    if name == "mongodb":
-        return _mongodb_backend
-    if name == "pinecone":
-        return _pinecone_backend
-    raise AttributeError(name)
-
-
-def bind_mongo_backend(mongo_backend: Any | None = None) -> None:
-    global _mongodb_backend
-    _mongodb_backend = mongo_backend
-
-
-def bind_pinecone_backend(pinecone_backend: Any | None = None) -> None:
-    global _pinecone_backend
-    _pinecone_backend = pinecone_backend
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -84,12 +63,9 @@ class MemorySearchService:
 
     def __init__(self):
         self.embedding_service = None
-        self.pinecone = None
-        self._index_available: bool | None = None
         self._facade = None
         self._bound = False
         self._search_adapter = ContextMemorySearchAdapter()
-        self._content_collection_override = None
 
     def bind_facade(self, facade) -> None:
         self._facade = facade
@@ -104,6 +80,10 @@ class MemorySearchService:
             raise LLMServiceNotBoundError("EmbeddingLLMService is not bound")
         return self.embedding_service
 
+    def _embedding_provider(self):
+        facade = self._require_facade()
+        return getattr(facade, "llm_provider", None) or self._require_embedding_service()
+
     def _require_facade(self):
         if not self._bound or self._facade is None:
             raise RuntimeError(
@@ -115,78 +95,12 @@ class MemorySearchService:
     def config(self):
         return memory_search_config
 
-    @property
-    def _pinecone_index(self):
-        """Lazily-connected Pinecone index for memory search."""
-        source = self.pinecone
-        if source is None:
-            source = globals().get("pinecone")
-        if source is None:
-            raise RuntimeError(
-                "MemorySearchService pinecone backend is unavailable; "
-                "bind memory search backend before calling search backends."
-            )
-        return source.get_index(self.config.index_name)
-
     @staticmethod
     def _is_not_found_error(exc: Exception) -> bool:
         return (
             exc.__class__.__name__ == "NotFoundException"
             or "not found" in str(exc).lower()
         )
-
-    def _is_index_available(self) -> bool:
-        """Check (and cache) whether the Pinecone index exists.
-
-        On the first call, probes the index with a lightweight
-        describe_index_stats request. The result is cached for the
-        lifetime of the process — the index either exists or it
-        doesn't (creating it requires a restart to pick up anyway).
-        """
-        if self._index_available is not None:
-            return self._index_available
-        try:
-            self._pinecone_index.describe_index_stats()
-            self._index_available = True
-            logger.info(
-                "MemorySearch: Pinecone index '%s' is available",
-                self.config.index_name,
-            )
-        except Exception as e:
-            if self._is_not_found_error(e):
-                self._index_available = False
-                logger.warning(
-                    "MemorySearch: Pinecone index '%s' not found — "
-                    "vector search/indexing will be skipped until restart",
-                    self.config.index_name,
-                )
-                return self._index_available
-            logger.warning(
-                "MemorySearch: failed to probe Pinecone index '%s': %s — "
-                "will retry on next request",
-                self.config.index_name,
-                e,
-            )
-            return False
-        return self._index_available
-
-    @property
-    def _content_collection(self):
-        """MongoDB conversation_content collection."""
-        source = self._content_collection_override
-        if source is not None:
-            return source
-        source = globals().get("mongodb")
-        if source is None:
-            raise RuntimeError(
-                "MemorySearchService mongodb backend is unavailable; "
-                "bind mongo backend before calling keyword search."
-            )
-        return source.conversation_content_collection
-
-    @_content_collection.setter
-    def _content_collection(self, value: Any) -> None:
-        self._content_collection_override = value
 
     # =========================================================================
     # Public API: Search
@@ -277,13 +191,11 @@ class MemorySearchService:
             return
 
         try:
-            cursor = self._content_collection.find(
-                {"room_id": room_id, "turn_id": {"$in": list(needs_hydration)}},
-                {"turn_id": 1, "turn_notes": 1},
+            facade = self._require_facade()
+            docs = await facade.content_repository.hydrate_turn_notes(
+                room_id, list(needs_hydration)
             )
-            docs_by_turn: dict[str, dict] = {}
-            async for doc in cursor:
-                docs_by_turn[doc.get("turn_id", "")] = doc
+            docs_by_turn = {doc.get("turn_id", ""): doc for doc in docs}
 
             for r in results:
                 if r.turn_id in docs_by_turn and not r.content:
@@ -308,18 +220,14 @@ class MemorySearchService:
         Embeds the query and searches the room-memory index filtered to
         the target room_id.
         """
-        if not self._is_index_available():
-            return []
-
-        embedding = await self._require_embedding_service().get_embedding(query)
-
         try:
-            results = await asyncio.to_thread(
-                self._pinecone_index.query,
-                vector=embedding,
-                top_k=50,
-                include_metadata=True,
-                filter={"room_id": {"$eq": room_id}},
+            facade = self._require_facade()
+            records = await memory_search_ops.vector_search(
+                room_id=room_id,
+                query=query,
+                vector=facade.vector,
+                llm_provider=self._embedding_provider(),
+                config=facade.search_config,
             )
         except Exception as e:
             if self._is_not_found_error(e):
@@ -334,38 +242,7 @@ class MemorySearchService:
                 )
             return []
 
-        matches = getattr(results, "matches", []) if results else []
-        search_results = []
-
-        for match in matches:
-            metadata = match.get("metadata", {}) if isinstance(match, dict) else getattr(match, "metadata", {})
-            score = match.get("score", 0.0) if isinstance(match, dict) else getattr(match, "score", 0.0)
-            match_id = match.get("id", "") if isinstance(match, dict) else getattr(match, "id", "")
-
-            timestamp = None
-            ts_str = metadata.get("timestamp", "")
-            if ts_str:
-                try:
-                    timestamp = datetime.fromisoformat(ts_str)
-                except (ValueError, TypeError):
-                    pass
-
-            search_results.append(
-                MemorySearchResult(
-                    turn_id=metadata.get("turn_id", match_id),
-                    room_id=room_id,
-                    source_type=MemorySourceType.TURN,
-                    content="",  # Will be populated from MongoDB if needed
-                    vector_score=score,
-                    timestamp=timestamp,
-                    role=metadata.get("role"),
-                    agent_name=metadata.get("agent_name") or None,
-                    is_compact=True,
-                    can_expand=True,
-                )
-            )
-
-        return search_results
+        return [_ranking_record_to_legacy_result(record) for record in records]
 
     # =========================================================================
     # Private: Keyword search (MongoDB text index on turn_notes)
@@ -386,50 +263,14 @@ class MemorySearchService:
 
         See CONTEXT_MEMORY_SYSTEM_DESIGN.md §8.3 for specification.
         """
-        cursor = (
-            self._content_collection.find(
-                {"room_id": room_id, "$text": {"$search": query}},
-                {
-                    "score": {"$meta": "textScore"},
-                    "turn_id": 1,
-                    "turn_notes": 1,
-                    "content_type": 1,
-                    "stored_at": 1,
-                },
-            )
-            .sort([("score", {"$meta": "textScore"})])
-            .limit(50)
+        facade = self._require_facade()
+        records = await memory_search_ops.keyword_search(
+            room_id=room_id,
+            query=query,
+            content_repository=facade.content_repository,
+            config=facade.search_config,
         )
-
-        docs = await cursor.to_list(length=50)
-        results = []
-
-        for doc in docs:
-            text_score = doc.get("score", 0.0)
-            turn_notes = doc.get("turn_notes", {})
-            one_liner = ""
-            if isinstance(turn_notes, dict):
-                one_liner = turn_notes.get("one_liner", "")
-
-            preview = one_liner[:self.config.max_snippet_chars] if one_liner else ""
-
-            timestamp = doc.get("stored_at")
-
-            results.append(
-                MemorySearchResult(
-                    turn_id=doc.get("turn_id", ""),
-                    room_id=room_id,
-                    source_type=MemorySourceType.TURN,
-                    content=one_liner or f"[{doc.get('content_type', 'text')}]",
-                    content_preview=preview or None,
-                    keyword_score=text_score,
-                    timestamp=timestamp,
-                    is_compact=True,
-                    can_expand=True,
-                )
-            )
-
-        return results
+        return [_ranking_record_to_legacy_result(record) for record in records]
 
     # =========================================================================
     # Private: Result merging
@@ -594,6 +435,29 @@ class MemorySearchService:
 
 # Singleton export
 memory_search_service = MemorySearchService()
+
+
+def _ranking_record_to_legacy_result(record: SearchRankingRecord) -> MemorySearchResult:
+    metadata = record.metadata or {}
+    source_type = metadata.get("source_type") or MemorySourceType.TURN
+    if isinstance(source_type, str):
+        source_type = MemorySourceType(source_type)
+    return MemorySearchResult(
+        turn_id=record.turn_id,
+        room_id=record.room_id,
+        source_type=source_type,
+        content=record.content,
+        content_preview=metadata.get("content_preview"),
+        vector_score=record.vector_score,
+        keyword_score=record.keyword_score,
+        combined_score=record.combined_score,
+        temporal_decay_factor=record.temporal_decay_factor,
+        timestamp=record.timestamp,
+        role=metadata.get("role"),
+        agent_name=metadata.get("agent_name") or None,
+        is_compact=bool(metadata.get("is_compact", False)),
+        can_expand=bool(metadata.get("can_expand", False)),
+    )
 
 
 def _legacy_search_response(payload: dict) -> MemorySearchResponse:

@@ -262,22 +262,25 @@ class TestMemorySearchHydration:
             ),
         ]
 
-        async def _mock_cursor():
-            yield {
-                "turn_id": "turn_1",
-                "turn_notes": {
-                    "keywords": ["React"],
-                    "one_liner": "Discussion about React deployment",
-                },
-            }
+        content_repository = MagicMock()
+        content_repository.hydrate_turn_notes = AsyncMock(
+            return_value=[
+                {
+                    "turn_id": "turn_1",
+                    "turn_notes": {
+                        "keywords": ["React"],
+                        "one_liner": "Discussion about React deployment",
+                    },
+                }
+            ]
+        )
+        service.bind_facade(MagicMock(content_repository=content_repository))
 
-        mock_coll = MagicMock()
-        mock_coll.find.return_value = _mock_cursor()
+        await service._hydrate_results_from_storage(results, "room_1")
 
-        with patch("app_shell.memory_search_service.mongodb") as mock_mongodb:
-            mock_mongodb.conversation_content_collection = mock_coll
-            await service._hydrate_results_from_storage(results, "room_1")
-
+        content_repository.hydrate_turn_notes.assert_awaited_once_with(
+            "room_1", ["turn_1"]
+        )
         assert results[0].content == "Discussion about React deployment"
         assert results[0].content_preview == "Discussion about React deployment"
 
@@ -301,13 +304,13 @@ class TestMemorySearchHydration:
             ),
         ]
 
-        mock_coll = MagicMock()
+        content_repository = MagicMock()
+        content_repository.hydrate_turn_notes = AsyncMock(return_value=[])
+        service.bind_facade(MagicMock(content_repository=content_repository))
 
-        with patch("app_shell.memory_search_service.mongodb") as mock_mongodb:
-            mock_mongodb.conversation_content_collection = mock_coll
-            await service._hydrate_results_from_storage(results, "room_1")
+        await service._hydrate_results_from_storage(results, "room_1")
 
-        mock_coll.find.assert_not_called()
+        content_repository.hydrate_turn_notes.assert_not_awaited()
 
 
 # =============================================================================

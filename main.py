@@ -415,15 +415,6 @@ async def lifespan(app: FastAPI):
             pinecone_db.connect()
             _db_svc.bind_backends(mongo=_legacy_mongo, pinecone=pinecone_db)
             capability_issue_service.bind_mongo(mongo_dal)
-            from app_shell.memory_search_service import (
-                bind_mongo_backend as _bind_mem_mongo,
-            )
-            from app_shell.memory_search_service import (
-                bind_pinecone_backend as _bind_mem_pinecone,
-            )
-
-            _bind_mem_mongo(_legacy_mongo)
-            _bind_mem_pinecone(pinecone_db)
             from common.observability.run_metrics import increment_counter
             from execution.cancellation import (
                 AgentTaskCleanupAdapter,
