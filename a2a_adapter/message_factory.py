@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from a2a.types import Message, Task, TextPart
+from a2a.types import Message, Part, Role, Task, TextPart
 
 from common import types as internal
 
@@ -33,6 +33,18 @@ def build_message_from_parts(
         role=role,
         message_id=message_id or uuid4().hex,
         parts=parts,
+    )
+
+
+def build_agent_text_message(
+    text: str,
+    *,
+    message_id: str | None = None,
+) -> Message:
+    return Message(
+        message_id=message_id or uuid4().hex,
+        role=Role.agent,
+        parts=[Part(root=TextPart(kind="text", text=text))],
     )
 
 
@@ -100,6 +112,7 @@ def from_sdk_task(task: Any) -> internal.Task:
 
 
 __all__ = [
+    "build_agent_text_message",
     "build_message_from_parts",
     "build_user_text_message",
     "from_sdk_message",

@@ -12,14 +12,11 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
-from a2a.types import (
-    Message,
-    Part,
-    Role,
-    TextPart,
+from a2a_adapter.message_factory import (
+    build_agent_text_message,
+    build_message_from_parts,
+    from_sdk_task,
 )
-
-from a2a_adapter.message_factory import build_message_from_parts, from_sdk_task
 from a2a_adapter.task_artifacts import materialize_non_text_parts_as_artifact
 from a2a_adapter.task_requests import (
     build_get_task_request,
@@ -1554,10 +1551,9 @@ class DirectTransport(AgentTransport):
                 if task_obj and task_obj.status:
                     task_obj.status.state = CommonTaskState(status) if isinstance(status, str) else status
                     if msg_text := response.get("message"):
-                        task_obj.status.message = Message(
+                        task_obj.status.message = build_agent_text_message(
+                            text=msg_text,
                             message_id=uuid.uuid4().hex,
-                            role=Role.agent,
-                            parts=[Part(root=TextPart(kind="text", text=msg_text))],
                         )
                 return True, None, message_id, response.get("task_id")
 
