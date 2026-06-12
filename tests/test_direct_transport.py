@@ -19,6 +19,8 @@ from a2a.types import (
     TextPart,
 )
 
+from common.utils.a2a_helpers import get_text_from_message
+from common.utils.cancellation import CancellationToken
 from execution.dispatch.transports.direct import DirectTransport, MessageStreamingState
 from models.error import A2AServiceError
 from models.processing import ProcessingContext, ProcessingStatus
@@ -939,3 +941,104 @@ class TestHandleSyncResponseInteractive:
         assert text is None
         assert paused == current_message.message_id
         assert agent_task_id == "real-agent-task-abc123"
+
+    @pytest.mark.asyncio
+    async def test_input_required_stores_prompt_in_task_status_message(self):
+        """When the agent returns requires_input with a message text, it must be
+        stored in task.status.message so dispatch() can read it as the HITL prompt."""
+        proc = _make_processor()
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+
+        task_info = {
+            "webhook_token": "tok-123",
+            "context_id": "ctx-1",
+            "created_at": "2025-01-01T00:00:00Z",
+        }
+        proc._setup_tracking_context = AsyncMock(
+            return_value=(
+                task_info,
+                MagicMock(
+                    room_id="room-1",
+                    current_message=current_message,
+                    agent_card=agent_card,
+                    user_message_id="msg-1",
+                    task_info=task_info,
+                    send_sse=False,
+                ),
+            )
+        )
+        proc.a2a_service.send_message_to_tracked_agent = AsyncMock(
+            return_value={
+                "type": "task",
+                "status": "input-required",
+                "requires_input": True,
+                "task_id": "task-abc",
+                "message": "Please provide your API key.",
+            }
+        )
+        proc.tsm.notify_task = AsyncMock()
+
+        await proc.handle_sync_response(
+            current_message=current_message,
+            agent_card=agent_card,
+            prepared_message=MagicMock(),
+            room_id="room-1",
+            _user_id="user-1",
+            user_message_id="msg-1",
+        )
+
+        task = current_message.message_content.message_task
+        assert task is not None
+        assert task.status.message is not None
+        assert get_text_from_message(task.status.message) == "Please provide your API key."
+
+    @pytest.mark.asyncio
+    async def test_input_required_without_message_leaves_task_status_message_none(self):
+        """When requires_input has no message text, task.status.message stays None."""
+        proc = _make_processor()
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+
+        task_info = {
+            "webhook_token": "tok-123",
+            "context_id": "ctx-1",
+            "created_at": "2025-01-01T00:00:00Z",
+        }
+        proc._setup_tracking_context = AsyncMock(
+            return_value=(
+                task_info,
+                MagicMock(
+                    room_id="room-1",
+                    current_message=current_message,
+                    agent_card=agent_card,
+                    user_message_id="msg-1",
+                    task_info=task_info,
+                    send_sse=False,
+                ),
+            )
+        )
+        proc.a2a_service.send_message_to_tracked_agent = AsyncMock(
+            return_value={
+                "type": "task",
+                "status": "input-required",
+                "requires_input": True,
+                "task_id": "task-abc",
+            }
+        )
+        proc.tsm.notify_task = AsyncMock()
+
+        await proc.handle_sync_response(
+            current_message=current_message,
+            agent_card=agent_card,
+            prepared_message=MagicMock(),
+            room_id="room-1",
+            _user_id="user-1",
+            user_message_id="msg-1",
+        )
+
+        task = current_message.message_content.message_task
+        assert task is not None
+        assert task.status.message is None
