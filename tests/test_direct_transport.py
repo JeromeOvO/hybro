@@ -20,7 +20,6 @@ from a2a.types import (
 )
 
 from common.utils.a2a_helpers import get_text_from_message
-from common.utils.cancellation import CancellationToken
 from execution.dispatch.transports.direct import DirectTransport, MessageStreamingState
 from models.error import A2AServiceError
 from models.processing import ProcessingContext, ProcessingStatus
