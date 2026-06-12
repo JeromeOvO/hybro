@@ -106,28 +106,11 @@ class AppShellRepositoryStore:
 
     @property
     def agent_room(self) -> AppShellAgentRoomStore:
-        part = getattr(self, "_agent_room_part", None)
-        if part is None:
-            part = AppShellAgentRoomStore(
-                agent_groups=self._agent_groups,
-                agents=self._agents,
-                room_repository=self._room_repository,
-                agent_repository=self._agent_repository,
-            )
-            self._agent_room_part = part
-        return part
+        return self._agent_room_part
 
     @property
     def messages(self) -> AppShellMessageStore:
-        part = getattr(self, "_message_part", None)
-        if part is None:
-            part = AppShellMessageStore(
-                room_agent_messages=getattr(self, "_room_agent_messages", None),
-                room_user_messages=getattr(self, "_room_user_messages", None),
-                message_repository=getattr(self, "_message_repository", None),
-            )
-            self._message_part = part
-        return part
+        return self._message_part
 
     async def add_agent_group(self, agent_group: AgentGroup) -> bool:
         return await self.agent_room.add_agent_group(agent_group)

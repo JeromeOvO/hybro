@@ -132,3 +132,17 @@ def test_app_shell_repository_store_wires_message_part():
     store = _make_app_shell_store()
 
     assert isinstance(store.messages, AppShellMessageStore)
+
+
+def test_app_shell_repository_store_part_properties_do_not_recreate_missing_parts():
+    store = _make_app_shell_store()
+
+    del store._agent_room_part
+    del store._message_part
+
+    for attribute in ("agent_room", "messages"):
+        try:
+            getattr(store, attribute)
+        except AttributeError:
+            continue
+        raise AssertionError(f"{attribute} should expose missing store wiring")
