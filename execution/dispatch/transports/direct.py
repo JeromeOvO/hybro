@@ -1201,6 +1201,22 @@ class DirectTransport(AgentTransport):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _resolve_task_response_status(response: dict[str, Any]) -> CommonTaskState:
+        """Derive task state from interactive flags, then status, then working."""
+        if response.get("requires_auth"):
+            return CommonTaskState.AUTH_REQUIRED
+        if response.get("requires_input"):
+            return CommonTaskState.INPUT_REQUIRED
+        raw_status = response.get("status")
+        if raw_status is not None:
+            return (
+                CommonTaskState(raw_status)
+                if isinstance(raw_status, str)
+                else raw_status
+            )
+        return CommonTaskState.WORKING
+
+    @staticmethod
     def _parse_sync_fallback_response(
         raw_response,
         message_id: str,
@@ -1238,6 +1254,13 @@ class DirectTransport(AgentTransport):
                 "task_id": result.id,
                 "status": state_value,
             }
+            if is_interactive_state(state):
+                parsed["requires_input"] = (
+                    state_value == CommonTaskState.INPUT_REQUIRED.value
+                )
+                parsed["requires_auth"] = (
+                    state_value == CommonTaskState.AUTH_REQUIRED.value
+                )
             if is_terminal_state(state) and result.artifacts:
                 from common.utils.a2a_helpers import (
                     extract_parts_from_artifacts as _epfa,
@@ -1533,23 +1556,29 @@ class DirectTransport(AgentTransport):
 
         # Handle "task" response (async path)
         if response.get("type") == "task":
-            status = response.get("status") or CommonTaskState.WORKING
+            status = self._resolve_task_response_status(response)
             if task_info:
                 await self.tsm.notify_task(
                     ctx,
                     status,
-                    requires_input=response.get("requires_input", False),
-                    requires_auth=response.get("requires_auth", False),
+                    requires_input=(
+                        response.get("requires_input", False)
+                        or status == CommonTaskState.INPUT_REQUIRED
+                    ),
+                    requires_auth=(
+                        response.get("requires_auth", False)
+                        or status == CommonTaskState.AUTH_REQUIRED
+                    ),
                     status_message=response.get("message"),
                 )
 
             # Interactive states (input-required / auth-required) are already
             # final for this dispatch cycle regardless of push capability.
             # Return immediately so QueueExecutor sees AWAITING_INPUT.
-            if response.get("requires_input") or response.get("requires_auth"):
+            if is_interactive_state(status):
                 task_obj = get_task(current_message)
                 if task_obj and task_obj.status:
-                    task_obj.status.state = CommonTaskState(status) if isinstance(status, str) else status
+                    task_obj.status.state = status
                     if msg_text := response.get("message"):
                         task_obj.status.message = build_agent_text_message(
                             text=msg_text,
