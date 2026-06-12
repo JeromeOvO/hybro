@@ -16,6 +16,7 @@ from uuid import uuid4
 
 import pytest
 
+from common.types import MessageRole
 from common.utils.context_utils import (
     add_turn_to_history,
     estimate_tokens,
@@ -234,7 +235,7 @@ class TestMemorySearchHydration:
                 turn_id="turn_1",
                 content="",
                 content_preview=None,
-                role="agent",
+                role=MessageRole.AGENT,
                 agent_name="TestAgent",
                 room_id="room_1",
                 source_type=MemorySourceType.TURN,
@@ -277,7 +278,7 @@ class TestMemorySearchHydration:
                 turn_id="turn_1",
                 content="Already has content",
                 content_preview="Already has content",
-                role="agent",
+                role=MessageRole.AGENT,
                 room_id="room_1",
                 source_type=MemorySourceType.TURN,
                 vector_score=0.95,
@@ -306,7 +307,7 @@ class TestWasSuccessfulPropagation:
         mc = MemoryContent()
         result = add_turn_to_history(
             mc,
-            role="agent",
+            role=MessageRole.AGENT,
             content="Agent completed the task successfully.",
             agent_id="agent_1",
             agent_name="TestAgent",
@@ -319,7 +320,7 @@ class TestWasSuccessfulPropagation:
         mc = MemoryContent()
         result = add_turn_to_history(
             mc,
-            role="agent",
+            role=MessageRole.AGENT,
             content="Agent failed to complete the task.",
             agent_id="agent_1",
             agent_name="TestAgent",
@@ -332,7 +333,7 @@ class TestWasSuccessfulPropagation:
         mc = MemoryContent()
         result = add_turn_to_history(
             mc,
-            role="user",
+            role=MessageRole.USER,
             content="User message",
         )
         assert len(result.conversation_history) == 1
@@ -421,7 +422,7 @@ class TestSearchToContextIntegration:
                 turn_id="turn_abc",
                 content="User asked about deploying the React frontend",
                 content_preview="User asked about deploying the React frontend",
-                role="user",
+                role=MessageRole.USER,
                 room_id="room_1",
                 source_type=MemorySourceType.TURN,
                 vector_score=0.92,
@@ -431,7 +432,7 @@ class TestSearchToContextIntegration:
                 turn_id="turn_def",
                 content="",
                 content_preview=None,
-                role="agent",
+                role=MessageRole.AGENT,
                 agent_name="DevAgent",
                 room_id="room_1",
                 source_type=MemorySourceType.TURN,

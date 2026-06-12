@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from uuid import uuid4
 from time import monotonic
+from uuid import uuid4
 
 from common.config import settings
 from common.utils.time import utcnow

@@ -3,8 +3,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
-
+from common.types import Message, MessageRole, Task, TaskState, TaskStatus, TextPart
 from common.utils.time import utcnow
 
 
@@ -12,7 +11,7 @@ def build_task_status(state: Any, *, error_text: str | None = None) -> TaskStatu
     status = TaskStatus(state=coerce_task_state(state))
     if error_text:
         status.message = Message(
-            role=Role.agent,
+            role=MessageRole.AGENT,
             parts=[TextPart(text=error_text)],
             message_id=str(uuid4()),
         )
@@ -33,7 +32,7 @@ def build_completed_text_task(
     task_context_id = context_id or task_id
     message = Message(
         message_id=task_id,
-        role=Role.agent,
+        role=MessageRole.AGENT,
         parts=[TextPart(text=text)],
         context_id=task_context_id,
         metadata=metadata or {},
@@ -61,7 +60,7 @@ def build_failed_text_task(
     task_context_id = context_id or task_id
     message = Message(
         message_id=uuid4().hex,
-        role=Role.agent,
+        role=MessageRole.AGENT,
         parts=[TextPart(text=error_text)],
         context_id=task_context_id,
         metadata=metadata or {},
@@ -79,8 +78,9 @@ def build_failed_text_task(
 
 
 def coerce_task_state(state: Any) -> Any:
-    if isinstance(state, str):
-        return TaskState(state)
+    val = getattr(state, "value", state)
+    if isinstance(val, str):
+        return TaskState(val)
     return state
 
 

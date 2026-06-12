@@ -84,6 +84,11 @@
             "path": "app_shell/task_service.py",
             "contract": "sdk_confinement",
             "reason": "Task runtime owns A2A task query models."
+        },
+        {
+            "path": "common/protocols/runtime_store_protocols.py",
+            "contract": "common_import_boundary",
+            "reason": "Runtime store protocols require importing concrete domain models to provide a type-safe contract."
         }
     ],
     "content_storage_callers": [

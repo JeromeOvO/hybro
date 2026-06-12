@@ -74,8 +74,13 @@ class Part(RootModel[PartUnion]):
     pass
 
 
+class MessageRole(str, Enum):
+    USER = "user"
+    AGENT = "agent"
+
+
 class Message(BaseModel):
-    role: Literal["user", "agent"]
+    role: MessageRole
     kind: str = "message"
     message_id: str | None = Field(default=None, alias="messageId")
     context_id: str | None = Field(default=None, alias="contextId")
@@ -219,7 +224,7 @@ class SendTaskRequest(JSONRPCRequest):
     method: Literal["tasks/send"] = "tasks/send"
     params: TaskSendParams = Field(
         default_factory=lambda: TaskSendParams(
-            id="", message=Message(role="user", parts=[])
+            id="", message=Message(role=MessageRole.USER, parts=[])
         )
     )
 
@@ -232,7 +237,7 @@ class SendTaskStreamingRequest(JSONRPCRequest):
     method: Literal["tasks/sendSubscribe"] = "tasks/sendSubscribe"
     params: TaskSendParams = Field(
         default_factory=lambda: TaskSendParams(
-            id="", message=Message(role="user", parts=[])
+            id="", message=Message(role=MessageRole.USER, parts=[])
         )
     )
 

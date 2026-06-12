@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from common.types import MessageRole
 from context_memory import assembly
 from context_memory.config import TokenBudgetConfig
 from context_memory.models import RoomSummaryData
@@ -112,7 +113,7 @@ def test_supervisor_assembly_fixed_golden_with_search_and_compact_pointer():
         memory_search_results=[
             SimpleNamespace(
                 content_preview="Remember migration parity",
-                role="user",
+                role=MessageRole.USER,
             )
         ],
     )

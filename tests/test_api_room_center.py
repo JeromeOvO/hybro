@@ -29,7 +29,7 @@ from api.room_center import (
     verify_room_ownership,
 )
 from app_shell.room_runtime import AppShellRoomCenter as RoomCenter
-from common.dto import ExecutionAck, RunInfo
+from common.dto import ExecutionAck
 from models.response import (
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
@@ -242,7 +242,7 @@ class TestInquiryActiveRuns:
             sample_room
         )
 
-        from models.response import RoomCenterActiveRunsResponse, ActiveRunRef
+        from models.response import ActiveRunRef, RoomCenterActiveRunsResponse
         mock_response = RoomCenterActiveRunsResponse(
             success=True,
             room_id=sample_room.room_id,

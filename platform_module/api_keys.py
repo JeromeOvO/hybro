@@ -9,10 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 
 from common.protocols import APIKeyRecord, MongoDAL
-
 
 _API_KEY_FIELDS = frozenset(
     ("key_id", "user_id", "name", "is_active", "created_at", "last_used_at", "usage_count", "key_hash")

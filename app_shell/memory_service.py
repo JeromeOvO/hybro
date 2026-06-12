@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from app_shell.runtime_store import UNBOUND_RUNTIME_STORE
 from common.dto import ChatContextGenerationInput
+from common.types import MessageRole
 from common.utils.context_utils import (
     add_turn_to_history,
 )
@@ -254,7 +255,7 @@ class RoomMemoryService:
                 if request.memory_content:
                     memory_content = add_turn_to_history(
                         memory_content=memory_content,
-                        role="user",
+                        role=MessageRole.USER,
                         content=request.memory_content,
                     )
                 memory_doc = RoomMemory(

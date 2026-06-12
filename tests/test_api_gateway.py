@@ -1,3 +1,4 @@
+
 """
 Unit tests for Gateway API endpoints.
 
@@ -29,6 +30,7 @@ from api.gateway import (
 )
 from common.dto import GatewayResponse, InternalAgentMessage
 from common.errors import GatewayPlatformError, PlatformRouteError
+from common.types import MessageRole
 from models.api_key import APIKey
 from models.gateway import (
     GatewayCardResponse,
@@ -180,7 +182,7 @@ class TestGatewaySend:
             agent_id="agent-001",
             message=InternalAgentMessage(
                 agent_id="agent-001",
-                role="user",
+                role=MessageRole.USER,
                 parts=[{"kind": "text", "text": "Hello agent"}],
                 metadata={},
             ),
@@ -271,7 +273,7 @@ class TestGatewayStream:
             agent_id="agent-001",
             message=InternalAgentMessage(
                 agent_id="agent-001",
-                role="user",
+                role=MessageRole.USER,
                 parts=[{"kind": "text", "text": "Hello agent"}],
                 metadata={},
             ),

@@ -2,7 +2,9 @@ import pytest
 
 from common.dto import RoomMessageSummary
 from common.prompts.markdown_response_format import HYBRO_MARKDOWN_RESPONSE_FORMAT
-from execution.orchestration.room_supervisor_service import SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT
+from execution.orchestration.room_supervisor_service import (
+    SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT,
+)
 from llm_gateway.services.summary import SummaryLLMService
 
 

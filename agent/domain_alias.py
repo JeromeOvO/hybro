@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from agent.public_url import PublicUrlGenerator, RESERVED_SUBDOMAINS
+from agent.public_url import RESERVED_SUBDOMAINS, PublicUrlGenerator
 from common.protocols import AgentRepository
 
 

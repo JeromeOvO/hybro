@@ -569,7 +569,8 @@ def _search_snippets(memory_search_results: list | None) -> list[str] | None:
         )
         role = getattr(result, "role", None) or "unknown"
         agent = getattr(result, "agent_name", None)
-        label = f"[{agent}]" if agent else f"[{role}]"
+        role_val = getattr(role, "value", role)
+        label = f"[{agent}]" if agent else f"[{role_val}]"
         if preview:
             snippets.append(f"{label} {preview}")
     return snippets

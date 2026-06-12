@@ -895,9 +895,10 @@ class RoomMessageCenter:
             room and isinstance(room.extend_info, dict)
             and room.extend_info.get("debateMode", False)
         )
-        turn_completion_kind = await self._emit_unified_summary(
+        turn_completion_kind, _ = await self._emit_unified_summary(
             room_id, room_user_message_id, is_debate=is_debate
-        ) or "deterministic"
+        )
+        turn_completion_kind = turn_completion_kind or "deterministic"
 
         # Emit turn_completed event
         if self._turn_event_appender:
@@ -1972,11 +1973,8 @@ class RoomMessageCenter:
                     and room.extend_info.get("debateMode", False)
                 ) if room else False
 
-                # Only emit a summary when the supervisor explicitly chose
-                # SYNTHESIZE (synthesis_text is set).  When the supervisor chose
-                # DONE it means individual agent responses are sufficient.
                 if result.synthesis_text is not None:
-                    await self._emit_unified_summary(
+                    turn_completion_kind, _ = await self._emit_unified_summary(
                         room_id,
                         user_message_id,
                         synthesis_text=result.synthesis_text,
@@ -1984,12 +1982,30 @@ class RoomMessageCenter:
                         is_debate=is_debate,
                         working_already_emitted=True,
                     )
+                    turn_completion_kind = turn_completion_kind or "deterministic"
+                elif is_debate and len(trajectory_responses) >= 2:
+                    turn_completion_kind, generated_summary = await self._emit_unified_summary(
+                        room_id,
+                        user_message_id,
+                        synthesis_text=None,
+                        trajectory_responses=trajectory_responses,
+                        is_debate=True,
+                        working_already_emitted=False,
+                        skip_db_write=True,
+                    )
+                    turn_completion_kind = turn_completion_kind or "deterministic"
+                    if generated_summary:
+                        result.synthesis_text = generated_summary
                 elif len(trajectory_responses) >= 2:
                     await self._emit_deterministic_digest(
                         room_id,
                         user_message_id,
                         agent_count=len(trajectory_responses),
                     )
+                    turn_completion_kind = "deterministic"
+                else:
+                    turn_completion_kind = "deterministic"
+
                 # Emit turn_completed event
                 if getattr(self, '_turn_event_appender', None):
                     try:
@@ -2000,10 +2016,6 @@ class RoomMessageCenter:
                     except Exception:
                         pass
 
-                turn_completion_kind = (
-                    "synthesis" if result.synthesis_text is not None
-                    else "deterministic"
-                )
                 await self._persist_turn_completion_kind(
                     user_message_id, turn_completion_kind
                 )
@@ -2375,9 +2387,9 @@ class RoomMessageCenter:
                 room and isinstance(room.extend_info, dict)
                 and room.extend_info.get("debateMode", False)
             )
-            turn_completion_kind = await self._emit_unified_summary(
+            turn_completion_kind, _ = await self._emit_unified_summary(
                 result.room_id, result.user_message_id, is_debate=is_debate
-            ) or "deterministic"
+            ) or ("deterministic", None)
             if getattr(self, '_turn_event_appender', None):
                 try:
                     await self._turn_event_appender.append(
@@ -2533,10 +2545,11 @@ class RoomMessageCenter:
         user_message_id: str,
         *,
         synthesis_text: str | None = None,
-        trajectory_responses: list[dict[str, str]] | None = None,
+        trajectory_responses: list[dict] | None = None,
         is_debate: bool = False,
         working_already_emitted: bool = False,
-    ) -> str | None:
+        skip_db_write: bool = False,
+    ) -> tuple[str | None, str | None]:
         """Emit a single unified summary message for a user message turn.
 
         Routing logic:
@@ -2572,7 +2585,7 @@ class RoomMessageCenter:
                 # duplicate content in the UI.  This mirrors the < 2 guard
                 # on the non-synthesis (coordinator) path below.
                 if trajectory_responses is not None and len(trajectory_responses) < 2:
-                    return "deterministic"
+                    return "deterministic", None
 
                 if not working_already_emitted:
                     await self._emit_summary_working(
@@ -2628,7 +2641,7 @@ class RoomMessageCenter:
 
                 # Skip summary entirely when fewer than 2 agents responded
                 if len(agent_responses) < 2:
-                    return "deterministic"
+                    return "deterministic", None
 
                 await self._emit_summary_working(
                     room_id, user_message_id, summary_message_id,
@@ -2657,7 +2670,7 @@ class RoomMessageCenter:
                         error="Summary generation returned empty",
                         client_request_id=summary_client_request_id,
                     )
-                    return None
+                    return None, None
 
             # 2. Build and persist
             from models.room import MessageContent, RoomAgentMessage
@@ -2696,7 +2709,7 @@ class RoomMessageCenter:
                 related_message_id=user_message_id,
                 client_request_id=summary_client_request_id,
             )
-            return "synthesis"
+            return "synthesis", content
 
         except LLMServiceNotBoundError:
             raise

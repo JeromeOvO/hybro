@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, Protocol
 
+from common.types import MessageRole
 from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -177,7 +178,7 @@ def get_message_from_task(task: Any) -> Any | None:
             logger.debug("Found %d parts in task.artifacts", len(all_parts))
             message = SimpleNamespace(
                 kind="message",
-                role="agent",
+                role=MessageRole.AGENT,
                 message_id=str(uuid.uuid4()),
                 task_id=task.id,
                 parts=all_parts,

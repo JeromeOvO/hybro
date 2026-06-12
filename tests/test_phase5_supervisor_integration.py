@@ -1139,7 +1139,7 @@ class TestHandleV2RunResultUnifiedSummary:
             from execution.orchestration.factory import create_room_message_center
 
             rmc = create_room_message_center(debate_rounds=2)
-            rmc._emit_unified_summary = AsyncMock()
+            rmc._emit_unified_summary = AsyncMock(return_value=("synthesis", "Final synthesis."))
             rmc._emit_deterministic_digest = AsyncMock()
             rmc._trigger_compaction_safe = AsyncMock()
             rmc._processing_status_emitter = _noop_processing_status_emitter

@@ -15,7 +15,6 @@ from models.request import (
 )
 from models.response import (
     ActiveRunRef,
-    RoomCenterActiveRunsResponse,
     RoomCenterUserMessageResponse,
 )
 
