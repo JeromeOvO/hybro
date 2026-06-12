@@ -63,10 +63,11 @@ class RunMongoRepository:
         )
 
     async def get_room_ids_with_non_terminal_runs(self) -> list[str]:
-        return await self._runs.distinct(
+        ids = await self._runs.distinct(
             "room_id",
             {"state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)}},
         )
+        return [str(room_id) for room_id in ids if room_id]
 
 
 class RunEventMongoRepository:

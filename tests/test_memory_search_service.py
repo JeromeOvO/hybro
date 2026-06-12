@@ -784,32 +784,30 @@ class TestSearchPipeline:
 
 
 class TestPineconeMultiIndex:
-    """Tests for PineconeDB.get_index() multi-index support."""
+    """Tests for VectorDALImpl multi-index support."""
 
     def test_get_index_caches(self):
-        from database.pinecone_db import PineconeDB
+        from dal.pinecone.client import VectorDALImpl
 
-        db = PineconeDB()
         mock_pc = MagicMock()
         mock_index = MagicMock()
         mock_pc.Index.return_value = mock_index
-        db._pc = mock_pc
+        vector = VectorDALImpl(client=mock_pc)
 
-        idx1 = db.get_index("test-index")
-        idx2 = db.get_index("test-index")
+        idx1 = vector._get_index("test-index")
+        idx2 = vector._get_index("test-index")
 
         assert idx1 is idx2
         mock_pc.Index.assert_called_once_with("test-index")
 
     def test_get_index_different_names(self):
-        from database.pinecone_db import PineconeDB
+        from dal.pinecone.client import VectorDALImpl
 
-        db = PineconeDB()
         mock_pc = MagicMock()
-        db._pc = mock_pc
+        vector = VectorDALImpl(client=mock_pc)
 
-        db.get_index("index-a")
-        db.get_index("index-b")
+        vector._get_index("index-a")
+        vector._get_index("index-b")
 
         assert mock_pc.Index.call_count == 2
 

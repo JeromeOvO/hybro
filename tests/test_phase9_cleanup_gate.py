@@ -406,7 +406,6 @@ def _test_import_files_for_package(package: str) -> list[str]:
 def test_repo_local_config_callers_use_common_config_settings():
     expected_callers = {
         Path("container.py"),
-        Path("database/mongodb.py"),
         Path("main.py"),
         Path("scripts/_discovery_client.py"),
     }
@@ -931,9 +930,19 @@ def test_package_removal_runtime_scan_includes_shipped_legacy_roots():
 def test_dal_database_convergence_manifest_exists_and_has_no_unknown_sections():
     manifest = json.loads(Path("tests/fixtures/dal_database_convergence_manifest.json").read_text())
     assert set(manifest) == {
-        "database_singleton_import_blockers",
-        "hidden_mongo_fallback_blockers",
-        "database_service_type_blockers",
-        "database_service_duck_type_blockers",
-        "pinecone_singleton_import_blockers",
+        "exclude_dirs",
+        "exclude_files",
+        "database_service_blockers",
+        "mongo_singleton_blockers",
+        "database_repository_blockers",
+        "pinecone_singleton_blockers",
+        "direct_pinecone_blockers",
+        "legacy_runtime_files",
     }
+    assert manifest["exclude_files"] == []
+    assert manifest["legacy_runtime_files"] == []
+    assert manifest["database_service_blockers"] == []
+    assert manifest["mongo_singleton_blockers"] == []
+    assert manifest["database_repository_blockers"] == []
+    assert manifest["pinecone_singleton_blockers"] == []
+    assert manifest["direct_pinecone_blockers"] == []

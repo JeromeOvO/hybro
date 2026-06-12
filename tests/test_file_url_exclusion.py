@@ -1,4 +1,4 @@
-from database.mongodb import MongoDB
+from app_shell.repository_store import _strip_file_urls
 
 
 class TestStripFileUrls:
@@ -12,7 +12,7 @@ class TestStripFileUrls:
                 ]
             }
         }
-        MongoDB._strip_file_urls(doc)
+        _strip_file_urls(doc)
         for att in doc["message_content"]["attachments"]:
             assert "file_url" not in att
 
@@ -26,17 +26,17 @@ class TestStripFileUrls:
                 }
             }
         }
-        MongoDB._strip_file_urls(doc)
+        _strip_file_urls(doc)
         assert "file_url" not in doc["$set"]["message_content"]["attachments"][0]
 
     def test_no_attachments_noop(self):
         doc = {"message_content": {"message_text": "hi"}}
-        MongoDB._strip_file_urls(doc)
+        _strip_file_urls(doc)
         assert doc["message_content"]["message_text"] == "hi"
 
     def test_no_message_content_noop(self):
         doc = {"room_id": "r1"}
-        MongoDB._strip_file_urls(doc)
+        _strip_file_urls(doc)
         assert doc == {"room_id": "r1"}
 
     def test_model_dump_excludes_file_url_when_none(self):

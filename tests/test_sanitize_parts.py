@@ -1,13 +1,13 @@
-"""Tests for mongodb.py read-path sanitization helpers.
+"""Tests for repository-store read-path sanitization helpers.
 
-Covers _sanitize_parts, _sanitize_task_dict, and _parse_room_agent_message —
+Covers _sanitize_parts, _sanitize_task_dict, and _safe_parse_agent_message —
 the defensive layer that strips malformed A2A Part dicts before Pydantic
 validation so a single bad part doesn't poison the entire RoomAgentMessage.
 """
 
 
-from database.mongodb import (
-    _parse_room_agent_message,
+from app_shell.repository_store import (
+    _safe_parse_agent_message,
     _sanitize_parts,
     _sanitize_task_dict,
 )
@@ -160,10 +160,10 @@ class TestSanitizeTaskDict:
 
 
 # ---------------------------------------------------------------------------
-# _parse_room_agent_message
+# _safe_parse_agent_message
 # ---------------------------------------------------------------------------
 class TestParseRoomAgentMessage:
-    """Integration tests for _parse_room_agent_message."""
+    """Integration tests for _safe_parse_agent_message."""
 
     @staticmethod
     def _make_raw(task_dict: dict | None = None, text: str | None = None) -> dict:
@@ -183,7 +183,8 @@ class TestParseRoomAgentMessage:
 
     def test_clean_doc_passes(self):
         raw = self._make_raw(text="hello")
-        msg = _parse_room_agent_message(raw)
+        msg = _safe_parse_agent_message(raw)
+        assert msg is not None
         assert msg.message_content.message_text == "hello"
 
     def test_malformed_part_stripped_before_validation(self):
@@ -202,7 +203,8 @@ class TestParseRoomAgentMessage:
                 }
             ],
         }
-        msg = _parse_room_agent_message(self._make_raw(task_dict=task_dict))
+        msg = _safe_parse_agent_message(self._make_raw(task_dict=task_dict))
+        assert msg is not None
         arts = msg.message_content.message_task.artifacts
         assert len(arts) == 1
         assert len(arts[0].parts) == 1
@@ -210,7 +212,8 @@ class TestParseRoomAgentMessage:
 
     def test_no_task_no_crash(self):
         raw = self._make_raw(text="just text")
-        msg = _parse_room_agent_message(raw)
+        msg = _safe_parse_agent_message(raw)
+        assert msg is not None
         assert msg.message_content.message_task is None
 
     def test_all_parts_malformed_yields_empty_artifact(self):
@@ -225,5 +228,6 @@ class TestParseRoomAgentMessage:
                 }
             ],
         }
-        msg = _parse_room_agent_message(self._make_raw(task_dict=task_dict))
+        msg = _safe_parse_agent_message(self._make_raw(task_dict=task_dict))
+        assert msg is not None
         assert len(msg.message_content.message_task.artifacts[0].parts) == 0

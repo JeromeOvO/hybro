@@ -4,7 +4,9 @@ Run these **before** or **during** deploy when the release notes call for it. Sc
 
 ## Run lifecycle (`runs` / `run_events`)
 
-**When:** Any release that adds or changes run lifecycle indexes (see `database/mongodb.py` → `create_run_lifecycle_indexes`).
+**When:** Any release that adds or changes run lifecycle indexes. The legacy
+`database/mongodb.py` helper has been deleted; port this migration to `MongoDAL`
+or use the runtime index registry before running it again.
 
 **Command** (from `multi-agents-backend` repo root, venv active, `MONGODB_URL` set):
 

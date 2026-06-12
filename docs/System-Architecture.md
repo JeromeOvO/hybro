@@ -374,8 +374,8 @@ Examples:
 - `app_shell.room_runtime`: room send-message preparation, target resolution,
   attachment resolution, supervisor preparation, and message parsing.
 - `app_shell.agent_service`: route-facing adapter over `AgentFacade`.
-- `app_shell.database_service`: app-shell database facade over `database.mongodb`
-  and Pinecone.
+- `app_shell.repository_store`: DAL/repository-backed compatibility store for
+  app-shell callers that have not yet moved directly to module facades.
 - `app_shell.relay_service`: relay route surface over
   `hub_runtime_bridge`.
 - `execution.dispatch.task_notifications`: terminal task update notifications.
@@ -693,7 +693,8 @@ The current codebase has a mixed architecture:
 - Newer modules use explicit facades, protocol interfaces, DTOs, and container
   construction.
 - Some app-shell modules still use singleton-style process runtime objects.
-- `app_shell.database_service` and `database.mongodb` still expose broad APIs.
+- Legacy runtime database files have been deleted; operational scripts and
+  historical migrations that still reference them require DAL ports before use.
 - Some route modules bind dependencies via module-level globals during startup.
 - Compatibility layers are intentionally kept so the repo can migrate in phases
   without breaking existing route behavior.
