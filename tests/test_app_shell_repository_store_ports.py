@@ -97,3 +97,52 @@ def test_protocol_import_tolerates_json_log_format_environment():
 
     assert result.returncode == 0, result.stderr
     assert "RuntimeAgentRoomStore APIKeyAuthenticator" in result.stdout
+
+
+class _FakeMongo:
+    def __init__(self) -> None:
+        self.collections: dict[str, object] = {}
+
+    def collection(self, name: str) -> object:
+        return self.collections.setdefault(name, object())
+
+
+def _make_app_shell_store():
+    from app_shell.repository_store import AppShellRepositoryStore
+
+    return AppShellRepositoryStore(
+        mongo=_FakeMongo(),
+        room_repository=object(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+
+
+def test_app_shell_repository_store_wires_agent_room_part():
+    from app_shell.repository_parts.agent_room_store import AppShellAgentRoomStore
+
+    store = _make_app_shell_store()
+
+    assert isinstance(store.agent_room, AppShellAgentRoomStore)
+
+
+def test_app_shell_repository_store_wires_message_part():
+    from app_shell.repository_parts.message_store import AppShellMessageStore
+
+    store = _make_app_shell_store()
+
+    assert isinstance(store.messages, AppShellMessageStore)
+
+
+def test_app_shell_repository_store_part_properties_do_not_recreate_missing_parts():
+    store = _make_app_shell_store()
+
+    del store._agent_room_part
+    del store._message_part
+
+    for attribute in ("agent_room", "messages"):
+        try:
+            getattr(store, attribute)
+        except AttributeError:
+            continue
+        raise AssertionError(f"{attribute} should expose missing store wiring")

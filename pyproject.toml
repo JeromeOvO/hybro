@@ -213,6 +213,7 @@ packages = [
     "api_gateway.routes",
     "api_gateway.viewsets",
     "app_shell",
+    "app_shell.repository_parts",
     "models",
     "common",
     "common.client",
