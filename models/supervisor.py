@@ -198,10 +198,12 @@ class SupervisorTrajectory(BaseModel):
 
     clarify_original_message_id: str | None = None
     """The ``user_message_id`` of the message that originally triggered the
-    CLARIFY action.  Carried through pause/resume so that
-    ``_handle_supervisor_run_result`` can update the original message's trajectory
-    status even when the clarify-resume itself gets paused by a push
-    notification and later resumes via the webhook path."""
+    clarification workflow. Used only during the clarify-resume path so
+    we can cross-reference the original question if needed."""
+
+    system_agent_message_id: str | None = None
+    """The message ID of the orchestrator task (system:hybro). Stored here so it
+    can be reused across PAUSED interrupts when the loop resumes."""
 
     hitl_user_reply: str | None = None
     """The user's reply to a CLARIFY question (pre-plan or mid-loop).

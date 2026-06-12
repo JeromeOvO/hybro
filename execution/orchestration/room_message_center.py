@@ -2436,7 +2436,7 @@ class RoomMessageCenter:
             message_id=summary_message_id,
             task_id=summary_message_id,
             agent_name="HYBRO AI",
-            agent_id=CoordinatorAgentId.SUMMARY,
+            agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
             status="working",
             related_message_id=user_message_id,
             task_content="Summarizing agent responses\u2026",
@@ -2455,7 +2455,7 @@ class RoomMessageCenter:
             self.sse_manager,
             room_id=room_id,
             message_id=summary_message_id,
-            agent_id=CoordinatorAgentId.SUMMARY,
+            agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
             token_stream=token_stream,
             client_request_id=summary_client_request_id,
         )
@@ -2494,7 +2494,7 @@ class RoomMessageCenter:
             summary_agent_message = RoomAgentMessage(
                 room_id=room_id,
                 message_id=summary_message_id,
-                agent_id=CoordinatorAgentId.SUMMARY,
+                agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
                 related_message_id=user_message_id,
                 user_id=user_id,
                 client_request_id=summary_client_request_id,
@@ -2505,7 +2505,6 @@ class RoomMessageCenter:
                     "source_user_message_id": user_message_id,
                     "summary_origin": "deterministic",
                 },
-                task_content=content,
             )
 
             await self._store.upsert_room_agent_message(summary_agent_message)
@@ -2513,7 +2512,7 @@ class RoomMessageCenter:
             await self.sse_manager.send_agent_response(
                 room_id,
                 summary_message_id,
-                CoordinatorAgentId.SUMMARY,
+                CoordinatorAgentId.SYSTEM_HYBRO,
                 content,
                 related_message_id=user_message_id,
                 client_request_id=summary_client_request_id,
@@ -2601,8 +2600,7 @@ class RoomMessageCenter:
                             and isinstance(msg.extend_info, dict)
                             and msg.extend_info.get("is_coordinator_summary")
                         ) or msg.agent_id in (
-                            "debate_summary", "non_debate_summary", "summary",
-                            "supervisor_synthesis", "supervisor_error", "supervisor_clarify",
+                            CoordinatorAgentId.SYSTEM_HYBRO, CoordinatorAgentId.SYSTEM_CLARIFIER, CoordinatorAgentId.SUPERVISOR_ERROR,
                         ):
                             continue
                         task = msg.message_content and msg.message_content.message_task
@@ -2655,7 +2653,7 @@ class RoomMessageCenter:
                 if not content:
                     await self.sse_manager.send_task_update(
                         room_id, summary_message_id, "failed",
-                        agent_id=CoordinatorAgentId.SUMMARY,
+                        agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
                         error="Summary generation returned empty",
                         client_request_id=summary_client_request_id,
                     )
@@ -2673,7 +2671,7 @@ class RoomMessageCenter:
             summary_agent_message = RoomAgentMessage(
                 room_id=room_id,
                 message_id=summary_message_id,
-                agent_id=CoordinatorAgentId.SUMMARY,
+                agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
                 related_message_id=user_message_id,
                 user_id=user_id,
                 client_request_id=summary_client_request_id,
@@ -2685,7 +2683,6 @@ class RoomMessageCenter:
                     "summary_type": "debate" if is_debate else "non_debate",
                     "summary_origin": origin,
                 },
-                task_content=content,
             )
 
             await self._store.upsert_room_agent_message(summary_agent_message)
@@ -2694,7 +2691,7 @@ class RoomMessageCenter:
             await self.sse_manager.send_agent_response(
                 room_id,
                 summary_message_id,
-                CoordinatorAgentId.SUMMARY,
+                CoordinatorAgentId.SYSTEM_HYBRO,
                 content,
                 related_message_id=user_message_id,
                 client_request_id=summary_client_request_id,
@@ -2714,7 +2711,7 @@ class RoomMessageCenter:
                     room_id=room_id,
                     message_id=summary_message_id,
                     status="failed",
-                    agent_id=CoordinatorAgentId.SUMMARY,
+                    agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
                     client_request_id=summary_client_request_id,
                 )
             except Exception:

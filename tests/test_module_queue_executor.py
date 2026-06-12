@@ -58,6 +58,9 @@ def _make_queue_executor():
     qe.database_service.get_room_user_message_by_message_id = AsyncMock(
         return_value=None
     )
+    qe.database_service.resolve_client_request_id_for_message_id = AsyncMock(
+        return_value=None
+    )
     qe.a2a_service = MagicMock()
     qe.room_runtime = MagicMock()
     qe.agent_dispatcher = MagicMock()

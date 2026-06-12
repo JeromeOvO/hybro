@@ -73,7 +73,7 @@ class TestEmitUnifiedSummary:
         rmc.database_service.upsert_room_agent_message.assert_awaited_once()
         saved_msg = rmc.database_service.upsert_room_agent_message.call_args[0][0]
         assert saved_msg.message_id == "summary-msg-1"
-        assert saved_msg.agent_id == CoordinatorAgentId.SUMMARY
+        assert saved_msg.agent_id == CoordinatorAgentId.SYSTEM_HYBRO
         assert saved_msg.extend_info["summary_origin"] == "supervisor"
         # SSE agent_response should be sent
         rmc.sse_manager.send_agent_response.assert_awaited_once()

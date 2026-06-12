@@ -216,6 +216,7 @@ async def test_resume_completion_uses_deterministic_kind_when_summary_skipped(mo
         save_continuation_on_message=AsyncMock(),
         get_room_by_room_id=AsyncMock(return_value=SimpleNamespace(extend_info={})),
     )
+    rmc._store = rmc.database_service
     rmc.queue_executor = SimpleNamespace(
         resume_from_continuation=AsyncMock(
             return_value=SimpleNamespace(

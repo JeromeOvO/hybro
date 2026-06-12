@@ -27,15 +27,14 @@ from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
 from execution.state.task_state_manager import TaskStateManager
 from models.processing import ProcessingResult, ProcessingStatus
-from models.room import RoomAgentMessage
+from models.room import CoordinatorAgentId, RoomAgentMessage
 
 if TYPE_CHECKING:
-    from app_shell.rate_limit_service import RateLimitService
-
     from app_shell.a2a_runtime import A2AService
     from app_shell.debate_service import DebateService
     from app_shell.delivery_runtime import SSEManager
     from app_shell.memory_service import RoomMemoryService
+    from app_shell.rate_limit_service import RateLimitService
     from app_shell.room_runtime import RoomServices
     from execution.dispatch.response_handler import AgentResponseHandler
 
@@ -234,6 +233,42 @@ class QueueExecutor:
             "QueueExecutor: Starting to process message queue with %d messages",
             len(message_queue),
         )
+
+        sys_message_id = f"sys-{user_message_id}"
+        client_req_id = await self._store.resolve_client_request_id_for_message_id(user_message_id)
+
+        try:
+            # Phase 1/3: Emit system:hybro task on start if not already emitted
+            existing_sys_msg = await self._store.get_room_agent_message_by_message_id(sys_message_id)
+            if not existing_sys_msg:
+                from common.utils.time import utcnow
+                sys_msg = self.room_runtime.create_agent_message(
+                    room_id=room_id,
+                    related_message_id=user_message_id,
+                    agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+                    content="",
+                    user_id=request_user_id,
+                    step_number=0,
+                    task_content="Orchestrating workflow...",
+                    client_request_id=client_req_id,
+                )
+                sys_msg.message_id = sys_message_id
+                await self._store.add_room_agent_message(sys_msg)
+
+                await self.sse_manager.send_task_submitted(
+                    room_id=room_id,
+                    message_id=sys_message_id,
+                    task_id=sys_message_id,
+                    agent_name="HYBRO AI",
+                    agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+                    status="working",
+                    related_message_id=user_message_id,
+                    created_at=utcnow().isoformat(),
+                    task_content="Orchestrating workflow...",
+                    client_request_id=client_req_id,
+                )
+        except Exception:
+            logger.warning("Failed to emit system:hybro task", exc_info=True)
 
         queue_result = QueueResult.COMPLETED
         deferred_sse: tuple[SSEProcessingStatus, bool] | None = None
@@ -440,6 +475,26 @@ class QueueExecutor:
                 last_popped.clear()
 
         # Phase 2: deferred SSE notification
+        # Phase 3: Emit terminal state for system:hybro
+        if queue_result != QueueResult.PAUSED:
+            try:
+                task_status = "completed" if queue_result == QueueResult.COMPLETED else queue_result.value
+                await self.sse_manager.send_task_update(
+                    room_id=room_id,
+                    message_id=sys_message_id,
+                    status=task_status,
+                )
+                
+                db_msg = await self._store.get_room_agent_message_by_message_id(sys_message_id)
+                if db_msg and db_msg.message_content and db_msg.message_content.message_task:
+                    from common.types import TaskState
+                    db_msg.message_content.message_task.status.state = TaskState(task_status)
+                    await self._store.update_room_agent_message_with_new_message_content_by_message_id(
+                        db_msg.message_id, db_msg.message_content
+                    )
+            except Exception:
+                logger.warning("Failed to update terminal state for system:hybro", exc_info=True)
+
         if deferred_sse:
             sse_status, clear_cancel = deferred_sse
             if (

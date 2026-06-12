@@ -6,11 +6,11 @@ validation so a single bad part doesn't poison the entire RoomAgentMessage.
 """
 
 
-from database.mongodb import (
-    _parse_room_agent_message,
-    _sanitize_parts,
-    _sanitize_task_dict,
+from common.utils.a2a_helpers import (
+    sanitize_artifact_parts as _sanitize_parts,
+    sanitize_task_dict as _sanitize_task_dict,
 )
+from database.mongodb import _parse_room_agent_message
 
 
 # ---------------------------------------------------------------------------
@@ -84,14 +84,22 @@ class TestSanitizeParts:
         assert _sanitize_parts(parts) == []
 
     def test_unknown_kind_with_content_key_kept(self):
-        """Parts with unknown kind but a recognized content key are kept."""
+        """Unknown kind with text content is normalized to TextPart."""
         parts = [{"kind": "custom", "text": "hello"}]
-        assert _sanitize_parts(parts) == parts
+        assert _sanitize_parts(parts) == [{"kind": "text", "text": "hello"}]
+
+    def test_unknown_kind_with_url_normalized(self):
+        parts = [{"kind": "custom", "url": "https://example.com/f.png"}]
+        assert _sanitize_parts(parts) == [
+            {"kind": "file", "file": {"uri": "https://example.com/f.png"}}
+        ]
 
     def test_no_kind_with_content_key_kept(self):
-        """Parts without 'kind' but with a recognized content key are kept."""
+        """Parts without 'kind' but with a recognized content key are normalized."""
         parts = [{"url": "https://example.com/doc.pdf"}]
-        assert _sanitize_parts(parts) == parts
+        assert _sanitize_parts(parts) == [
+            {"kind": "file", "file": {"uri": "https://example.com/doc.pdf"}}
+        ]
 
     def test_no_kind_without_content_key_dropped(self):
         """Parts without 'kind' and no recognized content key are dropped."""
@@ -227,3 +235,21 @@ class TestParseRoomAgentMessage:
         }
         msg = _parse_room_agent_message(self._make_raw(task_dict=task_dict))
         assert len(msg.message_content.message_task.artifacts[0].parts) == 0
+
+    def test_legacy_text_part_without_kind_parses(self):
+        """Legacy artifact parts missing kind still load after normalization."""
+        task_dict = {
+            "id": "task-3",
+            "contextId": "ctx-3",
+            "status": {"state": "completed"},
+            "artifacts": [
+                {
+                    "artifactId": "art-1",
+                    "parts": [{"text": "Hi, GPT-5-mini Agent here!"}],
+                }
+            ],
+        }
+        msg = _parse_room_agent_message(self._make_raw(task_dict=task_dict))
+        parts = msg.message_content.message_task.artifacts[0].parts
+        assert len(parts) == 1
+        assert parts[0].root.text == "Hi, GPT-5-mini Agent here!"

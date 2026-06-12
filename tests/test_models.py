@@ -214,13 +214,8 @@ class TestCoordinatorAgentId:
     def test_coordinator_agent_ids(self):
         """Should have expected coordinator agent IDs."""
         assert CoordinatorAgentId.SUPERVISOR_ERROR == "supervisor_error"
-        assert CoordinatorAgentId.SUPERVISOR_SYNTHESIS == "supervisor_synthesis"
-        assert CoordinatorAgentId.SUPERVISOR_CLARIFY == "supervisor_clarify"
-        assert CoordinatorAgentId.SUMMARY == "summary"
         assert CoordinatorAgentId.SYSTEM == "system"
         # Deprecated but still present for backward compat
-        assert CoordinatorAgentId.DEBATE_SUMMARY == "debate_summary"
-        assert CoordinatorAgentId.NON_DEBATE_SUMMARY == "non_debate_summary"
 
 
 # =============================================================================

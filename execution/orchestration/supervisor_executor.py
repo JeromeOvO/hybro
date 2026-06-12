@@ -45,10 +45,9 @@ from models.supervisor import (
 )
 
 if TYPE_CHECKING:
-    from app_shell.rate_limit_service import RateLimitService
-
     from app_shell.delivery_runtime import SSEManager
     from app_shell.memory_service import RoomMemoryService
+    from app_shell.rate_limit_service import RateLimitService
     from app_shell.room_coordinator_service import RoomCoordinatorService
     from app_shell.room_runtime import RoomServices
     from execution.dispatch.agent_dispatcher import AgentDispatcher
@@ -156,12 +155,15 @@ class SupervisorExecutor:
         """Run supervisor LLM synthesis with live artifact_update streaming."""
         from common.utils.summary_streaming import stream_summary_to_sse
 
-        summary_message_id = f"summary-{user_message_id}"
+        summary_message_id = trajectory.system_agent_message_id
+        if not summary_message_id:
+            summary_message_id = f"sys-{user_message_id}"
+            
         return await stream_summary_to_sse(
             self.sse_manager,
             room_id=room_id,
             message_id=summary_message_id,
-            agent_id=CoordinatorAgentId.SUMMARY,
+            agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
             token_stream=self.supervisor_service.synthesize_stream(
                 trajectory=trajectory,
                 synthesis_instruction=synthesis_instruction,
@@ -191,6 +193,41 @@ class SupervisorExecutor:
         trajectory = resumed_trajectory or SupervisorTrajectory()
         step_number = len(trajectory.entries)
         _checkpoint_msg = user_message
+
+        # Phase 1: Emit system:hybro task on start if not already emitted
+        if not trajectory.system_agent_message_id:
+            client_req_id = getattr(user_message, "client_request_id", None) if user_message else None
+            sys_message_id = f"sys-{user_message_id}"
+            trajectory.system_agent_message_id = sys_message_id
+            
+            try:
+                sys_msg = self.room_runtime.create_agent_message(
+                    room_id=room_id,
+                    related_message_id=user_message_id,
+                    agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+                    content="",
+                    user_id=request_user_id,
+                    step_number=0,
+                    task_content="Orchestrating workflow...",
+                    client_request_id=client_req_id,
+                )
+                sys_msg.message_id = sys_message_id
+                await self._store.add_room_agent_message(sys_msg)
+                
+                await self.sse_manager.send_task_submitted(
+                    room_id=room_id,
+                    message_id=sys_message_id,
+                    task_id=sys_message_id,
+                    agent_name="HYBRO AI",
+                    agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+                    status="working",
+                    related_message_id=user_message_id,
+                    created_at=utcnow().isoformat(),
+                    task_content="Orchestrating workflow...",
+                    client_request_id=client_req_id,
+                )
+            except Exception:
+                logger.warning("Failed to emit system:hybro task", exc_info=True)
 
         logger.info(
             "supervisor_run_started",
@@ -237,7 +274,7 @@ class SupervisorExecutor:
                     )
                     trajectory.entries.append(done_entry)
                     trajectory.status = TrajectoryStatus.COMPLETED
-                    return self._log_and_return(
+                    return await self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
                             status=RunStatus.COMPLETED, trajectory=trajectory
@@ -270,7 +307,7 @@ class SupervisorExecutor:
             # --- Cancellation check ---
             if token and token.is_cancelled:
                 trajectory.status = TrajectoryStatus.CANCELED
-                return self._log_and_return(
+                return await self._log_and_return(
                     room_id, trajectory,
                     SupervisorRunResult(
                         status=RunStatus.CANCELED, trajectory=trajectory
@@ -345,7 +382,7 @@ class SupervisorExecutor:
                     )
                     trajectory.entries.append(done_entry)
                     trajectory.status = TrajectoryStatus.COMPLETED
-                    return self._log_and_return(
+                    return await self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
                             status=RunStatus.COMPLETED, trajectory=trajectory
@@ -464,13 +501,13 @@ class SupervisorExecutor:
                     )
                     if not saved:
                         trajectory.status = TrajectoryStatus.FAILED
-                        return self._log_and_return(
+                        return await self._log_and_return(
                             room_id, trajectory,
                             SupervisorRunResult(
                                 status=RunStatus.FAILED, trajectory=trajectory
                             ),
                         )
-                    return self._log_and_return(
+                    return await self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
                             status=RunStatus.PAUSED, trajectory=trajectory
@@ -494,7 +531,7 @@ class SupervisorExecutor:
                     )
                 except CancellationError:
                     trajectory.status = TrajectoryStatus.CANCELED
-                    return self._log_and_return(
+                    return await self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
                             status=RunStatus.CANCELED, trajectory=trajectory
@@ -755,13 +792,13 @@ class SupervisorExecutor:
                         )
                         if not saved:
                             trajectory.status = TrajectoryStatus.FAILED
-                            return self._log_and_return(
+                            return await self._log_and_return(
                                 room_id, trajectory,
                                 SupervisorRunResult(
                                     status=RunStatus.FAILED, trajectory=trajectory
                                 ),
                             )
-                        return self._log_and_return(
+                        return await self._log_and_return(
                             room_id, trajectory,
                             SupervisorRunResult(
                                 status=RunStatus.PAUSED, trajectory=trajectory
@@ -816,7 +853,7 @@ class SupervisorExecutor:
                             )
                             entry.results = results
                             trajectory.status = TrajectoryStatus.FAILED
-                            return self._log_and_return(
+                            return await self._log_and_return(
                                 room_id, trajectory,
                                 SupervisorRunResult(
                                     status=RunStatus.FAILED, trajectory=trajectory
@@ -841,7 +878,7 @@ class SupervisorExecutor:
                         )
                         if not saved:
                             trajectory.status = TrajectoryStatus.FAILED
-                            return self._log_and_return(
+                            return await self._log_and_return(
                                 room_id, trajectory,
                                 SupervisorRunResult(
                                     status=RunStatus.FAILED, trajectory=trajectory
@@ -854,7 +891,7 @@ class SupervisorExecutor:
                             message_id=user_message_id,
                             lifecycle_message_id=user_message_id,
                         )
-                        return self._log_and_return(
+                        return await self._log_and_return(
                             room_id, trajectory,
                             SupervisorRunResult(
                                 status=RunStatus.AWAITING_INPUT,
@@ -904,7 +941,7 @@ class SupervisorExecutor:
                         entry.completed_at = utcnow()
                         trajectory.entries.append(entry)
                         trajectory.status = TrajectoryStatus.COMPLETED
-                        return self._log_and_return(
+                        return await self._log_and_return(
                             room_id, trajectory,
                             SupervisorRunResult(
                                 status=RunStatus.COMPLETED, trajectory=trajectory
@@ -932,21 +969,15 @@ class SupervisorExecutor:
                         except Exception:
                             logger.debug("SSE stage notification failed (synthesizing)", exc_info=True)
                         try:
-                            summary_message_id = f"summary-{user_message_id}"
-                            await self.sse_manager.send_task_submitted(
-                                room_id=room_id,
-                                message_id=summary_message_id,
-                                task_id=summary_message_id,
-                                agent_name="HYBRO AI",
-                                agent_id=CoordinatorAgentId.SUMMARY,
-                                status="working",
-                                related_message_id=user_message_id,
-                                created_at=utcnow().isoformat(),
-                                task_content="Summarizing agent responses\u2026",
-                                client_request_id=client_req_id,
-                            )
+                            if trajectory.system_agent_message_id:
+                                await self.sse_manager.send_task_update(
+                                    room_id=room_id,
+                                    message_id=trajectory.system_agent_message_id,
+                                    task_content="Summarizing agent responses\u2026",
+                                    client_request_id=client_req_id,
+                                )
                         except Exception:
-                            logger.debug("SSE summary working card failed", exc_info=True)
+                            logger.debug("SSE summary working card update failed", exc_info=True)
 
                     synth_coro = self._stream_supervisor_synthesis(
                         room_id=room_id,
@@ -962,16 +993,36 @@ class SupervisorExecutor:
                         )
                     except CancellationError:
                         trajectory.status = TrajectoryStatus.CANCELED
-                        return self._log_and_return(
+                        return await self._log_and_return(
                             room_id, trajectory,
                             SupervisorRunResult(
                                 status=RunStatus.CANCELED, trajectory=trajectory
                             ),
                         )
+
+                    if trajectory.system_agent_message_id:
+                        try:
+                            db_msg = await self._store.get_room_agent_message_by_message_id(trajectory.system_agent_message_id)
+                            if db_msg and db_msg.message_content:
+                                db_msg.message_content.message_text = synthesis
+                                await self._store.update_room_agent_message_with_new_message_content_by_message_id(
+                                    db_msg.message_id, db_msg.message_content
+                                )
+                            
+                            await self.sse_manager.send_agent_response(
+                                room_id=room_id,
+                                message_id=trajectory.system_agent_message_id,
+                                agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+                                content=synthesis,
+                                related_message_id=user_message_id,
+                                client_request_id=client_req_id,
+                            )
+                        except Exception:
+                            logger.warning("Failed to emit agent_response for supervisor synthesis", exc_info=True)
                     entry.completed_at = utcnow()
                     trajectory.entries.append(entry)
                     trajectory.status = TrajectoryStatus.COMPLETED
-                    return self._log_and_return(
+                    return await self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
                             status=RunStatus.COMPLETED,
@@ -1043,7 +1094,7 @@ class SupervisorExecutor:
                         hitl_agent_message = self.room_runtime.create_agent_message(
                             room_id=room_id,
                             related_message_id=user_message_id,
-                            agent_id="supervisor_hitl",
+                            agent_id=CoordinatorAgentId.SYSTEM_CLARIFIER,
                             content=q.prompt,
                             user_id=request_user_id,
                             step_number=step_number + 1,
@@ -1064,8 +1115,8 @@ class SupervisorExecutor:
                             prompt=q.prompt,
                             prompt_type=q_prompt_type,
                             choices=q.choices,
-                            agent_id="supervisor_hitl",
-                            agent_name="Question & Answer",
+                            agent_id=CoordinatorAgentId.SYSTEM_CLARIFIER,
+                            agent_name="HYBRO AI",
                             source_step_id=str(step_number + 1),
                             continuation_message_id=user_message_id,
                             display_message_id=hitl_agent_message.message_id,
@@ -1081,7 +1132,7 @@ class SupervisorExecutor:
                             )
                             await _cleanup_clarify_artifacts()
                             trajectory.status = TrajectoryStatus.FAILED
-                            return self._log_and_return(
+                            return await self._log_and_return(
                                 room_id, trajectory,
                                 SupervisorRunResult(
                                     status=RunStatus.FAILED, trajectory=trajectory
@@ -1113,7 +1164,7 @@ class SupervisorExecutor:
                         )
                         await _cleanup_clarify_artifacts()
                         trajectory.status = TrajectoryStatus.FAILED
-                        return self._log_and_return(
+                        return await self._log_and_return(
                             room_id, trajectory,
                             SupervisorRunResult(
                                 status=RunStatus.FAILED, trajectory=trajectory
@@ -1126,7 +1177,7 @@ class SupervisorExecutor:
                         message_id=user_message_id,
                         lifecycle_message_id=user_message_id,
                     )
-                    return self._log_and_return(
+                    return await self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
                             status=RunStatus.AWAITING_INPUT,
@@ -1144,7 +1195,7 @@ class SupervisorExecutor:
                     )
                     trajectory.entries.append(entry)
                     trajectory.status = TrajectoryStatus.COMPLETED
-                    return self._log_and_return(
+                    return await self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
                             status=RunStatus.COMPLETED, trajectory=trajectory
@@ -1171,7 +1222,7 @@ class SupervisorExecutor:
             )
             if not has_completed_results:
                 trajectory.status = TrajectoryStatus.FAILED
-                return self._log_and_return(
+                return await self._log_and_return(
                     room_id, trajectory,
                     SupervisorRunResult(
                         status=RunStatus.FAILED, trajectory=trajectory
@@ -1204,7 +1255,7 @@ class SupervisorExecutor:
                         message_id=summary_message_id,
                         task_id=summary_message_id,
                         agent_name="HYBRO AI",
-                        agent_id=CoordinatorAgentId.SUMMARY,
+                        agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
                         status="working",
                         related_message_id=user_message_id,
                         created_at=utcnow().isoformat(),
@@ -1228,14 +1279,14 @@ class SupervisorExecutor:
                 )
             except CancellationError:
                 trajectory.status = TrajectoryStatus.CANCELED
-                return self._log_and_return(
+                return await self._log_and_return(
                     room_id, trajectory,
                     SupervisorRunResult(
                         status=RunStatus.CANCELED, trajectory=trajectory
                     ),
                 )
             trajectory.status = TrajectoryStatus.COMPLETED
-            return self._log_and_return(
+            return await self._log_and_return(
                 room_id, trajectory,
                 SupervisorRunResult(
                     status=RunStatus.COMPLETED,
@@ -1245,7 +1296,7 @@ class SupervisorExecutor:
             )
 
         trajectory.status = TrajectoryStatus.FAILED
-        return self._log_and_return(
+        return await self._log_and_return(
             room_id, trajectory,
             SupervisorRunResult(
                 status=RunStatus.FAILED, trajectory=trajectory
@@ -1666,8 +1717,8 @@ class SupervisorExecutor:
     # Logging helper
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _log_and_return(
+    async def _log_and_return(
+        self,
         room_id: str,
         trajectory: SupervisorTrajectory,
         result: SupervisorRunResult,
@@ -1686,6 +1737,29 @@ class SupervisorExecutor:
                 "debate_mode": debate_mode,
             },
         )
+        
+        # Phase 1: Emit terminal state for system:hybro
+        if trajectory.system_agent_message_id and result.status != RunStatus.PAUSED:
+            try:
+                # If we're done, or failed, or canceled, or awaiting input (HITL)
+                task_status = "completed" if result.status == RunStatus.COMPLETED else result.status.value
+                await self.sse_manager.send_task_update(
+                    room_id=room_id,
+                    message_id=trajectory.system_agent_message_id,
+                    status=task_status,
+                )
+                
+                # Update DB record
+                db_msg = await self._store.get_room_agent_message_by_message_id(trajectory.system_agent_message_id)
+                if db_msg and db_msg.message_content and db_msg.message_content.message_task:
+                    from common.types import TaskState
+                    db_msg.message_content.message_task.status.state = TaskState(task_status)
+                    await self._store.update_room_agent_message_with_new_message_content_by_message_id(
+                        db_msg.message_id, db_msg.message_content
+                    )
+            except Exception:
+                logger.warning("Failed to update terminal state for system:hybro", exc_info=True)
+                
         return result
 
     # ------------------------------------------------------------------
