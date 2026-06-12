@@ -16,11 +16,6 @@
             "reason": "App-shell agent health runtime still uses database.mongodb directly pending DAL injection."
         },
         {
-            "path": "app_shell/database_service.py",
-            "contract": "legacy_import_boundary",
-            "reason": "App-shell database service is the retained Mongo/Pinecone facade pending DAL migration."
-        },
-        {
             "path": "app_shell/domain_alias_service.py",
             "contract": "legacy_import_boundary",
             "reason": "App-shell domain alias runtime still uses database.mongodb directly pending DAL injection."
@@ -54,11 +49,6 @@
             "path": "app_shell/agent_service.py",
             "contract": "sdk_confinement",
             "reason": "Agent app-shell runtime exposes A2A card models."
-        },
-        {
-            "path": "app_shell/database_service.py",
-            "contract": "sdk_confinement",
-            "reason": "Database app-shell facade persists A2A card models."
         },
         {
             "path": "app_shell/gemini_service.py",

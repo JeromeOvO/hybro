@@ -16,20 +16,19 @@ from models.request import OrchestrationRequest
 
 
 class TestClaimUserMessageForProcessing:
-    """Tests for the atomic claim method in mongodb.py."""
+    """Tests for the atomic claim method on the repository store."""
 
     @pytest.mark.asyncio
     async def test_claim_succeeds_for_never_claimed(self):
         """claim_user_message_for_processing returns True for unclaimed messages."""
-        from database.mongodb import MongoDB
+        from app_shell.repository_store import AppShellRepositoryStore
 
-        db = object.__new__(MongoDB)
+        store = object.__new__(AppShellRepositoryStore)
         mock_collection = MagicMock()
         mock_collection.find_one_and_update = AsyncMock(return_value={"message_id": "m1"})
-        db._room_user_messages_collection = mock_collection
-        type(db).room_user_messages_collection = property(lambda self: self._room_user_messages_collection)
+        store._room_user_messages = mock_collection
 
-        result = await db.claim_user_message_for_processing("m1")
+        result = await store.claim_user_message_for_processing("m1")
         assert result is True
 
         call_args = mock_collection.find_one_and_update.call_args
@@ -38,34 +37,32 @@ class TestClaimUserMessageForProcessing:
     @pytest.mark.asyncio
     async def test_claim_fails_for_already_claimed(self):
         """claim_user_message_for_processing returns False if already claimed."""
-        from database.mongodb import MongoDB
+        from app_shell.repository_store import AppShellRepositoryStore
 
-        db = object.__new__(MongoDB)
+        store = object.__new__(AppShellRepositoryStore)
         mock_collection = MagicMock()
         mock_collection.find_one_and_update = AsyncMock(return_value=None)
-        db._room_user_messages_collection = mock_collection
-        type(db).room_user_messages_collection = property(lambda self: self._room_user_messages_collection)
+        store._room_user_messages = mock_collection
 
-        result = await db.claim_user_message_for_processing("m1")
+        result = await store.claim_user_message_for_processing("m1")
         assert result is False
 
 
 class TestClaimOrReclaimUserMessage:
-    """Tests for recovery claim method in mongodb.py."""
+    """Tests for the recovery claim method on the repository store."""
 
     @pytest.mark.asyncio
     async def test_reclaim_succeeds_for_stale(self):
         """claim_or_reclaim_user_message returns True for stale-claimed messages."""
-        from database.mongodb import MongoDB
+        from app_shell.repository_store import AppShellRepositoryStore
 
-        db = object.__new__(MongoDB)
+        store = object.__new__(AppShellRepositoryStore)
         mock_collection = MagicMock()
         mock_collection.find_one_and_update = AsyncMock(return_value={"message_id": "m1"})
-        db._room_user_messages_collection = mock_collection
-        type(db).room_user_messages_collection = property(lambda self: self._room_user_messages_collection)
+        store._room_user_messages = mock_collection
 
         threshold = datetime(2026, 1, 1, tzinfo=UTC)
-        result = await db.claim_or_reclaim_user_message("m1", threshold)
+        result = await store.claim_or_reclaim_user_message("m1", threshold)
         assert result is True
 
         call_args = mock_collection.find_one_and_update.call_args
@@ -77,16 +74,15 @@ class TestClaimOrReclaimUserMessage:
     @pytest.mark.asyncio
     async def test_reclaim_fails_for_recently_claimed(self):
         """claim_or_reclaim_user_message returns False if recently claimed."""
-        from database.mongodb import MongoDB
+        from app_shell.repository_store import AppShellRepositoryStore
 
-        db = object.__new__(MongoDB)
+        store = object.__new__(AppShellRepositoryStore)
         mock_collection = MagicMock()
         mock_collection.find_one_and_update = AsyncMock(return_value=None)
-        db._room_user_messages_collection = mock_collection
-        type(db).room_user_messages_collection = property(lambda self: self._room_user_messages_collection)
+        store._room_user_messages = mock_collection
 
         threshold = datetime(2026, 1, 1, tzinfo=UTC)
-        result = await db.claim_or_reclaim_user_message("m1", threshold)
+        result = await store.claim_or_reclaim_user_message("m1", threshold)
         assert result is False
 
 

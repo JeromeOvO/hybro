@@ -16,7 +16,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.database_service.A2ATaskReader",
+    "owning_protocol": "common.protocols.A2ATaskReader",
     "path": "/api/v1/a2a-tasks/{message_id}",
     "response_class": null,
     "response_model": "dict",
@@ -370,7 +370,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.database_service.AgentGroupStore",
+    "owning_protocol": "common.protocols.AgentGroupStore",
     "path": "/api/v1/agentGroups",
     "response_class": null,
     "response_model": null,
@@ -393,7 +393,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.database_service.AgentGroupStore",
+    "owning_protocol": "common.protocols.AgentGroupStore",
     "path": "/api/v1/agentGroups",
     "response_class": null,
     "response_model": null,
@@ -417,7 +417,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.database_service.AgentGroupStore",
+    "owning_protocol": "common.protocols.AgentGroupStore",
     "path": "/api/v1/agentGroups/{group_id}",
     "response_class": null,
     "response_model": null,
@@ -441,7 +441,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.database_service.AgentGroupStore",
+    "owning_protocol": "common.protocols.AgentGroupStore",
     "path": "/api/v1/agentGroups/{group_id}",
     "response_class": null,
     "response_model": null,
@@ -465,7 +465,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.database_service.AgentGroupStore",
+    "owning_protocol": "common.protocols.AgentGroupStore",
     "path": "/api/v1/agentGroups/{group_id}",
     "response_class": null,
     "response_model": null,
@@ -1332,7 +1332,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.database_service.A2ATaskReader"
+      "common.protocols.A2ATaskReader"
     ]
   },
   {
@@ -1441,7 +1441,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.database_service.A2ATaskReader",
+    "owning_protocol": "common.protocols.A2ATaskReader",
     "path": "/api/v1/rooms/{room_id}/a2a-tasks",
     "response_class": null,
     "response_model": "dict",
@@ -1551,7 +1551,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.database_service.A2ATaskReader"
+      "common.protocols.A2ATaskReader"
     ]
   },
   {
@@ -1579,7 +1579,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.database_service.A2ATaskReader"
+      "common.protocols.A2ATaskReader"
     ]
   },
   {
@@ -1615,7 +1615,7 @@
       "media_type": "text/event-stream"
     },
     "supporting_protocols": [
-      "app_shell.database_service.A2ATaskReader"
+      "common.protocols.A2ATaskReader"
     ]
   },
   {
@@ -1634,7 +1634,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.database_service.A2ATaskReader",
+    "owning_protocol": "common.protocols.A2ATaskReader",
     "path": "/api/v1/users/me/a2a-tasks",
     "response_class": null,
     "response_model": "dict",

@@ -1,17 +1,30 @@
 import asyncio
-import logging
+import os
 import sys
 
+from dotenv import load_dotenv
+from motor.motor_asyncio import AsyncIOMotorClient
+
 from common.utils.logger import get_logger
-from database.mongodb import get_db, mongodb
 
 logger = get_logger(__name__)
+load_dotenv()
+
+
+def _get_mongo_client_and_db() -> tuple[AsyncIOMotorClient, object]:
+    url = os.getenv("MONGODB_URL")
+    db_name = os.getenv("MONGODB_DB_NAME")
+    if not url:
+        raise ValueError("MONGODB_URL environment variable is not set")
+    if not db_name:
+        raise ValueError("MONGODB_DB_NAME environment variable is not set")
+    client = AsyncIOMotorClient(url)
+    return client, client[db_name]
+
 
 async def run_migration():
-    await mongodb.connect()
+    client, db = _get_mongo_client_and_db()
     try:
-        db = await get_db()
-
         clarifier_legacy = ["supervisor_hitl", "supervisor_clarify"]
         hybro_legacy = [
             "supervisor_synthesis",
@@ -45,12 +58,18 @@ async def run_migration():
 
         # 2. Update room_memories
         logger.info("Migrating room_memories...")
-        
+
         # Clarifier
         result = await db.room_memories.update_many(
             {"turns.agent_responses.agent_id": {"$in": clarifier_legacy}},
-            {"$set": {"turns.$[].agent_responses.$[response].agent_id": "system:clarifier"}},
-            array_filters=[{"response.agent_id": {"$in": clarifier_legacy}}]
+            {
+                "$set": {
+                    "turns.$[].agent_responses.$[response].agent_id": (
+                        "system:clarifier"
+                    )
+                }
+            },
+            array_filters=[{"response.agent_id": {"$in": clarifier_legacy}}],
         )
         total_memories_migrated += result.modified_count
         logger.info(f"Updated {result.modified_count} clarifier memories.")
@@ -58,8 +77,12 @@ async def run_migration():
         # Hybro
         result = await db.room_memories.update_many(
             {"turns.agent_responses.agent_id": {"$in": hybro_legacy}},
-            {"$set": {"turns.$[].agent_responses.$[response].agent_id": "system:hybro"}},
-            array_filters=[{"response.agent_id": {"$in": hybro_legacy}}]
+            {
+                "$set": {
+                    "turns.$[].agent_responses.$[response].agent_id": "system:hybro"
+                }
+            },
+            array_filters=[{"response.agent_id": {"$in": hybro_legacy}}],
         )
         total_memories_migrated += result.modified_count
         logger.info(f"Updated {result.modified_count} hybro memories.")
@@ -83,9 +106,16 @@ async def run_migration():
         total_run_events_migrated += result.modified_count
         logger.info(f"Updated {result.modified_count} hybro run events.")
 
-        logger.info(f"Migration complete. Total agent messages migrated: {total_agent_messages_migrated}, Total memories migrated: {total_memories_migrated}, Total run events migrated: {total_run_events_migrated}")
+        logger.info(
+            "Migration complete. Total agent messages migrated: %d, "
+            "Total memories migrated: %d, Total run events migrated: %d",
+            total_agent_messages_migrated,
+            total_memories_migrated,
+            total_run_events_migrated,
+        )
     finally:
-        await mongodb.close_database_connection()
+        client.close()
+
 
 if __name__ == "__main__":
     try:
@@ -93,6 +123,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Migration interrupted.")
         sys.exit(1)
-    except Exception as e:
-        logger.error(f"Migration failed: {e}")
+    except Exception:
+        logger.error("Migration failed", exc_info=True)
         sys.exit(1)

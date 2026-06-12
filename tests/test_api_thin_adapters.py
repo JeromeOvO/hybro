@@ -536,7 +536,7 @@ def test_room_center_route_inventory_records_live_protocol_owners():
         },
         "send_message": {
             "owner": "common.protocols.ExecutionEngine",
-            "supporting": {"app_shell.database_service.A2ATaskReader"},
+            "supporting": {"common.protocols.A2ATaskReader"},
         },
         "suggest_agents": {
             "owner": "app_shell.bound.AgentSelectionSuggester",
@@ -664,9 +664,14 @@ def test_route_owner_protocols_match_handler_calls():
         ViewSetRepository,
         WebhookTransport,
     )
-    from app_shell.database_service import A2ATaskReader, AgentGroupStore
     from app_shell.health_check import HealthCheck
-    from common.protocols import AgentAvatarManager, HubRelayManagement, HubStatusReader
+    from common.protocols import (
+        A2ATaskReader,
+        AgentAvatarManager,
+        AgentGroupStore,
+        HubRelayManagement,
+        HubStatusReader,
+    )
 
     expected_by_protocol = {
         AgentAvatarManager: {
@@ -933,7 +938,7 @@ def test_sse_cancel_route_inventory_records_execution_owner():
     assert route["module"] == "api_gateway.routes.sse_routes"
     assert route["owning_protocol"] == "common.protocols.ExecutionEngine"
     assert set(route.get("supporting_protocols") or []) == {
-        "app_shell.database_service.A2ATaskReader",
+        "common.protocols.A2ATaskReader",
     }
 
 
@@ -1129,7 +1134,7 @@ def test_app_shell_protocol_surfaces_are_specific():
         WebhookTransport,
         WebhookTransportFactory,
     )
-    from app_shell.database_service import A2ATaskReader, AgentGroupStore
+    from common.protocols import A2ATaskReader, AgentGroupStore
 
     for protocol in (
         InspectionCenter,
@@ -1156,8 +1161,7 @@ def test_route_owner_protocols_do_not_expose_any_annotations():
     from typing import Any
 
     from app_shell.bound import ViewSetRepository
-    from app_shell.database_service import A2ATaskReader, AgentGroupStore
-    from common.protocols import APIKeyStore
+    from common.protocols import A2ATaskReader, AgentGroupStore, APIKeyStore
 
     protocols = (APIKeyStore, ViewSetRepository, A2ATaskReader, AgentGroupStore)
     violations: list[str] = []
@@ -1182,15 +1186,15 @@ def test_route_owner_protocols_do_not_expose_any_annotations():
 
 def test_app_shell_route_protocols_do_not_expose_broad_annotations():
     import app_shell.bound as bound
-    import app_shell.database_service as database_service
     import app_shell.health_check as health_check
+    from common.protocols import A2ATaskReader, AgentGroupStore
 
     protocols = [
         getattr(bound, name)
         for name in bound.__all__
         if isinstance(getattr(bound, name, None), type)
     ]
-    protocols.extend([database_service.A2ATaskReader, database_service.AgentGroupStore])
+    protocols.extend([A2ATaskReader, AgentGroupStore])
     protocols.append(health_check.HealthCheck)
     violations: list[str] = []
 
@@ -1272,7 +1276,7 @@ def test_platform_route_protocols_do_not_expose_any_or_wildcard_params():
 
 
 def test_app_shell_protocols_have_single_runtime_marker():
-    for path in (Path("app_shell/bound.py"), Path("app_shell/database_service.py")):
+    for path in (Path("app_shell/bound.py"),):
         source = path.read_text()
         assert "@runtime_checkable\n@runtime_checkable" not in source
 

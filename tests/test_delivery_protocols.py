@@ -732,6 +732,7 @@ def test_main_does_not_import_or_instantiate_concrete_dal():
         "RedisPubSubImpl",
     }
     tree = ast.parse(Path("main.py").read_text(), filename="main.py")
+    invalid_collection_calls: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -742,8 +743,19 @@ def test_main_does_not_import_or_instantiate_concrete_dal():
             assert node.id not in forbidden_names
             assert not node.id.endswith("DALImpl")
         elif isinstance(node, ast.Attribute):
-            assert node.attr != "collection"
             assert node.attr != "cancelled_messages_collection"
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "collection"
+        ):
+            if not (
+                isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "mongo_dal"
+            ):
+                invalid_collection_calls.append(f"line {node.lineno}")
+
+    assert not invalid_collection_calls
 
 
 def test_main_does_not_construct_legacy_sse_broker():

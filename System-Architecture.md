@@ -64,9 +64,8 @@ Startup has three practical phases:
 
 1. Infrastructure setup:
    - Load settings and auth configuration.
-   - Connect MongoDB through `database.mongodb.mongodb`.
-   - Connect Pinecone through `database.pinecone_db.pinecone_db`.
-   - Build DAL/facade objects from `container.py`.
+   - Build `MongoDAL`, `VectorDAL`, Redis, object-storage adapters, facades,
+     and repositories through `container.py`.
    - Bind route modules and app-shell runtime adapters.
 
 2. Runtime guard and background services:
@@ -374,10 +373,12 @@ Business modules use module-scoped repositories built from `MongoDAL`,
 - `dal.s3`: object storage adapter.
 - `dal.index_registry`: startup index registration across modules.
 
-`database/mongodb.py`, `database/pinecone_db.py`, `database/repository.py`, and
-`app_shell/database_service.py` remain as excluded legacy runtime files until
-the final deletion PR. Production startup wiring in `main.py` uses `MongoDAL`,
-`VectorDAL`, DAL-backed repositories, and narrow app-shell adapters directly.
+The legacy runtime database files `database/mongodb.py`,
+`database/pinecone_db.py`, `database/repository.py`, and
+`app_shell/database_service.py` have been removed. Production startup wiring in
+`main.py` uses `MongoDAL`, `VectorDAL`, DAL-backed repositories, and narrow
+app-shell adapters directly. The remaining `database/` package is limited to
+retired migration scripts and is not part of production runtime wiring.
 
 Important Mongo collections include:
 
@@ -417,9 +418,8 @@ Examples:
 - `app_shell.room_runtime`: room send-message preparation, target resolution,
   attachment resolution, supervisor preparation, and message parsing.
 - `app_shell.agent_service`: route-facing adapter over `AgentFacade`.
-- `app_shell.database_service`: legacy app-shell database facade retained only
-  until the final legacy file deletion PR; production wiring no longer imports
-  or binds it.
+- `app_shell.repository_store`: DAL/repository-backed compatibility store for
+  app-shell callers that have not yet moved directly to module facades.
 - `app_shell.relay_service`: relay route surface over
   `hub_runtime_bridge`. Hub-owned liveness, stream binding, agent sync,
   ownership, and internal response router setup are handled by `HubFacade`;
@@ -700,7 +700,7 @@ and tested independently.
 App-shell memory search is a compatibility adapter over `ContextMemoryFacade`.
 Vector retrieval goes through `VectorDAL`, and keyword search/hydration goes
 through the context-memory content repository rather than private
-`database.mongodb` or `database.pinecone_db` backends.
+legacy database runtime backends.
 
 ## Background Jobs
 
