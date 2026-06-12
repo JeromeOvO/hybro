@@ -78,8 +78,9 @@ def build_failed_text_task(
 
 
 def coerce_task_state(state: Any) -> Any:
-    if isinstance(state, str):
-        return TaskState(state)
+    val = getattr(state, "value", state)
+    if isinstance(val, str):
+        return TaskState(val)
     return state
 
 

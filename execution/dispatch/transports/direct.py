@@ -23,7 +23,7 @@ from a2a_adapter.task_requests import (
     get_response_result,
     is_jsonrpc_error_response,
 )
-from a2a_adapter.task_status import build_task_status
+from a2a_adapter.task_status import build_task_status, coerce_task_state
 from common.a2a_constants import (
     INTERACTIVE_STATES,
     TERMINAL_STATES,
@@ -1578,7 +1578,7 @@ class DirectTransport(AgentTransport):
             if is_interactive_state(status):
                 task_obj = get_task(current_message)
                 if task_obj and task_obj.status:
-                    task_obj.status.state = status
+                    task_obj.status.state = coerce_task_state(status)
                     if msg_text := response.get("message"):
                         task_obj.status.message = build_agent_text_message(
                             text=msg_text,
