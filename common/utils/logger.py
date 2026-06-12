@@ -9,6 +9,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+DEFAULT_LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+JSON_LOG_FORMAT = (
+    '{"timestamp":"%(asctime)s","logger":"%(name)s",'
+    '"level":"%(levelname)s","message":"%(message)s"}'
+)
+
+
+def _resolve_log_format(value: str | None) -> str:
+    if value is None:
+        return DEFAULT_LOG_FORMAT
+    if value.strip().lower() == "json":
+        return JSON_LOG_FORMAT
+    return value
+
+
 (log_path := Path(os.getenv("LOG_PATH"))).parent.mkdir(parents=True, exist_ok=True)
 log_path.touch()
 
@@ -19,9 +34,7 @@ file_handler = RotatingFileHandler(
 )
 logging.basicConfig(
     level=getattr(logging, os.getenv("LOG_LEVEL", "INFO")),
-    format=os.getenv(
-        "LOG_FORMAT", "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    ),
+    format=_resolve_log_format(os.getenv("LOG_FORMAT")),
 )
 
 
