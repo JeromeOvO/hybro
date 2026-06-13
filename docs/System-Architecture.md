@@ -517,6 +517,12 @@ This keeps all final task state, artifact persistence, and SSE emission logic
 in one response handler regardless of whether the response came from direct
 transport, relay, or webhook.
 
+Task lifecycle data access for A2A task submission, webhook token validation,
+cancellation persistence, stale-task cleanup, HITL persistence, and memory
+lookups is routed through `AppShellRepositoryStore`. The store delegates task
+lifecycle, HITL, and context-memory operations to scoped `repository_parts`
+classes while preserving the legacy method surface for app-shell callers.
+
 **Agent display text:** Terminal `message_text` and artifact text parts are persisted as received from agents. List/section markdown repair runs only in the frontend remark plugin pipeline (`hybro-frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown render time. Backend terminal helpers in `common/utils/a2a_helpers.py` (`prepare_terminal_agent_content`, `resolve_terminal_sse_content`, `sync_artifact_dicts_to_canonical_text`) resolve canonical text from artifacts and align artifact payloads without transforming markdown. Terminal resolution is owned by `update_task_state_on_message`; streaming text parts collapse to a single canonical text part while file/data parts are preserved. SSE terminal `content` is authoritative for display text; `parts` carries only non-text payloads.
 
 ## Hub Relay Workflow

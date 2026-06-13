@@ -144,14 +144,32 @@ def test_app_shell_repository_store_wires_task_lifecycle_part():
     assert isinstance(store.tasks, AppShellTaskLifecycleStore)
 
 
+def test_app_shell_repository_store_wires_hitl_part():
+    from app_shell.repository_parts.hitl_store import AppShellHITLStore
+
+    store = _make_app_shell_store()
+
+    assert isinstance(store.hitl, AppShellHITLStore)
+
+
+def test_app_shell_repository_store_wires_memory_part():
+    from app_shell.repository_parts.memory_store import AppShellMemoryStore
+
+    store = _make_app_shell_store()
+
+    assert isinstance(store.memory, AppShellMemoryStore)
+
+
 def test_app_shell_repository_store_part_properties_do_not_recreate_missing_parts():
     store = _make_app_shell_store()
 
     del store._agent_room_part
     del store._message_part
     del store._task_lifecycle_part
+    del store._hitl_part
+    del store._memory_part
 
-    for attribute in ("agent_room", "messages", "tasks"):
+    for attribute in ("agent_room", "messages", "tasks", "hitl", "memory"):
         try:
             getattr(store, attribute)
         except AttributeError:

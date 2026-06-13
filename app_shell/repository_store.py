@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
 from app_shell.repository_parts import (
     AppShellAgentRoomStore,
+    AppShellHITLStore,
+    AppShellMemoryStore,
     AppShellMessageStore,
     AppShellTaskLifecycleStore,
 )
@@ -36,7 +37,6 @@ from common.protocols import (
     RoomRepository,
 )
 from common.utils.logger import get_logger
-from common.utils.time import utcnow
 from models.agent import Agent
 from models.agent_group import AgentGroup
 from models.memory import ChatContext, RoomMemory
@@ -109,6 +109,18 @@ class AppShellRepositoryStore:
             message_repository=self._message_repository,
             message_store=self.messages,
         )
+        self._hitl_part = AppShellHITLStore(
+            hitl_requests=self._hitl_requests,
+            room_agent_messages=self._room_agent_messages,
+            room_user_messages=self._room_user_messages,
+        )
+        self._memory_part = AppShellMemoryStore(
+            chat_contexts=self._chat_contexts,
+            user_memories=self._user_memories,
+            agent_memories=self._agent_memories,
+            room_memories=self._room_memories,
+            room_repository=self._room_repository,
+        )
 
     @property
     def agent_room(self) -> AppShellAgentRoomStore:
@@ -121,6 +133,14 @@ class AppShellRepositoryStore:
     @property
     def tasks(self) -> AppShellTaskLifecycleStore:
         return self._task_lifecycle_part
+
+    @property
+    def hitl(self) -> AppShellHITLStore:
+        return self._hitl_part
+
+    @property
+    def memory(self) -> AppShellMemoryStore:
+        return self._memory_part
 
     def _message_delegate(self) -> AppShellMessageStore:
         part = getattr(self, "_message_part", None)
@@ -143,6 +163,28 @@ class AppShellRepositoryStore:
             runs=getattr(self, "_runs", None),
             message_repository=getattr(self, "_message_repository", None),
             message_store=self._message_delegate(),
+        )
+
+    def _hitl_delegate(self) -> AppShellHITLStore:
+        part = getattr(self, "_hitl_part", None)
+        if part is not None:
+            return part
+        return AppShellHITLStore(
+            hitl_requests=getattr(self, "_hitl_requests", None),
+            room_agent_messages=getattr(self, "_room_agent_messages", None),
+            room_user_messages=getattr(self, "_room_user_messages", None),
+        )
+
+    def _memory_delegate(self) -> AppShellMemoryStore:
+        part = getattr(self, "_memory_part", None)
+        if part is not None:
+            return part
+        return AppShellMemoryStore(
+            chat_contexts=getattr(self, "_chat_contexts", None),
+            user_memories=getattr(self, "_user_memories", None),
+            agent_memories=getattr(self, "_agent_memories", None),
+            room_memories=getattr(self, "_room_memories", None),
+            room_repository=getattr(self, "_room_repository", None),
         )
 
     async def add_agent_group(self, agent_group: AgentGroup) -> bool:
@@ -468,13 +510,169 @@ class AppShellRepositoryStore:
         return await self._task_delegate().claim_stuck_supervisor_trajectory(message_id)
 
     async def get_room_memory_by_room_id(self, room_id: str) -> RoomMemory | None:
-        try:
-            return _safe_parse_room_memory(
-                await self._room_memories.find_one({"room_id": room_id})
-            )
-        except Exception:
-            logger.error("Failed to get room memory", exc_info=True)
-            return None
+        return await self._memory_delegate().get_room_memory_by_room_id(room_id)
+
+    async def get_pending_hitl_requests_for_message(
+        self, user_message_id: str
+    ) -> list[dict]:
+        return await self._hitl_delegate().get_pending_hitl_requests_for_message(
+            user_message_id
+        )
+
+    async def create_hitl_request(self, request_data: dict) -> bool:
+        return await self._hitl_delegate().create_hitl_request(request_data)
+
+    async def get_hitl_request(self, request_id: str) -> dict | None:
+        return await self._hitl_delegate().get_hitl_request(request_id)
+
+    async def update_hitl_request(self, request_id: str, **updates) -> bool:
+        return await self._hitl_delegate().update_hitl_request(request_id, **updates)
+
+    async def cas_update_hitl_request(
+        self,
+        request_id: str,
+        expected_status: str,
+        **updates,
+    ) -> bool:
+        return await self._hitl_delegate().cas_update_hitl_request(
+            request_id, expected_status, **updates
+        )
+
+    async def fenced_update_hitl_request(
+        self,
+        request_id: str,
+        claim_id: str,
+        updates: dict | None = None,
+        **kw_updates,
+    ) -> bool:
+        return await self._hitl_delegate().fenced_update_hitl_request(
+            request_id, claim_id, updates, **kw_updates
+        )
+
+    async def claim_hitl_request(self, request_id: str, **updates) -> dict | None:
+        return await self._hitl_delegate().claim_hitl_request(request_id, **updates)
+
+    async def get_pending_hitl_requests(self, room_id: str) -> list[dict]:
+        return await self._hitl_delegate().get_pending_hitl_requests(room_id)
+
+    async def get_hitl_group_requests(self, group_id: str) -> list[dict]:
+        return await self._hitl_delegate().get_hitl_group_requests(group_id)
+
+    async def count_pending_in_hitl_group(self, group_id: str) -> int:
+        return await self._hitl_delegate().count_pending_in_hitl_group(group_id)
+
+    async def claim_hitl_group_routing(
+        self,
+        group_id: str,
+        claim_id: str,
+    ) -> bool:
+        return await self._hitl_delegate().claim_hitl_group_routing(group_id, claim_id)
+
+    async def release_hitl_group_routing(
+        self,
+        group_id: str,
+        claim_id: str,
+    ) -> bool:
+        return await self._hitl_delegate().release_hitl_group_routing(group_id, claim_id)
+
+    async def count_hitl_requests_for_message(
+        self,
+        continuation_message_id: str,
+    ) -> int:
+        return await self._hitl_delegate().count_hitl_requests_for_message(
+            continuation_message_id
+        )
+
+    async def update_agent_message_task_state(
+        self,
+        message_id: str,
+        state: str,
+    ) -> bool:
+        return await self._hitl_delegate().update_agent_message_task_state(
+            message_id, state
+        )
+
+    async def _ensure_message_task_metadata(self, message_id: str) -> None:
+        return await self._hitl_delegate()._ensure_message_task_metadata(message_id)
+
+    async def persist_hitl_user_answer(
+        self,
+        message_id: str,
+        user_input: str | None,
+    ) -> bool:
+        return await self._hitl_delegate().persist_hitl_user_answer(
+            message_id, user_input
+        )
+
+    async def persist_hitl_group_metadata(
+        self,
+        message_id: str,
+        *,
+        group_id: str,
+        group_total: int | None,
+        group_index: int | None,
+    ) -> bool:
+        return await self._hitl_delegate().persist_hitl_group_metadata(
+            message_id,
+            group_id=group_id,
+            group_total=group_total,
+            group_index=group_index,
+        )
+
+    async def iter_stale_processing_hitl_requests(
+        self,
+        cutoff: Any,
+    ) -> AsyncIterator[dict]:
+        async for doc in self._hitl_delegate().iter_stale_processing_hitl_requests(
+            cutoff
+        ):
+            yield doc
+
+    async def ensure_hitl_indexes(self) -> None:
+        return await self._hitl_delegate().ensure_hitl_indexes()
+
+    async def add_chat_context(self, chat_context: ChatContext) -> bool:
+        return await self._memory_delegate().add_chat_context(chat_context)
+
+    async def get_chat_context_by_session_id(
+        self, session_id: str
+    ) -> ChatContext | None:
+        return await self._memory_delegate().get_chat_context_by_session_id(session_id)
+
+    async def update_chat_context_by_session_id(
+        self, session_id: str, chat_context: ChatContext
+    ) -> bool:
+        return await self._memory_delegate().update_chat_context_by_session_id(
+            session_id, chat_context
+        )
+
+    async def delete_chat_context_by_session_id(self, session_id: str) -> bool:
+        return await self._memory_delegate().delete_chat_context_by_session_id(
+            session_id
+        )
+
+    async def increment_user_interactions(self, user_id: str) -> bool:
+        return await self._memory_delegate().increment_user_interactions(user_id)
+
+    async def record_agent_call(
+        self,
+        *,
+        agent_id: str,
+        success: bool,
+        response_time_ms: float = 0.0,
+    ) -> bool:
+        return await self._memory_delegate().record_agent_call(
+            agent_id=agent_id,
+            success=success,
+            response_time_ms=response_time_ms,
+        )
+
+    async def update_turn_notes(
+        self, room_id: str, turn_id: str, turn_notes: dict
+    ) -> bool:
+        return await self._memory_delegate().update_turn_notes(
+            room_id, turn_id, turn_notes
+        )
 
     async def claim_user_message_for_processing(self, message_id: str) -> bool:
         return await self._message_delegate().claim_user_message_for_processing(
@@ -517,278 +715,8 @@ class AppShellRepositoryStore:
             message_id, state
         )
 
-    async def get_pending_hitl_requests_for_message(
-        self, user_message_id: str
-    ) -> list[dict]:
-        try:
-            return await self._hitl_requests.find(
-                {"user_message_id": user_message_id, "status": "pending"},
-                limit=50,
-            )
-        except Exception:
-            logger.error("Failed to get pending HITL requests", exc_info=True)
-            return []
-
-    async def create_hitl_request(self, request_data: dict) -> bool:
-        try:
-            await self._hitl_requests.insert_one(dict(request_data))
-            return True
-        except Exception:
-            logger.error("Failed to create HITL request", exc_info=True)
-            return False
-
-    async def get_hitl_request(self, request_id: str) -> dict | None:
-        try:
-            return await self._hitl_requests.find_one({"request_id": request_id})
-        except Exception:
-            logger.error("Failed to get HITL request", exc_info=True)
-            return None
-
-    async def update_hitl_request(self, request_id: str, **updates) -> bool:
-        try:
-            return await self._hitl_requests.update_one(
-                {"request_id": request_id},
-                {"$set": dict(updates)},
-            )
-        except Exception:
-            logger.error("Failed to update HITL request", exc_info=True)
-            return False
-
-    async def cas_update_hitl_request(
-        self,
-        request_id: str,
-        expected_status: str,
-        **updates,
-    ) -> bool:
-        try:
-            return await self._hitl_requests.update_one(
-                {"request_id": request_id, "status": expected_status},
-                {"$set": dict(updates)},
-            )
-        except Exception:
-            logger.error("Failed to CAS update HITL request", exc_info=True)
-            return False
-
-    async def fenced_update_hitl_request(
-        self,
-        request_id: str,
-        claim_id: str,
-        updates: dict | None = None,
-        **kw_updates,
-    ) -> bool:
-        merged = {**(updates or {}), **kw_updates}
-        try:
-            return await self._hitl_requests.update_one(
-                {"request_id": request_id, "claim_id": claim_id},
-                {"$set": merged},
-            )
-        except Exception:
-            logger.error("Failed to fenced-update HITL request", exc_info=True)
-            return False
-
-    async def claim_hitl_request(self, request_id: str, **updates) -> dict | None:
-        try:
-            return await self._hitl_requests.find_one_and_update(
-                {"request_id": request_id, "status": "pending"},
-                {"$set": dict(updates)},
-            )
-        except Exception:
-            logger.error("Failed to claim HITL request", exc_info=True)
-            return None
-
-    async def get_pending_hitl_requests(self, room_id: str) -> list[dict]:
-        try:
-            return await self._hitl_requests.find(
-                {"room_id": room_id, "status": "pending"},
-                limit=50,
-            )
-        except Exception:
-            logger.error("Failed to get room HITL requests", exc_info=True)
-            return []
-
-    async def get_hitl_group_requests(self, group_id: str) -> list[dict]:
-        try:
-            return await self._hitl_requests.find(
-                {"group_id": group_id},
-                sort=[("group_index", 1)],
-                limit=100,
-            )
-        except Exception:
-            logger.error("Failed to get HITL group requests", exc_info=True)
-            return []
-
-    async def count_pending_in_hitl_group(self, group_id: str) -> int:
-        try:
-            return await self._hitl_requests.count(
-                {"group_id": group_id, "status": {"$in": ["pending", "processing"]}},
-            )
-        except Exception:
-            logger.error("Failed to count pending HITL group requests", exc_info=True)
-            return -1
-
-    async def claim_hitl_group_routing(
-        self,
-        group_id: str,
-        claim_id: str,
-    ) -> bool:
-        try:
-            return await self._hitl_requests.update_one(
-                {
-                    "group_id": group_id,
-                    "group_index": 0,
-                    "group_routing_claim_id": {"$exists": False},
-                },
-                {
-                    "$set": {
-                        "group_routing_claim_id": claim_id,
-                        "group_routing_claimed_at": utcnow(),
-                    }
-                },
-            )
-        except Exception:
-            logger.error("Failed to claim HITL group routing", exc_info=True)
-            return False
-
-    async def release_hitl_group_routing(
-        self,
-        group_id: str,
-        claim_id: str,
-    ) -> bool:
-        try:
-            return await self._hitl_requests.update_one(
-                {"group_id": group_id, "group_routing_claim_id": claim_id},
-                {
-                    "$unset": {
-                        "group_routing_claim_id": "",
-                        "group_routing_claimed_at": "",
-                    }
-                },
-            )
-        except Exception:
-            logger.error("Failed to release HITL group routing", exc_info=True)
-            return False
-
-    async def count_hitl_requests_for_message(
-        self,
-        continuation_message_id: str,
-    ) -> int:
-        try:
-            return await self._hitl_requests.count(
-                {
-                    "continuation_message_id": continuation_message_id,
-                    "status": {"$ne": "canceled"},
-                    "$or": [
-                        {"group_index": None},
-                        {"group_index": {"$exists": False}},
-                        {"group_index": 0},
-                    ],
-                }
-            )
-        except Exception:
-            logger.error("Failed to count HITL requests for message", exc_info=True)
-            return 0
-
-    async def update_agent_message_task_state(
-        self,
-        message_id: str,
-        state: str,
-    ) -> bool:
-        try:
-            return await self._room_agent_messages.update_one(
-                {"message_id": message_id},
-                {"$set": {"message_content.message_task.status.state": state}},
-            )
-        except Exception:
-            logger.error("Failed to update agent message task state", exc_info=True)
-            return False
-
-    async def _ensure_message_task_metadata(self, message_id: str) -> None:
-        await self._room_agent_messages.update_one(
-            {
-                "message_id": message_id,
-                "message_content.message_task.metadata": None,
-            },
-            {"$set": {"message_content.message_task.metadata": {}}},
-        )
-
-    async def persist_hitl_user_answer(
-        self,
-        message_id: str,
-        user_input: str | None,
-    ) -> bool:
-        try:
-            await self._ensure_message_task_metadata(message_id)
-            return await self._room_agent_messages.update_one(
-                {"message_id": message_id},
-                {
-                    "$set": {
-                        "message_content.message_task.metadata.user_answer": user_input
-                    }
-                },
-            )
-        except Exception:
-            logger.error("Failed to persist HITL user answer", exc_info=True)
-            return False
-
-    async def persist_hitl_group_metadata(
-        self,
-        message_id: str,
-        *,
-        group_id: str,
-        group_total: int | None,
-        group_index: int | None,
-    ) -> bool:
-        try:
-            await self._ensure_message_task_metadata(message_id)
-            updates: dict[str, Any] = {
-                "message_content.message_task.metadata.hitl_group_id": group_id,
-            }
-            if group_total is not None:
-                updates["message_content.message_task.metadata.hitl_group_total"] = (
-                    group_total
-                )
-            if group_index is not None:
-                updates["message_content.message_task.metadata.hitl_group_index"] = (
-                    group_index
-                )
-            return await self._room_agent_messages.update_one(
-                {"message_id": message_id},
-                {"$set": updates},
-            )
-        except Exception:
-            logger.error("Failed to persist HITL group metadata", exc_info=True)
-            return False
-
     async def reset_last_notified_state(self, message_id: str) -> bool:
         return await self._message_delegate().reset_last_notified_state(message_id)
-
-    async def iter_stale_processing_hitl_requests(
-        self,
-        cutoff: Any,
-    ) -> AsyncIterator[dict]:
-        try:
-            docs = await self._hitl_requests.find(
-                {"status": "processing", "responded_at": {"$lt": cutoff}},
-            )
-        except Exception:
-            logger.error(
-                "Failed to iterate stale processing HITL requests", exc_info=True
-            )
-            docs = []
-        for doc in docs:
-            yield doc
-
-    async def ensure_hitl_indexes(self) -> None:
-        try:
-            await self._hitl_requests.create_index([("request_id", 1)], unique=True)
-            await self._hitl_requests.create_index([("room_id", 1), ("status", 1)])
-            await self._hitl_requests.create_index([("expires_at", 1), ("status", 1)])
-            await self._hitl_requests.create_index(
-                [("user_message_id", 1), ("status", 1)]
-            )
-            await self._hitl_requests.create_index([("continuation_message_id", 1)])
-        except Exception:
-            logger.error("Failed to create HITL indexes", exc_info=True)
 
     async def update_task_state_on_message(
         self,
@@ -829,99 +757,3 @@ class AppShellRepositoryStore:
                 message_id, state
             )
         )
-
-    async def add_chat_context(self, chat_context: ChatContext) -> bool:
-        try:
-            if chat_context.memory_id == "":
-                chat_context.memory_id = str(uuid.uuid4())
-            await self._chat_contexts.insert_one(chat_context.model_dump(mode="json"))
-            return True
-        except Exception:
-            logger.error("Failed to add chat context", exc_info=True)
-            return False
-
-    async def get_chat_context_by_session_id(
-        self, session_id: str
-    ) -> ChatContext | None:
-        try:
-            return _safe_parse_chat_context(
-                await self._chat_contexts.find_one({"session_id": session_id})
-            )
-        except Exception:
-            logger.error("Failed to get chat context", exc_info=True)
-            return None
-
-    async def update_chat_context_by_session_id(
-        self, session_id: str, chat_context: ChatContext
-    ) -> bool:
-        try:
-            await self._chat_contexts.update_one(
-                {"session_id": session_id},
-                {"$set": chat_context.model_dump(exclude_unset=True, mode="json")},
-            )
-            return True
-        except Exception:
-            logger.error("Failed to update chat context", exc_info=True)
-            return False
-
-    async def delete_chat_context_by_session_id(self, session_id: str) -> bool:
-        try:
-            await self._chat_contexts.delete_one({"session_id": session_id})
-            return True
-        except Exception:
-            logger.error("Failed to delete chat context", exc_info=True)
-            return False
-
-    async def increment_user_interactions(self, user_id: str) -> bool:
-        now = utcnow()
-        try:
-            return await self._user_memories.update_one(
-                {"user_id": user_id},
-                {
-                    "$inc": {"total_interactions": 1},
-                    "$set": {"last_active_at": now},
-                    "$setOnInsert": {"user_id": user_id, "created_at": now},
-                },
-                upsert=True,
-            )
-        except Exception:
-            logger.error("Failed to increment user interactions", exc_info=True)
-            return False
-
-    async def record_agent_call(
-        self,
-        *,
-        agent_id: str,
-        success: bool,
-        response_time_ms: float = 0.0,
-    ) -> bool:
-        inc_fields: dict[str, float | int] = {
-            "total_calls": 1,
-            "total_response_time_ms": response_time_ms,
-        }
-        if success:
-            inc_fields["successful_calls"] = 1
-        try:
-            return await self._agent_memories.update_one(
-                {"agent_id": agent_id},
-                {
-                    "$inc": inc_fields,
-                    "$set": {"last_called_at": utcnow()},
-                    "$setOnInsert": {"agent_id": agent_id},
-                },
-                upsert=True,
-            )
-        except Exception:
-            logger.error("Failed to record agent call", exc_info=True)
-            return False
-
-    async def update_turn_notes(
-        self, room_id: str, turn_id: str, turn_notes: dict
-    ) -> bool:
-        updater = getattr(self._room_repository, "update_turn_notes", None)
-        if callable(updater):
-            try:
-                return await updater(room_id, turn_id, turn_notes)
-            except Exception:
-                logger.error("Failed to update turn notes", exc_info=True)
-        return False

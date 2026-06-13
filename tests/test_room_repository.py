@@ -654,6 +654,111 @@ async def test_app_shell_store_chat_context_mutations_succeed_on_no_exception():
 
 
 @pytest.mark.asyncio
+async def test_app_shell_store_memory_write_methods_use_expected_dependencies():
+    from app_shell.repository_store import AppShellRepositoryStore
+
+    class RecordingUpsertCollection(FakeCollection):
+        async def update_one(self, query: dict, update: dict, **kwargs) -> bool:
+            self.update_one_calls.append(
+                (deepcopy(query), deepcopy(update), deepcopy(kwargs))
+            )
+            return True
+
+    class RoomRepositoryWithTurnNotes:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, dict]] = []
+
+        async def update_turn_notes(
+            self,
+            room_id: str,
+            turn_id: str,
+            turn_notes: dict,
+        ) -> bool:
+            self.calls.append((room_id, turn_id, deepcopy(turn_notes)))
+            return True
+
+    class FailingRoomRepository:
+        async def update_turn_notes(self, *args, **kwargs):
+            raise RuntimeError("database down")
+
+    user_memories = RecordingUpsertCollection()
+    agent_memories = RecordingUpsertCollection()
+    room_repository = RoomRepositoryWithTurnNotes()
+    store = AppShellRepositoryStore(
+        mongo=FakeMongo(
+            {
+                "user_memories": user_memories,
+                "agent_memories": agent_memories,
+            }
+        ),
+        room_repository=room_repository,
+        message_repository=object(),
+        agent_repository=object(),
+    )
+
+    assert await store.increment_user_interactions("user-1") is True
+    query, update, kwargs = user_memories.update_one_calls[0]
+    assert query == {"user_id": "user-1"}
+    assert update["$inc"] == {"total_interactions": 1}
+    assert set(update["$set"]) == {"last_active_at"}
+    assert update["$setOnInsert"]["user_id"] == "user-1"
+    assert "created_at" in update["$setOnInsert"]
+    assert kwargs == {"upsert": True}
+
+    assert (
+        await store.record_agent_call(
+            agent_id="agent-1",
+            success=True,
+        )
+        is True
+    )
+    query, update, kwargs = agent_memories.update_one_calls[0]
+    assert query == {"agent_id": "agent-1"}
+    assert update["$inc"] == {
+        "total_calls": 1,
+        "total_response_time_ms": 0.0,
+        "successful_calls": 1,
+    }
+    assert set(update["$set"]) == {"last_called_at"}
+    assert update["$setOnInsert"] == {"agent_id": "agent-1"}
+    assert kwargs == {"upsert": True}
+
+    assert (
+        await store.record_agent_call(
+            agent_id="agent-1",
+            success=False,
+            response_time_ms=12.5,
+        )
+        is True
+    )
+    _, failed_update, _ = agent_memories.update_one_calls[1]
+    assert failed_update["$inc"] == {
+        "total_calls": 1,
+        "total_response_time_ms": 12.5,
+    }
+
+    turn_notes = {"summary": "note"}
+    assert await store.update_turn_notes("room-1", "turn-1", turn_notes) is True
+    assert room_repository.calls == [("room-1", "turn-1", turn_notes)]
+
+    no_method_store = AppShellRepositoryStore(
+        mongo=FakeMongo(),
+        room_repository=object(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+    assert await no_method_store.update_turn_notes("room-1", "turn-1", {}) is False
+
+    failing_store = AppShellRepositoryStore(
+        mongo=FakeMongo(),
+        room_repository=FailingRoomRepository(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+    assert await failing_store.update_turn_notes("room-1", "turn-1", {}) is False
+
+
+@pytest.mark.asyncio
 async def test_app_shell_store_generates_chat_context_memory_id_when_empty():
     from app_shell.repository_store import AppShellRepositoryStore
     from models.memory import ChatContext
