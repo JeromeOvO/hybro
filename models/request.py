@@ -9,7 +9,7 @@ from pydantic import (
     field_validator,
 )
 
-from common.types import AgentCard, Task
+from common.types import AgentCard, Message, MessageRole, Part, Task, TextPart
 from models.agent import Agent, AgentStatus, coerce_legacy_agent_card
 from models.memory import ChatContext, RoomMemory
 from models.room import (
@@ -61,13 +61,16 @@ class TaskRequest(BaseModel):
     message: Any | None = None
 
     def to_message(self) -> Any:
-        """Convert request to A2A protocol Message"""
+        """Convert request to an internal A2A-shaped message."""
         if self.message:
             return self.message
 
-        from a2a_adapter.message_factory import build_user_text_message
-
-        return build_user_text_message(self.query, metadata=self.context)
+        return Message(
+            message_id=uuid4().hex,
+            role=MessageRole.USER,
+            parts=[Part(root=TextPart(text=self.query))],
+            metadata=self.context,
+        )
 
 
 class AgentTaskRequest(BaseModel):
@@ -79,7 +82,7 @@ class AgentTaskRequest(BaseModel):
     message: Any | None = None
 
     def to_message(self) -> Any:
-        """Convert agent task request to A2A protocol Message"""
+        """Convert agent task request to an internal A2A-shaped message."""
         if self.message:
             return self.message
 
@@ -104,9 +107,12 @@ class AgentTaskRequest(BaseModel):
             **self.context,
         }
 
-        from a2a_adapter.message_factory import build_user_text_message
-
-        return build_user_text_message(text, metadata=metadata)
+        return Message(
+            message_id=uuid4().hex,
+            role=MessageRole.USER,
+            parts=[Part(root=TextPart(text=text))],
+            metadata=metadata,
+        )
 
 
 # for user

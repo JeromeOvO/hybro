@@ -250,6 +250,49 @@ def test_agent_card_ignores_unknown_fields():
     assert not card.model_extra or "versoin" not in card.model_extra
 
 
+def test_agent_card_preserves_known_sdk_extension_fields_with_aliases():
+    from common.types import AgentCapabilities, AgentCard, AgentSkill
+
+    card = AgentCard(
+        name="agent",
+        description="desc",
+        url="https://agent.example",
+        version="1.0.0",
+        capabilities=AgentCapabilities(
+            extensions=[{"uri": "urn:capability:example"}]
+        ),
+        skills=[AgentSkill(id="skill", name="Skill")],
+        protocolVersion="0.3.0",
+        preferredTransport="JSONRPC",
+        additionalInterfaces=[{"url": "https://agent.example/a2a"}],
+        security=[{"bearer": []}],
+        securitySchemes={"bearer": {"type": "http"}},
+        signatures=[{"protected": "header", "signature": "sig"}],
+        supportsAuthenticatedExtendedCard=True,
+    )
+
+    dumped = card.model_dump(mode="json")
+
+    assert dumped["protocolVersion"] == "0.3.0"
+    assert dumped["capabilities"]["extensions"] == [
+        {"uri": "urn:capability:example"}
+    ]
+    assert dumped["security"] == [{"bearer": []}]
+    assert dumped["signatures"] == [{"protected": "header", "signature": "sig"}]
+    assert dumped["supportsAuthenticatedExtendedCard"] is True
+    assert "supports_authenticated_extended_card" not in dumped
+
+
+def test_file_content_accepts_snake_case_mime_type_but_dumps_a2a_field():
+    from common.types import FileContent
+
+    content = FileContent(uri="s3://bucket/file.png", mime_type="image/png")
+
+    assert content.mimeType == "image/png"
+    assert content.model_dump(mode="json")["mimeType"] == "image/png"
+    assert "mime_type" not in content.model_dump(mode="json")
+
+
 @pytest.mark.asyncio
 async def test_auth_config_binds_authorized_parties(monkeypatch):
     import common.auth as auth
