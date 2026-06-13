@@ -4,9 +4,7 @@ import httpx
 
 from a2a_adapter.inspection import (
     fetch_agent_card_for_inspection,
-)
-from a2a_adapter.inspection import (
-    inspect_a2a_connection as adapter_inspect_a2a_connection,
+    inspect_a2a_connection,
 )
 from app_shell.agent_service import agent_service
 from common.utils.logger import get_logger
@@ -18,9 +16,8 @@ logger = get_logger(__name__)
 
 
 class AppShellInspectionCenter:
-    def __init__(self, *, agent_service_dep=None, a2a_service_dep=None):
+    def __init__(self, *, agent_service_dep=None):
         self.agent_service = agent_service_dep or agent_service
-        self.a2a_service = a2a_service_dep
 
     async def inspect_agent_card(
         self, request: InspectionCenterRequest
@@ -90,7 +87,7 @@ class AppShellInspectionCenter:
             ) from None
 
         try:
-            response = await adapter_inspect_a2a_connection(str(agent_url))
+            response = await inspect_a2a_connection(str(agent_url))
             return InspectionCenterResponse(
                 agent_url=agent_url,
                 agent_card=response.get("agent_card"),
