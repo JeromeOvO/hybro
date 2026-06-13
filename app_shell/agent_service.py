@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from a2a.types import AgentCard
-
 from a2a_adapter.translators import a2a_card_to_snapshot
 from agent.url_utils import (  # noqa: F401 - legacy service compatibility re-export
     is_local_agent_url,
@@ -13,6 +11,7 @@ from agent.url_utils import (  # noqa: F401 - legacy service compatibility re-ex
 # Deprecated compatibility re-export for legacy service imports.
 # New code should import URL helpers from agent.url_utils directly.
 from common.dto.agent import AgentCardSnapshot, AgentInfo
+from common.types import AgentCard
 from common.utils.logger import get_logger
 from models.agent import Agent
 from models.error import (

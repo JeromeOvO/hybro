@@ -41,16 +41,6 @@
             "reason": "Agent health runtime fetches and parses A2A cards."
         },
         {
-            "path": "app_shell/agent_resolver_service.py",
-            "contract": "sdk_confinement",
-            "reason": "Agent resolver runtime uses A2A card constants."
-        },
-        {
-            "path": "app_shell/agent_service.py",
-            "contract": "sdk_confinement",
-            "reason": "Agent app-shell runtime exposes A2A card models."
-        },
-        {
             "path": "app_shell/gemini_service.py",
             "contract": "sdk_confinement",
             "reason": "Gemini runtime maps A2A message/task models."
@@ -59,16 +49,6 @@
             "path": "app_shell/inspection_runtime.py",
             "contract": "sdk_confinement",
             "reason": "Inspection runtime validates A2A client connectivity."
-        },
-        {
-            "path": "app_shell/notification_service.py",
-            "contract": "sdk_confinement",
-            "reason": "Notification runtime handles A2A card payloads."
-        },
-        {
-            "path": "app_shell/openai_service.py",
-            "contract": "sdk_confinement",
-            "reason": "OpenAI runtime maps A2A message roles."
         },
         {
             "path": "app_shell/room_coordinator_service.py",

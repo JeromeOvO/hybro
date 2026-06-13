@@ -3,8 +3,6 @@ from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 
-from a2a.types import Role
-
 from common.dto import (
     AgentRoutingCandidate,
     ChatContextGenerationInput,
@@ -13,6 +11,7 @@ from common.dto import (
     RoomMemoryGenerationInput,
     RoomMessageSummary,
 )
+from common.types import MessageRole as Role
 from common.utils.logger import get_logger
 from llm_gateway.config import LLMGatewayConfig
 from llm_gateway.errors import LLMModelRoutingError, LLMServiceNotBoundError
@@ -284,7 +283,7 @@ class OpenAIService:
                     agent_messages = [
                         m
                         for m in msg.message_content.message_task.history
-                        if m.role == Role.agent
+                        if m.role == Role.AGENT
                     ]
 
                     if agent_messages:

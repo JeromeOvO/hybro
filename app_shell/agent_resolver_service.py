@@ -19,11 +19,11 @@ from time import monotonic
 from typing import Protocol
 
 import httpx
-from a2a.utils.constants import (
+
+from a2a_adapter.constants import (
     AGENT_CARD_WELL_KNOWN_PATH,
     PREV_AGENT_CARD_WELL_KNOWN_PATH,
 )
-
 from app_shell.agent_capability_issue_service import capability_issue_service
 from common.config.settings import settings
 from common.dto import AgentRoutingCandidate
