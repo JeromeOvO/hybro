@@ -7,6 +7,7 @@ from typing import Any
 from pymongo.errors import DuplicateKeyError
 
 from common.a2a_constants import SSEProcessingStatus
+from common.config import settings
 from common.observability.run_metrics import increment_counter
 from common.protocols import RunEventRepository, RunRepository
 from common.utils.logger import get_logger
@@ -38,8 +39,6 @@ class _UnboundRunEventRepository:
 
 
 def feature_run_dual_write_enabled() -> bool:
-    from common.config import settings
-
     return settings.feature_run_dual_write
 
 
@@ -468,8 +467,6 @@ class RunCommandHandler:
 
 
 def run_event_sse_enabled() -> bool:
-    from common.config import settings
-
     return settings.feature_run_event_sse
 
 

@@ -26,9 +26,7 @@ from platform_module.content_storage import (
 logger = get_logger(__name__)
 
 # Concurrency limit for parallel compaction I/O (content storage + Pinecone).
-# Tune based on downstream service capacity. Default 5 balances throughput vs.
-# rate-limit risk.  Must be >= 1; invalid values fall back in Settings.
-_DEFAULT_COMPACTION_CONCURRENCY = 5
+# Tune based on downstream service capacity via Settings.
 COMPACTION_CONCURRENCY = _settings.compaction_concurrency
 
 

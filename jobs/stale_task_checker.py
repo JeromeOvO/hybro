@@ -24,6 +24,7 @@ from common.a2a_constants import (
     CommonTaskState,
     is_terminal_state,
 )
+from common.config import settings
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from jobs.constants import STALE_TASK_CHECKER
@@ -332,8 +333,6 @@ class StaleTaskChecker:
 
     async def _fail_stale_runs(self) -> None:
         """Append run_failed for non-terminal runs past RUN_WATCHDOG_STALE_MINUTES."""
-        from common.config import settings
-
         if not settings.feature_run_watchdog:
             return
         stale_mins = settings.run_watchdog_stale_minutes

@@ -249,7 +249,7 @@ def test_context_memory_protocol_method_sets():
     }
 
 
-def test_context_memory_facade_uses_legacy_compaction_concurrency(monkeypatch):
+def test_context_memory_facade_uses_settings_compaction_concurrency(monkeypatch):
     from common.config import settings
     from container import create_context_memory_facade
 
