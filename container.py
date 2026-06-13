@@ -5,7 +5,7 @@ import logging
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from agent import AgentFacade, AgentMongoRepository
@@ -84,6 +84,9 @@ from platform_module.adapters import (
 from platform_module.deps import DiscoveryQueryExpander, LoggerLike
 from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
 from room.repository import RoomQuoteMongoRepository
+
+if TYPE_CHECKING:
+    from app_shell.repository_store import AppShellRepositoryStore
 
 
 def create_execution_repositories(*, mongo: MongoDAL):
@@ -967,7 +970,7 @@ def create_app_shell_repository_store(
     mongo: MongoDAL,
     room_deps: RoomDeps,
     agent_deps: AgentDeps,
-):
+) -> AppShellRepositoryStore:
     from app_shell.repository_store import AppShellRepositoryStore
 
     return AppShellRepositoryStore(
