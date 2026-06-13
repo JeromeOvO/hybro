@@ -13,6 +13,8 @@ from uuid import uuid4
 
 from a2a.types import Task, TaskState, TaskStatus
 
+from common.types import Message as InternalMessage
+from common.types import TextPart
 from models.agent import Agent, AgentStatus
 from models.hitl import HITLPromptType, HITLRequest, HITLStatus
 from models.memory import (
@@ -38,13 +40,16 @@ from models.room import (
 
 
 class TestLegacyTaskRequestModels:
-    """Tests for legacy request helpers that build A2A SDK messages."""
+    """Tests for legacy request helpers that build internal messages."""
 
-    def test_task_request_to_message_builds_valid_sdk_message(self):
+    def test_task_request_to_message_builds_internal_message(self):
         message = TaskRequest(query="hello", context={"room_id": "room-1"}).to_message()
 
+        assert isinstance(message, InternalMessage)
         assert message.message_id
         assert message.role == "user"
+        assert isinstance(message.parts[0].root, TextPart)
+        assert message.parts[0].root.text == "hello"
         assert message.metadata == {"room_id": "room-1"}
         assert message.model_dump(mode="json", by_alias=True)["messageId"]
 
@@ -62,7 +67,7 @@ class TestLegacyTaskRequestModels:
             "timestamp": None,
         }
 
-    def test_agent_task_request_to_message_builds_valid_sdk_message(self):
+    def test_agent_task_request_to_message_builds_internal_message(self):
         message = AgentTaskRequest(
             task_id="task-1",
             agent_id="agent-1",
@@ -71,8 +76,11 @@ class TestLegacyTaskRequestModels:
             context={"room_id": "room-1"},
         ).to_message()
 
+        assert isinstance(message, InternalMessage)
         assert message.message_id
         assert message.role == "user"
+        assert isinstance(message.parts[0].root, TextPart)
+        assert message.parts[0].root.text == "hello"
         assert message.metadata == {
             "task_id": "task-1",
             "agent_id": "agent-1",
