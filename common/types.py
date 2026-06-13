@@ -10,6 +10,7 @@ from typing import Annotated, Any, Literal, Self
 from uuid import uuid4
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -21,10 +22,28 @@ from pydantic import (
 
 
 class FileContent(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     name: str | None = None
-    mimeType: str | None = None
+    mimeType: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("mimeType", "mime_type"),
+        serialization_alias="mimeType",
+    )
     bytes: str | None = None
     uri: str | None = None
+
+    def model_dump(self, *args, **kwargs):
+        kwargs.setdefault("by_alias", False)
+        return super().model_dump(*args, **kwargs)
+
+    @property
+    def mime_type(self) -> str | None:
+        return self.mimeType
+
+    @mime_type.setter
+    def mime_type(self, value: str | None) -> None:
+        self.mimeType = value
 
     @model_validator(mode="after")
     def check_content(self) -> Self:
@@ -139,7 +158,7 @@ class Task(BaseModel):
 
 
 class TaskStatusUpdateEvent(BaseModel):
-    id: str
+    id: str = Field(validation_alias=AliasChoices("id", "taskId"), serialization_alias="taskId")
     kind: str = "status-update"
     context_id: str | None = Field(default=None, alias="contextId")
     status: TaskStatus
@@ -148,15 +167,25 @@ class TaskStatusUpdateEvent(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
 
+    @property
+    def task_id(self) -> str:
+        return self.id
+
 
 class TaskArtifactUpdateEvent(BaseModel):
-    id: str
+    id: str = Field(validation_alias=AliasChoices("id", "taskId"), serialization_alias="taskId")
     kind: str = "artifact-update"
     context_id: str | None = Field(default=None, alias="contextId")
     artifact: Artifact
+    append: bool = False
+    last_chunk: bool = Field(default=False, alias="lastChunk")
     metadata: dict[str, Any] | None = None
 
     model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    @property
+    def task_id(self) -> str:
+        return self.id
 
 
 class AuthenticationInfo(BaseModel):
@@ -378,6 +407,7 @@ class AgentCapabilities(BaseModel):
     streaming: bool | None = False
     pushNotifications: bool | None = False
     stateTransitionHistory: bool | None = False
+    extensions: list[dict[str, Any]] | None = None
 
     @property
     def push_notifications(self) -> bool | None:
@@ -412,7 +442,7 @@ class AgentSkill(BaseModel):
 
 
 class AgentCard(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     name: str
     description: str | None = None
@@ -426,7 +456,19 @@ class AgentCard(BaseModel):
     defaultInputModes: list[str] = ["text"]
     defaultOutputModes: list[str] = ["text"]
     skills: list[AgentSkill]
-    supports_authenticated_extended_card: bool | None = None
+    protocolVersion: str | None = None
+    preferredTransport: str | None = None
+    additionalInterfaces: list[dict[str, Any]] | None = None
+    security: list[dict[str, list[str]]] | None = None
+    securitySchemes: dict[str, Any] | None = None
+    signatures: list[dict[str, Any]] | None = None
+    supports_authenticated_extended_card: bool | None = Field(
+        default=None, alias="supportsAuthenticatedExtendedCard"
+    )
+
+    def model_dump(self, *args, **kwargs):
+        kwargs.setdefault("by_alias", True)
+        return super().model_dump(*args, **kwargs)
 
     @property
     def documentation_url(self) -> str | None:

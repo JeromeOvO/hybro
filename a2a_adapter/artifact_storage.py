@@ -15,9 +15,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from a2a.types import FileWithUri
 
 from common.file_upload_constants import MAX_INLINE_CONVERSIONS_PER_MESSAGE
+from common.types import FileContent
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,12 @@ def _require_storage_service() -> Any:
     if _storage_service is None:
         raise RuntimeError("A2A artifact storage dependency has not been bound")
     return _storage_service
+
+
+def _file_content_mime(file_content: Any) -> str | None:
+    return getattr(file_content, "mime_type", None) or getattr(
+        file_content, "mimeType", None
+    )
 
 
 def _is_own_storage_url(uri: str) -> bool:
@@ -321,7 +327,7 @@ async def convert_pydantic_artifacts_to_s3(
             except Exception:
                 continue
 
-            mime = getattr(fc, "mime_type", None) or "application/octet-stream"
+            mime = _file_content_mime(fc) or "application/octet-stream"
             ext = mime.split("/")[-1] if "/" in mime else "bin"
             storage_key = f"artifacts/{room_id}/{message_id}/inline-{converted}.{ext}"
 
@@ -335,9 +341,9 @@ async def convert_pydantic_artifacts_to_s3(
                 presigned_url = await storage.generate_presigned_url(
                     storage_key, filename=orig_name,
                 )
-                root.file = FileWithUri(
+                root.file = FileContent(
                     uri=presigned_url,
-                    mime_type=getattr(fc, "mime_type", None),
+                    mimeType=_file_content_mime(fc),
                     name=orig_name,
                 )
                 root.metadata = {**(root.metadata or {}), "s3_key": storage_key}
@@ -400,7 +406,7 @@ async def convert_pydantic_artifacts_to_s3(
                     )
                     continue
 
-                mime = getattr(fc, "mime_type", None) or content_type
+                mime = _file_content_mime(fc) or content_type
                 ext = mime.split("/")[-1] if "/" in mime else "bin"
                 storage_key = f"artifacts/{room_id}/{message_id}/ext-{converted}.{ext}"
 

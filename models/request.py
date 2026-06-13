@@ -9,7 +9,7 @@ from pydantic import (
     field_validator,
 )
 
-from common.types import AgentCard, Task
+from common.types import AgentCard, Message, MessageRole, Part, Task, TextPart
 from models.agent import Agent, AgentStatus, coerce_legacy_agent_card
 from models.memory import ChatContext, RoomMemory
 from models.room import (
@@ -58,16 +58,23 @@ class TaskRequest(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid4()))
     query: str
     context: dict[str, Any] | None = Field(default_factory=dict)
-    message: Any | None = None
+    message: Message | None = None
 
-    def to_message(self) -> Any:
-        """Convert request to A2A protocol Message"""
+    def to_message(self) -> Message:
+        """Convert request to an internal message.
+
+        Message overrides must already use ``common.types.Message``; SDK or
+        external message shapes should be normalized at the adapter boundary.
+        """
         if self.message:
             return self.message
 
-        from a2a_adapter.message_factory import build_user_text_message
-
-        return build_user_text_message(self.query, metadata=self.context)
+        return Message(
+            message_id=uuid4().hex,
+            role=MessageRole.USER,
+            parts=[Part(root=TextPart(text=self.query))],
+            metadata=self.context,
+        )
 
 
 class AgentTaskRequest(BaseModel):
@@ -76,10 +83,14 @@ class AgentTaskRequest(BaseModel):
     step_id: str
     input_data: Any
     context: dict[str, Any] | None = Field(default_factory=dict)
-    message: Any | None = None
+    message: Message | None = None
 
-    def to_message(self) -> Any:
-        """Convert agent task request to A2A protocol Message"""
+    def to_message(self) -> Message:
+        """Convert agent task request to an internal message.
+
+        Message overrides must already use ``common.types.Message``; SDK or
+        external message shapes should be normalized at the adapter boundary.
+        """
         if self.message:
             return self.message
 
@@ -104,9 +115,12 @@ class AgentTaskRequest(BaseModel):
             **self.context,
         }
 
-        from a2a_adapter.message_factory import build_user_text_message
-
-        return build_user_text_message(text, metadata=metadata)
+        return Message(
+            message_id=uuid4().hex,
+            role=MessageRole.USER,
+            parts=[Part(root=TextPart(text=text))],
+            metadata=metadata,
+        )
 
 
 # for user
