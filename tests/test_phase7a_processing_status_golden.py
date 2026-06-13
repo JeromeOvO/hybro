@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app_shell.delivery_runtime import SSEManager
+from common.config import settings
 from common.dto import RunEventNotification
 from execution.orchestration.room_message_center import RoomMessageCenter
 from models.supervisor import RunStatus, SupervisorRunResult, SupervisorTrajectory
@@ -120,7 +121,7 @@ async def test_golden_send_message_processing_status_order(monkeypatch):
     )
     run_lifecycle = SimpleNamespace(record_processing_status=record)
 
-    monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
+    monkeypatch.setattr(settings, "feature_run_event_sse", True)
 
     svc = object.__new__(room_services.RoomServices)
     svc._processing_status_emitter = lambda **kwargs: emit_processing_status(
@@ -158,7 +159,7 @@ async def test_golden_hitl_resolve_resume_completion_order(monkeypatch):
     }
     record = AsyncMock(side_effect=[payload, None])
 
-    monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
+    monkeypatch.setattr(settings, "feature_run_event_sse", True)
 
     rmc = object.__new__(RoomMessageCenter)
     rmc.sse_manager = manager
@@ -208,7 +209,7 @@ async def test_resume_completion_uses_deterministic_kind_when_summary_skipped(mo
     conn = await manager.add_connection("room-1")
     record = AsyncMock(return_value=None)
 
-    monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
+    monkeypatch.setattr(settings, "feature_run_event_sse", True)
 
     rmc = object.__new__(RoomMessageCenter)
     rmc.sse_manager = manager
@@ -293,7 +294,7 @@ async def test_golden_duplicate_terminal_root_completion_suppressed(monkeypatch)
     }
     record = AsyncMock(side_effect=[payload, None])
 
-    monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
+    monkeypatch.setattr(settings, "feature_run_event_sse", True)
 
     rmc = _make_rmc_for_supervisor_result(manager)
     _bind_test_processing_emitter(rmc, manager, record)
@@ -332,7 +333,7 @@ async def test_golden_duplicate_terminal_suppressed_across_redis_l2(monkeypatch)
     }
     record = AsyncMock(side_effect=[payload, None])
 
-    monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
+    monkeypatch.setattr(settings, "feature_run_event_sse", True)
 
     result = SupervisorRunResult(
         status=RunStatus.COMPLETED,

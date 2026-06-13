@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from pymongo.errors import DuplicateKeyError
 
 from common.a2a_constants import SSEProcessingStatus
+from common.config import settings
 from common.observability.run_metrics import increment_counter
 from common.protocols import RunEventRepository, RunRepository
 from common.utils.logger import get_logger
@@ -39,8 +39,7 @@ class _UnboundRunEventRepository:
 
 
 def feature_run_dual_write_enabled() -> bool:
-    raw = (os.environ.get("FEATURE_RUN_DUAL_WRITE") or "1").strip().lower()
-    return raw not in ("0", "false", "no", "off")
+    return settings.feature_run_dual_write
 
 
 def _feature_run_dual_write_enabled() -> bool:
@@ -468,8 +467,7 @@ class RunCommandHandler:
 
 
 def run_event_sse_enabled() -> bool:
-    raw = (os.environ.get("FEATURE_RUN_EVENT_SSE") or "0").strip().lower()
-    return raw in ("1", "true", "yes", "on")
+    return settings.feature_run_event_sse
 
 
 run_command_handler = RunCommandHandler(

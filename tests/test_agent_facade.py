@@ -925,15 +925,11 @@ def test_matching_weights_and_thresholds_use_module_constants(monkeypatch):
 
     monkeypatch.setattr(matching, "VECTOR_WEIGHT", 0.25)
     monkeypatch.setattr(matching, "CAPABILITY_WEIGHT", 0.75)
-    monkeypatch.setenv("MATCH_VECTOR_WEIGHT", "1.0")
-    monkeypatch.setenv("MATCH_CAPABILITY_WEIGHT", "0.0")
 
     assert matching.compute_final_score(0.2, 1.0) == pytest.approx(0.8)
 
     monkeypatch.setattr(matching, "GAP_THRESHOLD", 0.5)
     monkeypatch.setattr(matching, "QUALITY_THRESHOLD", 0.5)
-    monkeypatch.setenv("MATCH_GAP_THRESHOLD", "0.01")
-    monkeypatch.setenv("MATCH_QUALITY_THRESHOLD", "0.99")
     ranked = [
         {"agent_id": "a1", "final_score": 0.8},
         {"agent_id": "a2", "final_score": 0.6},
@@ -946,7 +942,6 @@ def test_matching_weights_and_thresholds_use_module_constants(monkeypatch):
     ]
 
     monkeypatch.setattr(matching, "DEBATE_THRESHOLD", 0.3)
-    monkeypatch.setenv("MATCH_DEBATE_THRESHOLD", "0.95")
 
     assert [
         m["agent_id"]

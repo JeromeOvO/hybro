@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -9,13 +8,6 @@ def _setting(name: str, fallback):
     from common.config import settings
 
     return getattr(settings, name, fallback)
-
-
-def _env_int(name: str, fallback: int) -> int:
-    try:
-        return max(1, int(os.getenv(name, str(fallback))))
-    except (TypeError, ValueError):
-        return fallback
 
 
 @dataclass(frozen=True)
@@ -62,7 +54,7 @@ class TokenBudgetConfig:
     def current_task_tokens(self) -> int:
         return int(self.available_for_content * self.current_task_pct)
 
-    def with_model_window(self, token_budget: int) -> "TokenBudgetConfig":
+    def with_model_window(self, token_budget: int) -> TokenBudgetConfig:
         model_context_window = max(0, int(token_budget))
         return TokenBudgetConfig(
             model_context_window=model_context_window,
@@ -93,7 +85,7 @@ class CompactionConfig:
         default_factory=lambda: _setting("compaction_content_ttl_days", 0)
     )
     concurrency: int = field(
-        default_factory=lambda: _env_int("COMPACTION_CONCURRENCY", 5)
+        default_factory=lambda: _setting("compaction_concurrency", 5)
     )
 
     def expires_delta(self) -> timedelta | None:

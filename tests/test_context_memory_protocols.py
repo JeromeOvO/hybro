@@ -249,10 +249,11 @@ def test_context_memory_protocol_method_sets():
     }
 
 
-def test_context_memory_facade_uses_legacy_compaction_concurrency(monkeypatch):
+def test_context_memory_facade_uses_settings_compaction_concurrency(monkeypatch):
+    from common.config import settings
     from container import create_context_memory_facade
 
-    monkeypatch.setenv("COMPACTION_CONCURRENCY", "11")
+    monkeypatch.setattr(settings, "compaction_concurrency", 11)
 
     facade = create_context_memory_facade(
         mongo=FakeMongo(),
@@ -284,7 +285,7 @@ def test_context_memory_config_defaults_read_common_settings(monkeypatch):
     monkeypatch.setattr(settings, "compaction_max_total_tokens", 777)
     monkeypatch.setattr(settings, "compaction_preserve_recent", 3)
     monkeypatch.setattr(settings, "compaction_content_ttl_days", 9)
-    monkeypatch.setenv("COMPACTION_CONCURRENCY", "4")
+    monkeypatch.setattr(settings, "compaction_concurrency", 4)
     monkeypatch.setattr(settings, "memory_search_enabled", False)
     monkeypatch.setattr(settings, "memory_search_vector_weight", 0.4)
     monkeypatch.setattr(settings, "memory_search_keyword_weight", 0.6)

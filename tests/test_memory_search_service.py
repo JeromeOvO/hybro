@@ -192,9 +192,8 @@ def bind_memory_search_facade(service: MemorySearchService) -> MemorySearchServi
 
 
 @pytest.fixture
-def mock_settings(monkeypatch):
+def mock_settings():
     """Mock settings for memory search configuration."""
-    monkeypatch.delenv("MEMORY_SEARCH_INDEX_NAME", raising=False)
     with patch("models.context_config.settings") as mock:
         mock.memory_search_enabled = True
         mock.memory_search_vector_weight = 0.7
@@ -837,12 +836,18 @@ class TestMemorySearchConfig:
 
         assert memory_search_config.enabled is False
 
-    def test_index_name_prefers_env(self, mock_settings, monkeypatch):
-        monkeypatch.setenv("MEMORY_SEARCH_INDEX_NAME", "env-room-memory")
+    def test_index_name_reads_settings(self, mock_settings):
         mock_settings.memory_search_index_name = "settings-room-memory"
         from models.context_config import memory_search_config
 
-        assert memory_search_config.index_name == "env-room-memory"
+        assert memory_search_config.index_name == "settings-room-memory"
+
+    def test_blank_index_name_falls_back_to_default(self):
+        from common.config import MEMORY_SEARCH_INDEX_NAME_DEFAULT, Settings
+
+        settings = Settings(_env_file=None, memory_search_index_name="")
+
+        assert settings.memory_search_index_name == MEMORY_SEARCH_INDEX_NAME_DEFAULT
 
 
 # =========================================================================

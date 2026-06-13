@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -361,9 +360,7 @@ async def lifespan(app: FastAPI):
             _delivery_config = create_delivery_config(settings)
             delivery_startup_policy = create_delivery_startup_policy(
                 redis_url=settings.redis_url,
-                multi_worker=os.environ.get("SERVER_SOFTWARE", "").startswith(
-                    "gunicorn"
-                ),
+                multi_worker=settings.is_gunicorn,
             )
             delivery_redis_kv, delivery_redis_pubsub = create_delivery_redis_clients(
                 redis_url=settings.redis_url,
@@ -824,7 +821,7 @@ async def lifespan(app: FastAPI):
 
         # ── Guard: fail if gunicorn without fully connected Redis ──
         check_multi_worker_safety(
-            is_gunicorn=os.environ.get("SERVER_SOFTWARE", "").startswith("gunicorn"),
+            is_gunicorn=settings.is_gunicorn,
             delivery_pubsub_connected=bool(
                 _delivery_facade and _delivery_facade.delivery_pubsub_connected
             ),
@@ -874,8 +871,7 @@ async def lifespan(app: FastAPI):
             )
 
             def run_dual_write_enabled() -> bool:
-                raw = (os.environ.get("FEATURE_RUN_DUAL_WRITE") or "1").strip().lower()
-                return raw not in ("0", "false", "no", "off")
+                return settings.feature_run_dual_write
 
             async def emit_watchdog_run_event(
                 *,
@@ -1270,7 +1266,7 @@ async def health_check(
 
 
 # Include API routers with /api/v1 prefix and global authentication
-api_prefix = os.getenv("API_PREFIX", "/api/v1")
+api_prefix = settings.api_prefix
 
 app.include_router(api_gateway.router, prefix=api_prefix)
 

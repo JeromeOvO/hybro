@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from common.config import settings
 from jobs.stale_task_checker import StaleRunWatchdogEventDeps, StaleTaskChecker
 
 
@@ -21,7 +22,7 @@ async def test_watchdog_broadcasts_pre_recorded_payload_before_failed_status(mon
     emit_run_event = AsyncMock(side_effect=lambda *a, **k: calls.append("broadcast"))
     emit_status = AsyncMock(side_effect=lambda *a, **k: calls.append("send"))
 
-    monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
+    monkeypatch.setattr(settings, "feature_run_dual_write", True)
     monkeypatch.setattr(
         mod.store,
         "find_stale_non_terminal_runs",
@@ -68,7 +69,7 @@ async def test_watchdog_payload_none_suppresses_metric_and_delivery(monkeypatch)
     emit_status = AsyncMock()
     counter = MagicMock()
 
-    monkeypatch.delenv("FEATURE_RUN_DUAL_WRITE", raising=False)
+    monkeypatch.setattr(settings, "feature_run_dual_write", True)
     monkeypatch.setattr(
         mod.store,
         "find_stale_non_terminal_runs",
@@ -103,7 +104,7 @@ async def test_watchdog_dual_write_disabled_sends_failed_without_lifecycle(
     emit_run_event = AsyncMock()
     emit_status = AsyncMock(side_effect=lambda *a, **k: calls.append("send"))
 
-    monkeypatch.setenv("FEATURE_RUN_DUAL_WRITE", "0")
+    monkeypatch.setattr(settings, "feature_run_dual_write", False)
     monkeypatch.setattr(
         mod.store,
         "find_stale_non_terminal_runs",

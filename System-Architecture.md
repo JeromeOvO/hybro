@@ -158,6 +158,20 @@ use API-key auth from `common.api_key_auth`.
 When adding new boundaries, prefer using `common.protocols` instead of importing
 concrete runtime singletons.
 
+#### Runtime Configuration
+
+Runtime application code reads environment-backed configuration through
+`common/config/settings.py`. Raw `os.getenv()`, `os.environ.get()`, and
+`os.environ[...]` reads are reserved for the canonical settings module; the
+config unification gate in `tests/test_config_unification_gate.py` scans tracked
+production Python files and fails on new raw env reads outside that file.
+
+The gate intentionally excludes `tests/`, `scripts/`, `docs/`, and
+`database/migration/`: tests may set env vars to verify settings loading, while
+scripts and migration utilities run outside the app runtime. `SERVER_SOFTWARE`
+is exposed as the live `Settings.is_gunicorn` property because it is
+server-injected runtime metadata, not user application configuration.
+
 ### `llm_gateway`
 
 `llm_gateway` owns all LLM provider SDK access and LLM model routing. Provider

@@ -17,11 +17,11 @@ See System-Architecture.md for design details.
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from common.a2a_constants import SSEProcessingStatus
+from common.config import settings as _settings
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -45,9 +45,10 @@ from models.supervisor import (
 )
 
 if TYPE_CHECKING:
+    from app_shell.rate_limit_service import RateLimitService
+
     from app_shell.delivery_runtime import SSEManager
     from app_shell.memory_service import RoomMemoryService
-    from app_shell.rate_limit_service import RateLimitService
     from app_shell.room_coordinator_service import RoomCoordinatorService
     from app_shell.room_runtime import RoomServices
     from execution.dispatch.agent_dispatcher import AgentDispatcher
@@ -68,7 +69,7 @@ settings = _SupervisorSettings()
 class SupervisorExecutor:
     """Executes the Supervisor's adaptive loop for a single user message."""
 
-    MAX_STEPS: int = int(os.environ.get("SUPERVISOR_MAX_STEPS", "8"))
+    MAX_STEPS: int = _settings.supervisor_max_steps
 
     def __init__(
         self,

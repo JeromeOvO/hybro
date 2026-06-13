@@ -8,8 +8,7 @@ Original content is always retrievable on demand.
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6 for design details.
 """
 
-import os
-
+from common.config import settings as _settings
 from common.utils.context_utils import estimate_tokens
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -27,13 +26,8 @@ from platform_module.content_storage import (
 logger = get_logger(__name__)
 
 # Concurrency limit for parallel compaction I/O (content storage + Pinecone).
-# Tune based on downstream service capacity. Default 5 balances throughput vs.
-# rate-limit risk.  Must be >= 1; invalid values fall back to default.
-_DEFAULT_COMPACTION_CONCURRENCY = 5
-try:
-    COMPACTION_CONCURRENCY = max(1, int(os.getenv("COMPACTION_CONCURRENCY", str(_DEFAULT_COMPACTION_CONCURRENCY))))
-except (ValueError, TypeError):
-    COMPACTION_CONCURRENCY = _DEFAULT_COMPACTION_CONCURRENCY
+# Tune based on downstream service capacity via Settings.
+COMPACTION_CONCURRENCY = _settings.compaction_concurrency
 
 
 def _safe_tokens_full(turn: ConversationTurn) -> int:
