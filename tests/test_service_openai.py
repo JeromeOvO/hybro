@@ -12,8 +12,20 @@ from common.dto import (
     RoomMemoryGenerationInput,
     RoomMessageSummary,
 )
+from common.types import (
+    Message as A2AMessage,
+)
+from common.types import (
+    MessageRole,
+    Part,
+    Task,
+    TaskState,
+    TaskStatus,
+    TextPart,
+)
 from llm_gateway.config import LLMGatewayConfig
 from llm_gateway.errors import LLMModelRoutingError, LLMServiceNotBoundError
+from models.room import MessageContent, RoomAgentMessage
 
 # ---------------------------------------------------------------------------
 # Fixtures & helpers
@@ -319,6 +331,61 @@ class TestLegacyFocusedWorkflowDelegation:
         assert isinstance(request, RoomMemoryGenerationInput)
         assert request.existing_memory == "existing memory"
         assert request.messages == []
+        openai_svc.client.responses.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_generate_room_memory_content_extracts_latest_agent_history_message(
+        self, openai_svc
+    ):
+        room_memory = AsyncMock()
+        room_memory.generate_room_memory_content = AsyncMock(return_value="memory")
+        openai_svc._room_memory_llm_service = room_memory
+        memory_content = MagicMock()
+        memory_content.memory_text = "existing memory"
+        task = Task(
+            id="task-1",
+            status=TaskStatus(state=TaskState.completed),
+            history=[
+                A2AMessage(
+                    role=MessageRole.USER,
+                    messageId="user-msg",
+                    parts=[Part(root=TextPart(text="question"))],
+                ),
+                A2AMessage(
+                    role=MessageRole.AGENT,
+                    messageId="agent-msg-old",
+                    parts=[Part(root=TextPart(text="older answer"))],
+                ),
+                A2AMessage(
+                    role=MessageRole.AGENT,
+                    messageId="agent-msg-new",
+                    parts=[Part(root=TextPart(text="final answer"))],
+                ),
+            ],
+        )
+        message = RoomAgentMessage(
+            room_id="room-1",
+            message_id="room-msg-1",
+            agent_id="agent-1",
+            message_content=MessageContent(message_task=task),
+        )
+
+        result = await openai_svc.generate_room_memory_content(
+            [message],
+            memory_content,
+        )
+
+        assert result == "memory"
+        request = room_memory.generate_room_memory_content.await_args.args[0]
+        assert isinstance(request, RoomMemoryGenerationInput)
+        assert request.existing_memory == "existing memory"
+        assert request.messages == [
+            RoomMessageSummary(
+                agent_id="agent-1",
+                agent_name="agent-1",
+                message="final answer",
+            )
+        ]
         openai_svc.client.responses.create.assert_not_called()
 
     @pytest.mark.asyncio
