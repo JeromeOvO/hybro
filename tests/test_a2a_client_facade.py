@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -299,6 +300,30 @@ async def test_cancel_remote_task_returns_false_for_jsonrpc_error(monkeypatch):
     card = _sdk_card_data()
 
     assert await client_facade.cancel_remote_task(card, "task-1", timeout=1) is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_remote_task_logs_transport_failures(monkeypatch, caplog):
+    monkeypatch.setattr(
+        client_facade.httpx,
+        "AsyncClient",
+        lambda *, timeout: _AsyncClientContext(),
+    )
+
+    class _A2AClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def cancel_task(self, request):
+            raise TimeoutError("timed out")
+
+    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
+    card = _sdk_card_data()
+
+    caplog.set_level(logging.WARNING, logger=client_facade.__name__)
+
+    assert await client_facade.cancel_remote_task(card, "task-1", timeout=1) is False
+    assert "Failed to cancel remote A2A task task-1" in caplog.text
 
 
 @pytest.mark.asyncio

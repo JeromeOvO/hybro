@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -131,14 +130,12 @@ async def cancel_remote_task(
     try:
         card = AgentCard(**sdk_agent_card_data(agent_card_data))
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await asyncio.wait_for(
-                A2AClient(client, agent_card=card).cancel_task(
-                    CancelTaskRequest(id=str(uuid4()), params=TaskIdParams(id=task_id))
-                ),
-                timeout=timeout,
+            response = await A2AClient(client, agent_card=card).cancel_task(
+                CancelTaskRequest(id=str(uuid4()), params=TaskIdParams(id=task_id))
             )
         return not isinstance(response.root, JSONRPCErrorResponse)
     except Exception:
+        logger.warning("Failed to cancel remote A2A task %s", task_id, exc_info=True)
         return False
 
 
