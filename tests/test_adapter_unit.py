@@ -36,6 +36,150 @@ def test_translator_internal_message_to_a2a_preserves_message_fields():
     }
 
 
+def test_sdk_agent_card_data_normalizes_nested_agent_skill_models():
+    from a2a_adapter.card_data import sdk_agent_card_data
+    from common.types import AgentCard
+
+    card = AgentCard(
+        name="Minimal",
+        url="https://agent.example",
+        version="1",
+        capabilities={},
+        skills=[{"id": "skill-1", "name": "Skill"}],
+    )
+
+    data = sdk_agent_card_data(card)
+
+    assert data["description"] == ""
+    assert data["defaultInputModes"] == ["text"]
+    assert data["defaultOutputModes"] == ["text"]
+    assert data["skills"] == [
+        {
+            "id": "skill-1",
+            "name": "Skill",
+            "description": "",
+            "tags": [],
+            "examples": None,
+            "inputModes": None,
+            "outputModes": None,
+        }
+    ]
+
+    dict_data = sdk_agent_card_data(
+        {
+            "name": "Minimal",
+            "url": "https://agent.example",
+            "version": "1",
+            "capabilities": {},
+            "skills": [{"id": "skill-1", "name": "Skill"}],
+        }
+    )
+    assert dict_data["defaultInputModes"] == data["defaultInputModes"]
+    assert dict_data["defaultOutputModes"] == data["defaultOutputModes"]
+
+
+@pytest.mark.asyncio
+async def test_inspection_fetch_sdk_agent_card_falls_back_after_current_404(
+    monkeypatch,
+):
+    from a2a.client.errors import A2AClientHTTPError
+
+    from a2a_adapter import inspection
+    from a2a_adapter.constants import (
+        AGENT_CARD_WELL_KNOWN_PATH,
+        PREV_AGENT_CARD_WELL_KNOWN_PATH,
+    )
+
+    paths = []
+
+    class _Resolver:
+        def __init__(self, client, agent_url, path):
+            paths.append(path)
+            self.path = path
+
+        async def get_agent_card(self):
+            if self.path == AGENT_CARD_WELL_KNOWN_PATH:
+                raise A2AClientHTTPError(404, "missing")
+            return SimpleNamespace(name="Fallback Agent")
+
+    monkeypatch.setattr(inspection, "A2ACardResolver", _Resolver)
+
+    card = await inspection._fetch_sdk_agent_card_with_fallback(
+        SimpleNamespace(),
+        "https://agent.example",
+    )
+
+    assert card.name == "Fallback Agent"
+    assert paths == [AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH]
+
+
+def test_inspection_adapter_validates_probe_response_shapes():
+    from a2a_adapter.inspection import _validate_message, _validate_response
+
+    assert _validate_message({"kind": "task"}) == [
+        "Task object missing required field: 'id'.",
+        "Task object missing required field: 'status.state'.",
+    ]
+    assert _validate_message({"kind": "status-update", "status": {}}) == [
+        "StatusUpdate object missing required field: 'status.state'."
+    ]
+    assert _validate_message({"kind": "artifact-update", "artifact": {}}) == [
+        "Artifact object must have a non-empty 'parts' array."
+    ]
+    assert _validate_message({"kind": "message"}) == [
+        "Message object must have a non-empty 'parts' array.",
+        "Message from agent must have 'role' set to 'agent'.",
+    ]
+    assert _validate_message({"kind": "unexpected"}) == [
+        "Unknown message kind received: 'unexpected'."
+    ]
+
+    response = SimpleNamespace(
+        root=SimpleNamespace(
+            result=SimpleNamespace(
+                model_dump=lambda exclude_none=True: {"kind": "message"}
+            )
+        )
+    )
+
+    assert _validate_response(response) == {
+        "result": [
+            "Message object must have a non-empty 'parts' array.",
+            "Message from agent must have 'role' set to 'agent'.",
+        ],
+        "status_code": 500,
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_card_health_keeps_healthy_invalid_card_nonfatal():
+    from a2a_adapter.agent_card_health import fetch_agent_card_for_health
+    from a2a_adapter.constants import AGENT_CARD_WELL_KNOWN_PATH
+
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            raise ValueError("not json")
+
+    class _Client:
+        def __init__(self):
+            self.urls = []
+
+        async def get(self, url):
+            self.urls.append(url)
+            return _Response()
+
+    client = _Client()
+
+    result = await fetch_agent_card_for_health("https://agent.example/", client)
+
+    assert result.is_healthy is True
+    assert result.card is None
+    assert result.status_code == 200
+    assert client.urls == ["https://agent.example" + AGENT_CARD_WELL_KNOWN_PATH]
+
+
 def test_completed_text_task_factory_builds_sdk_task_payload():
     from a2a_adapter.task_status import build_completed_text_task
     from common.types import TaskState
@@ -140,11 +284,61 @@ def test_artifact_factory_materializes_non_text_parts_on_task():
 
     assert task.artifacts is not None
     assert len(task.artifacts) == 1
+    assert type(task.artifacts[0]).__module__ == "common.types"
+    assert type(task.artifacts[0].parts[0]).__module__ == "common.types"
+    assert type(task.artifacts[0].parts[0].root).__module__ == "common.types"
     assert task.artifacts[0].parts[0].model_dump(mode="json") == {
         "kind": "data",
         "metadata": None,
         "data": {"value": 1},
     }
+
+
+@pytest.mark.asyncio
+async def test_pydantic_artifact_storage_reads_internal_mime_type_attribute():
+    from a2a_adapter.artifact_storage import (
+        bind_a2a_storage_dependencies,
+        convert_pydantic_artifacts_to_s3,
+    )
+    from common.types import Artifact, FileContent, FilePart, Part
+
+    class _Storage:
+        def __init__(self):
+            self.uploads = []
+
+        async def upload_file(self, **kwargs):
+            self.uploads.append(kwargs)
+
+        async def generate_presigned_url(self, s3_key, filename=None):
+            return f"https://files.example/{s3_key}"
+
+    storage = _Storage()
+    bind_a2a_storage_dependencies(storage_service=storage)
+    artifact = Artifact(
+        artifact_id="art-1",
+        parts=[
+            Part(
+                root=FilePart(
+                    file=FileContent(
+                        bytes="aGVsbG8=",
+                        mimeType="image/png",
+                        name="image.png",
+                    )
+                )
+            )
+        ],
+    )
+
+    converted = await convert_pydantic_artifacts_to_s3(
+        [artifact],
+        room_id="room-1",
+        message_id="msg-1",
+    )
+
+    assert converted == 1
+    assert storage.uploads[0]["content_type"] == "image/png"
+    assert type(artifact.parts[0].root.file).__module__ == "common.types"
+    assert artifact.parts[0].root.file.mime_type == "image/png"
 
 
 def test_translator_a2a_task_to_result_normalizes_task_status_result_and_error_text():
