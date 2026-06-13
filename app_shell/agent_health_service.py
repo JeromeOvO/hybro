@@ -4,13 +4,9 @@ import asyncio
 from typing import TYPE_CHECKING, Protocol
 
 import httpx
-from a2a.types import AgentCard
-from a2a.utils.constants import (
-    AGENT_CARD_WELL_KNOWN_PATH,
-    PREV_AGENT_CARD_WELL_KNOWN_PATH,
-)
 from loguru import logger
 
+from a2a_adapter.agent_card_health import fetch_agent_card_for_health
 from common.config.settings import settings
 from common.types import AgentCard as CommonAgentCard
 from jobs.constants import AGENT_HEALTH_CHECKER
@@ -104,7 +100,7 @@ class AgentHealthService:
 
     async def check_agent_health(
         self, agent: Agent, *, timeout: float | None = None
-    ) -> tuple[bool, AgentCard | None]:
+    ) -> tuple[bool, CommonAgentCard | None]:
         """
         Check if an agent is reachable by making an HTTP request to its URL.
 
@@ -125,39 +121,22 @@ class AgentHealthService:
 
         try:
             async with httpx.AsyncClient(timeout=effective_timeout) as client:
-                # Try current A2A well-known path first
-                agent_card_url = agent_url.rstrip("/") + AGENT_CARD_WELL_KNOWN_PATH
-                response = await client.get(agent_card_url)
-
-                # Fall back to previous well-known path if not found
-                if response.status_code == 404:
-                    agent_card_url = (
-                        agent_url.rstrip("/") + PREV_AGENT_CARD_WELL_KNOWN_PATH
-                    )
-                    response = await client.get(agent_card_url)
-
-                # Consider 2xx and 3xx as healthy
-                is_healthy = response.status_code < 400
-
-                fetched_card: AgentCard | None = None
-                if is_healthy:
+                result = await fetch_agent_card_for_health(agent_url, client)
+                if result.is_healthy:
                     logger.debug(
                         f"Agent {agent.agent_id} ({agent.agent_card.name}) is healthy"
                     )
-                    # Try to parse the response body as an AgentCard
-                    try:
-                        fetched_card = AgentCard(**response.json())
-                    except Exception as e:
+                    if result.card is None:
                         logger.debug(
-                            f"Could not parse agent card for {agent.agent_id}: {e}"
+                            f"Could not parse agent card for {agent.agent_id}"
                         )
                 else:
                     logger.warning(
                         f"Agent {agent.agent_id} ({agent.agent_card.name}) "
-                        f"returned status {response.status_code}"
+                        f"returned status {result.status_code}"
                     )
 
-                return is_healthy, fetched_card
+                return result.is_healthy, result.card
 
         except httpx.TimeoutException:
             logger.warning(
@@ -174,7 +153,7 @@ class AgentHealthService:
             return False, None
 
     async def _update_agent_card_in_db(
-        self, agent: Agent, fetched_card: AgentCard
+        self, agent: Agent, fetched_card: CommonAgentCard
     ) -> None:
         """
         Persist the freshly fetched agent card to MongoDB using a partial update.
@@ -193,8 +172,8 @@ class AgentHealthService:
         try:
             card_dict = CommonAgentCard.model_validate(
                 coerce_legacy_agent_card(fetched_card)
-            ).model_dump(mode="json")
-            stored_dict = agent.agent_card.model_dump(mode="json")
+            ).model_dump(mode="json", by_alias=True)
+            stored_dict = agent.agent_card.model_dump(mode="json", by_alias=True)
             partial_set = {
                 f"agent_card.{field}": card_dict[field]
                 for field in card_dict
