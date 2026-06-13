@@ -58,10 +58,14 @@ class TaskRequest(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid4()))
     query: str
     context: dict[str, Any] | None = Field(default_factory=dict)
-    message: Any | None = None
+    message: Message | None = None
 
-    def to_message(self) -> Any:
-        """Convert request to an internal A2A-shaped message."""
+    def to_message(self) -> Message:
+        """Convert request to an internal message.
+
+        Message overrides must already use ``common.types.Message``; SDK or
+        external message shapes should be normalized at the adapter boundary.
+        """
         if self.message:
             return self.message
 
@@ -79,10 +83,14 @@ class AgentTaskRequest(BaseModel):
     step_id: str
     input_data: Any
     context: dict[str, Any] | None = Field(default_factory=dict)
-    message: Any | None = None
+    message: Message | None = None
 
-    def to_message(self) -> Any:
-        """Convert agent task request to an internal A2A-shaped message."""
+    def to_message(self) -> Message:
+        """Convert agent task request to an internal message.
+
+        Message overrides must already use ``common.types.Message``; SDK or
+        external message shapes should be normalized at the adapter boundary.
+        """
         if self.message:
             return self.message
 
