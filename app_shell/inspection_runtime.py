@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import httpx
 
-from a2a_adapter.inspection import (
-    fetch_agent_card_for_inspection,
-    inspect_a2a_connection,
-)
+from a2a_adapter import inspection as a2a_inspection
 from app_shell.agent_service import agent_service
 from common.utils.logger import get_logger
 from models.error import AgentNotFoundError
@@ -39,7 +36,7 @@ class AppShellInspectionCenter:
             ) from None
 
         try:
-            card = await fetch_agent_card_for_inspection(agent_url)
+            card = await a2a_inspection.fetch_agent_card_for_inspection(agent_url)
             validation_errors = await self.agent_service.validate_agent_card(
                 card.model_dump(exclude_none=False)
             )
@@ -87,7 +84,7 @@ class AppShellInspectionCenter:
             ) from None
 
         try:
-            response = await inspect_a2a_connection(str(agent_url))
+            response = await a2a_inspection.inspect_a2a_connection(str(agent_url))
             return InspectionCenterResponse(
                 agent_url=agent_url,
                 agent_card=response.get("agent_card"),
