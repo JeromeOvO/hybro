@@ -65,6 +65,18 @@ def test_sdk_agent_card_data_normalizes_nested_agent_skill_models():
         }
     ]
 
+    dict_data = sdk_agent_card_data(
+        {
+            "name": "Minimal",
+            "url": "https://agent.example",
+            "version": "1",
+            "capabilities": {},
+            "skills": [{"id": "skill-1", "name": "Skill"}],
+        }
+    )
+    assert dict_data["defaultInputModes"] == data["defaultInputModes"]
+    assert dict_data["defaultOutputModes"] == data["defaultOutputModes"]
+
 
 @pytest.mark.asyncio
 async def test_inspection_fetch_sdk_agent_card_falls_back_after_current_404(

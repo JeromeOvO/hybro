@@ -10,9 +10,9 @@ def sdk_agent_card_data(agent_card_data: Any) -> dict[str, Any]:
     if data.get("description") is None:
         data["description"] = ""
     if data.get("defaultInputModes") is None:
-        data["defaultInputModes"] = ["text/plain"]
+        data["defaultInputModes"] = ["text"]
     if data.get("defaultOutputModes") is None:
-        data["defaultOutputModes"] = ["text/plain"]
+        data["defaultOutputModes"] = ["text"]
 
     normalized_skills = []
     for skill in data.get("skills") or []:
