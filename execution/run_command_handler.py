@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from pymongo.errors import DuplicateKeyError
@@ -39,8 +38,9 @@ class _UnboundRunEventRepository:
 
 
 def feature_run_dual_write_enabled() -> bool:
-    raw = (os.environ.get("FEATURE_RUN_DUAL_WRITE") or "1").strip().lower()
-    return raw not in ("0", "false", "no", "off")
+    from common.config import settings
+
+    return settings.feature_run_dual_write
 
 
 def _feature_run_dual_write_enabled() -> bool:
@@ -468,8 +468,9 @@ class RunCommandHandler:
 
 
 def run_event_sse_enabled() -> bool:
-    raw = (os.environ.get("FEATURE_RUN_EVENT_SSE") or "0").strip().lower()
-    return raw in ("1", "true", "yes", "on")
+    from common.config import settings
+
+    return settings.feature_run_event_sse
 
 
 run_command_handler = RunCommandHandler(

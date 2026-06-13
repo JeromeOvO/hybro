@@ -30,11 +30,12 @@ from models.processing import ProcessingResult, ProcessingStatus
 from models.room import CoordinatorAgentId, RoomAgentMessage
 
 if TYPE_CHECKING:
+    from app_shell.rate_limit_service import RateLimitService
+
     from app_shell.a2a_runtime import A2AService
     from app_shell.debate_service import DebateService
     from app_shell.delivery_runtime import SSEManager
     from app_shell.memory_service import RoomMemoryService
-    from app_shell.rate_limit_service import RateLimitService
     from app_shell.room_runtime import RoomServices
     from execution.dispatch.response_handler import AgentResponseHandler
 

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import os
 from typing import Any
+
+from common.config import settings
 
 FILE_CAPABLE_EXACT = frozenset({"file", "*/*"})
 FILE_CAPABLE_PREFIXES = frozenset({"image/", "audio/", "video/"})
@@ -14,15 +15,11 @@ FILE_CAPABLE_MIMES = frozenset({
 })
 
 
-def _env_float(name: str, default: float) -> float:
-    return float(os.getenv(name, str(default)))
-
-
-VECTOR_WEIGHT = _env_float("MATCH_VECTOR_WEIGHT", 0.85)
-CAPABILITY_WEIGHT = _env_float("MATCH_CAPABILITY_WEIGHT", 0.15)
-DEBATE_THRESHOLD = _env_float("MATCH_DEBATE_THRESHOLD", 0.3)
-GAP_THRESHOLD = _env_float("MATCH_GAP_THRESHOLD", 0.15)
-QUALITY_THRESHOLD = _env_float("MATCH_QUALITY_THRESHOLD", 0.4)
+VECTOR_WEIGHT = settings.match_vector_weight
+CAPABILITY_WEIGHT = settings.match_capability_weight
+DEBATE_THRESHOLD = settings.match_debate_threshold
+GAP_THRESHOLD = settings.match_gap_threshold
+QUALITY_THRESHOLD = settings.match_quality_threshold
 
 
 def supports_files(agent: dict[str, Any]) -> bool:

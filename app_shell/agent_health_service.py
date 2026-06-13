@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import TYPE_CHECKING, Protocol
 
 import httpx
@@ -50,9 +49,7 @@ class AgentHealthService:
         self,
         *,
         repository: AgentHealthRepositoryPort | None = None,
-        check_interval_seconds: int = int(
-            os.getenv("AGENT_HEALTH_CHECK_INTERVAL", "3600")
-        ),
+        check_interval_seconds: int | None = None,
         timeout_seconds: float = 10.0,
         max_consecutive_failures: int = 3,
         initial_retry_delay: float = 30.0,  # First retry after 30s
@@ -70,6 +67,8 @@ class AgentHealthService:
             max_retry_delay: Maximum retry delay in seconds
             backoff_multiplier: Backoff multiplier for the retry delay
         """
+        if check_interval_seconds is None:
+            check_interval_seconds = settings.agent_health_check_interval
         self.check_interval = check_interval_seconds
         self.timeout = timeout_seconds
         self.max_consecutive_failures = max_consecutive_failures

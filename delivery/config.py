@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-
 DEFAULT_TERMINAL_PROCESSING_STATUSES = frozenset(
     {"completed", "failed", "canceled", "rejected", "rate_limited", "error"}
 )

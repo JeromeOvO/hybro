@@ -647,12 +647,10 @@ async def test_vector_dal_impl_ping_uses_instance_default_index():
 
 
 @pytest.mark.asyncio
-async def test_vector_dal_impl_prefers_env_pinecone_config(monkeypatch):
+async def test_vector_dal_impl_uses_settings_pinecone_config(monkeypatch):
     from common.config import settings
     from dal.pinecone.client import VectorDALImpl
 
-    monkeypatch.setenv("PINECONE_API_KEY", "env-key")
-    monkeypatch.setenv("PINECONE_INDEX_NAME", "env-index")
     monkeypatch.setattr(settings, "pinecone_api_key", "settings-key")
     monkeypatch.setattr(settings, "pinecone_index_name", "settings-index")
 
@@ -666,21 +664,19 @@ async def test_vector_dal_impl_prefers_env_pinecone_config(monkeypatch):
     vector = VectorDALImpl()
 
     assert await vector.ping() is True
-    pinecone_factory.assert_called_once_with(api_key="env-key")
-    client.Index.assert_called_once_with("env-index")
+    pinecone_factory.assert_called_once_with(api_key="settings-key")
+    client.Index.assert_called_once_with("settings-index")
 
 
-def test_pinecone_index_config_falls_back_to_default_when_empty(monkeypatch):
+def test_pinecone_index_config_falls_back_to_default_when_empty():
     from common.config import (
         PINECONE_INDEX_NAME_DEFAULT,
-        get_pinecone_index_name,
-        settings,
+        Settings,
     )
 
-    monkeypatch.delenv("PINECONE_INDEX_NAME", raising=False)
-    monkeypatch.setattr(settings, "pinecone_index_name", "")
+    settings = Settings(_env_file=None, pinecone_index_name="")
 
-    assert get_pinecone_index_name() == PINECONE_INDEX_NAME_DEFAULT
+    assert settings.pinecone_index_name == PINECONE_INDEX_NAME_DEFAULT
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app_shell.delivery_runtime import SSEConnection
+from common.config import settings
 from tests.delivery_adapter_fakes import make_bound_manager
 
 # =============================================================================
@@ -218,7 +219,7 @@ class TestSendProcessingStatusClientRequestId:
                 "payload": {},
             }
         )
-        monkeypatch.setenv("FEATURE_RUN_EVENT_SSE", "1")
+        monkeypatch.setattr(settings, "feature_run_event_sse", True)
         monkeypatch.setattr(
             handler_mod.run_command_handler,
             "record_processing_status",

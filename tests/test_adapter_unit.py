@@ -79,7 +79,7 @@ def test_failed_text_task_factory_builds_sdk_task_payload():
 
 
 def test_get_task_request_helpers_keep_sdk_details_in_adapter():
-    from a2a.types import Part, GetTaskRequest
+    from a2a.types import GetTaskRequest
 
     from a2a_adapter.task_requests import build_get_task_request
 
@@ -93,7 +93,7 @@ def test_get_task_request_helpers_keep_sdk_details_in_adapter():
 def test_get_task_response_helper_returns_none_for_jsonrpc_errors():
     from types import SimpleNamespace
 
-    from a2a.types import Part, JSONRPCError, JSONRPCErrorResponse
+    from a2a.types import JSONRPCError, JSONRPCErrorResponse
 
     from a2a_adapter.task_requests import (
         extract_get_task_result,

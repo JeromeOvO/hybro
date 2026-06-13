@@ -1,13 +1,10 @@
 """Logging utilities for the multi-agents backend."""
 
 import logging
-import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-load_dotenv()
+from common.config import settings
 
 DEFAULT_LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 JSON_LOG_FORMAT = (
@@ -24,17 +21,17 @@ def _resolve_log_format(value: str | None) -> str:
     return value
 
 
-(log_path := Path(os.getenv("LOG_PATH"))).parent.mkdir(parents=True, exist_ok=True)
+(log_path := Path(settings.log_path)).parent.mkdir(parents=True, exist_ok=True)
 log_path.touch()
 
 file_handler = RotatingFileHandler(
     log_path,
-    maxBytes=int(os.getenv("LOG_MAX_BYTES", "10485760")),  # 10MB default
-    backupCount=int(os.getenv("LOG_BACKUP_COUNT", "5")),
+    maxBytes=settings.log_max_bytes,
+    backupCount=settings.log_backup_count,
 )
 logging.basicConfig(
-    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO")),
-    format=_resolve_log_format(os.getenv("LOG_FORMAT")),
+    level=getattr(logging, settings.log_level),
+    format=_resolve_log_format(settings.log_format),
 )
 
 

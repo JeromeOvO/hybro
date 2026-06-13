@@ -12,7 +12,6 @@ This module provides a background job that:
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -333,13 +332,11 @@ class StaleTaskChecker:
 
     async def _fail_stale_runs(self) -> None:
         """Append run_failed for non-terminal runs past RUN_WATCHDOG_STALE_MINUTES."""
-        if os.environ.get("FEATURE_RUN_WATCHDOG", "1").strip().lower() in (
-            "0",
-            "false",
-            "off",
-        ):
+        from common.config import settings
+
+        if not settings.feature_run_watchdog:
             return
-        stale_mins = int(os.environ.get("RUN_WATCHDOG_STALE_MINUTES", "90"))
+        stale_mins = settings.run_watchdog_stale_minutes
         try:
             stale = await self._store.find_stale_non_terminal_runs(
                 stale_mins,

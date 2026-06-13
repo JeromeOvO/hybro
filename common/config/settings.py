@@ -57,6 +57,28 @@ class Settings(BaseSettings):
     log_backup_count: int = 5
     log_max_bytes: int = 10485760  # 10 MB
 
+    # Feature Flags (runtime-toggleable behavior gates)
+    feature_run_dual_write: bool = True
+    feature_run_event_sse: bool = False
+    feature_run_watchdog: bool = True
+
+    # Execution Tuning
+    supervisor_max_steps: int = 8
+    run_watchdog_stale_minutes: int = 90
+
+    # Agent Matching Tuning
+    match_vector_weight: float = 0.85
+    match_capability_weight: float = 0.15
+    match_debate_threshold: float = 0.3
+    match_gap_threshold: float = 0.15
+    match_quality_threshold: float = 0.4
+
+    # Agent Health
+    agent_health_check_interval: int = 3600
+
+    # Compaction
+    compaction_concurrency: int = 5
+
     debate_rounds: int = 2  # todo: can be as parameter
     parse_confidence_threshold: float = 0.3
 
@@ -258,61 +280,71 @@ class Settings(BaseSettings):
             return frozenset()
         return frozenset(str(status).strip().lower() for status in v)
 
+    @field_validator("compaction_concurrency", mode="before")
+    @classmethod
+    def normalize_compaction_concurrency(cls, value):
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            return 5
+
+    @field_validator("pinecone_index_name", mode="before")
+    @classmethod
+    def normalize_pinecone_index_name(cls, value):
+        value = str(value or "").strip()
+        return value or PINECONE_INDEX_NAME_DEFAULT
+
+    @field_validator("memory_search_index_name", mode="before")
+    @classmethod
+    def normalize_memory_search_index_name(cls, value):
+        value = str(value or "").strip()
+        return value or MEMORY_SEARCH_INDEX_NAME_DEFAULT
+
+    @field_validator("feature_run_dual_write", mode="before")
+    @classmethod
+    def normalize_feature_run_dual_write(cls, value):
+        if value is None or str(value).strip() == "":
+            return True
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() not in {"0", "false", "no", "off"}
+
+    @field_validator("feature_run_event_sse", mode="before")
+    @classmethod
+    def normalize_feature_run_event_sse(cls, value):
+        if value is None or str(value).strip() == "":
+            return False
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    @field_validator("feature_run_watchdog", mode="before")
+    @classmethod
+    def normalize_feature_run_watchdog(cls, value):
+        if value is None or str(value).strip() == "":
+            return True
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() not in {"0", "false", "off"}
+
     @model_validator(mode="after")
     def apply_gemini_api_key_fallback(self):
         if not str(self.google_api_key or "").strip():
-            self.google_api_key = self.gemini_api_key or os.getenv("GEMINI_API_KEY", "")
+            self.google_api_key = self.gemini_api_key or ""
         return self
+
+    @property
+    def is_gunicorn(self) -> bool:
+        """Detect gunicorn from server-injected runtime metadata."""
+        return os.environ.get("SERVER_SOFTWARE", "").startswith("gunicorn")
 
 
 settings = Settings()
-
-
-def _first_non_empty(*values: str | None, default: str) -> str:
-    for value in values:
-        if value is None:
-            continue
-        text = str(value).strip()
-        if text:
-            return text
-    return default
-
-
-def _settings_value(settings_obj, name: str):
-    source = settings if settings_obj is None else settings_obj
-    return getattr(source, name, None)
-
-
-def get_pinecone_api_key(settings_obj=None) -> str:
-    return _first_non_empty(
-        os.getenv("PINECONE_API_KEY"),
-        _settings_value(settings_obj, "pinecone_api_key"),
-        default=PINECONE_API_KEY_DEFAULT,
-    )
-
-
-def get_pinecone_index_name(settings_obj=None) -> str:
-    return _first_non_empty(
-        os.getenv("PINECONE_INDEX_NAME"),
-        _settings_value(settings_obj, "pinecone_index_name"),
-        default=PINECONE_INDEX_NAME_DEFAULT,
-    )
-
-
-def get_memory_search_index_name(settings_obj=None) -> str:
-    return _first_non_empty(
-        os.getenv("MEMORY_SEARCH_INDEX_NAME"),
-        _settings_value(settings_obj, "memory_search_index_name"),
-        default=MEMORY_SEARCH_INDEX_NAME_DEFAULT,
-    )
 
 
 __all__ = [
     "MEMORY_SEARCH_INDEX_NAME_DEFAULT",
     "PINECONE_INDEX_NAME_DEFAULT",
     "Settings",
-    "get_memory_search_index_name",
-    "get_pinecone_api_key",
-    "get_pinecone_index_name",
     "settings",
 ]

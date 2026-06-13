@@ -5,7 +5,7 @@ from typing import Any
 
 import pinecone
 
-from common.config import get_pinecone_api_key, get_pinecone_index_name
+from common.config import settings
 from common.dto import VectorRecord, VectorSearchResult
 from common.errors import VectorIndexUnavailableError
 
@@ -29,14 +29,14 @@ class VectorDALImpl:
 
     def _resolved_api_key(self) -> str:
         return (
-            get_pinecone_api_key()
+            settings.pinecone_api_key
             if self._api_key_override is None
             else self._api_key_override
         )
 
     def _resolved_default_index(self) -> str:
         return (
-            get_pinecone_index_name()
+            settings.pinecone_index_name
             if self._default_index_override is None
             else self._default_index_override
         )

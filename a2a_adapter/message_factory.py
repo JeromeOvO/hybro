@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from a2a.types import Message, Part, Role, Task, TextPart
+from a2a.types import Message, Task, TextPart
 
 from common import types as internal
 from common.types import MessageRole

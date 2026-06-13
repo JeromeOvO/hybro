@@ -2,18 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from agent import AgentFacade, AgentMongoRepository
-from common.config.settings import (
-    get_memory_search_index_name,
-    get_pinecone_index_name,
-    settings,
-)
+from common.config.settings import settings
 from common.dto import VectorRecord
 from common.observability import MetricsCollector, traced_create_task
 from common.protocols import (
@@ -477,7 +472,7 @@ class AgentViewsetVectorIndexAdapter:
 
 
 def create_agent_viewset_vector_index(*, vector: VectorDAL) -> AgentViewsetVectorIndexAdapter:
-    index_name = get_pinecone_index_name()
+    index_name = settings.pinecone_index_name
     return AgentViewsetVectorIndexAdapter(vector_dal=vector, index=index_name)
 
 
@@ -832,7 +827,7 @@ def create_agent_deps(
         vector=vector,
         llm_provider=llm_provider,
         card_resolver=card_resolver,
-        agent_index=get_pinecone_index_name(),
+        agent_index=settings.pinecone_index_name,
         hub_liveness=hub_liveness,
         exclusion_reader=exclusion_reader,
         gateway_base_url=gateway_base_url,
@@ -914,7 +909,7 @@ def create_context_memory_facade(
         max_total_tokens=settings.compaction_max_total_tokens,
         preserve_recent_turns=settings.compaction_preserve_recent,
         content_ttl_days=settings.compaction_content_ttl_days,
-        concurrency=_legacy_compaction_concurrency(),
+        concurrency=settings.compaction_concurrency,
     )
     search_config = search_config or MemorySearchConfig(
         enabled=settings.memory_search_enabled,
@@ -925,7 +920,7 @@ def create_context_memory_facade(
         mmr_lambda=settings.memory_search_mmr_lambda,
         max_results=settings.memory_search_max_results,
         max_snippet_chars=settings.memory_search_max_snippet_chars,
-        index_name=get_memory_search_index_name(),
+        index_name=settings.memory_search_index_name,
     )
     return ContextMemoryFacade(
         memory_repository=memory_repository,
@@ -949,13 +944,6 @@ def create_context_memory_deps(facade: ContextMemoryFacade) -> ContextMemoryDeps
         memory_manager=facade,
         memory_projector=facade,
     )
-
-
-def _legacy_compaction_concurrency() -> int:
-    try:
-        return max(1, int(os.getenv("COMPACTION_CONCURRENCY", "5")))
-    except (TypeError, ValueError):
-        return 5
 
 
 def create_api_key_store(*, mongo: MongoDAL):

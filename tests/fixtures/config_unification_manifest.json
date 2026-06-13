@@ -1,0 +1,24 @@
+{
+    "description": "Config unification gate: only the canonical settings module may use os.getenv/os.environ in runtime code",
+    "allowed_paths": [
+        "common/config/settings.py"
+    ],
+    "excluded_dirs": [
+        ".git",
+        ".venv",
+        "__pycache__",
+        ".pytest_cache",
+        ".ruff_cache",
+        "logs",
+        "multi_agents_backend.egg-info",
+        "database/migration",
+        "scripts",
+        "tests",
+        "docs"
+    ],
+    "notes": {
+        "database/migration": "Standalone migration scripts run outside the app runtime",
+        "scripts": "CLI tools with their own env var needs (HYBRO_API_KEY etc.)",
+        "tests": "Test code legitimately uses os.environ for monkeypatch/conditional skips"
+    }
+}
