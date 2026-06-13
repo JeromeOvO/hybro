@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from a2a.types import Artifact, DataPart, FilePart, Part
+from common.types import Artifact, DataPart, FilePart, Part
 
 
 def materialize_non_text_parts_as_artifact(

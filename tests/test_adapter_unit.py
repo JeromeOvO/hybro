@@ -140,11 +140,61 @@ def test_artifact_factory_materializes_non_text_parts_on_task():
 
     assert task.artifacts is not None
     assert len(task.artifacts) == 1
+    assert type(task.artifacts[0]).__module__ == "common.types"
+    assert type(task.artifacts[0].parts[0]).__module__ == "common.types"
+    assert type(task.artifacts[0].parts[0].root).__module__ == "common.types"
     assert task.artifacts[0].parts[0].model_dump(mode="json") == {
         "kind": "data",
         "metadata": None,
         "data": {"value": 1},
     }
+
+
+@pytest.mark.asyncio
+async def test_pydantic_artifact_storage_reads_internal_mime_type_attribute():
+    from a2a_adapter.artifact_storage import (
+        bind_a2a_storage_dependencies,
+        convert_pydantic_artifacts_to_s3,
+    )
+    from common.types import Artifact, FileContent, FilePart, Part
+
+    class _Storage:
+        def __init__(self):
+            self.uploads = []
+
+        async def upload_file(self, **kwargs):
+            self.uploads.append(kwargs)
+
+        async def generate_presigned_url(self, s3_key, filename=None):
+            return f"https://files.example/{s3_key}"
+
+    storage = _Storage()
+    bind_a2a_storage_dependencies(storage_service=storage)
+    artifact = Artifact(
+        artifact_id="art-1",
+        parts=[
+            Part(
+                root=FilePart(
+                    file=FileContent(
+                        bytes="aGVsbG8=",
+                        mimeType="image/png",
+                        name="image.png",
+                    )
+                )
+            )
+        ],
+    )
+
+    converted = await convert_pydantic_artifacts_to_s3(
+        [artifact],
+        room_id="room-1",
+        message_id="msg-1",
+    )
+
+    assert converted == 1
+    assert storage.uploads[0]["content_type"] == "image/png"
+    assert type(artifact.parts[0].root.file).__module__ == "common.types"
+    assert artifact.parts[0].root.file.mime_type == "image/png"
 
 
 def test_translator_a2a_task_to_result_normalizes_task_status_result_and_error_text():
