@@ -418,8 +418,10 @@ Examples:
 - `app_shell.room_runtime`: room send-message preparation, target resolution,
   attachment resolution, supervisor preparation, and message parsing.
 - `app_shell.agent_service`: route-facing adapter over `AgentFacade`.
-- `app_shell.repository_store`: DAL/repository-backed compatibility store for
-  app-shell callers that have not yet moved directly to module facades.
+- `app_shell.repository_store`: compatibility composite over focused runtime
+  store parts in `app_shell.repository_parts`. Existing app-shell and execution
+  callers still bind the composite, but new consumers should depend on a narrow
+  protocol or focused part.
 - `app_shell.relay_service`: relay route surface over
   `hub_runtime_bridge`. Hub-owned liveness, stream binding, agent sync,
   ownership, and internal response router setup are handled by `HubFacade`;

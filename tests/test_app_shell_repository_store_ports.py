@@ -160,6 +160,24 @@ def test_app_shell_repository_store_wires_memory_part():
     assert isinstance(store.memory, AppShellMemoryStore)
 
 
+def test_app_shell_repository_store_wires_all_focused_parts():
+    from app_shell.repository_parts import (
+        AppShellAgentRoomStore,
+        AppShellHITLStore,
+        AppShellMemoryStore,
+        AppShellMessageStore,
+        AppShellTaskLifecycleStore,
+    )
+
+    store = _make_app_shell_store()
+
+    assert isinstance(store.agent_room, AppShellAgentRoomStore)
+    assert isinstance(store.messages, AppShellMessageStore)
+    assert isinstance(store.tasks, AppShellTaskLifecycleStore)
+    assert isinstance(store.hitl, AppShellHITLStore)
+    assert isinstance(store.memory, AppShellMemoryStore)
+
+
 def test_app_shell_repository_store_part_properties_do_not_recreate_missing_parts():
     store = _make_app_shell_store()
 

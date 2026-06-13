@@ -552,6 +552,9 @@ async def lifespan(app: FastAPI):
                 membership_source=membership_source,
             )
             _room_facade = _room_deps.room_registry
+            # Compatibility store: callers below still receive the composite object while
+            # AppShellRepositoryStore delegates to focused runtime store parts. Do not add
+            # new broad-store consumers; bind a focused part or protocol instead.
             app_shell_store = create_app_shell_repository_store(
                 mongo=mongo_dal,
                 room_deps=_room_deps,
