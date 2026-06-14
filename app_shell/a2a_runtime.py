@@ -1,43 +1,41 @@
-import asyncio
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
 from typing import Any
 from uuid import uuid4
 
-import httpx
-from a2a.client import A2ACardResolver, A2AClient
-from a2a.client.errors import A2AClientHTTPError
-from a2a.types import (
-    AgentCard,
-    CancelTaskRequest,
-    JSONRPCErrorResponse,
-    Message,
-    MessageSendConfiguration,
-    MessageSendParams,
-    PushNotificationConfig,
-    Role,
-    SendMessageRequest,
-    SendMessageResponse,
-    SendStreamingMessageRequest,
-    SendStreamingMessageResponse,
-    Task,
-    TaskIdParams,
-    TaskState,
-    TaskStatus,
-    TextPart,
+from a2a_adapter.client_facade import (
+    cancel_remote_task as adapter_cancel_remote_task,
 )
-from a2a.utils.constants import (
-    AGENT_CARD_WELL_KNOWN_PATH,
-    PREV_AGENT_CARD_WELL_KNOWN_PATH,
+from a2a_adapter.client_facade import (
+    fetch_agent_card_with_fallback as adapter_fetch_card,
 )
-
-from a2a_adapter.message_factory import from_sdk_task, to_sdk_message
+from a2a_adapter.client_facade import (
+    send_hitl_reply as adapter_send_hitl_reply,
+)
+from a2a_adapter.client_facade import (
+    send_message as adapter_send_message,
+)
+from a2a_adapter.client_facade import (
+    stream_message as adapter_stream_message,
+)
 from common.a2a_constants import (
     INTERACTIVE_STATES,
     SyntheticTaskId,
     is_terminal_state,
 )
 from common.config.settings import settings
+from common.types import (
+    AgentCard,
+    Artifact,
+    Message,
+    Part,
+    Task,
+    TaskState,
+    TaskStatus,
+    TextPart,
+)
+from common.types import (
+    MessageRole as Role,
+)
 from common.utils.logger import get_logger
 from models.error import A2AServiceError, IllgalParameterError
 from models.response import InsepectionCenterConnectionValidationResponse
@@ -108,42 +106,15 @@ class A2AService:
         return sorted(accepted)
 
     async def _fetch_agent_card_with_fallback(
-        self, httpx_client: httpx.AsyncClient, agent_url: str
+        self, _client: Any, agent_url: str
     ) -> AgentCard:
-        """
-        Fetch agent card with fallback support.
-        First tries the new path (agent-card.json), then falls back to the old path (agent.json).
-        """
-        # Try new path first
-        card_resolver = A2ACardResolver(
-            httpx_client, str(agent_url), AGENT_CARD_WELL_KNOWN_PATH
+        """Fetch an agent card through the SDK-confined adapter."""
+        return AgentCard.model_validate(
+            await adapter_fetch_card(
+                agent_url,
+                timeout=self.AGENT_CARD_FETCH_TIMEOUT,
+            )
         )
-        try:
-            logger.debug(
-                f"Attempting to fetch agent card from {AGENT_CARD_WELL_KNOWN_PATH}"
-            )
-            card = await card_resolver.get_agent_card()
-            logger.info(
-                f"Successfully fetched agent card from {AGENT_CARD_WELL_KNOWN_PATH}"
-            )
-            return card
-        except A2AClientHTTPError as e:
-            # If 404, try the old path
-            if e.status_code == 404:
-                logger.debug(
-                    f"Agent card not found at {AGENT_CARD_WELL_KNOWN_PATH}, "
-                    f"trying fallback path {PREV_AGENT_CARD_WELL_KNOWN_PATH}"
-                )
-                card_resolver_fallback = A2ACardResolver(
-                    httpx_client, str(agent_url), PREV_AGENT_CARD_WELL_KNOWN_PATH
-                )
-                card = await card_resolver_fallback.get_agent_card()
-                logger.info(
-                    f"Successfully fetched agent card from fallback path {PREV_AGENT_CARD_WELL_KNOWN_PATH}"
-                )
-                return card
-            # If not 404, re-raise the error
-            raise
 
     AGENT_CARD_FETCH_TIMEOUT = 30.0
     DEFAULT_REQUEST_TIMEOUT = 600.0
@@ -154,27 +125,16 @@ class A2AService:
             raise IllgalParameterError()
 
         try:
-            async with httpx.AsyncClient(
-                timeout=self.AGENT_CARD_FETCH_TIMEOUT
-            ) as httpx_client:
-                card = await self._fetch_agent_card_with_fallback(
-                    httpx_client, agent_url
+            return AgentCard.model_validate(
+                await adapter_fetch_card(
+                    agent_url,
+                    timeout=self.AGENT_CARD_FETCH_TIMEOUT,
                 )
-                return card
+            )
 
         except Exception as e:
             logger.error(f"Failed to get agent card from url: {e}", exc_info=True)
             raise A2AServiceError() from e
-
-    @asynccontextmanager
-    async def create_a2a_client(
-        self, agent_card: AgentCard, timeout: float = DEFAULT_REQUEST_TIMEOUT
-    ):
-        httpx_client = httpx.AsyncClient(timeout=timeout)
-        try:
-            yield A2AClient(httpx_client, agent_card=agent_card)
-        finally:
-            await httpx_client.aclose()
 
     def has_streaming_capability(self, agent_card: AgentCard) -> bool:
         """
@@ -298,9 +258,7 @@ class A2AService:
 
         # Keep the in-memory object in sync with what was written to the DB.
         if current_message.message_content:
-            current_message.message_content.message_task = from_sdk_task(
-                placeholder_task
-            )
+            current_message.message_content.message_task = placeholder_task
         current_message.has_task_tracking = True
 
         return {
@@ -388,11 +346,11 @@ class A2AService:
         )
 
         if has_capability and webhook_url:
-            push_config = PushNotificationConfig(
-                id=message_id,
-                url=f"{webhook_url}/api/v1/webhooks/a2a/{message_id}",
-                token=webhook_token,
-            )
+            push_config = {
+                "id": message_id,
+                "url": f"{webhook_url}/api/v1/webhooks/a2a/{message_id}",
+                "token": webhook_token,
+            }
             logger.info(
                 f"Enabled push notifications for task {message_id} "
                 f"(callback → {webhook_url}/api/v1/webhooks/a2a/{message_id})"
@@ -410,25 +368,10 @@ class A2AService:
         # blocking=False tells the agent to ack quickly and deliver via webhook;
         # blocking=True (no push_config) tells it to hold the connection until done.
         use_blocking = push_config is None
-        payload = MessageSendParams(
-            message=to_sdk_message(message),
-            configuration=MessageSendConfiguration(
-                accepted_output_modes=self._resolve_accepted_modes(agent_card),
-                push_notification_config=push_config,
-                blocking=use_blocking,
-            ),
-        )
 
         logger.debug(
             f"MessageSendParams configuration: push_notification_config={push_config}, "
             f"blocking={use_blocking}"
-        )
-
-        send_message_request = SendMessageRequest(
-            id=str(uuid4()),
-            method="message/send",
-            jsonrpc="2.0",
-            params=payload,
         )
 
         # Push-notification agents should ack immediately (use short timeout).
@@ -439,10 +382,14 @@ class A2AService:
                 if push_config
                 else self.DEFAULT_REQUEST_TIMEOUT
             )
-            async with self.create_a2a_client(
-                agent_card, timeout=dispatch_timeout
-            ) as a2a_client:
-                response = await a2a_client.send_message(send_message_request)
+            response = await adapter_send_message(
+                agent_card,
+                message,
+                accepted_output_modes=self._resolve_accepted_modes(agent_card),
+                push_notification_config=push_config,
+                blocking=use_blocking,
+                timeout=dispatch_timeout,
+            )
         except Exception as e:
             await self._record_call(agent_id, success=False)
             # Mark task as failed IMMEDIATELY (don't wait for stale checker)
@@ -452,8 +399,14 @@ class A2AService:
                 status=TaskStatus(
                     state=TaskState.failed,
                     message=Message(
-                        role=Role.agent,
-                        parts=[TextPart(text=f"Failed to contact agent: {str(e)}")],
+                        role=Role.AGENT,
+                        parts=[
+                            Part(
+                                root=TextPart(
+                                    text=f"Failed to contact agent: {str(e)}"
+                                )
+                            )
+                        ],
                         message_id=str(uuid4()),
                     ),
                 ),
@@ -465,17 +418,22 @@ class A2AService:
             raise A2AServiceError(str(e)) from e
 
         # Handle error response
-        if isinstance(response.root, JSONRPCErrorResponse):
+        if response.get("kind") == "error":
             await self._record_call(agent_id, success=False)
-            error_msg = str(response.root.error.message)
+            error_payload = response.get("error")
+            error_msg = (
+                error_payload.get("message")
+                if isinstance(error_payload, dict)
+                else str(error_payload)
+            )
             failed_task = Task(
                 id=SyntheticTaskId.FAILED,
                 context_id=context_id,
                 status=TaskStatus(
                     state=TaskState.failed,
                     message=Message(
-                        role=Role.agent,
-                        parts=[TextPart(text=f"Agent error: {error_msg}")],
+                        role=Role.AGENT,
+                        parts=[Part(root=TextPart(text=f"Agent error: {error_msg}"))],
                         message_id=str(uuid4()),
                     ),
                 ),
@@ -486,7 +444,7 @@ class A2AService:
             raise A2AServiceError(error_msg)
 
         await self._record_call(agent_id, success=True)
-        result = response.root.result
+        result = self._facade_result_to_model(response)
 
         # --- Diagnostic: log the raw response shape ---
         _art_count = (
@@ -641,8 +599,6 @@ class A2AService:
 
     def _message_to_completed_task(self, message: Message, context_id: str) -> Task:
         """Convert a Message response to a completed Task."""
-        from a2a.types import Artifact
-
         return Task(
             id=str(uuid4()),
             context_id=context_id,
@@ -651,10 +607,41 @@ class A2AService:
                 Artifact(
                     artifact_id=str(uuid4()),
                     name="response",
-                    parts=message.parts,
+                    parts=self._coerce_parts(message.parts),
                 )
             ],
         )
+
+    @staticmethod
+    def _coerce_parts(parts: list[Any] | None) -> list[Part]:
+        coerced: list[Part] = []
+        for part in parts or []:
+            if isinstance(part, Part):
+                coerced.append(part)
+            elif isinstance(part, dict):
+                data = dict(part)
+                if "kind" not in data and "text" in data:
+                    data["kind"] = "text"
+                coerced.append(Part.model_validate(data))
+            elif hasattr(part, "root"):
+                coerced.append(Part(root=part.root))
+            elif hasattr(part, "model_dump"):
+                data = part.model_dump(mode="json")
+                if "kind" not in data and "text" in data:
+                    data["kind"] = "text"
+                coerced.append(Part.model_validate(data))
+            elif hasattr(part, "text"):
+                coerced.append(Part(root=TextPart(text=part.text)))
+        return coerced
+
+    def _facade_result_to_model(self, response: dict[str, Any]) -> Message | Task:
+        kind = response.get("kind")
+        result = response.get("result") or {}
+        if kind == "message":
+            return Message.model_validate(result)
+        if kind == "task":
+            return Task.model_validate(result)
+        raise A2AServiceError(str(response.get("error") or "Unknown A2A response"))
 
     def _extract_text_from_message(self, message: Message) -> str:
         """Extract text content from a Message."""
@@ -694,7 +681,7 @@ class A2AService:
         agent_card: AgentCard,
         message: Message,
         agent_id: str | None = None,
-    ) -> SendMessageResponse | None:
+    ) -> dict[str, Any] | None:
         """
         Send message to agent using synchronous (non-streaming) endpoint.
 
@@ -711,33 +698,25 @@ class A2AService:
         """
         success = False
         try:
-            async with self.create_a2a_client(agent_card) as a2a_client:
-                payload = MessageSendParams(
-                    message=to_sdk_message(message),
-                    configuration=MessageSendConfiguration(
-                        accepted_output_modes=self._resolve_accepted_modes(agent_card)
-                    ),
+            logger.debug(f"a2a_service: Sending sync message to agent: {agent_card}")
+            response = await adapter_send_message(
+                agent_card,
+                message,
+                accepted_output_modes=self._resolve_accepted_modes(agent_card),
+                blocking=True,
+                timeout=self.DEFAULT_REQUEST_TIMEOUT,
+            )
+            if response.get("kind") == "error":
+                error_payload = response.get("error")
+                error_msg = (
+                    error_payload.get("message")
+                    if isinstance(error_payload, dict)
+                    else str(error_payload)
                 )
-
-                send_message_request = SendMessageRequest(
-                    id=str(uuid4()),
-                    method="message/send",
-                    jsonrpc="2.0",
-                    params=payload,
-                )
-
-                logger.debug(
-                    f"a2a_service: Sending sync message to agent: {agent_card}"
-                )
-                response = await a2a_client.send_message(send_message_request)
-
-                # Handle error
-                if isinstance(response.root, JSONRPCErrorResponse):
-                    error_msg = str(response.root.error.message)
-                    logger.error(f"a2a_service: Agent error: {error_msg}")
-                    raise A2AServiceError(error_msg)
-                success = True
-                return response
+                logger.error(f"a2a_service: Agent error: {error_msg}")
+                raise A2AServiceError(error_msg)
+            success = True
+            return response
 
         except A2AServiceError:
             raise
@@ -752,7 +731,7 @@ class A2AService:
         agent_card: AgentCard,
         message: Message,
         agent_id: str | None = None,
-    ) -> AsyncGenerator[SendStreamingMessageResponse, None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Send message to agent with TRUE passthrough streaming.
 
@@ -773,28 +752,15 @@ class A2AService:
         """
         success = False
         try:
-            async with self.create_a2a_client(agent_card) as a2a_client:
-                payload = MessageSendParams(
-                    message=to_sdk_message(message),
-                    configuration=MessageSendConfiguration(
-                        accepted_output_modes=self._resolve_accepted_modes(agent_card)
-                    ),
-                )
-
-                stream_request = SendStreamingMessageRequest(
-                    id=str(uuid4()),
-                    method="message/stream",
-                    jsonrpc="2.0",
-                    params=payload,
-                )
-
-                logger.debug(
-                    f"a2a_service: Starting streaming from agent: {agent_card}"
-                )
-                response_stream = a2a_client.send_message_streaming(stream_request)
-                async for response in response_stream:
-                    success = True
-                    yield response
+            logger.debug(f"a2a_service: Starting streaming from agent: {agent_card}")
+            async for response in adapter_stream_message(
+                agent_card,
+                message,
+                accepted_output_modes=self._resolve_accepted_modes(agent_card),
+                timeout=self.DEFAULT_REQUEST_TIMEOUT,
+            ):
+                success = response.get("kind") != "error"
+                yield response
         finally:
             await self._record_call(agent_id, success=success)
 
@@ -803,7 +769,7 @@ class A2AService:
         agent_card: AgentCard,
         message: Message,
         agent_id: str | None = None,
-    ) -> AsyncGenerator[SendStreamingMessageResponse | SendMessageResponse, None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Send message to agent with automatic capability detection.
 
@@ -843,58 +809,26 @@ class A2AService:
                 raise A2AServiceError(str(e)) from e
 
     async def dry_send_message(
-        self, a2a_client: A2AClient, aegnt_card: AgentCard, message_text: str
+        self, _a2a_client: Any, aegnt_card: AgentCard, message_text: str
     ) -> InsepectionCenterConnectionValidationResponse:
         message = Message(
-            role=Role.user,
-            parts=[TextPart(text=str(message_text))],  # type: ignore[list-item]
+            role=Role.USER,
+            parts=[Part(root=TextPart(text=str(message_text)))],
             message_id=str(uuid4()),
             context_id=str(uuid4()),
         )
-
-        payload = MessageSendParams(
-            message=message,
-            configuration=MessageSendConfiguration(
-                accepted_output_modes=self._resolve_accepted_modes(aegnt_card)
-            ),
-        )
-
-        supports_streaming = (
-            hasattr(aegnt_card.capabilities, "streaming")
-            and aegnt_card.capabilities.streaming is True
-        )
-
         try:
-            if supports_streaming:
-                stream_request = SendStreamingMessageRequest(
-                    id=str(uuid4()),
-                    method="message/stream",
-                    jsonrpc="2.0",
-                    params=payload,
-                )
-                response_stream = a2a_client.send_message_streaming(stream_request)
-
-                async for stream_result in response_stream:
-                    inspection_center_response = await self.validate_a2a_response(
-                        stream_result
-                    )
-                    inspection_center_response.agent_url = aegnt_card.url
-                    inspection_center_response.agent_card = aegnt_card
-                return inspection_center_response
-            else:
-                send_message_request = SendMessageRequest(
-                    id=str(uuid4()),
-                    method="message/send",
-                    jsonrpc="2.0",
-                    params=payload,
-                )
-                send_result = await a2a_client.send_message(send_message_request)
-                inspection_center_response = await self.validate_a2a_response(
-                    send_result
-                )
-                inspection_center_response.agent_url = aegnt_card.url
-                inspection_center_response.agent_card = aegnt_card
-                return inspection_center_response
+            response = await adapter_send_message(
+                aegnt_card,
+                message,
+                accepted_output_modes=self._resolve_accepted_modes(aegnt_card),
+                blocking=True,
+                timeout=self.DEFAULT_REQUEST_TIMEOUT,
+            )
+            inspection_center_response = await self.validate_a2a_response(response)
+            inspection_center_response.agent_url = aegnt_card.url
+            inspection_center_response.agent_card = aegnt_card
+            return inspection_center_response
 
         except Exception as e:
             logger.error(f"Failed to send message: {e}")
@@ -907,23 +841,19 @@ class A2AService:
             )
 
     async def validate_a2a_response(
-        self, result: SendMessageResponse | SendStreamingMessageResponse
+        self, result: dict[str, Any]
     ) -> InsepectionCenterConnectionValidationResponse:
         """Validate a response from the A2A client."""
-        if isinstance(result.root, JSONRPCErrorResponse):
-            error_data = result.root.error.model_dump(exclude_none=True)
-
+        if result.get("kind") == "error":
             return InsepectionCenterConnectionValidationResponse(
-                agent_url="", result=[str(error_data)], is_valid=False, status_code=500
+                agent_url="",
+                result=[str(result.get("error"))],
+                is_valid=False,
+                status_code=500,
             )
 
-        # Success case
-        response_data = result.root.result
-
+        response_data = result.get("result") or {}
         logger.info(f"validate_a2a_response: response_data: {response_data}")
-
-        response_data = response_data.model_dump(exclude_none=True)
-
         validation_errors = self.validate_message(response_data)
 
         return InsepectionCenterConnectionValidationResponse(
@@ -988,18 +918,14 @@ class A2AService:
         return errors
 
     async def process_a2a_response(
-        self, response: SendMessageResponse | SendStreamingMessageResponse
+        self, response: dict[str, Any]
     ) -> Any:
-        if isinstance(response.root, JSONRPCErrorResponse):
+        if response.get("kind") == "error":
             raise A2AServiceError()
 
-        # Success case
         logger.info(f"process_a2a_response: response: {response}")
-
-        response_data = response.root.result
-
+        response_data = self._facade_result_to_model(response)
         logger.info(f"process_a2a_response: response_data: {response_data}")
-
         return response_data
 
     async def cancel_remote_task(
@@ -1024,42 +950,16 @@ class A2AService:
 
         Returns True if the cancel request was acknowledged, False otherwise.
         """
-        try:
-            async with self.create_a2a_client(agent_card) as a2a_client:
-                cancel_request = CancelTaskRequest(
-                    id=str(uuid4()),
-                    params=TaskIdParams(id=task_id),
-                )
-                response = await asyncio.wait_for(
-                    a2a_client.cancel_task(cancel_request),
-                    timeout=timeout,
-                )
-                if isinstance(response.root, JSONRPCErrorResponse):
-                    logger.debug(
-                        "a2a_service: Remote cancel rejected for task %s: %s",
-                        task_id,
-                        response.root.error.message,
-                    )
-                    return False
-                logger.info(
-                    "a2a_service: Remote cancel acknowledged for task %s",
-                    task_id,
-                )
-                return True
-        except TimeoutError:
-            logger.debug(
-                "a2a_service: Remote cancel timed out for task %s after %.1fs",
-                task_id,
-                timeout,
-            )
-            return False
-        except Exception as e:
-            logger.debug(
-                "a2a_service: Remote cancel failed for task %s: %s",
-                task_id,
-                e,
-            )
-            return False
+        acknowledged = await adapter_cancel_remote_task(
+            agent_card,
+            task_id,
+            timeout=timeout,
+        )
+        if acknowledged:
+            logger.info("a2a_service: Remote cancel acknowledged for task %s", task_id)
+        else:
+            logger.debug("a2a_service: Remote cancel failed for task %s", task_id)
+        return acknowledged
 
     # ------------------------------------------------------------------
     # HITL: Reply to an existing task (input_required continuation)
@@ -1123,15 +1023,15 @@ class A2AService:
                 )
 
         if has_capability and webhook_url:
-            push_config = PushNotificationConfig(
-                id=message_id,
-                url=f"{webhook_url}/api/v1/webhooks/a2a/{message_id}",
-                token=webhook_token,
-            )
+            push_config = {
+                "id": message_id,
+                "url": f"{webhook_url}/api/v1/webhooks/a2a/{message_id}",
+                "token": webhook_token,
+            }
             logger.info(
                 "hitl: push-notification mode for task %s (callback → %s)",
                 message_id,
-                push_config.url,
+                push_config["url"],
             )
             hitl_blocking = False
             hitl_timeout = self.PUSH_NOTIFICATION_TIMEOUT
@@ -1148,39 +1048,23 @@ class A2AService:
                 "hitl: %s — using blocking=True for task %s", reason, message_id
             )
 
-        # Build message continuing the existing task
-        reply_message = Message(
-            role=Role.user,
-            parts=[TextPart(text=user_input)],
-            message_id=str(uuid4()),
-            task_id=task_id,
-            context_id=context_id,
-            reference_task_ids=[task_id],
-        )
+        reply_message = {
+            "kind": "message",
+            "role": "user",
+            "parts": [{"kind": "text", "text": user_input}],
+            "messageId": str(uuid4()),
+            "taskId": task_id,
+            "contextId": context_id,
+            "referenceTaskIds": [task_id],
+        }
 
-        params = MessageSendParams(
-            message=reply_message,
-            configuration=MessageSendConfiguration(
-                push_notification_config=push_config,
-                blocking=hitl_blocking,
-            ),
+        response = await adapter_send_hitl_reply(
+            agent_url,
+            reply_message,
+            push_notification_config=push_config,
+            blocking=hitl_blocking,
+            timeout=hitl_timeout,
         )
-
-        # Use a scoped httpx client with async with to ensure cleanup.
-        # Agent card resolution is skipped since we already have the
-        # agent_url.
-        async with httpx.AsyncClient(timeout=hitl_timeout) as client:
-            a2a_client = A2AClient(
-                httpx_client=client,
-                url=agent_url,
-            )
-            request = SendMessageRequest(
-                id=str(uuid4()),
-                method="message/send",
-                jsonrpc="2.0",
-                params=params,
-            )
-            response = await a2a_client.send_message(request)
 
         # Extract response and persist task to DB in one shot so that
         # message_text is written atomically with the task.  Without this,
@@ -1188,27 +1072,26 @@ class A2AService:
         # subsequent update_task_state_on_message call in hitl_service,
         # leaving message_text empty.
         task_obj = None
-        result = getattr(response, "root", None)
+        task_result = (
+            self._facade_result_to_model(response)
+            if response.get("kind") != "error"
+            else None
+        )
 
         # --- Extract response text from artifacts or message ---
         response_text: str | None = None
-        if result and hasattr(result, "result"):
-            task_result = result.result
-            if hasattr(task_result, "kind") and task_result.kind == "task":
-                task_obj = task_result
-                if task_obj.artifacts:
-                    from common.utils.a2a_helpers import extract_text_from_artifacts
+        if hasattr(task_result, "kind") and task_result.kind == "task":
+            task_obj = task_result
+            if task_obj.artifacts:
+                from common.utils.a2a_helpers import extract_text_from_artifacts
 
-                    response_text = extract_text_from_artifacts(task_obj.artifacts)
-            elif hasattr(task_result, "kind") and task_result.kind == "message":
-                parts = getattr(task_result, "parts", []) or []
-                for p in parts:
-                    if hasattr(p, "root") and hasattr(p.root, "text"):
-                        response_text = p.root.text
-                        break
-                    if hasattr(p, "text"):
-                        response_text = p.text
-                        break
+                response_text = extract_text_from_artifacts(task_obj.artifacts)
+        elif hasattr(task_result, "kind") and task_result.kind == "message":
+            parts = getattr(task_result, "parts", []) or []
+            for p in parts:
+                if hasattr(p, "root") and hasattr(p.root, "text"):
+                    response_text = p.root.text
+                    break
 
         # Fallback: check task.status.message for the agent's follow-up prompt
         # (e.g. when task is input_required / auth_required)

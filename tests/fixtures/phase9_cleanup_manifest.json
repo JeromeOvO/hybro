@@ -31,16 +31,6 @@
             "reason": "App-shell room runtime still uses database.mongodb directly pending DAL injection."
         },
         {
-            "path": "app_shell/a2a_runtime.py",
-            "contract": "sdk_confinement",
-            "reason": "A2A client runtime owns direct SDK interaction."
-        },
-        {
-            "path": "app_shell/room_runtime.py",
-            "contract": "sdk_confinement",
-            "reason": "Room runtime handles A2A task and message models."
-        },
-        {
             "path": "common/protocols/runtime_store_protocols.py",
             "contract": "common_import_boundary",
             "reason": "Runtime store protocols require importing concrete domain models to provide a type-safe contract."
