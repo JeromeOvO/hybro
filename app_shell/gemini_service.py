@@ -4,8 +4,15 @@ import uuid
 from types import SimpleNamespace
 from typing import Any
 
-from a2a.types import Message, Part, Role, Task, TaskState, TaskStatus, TextPart
-
+from common.types import (
+    Message,
+    MessageRole,
+    Part,
+    Task,
+    TaskState,
+    TaskStatus,
+    TextPart,
+)
 from common.utils.time import utcnow
 from llm_gateway.errors import LLMServiceNotBoundError
 
@@ -85,7 +92,7 @@ class GeminiService:
                 state=TaskState.failed,
                 message=Message(
                     message_id=uuid.uuid4().hex,
-                    role=Role.agent,
+                    role=MessageRole.AGENT,
                     parts=[
                         Part(
                             root=TextPart(text="No user message found in task history")
@@ -122,7 +129,7 @@ class GeminiService:
         # Create agent response message
         agent_message = Message(
             message_id=uuid.uuid4().hex,
-            role=Role.agent,
+            role=MessageRole.AGENT,
             parts=[Part(root=TextPart(text=response.text if response.text else ""))],
         )
 

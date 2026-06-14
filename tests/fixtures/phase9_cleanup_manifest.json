@@ -36,16 +36,6 @@
             "reason": "A2A client runtime owns direct SDK interaction."
         },
         {
-            "path": "app_shell/gemini_service.py",
-            "contract": "sdk_confinement",
-            "reason": "Gemini runtime maps A2A message/task models."
-        },
-        {
-            "path": "app_shell/room_coordinator_service.py",
-            "contract": "sdk_confinement",
-            "reason": "Room coordinator runtime maps A2A message/task models."
-        },
-        {
             "path": "app_shell/room_runtime.py",
             "contract": "sdk_confinement",
             "reason": "Room runtime handles A2A task and message models."
