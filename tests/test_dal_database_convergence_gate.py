@@ -105,8 +105,7 @@ def _iter_imports(path: Path) -> list[Blocker]:
     for node in ast.walk(_tree(path)):
         if isinstance(node, ast.Import):
             imports.extend(
-                Blocker(rel, node.lineno, alias.name)
-                for alias in node.names
+                Blocker(rel, node.lineno, alias.name) for alias in node.names
             )
         elif isinstance(node, ast.ImportFrom) and node.module:
             imports.append(Blocker(rel, node.lineno, node.module))
@@ -130,10 +129,7 @@ def _iter_dynamic_imports(path: Path) -> list[Blocker]:
             and func.attr == "import_module"
             and isinstance(func.value, ast.Name)
             and func.value.id == "importlib"
-        ) or (
-            isinstance(func, ast.Name)
-            and func.id == "import_module"
-        )
+        ) or (isinstance(func, ast.Name) and func.id == "import_module")
         if (
             is_import_module
             and node.args
@@ -158,12 +154,9 @@ def _hidden_mongo_fallback_blockers(path: Path) -> list[Blocker]:
     blockers: list[Blocker] = []
     tree = _tree(path)
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Assign)
-            and any(
-                isinstance(target, ast.Name) and target.id == "mongodb"
-                for target in node.targets
-            )
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "mongodb"
+            for target in node.targets
         ):
             blockers.append(Blocker(rel, node.lineno, "mongodb"))
         if (
@@ -204,10 +197,7 @@ def _hidden_mongo_fallback_blockers(path: Path) -> list[Blocker]:
 
 def _function_exposes_mongodb(node: ast.FunctionDef) -> bool:
     for child in ast.walk(node):
-        if (
-            isinstance(child, ast.Constant)
-            and child.value == "mongodb"
-        ):
+        if isinstance(child, ast.Constant) and child.value == "mongodb":
             return True
     return False
 
@@ -220,7 +210,7 @@ def _name_blockers(path: Path, names: set[str]) -> list[Blocker]:
             blockers.append(Blocker(rel, node.lineno, node.id))
         elif isinstance(node, ast.Attribute) and node.attr in names:
             blockers.append(Blocker(rel, node.lineno, node.attr))
-        elif isinstance(node, (ast.arg,)) and node.arg in names:
+        elif isinstance(node, ast.arg) and node.arg in names:
             blockers.append(Blocker(rel, node.lineno, node.arg))
     return blockers
 
@@ -253,7 +243,9 @@ def _aliased_import_name_blockers(
             if alias.name not in names or alias.asname is None:
                 continue
             aliases[alias.asname] = alias.name
-            blockers.append(Blocker(rel, node.lineno, f"{alias.name} as {alias.asname}"))
+            blockers.append(
+                Blocker(rel, node.lineno, f"{alias.name} as {alias.asname}")
+            )
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and node.id in aliases:
@@ -307,7 +299,9 @@ def _database_repository_blockers(path: Path) -> list[Blocker]:
     for node in ast.walk(_tree(path)):
         if isinstance(node, ast.keyword):
             if node.arg == "create_repository" and _is_name(node.value, "Repository"):
-                blockers.append(Blocker(rel, node.value.lineno, "create_repository=Repository"))
+                blockers.append(
+                    Blocker(rel, node.value.lineno, "create_repository=Repository")
+                )
             if node.arg == "db_provider" and _is_name(node.value, "get_db"):
                 blockers.append(Blocker(rel, node.value.lineno, "db_provider=get_db"))
     return _unique_blockers(blockers)
@@ -422,7 +416,7 @@ def _has_database_service_duck_usage(path: Path) -> bool:
         return False
     tree = ast.parse(source, filename=str(path))
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             for arg in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]:
                 if arg.arg in {"database_service", "db_service"}:
                     return True
@@ -430,7 +424,7 @@ def _has_database_service_duck_usage(path: Path) -> bool:
             target_names = {
                 target.attr if isinstance(target, ast.Attribute) else target.id
                 for target in node.targets
-                if isinstance(target, (ast.Attribute, ast.Name))
+                if isinstance(target, ast.Attribute | ast.Name)
             }
             if target_names.intersection({"_db", "_database_service", "_db_service"}):
                 if isinstance(node.value, ast.Name) and node.value.id in {
@@ -448,14 +442,14 @@ def _has_database_service_duck_usage(path: Path) -> bool:
         "db_service=",
         "DatabaseHITLPersistenceAdapter",
         "_DatabaseServiceLike",
-        "\"database_service\":",
-        "\"db_service\":",
+        '"database_service":',
+        '"db_service":',
         "'database_service':",
         "'db_service':",
         "db_service:",
         "db_service =",
         "global db_service",
-        "(\"db_service\"",
+        '("db_service"',
         "('db_service'",
     )
     return any(snippet in source for snippet in forbidden_snippets)
@@ -478,9 +472,7 @@ def test_convergence_scanner_detects_dynamic_imports_and_pinecone_calls(tmp_path
         )
     )
 
-    assert "sample.py:3:database.mongodb" in _entries(
-        _mongo_singleton_blockers(sample)
-    )
+    assert "sample.py:3:database.mongodb" in _entries(_mongo_singleton_blockers(sample))
     assert "sample.py:4:database.pinecone_db" in _entries(
         _pinecone_singleton_blockers(sample)
     )
@@ -503,9 +495,7 @@ def test_convergence_scanner_detects_from_import_legacy_modules(tmp_path):
         )
     )
 
-    assert "sample.py:1:database.mongodb" in _entries(
-        _mongo_singleton_blockers(sample)
-    )
+    assert "sample.py:1:database.mongodb" in _entries(_mongo_singleton_blockers(sample))
     assert "sample.py:1:database.pinecone_db" in _entries(
         _pinecone_singleton_blockers(sample)
     )

@@ -11,7 +11,7 @@ Responsibilities:
 - Enforce cancellation, rate limits, and step budget
 - Dispatch concurrent targets via ``asyncio.gather``
 
-See System-Architecture.md for design details.
+See docs/System-Architecture.md for design details.
 """
 
 from __future__ import annotations
@@ -45,10 +45,9 @@ from models.supervisor import (
 )
 
 if TYPE_CHECKING:
-    from app_shell.rate_limit_service import RateLimitService
-
     from app_shell.delivery_runtime import SSEManager
     from app_shell.memory_service import RoomMemoryService
+    from app_shell.rate_limit_service import RateLimitService
     from app_shell.room_coordinator_service import RoomCoordinatorService
     from app_shell.room_runtime import RoomServices
     from execution.dispatch.agent_dispatcher import AgentDispatcher
@@ -119,7 +118,9 @@ class SupervisorExecutor:
         agents: list[dict] | None = None,
     ) -> None:
         if self._processing_status_emitter is None:
-            raise RuntimeError("SupervisorExecutor execution event dependencies not bound")
+            raise RuntimeError(
+                "SupervisorExecutor execution event dependencies not bound"
+            )
         status_value = status.value if hasattr(status, "value") else str(status)
         await self._processing_status_emitter(
             room_id=room_id,
@@ -159,7 +160,7 @@ class SupervisorExecutor:
         summary_message_id = trajectory.system_agent_message_id
         if not summary_message_id:
             summary_message_id = f"sys-{user_message_id}"
-            
+
         return await stream_summary_to_sse(
             self.sse_manager,
             room_id=room_id,
@@ -197,10 +198,14 @@ class SupervisorExecutor:
 
         # Phase 1: Emit system:hybro task on start if not already emitted
         if not trajectory.system_agent_message_id:
-            client_req_id = getattr(user_message, "client_request_id", None) if user_message else None
+            client_req_id = (
+                getattr(user_message, "client_request_id", None)
+                if user_message
+                else None
+            )
             sys_message_id = f"sys-{user_message_id}"
             trajectory.system_agent_message_id = sys_message_id
-            
+
             try:
                 sys_msg = self.room_runtime.create_agent_message(
                     room_id=room_id,
@@ -214,7 +219,7 @@ class SupervisorExecutor:
                 )
                 sys_msg.message_id = sys_message_id
                 await self._store.add_room_agent_message(sys_msg)
-                
+
                 await self.sse_manager.send_task_submitted(
                     room_id=room_id,
                     message_id=sys_message_id,
@@ -276,7 +281,8 @@ class SupervisorExecutor:
                     trajectory.entries.append(done_entry)
                     trajectory.status = TrajectoryStatus.COMPLETED
                     return await self._log_and_return(
-                        room_id, trajectory,
+                        room_id,
+                        trajectory,
                         SupervisorRunResult(
                             status=RunStatus.COMPLETED, trajectory=trajectory
                         ),
@@ -304,12 +310,12 @@ class SupervisorExecutor:
             effective_max_steps = max(self.MAX_STEPS, len(debate_agent_ids) + 1)
 
         while step_number < effective_max_steps:
-
             # --- Cancellation check ---
             if token and token.is_cancelled:
                 trajectory.status = TrajectoryStatus.CANCELED
                 return await self._log_and_return(
-                    room_id, trajectory,
+                    room_id,
+                    trajectory,
                     SupervisorRunResult(
                         status=RunStatus.CANCELED, trajectory=trajectory
                     ),
@@ -360,7 +366,9 @@ class SupervisorExecutor:
                         details="Planning next action...",
                     )
                 except Exception:
-                    logger.debug("SSE stage notification failed (planning)", exc_info=True)
+                    logger.debug(
+                        "SSE stage notification failed (planning)", exc_info=True
+                    )
 
             # --- Debate mode fast-path (§8.13) ---
             if inflight_entry is not None:
@@ -368,7 +376,9 @@ class SupervisorExecutor:
             elif room_config.is_debate_mode:
                 # Sequential debate: dispatch one agent per step
                 # (debate_agent_ids already computed before the loop; snapshot is idempotent)
-                remaining_ids = self._get_remaining_debate_agent_ids(debate_agent_ids, trajectory)
+                remaining_ids = self._get_remaining_debate_agent_ids(
+                    debate_agent_ids, trajectory
+                )
 
                 if not remaining_ids:
                     # All agents dispatched — done
@@ -384,7 +394,8 @@ class SupervisorExecutor:
                     trajectory.entries.append(done_entry)
                     trajectory.status = TrajectoryStatus.COMPLETED
                     return await self._log_and_return(
-                        room_id, trajectory,
+                        room_id,
+                        trajectory,
                         SupervisorRunResult(
                             status=RunStatus.COMPLETED, trajectory=trajectory
                         ),
@@ -393,7 +404,9 @@ class SupervisorExecutor:
 
                 next_id = remaining_ids[0]
                 # Find agent profile
-                next_profile = next((a for a in agent_registry if a.agent_id == next_id), None)
+                next_profile = next(
+                    (a for a in agent_registry if a.agent_id == next_id), None
+                )
 
                 if next_profile is None or not next_profile.is_healthy:
                     # Skip unhealthy agent: create FAILED entry, checkpoint, continue
@@ -402,24 +415,32 @@ class SupervisorExecutor:
                         action=SupervisorAction(
                             action=ActionType.DELEGATE,
                             reasoning=f"Debate: skipping unhealthy agent {next_id}",
-                            targets=[DelegateTarget(agent_id=next_id, agent_name=next_id, task="")],
+                            targets=[
+                                DelegateTarget(
+                                    agent_id=next_id, agent_name=next_id, task=""
+                                )
+                            ],
                         ),
                         started_at=utcnow(),
                         completed_at=utcnow(),
-                        results=[StepResult(
-                            step_number=step_number + 1,
-                            agent_id=next_id,
-                            agent_name=next_id,
-                            task="",
-                            response_text="",
-                            success=False,
-                            status=StepStatus.FAILED,
-                            error_message="Agent unhealthy at dispatch time",
-                        )],
+                        results=[
+                            StepResult(
+                                step_number=step_number + 1,
+                                agent_id=next_id,
+                                agent_name=next_id,
+                                task="",
+                                response_text="",
+                                success=False,
+                                status=StepStatus.FAILED,
+                                error_message="Agent unhealthy at dispatch time",
+                            )
+                        ],
                     )
                     trajectory.entries.append(skip_entry)
                     _checkpoint_msg = await self._checkpoint_trajectory(
-                        user_message_id, trajectory, cached_user_message=_checkpoint_msg,
+                        user_message_id,
+                        trajectory,
+                        cached_user_message=_checkpoint_msg,
                     )
                     step_number += 1
                     continue
@@ -456,8 +477,7 @@ class SupervisorExecutor:
                     r
                     for entry in trajectory.entries
                     for r in entry.results
-                    if r.status == StepStatus.PAUSED
-                    and r.paused_message_id
+                    if r.status == StepStatus.PAUSED and r.paused_message_id
                 ]
                 if all_still_paused:
                     # Reconcile against DB: a relay agent may have completed
@@ -472,8 +492,7 @@ class SupervisorExecutor:
                         r
                         for entry in trajectory.entries
                         for r in entry.results
-                        if r.status == StepStatus.PAUSED
-                        and r.paused_message_id
+                        if r.status == StepStatus.PAUSED and r.paused_message_id
                     ]
 
                 if all_still_paused:
@@ -483,7 +502,9 @@ class SupervisorExecutor:
                             "room_id": room_id,
                             "trajectory_id": trajectory.trajectory_id,
                             "still_paused_count": len(all_still_paused),
-                            "still_paused_agents": [r.agent_name for r in all_still_paused],
+                            "still_paused_agents": [
+                                r.agent_name for r in all_still_paused
+                            ],
                         },
                     )
                     trajectory.status = TrajectoryStatus.RUNNING
@@ -503,13 +524,15 @@ class SupervisorExecutor:
                     if not saved:
                         trajectory.status = TrajectoryStatus.FAILED
                         return await self._log_and_return(
-                            room_id, trajectory,
+                            room_id,
+                            trajectory,
                             SupervisorRunResult(
                                 status=RunStatus.FAILED, trajectory=trajectory
                             ),
                         )
                     return await self._log_and_return(
-                        room_id, trajectory,
+                        room_id,
+                        trajectory,
                         SupervisorRunResult(
                             status=RunStatus.PAUSED, trajectory=trajectory
                         ),
@@ -527,13 +550,13 @@ class SupervisorExecutor:
                 )
                 try:
                     action = (
-                        await token.race(decide_coro) if token
-                        else await decide_coro
+                        await token.race(decide_coro) if token else await decide_coro
                     )
                 except CancellationError:
                     trajectory.status = TrajectoryStatus.CANCELED
                     return await self._log_and_return(
-                        room_id, trajectory,
+                        room_id,
+                        trajectory,
                         SupervisorRunResult(
                             status=RunStatus.CANCELED, trajectory=trajectory
                         ),
@@ -566,8 +589,7 @@ class SupervisorExecutor:
             # to DELEGATE so the user sees at least one agent response.
             if action.action in (ActionType.DONE, ActionType.SYNTHESIZE):
                 has_any_delegation = any(
-                    e.action.action == ActionType.DELEGATE
-                    for e in trajectory.entries
+                    e.action.action == ActionType.DELEGATE for e in trajectory.entries
                 )
                 if not has_any_delegation:
                     healthy_agents = [a for a in agent_registry if a.is_healthy]
@@ -580,9 +602,7 @@ class SupervisorExecutor:
                                 "trajectory_id": trajectory.trajectory_id,
                                 "step_number": step_number,
                                 "original_reasoning": (
-                                    action.reasoning[:120]
-                                    if action.reasoning
-                                    else ""
+                                    action.reasoning[:120] if action.reasoning else ""
                                 ),
                             },
                         )
@@ -633,12 +653,8 @@ class SupervisorExecutor:
                         extra={
                             "room_id": room_id,
                             "trajectory_id": trajectory.trajectory_id,
-                            "original_targets": [
-                                t.agent_name for t in action.targets
-                            ],
-                            "deduped_targets": [
-                                t.agent_name for t in deduped
-                            ],
+                            "original_targets": [t.agent_name for t in action.targets],
+                            "deduped_targets": [t.agent_name for t in deduped],
                         },
                     )
                     action = SupervisorAction(
@@ -652,7 +668,8 @@ class SupervisorExecutor:
             # --- Guard: CLARIFY cap — only one round per user message ---
             if action.action == ActionType.CLARIFY:
                 prior_clarifies = sum(
-                    1 for e in trajectory.entries
+                    1
+                    for e in trajectory.entries
                     if e.action.action == ActionType.CLARIFY
                 )
                 if prior_clarifies >= 1:
@@ -680,7 +697,9 @@ class SupervisorExecutor:
                             a.agent_id for a in agent_registry if a.is_healthy
                         }
                         target_agent = self._pick_best_fallback_agent(
-                            trajectory, agent_registry, healthy_ids,
+                            trajectory,
+                            agent_registry,
+                            healthy_ids,
                         )
                         if target_agent:
                             action = SupervisorAction(
@@ -709,7 +728,6 @@ class SupervisorExecutor:
 
             # --- Execute the action ---
             match action.action:
-
                 case ActionType.DELEGATE:
                     entry = TrajectoryEntry(
                         step_number=step_number + 1,
@@ -723,7 +741,8 @@ class SupervisorExecutor:
                     # decide_next (which would create duplicate dispatches).
                     trajectory.entries.append(entry)
                     _checkpoint_msg = await self._checkpoint_trajectory(
-                        user_message_id, trajectory,
+                        user_message_id,
+                        trajectory,
                         cached_user_message=_checkpoint_msg,
                     )
 
@@ -742,7 +761,10 @@ class SupervisorExecutor:
                                 ],
                             )
                         except Exception:
-                            logger.debug("SSE stage notification failed (delegating)", exc_info=True)
+                            logger.debug(
+                                "SSE stage notification failed (delegating)",
+                                exc_info=True,
+                            )
 
                     results = await self._dispatch_targets(
                         targets=action.targets,
@@ -794,13 +816,15 @@ class SupervisorExecutor:
                         if not saved:
                             trajectory.status = TrajectoryStatus.FAILED
                             return await self._log_and_return(
-                                room_id, trajectory,
+                                room_id,
+                                trajectory,
                                 SupervisorRunResult(
                                     status=RunStatus.FAILED, trajectory=trajectory
                                 ),
                             )
                         return await self._log_and_return(
-                            room_id, trajectory,
+                            room_id,
+                            trajectory,
                             SupervisorRunResult(
                                 status=RunStatus.PAUSED, trajectory=trajectory
                             ),
@@ -808,8 +832,7 @@ class SupervisorExecutor:
 
                     # Check for AWAITING_INPUT (agent returned input_required)
                     awaiting = [
-                        r for r in results
-                        if r.status == StepStatus.AWAITING_INPUT
+                        r for r in results if r.status == StepStatus.AWAITING_INPUT
                     ]
                     if awaiting:
                         # Mark non-first awaiting agents as FAILED so the
@@ -855,7 +878,8 @@ class SupervisorExecutor:
                             entry.results = results
                             trajectory.status = TrajectoryStatus.FAILED
                             return await self._log_and_return(
-                                room_id, trajectory,
+                                room_id,
+                                trajectory,
                                 SupervisorRunResult(
                                     status=RunStatus.FAILED, trajectory=trajectory
                                 ),
@@ -873,14 +897,13 @@ class SupervisorExecutor:
                             conversation_context=conversation_context,
                             request_user_id=request_user_id,
                             quoted_text=quoted_text,
-                            hitl_request_id=(
-                                request.request_id if request else None
-                            ),
+                            hitl_request_id=(request.request_id if request else None),
                         )
                         if not saved:
                             trajectory.status = TrajectoryStatus.FAILED
                             return await self._log_and_return(
-                                room_id, trajectory,
+                                room_id,
+                                trajectory,
                                 SupervisorRunResult(
                                     status=RunStatus.FAILED, trajectory=trajectory
                                 ),
@@ -893,7 +916,8 @@ class SupervisorExecutor:
                             lifecycle_message_id=user_message_id,
                         )
                         return await self._log_and_return(
-                            room_id, trajectory,
+                            room_id,
+                            trajectory,
                             SupervisorRunResult(
                                 status=RunStatus.AWAITING_INPUT,
                                 trajectory=trajectory,
@@ -905,7 +929,8 @@ class SupervisorExecutor:
 
                     # Post-dispatch checkpoint: persist completed results.
                     _checkpoint_msg = await self._checkpoint_trajectory(
-                        user_message_id, trajectory,
+                        user_message_id,
+                        trajectory,
                         cached_user_message=_checkpoint_msg,
                     )
 
@@ -920,7 +945,10 @@ class SupervisorExecutor:
                                 details="Evaluating agent results...",
                             )
                         except Exception:
-                            logger.debug("SSE stage notification failed (evaluating)", exc_info=True)
+                            logger.debug(
+                                "SSE stage notification failed (evaluating)",
+                                exc_info=True,
+                            )
 
                 case ActionType.SYNTHESIZE:
                     entry = TrajectoryEntry(
@@ -943,7 +971,8 @@ class SupervisorExecutor:
                         trajectory.entries.append(entry)
                         trajectory.status = TrajectoryStatus.COMPLETED
                         return await self._log_and_return(
-                            room_id, trajectory,
+                            room_id,
+                            trajectory,
                             SupervisorRunResult(
                                 status=RunStatus.COMPLETED, trajectory=trajectory
                             ),
@@ -968,7 +997,10 @@ class SupervisorExecutor:
                                 },
                             )
                         except Exception:
-                            logger.debug("SSE stage notification failed (synthesizing)", exc_info=True)
+                            logger.debug(
+                                "SSE stage notification failed (synthesizing)",
+                                exc_info=True,
+                            )
                         try:
                             if trajectory.system_agent_message_id:
                                 await self.sse_manager.send_task_update(
@@ -978,7 +1010,9 @@ class SupervisorExecutor:
                                     client_request_id=client_req_id,
                                 )
                         except Exception:
-                            logger.debug("SSE summary working card update failed", exc_info=True)
+                            logger.debug(
+                                "SSE summary working card update failed", exc_info=True
+                            )
 
                     synth_coro = self._stream_supervisor_synthesis(
                         room_id=room_id,
@@ -989,13 +1023,13 @@ class SupervisorExecutor:
                     )
                     try:
                         synthesis = (
-                            await token.race(synth_coro) if token
-                            else await synth_coro
+                            await token.race(synth_coro) if token else await synth_coro
                         )
                     except CancellationError:
                         trajectory.status = TrajectoryStatus.CANCELED
                         return await self._log_and_return(
-                            room_id, trajectory,
+                            room_id,
+                            trajectory,
                             SupervisorRunResult(
                                 status=RunStatus.CANCELED, trajectory=trajectory
                             ),
@@ -1003,13 +1037,17 @@ class SupervisorExecutor:
 
                     if trajectory.system_agent_message_id:
                         try:
-                            db_msg = await self._store.get_room_agent_message_by_message_id(trajectory.system_agent_message_id)
+                            db_msg = (
+                                await self._store.get_room_agent_message_by_message_id(
+                                    trajectory.system_agent_message_id
+                                )
+                            )
                             if db_msg and db_msg.message_content:
                                 db_msg.message_content.message_text = synthesis
                                 await self._store.update_room_agent_message_with_new_message_content_by_message_id(
                                     db_msg.message_id, db_msg.message_content
                                 )
-                            
+
                             await self.sse_manager.send_agent_response(
                                 room_id=room_id,
                                 message_id=trajectory.system_agent_message_id,
@@ -1019,12 +1057,16 @@ class SupervisorExecutor:
                                 client_request_id=client_req_id,
                             )
                         except Exception:
-                            logger.warning("Failed to emit agent_response for supervisor synthesis", exc_info=True)
+                            logger.warning(
+                                "Failed to emit agent_response for supervisor synthesis",
+                                exc_info=True,
+                            )
                     entry.completed_at = utcnow()
                     trajectory.entries.append(entry)
                     trajectory.status = TrajectoryStatus.COMPLETED
                     return await self._log_and_return(
-                        room_id, trajectory,
+                        room_id,
+                        trajectory,
                         SupervisorRunResult(
                             status=RunStatus.COMPLETED,
                             trajectory=trajectory,
@@ -1044,6 +1086,7 @@ class SupervisorExecutor:
 
                     from models.hitl import HITLPromptType
                     from models.supervisor import ClarifyQuestion
+
                     if self.hitl_coordinator is None:
                         raise RuntimeError("HITL coordinator has not been bound")
 
@@ -1054,14 +1097,16 @@ class SupervisorExecutor:
                         questions = action.questions
                     else:
                         legacy_pt = action.prompt_type
-                        questions = [ClarifyQuestion(
-                            prompt=(
-                                action.clarification_question
-                                or "The supervisor needs your input."
-                            ),
-                            prompt_type=legacy_pt,
-                            choices=action.choices,
-                        )]
+                        questions = [
+                            ClarifyQuestion(
+                                prompt=(
+                                    action.clarification_question
+                                    or "The supervisor needs your input."
+                                ),
+                                prompt_type=legacy_pt,
+                                choices=action.choices,
+                            )
+                        ]
 
                     group_id = uuid4().hex if len(questions) > 1 else None
                     last_request = None
@@ -1077,12 +1122,21 @@ class SupervisorExecutor:
                             try:
                                 await self.hitl_coordinator.cancel_request(rid, room_id)
                             except Exception:
-                                logger.warning("Failed to cancel orphaned HITL request %s", rid)
+                                logger.warning(
+                                    "Failed to cancel orphaned HITL request %s", rid
+                                )
                         for mid in message_ids:
                             try:
-                                await self._store.delete_room_agent_message_by_message_id(mid)
+                                await (
+                                    self._store.delete_room_agent_message_by_message_id(
+                                        mid
+                                    )
+                                )
                             except Exception:
-                                logger.warning("Failed to delete orphaned HITL agent message %s", mid)
+                                logger.warning(
+                                    "Failed to delete orphaned HITL agent message %s",
+                                    mid,
+                                )
 
                     for qi, q in enumerate(questions):
                         q_prompt_type = HITLPromptType.TEXT
@@ -1104,9 +1158,7 @@ class SupervisorExecutor:
                                 user_message_id
                             ),
                         )
-                        await self._store.add_room_agent_message(
-                            hitl_agent_message
-                        )
+                        await self._store.add_room_agent_message(hitl_agent_message)
                         created_messages.append(hitl_agent_message.message_id)
 
                         request = await self.hitl_coordinator.request_input(
@@ -1129,12 +1181,15 @@ class SupervisorExecutor:
                         if request is None:
                             logger.warning(
                                 "HITL request_input failed for message %s (q %d/%d) — cleaning up",
-                                user_message_id, qi + 1, len(questions),
+                                user_message_id,
+                                qi + 1,
+                                len(questions),
                             )
                             await _cleanup_clarify_artifacts()
                             trajectory.status = TrajectoryStatus.FAILED
                             return await self._log_and_return(
-                                room_id, trajectory,
+                                room_id,
+                                trajectory,
                                 SupervisorRunResult(
                                     status=RunStatus.FAILED, trajectory=trajectory
                                 ),
@@ -1161,12 +1216,14 @@ class SupervisorExecutor:
                     if not saved:
                         logger.warning(
                             "Failed to save continuation for message %s — cleaning up %d requests",
-                            user_message_id, len(created_request_ids),
+                            user_message_id,
+                            len(created_request_ids),
                         )
                         await _cleanup_clarify_artifacts()
                         trajectory.status = TrajectoryStatus.FAILED
                         return await self._log_and_return(
-                            room_id, trajectory,
+                            room_id,
+                            trajectory,
                             SupervisorRunResult(
                                 status=RunStatus.FAILED, trajectory=trajectory
                             ),
@@ -1179,7 +1236,8 @@ class SupervisorExecutor:
                         lifecycle_message_id=user_message_id,
                     )
                     return await self._log_and_return(
-                        room_id, trajectory,
+                        room_id,
+                        trajectory,
                         SupervisorRunResult(
                             status=RunStatus.AWAITING_INPUT,
                             trajectory=trajectory,
@@ -1197,7 +1255,8 @@ class SupervisorExecutor:
                     trajectory.entries.append(entry)
                     trajectory.status = TrajectoryStatus.COMPLETED
                     return await self._log_and_return(
-                        room_id, trajectory,
+                        room_id,
+                        trajectory,
                         SupervisorRunResult(
                             status=RunStatus.COMPLETED, trajectory=trajectory
                         ),
@@ -1224,10 +1283,9 @@ class SupervisorExecutor:
             if not has_completed_results:
                 trajectory.status = TrajectoryStatus.FAILED
                 return await self._log_and_return(
-                    room_id, trajectory,
-                    SupervisorRunResult(
-                        status=RunStatus.FAILED, trajectory=trajectory
-                    ),
+                    room_id,
+                    trajectory,
+                    SupervisorRunResult(status=RunStatus.FAILED, trajectory=trajectory),
                 )
             budget_client_req_id = (
                 await self._store.resolve_client_request_id_for_message_id(
@@ -1248,7 +1306,10 @@ class SupervisorExecutor:
                         },
                     )
                 except Exception:
-                    logger.debug("SSE stage notification failed (budget synthesis)", exc_info=True)
+                    logger.debug(
+                        "SSE stage notification failed (budget synthesis)",
+                        exc_info=True,
+                    )
                 try:
                     summary_message_id = f"summary-{user_message_id}"
                     await self.sse_manager.send_task_submitted(
@@ -1264,7 +1325,9 @@ class SupervisorExecutor:
                         client_request_id=budget_client_req_id,
                     )
                 except Exception:
-                    logger.debug("SSE summary working card failed (budget)", exc_info=True)
+                    logger.debug(
+                        "SSE summary working card failed (budget)", exc_info=True
+                    )
 
             budget_synth_coro = self._stream_supervisor_synthesis(
                 room_id=room_id,
@@ -1275,20 +1338,23 @@ class SupervisorExecutor:
             )
             try:
                 synthesis = (
-                    await token.race(budget_synth_coro) if token
+                    await token.race(budget_synth_coro)
+                    if token
                     else await budget_synth_coro
                 )
             except CancellationError:
                 trajectory.status = TrajectoryStatus.CANCELED
                 return await self._log_and_return(
-                    room_id, trajectory,
+                    room_id,
+                    trajectory,
                     SupervisorRunResult(
                         status=RunStatus.CANCELED, trajectory=trajectory
                     ),
                 )
             trajectory.status = TrajectoryStatus.COMPLETED
             return await self._log_and_return(
-                room_id, trajectory,
+                room_id,
+                trajectory,
                 SupervisorRunResult(
                     status=RunStatus.COMPLETED,
                     trajectory=trajectory,
@@ -1298,10 +1364,9 @@ class SupervisorExecutor:
 
         trajectory.status = TrajectoryStatus.FAILED
         return await self._log_and_return(
-            room_id, trajectory,
-            SupervisorRunResult(
-                status=RunStatus.FAILED, trajectory=trajectory
-            ),
+            room_id,
+            trajectory,
+            SupervisorRunResult(status=RunStatus.FAILED, trajectory=trajectory),
         )
 
     # ------------------------------------------------------------------
@@ -1347,7 +1412,7 @@ class SupervisorExecutor:
                 )
                 if not agent:
                     # --- Emit failed slot (Phase 1b) ---
-                    if getattr(self, '_slot_lifecycle', None) and user_message_id:
+                    if getattr(self, "_slot_lifecycle", None) and user_message_id:
                         try:
                             failed_slot_id = f"sup-{target.agent_id}-{step_number}"
                             await self._slot_lifecycle.open_slot(
@@ -1422,7 +1487,7 @@ class SupervisorExecutor:
                 await self._store.add_room_agent_message(message)
 
                 # --- Emit slot_opened (Phase 1b) ---
-                if getattr(self, '_slot_lifecycle', None) and message.turn_id:
+                if getattr(self, "_slot_lifecycle", None) and message.turn_id:
                     try:
                         await self._slot_lifecycle.open_slot(
                             room_id=room_id,
@@ -1509,9 +1574,7 @@ class SupervisorExecutor:
                     success=is_success,
                     status=StepStatus.SUCCESS if is_success else StepStatus.FAILED,
                     error_message=(
-                        "Agent processing failed"
-                        if not is_success
-                        else None
+                        "Agent processing failed" if not is_success else None
                     ),
                     agent_message_id=message.message_id,
                 )
@@ -1533,9 +1596,7 @@ class SupervisorExecutor:
                 return step_result
 
             except asyncio.CancelledError:
-                logger.warning(
-                    "dispatch_one cancelled for agent %s", target.agent_id
-                )
+                logger.warning("dispatch_one cancelled for agent %s", target.agent_id)
                 raise
             except Exception as e:
                 logger.exception(
@@ -1579,31 +1640,29 @@ class SupervisorExecutor:
                         return [work.result()]
                     except Exception:
                         pass
-                return [StepResult(
-                    step_number=step_number,
-                    agent_id=targets[0].agent_id,
-                    agent_name=targets[0].agent_name,
-                    task=targets[0].task,
-                    response_text="",
-                    success=False,
-                    status=StepStatus.FAILED,
-                    error_message="Agent dispatch was cancelled",
-                )]
+                return [
+                    StepResult(
+                        step_number=step_number,
+                        agent_id=targets[0].agent_id,
+                        agent_name=targets[0].agent_name,
+                        task=targets[0].task,
+                        response_text="",
+                        success=False,
+                        status=StepStatus.FAILED,
+                        error_message="Agent dispatch was cancelled",
+                    )
+                ]
             return [await dispatch_one(targets[0])]
 
         if not token:
-            return list(
-                await asyncio.gather(*(dispatch_one(t) for t in targets))
-            )
+            return list(await asyncio.gather(*(dispatch_one(t) for t in targets)))
 
         # Manage individual tasks so that when cancellation fires we
         # can still collect results (with agent_message_id) from tasks
         # that already completed -- needed for cancel_descendants cleanup.
         tasks = [asyncio.ensure_future(dispatch_one(t)) for t in targets]
         cancel_waiter = token.wait()
-        all_work = asyncio.ensure_future(
-            asyncio.gather(*tasks, return_exceptions=True)
-        )
+        all_work = asyncio.ensure_future(asyncio.gather(*tasks, return_exceptions=True))
 
         try:
             done, _pending = await asyncio.wait(
@@ -1620,7 +1679,9 @@ class SupervisorExecutor:
             # All tasks completed normally.
             raw_results = all_work.result()
             return [
-                r if isinstance(r, StepResult) else StepResult(
+                r
+                if isinstance(r, StepResult)
+                else StepResult(
                     step_number=step_number,
                     agent_id=targets[i].agent_id,
                     agent_name=targets[i].agent_name,
@@ -1655,16 +1716,18 @@ class SupervisorExecutor:
                 task.cancel()
         for t in targets:
             if t.agent_id not in completed_ids:
-                results.append(StepResult(
-                    step_number=step_number,
-                    agent_id=t.agent_id,
-                    agent_name=t.agent_name,
-                    task=t.task,
-                    response_text="",
-                    success=False,
-                    status=StepStatus.FAILED,
-                    error_message="Agent dispatch was cancelled",
-                ))
+                results.append(
+                    StepResult(
+                        step_number=step_number,
+                        agent_id=t.agent_id,
+                        agent_name=t.agent_name,
+                        task=t.task,
+                        response_text="",
+                        success=False,
+                        status=StepStatus.FAILED,
+                        error_message="Agent dispatch was cancelled",
+                    )
+                )
         return results
 
     # ------------------------------------------------------------------
@@ -1706,9 +1769,7 @@ class SupervisorExecutor:
         if succeeded_id:
             return healthy_map[succeeded_id]
 
-        non_failed = [
-            a for aid, a in healthy_map.items() if aid not in failed_ids
-        ]
+        non_failed = [a for aid, a in healthy_map.items() if aid not in failed_ids]
         if non_failed:
             return non_failed[0]
 
@@ -1738,29 +1799,44 @@ class SupervisorExecutor:
                 "debate_mode": debate_mode,
             },
         )
-        
+
         # Phase 1: Emit terminal state for system:hybro
         if trajectory.system_agent_message_id and result.status != RunStatus.PAUSED:
             try:
                 # If we're done, or failed, or canceled, or awaiting input (HITL)
-                task_status = "completed" if result.status == RunStatus.COMPLETED else result.status.value
+                task_status = (
+                    "completed"
+                    if result.status == RunStatus.COMPLETED
+                    else result.status.value
+                )
                 await self.sse_manager.send_task_update(
                     room_id=room_id,
                     message_id=trajectory.system_agent_message_id,
                     status=task_status,
                 )
-                
+
                 # Update DB record
-                db_msg = await self._store.get_room_agent_message_by_message_id(trajectory.system_agent_message_id)
-                if db_msg and db_msg.message_content and db_msg.message_content.message_task:
+                db_msg = await self._store.get_room_agent_message_by_message_id(
+                    trajectory.system_agent_message_id
+                )
+                if (
+                    db_msg
+                    and db_msg.message_content
+                    and db_msg.message_content.message_task
+                ):
                     from common.types import TaskState
-                    db_msg.message_content.message_task.status.state = TaskState(task_status)
+
+                    db_msg.message_content.message_task.status.state = TaskState(
+                        task_status
+                    )
                     await self._store.update_room_agent_message_with_new_message_content_by_message_id(
                         db_msg.message_id, db_msg.message_content
                     )
             except Exception:
-                logger.warning("Failed to update terminal state for system:hybro", exc_info=True)
-                
+                logger.warning(
+                    "Failed to update terminal state for system:hybro", exc_info=True
+                )
+
         return result
 
     # ------------------------------------------------------------------
@@ -1786,10 +1862,8 @@ class SupervisorExecutor:
         try:
             user_message = cached_user_message
             if user_message is None:
-                user_message = (
-                    await self._store.get_room_user_message_by_message_id(
-                        user_message_id
-                    )
+                user_message = await self._store.get_room_user_message_by_message_id(
+                    user_message_id
                 )
             if user_message:
                 if not isinstance(user_message.extend_info, dict):
@@ -1859,15 +1933,16 @@ class SupervisorExecutor:
                             task=result.task,
                             response_text=response_text,
                             success=is_success,
-                            status=StepStatus.SUCCESS if is_success else StepStatus.FAILED,
+                            status=StepStatus.SUCCESS
+                            if is_success
+                            else StepStatus.FAILED,
                             error_message=None if is_success else "Agent task failed",
                             agent_message_id=msg_id,
                             completed_at=utcnow(),
                         )
                         if entry.completed_at is None:
                             still_paused = any(
-                                r.status == StepStatus.PAUSED
-                                for r in entry.results
+                                r.status == StepStatus.PAUSED for r in entry.results
                             )
                             if not still_paused:
                                 entry.completed_at = utcnow()
@@ -1935,9 +2010,7 @@ class SupervisorExecutor:
             "room_id": room_id,
             "user_message_id": user_message_id,
             "message_text": message_text,
-            "agent_registry": [
-                p.model_dump(mode="json") for p in agent_registry
-            ],
+            "agent_registry": [p.model_dump(mode="json") for p in agent_registry],
             "room_config": room_config.model_dump(mode="json"),
             "conversation_context": conversation_context,
             "request_user_id": request_user_id,
@@ -1983,9 +2056,7 @@ class SupervisorExecutor:
         # HITL_AGENT: save on the agent message
         if kind == InterruptKind.HITL_AGENT:
             if not message_id:
-                logger.error(
-                    "SupervisorExecutor: HITL_AGENT save missing message_id"
-                )
+                logger.error("SupervisorExecutor: HITL_AGENT save missing message_id")
                 return False
             success = await self._store.save_continuation_on_message(
                 message_id, interrupted_state
@@ -2038,9 +2109,7 @@ class SupervisorExecutor:
                 )
             return success
 
-        logger.error(
-            "SupervisorExecutor: Unknown interrupt kind %s", kind
-        )
+        logger.error("SupervisorExecutor: Unknown interrupt kind %s", kind)
         return False
 
     @staticmethod
@@ -2107,6 +2176,7 @@ class SupervisorExecutor:
         agent needs to be re-dispatched.
         """
         from collections import Counter
+
         dispatch_counts: Counter[str] = Counter()
         for entry in trajectory.entries:
             if entry.action.action == ActionType.DELEGATE and entry.results:
@@ -2131,6 +2201,10 @@ class SupervisorExecutor:
             if entry.action.action != ActionType.DELEGATE:
                 continue
             for result in entry.results:
-                if result.success and result.status == StepStatus.SUCCESS and result.response_text:
+                if (
+                    result.success
+                    and result.status == StepStatus.SUCCESS
+                    and result.response_text
+                ):
                     responses.append((result.agent_name, result.response_text))
         return responses

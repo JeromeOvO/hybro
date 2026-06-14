@@ -30,12 +30,11 @@ from models.processing import ProcessingResult, ProcessingStatus
 from models.room import CoordinatorAgentId, RoomAgentMessage
 
 if TYPE_CHECKING:
-    from app_shell.rate_limit_service import RateLimitService
-
     from app_shell.a2a_runtime import A2AService
     from app_shell.debate_service import DebateService
     from app_shell.delivery_runtime import SSEManager
     from app_shell.memory_service import RoomMemoryService
+    from app_shell.rate_limit_service import RateLimitService
     from app_shell.room_runtime import RoomServices
     from execution.dispatch.response_handler import AgentResponseHandler
 
@@ -236,13 +235,18 @@ class QueueExecutor:
         )
 
         sys_message_id = f"sys-{user_message_id}"
-        client_req_id = await self._store.resolve_client_request_id_for_message_id(user_message_id)
+        client_req_id = await self._store.resolve_client_request_id_for_message_id(
+            user_message_id
+        )
 
         try:
             # Phase 1/3: Emit system:hybro task on start if not already emitted
-            existing_sys_msg = await self._store.get_room_agent_message_by_message_id(sys_message_id)
+            existing_sys_msg = await self._store.get_room_agent_message_by_message_id(
+                sys_message_id
+            )
             if not existing_sys_msg:
                 from common.utils.time import utcnow
+
                 sys_msg = self.room_runtime.create_agent_message(
                     room_id=room_id,
                     related_message_id=user_message_id,
@@ -302,15 +306,13 @@ class QueueExecutor:
                     break
 
                 # --- Agent resolution ---
-                agent = await self._resolve_agent_for_message(
-                    current_message, room_id
-                )
+                agent = await self._resolve_agent_for_message(current_message, room_id)
                 if agent is None:
                     queue_result = QueueResult.FAILED
                     break
 
                 # --- Emit slot_opened turn event (Phase 1b) ---
-                if getattr(self, '_slot_lifecycle', None) and current_message.turn_id:
+                if getattr(self, "_slot_lifecycle", None) and current_message.turn_id:
                     try:
                         await self._slot_lifecycle.open_slot(
                             room_id=room_id,
@@ -318,7 +320,9 @@ class QueueExecutor:
                             slot_id=current_message.message_id,
                             slot_type="agent",
                             agent_id=agent.agent_id,
-                            agent_name=getattr(agent.agent_card, 'name', None) if hasattr(agent, 'agent_card') and agent.agent_card else None,
+                            agent_name=getattr(agent.agent_card, "name", None)
+                            if hasattr(agent, "agent_card") and agent.agent_card
+                            else None,
                         )
                     except Exception:
                         logger.warning(
@@ -330,7 +334,11 @@ class QueueExecutor:
                 # --- Rate limit check ---
                 if request_user_id:
                     rate_limited = await self._check_rate_limit(
-                        current_message, agent, room_id, user_message_id, request_user_id
+                        current_message,
+                        agent,
+                        room_id,
+                        user_message_id,
+                        request_user_id,
                     )
                     if rate_limited:
                         queue_result = QueueResult.CANCELED
@@ -390,9 +398,7 @@ class QueueExecutor:
                                 or "The agent needs additional information."
                             ),
                             agent_id=current_message.agent_id,
-                            agent_name=(
-                                agent.agent_card.name if agent else None
-                            ),
+                            agent_name=(agent.agent_card.name if agent else None),
                             a2a_task_id=result.a2a_task_id,
                             a2a_context_id=result.a2a_context_id,
                             continuation_message_id=result.message_id,
@@ -479,28 +485,42 @@ class QueueExecutor:
         # Phase 3: Emit terminal state for system:hybro
         if queue_result != QueueResult.PAUSED:
             try:
-                task_status = "completed" if queue_result == QueueResult.COMPLETED else queue_result.value
+                task_status = (
+                    "completed"
+                    if queue_result == QueueResult.COMPLETED
+                    else queue_result.value
+                )
                 await self.sse_manager.send_task_update(
                     room_id=room_id,
                     message_id=sys_message_id,
                     status=task_status,
                 )
-                
-                db_msg = await self._store.get_room_agent_message_by_message_id(sys_message_id)
-                if db_msg and db_msg.message_content and db_msg.message_content.message_task:
+
+                db_msg = await self._store.get_room_agent_message_by_message_id(
+                    sys_message_id
+                )
+                if (
+                    db_msg
+                    and db_msg.message_content
+                    and db_msg.message_content.message_task
+                ):
                     from common.types import TaskState
-                    db_msg.message_content.message_task.status.state = TaskState(task_status)
+
+                    db_msg.message_content.message_task.status.state = TaskState(
+                        task_status
+                    )
                     await self._store.update_room_agent_message_with_new_message_content_by_message_id(
                         db_msg.message_id, db_msg.message_content
                     )
             except Exception:
-                logger.warning("Failed to update terminal state for system:hybro", exc_info=True)
+                logger.warning(
+                    "Failed to update terminal state for system:hybro", exc_info=True
+                )
 
         if deferred_sse:
             sse_status, clear_cancel = deferred_sse
-            if (
-                sse_status == SSEProcessingStatus.CANCELED
-                and getattr(self, "_turn_event_appender", None)
+            if sse_status == SSEProcessingStatus.CANCELED and getattr(
+                self, "_turn_event_appender", None
             ):
                 try:
                     await self._turn_event_appender.append(
@@ -562,7 +582,8 @@ class QueueExecutor:
                 if intended_agent_id:
                     current_message.agent_id = intended_agent_id
                 await self.tsm.transition_task(
-                    current_message, coerce_task_state("failed"),
+                    current_message,
+                    coerce_task_state("failed"),
                     error=error_text,
                     persist=True,
                 )
@@ -574,7 +595,7 @@ class QueueExecutor:
                     error=error_text,
                 )
                 # --- Emit failed slot (Phase 1b) ---
-                if getattr(self, '_slot_lifecycle', None) and current_message.turn_id:
+                if getattr(self, "_slot_lifecycle", None) and current_message.turn_id:
                     try:
                         await self._slot_lifecycle.open_slot(
                             room_id=room_id,
@@ -593,14 +614,13 @@ class QueueExecutor:
                     except Exception:
                         logger.warning(
                             "QueueExecutor: Failed to emit agent_unavailable slot for %s",
-                            current_message.message_id, exc_info=True,
+                            current_message.message_id,
+                            exc_info=True,
                         )
                 return None
             return agent
 
-        agent = await self._store.get_agent_by_agent_id(
-            current_message.agent_id
-        )
+        agent = await self._store.get_agent_by_agent_id(current_message.agent_id)
         if agent is None:
             logger.error(
                 "QueueExecutor: Assigned agent %s not found for message %s",
@@ -608,7 +628,8 @@ class QueueExecutor:
                 current_message.message_id,
             )
             await self.tsm.transition_task(
-                current_message, coerce_task_state("failed"),
+                current_message,
+                coerce_task_state("failed"),
                 error="The assigned agent could not be found.",
                 persist=True,
             )
@@ -620,7 +641,7 @@ class QueueExecutor:
                 error="The assigned agent could not be found.",
             )
             # --- Emit failed slot (Phase 1b) ---
-            if getattr(self, '_slot_lifecycle', None) and current_message.turn_id:
+            if getattr(self, "_slot_lifecycle", None) and current_message.turn_id:
                 try:
                     await self._slot_lifecycle.open_slot(
                         room_id=room_id,
@@ -639,7 +660,8 @@ class QueueExecutor:
                 except Exception:
                     logger.warning(
                         "QueueExecutor: Failed to emit agent_unavailable slot for %s",
-                        current_message.message_id, exc_info=True,
+                        current_message.message_id,
+                        exc_info=True,
                     )
             return None
 
@@ -652,9 +674,10 @@ class QueueExecutor:
             )
             original_agent_id = current_message.agent_id
             current_message.agent_id = None
-            reassigned, failure_reason = await self.agent_dispatcher.assign_agent_for_queue(
-                current_message
-            )
+            (
+                reassigned,
+                failure_reason,
+            ) = await self.agent_dispatcher.assign_agent_for_queue(current_message)
             if reassigned is None:
                 error_text = (
                     failure_reason
@@ -662,7 +685,8 @@ class QueueExecutor:
                 )
                 current_message.agent_id = original_agent_id
                 await self.tsm.transition_task(
-                    current_message, coerce_task_state("failed"),
+                    current_message,
+                    coerce_task_state("failed"),
                     error=error_text,
                     persist=True,
                 )
@@ -674,7 +698,7 @@ class QueueExecutor:
                     error=error_text,
                 )
                 # --- Emit failed slot (Phase 1b) ---
-                if getattr(self, '_slot_lifecycle', None) and current_message.turn_id:
+                if getattr(self, "_slot_lifecycle", None) and current_message.turn_id:
                     try:
                         await self._slot_lifecycle.open_slot(
                             room_id=room_id,
@@ -693,7 +717,8 @@ class QueueExecutor:
                     except Exception:
                         logger.warning(
                             "QueueExecutor: Failed to emit agent_unavailable slot for %s",
-                            current_message.message_id, exc_info=True,
+                            current_message.message_id,
+                            exc_info=True,
                         )
                 return None
             return reassigned
@@ -821,10 +846,8 @@ class QueueExecutor:
         Returns a ``ResumeResult`` indicating whether the caller should trigger
         post-completion logic (coordinator + COMPLETED SSE status).
         """
-        continuation = (
-            await self._store.get_and_clear_continuation_on_message(
-                message_id
-            )
+        continuation = await self._store.get_and_clear_continuation_on_message(
+            message_id
         )
 
         if not continuation:
@@ -950,10 +973,8 @@ class QueueExecutor:
             current_message.step_number,
             current_message.total_steps,
         )
-        next_messages = (
-            await self._store.get_room_agent_messages_by_related_message_id(
-                current_message.message_id
-            )
+        next_messages = await self._store.get_room_agent_messages_by_related_message_id(
+            current_message.message_id
         )
         logger.info(
             "QueueExecutor: Found %d next messages for message %s",
