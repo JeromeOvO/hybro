@@ -85,7 +85,7 @@ class TestBuildMessageParts:
         card.default_input_modes = ["text"]
         parts = await room_svc._build_message_parts("hello", None, card)
         assert len(parts) == 1
-        assert parts[0].text == "hello"
+        assert parts[0].root.text == "hello"
 
     async def test_file_parts_added_for_capable_agent(self, room_svc):
         card = MagicMock()
@@ -97,8 +97,8 @@ class TestBuildMessageParts:
         )
         parts = await room_svc._build_message_parts("hello", [att], card)
         assert len(parts) == 2
-        assert parts[0].text == "hello"
-        assert hasattr(parts[1], "file")
+        assert parts[0].root.text == "hello"
+        assert parts[1].root.file.name == "photo.png"
 
     async def test_text_only_when_agent_not_file_capable(self, room_svc):
         card = MagicMock()

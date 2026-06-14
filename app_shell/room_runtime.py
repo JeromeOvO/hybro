@@ -7,20 +7,6 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from a2a.types import (
-    FilePart,
-    FileWithUri,
-    Message,
-    Part,
-    Role,
-    Task,
-    TaskArtifactUpdateEvent,
-    TaskState,
-    TaskStatus,
-    TaskStatusUpdateEvent,
-    TextPart,
-)
-
 from app_shell.a2a_runtime import a2a_service
 from app_shell.agent_selection_service import agent_selection_service
 from app_shell.agent_service import agent_service
@@ -36,6 +22,21 @@ from common.dto import (
     MembershipSeed,
     ParsedUserMessageRequest,
     RoomInfo,
+)
+from common.types import (
+    FileContent,
+    FilePart,
+    Message,
+    Part,
+    Task,
+    TaskArtifactUpdateEvent,
+    TaskState,
+    TaskStatus,
+    TaskStatusUpdateEvent,
+    TextPart,
+)
+from common.types import (
+    MessageRole as Role,
 )
 from common.utils.cancellation import CancellationToken
 from common.utils.context_utils import (
@@ -1243,9 +1244,9 @@ class RoomServices:
         text: str,
         attachments: list[UserAttachment] | None,
         agent_card,
-    ) -> list:
+    ) -> list[Part]:
         """Build A2A message parts from text and optional attachments."""
-        parts = [TextPart(text=text)]
+        parts = [Part(root=TextPart(text=text))]
 
         if not attachments:
             return parts
@@ -1268,11 +1269,13 @@ class RoomServices:
             for att in attachments:
                 presigned_url = await self.s3_service.generate_presigned_url(att.s3_key)
                 parts.append(
-                    FilePart(
-                        file=FileWithUri(
-                            uri=presigned_url,
-                            mime_type=att.mime_type,
-                            name=att.file_name,
+                    Part(
+                        root=FilePart(
+                            file=FileContent(
+                                uri=presigned_url,
+                                mimeType=att.mime_type,
+                                name=att.file_name,
+                            )
                         )
                     )
                 )
@@ -1545,8 +1548,8 @@ class RoomServices:
         # Create Message
         message = Message(
             message_id=user_message.message_id,
-            role=Role.user,
-            parts=[TextPart(text=agent_relevant_text)],  # Use filtered content
+            role=Role.USER,
+            parts=[Part(root=TextPart(text=agent_relevant_text))],
             context_id=user_message.room_id,
             metadata={},
         )
@@ -1589,8 +1592,8 @@ class RoomServices:
             # Create Message with shared content
             message = Message(
                 message_id=f"{user_message.message_id}_{agent_id}",  # Unique ID per agent
-                role=Role.user,
-                parts=[TextPart(text=shared_content)],
+                role=Role.USER,
+                parts=[Part(root=TextPart(text=shared_content))],
                 context_id=user_message.room_id,
                 metadata={},
             )
@@ -1618,8 +1621,8 @@ class RoomServices:
         """
         a2a_message = Message(
             message_id=str(uuid4()),
-            role=Role.user,
-            parts=[TextPart(text=content)],
+            role=Role.USER,
+            parts=[Part(root=TextPart(text=content))],
             context_id=str(uuid4()),
             metadata={},
         )
@@ -3676,8 +3679,8 @@ class RoomServices:
                         "", user_attachments, agent_card_obj
                     )
                     for p in file_parts:
-                        if not isinstance(p, TextPart):
-                            agent_message.parts.append(Part(root=p))
+                        if not isinstance(p.root, TextPart):
+                            agent_message.parts.append(p)
         except Exception as e:
             logger.warning("Failed to append attachment parts to agent message: %s", e)
 
@@ -3884,8 +3887,8 @@ class RoomServices:
                     state=TaskState.failed,
                     message=Message(
                         message_id=uuid4().hex,
-                        role=Role.agent,
-                        parts=[TextPart(text=error_text)],
+                        role=Role.AGENT,
+                        parts=[Part(root=TextPart(text=error_text))],
                     ),
                 )
             msg.task_updated_at = utcnow()
@@ -4117,7 +4120,7 @@ class RoomServices:
                         if not agent_content and task.history:
                             # Find the latest message with role "agent"
                             agent_messages = [
-                                msg for msg in task.history if msg.role == Role.agent
+                                msg for msg in task.history if msg.role == Role.AGENT
                             ]
 
                             if agent_messages:
@@ -4213,8 +4216,9 @@ class RoomServices:
             return False
 
         if message_data.kind == "task":
-            from a2a_adapter.message_factory import from_sdk_task as _from_sdk_task
-            room_agent_message.message_content.message_task = _from_sdk_task(message_data)
+            room_agent_message.message_content.message_task = Task.model_validate(
+                message_data
+            )
             update_response = await self.update_agent_message_by_message_id(
                 RoomCenterAgentMessageRequest(
                     message_id=room_agent_message.message_id,

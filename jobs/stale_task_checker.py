@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from a2a_adapter.task_requests import build_get_task_request, extract_get_task_result
+from a2a_adapter.remote_task import fetch_remote_task
 from a2a_adapter.task_status import build_failed_text_task
 from common.a2a_constants import (
     INTERACTIVE_STATES,
@@ -528,9 +528,7 @@ class StaleTaskChecker:
     async def _get_task_from_agent(self, agent_card, task_id: str) -> Any | None:
         """Get task status from agent."""
         try:
-            async with self._a2a_service.create_a2a_client(agent_card) as a2a_client:
-                response = await a2a_client.get_task(build_get_task_request(task_id))
-                return extract_get_task_result(response)
+            return await fetch_remote_task(agent_card, task_id)
         except Exception as e:
             logger.error(f"Failed to get task from agent: {e}")
             return None

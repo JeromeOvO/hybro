@@ -3,29 +3,27 @@ Unit tests for DirectTransport module.
 
 Tests cover:
 - _parse_sync_fallback_response: None input, message kind, task kind,
-  JSONRPCErrorResponse, and default fallback
+  normalized error, and default fallback
 """
 
-from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from a2a.types import (
-    JSONRPCError,
-    JSONRPCErrorResponse,
-)
 
 from common.a2a_constants import CommonTaskState
 from common.types import (
     Message,
     MessageRole,
     Task,
+    TaskArtifactUpdateEvent,
     TaskState,
     TaskStatus,
+    TaskStatusUpdateEvent,
     TextPart,
 )
 from common.utils.a2a_helpers import get_text_from_message
 from execution.dispatch.dispatch_middleware import DispatchContext
+from execution.dispatch.transports import direct as direct_module
 from execution.dispatch.transports.direct import DirectTransport, MessageStreamingState
 from models.error import A2AServiceError
 from models.processing import ProcessingContext, ProcessingStatus
@@ -64,40 +62,32 @@ class TestParseSyncFallbackResponse:
         assert result == {"type": "message", "message_id": "msg-1", "content": ""}
 
     def test_parses_message_kind(self):
-        part = MagicMock()
-        part.text = "Hello"
-        del part.root
-
-        inner_result = MagicMock()
-        inner_result.kind = "message"
-        inner_result.parts = [part]
-
-        root = MagicMock()
-        root.result = inner_result
-
-        response = MagicMock()
-        response.root = root
-
-        assert not isinstance(response.root, JSONRPCErrorResponse)
+        response = {
+            "kind": "message",
+            "result": {
+                "kind": "message",
+                "role": "agent",
+                "messageId": "agent-msg-1",
+                "parts": [{"kind": "text", "text": "Hello"}],
+            },
+            "error": None,
+        }
 
         result = DirectTransport._parse_sync_fallback_response(response, "msg-1")
         assert result["type"] == "message"
         assert result["content"] == "Hello"
 
     def test_parses_task_kind(self):
-        inner_result = MagicMock()
-        inner_result.kind = "task"
-        inner_result.id = "task-001"
-        inner_result.status = MagicMock()
-        inner_result.status.state = TaskState.completed
-
-        root = MagicMock()
-        root.result = inner_result
-
-        response = MagicMock()
-        response.root = root
-
-        assert not isinstance(response.root, JSONRPCErrorResponse)
+        response = {
+            "kind": "task",
+            "result": {
+                "kind": "task",
+                "id": "task-001",
+                "status": {"state": "completed"},
+                "artifacts": [],
+            },
+            "error": None,
+        }
 
         result = DirectTransport._parse_sync_fallback_response(response, "msg-1")
         assert result["type"] == "task"
@@ -105,17 +95,16 @@ class TestParseSyncFallbackResponse:
         assert result["status"] == "completed"
 
     def test_parses_interactive_task_with_requires_flags(self):
-        inner_result = MagicMock()
-        inner_result.kind = "task"
-        inner_result.id = "task-001"
-        inner_result.status = MagicMock()
-        inner_result.status.state = TaskState.auth_required
-
-        root = MagicMock()
-        root.result = inner_result
-
-        response = MagicMock()
-        response.root = root
+        response = {
+            "kind": "task",
+            "result": {
+                "kind": "task",
+                "id": "task-001",
+                "status": {"state": "auth-required"},
+                "artifacts": [],
+            },
+            "error": None,
+        }
 
         result = DirectTransport._parse_sync_fallback_response(response, "msg-1")
 
@@ -124,55 +113,110 @@ class TestParseSyncFallbackResponse:
         assert result["requires_auth"] is True
         assert result["requires_input"] is False
 
-    def test_raises_on_jsonrpc_error(self):
-        error_response = JSONRPCErrorResponse(
-            id="req-1",
-            error=JSONRPCError(code=-32000, message="Agent offline"),
-        )
-
-        response = MagicMock()
-        response.root = error_response
+    def test_raises_on_normalized_error(self):
+        response = {
+            "kind": "error",
+            "result": None,
+            "error": {"code": -32000, "message": "Agent offline"},
+        }
 
         with pytest.raises(A2AServiceError):
             DirectTransport._parse_sync_fallback_response(response, "msg-1")
 
     def test_unknown_kind_returns_empty(self):
-        inner_result = MagicMock()
-        inner_result.kind = "unknown"
+        response = {"kind": "unknown", "result": {"kind": "unknown"}, "error": None}
 
-        root = MagicMock()
-        root.result = inner_result
-
-        response = MagicMock()
-        response.root = root
-
-        assert not isinstance(response.root, JSONRPCErrorResponse)
-
-        result = DirectTransport._parse_sync_fallback_response(response, "msg-1")
-        assert result == {"type": "message", "message_id": "msg-1", "content": ""}
+        with pytest.raises(A2AServiceError):
+            DirectTransport._parse_sync_fallback_response(response, "msg-1")
 
     def test_concatenates_multiple_text_parts(self):
-        p1 = MagicMock()
-        p1.text = "Hello "
-        del p1.root
-        p2 = MagicMock()
-        p2.text = "world"
-        del p2.root
-
-        inner_result = MagicMock()
-        inner_result.kind = "message"
-        inner_result.parts = [p1, p2]
-
-        root = MagicMock()
-        root.result = inner_result
-
-        response = MagicMock()
-        response.root = root
-
-        assert not isinstance(response.root, JSONRPCErrorResponse)
+        response = {
+            "kind": "message",
+            "result": {
+                "kind": "message",
+                "role": "agent",
+                "messageId": "agent-msg-1",
+                "parts": [
+                    {"kind": "text", "text": "Hello "},
+                    {"kind": "text", "text": "world"},
+                ],
+            },
+            "error": None,
+        }
 
         result = DirectTransport._parse_sync_fallback_response(response, "msg-1")
         assert result["content"] == "Hello world"
+
+    def test_rejects_sdk_envelope_shape(self):
+        response = MagicMock()
+        response.root = MagicMock()
+
+        with pytest.raises(A2AServiceError, match="normalized dict"):
+            DirectTransport._parse_sync_fallback_response(response, "msg-1")
+
+    def test_stream_error_message_ignores_sdk_envelope_shape(self):
+        response = MagicMock()
+        response.root.error.message = "Agent offline"
+
+        assert DirectTransport._stream_error_message(response) is None
+        assert (
+            DirectTransport._stream_error_message(
+                {"kind": "error", "error": {"message": "Agent offline"}}
+            )
+            == "{'message': 'Agent offline'}"
+        )
+
+    def test_coerce_parts_preserves_snake_case_file_mime_type(self):
+        parts = DirectTransport._coerce_parts(
+            [
+                {
+                    "kind": "file",
+                    "file": {
+                        "uri": "s3://bucket/file.png",
+                        "mime_type": "image/png",
+                    },
+                }
+            ]
+        )
+
+        assert parts[0].root.file.mimeType == "image/png"
+
+    def test_coerce_stream_result_accepts_sdk_event_aliases(self):
+        status_event = DirectTransport._coerce_stream_result(
+            {
+                "kind": "status-update",
+                "result": {
+                    "kind": "status-update",
+                    "taskId": "task-1",
+                    "status": {"state": "completed"},
+                    "final": True,
+                },
+            }
+        )
+        artifact_event = DirectTransport._coerce_stream_result(
+            {
+                "kind": "artifact-update",
+                "result": {
+                    "kind": "artifact-update",
+                    "taskId": "task-1",
+                    "artifact": {
+                        "artifactId": "art-1",
+                        "parts": [{"kind": "text", "text": "hello"}],
+                    },
+                    "append": True,
+                    "lastChunk": True,
+                },
+            }
+        )
+
+        assert isinstance(status_event, TaskStatusUpdateEvent)
+        assert status_event.id == "task-1"
+        assert status_event.task_id == "task-1"
+        assert isinstance(artifact_event, TaskArtifactUpdateEvent)
+        assert artifact_event.id == "task-1"
+        assert artifact_event.task_id == "task-1"
+        assert artifact_event.append is True
+        assert artifact_event.last_chunk is True
 
 
 # =============================================================================
@@ -343,7 +387,7 @@ class TestPollTaskUntilCompleteReachesTerminal:
     """_poll_task_until_complete keeps polling until a terminal state is returned."""
 
     @pytest.mark.asyncio
-    async def test_poll_task_until_complete_reaches_terminal(self):
+    async def test_poll_task_until_complete_reaches_terminal(self, monkeypatch):
         proc = _make_processor()
         agent_card = MagicMock()
 
@@ -353,29 +397,10 @@ class TestPollTaskUntilCompleteReachesTerminal:
         completed_task = MagicMock()
         completed_task.status.state = TaskState.completed
 
-        # Build responses whose .root is not a JSONRPCErrorResponse instance.
-        # Using a simple namespace avoids MagicMock spec issues.
-        class _FakeRoot:
-            def __init__(self, result):
-                self.result = result
-
-        class _FakeResponse:
-            def __init__(self, result):
-                self.root = _FakeRoot(result)
-
-        working_resp = _FakeResponse(working_task)
-        completed_resp = _FakeResponse(completed_task)
-
-        a2a_client = AsyncMock()
-        a2a_client.get_task = AsyncMock(
-            side_effect=[working_resp, working_resp, completed_resp]
+        fetch_remote_task = AsyncMock(
+            side_effect=[working_task, working_task, completed_task]
         )
-
-        @asynccontextmanager
-        async def _fake_create_a2a_client(*args, **kwargs):
-            yield a2a_client
-
-        proc.a2a_service.create_a2a_client = _fake_create_a2a_client
+        monkeypatch.setattr(direct_module, "fetch_remote_task", fetch_remote_task)
 
         result = await proc._poll_task_until_complete(
             agent_card=agent_card,
@@ -388,7 +413,7 @@ class TestPollTaskUntilCompleteReachesTerminal:
 
         assert result is not None
         assert result.status.state == TaskState.completed
-        assert a2a_client.get_task.await_count == 3
+        assert fetch_remote_task.await_count == 3
 
 
 class TestHandleStreamingCancellation:

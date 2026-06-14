@@ -691,6 +691,18 @@ def test_common_task_manager_has_no_sdk_confinement_blocker():
     assert "common/server/task_manager.py" not in blocked_paths
 
 
+def test_a2a_runtime_has_no_sdk_confinement_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "app_shell/a2a_runtime.py" not in blocked_paths
+
+
+def test_room_runtime_has_no_sdk_confinement_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "app_shell/room_runtime.py" not in blocked_paths
+
+
 def test_common_server_has_no_sdk_confinement_blocker():
     blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
 
@@ -1014,3 +1026,39 @@ def test_dal_database_convergence_manifest_exists_and_has_no_unknown_sections():
     assert manifest["database_repository_blockers"] == []
     assert manifest["pinecone_singleton_blockers"] == []
     assert manifest["direct_pinecone_blockers"] == []
+
+
+def test_sdk_shaped_adapter_helpers_are_adapter_only():
+    from a2a_adapter import message_factory, task_requests
+
+    forbidden_symbols = set(message_factory.__all__) | set(task_requests.__all__)
+    forbidden_modules = {
+        "a2a_adapter.message_factory",
+        "a2a_adapter.task_requests",
+    }
+    violations: list[str] = []
+
+    for path in _production_python_files():
+        if path.parts and path.parts[0] == "a2a_adapter":
+            continue
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in forbidden_modules:
+                        violations.append(f"{path}:{node.lineno}: {alias.name}")
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                if node.module in forbidden_modules:
+                    for alias in node.names:
+                        if alias.name in forbidden_symbols or alias.name == "*":
+                            violations.append(
+                                f"{path}:{node.lineno}: {node.module}.{alias.name}"
+                            )
+                elif node.module == "a2a_adapter":
+                    for alias in node.names:
+                        if alias.name in {"message_factory", "task_requests"}:
+                            violations.append(
+                                f"{path}:{node.lineno}: {node.module}.{alias.name}"
+                            )
+
+    assert not violations

@@ -367,13 +367,21 @@ queues for single-process/degraded operation.
 `a2a_adapter` isolates A2A protocol details:
 
 - Resolve and validate AgentCards.
-- Build outbound A2A messages and task requests.
-- Translate internal messages/results to A2A-shaped payloads.
+- Own all production imports of the upstream A2A SDK.
+- Build outbound A2A send, stream, cancellation, HITL, and task-fetch requests.
+- Translate internal common models to SDK payloads and normalize SDK responses
+  back to SDK-free dictionaries or `common.types` models.
 - Normalize task status and artifacts.
 - Parse webhook stream response payloads.
+- Probe inspection and dry-send flows without leaking SDK clients into app-shell
+  services.
 - Convert inline binary artifacts to S3-backed references through bound storage.
 
-Execution transports call this layer rather than building A2A payloads inline.
+App-shell services, jobs, execution transports, and room runtime code use
+`common.types`, plain DTO dictionaries, and adapter facades instead of importing
+`a2a.*` directly. `tests/test_phase9_cleanup_gate.py` enforces that boundary by
+failing on direct A2A SDK imports and SDK-shaped adapter helper usage outside
+`a2a_adapter/` and tests.
 
 ### `dal` and `database`
 

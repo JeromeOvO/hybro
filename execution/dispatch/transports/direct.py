@@ -12,17 +12,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
-from a2a_adapter.message_factory import (
-    build_agent_text_message,
-    build_message_from_parts,
-    from_sdk_task,
-)
+from a2a_adapter.remote_task import fetch_remote_task
 from a2a_adapter.task_artifacts import materialize_non_text_parts_as_artifact
-from a2a_adapter.task_requests import (
-    build_get_task_request,
-    get_response_result,
-    is_jsonrpc_error_response,
-)
 from a2a_adapter.task_status import build_task_status, coerce_task_state
 from common.a2a_constants import (
     INTERACTIVE_STATES,
@@ -32,6 +23,15 @@ from common.a2a_constants import (
     is_failure_state,
     is_interactive_state,
     is_terminal_state,
+)
+from common.types import (
+    Message,
+    MessageRole,
+    Part,
+    Task,
+    TaskArtifactUpdateEvent,
+    TaskStatusUpdateEvent,
+    TextPart,
 )
 from common.utils.a2a_helpers import (
     extract_error_message,
@@ -617,18 +617,7 @@ class DirectTransport(AgentTransport):
             poll_count += 1
 
             try:
-                async with self.a2a_service.create_a2a_client(agent_card) as a2a_client:
-                    response = await a2a_client.get_task(build_get_task_request(task_id))
-
-                if not response or is_jsonrpc_error_response(response):
-                    logger.warning(
-                        "DirectTransport: Poll %d for task %s returned error/empty",
-                        poll_count,
-                        message_id,
-                    )
-                    continue
-
-                task = get_response_result(response)
+                task = await fetch_remote_task(agent_card, task_id)
                 if task is None:
                     logger.warning(
                         "DirectTransport: Poll %d for task %s returned no result",
@@ -703,12 +692,15 @@ class DirectTransport(AgentTransport):
             if token and token.is_cancelled:
                 return await self._handle_streaming_cancellation(ctx, streaming_state)
 
-            if is_jsonrpc_error_response(a2a_response):
+            error_message = self._stream_error_message(a2a_response)
+            if error_message is not None:
                 return await self._handle_streaming_error(
-                    a2a_response, ctx, streaming_state
+                    error_message,
+                    ctx,
+                    streaming_state,
                 )
 
-            result = a2a_response.root.result
+            result = self._coerce_stream_result(a2a_response)
             match result.kind:
                 case "message":
                     await self._handle_stream_message_chunk(
@@ -731,6 +723,30 @@ class DirectTransport(AgentTransport):
                     )
 
         return await self._finalize_streaming(ctx, streaming_state)
+
+    @staticmethod
+    def _coerce_stream_result(a2a_response: dict[str, Any]) -> Any:
+        if not isinstance(a2a_response, dict):
+            raise A2AServiceError("A2A stream event must be a normalized dict")
+        kind = a2a_response.get("kind")
+        result = a2a_response.get("result") or {}
+        if kind == "message":
+            return Message.model_validate(result)
+        if kind == "task":
+            return Task.model_validate(result)
+        if kind == "status-update":
+            return TaskStatusUpdateEvent.model_validate(result)
+        if kind == "artifact-update":
+            return TaskArtifactUpdateEvent.model_validate(result)
+        raise A2AServiceError(f"Unknown A2A stream event kind: {kind}")
+
+    @staticmethod
+    def _stream_error_message(a2a_response: Any) -> str | None:
+        if not isinstance(a2a_response, dict):
+            return None
+        if a2a_response.get("kind") != "error":
+            return None
+        return str(a2a_response.get("error") or "Unknown A2A stream error")
 
     async def _handle_streaming_cancellation(
         self,
@@ -760,12 +776,11 @@ class DirectTransport(AgentTransport):
 
     async def _handle_streaming_error(
         self,
-        a2a_response,
+        error_message: str,
         ctx: ProcessingContext,
         streaming_state: MessageStreamingState,
     ) -> tuple[ProcessingStatus, str]:
         """Handle JSON-RPC error during streaming."""
-        error_message = a2a_response.root.error.model_dump_json()
         logger.error("DirectTransport: Agent error: %s", error_message)
         await self.tsm.transition_task(
             ctx.current_message, CommonTaskState.FAILED, error=error_message,
@@ -806,7 +821,7 @@ class DirectTransport(AgentTransport):
         """Handle a 'message' event during streaming."""
         from common.utils.a2a_helpers import extract_parts
 
-        message_list = result.parts
+        message_list = self._coerce_parts(result.parts)
         streaming_state.accumulated_parts.extend(message_list)
 
         if streaming_state.agent_message_id is None:
@@ -825,7 +840,7 @@ class DirectTransport(AgentTransport):
             if task.history is None:
                 task.history = []
 
-            updated_message = build_message_from_parts(
+            updated_message = Message(
                 kind="message",
                 role=result.role,
                 message_id=streaming_state.agent_message_id,
@@ -860,6 +875,23 @@ class DirectTransport(AgentTransport):
                 last_chunk=False,
                 client_request_id=ctx.current_message.client_request_id,
             )
+
+    @staticmethod
+    def _coerce_parts(parts: list[Any]) -> list[Part]:
+        coerced: list[Part] = []
+        for part in parts or []:
+            if isinstance(part, Part):
+                coerced.append(part)
+            elif isinstance(part, dict):
+                data = dict(part)
+                if "kind" not in data and "text" in data:
+                    data["kind"] = "text"
+                coerced.append(Part.model_validate(data))
+            elif hasattr(part, "root"):
+                coerced.append(Part(root=part.root))
+            elif hasattr(part, "text"):
+                coerced.append(Part(root=TextPart(text=part.text)))
+        return coerced
 
     @staticmethod
     def _handle_stream_task_event(result) -> None:
@@ -1171,15 +1203,19 @@ class DirectTransport(AgentTransport):
                         state_str(incoming_state),
                         room_agent_message.message_id,
                     )
-                    converted = from_sdk_task(message_data)
+                    converted = Task.model_validate(message_data)
                     if converted.artifacts:
                         existing_task.artifacts = converted.artifacts
                     if converted.history:
                         existing_task.history = converted.history
                 else:
-                    room_agent_message.message_content.message_task = from_sdk_task(message_data)
+                    room_agent_message.message_content.message_task = Task.model_validate(
+                        message_data
+                    )
             else:
-                room_agent_message.message_content.message_task = from_sdk_task(message_data)
+                room_agent_message.message_content.message_task = Task.model_validate(
+                    message_data
+                )
             return await self.tsm.persist_message(room_agent_message)
 
         if getattr(message_data, "kind", None) == "message":
@@ -1226,11 +1262,17 @@ class DirectTransport(AgentTransport):
         if raw_response is None:
             return {"type": "message", "message_id": message_id, "content": ""}
 
-        if is_jsonrpc_error_response(raw_response):
-            root = getattr(raw_response, "root", raw_response)
-            raise A2AServiceError(str(root.error.message))
-
-        result = get_response_result(raw_response)
+        if not isinstance(raw_response, dict):
+            raise A2AServiceError("A2A sync response must be a normalized dict")
+        if raw_response.get("kind") == "error":
+            error_payload = raw_response.get("error")
+            error_message = (
+                error_payload.get("message")
+                if isinstance(error_payload, dict)
+                else str(error_payload)
+            )
+            raise A2AServiceError(error_message)
+        result = DirectTransport._coerce_stream_result(raw_response)
 
         if result.kind == "message":
             from common.utils.a2a_helpers import extract_parts
@@ -1580,8 +1622,9 @@ class DirectTransport(AgentTransport):
                 if task_obj and task_obj.status:
                     task_obj.status.state = coerce_task_state(status)
                     if msg_text := response.get("message"):
-                        task_obj.status.message = build_agent_text_message(
-                            text=msg_text,
+                        task_obj.status.message = Message(
+                            role=MessageRole.AGENT,
+                            parts=[Part(root=TextPart(text=msg_text))],
                             message_id=uuid.uuid4().hex,
                         )
                 return True, None, message_id, response.get("task_id")
@@ -1682,7 +1725,9 @@ class DirectTransport(AgentTransport):
         if state in INTERACTIVE_STATES:
             # Update in-memory task so get_task(message) sees the new state.
             if current_message.message_content:
-                current_message.message_content.message_task = from_sdk_task(completed_task)
+                current_message.message_content.message_task = Task.model_validate(
+                    completed_task
+                )
             if task_info:
                 await self._task_updater.update_task_on_message(
                     message_id,
