@@ -3,11 +3,18 @@ from __future__ import annotations
 from collections import deque
 from uuid import uuid4
 
-from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
-
 from app_shell.delivery_runtime import sse_manager
 from app_shell.runtime_store import UNBOUND_RUNTIME_STORE
 from common.dto import RoomMessageSummary
+from common.types import (
+    Message,
+    MessageRole,
+    Part,
+    Task,
+    TaskState,
+    TaskStatus,
+    TextPart,
+)
 from common.utils.a2a_helpers import extract_agent_text_from_room_message
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -350,8 +357,8 @@ class RoomCoordinatorService:
         # RoomServices._generate_agent_message_content.
         summary_message = Message(
             message_id=str(uuid4()),
-            role=Role.agent,
-            parts=[TextPart(text=summary_text)],
+            role=MessageRole.AGENT,
+            parts=[Part(root=TextPart(text=summary_text))],
             context_id=str(uuid4()),
             metadata={},
         )
