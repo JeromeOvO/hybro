@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This is a Python FastAPI backend for HybroAI's multi-agent system. The app entry points are `main.py`, `__main__.py`, and the console script `multi-agents-backend`. Route adapters live in `api/` and `api_gateway/`; domain modules are organized by capability, including `agent/`, `room/`, `execution/`, `delivery/`, `context_memory/`, `hub_runtime_bridge/`, `platform_module/`, and `llm_gateway/`. Shared contracts are in `common/`, persistence adapters in `dal/` and `database/`, background tasks in `jobs/`, helpers in `scripts/`, and architecture notes in `docs/` and `System-Architecture.md`. Tests live in `tests/`.
+This is a Python FastAPI backend for HybroAI's multi-agent system. The app entry points are `main.py`, `__main__.py`, and the console script `multi-agents-backend`. Route adapters live in `api/` and `api_gateway/`; domain modules are organized by capability, including `agent/`, `room/`, `execution/`, `delivery/`, `context_memory/`, `hub_runtime_bridge/`, `platform_module/`, and `llm_gateway/`. Shared contracts are in `common/`, persistence adapters in `dal/` and `database/`, background tasks in `jobs/`, helpers in `scripts/`, and architecture notes in `docs/` and `docs/System-Architecture.md`. Tests live in `tests/`.
 
 ## Build, Test, and Development Commands
 
@@ -24,7 +24,7 @@ Pytest is configured in `pyproject.toml` with `tests/` as the test root, `test_*
 
 ## Architecture Documentation
 
-After completing code changes, update architecture documentation. Use `System-Architecture.md` for system-level changes and `docs/` for module-specific decisions, migrations, or design notes.
+After completing code changes, update architecture documentation. Use `docs/System-Architecture.md` for system-level changes and `docs/` for module-specific decisions, migrations, or design notes.
 Do not commit `docs/superpowers/` or superpowers planning documents unless explicitly requested.
 
 ## Commit & Pull Request Guidelines
