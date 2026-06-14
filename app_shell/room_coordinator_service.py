@@ -353,8 +353,7 @@ class RoomCoordinatorService:
             message_id: Optional pre-generated message ID (reuses existing
                         task_submitted bubble instead of creating a new one)
         """
-        # Build an A2A-style message and task for storage, similar to
-        # RoomServices._generate_agent_message_content.
+        # Build an SDK-free A2A-style message and task for storage.
         summary_message = Message(
             message_id=str(uuid4()),
             role=MessageRole.AGENT,
