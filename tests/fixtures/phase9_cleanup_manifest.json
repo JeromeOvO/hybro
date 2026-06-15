@@ -1,0 +1,101 @@
+{
+    "blocked_cleanup": [
+        {
+            "path": "app_shell/a2a_runtime.py",
+            "contract": "legacy_import_boundary",
+            "reason": "App-shell A2A runtime still uses database.mongodb directly pending DAL injection."
+        },
+        {
+            "path": "app_shell/agent_capability_issue_service.py",
+            "contract": "legacy_import_boundary",
+            "reason": "App-shell agent capability issue runtime still uses database.mongodb directly pending DAL injection."
+        },
+        {
+            "path": "app_shell/agent_health_service.py",
+            "contract": "legacy_import_boundary",
+            "reason": "App-shell agent health runtime still uses database.mongodb directly pending DAL injection."
+        },
+        {
+            "path": "app_shell/domain_alias_service.py",
+            "contract": "legacy_import_boundary",
+            "reason": "App-shell domain alias runtime still uses database.mongodb directly pending DAL injection."
+        },
+        {
+            "path": "app_shell/memory_search_service.py",
+            "contract": "legacy_import_boundary",
+            "reason": "App-shell memory search runtime still uses database.mongodb directly pending DAL injection."
+        },
+        {
+            "path": "app_shell/room_runtime.py",
+            "contract": "legacy_import_boundary",
+            "reason": "App-shell room runtime still uses database.mongodb directly pending DAL injection."
+        },
+        {
+            "path": "common/protocols/runtime_store_protocols.py",
+            "contract": "common_import_boundary",
+            "reason": "Runtime store protocols require importing concrete domain models to provide a type-safe contract."
+        }
+    ],
+    "content_storage_callers": [
+        {
+            "classification": "Platform-owned behavior now covered by tests",
+            "path": "platform_module/content_storage.py",
+            "references": [
+                "PlatformContentStorage",
+                "hash_content",
+                "expand_content_reference"
+            ]
+        }
+    ],
+    "app_shell_runtime_blockers": [],
+    "package_removal_checklist": [
+        {
+            "package": "config",
+            "py_files": 0,
+            "runtime_import_files": [],
+            "runtime_blockers": [],
+            "status": "removed",
+            "test_import_files": [],
+            "test_blockers": [],
+            "required_before_remove": []
+        },
+        {
+            "package": "infrastructure",
+            "py_files": 0,
+            "runtime_import_files": [],
+            "runtime_blockers": [],
+            "status": "removed",
+            "test_import_files": [],
+            "test_blockers": [],
+            "required_before_remove": []
+        },
+        {
+            "package": "modules",
+            "py_files": 0,
+            "runtime_import_files": [],
+            "runtime_blockers": [],
+            "status": "removed",
+            "test_import_files": [],
+            "test_blockers": [],
+            "required_before_remove": []
+        },
+        {
+            "package": "services",
+            "py_files": 0,
+            "runtime_import_files": [],
+            "runtime_blockers": [],
+            "status": "removed",
+            "test_import_files": [],
+            "test_blockers": [],
+            "required_before_remove": []
+        }
+    ],
+    "safe_to_delete": [
+        "config",
+        "infrastructure",
+        "modules",
+        "services",
+        "scripts/backfill_domain_aliases.py",
+        "scripts/reupsert_agents_pinecone.py"
+    ]
+}

@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+
+# Distribution / packaging
+dist/
+build/
+eggs/
+.eggs/
+*.egg-info/
+
+# Virtual Environment
+venv/
+.venv/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+
+.DS_Store
+
+.worktrees/
+
+config.py
+!hub_runtime_bridge/config.py
+!llm_gateway/config.py
+
+# logs
+logs/
+
+# Coverage artifacts
+*.cover
+.coverage
+htmlcov/

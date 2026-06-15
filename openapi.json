@@ -1,0 +1,4039 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Multi-Agent AI System",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health Check",
+        "operationId": "health_check_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents": {
+      "get": {
+        "tags": [
+          "agent",
+          "Agents"
+        ],
+        "summary": "List Endpoint",
+        "operationId": "list_endpoint_api_v1_agents_get",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page number (1-indexed)",
+              "title": "Page"
+            },
+            "description": "Page number (1-indexed)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 100,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Number of items per page",
+              "title": "Limit"
+            },
+            "description": "Number of items per page"
+          },
+          {
+            "name": "sort_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Field to sort by",
+              "title": "Sort By"
+            },
+            "description": "Field to sort by"
+          },
+          {
+            "name": "sort_order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "description": "Sort order: 1 for ascending, -1 for descending",
+              "default": -1,
+              "title": "Sort Order"
+            },
+            "description": "Sort order: 1 for ascending, -1 for descending"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_AgentResponse_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "agent",
+          "Agents"
+        ],
+        "summary": "Create Endpoint",
+        "operationId": "create_endpoint_api_v1_agents_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{item_id}": {
+      "get": {
+        "tags": [
+          "agent",
+          "Agents"
+        ],
+        "summary": "Retrieve Endpoint",
+        "operationId": "retrieve_endpoint_api_v1_agents__item_id__get",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "agent",
+          "Agents"
+        ],
+        "summary": "Delete Endpoint",
+        "operationId": "delete_endpoint_api_v1_agents__item_id__delete",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "agent",
+          "Agents"
+        ],
+        "summary": "Update Endpoint",
+        "operationId": "update_endpoint_api_v1_agents__item_id__put",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "agent",
+          "Agents"
+        ],
+        "summary": "Patch Endpoint",
+        "operationId": "patch_endpoint_api_v1_agents__item_id__patch",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/registerAgent": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Register Agent",
+        "description": "Register a new agent - PROTECTED (requires authentication)",
+        "operationId": "register_agent_api_v1_agent_registerAgent_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/getAgent/me": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Get Agent By Provider",
+        "description": "Get agents by provider id - PROTECTED (requires authentication)",
+        "operationId": "get_agent_by_provider_api_v1_agent_getAgent_me_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/deleteAgent": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Delete Agent",
+        "description": "Delete an agent - PROTECTED (requires authentication and ownership)",
+        "operationId": "delete_agent_api_v1_agent_deleteAgent_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/updateAgent/{agent_id}": {
+      "put": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Update Agent",
+        "description": "Update an agent's settings - PROTECTED (requires authentication and ownership)\n\nAllows updating agent settings including rate limits:\n- rate_limit_per_user_per_hour: Max requests per user per hour (null = unlimited)\n- rate_limit_system_per_hour: Max total requests per hour (null = unlimited)\n- agent_status: Agent status (active/inactive)",
+        "operationId": "update_agent_api_v1_agent_updateAgent__agent_id__put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentSettingsUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/{agent_id}/avatar": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Upload Agent Avatar",
+        "description": "Upload a custom avatar image for an agent - PROTECTED (requires ownership)\n\nAccepts multipart/form-data with a single `file` field.\nStores the image under the agent-avatars/ S3 prefix (publicly readable)\nand persists the permanent URL to agent_card.iconUrl in MongoDB.\n\nReturns: { \"iconUrl\": \"<permanent public URL>\" }",
+        "operationId": "upload_agent_avatar_api_v1_agent__agent_id__avatar_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_agent_avatar_api_v1_agent__agent_id__avatar_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/{agent_id}/capability-issues": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Get Capability Issues",
+        "description": "Get capability issues for an agent - PROTECTED (requires ownership)",
+        "operationId": "get_capability_issues_api_v1_agent__agent_id__capability_issues_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by status: open or resolved",
+              "title": "Status"
+            },
+            "description": "Filter by status: open or resolved"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "description": "Max issues to return",
+              "default": 100,
+              "title": "Limit"
+            },
+            "description": "Max issues to return"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of issues to skip",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Number of issues to skip"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/{agent_id}/capability-issues/resolve-all": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Resolve All Capability Issues",
+        "description": "Bulk resolve all open capability issues for an agent - PROTECTED",
+        "operationId": "resolve_all_capability_issues_api_v1_agent__agent_id__capability_issues_resolve_all_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/capability-issues/{issue_id}/resolve": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Resolve Capability Issue",
+        "description": "Resolve a single capability issue - PROTECTED (requires ownership)",
+        "operationId": "resolve_capability_issue_api_v1_agent_capability_issues__issue_id__resolve_post",
+        "parameters": [
+          {
+            "name": "issue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Issue Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/getAgentCardFromUrl": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Get Agent Card From Url",
+        "description": "Get agent card from URL - PUBLIC (no authentication required)",
+        "operationId": "get_agent_card_from_url_api_v1_agent_getAgentCardFromUrl_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/getAgent/{agent_id}": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Get Agent",
+        "description": "Get agent by ID - PUBLIC (authentication optional)",
+        "operationId": "get_agent_api_v1_agent_getAgent__agent_id__get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/getAllAgents": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Get Agent List",
+        "description": "Get all agents - PUBLIC (authentication optional)",
+        "operationId": "get_agent_list_api_v1_agent_getAllAgents_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/getAllActiveAgents": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Get All Active Agents",
+        "description": "Get all active agents - PUBLIC (authentication optional)\n\nReturns only agents with active status, filtering out inactive and deleted agents.\nIf authenticated, also includes the user's private agents.",
+        "operationId": "get_all_active_agents_api_v1_agent_getAllActiveAgents_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/getAgentListWithConditions": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Get Agent List With Conditions",
+        "description": "Get agents with conditions - PUBLIC (authentication optional)",
+        "operationId": "get_agent_list_with_conditions_api_v1_agent_getAgentListWithConditions_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/inspectionCenter/inspectAgentCard": {
+      "post": {
+        "tags": [
+          "inspection"
+        ],
+        "summary": "Inspect Agent",
+        "operationId": "inspect_agent_api_v1_inspectionCenter_inspectAgentCard_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/inspectionCenter/inspectA2AConnection": {
+      "post": {
+        "tags": [
+          "inspection"
+        ],
+        "summary": "Inspect A2A Connection",
+        "operationId": "inspect_a2a_connection_api_v1_inspectionCenter_inspectA2AConnection_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memoryCenter/addChatContext": {
+      "post": {
+        "tags": [
+          "memory"
+        ],
+        "summary": "Add Chat Context",
+        "operationId": "add_chat_context_api_v1_memoryCenter_addChatContext_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memoryCenter/getChatContextBySessionId": {
+      "post": {
+        "tags": [
+          "memory"
+        ],
+        "summary": "Get Chat Context By Session Id",
+        "operationId": "get_chat_context_by_session_id_api_v1_memoryCenter_getChatContextBySessionId_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memoryCenter/updateChatContextBySessionId": {
+      "post": {
+        "tags": [
+          "memory"
+        ],
+        "summary": "Update Chat Context By Session Id",
+        "operationId": "update_chat_context_by_session_id_api_v1_memoryCenter_updateChatContextBySessionId_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memoryCenter/deleteChatContextBySessionId": {
+      "post": {
+        "tags": [
+          "memory"
+        ],
+        "summary": "Delete Chat Context By Session Id",
+        "operationId": "delete_chat_context_by_session_id_api_v1_memoryCenter_deleteChatContextBySessionId_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roomCenter/createNewRoom": {
+      "post": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Create New Room",
+        "operationId": "create_new_room_api_v1_roomCenter_createNewRoom_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roomCenter/inquiryRoomSetting": {
+      "post": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Inquiry Room Setting",
+        "description": "Get room settings - PROTECTED (requires room ownership)",
+        "operationId": "inquiry_room_setting_api_v1_roomCenter_inquiryRoomSetting_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roomCenter/inquiryActiveRuns": {
+      "post": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Inquiry Active Runs",
+        "description": "List non-terminal orchestration runs for a room — same auth as inquiryRoomSetting.",
+        "operationId": "inquiry_active_runs_api_v1_roomCenter_inquiryActiveRuns_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roomCenter/inquiryRoomsByRoomOwnerId": {
+      "post": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Inquiry Rooms By Room Owner Id",
+        "operationId": "inquiry_rooms_by_room_owner_id_api_v1_roomCenter_inquiryRoomsByRoomOwnerId_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roomCenter/updateRoomAgentSet": {
+      "post": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Update Room Agent Set",
+        "description": "Update room agent set - PROTECTED (requires room ownership)",
+        "operationId": "update_room_agent_set_api_v1_roomCenter_updateRoomAgentSet_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roomCenter/updateRoomName": {
+      "post": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Update Room Name",
+        "description": "Update room name - PROTECTED (requires room ownership)",
+        "operationId": "update_room_name_api_v1_roomCenter_updateRoomName_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roomCenter/updateRoomExtendInfo": {
+      "post": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Update Room Extend Info",
+        "description": "Update room extended info - PROTECTED (requires room ownership)",
+        "operationId": "update_room_extend_info_api_v1_roomCenter_updateRoomExtendInfo_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roomCenter/inquiryRoomMessagesByRoomId": {
+      "post": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Inquiry Room Messages",
+        "description": "Read room messages - PROTECTED (requires room ownership)",
+        "operationId": "inquiry_room_messages_api_v1_roomCenter_inquiryRoomMessagesByRoomId_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roomCenter/sendMessage": {
+      "post": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Send Message",
+        "description": "Send message to room - PROTECTED (requires room ownership)\n\nThis endpoint:\n1. Creates the user message and generates agent messages\n2. Automatically queues background processing of agent messages\n\nThe frontend no longer needs to call processRoomUserMessage separately.\nProcessing happens atomically to prevent orphaned messages on page refresh.",
+        "operationId": "send_message_api_v1_roomCenter_sendMessage_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roomCenter/suggestAgents": {
+      "post": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Suggest Agents",
+        "description": "Suggest agents for a message based on content analysis.\nUsed for Auto mode to preview which agents will be selected.",
+        "operationId": "suggest_agents_api_v1_roomCenter_suggestAgents_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{room_id}/hitl/respond": {
+      "post": {
+        "tags": [
+          "hitl",
+          "hitl"
+        ],
+        "summary": "Respond To Hitl Request",
+        "description": "User responds to an HITL prompt.",
+        "operationId": "respond_to_hitl_request_api_v1_rooms__room_id__hitl_respond_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HITLResponseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{room_id}/hitl/pending": {
+      "get": {
+        "tags": [
+          "hitl",
+          "hitl"
+        ],
+        "summary": "Get Pending Hitl Requests",
+        "description": "Get pending HITL requests for a room (SSE reconnect catch-up).",
+        "operationId": "get_pending_hitl_requests_api_v1_rooms__room_id__hitl_pending_get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{room_id}/hitl/{request_id}/cancel": {
+      "post": {
+        "tags": [
+          "hitl",
+          "hitl"
+        ],
+        "summary": "Cancel Hitl Request",
+        "description": "Cancel a pending HITL request.",
+        "operationId": "cancel_hitl_request_api_v1_rooms__room_id__hitl__request_id__cancel_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          },
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hub/my-status": {
+      "get": {
+        "tags": [
+          "hub"
+        ],
+        "summary": "Hub Status For User",
+        "operationId": "hub_status_for_user_api_v1_hub_my_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sse/room/{room_id}/stream": {
+      "get": {
+        "tags": [
+          "sse"
+        ],
+        "summary": "Stream Room Messages",
+        "description": "create SSE message stream for specified room\n\nArgs:\n    room_id: room ID\n    user: Authenticated user (from header or query param token)\n\nReturns:\n    StreamingResponse: SSE stream response",
+        "operationId": "stream_room_messages_api_v1_sse_room__room_id__stream_get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "room ID",
+              "title": "Room Id"
+            },
+            "description": "room ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sse/room/{room_id}/status": {
+      "get": {
+        "tags": [
+          "sse"
+        ],
+        "summary": "Get Room Sse Status",
+        "description": "get SSE connection status for specified room\n\nArgs:\n    room_id: room ID\n    user: Authenticated user (from header or query param token)\n\nReturns:\n    dict: room connection status information",
+        "operationId": "get_room_sse_status_api_v1_sse_room__room_id__status_get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "room ID",
+              "title": "Room Id"
+            },
+            "description": "room ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sse/message/{message_id}/cancel": {
+      "post": {
+        "tags": [
+          "sse"
+        ],
+        "summary": "Cancel Message",
+        "description": "Cancel an ongoing message processing workflow.\n\nThis marks the message as cancelled, which will be detected at the next\ncheckpoint in the workflow, causing it to stop gracefully.\n\nArgs:\n    message_id: The ID of the message to cancel\n    user: Authenticated user\n\nReturns:\n    dict: Success status and message",
+        "operationId": "cancel_message_api_v1_sse_message__message_id__cancel_post",
+        "parameters": [
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Message ID to cancel",
+              "title": "Message Id"
+            },
+            "description": "Message ID to cancel"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agentGroups": {
+      "post": {
+        "tags": [
+          "agent_group"
+        ],
+        "summary": "Create Agent Group",
+        "description": "Create a new agent group.",
+        "operationId": "create_agent_group_api_v1_agentGroups_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "agent_group"
+        ],
+        "summary": "List Agent Groups",
+        "description": "List all agent groups for a user.\nReturns both built-in groups and user-created groups.",
+        "operationId": "list_agent_groups_api_v1_agentGroups_get",
+        "parameters": [
+          {
+            "name": "owner_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agentGroups/{group_id}": {
+      "get": {
+        "tags": [
+          "agent_group"
+        ],
+        "summary": "Get Agent Group",
+        "description": "Get a specific agent group by ID.",
+        "operationId": "get_agent_group_api_v1_agentGroups__group_id__get",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "agent_group"
+        ],
+        "summary": "Update Agent Group",
+        "description": "Update an agent group.",
+        "operationId": "update_agent_group_api_v1_agentGroups__group_id__put",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "agent_group"
+        ],
+        "summary": "Delete Agent Group",
+        "description": "Delete an agent group.",
+        "operationId": "delete_agent_group_api_v1_agentGroups__group_id__delete",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/upload": {
+      "post": {
+        "tags": [
+          "files",
+          "files"
+        ],
+        "summary": "Upload File",
+        "description": "Upload a file to S3 for attachment to a room message.\n\nAccepts multipart/form-data with:\n- file: The file to upload\n- room_id: The room this file belongs to\n\nReturns FileUploadResponse with file_id and presigned URL.",
+        "operationId": "upload_file_api_v1_files_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_file_api_v1_files_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/discovery/agents": {
+      "post": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Discover Agents",
+        "description": "Search for agents based on a text query using semantic search.\n\nReturns a list of A2A-compliant AgentCards for agents that match the query\nwith a similarity score above the confidence threshold.\n\n**Authentication:** Requires `X-API-Key` header with a valid API key.\n\n**Example Request:**\n```json\n{\n    \"query\": \"I need help with data analysis\",\n    \"limit\": 5\n}\n```\n\n**Example Response:**\n```json\n{\n    \"query\": \"I need help with data analysis\",\n    \"agents\": [\n        {\n            \"agent_card\": { ... },\n            \"match_score\": 0.92\n        }\n    ],\n    \"count\": 1\n}\n```",
+        "operationId": "discover_agents_api_v1_discovery_agents_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoveryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/api-keys": {
+      "get": {
+        "tags": [
+          "api_keys"
+        ],
+        "summary": "List API Keys",
+        "description": "List all API keys belonging to the authenticated user.",
+        "operationId": "list_api_keys_api_v1_api_keys_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api_keys"
+        ],
+        "summary": "Create API Key",
+        "description": "Create a new API key and return its plaintext value once.",
+        "operationId": "create_api_key_api_v1_api_keys_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/APIKeyCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyCreateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/api-keys/{key_id}": {
+      "delete": {
+        "tags": [
+          "api_keys"
+        ],
+        "summary": "Deactivate API Key",
+        "description": "Soft-delete an API key owned by the authenticated user.",
+        "operationId": "deactivate_api_key_api_v1_api_keys__key_id__delete",
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyOperationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "API key not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/a2a-tasks/{message_id}": {
+      "get": {
+        "tags": [
+          "a2a_tasks"
+        ],
+        "summary": "Get Task Status",
+        "description": "Get the status of a long-running A2A task.\n\nArgs:\n    message_id: The message ID (used for task tracking)\n    current_user: Authenticated user\n\nReturns:\n    Task status with optional retry_after_seconds hint",
+        "operationId": "get_task_status_api_v1_a2a_tasks__message_id__get",
+        "parameters": [
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Message Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Task Status Api V1 A2A Tasks  Message Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{room_id}/a2a-tasks": {
+      "get": {
+        "tags": [
+          "a2a_tasks"
+        ],
+        "summary": "List Room Tasks",
+        "description": "List all A2A tasks for a room.\n\nArgs:\n    room_id: The room ID\n    limit: Maximum number of tasks to return\n    current_user: Authenticated user\n\nReturns:\n    List of tasks for the room",
+        "operationId": "list_room_tasks_api_v1_rooms__room_id__a2a_tasks_get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Room Tasks Api V1 Rooms  Room Id  A2A Tasks Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/a2a-tasks": {
+      "get": {
+        "tags": [
+          "a2a_tasks"
+        ],
+        "summary": "List User Pending Tasks",
+        "description": "List all pending A2A tasks for the current user.\n\nArgs:\n    current_user: Authenticated user\n\nReturns:\n    List of pending tasks for the user",
+        "operationId": "list_user_pending_tasks_api_v1_users_me_a2a_tasks_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List User Pending Tasks Api V1 Users Me A2A Tasks Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gateway/agents/discover": {
+      "post": {
+        "tags": [
+          "gateway"
+        ],
+        "summary": "Discover cloud agents",
+        "operationId": "gateway_discover_api_v1_gateway_agents_discover_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GatewayDiscoverRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayDiscoveryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gateway/agents/{agent_id}/message/send": {
+      "post": {
+        "tags": [
+          "gateway"
+        ],
+        "summary": "Send a synchronous message to an agent",
+        "operationId": "gateway_send_api_v1_gateway_agents__agent_id__message_send_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GatewaySendRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gateway/agents/{agent_id}/message/stream": {
+      "post": {
+        "tags": [
+          "gateway"
+        ],
+        "summary": "Stream a message to an agent (SSE)",
+        "operationId": "gateway_stream_api_v1_gateway_agents__agent_id__message_stream_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GatewaySendRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gateway/agents/{agent_id}/card": {
+      "get": {
+        "tags": [
+          "gateway"
+        ],
+        "summary": "Get an agent's card with masked URL",
+        "operationId": "gateway_get_card_api_v1_gateway_agents__agent_id__card_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayCardResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/relay/hub/register": {
+      "post": {
+        "tags": [
+          "relay"
+        ],
+        "summary": "Relay Register",
+        "operationId": "relay_register_api_v1_relay_hub_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterHubRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterHubResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/relay/hub/{hub_id}/events": {
+      "get": {
+        "tags": [
+          "relay"
+        ],
+        "summary": "Relay Events",
+        "operationId": "relay_events_api_v1_relay_hub__hub_id__events_get",
+        "parameters": [
+          {
+            "name": "hub_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Hub Id"
+            }
+          },
+          {
+            "name": "last_event_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Event Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/relay/hub/{hub_id}/publish": {
+      "post": {
+        "tags": [
+          "relay"
+        ],
+        "summary": "Relay Publish",
+        "operationId": "relay_publish_api_v1_relay_hub__hub_id__publish_post",
+        "parameters": [
+          {
+            "name": "hub_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Hub Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HubPublishRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/relay/hub/{hub_id}/agents/sync": {
+      "post": {
+        "tags": [
+          "relay"
+        ],
+        "summary": "Relay Sync Agents",
+        "operationId": "relay_sync_agents_api_v1_relay_hub__hub_id__agents_sync_post",
+        "parameters": [
+          {
+            "name": "hub_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Hub Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HubAgentSyncRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubAgentSyncResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/relay/hub/status": {
+      "get": {
+        "tags": [
+          "relay"
+        ],
+        "summary": "Relay Status",
+        "operationId": "relay_status_api_v1_relay_hub_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/relay/hub/{hub_id}/heartbeat": {
+      "post": {
+        "tags": [
+          "relay"
+        ],
+        "summary": "Relay Heartbeat",
+        "description": "Lightweight liveness signal from the hub daemon.",
+        "operationId": "relay_heartbeat_api_v1_relay_hub__hub_id__heartbeat_post",
+        "parameters": [
+          {
+            "name": "hub_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Hub Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/a2a/{message_id}": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Handle A2A Webhook",
+        "description": "Receive task updates from A2A agents.\n\nPer A2A spec section 4.3.3, payload is StreamResponse format.\nSecurity: Validates token against stored hash.\nIdempotency: Safe to call multiple times with same status.",
+        "operationId": "handle_a2a_webhook_api_v1_webhooks_a2a__message_id__post",
+        "parameters": [
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Message Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-A2A-Notification-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "X-A2A-Notification-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Handle A2A Webhook Api V1 Webhooks A2A  Message Id  Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "APIKeyCreateRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "description": "Friendly name for the API key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "APIKeyCreateRequest"
+      },
+      "APIKeyCreateResponse": {
+        "properties": {
+          "key_id": {
+            "type": "string",
+            "title": "Key Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "api_key": {
+            "type": "string",
+            "title": "Api Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key_id",
+          "name",
+          "created_at",
+          "api_key"
+        ],
+        "title": "APIKeyCreateResponse"
+      },
+      "APIKeyErrorResponse": {
+        "properties": {
+          "error": {
+            "type": "string",
+            "title": "Error"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error",
+          "message"
+        ],
+        "title": "APIKeyErrorResponse"
+      },
+      "APIKeyItemResponse": {
+        "properties": {
+          "key_id": {
+            "type": "string",
+            "title": "Key Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "usage_count": {
+            "type": "integer",
+            "title": "Usage Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key_id",
+          "name",
+          "created_at",
+          "is_active",
+          "usage_count"
+        ],
+        "title": "APIKeyItemResponse"
+      },
+      "APIKeyListResponse": {
+        "properties": {
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/APIKeyItemResponse"
+            },
+            "type": "array",
+            "title": "Keys"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "keys",
+          "count"
+        ],
+        "title": "APIKeyListResponse"
+      },
+      "APIKeyOperationResponse": {
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "title": "Success"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "success",
+          "message"
+        ],
+        "title": "APIKeyOperationResponse"
+      },
+      "AgentAuthentication": {
+        "properties": {
+          "schemes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Schemes"
+          },
+          "credentials": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credentials"
+          }
+        },
+        "type": "object",
+        "required": [
+          "schemes"
+        ],
+        "title": "AgentAuthentication"
+      },
+      "AgentCapabilities": {
+        "properties": {
+          "streaming": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Streaming",
+            "default": false
+          },
+          "pushNotifications": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pushnotifications",
+            "default": false
+          },
+          "stateTransitionHistory": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Statetransitionhistory",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "AgentCapabilities"
+      },
+      "AgentCard": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentProvider"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "documentationUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Documentationurl"
+          },
+          "iconUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Iconurl"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/AgentCapabilities"
+          },
+          "authentication": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentAuthentication"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "defaultInputModes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Defaultinputmodes",
+            "default": [
+              "text"
+            ]
+          },
+          "defaultOutputModes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Defaultoutputmodes",
+            "default": [
+              "text"
+            ]
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/AgentSkill"
+            },
+            "type": "array",
+            "title": "Skills"
+          },
+          "supports_authenticated_extended_card": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supports Authenticated Extended Card"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "url",
+          "version",
+          "capabilities",
+          "skills"
+        ],
+        "title": "AgentCard"
+      },
+      "AgentCreate": {
+        "properties": {
+          "agent_url": {
+            "type": "string",
+            "title": "Agent Url"
+          },
+          "agent_card": {
+            "$ref": "#/components/schemas/AgentCard"
+          },
+          "call_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Call Count",
+            "default": 0
+          },
+          "call_success_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Call Success Count",
+            "default": 0
+          },
+          "like_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Like Count",
+            "default": 0
+          },
+          "dislike_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dislike Count",
+            "default": 0
+          },
+          "agent_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rate_limit_per_user_per_hour": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit Per User Per Hour"
+          },
+          "rate_limit_system_per_hour": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit System Per Hour"
+          },
+          "is_public": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Public"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id",
+            "description": "Must be a valid UUID string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_url",
+          "agent_card"
+        ],
+        "title": "AgentCreate"
+      },
+      "AgentPatch": {
+        "properties": {
+          "agent_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Url"
+          },
+          "agent_card": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentCard"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "call_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Call Count",
+            "default": 0
+          },
+          "call_success_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Call Success Count",
+            "default": 0
+          },
+          "like_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Like Count",
+            "default": 0
+          },
+          "dislike_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dislike Count",
+            "default": 0
+          },
+          "agent_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rate_limit_per_user_per_hour": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit Per User Per Hour"
+          },
+          "rate_limit_system_per_hour": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit System Per Hour"
+          },
+          "is_public": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Public"
+          }
+        },
+        "type": "object",
+        "title": "AgentPatch"
+      },
+      "AgentProvider": {
+        "properties": {
+          "organization": {
+            "type": "string",
+            "title": "Organization"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "organization"
+        ],
+        "title": "AgentProvider"
+      },
+      "AgentResponse": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "agent_card": {
+            "$ref": "#/components/schemas/AgentCard"
+          },
+          "agent_status": {
+            "$ref": "#/components/schemas/AgentStatus",
+            "default": "active"
+          },
+          "call_count": {
+            "type": "integer",
+            "title": "Call Count",
+            "default": 0
+          },
+          "call_success_count": {
+            "type": "integer",
+            "title": "Call Success Count",
+            "default": 0
+          },
+          "like_count": {
+            "type": "integer",
+            "title": "Like Count",
+            "default": 0
+          },
+          "dislike_count": {
+            "type": "integer",
+            "title": "Dislike Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "agent_card"
+        ],
+        "title": "AgentResponse"
+      },
+      "AgentSettingsUpdateRequest": {
+        "properties": {
+          "rate_limit_per_user_per_hour": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit Per User Per Hour"
+          },
+          "rate_limit_system_per_hour": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit System Per Hour"
+          },
+          "agent_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "is_public": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Public"
+          }
+        },
+        "type": "object",
+        "title": "AgentSettingsUpdateRequest",
+        "description": "Request model for updating agent settings (rate limits, status, visibility)."
+      },
+      "AgentSkill": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags"
+          },
+          "examples": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Examples"
+          },
+          "inputModes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inputmodes"
+          },
+          "outputModes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outputmodes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "AgentSkill"
+      },
+      "AgentStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "inactive",
+          "deleted"
+        ],
+        "title": "AgentStatus"
+      },
+      "AgentUpdate": {
+        "properties": {
+          "agent_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Url"
+          },
+          "agent_card": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentCard"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "call_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Call Count"
+          },
+          "call_success_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Call Success Count"
+          },
+          "like_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Like Count"
+          },
+          "dislike_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dislike Count"
+          },
+          "agent_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rate_limit_per_user_per_hour": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit Per User Per Hour"
+          },
+          "rate_limit_system_per_hour": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit System Per Hour"
+          },
+          "is_public": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Public"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_card",
+          "call_count",
+          "call_success_count",
+          "like_count",
+          "dislike_count",
+          "agent_status",
+          "agent_id"
+        ],
+        "title": "AgentUpdate"
+      },
+      "Body_upload_agent_avatar_api_v1_agent__agent_id__avatar_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_agent_avatar_api_v1_agent__agent_id__avatar_post"
+      },
+      "Body_upload_file_api_v1_files_upload_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          },
+          "room_id": {
+            "type": "string",
+            "title": "Room Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file",
+          "room_id"
+        ],
+        "title": "Body_upload_file_api_v1_files_upload_post"
+      },
+      "DiscoveryAgentResult": {
+        "properties": {
+          "agent_card": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Agent Card"
+          },
+          "match_score": {
+            "type": "number",
+            "title": "Match Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_card",
+          "match_score"
+        ],
+        "title": "DiscoveryAgentResult",
+        "description": "A single agent result from the Discovery API."
+      },
+      "DiscoveryErrorResponse": {
+        "properties": {
+          "error": {
+            "type": "string",
+            "title": "Error"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error",
+          "message"
+        ],
+        "title": "DiscoveryErrorResponse",
+        "description": "Standardized error response for Discovery API."
+      },
+      "DiscoveryRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query",
+            "description": "Text query to search for matching agents"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100,
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit",
+            "description": "Maximum number of agents to return (default: 10, max: 100)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "DiscoveryRequest",
+        "description": "Request body for agent discovery endpoint."
+      },
+      "DiscoveryResponse": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/DiscoveryAgentResult"
+            },
+            "type": "array",
+            "title": "Agents"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query",
+          "agents",
+          "count"
+        ],
+        "title": "DiscoveryResponse",
+        "description": "Successful response from the Discovery API."
+      },
+      "GatewayCardResponse": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "agent_card": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Agent Card"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "agent_card"
+        ],
+        "title": "GatewayCardResponse"
+      },
+      "GatewayDiscoverRequest": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100,
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "GatewayDiscoverRequest"
+      },
+      "GatewayDiscoveryAgentResult": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "agent_card": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Agent Card"
+          },
+          "match_score": {
+            "type": "number",
+            "title": "Match Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "agent_card",
+          "match_score"
+        ],
+        "title": "GatewayDiscoveryAgentResult",
+        "description": "Discovery result enriched with agent_id for gateway consumers."
+      },
+      "GatewayDiscoveryResponse": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/GatewayDiscoveryAgentResult"
+            },
+            "type": "array",
+            "title": "Agents"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query",
+          "agents",
+          "count"
+        ],
+        "title": "GatewayDiscoveryResponse",
+        "description": "Gateway discovery response with agent_id on each result."
+      },
+      "GatewaySendRequest": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "message": {
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "GatewaySendRequest"
+      },
+      "HITLResponseRequest": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "user_input": {
+            "type": "string",
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "User Input"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "user_input"
+        ],
+        "title": "HITLResponseRequest",
+        "description": "REST request body for POST /rooms/{room_id}/hitl/respond."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HubAgentSync": {
+        "properties": {
+          "local_agent_id": {
+            "type": "string",
+            "title": "Local Agent Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Capabilities",
+            "default": []
+          },
+          "agent_card": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Agent Card"
+          }
+        },
+        "type": "object",
+        "required": [
+          "local_agent_id",
+          "name",
+          "description",
+          "agent_card"
+        ],
+        "title": "HubAgentSync",
+        "description": "Single agent entry in a sync request."
+      },
+      "HubAgentSyncRequest": {
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/HubAgentSync"
+            },
+            "type": "array",
+            "title": "Agents"
+          },
+          "prune_missing": {
+            "type": "boolean",
+            "title": "Prune Missing",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "agents"
+        ],
+        "title": "HubAgentSyncRequest",
+        "description": "POST /relay/hub/{hub_id}/agents/sync body."
+      },
+      "HubAgentSyncResponse": {
+        "properties": {
+          "synced": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Synced"
+          }
+        },
+        "type": "object",
+        "required": [
+          "synced"
+        ],
+        "title": "HubAgentSyncResponse",
+        "description": "Response from the agent sync endpoint."
+      },
+      "HubPublishEvent": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "task_submitted",
+              "agent_response",
+              "agent_error",
+              "processing_status",
+              "artifact_update",
+              "task_status",
+              "task_interactive"
+            ],
+            "title": "Type"
+          },
+          "agent_message_id": {
+            "type": "string",
+            "title": "Agent Message Id"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "agent_message_id",
+          "data"
+        ],
+        "title": "HubPublishEvent",
+        "description": "Single event in a publish batch from hub to cloud."
+      },
+      "HubPublishRequest": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "title": "Room Id"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/HubPublishEvent"
+            },
+            "type": "array",
+            "title": "Events"
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id",
+          "events"
+        ],
+        "title": "HubPublishRequest",
+        "description": "POST /relay/hub/{hub_id}/publish body."
+      },
+      "HubStatus": {
+        "properties": {
+          "hub_id": {
+            "type": "string",
+            "title": "Hub Id"
+          },
+          "is_online": {
+            "type": "boolean",
+            "title": "Is Online"
+          },
+          "last_connected_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Connected At"
+          },
+          "agent_count": {
+            "type": "integer",
+            "title": "Agent Count",
+            "default": 0
+          },
+          "active_agent_count": {
+            "type": "integer",
+            "title": "Active Agent Count",
+            "default": 0
+          },
+          "inactive_agent_count": {
+            "type": "integer",
+            "title": "Inactive Agent Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "hub_id",
+          "is_online"
+        ],
+        "title": "HubStatus"
+      },
+      "HubStatusResponse": {
+        "properties": {
+          "hubs": {
+            "items": {
+              "$ref": "#/components/schemas/HubStatus"
+            },
+            "type": "array",
+            "title": "Hubs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "hubs"
+        ],
+        "title": "HubStatusResponse"
+      },
+      "PaginatedResponse_AgentResponse_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AgentResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/PaginationMeta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "meta"
+        ],
+        "title": "PaginatedResponse[AgentResponse]"
+      },
+      "PaginationMeta": {
+        "properties": {
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "total_pages": {
+            "type": "integer",
+            "title": "Total Pages"
+          },
+          "has_next": {
+            "type": "boolean",
+            "title": "Has Next"
+          },
+          "has_prev": {
+            "type": "boolean",
+            "title": "Has Prev"
+          }
+        },
+        "type": "object",
+        "required": [
+          "page",
+          "limit",
+          "total",
+          "total_pages",
+          "has_next",
+          "has_prev"
+        ],
+        "title": "PaginationMeta"
+      },
+      "RegisterHubRequest": {
+        "properties": {
+          "hub_id": {
+            "type": "string",
+            "title": "Hub Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "hub_id"
+        ],
+        "title": "RegisterHubRequest"
+      },
+      "RegisterHubResponse": {
+        "properties": {
+          "hub_id": {
+            "type": "string",
+            "title": "Hub Id"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "hub_id",
+          "user_id"
+        ],
+        "title": "RegisterHubResponse"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

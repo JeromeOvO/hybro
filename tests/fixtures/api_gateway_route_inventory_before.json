@@ -1,0 +1,1413 @@
+[
+  {
+    "path": "/api/v1/a2a-tasks/{message_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_task_status",
+    "endpoint_module": "api_gateway.routes.a2a_task_routes",
+    "declared_owner": "api_gateway.routes.a2a_task_routes",
+    "tags": [
+      "a2a_tasks"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_task_store"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agent/capability-issues/{issue_id}/resolve",
+    "methods": [
+      "POST"
+    ],
+    "name": "resolve_capability_issue",
+    "endpoint_module": "api_gateway.routes.agent_routes",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_service",
+      "get_capability_issue_service",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agent/deleteAgent",
+    "methods": [
+      "POST"
+    ],
+    "name": "delete_agent",
+    "endpoint_module": "api_gateway.routes.agent_routes",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_center",
+      "get_agent_service",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agent/getAgent/me",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_agent_by_provider",
+    "endpoint_module": "api_gateway.routes.agent_routes",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_center",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agent/getAgent/{agent_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_agent",
+    "endpoint_module": "api_gateway.routes.agent_routes",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_center",
+      "get_agent_liveness_checker",
+      "get_optional_user"
+    ],
+    "auth_dependencies": [
+      "get_optional_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agent/getAgentCardFromUrl",
+    "methods": [
+      "POST"
+    ],
+    "name": "get_agent_card_from_url",
+    "endpoint_module": "api_gateway.routes.agent_routes",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_center"
+    ],
+    "auth_dependencies": [],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agent/getAgentListWithConditions",
+    "methods": [
+      "POST"
+    ],
+    "name": "get_agent_list_with_conditions",
+    "endpoint_module": "api_gateway.routes.agent_routes",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_center",
+      "get_optional_user"
+    ],
+    "auth_dependencies": [
+      "get_optional_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agent/getAllActiveAgents",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_all_active_agents",
+    "endpoint_module": "api_gateway.routes.agent_routes",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_center",
+      "get_optional_user"
+    ],
+    "auth_dependencies": [
+      "get_optional_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agent/getAllAgents",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_agent_list",
+    "endpoint_module": "api_gateway.routes.agent_routes",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_center",
+      "get_optional_user"
+    ],
+    "auth_dependencies": [
+      "get_optional_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agent/registerAgent",
+    "methods": [
+      "POST"
+    ],
+    "name": "register_agent",
+    "endpoint_module": "api_gateway.routes.agent_routes",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_center",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agent/updateAgent/{agent_id}",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_agent",
+    "endpoint_module": "api_gateway.routes.agent_routes",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_center",
+      "get_agent_service",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agent/{agent_id}/avatar",
+    "methods": [
+      "POST"
+    ],
+    "name": "upload_agent_avatar",
+    "endpoint_module": "api_gateway.routes.agent_routes",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_avatar_manager",
+      "get_agent_service",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agent/{agent_id}/capability-issues",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_capability_issues",
+    "endpoint_module": "api_gateway.routes.agent_routes",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_service",
+      "get_capability_issue_service",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agent/{agent_id}/capability-issues/resolve-all",
+    "methods": [
+      "POST"
+    ],
+    "name": "resolve_all_capability_issues",
+    "endpoint_module": "api_gateway.routes.agent_routes",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_service",
+      "get_capability_issue_service",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agentGroups",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_agent_groups",
+    "endpoint_module": "api_gateway.routes.agent_group_routes",
+    "declared_owner": "api_gateway.routes.agent_group_routes",
+    "tags": [
+      "agent_group"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_group_store",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agentGroups",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_agent_group",
+    "endpoint_module": "api_gateway.routes.agent_group_routes",
+    "declared_owner": "api_gateway.routes.agent_group_routes",
+    "tags": [
+      "agent_group"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_group_store",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agentGroups/{group_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_agent_group",
+    "endpoint_module": "api_gateway.routes.agent_group_routes",
+    "declared_owner": "api_gateway.routes.agent_group_routes",
+    "tags": [
+      "agent_group"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_group_store",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agentGroups/{group_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_agent_group",
+    "endpoint_module": "api_gateway.routes.agent_group_routes",
+    "declared_owner": "api_gateway.routes.agent_group_routes",
+    "tags": [
+      "agent_group"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_group_store",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agentGroups/{group_id}",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_agent_group",
+    "endpoint_module": "api_gateway.routes.agent_group_routes",
+    "declared_owner": "api_gateway.routes.agent_group_routes",
+    "tags": [
+      "agent_group"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_group_store",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agents",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_endpoint",
+    "endpoint_module": "api_gateway.viewsets.agent",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent",
+      "Agents"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_optional_user",
+      "get_viewset_repository"
+    ],
+    "auth_dependencies": [
+      "get_optional_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agents",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_endpoint",
+    "endpoint_module": "api_gateway.viewsets.base",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent",
+      "Agents"
+    ],
+    "status_code": 201,
+    "dependencies": [
+      "get_current_user",
+      "get_viewset_repository"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agents/{item_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_endpoint",
+    "endpoint_module": "api_gateway.viewsets.agent",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent",
+      "Agents"
+    ],
+    "status_code": 204,
+    "dependencies": [
+      "get_current_user",
+      "get_viewset_repository"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agents/{item_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "retrieve_endpoint",
+    "endpoint_module": "api_gateway.viewsets.agent",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent",
+      "Agents"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_optional_user",
+      "get_viewset_repository"
+    ],
+    "auth_dependencies": [
+      "get_optional_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agents/{item_id}",
+    "methods": [
+      "PATCH"
+    ],
+    "name": "patch_endpoint",
+    "endpoint_module": "api_gateway.viewsets.agent",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent",
+      "Agents"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_viewset_repository"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agents/{item_id}",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_endpoint",
+    "endpoint_module": "api_gateway.viewsets.agent",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent",
+      "Agents"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_viewset_repository"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/api-keys",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_api_keys",
+    "endpoint_module": "api_gateway.routes.discovery_api_key_routes",
+    "declared_owner": "api_gateway.routes.discovery_api_key_routes",
+    "tags": [
+      "api_keys"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key_store",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/api-keys",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_api_key",
+    "endpoint_module": "api_gateway.routes.discovery_api_key_routes",
+    "declared_owner": "api_gateway.routes.discovery_api_key_routes",
+    "tags": [
+      "api_keys"
+    ],
+    "status_code": 201,
+    "dependencies": [
+      "get_api_key_store",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/api-keys/{key_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "deactivate_api_key",
+    "endpoint_module": "api_gateway.routes.discovery_api_key_routes",
+    "declared_owner": "api_gateway.routes.discovery_api_key_routes",
+    "tags": [
+      "api_keys"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key_store",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/discovery/agents",
+    "methods": [
+      "POST"
+    ],
+    "name": "discover_agents",
+    "endpoint_module": "api_gateway.routes.discovery_routes",
+    "declared_owner": "api_gateway.routes.discovery_routes",
+    "tags": [
+      "discovery"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key",
+      "get_discovery_default_limit",
+      "get_discovery_rate_limiter",
+      "get_discovery_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/files/upload",
+    "methods": [
+      "POST"
+    ],
+    "name": "upload_file",
+    "endpoint_module": "api_gateway.routes.files_routes",
+    "declared_owner": "api_gateway.routes.files_routes",
+    "tags": [
+      "files",
+      "files"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_file_storage",
+      "get_room_ownership_reader"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/gateway/agents/discover",
+    "methods": [
+      "POST"
+    ],
+    "name": "gateway_discover",
+    "endpoint_module": "api_gateway.routes.platform_gateway_routes",
+    "declared_owner": "api_gateway.routes.platform_gateway_routes",
+    "tags": [
+      "gateway"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key",
+      "get_gateway_rate_limiter",
+      "get_gateway_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/gateway/agents/{agent_id}/card",
+    "methods": [
+      "GET"
+    ],
+    "name": "gateway_get_card",
+    "endpoint_module": "api_gateway.routes.platform_gateway_routes",
+    "declared_owner": "api_gateway.routes.platform_gateway_routes",
+    "tags": [
+      "gateway"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key",
+      "get_gateway_rate_limiter",
+      "get_gateway_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/gateway/agents/{agent_id}/message/send",
+    "methods": [
+      "POST"
+    ],
+    "name": "gateway_send",
+    "endpoint_module": "api_gateway.routes.platform_gateway_routes",
+    "declared_owner": "api_gateway.routes.platform_gateway_routes",
+    "tags": [
+      "gateway"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key",
+      "get_gateway_rate_limiter",
+      "get_gateway_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/gateway/agents/{agent_id}/message/stream",
+    "methods": [
+      "POST"
+    ],
+    "name": "gateway_stream",
+    "endpoint_module": "api_gateway.routes.platform_gateway_routes",
+    "declared_owner": "api_gateway.routes.platform_gateway_routes",
+    "tags": [
+      "gateway"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key",
+      "get_gateway_rate_limiter",
+      "get_gateway_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/hub/my-status",
+    "methods": [
+      "GET"
+    ],
+    "name": "hub_status_for_user",
+    "endpoint_module": "api_gateway.routes.hub_routes",
+    "declared_owner": "api_gateway.routes.hub_routes",
+    "tags": [
+      "hub"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_hub_relay_service"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/inspectionCenter/inspectA2AConnection",
+    "methods": [
+      "POST"
+    ],
+    "name": "inspect_a2a_connection",
+    "endpoint_module": "api_gateway.routes.inspection_routes",
+    "declared_owner": "api_gateway.routes.inspection_routes",
+    "tags": [
+      "inspection"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_inspection_center"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/inspectionCenter/inspectAgentCard",
+    "methods": [
+      "POST"
+    ],
+    "name": "inspect_agent",
+    "endpoint_module": "api_gateway.routes.inspection_routes",
+    "declared_owner": "api_gateway.routes.inspection_routes",
+    "tags": [
+      "inspection"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_inspection_center"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/memoryCenter/addChatContext",
+    "methods": [
+      "POST"
+    ],
+    "name": "add_chat_context",
+    "endpoint_module": "api_gateway.routes.memory_routes",
+    "declared_owner": "api_gateway.routes.memory_routes",
+    "tags": [
+      "memory"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_memory_center"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/memoryCenter/deleteChatContextBySessionId",
+    "methods": [
+      "POST"
+    ],
+    "name": "delete_chat_context_by_session_id",
+    "endpoint_module": "api_gateway.routes.memory_routes",
+    "declared_owner": "api_gateway.routes.memory_routes",
+    "tags": [
+      "memory"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_memory_center"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/memoryCenter/getChatContextBySessionId",
+    "methods": [
+      "POST"
+    ],
+    "name": "get_chat_context_by_session_id",
+    "endpoint_module": "api_gateway.routes.memory_routes",
+    "declared_owner": "api_gateway.routes.memory_routes",
+    "tags": [
+      "memory"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_memory_center"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/memoryCenter/updateChatContextBySessionId",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_chat_context_by_session_id",
+    "endpoint_module": "api_gateway.routes.memory_routes",
+    "declared_owner": "api_gateway.routes.memory_routes",
+    "tags": [
+      "memory"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_memory_center"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/relay/hub/register",
+    "methods": [
+      "POST"
+    ],
+    "name": "relay_register",
+    "endpoint_module": "api_gateway.routes.relay_routes",
+    "declared_owner": "api_gateway.routes.relay_routes",
+    "tags": [
+      "relay"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key_no_track",
+      "get_relay_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key_no_track"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/relay/hub/status",
+    "methods": [
+      "GET"
+    ],
+    "name": "relay_status",
+    "endpoint_module": "api_gateway.routes.relay_routes",
+    "declared_owner": "api_gateway.routes.relay_routes",
+    "tags": [
+      "relay"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key",
+      "get_relay_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/relay/hub/{hub_id}/agents/sync",
+    "methods": [
+      "POST"
+    ],
+    "name": "relay_sync_agents",
+    "endpoint_module": "api_gateway.routes.relay_routes",
+    "declared_owner": "api_gateway.routes.relay_routes",
+    "tags": [
+      "relay"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key_no_track",
+      "get_relay_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key_no_track"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/relay/hub/{hub_id}/events",
+    "methods": [
+      "GET"
+    ],
+    "name": "relay_events",
+    "endpoint_module": "api_gateway.routes.relay_routes",
+    "declared_owner": "api_gateway.routes.relay_routes",
+    "tags": [
+      "relay"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key_no_track",
+      "get_relay_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key_no_track"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/relay/hub/{hub_id}/heartbeat",
+    "methods": [
+      "POST"
+    ],
+    "name": "relay_heartbeat",
+    "endpoint_module": "api_gateway.routes.relay_routes",
+    "declared_owner": "api_gateway.routes.relay_routes",
+    "tags": [
+      "relay"
+    ],
+    "status_code": 204,
+    "dependencies": [
+      "get_api_key_no_track",
+      "get_relay_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key_no_track"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/relay/hub/{hub_id}/publish",
+    "methods": [
+      "POST"
+    ],
+    "name": "relay_publish",
+    "endpoint_module": "api_gateway.routes.relay_routes",
+    "declared_owner": "api_gateway.routes.relay_routes",
+    "tags": [
+      "relay"
+    ],
+    "status_code": 204,
+    "dependencies": [
+      "get_api_key",
+      "get_relay_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/roomCenter/createNewRoom",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_new_room",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/roomCenter/inquiryActiveRuns",
+    "methods": [
+      "POST"
+    ],
+    "name": "inquiry_active_runs",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/roomCenter/inquiryRoomMessagesByRoomId",
+    "methods": [
+      "POST"
+    ],
+    "name": "inquiry_room_messages",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/roomCenter/inquiryRoomSetting",
+    "methods": [
+      "POST"
+    ],
+    "name": "inquiry_room_setting",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/roomCenter/inquiryRoomsByRoomOwnerId",
+    "methods": [
+      "POST"
+    ],
+    "name": "inquiry_rooms_by_room_owner_id",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/roomCenter/sendMessage",
+    "methods": [
+      "POST"
+    ],
+    "name": "send_message",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/roomCenter/suggestAgents",
+    "methods": [
+      "POST"
+    ],
+    "name": "suggest_agents",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_selection_service",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/roomCenter/updateRoomAgentSet",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_room_agent_set",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/roomCenter/updateRoomExtendInfo",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_room_extend_info",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/roomCenter/updateRoomName",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_room_name",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/rooms/{room_id}/a2a-tasks",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_room_tasks",
+    "endpoint_module": "api_gateway.routes.a2a_task_routes",
+    "declared_owner": "api_gateway.routes.a2a_task_routes",
+    "tags": [
+      "a2a_tasks"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_task_store"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/rooms/{room_id}/hitl/pending",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_pending_hitl_requests",
+    "endpoint_module": "api_gateway.routes.hitl_routes",
+    "declared_owner": "api_gateway.routes.hitl_routes",
+    "tags": [
+      "hitl",
+      "hitl"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/rooms/{room_id}/hitl/respond",
+    "methods": [
+      "POST"
+    ],
+    "name": "respond_to_hitl_request",
+    "endpoint_module": "api_gateway.routes.hitl_routes",
+    "declared_owner": "api_gateway.routes.hitl_routes",
+    "tags": [
+      "hitl",
+      "hitl"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/rooms/{room_id}/hitl/{request_id}/cancel",
+    "methods": [
+      "POST"
+    ],
+    "name": "cancel_hitl_request",
+    "endpoint_module": "api_gateway.routes.hitl_routes",
+    "declared_owner": "api_gateway.routes.hitl_routes",
+    "tags": [
+      "hitl",
+      "hitl"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/sse/message/{message_id}/cancel",
+    "methods": [
+      "POST"
+    ],
+    "name": "cancel_message",
+    "endpoint_module": "api_gateway.routes.sse_routes",
+    "declared_owner": "api_gateway.routes.sse_routes",
+    "tags": [
+      "sse"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_execution_engine",
+      "get_sse_store"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/sse/room/{room_id}/status",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_room_sse_status",
+    "endpoint_module": "api_gateway.routes.sse_routes",
+    "declared_owner": "api_gateway.routes.sse_routes",
+    "tags": [
+      "sse"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user_with_query_token",
+      "get_sse_manager",
+      "get_sse_store"
+    ],
+    "auth_dependencies": [
+      "get_current_user_with_query_token"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/sse/room/{room_id}/stream",
+    "methods": [
+      "GET"
+    ],
+    "name": "stream_room_messages",
+    "endpoint_module": "api_gateway.routes.sse_routes",
+    "declared_owner": "api_gateway.routes.sse_routes",
+    "tags": [
+      "sse"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user_with_query_token",
+      "get_sse_manager",
+      "get_sse_store"
+    ],
+    "auth_dependencies": [
+      "get_current_user_with_query_token"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/users/me/a2a-tasks",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_user_pending_tasks",
+    "endpoint_module": "api_gateway.routes.a2a_task_routes",
+    "declared_owner": "api_gateway.routes.a2a_task_routes",
+    "tags": [
+      "a2a_tasks"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_task_store"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/webhooks/a2a/{message_id}",
+    "methods": [
+      "POST"
+    ],
+    "name": "handle_a2a_webhook",
+    "endpoint_module": "api_gateway.routes.webhook_routes",
+    "declared_owner": "api_gateway.routes.webhook_routes",
+    "tags": [
+      "webhooks"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_webhook_transport"
+    ],
+    "auth_dependencies": [],
+    "include_in_schema": true
+  },
+  {
+    "path": "/health",
+    "methods": [
+      "GET"
+    ],
+    "name": "health_check",
+    "endpoint_module": "main",
+    "declared_owner": "main",
+    "tags": [],
+    "status_code": null,
+    "dependencies": [
+      "get_health_check"
+    ],
+    "auth_dependencies": [],
+    "include_in_schema": true
+  }
+]

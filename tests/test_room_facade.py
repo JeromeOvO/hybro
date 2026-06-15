@@ -1,0 +1,745 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock
+
+import pytest
+
+from common.dto import (
+    AgentInfo,
+    AgentMessageInput,
+    CreateRoomRequest,
+    MembershipSeed,
+    MembershipUpdateRequest,
+    SavedAgentGroupSnapshot,
+    UserMessageInput,
+)
+from room import RoomFacade
+
+NOW = datetime(2026, 5, 11, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_registry_and_ownership_methods_use_repository_and_agent_registry():
+    facade, rooms, _, registry, _ = _facade(
+        room_docs=[
+            {
+                "room_id": "r1",
+                "room_name": "Room",
+                "room_owner_id": "owner",
+                "room_owner_name": "Owner",
+                "room_agent_set": {"a1": "Agent One", "a2": "Agent Two"},
+                "room_created_at": NOW,
+            }
+        ],
+        agents=[
+            AgentInfo(agent_id="a1", name="Agent One", hub_id="hub-1"),
+            AgentInfo(agent_id="a2", name="Agent Two", hub_id="hub-2"),
+        ],
+    )
+
+    room = await facade.get_room("r1")
+
+    assert room is not None
+    assert room.room_id == "r1"
+    assert list(room.agent_ids) == ["a1", "a2"]
+    assert await facade.get_room("missing") is None
+    assert await facade.get_room_agents("r1") == ["a1", "a2"]
+    assert await facade.get_room_agents("missing") == []
+    assert await facade.get_room_owner("r1") == "owner"
+    assert await facade.get_room_owner("missing") is None
+    assert await facade.verify_room_agent_membership("r1", "a1") is True
+    assert await facade.verify_room_agent_membership("r1", "missing") is False
+    assert await facade.verify_room_hub_ownership("r1", "hub-2") is True
+    assert await facade.verify_room_hub_ownership("r1", "missing-hub") is False
+    assert rooms.get_by_id_calls[:2] == ["r1", "missing"]
+    assert rooms.get_by_id_calls.count("missing") == 3
+    assert rooms.get_by_id_calls.count("r1") >= 6
+    registry.get_agents_by_ids.assert_called_with(["a1", "a2"])
+
+
+@pytest.mark.asyncio
+async def test_create_room_validates_required_fields_and_manual_seed():
+    facade, rooms, _, _, _ = _facade(
+        agents=[
+            AgentInfo(agent_id="a1", name="Agent One"),
+            AgentInfo(agent_id="a2", name="Agent Two"),
+        ],
+        ids=["room-created"],
+    )
+
+    with pytest.raises(ValueError, match="owner_id is required"):
+        await facade.create_room(
+            CreateRoomRequest(
+                owner_id="",
+                owner_name="Owner",
+                room_name="Room",
+                membership_seed=MembershipSeed(mode="manual"),
+            )
+        )
+
+    room = await facade.create_room(
+        CreateRoomRequest(
+            owner_id="owner",
+            owner_name="Owner",
+            room_name="Room",
+            membership_seed=MembershipSeed(mode="manual", agent_ids=["a2", "a1"]),
+        )
+    )
+
+    assert room.room_id == "room-created"
+    assert list(room.agent_ids) == ["a2", "a1"]
+    assert dict(room.agent_set) == {"a2": "Agent Two", "a1": "Agent One"}
+    assert room.membership_origin == "manual"
+    assert room.membership_origin_status == "manual"
+    assert rooms.created_docs[-1] == {
+        "room_id": "room-created",
+        "room_name": "Room",
+        "room_owner_id": "owner",
+        "room_owner_name": "Owner",
+        "room_agent_set": {"a2": "Agent Two", "a1": "Agent One"},
+        "room_created_at": NOW,
+        "membership_origin": "manual",
+        "membership_origin_status": "manual",
+        "source_group_id": None,
+        "source_group_name": None,
+        "processing_message_id": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_room_preserves_initial_extend_info():
+    facade, rooms, _, _, _ = _facade(ids=["room-created"])
+
+    room = await facade.create_room(
+        CreateRoomRequest(
+            owner_id="owner",
+            owner_name="Owner",
+            room_name="Room",
+            membership_seed=MembershipSeed(mode="manual"),
+            extend_info={"debateMode": True, "use_supervisor": True},
+        )
+    )
+
+    assert room.extend_info == {"debateMode": True, "use_supervisor": True}
+    assert rooms.created_docs[-1]["extend_info"] == {
+        "debateMode": True,
+        "use_supervisor": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_room_supports_saved_group_all_current_and_empty_manual():
+    facade, _, _, _, source = _facade(
+        agents=[
+            AgentInfo(agent_id="a1", name="Agent One", status="active"),
+            AgentInfo(agent_id="a2", name="Agent Two", status="active"),
+        ],
+        saved_groups={
+            "g1": SavedAgentGroupSnapshot(
+                group_id="g1",
+                name="Group One",
+                owner_id="owner",
+                type="custom",
+                agent_ids=["a1"],
+            )
+        },
+        current_agents=[
+            AgentInfo(agent_id="a2", name="Agent Two", status="active"),
+            AgentInfo(agent_id="inactive", name="Inactive", status="inactive"),
+        ],
+        ids=["saved-room", "current-room", "empty-room"],
+    )
+
+    saved = await facade.create_room(
+        CreateRoomRequest(
+            owner_id="owner",
+            owner_name="Owner",
+            room_name="Saved",
+            membership_seed=MembershipSeed(mode="saved_group", group_id="g1"),
+        )
+    )
+    current = await facade.create_room(
+        CreateRoomRequest(
+            owner_id="owner",
+            owner_name="Owner",
+            room_name="Current",
+            membership_seed=MembershipSeed(mode="all_current_agents"),
+        )
+    )
+    empty = await facade.create_room(
+        CreateRoomRequest(
+            owner_id="owner",
+            owner_name="Owner",
+            room_name="Empty",
+            membership_seed=MembershipSeed(mode="manual"),
+        )
+    )
+
+    assert saved.source_group_id == "g1"
+    assert saved.source_group_name == "Group One"
+    assert saved.membership_origin == "saved_group"
+    assert saved.membership_origin_status == "seeded_never_edited"
+    assert list(current.agent_ids) == ["a2"]
+    assert source.list_current_agents_calls == ["owner"]
+    assert list(empty.agent_ids) == []
+    assert empty.membership_origin == "manual"
+
+
+@pytest.mark.asyncio
+async def test_update_and_delete_room_lifecycle_rules():
+    facade, rooms, messages, _, _ = _facade(
+        room_docs=[
+            {
+                "room_id": "r1",
+                "room_name": "Old",
+                "room_owner_id": "owner",
+                "room_owner_name": "Owner",
+                "room_agent_set": {},
+                "room_created_at": NOW,
+            }
+        ]
+    )
+
+    updated = await facade.update_room("r1", {"room_name": "New"})
+    extended = await facade.update_room("r1", {"extend_info": {"x": 1}})
+
+    assert updated is not None
+    assert updated.room_name == "New"
+    assert extended is not None
+    assert extended.extend_info == {"x": 1}
+    assert await facade.update_room("missing", {"room_name": "Nope"}) is None
+    with pytest.raises(ValueError, match="Unknown room update keys"):
+        await facade.update_room("r1", {"not_allowed": True})
+
+    assert await facade.delete_room("missing", "owner") is False
+    assert await facade.delete_room("r1", "not-owner") is False
+    assert await facade.delete_room("r1", "owner") is True
+    assert messages.deleted_rooms == ["r1"]
+    assert rooms.deleted_ids == ["r1"]
+
+
+@pytest.mark.asyncio
+async def test_delete_room_uses_normalized_owner_id_from_repository_doc():
+    class OwnerId:
+        def __str__(self) -> str:
+            return "owner"
+
+    facade, rooms, messages, _, _ = _facade(
+        room_docs=[
+            {
+                "room_id": "r1",
+                "room_name": "Room",
+                "room_owner_id": OwnerId(),
+                "room_owner_name": "Owner",
+                "room_agent_set": {},
+            }
+        ]
+    )
+
+    assert await facade.get_room_owner("r1") == "owner"
+    assert await facade.delete_room("r1", "owner") is True
+    assert messages.deleted_rooms == ["r1"]
+    assert rooms.deleted_ids == ["r1"]
+
+
+@pytest.mark.asyncio
+async def test_update_membership_add_remove_validation_and_provenance():
+    facade, rooms, _, _, _ = _facade(
+        room_docs=[
+            {
+                "room_id": "seeded",
+                "room_name": "Seeded",
+                "room_owner_id": "owner",
+                "room_owner_name": "Owner",
+                "room_agent_set": {"a1": "Agent One"},
+                "membership_origin": "saved_group",
+                "membership_origin_status": "seeded_never_edited",
+            },
+            {
+                "room_id": "manual",
+                "room_name": "Manual",
+                "room_owner_id": "owner",
+                "room_owner_name": "Owner",
+                "room_agent_set": {"a1": "Agent One"},
+                "membership_origin": "manual",
+                "membership_origin_status": "manual",
+            },
+        ],
+        agents=[
+            AgentInfo(agent_id="a1", name="Agent One", status="active"),
+            AgentInfo(agent_id="a2", name="Agent Two", status="active"),
+            AgentInfo(agent_id="inactive", name="Inactive", status="inactive"),
+            AgentInfo(
+                agent_id="private",
+                name="Private",
+                status="active",
+                is_public=False,
+                provider_id="someone-else",
+            ),
+        ],
+    )
+
+    seeded = await facade.update_membership(
+        "seeded",
+        MembershipUpdateRequest(add_agent_ids=["a2"]),
+    )
+    manual = await facade.update_membership(
+        "manual",
+        MembershipUpdateRequest(remove_agent_ids=["a1"]),
+    )
+
+    assert dict(seeded.agent_set) == {"a1": "Agent One", "a2": "Agent Two"}
+    assert seeded.membership_origin_status == "seeded_edited"
+    assert dict(manual.agent_set) == {}
+    assert manual.membership_origin_status == "manual"
+    with pytest.raises(ValueError, match="Unknown or deleted agent IDs"):
+        await facade.update_membership(
+            "manual",
+            MembershipUpdateRequest(add_agent_ids=["missing"]),
+        )
+    with pytest.raises(ValueError, match="Access denied to private agents"):
+        await facade.update_membership(
+            "manual",
+            MembershipUpdateRequest(add_agent_ids=["private"]),
+        )
+    with pytest.raises(ValueError, match="Inactive agent IDs"):
+        await facade.update_membership(
+            "manual",
+            MembershipUpdateRequest(add_agent_ids=["inactive"]),
+        )
+    assert rooms.membership_updates[-1]["membership_origin_status"] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_replace_membership_compatibility_helper_replaces_full_seed():
+    facade, _, _, _, _ = _facade(
+        room_docs=[
+            {
+                "room_id": "r1",
+                "room_name": "Room",
+                "room_owner_id": "owner",
+                "room_owner_name": "Owner",
+                "room_agent_set": {"old": "Old Agent"},
+                "membership_origin": "manual",
+                "membership_origin_status": "manual",
+            }
+        ],
+        agents=[AgentInfo(agent_id="a1", name="Agent One")],
+    )
+
+    room = await facade.replace_membership(
+        "r1",
+        MembershipSeed(mode="manual", agent_ids=["a1"]),
+        requesting_user_id="owner",
+    )
+
+    assert list(room.agent_ids) == ["a1"]
+    assert dict(room.agent_set) == {"a1": "Agent One"}
+
+
+@pytest.mark.asyncio
+async def test_save_user_message_verifies_room_persists_raw_doc_and_returns_saved_dto():
+    facade, _, messages, _, _ = _facade(
+        room_docs=[
+            {
+                "room_id": "r1",
+                "room_name": "Room",
+                "room_owner_id": "owner",
+                "room_owner_name": "Owner",
+                "room_agent_set": {},
+            }
+        ],
+        ids=["msg-user"],
+    )
+
+    with pytest.raises(ValueError, match="Room not found"):
+        await facade.save_user_message(
+            "missing",
+            UserMessageInput(room_id="missing", message_text="hi", sender_id="u1"),
+        )
+
+    saved = await facade.save_user_message(
+        "r1",
+        UserMessageInput(
+            room_id="r1",
+            message_text="hello",
+            sender_id="u1",
+            sender_name="User",
+            client_request_id="client-1",
+            metadata={"scope_resolution_error": {"code": "empty_scope"}},
+        ),
+    )
+
+    assert saved.message_id == "msg-user"
+    assert saved.dispatch_root_message_id == "msg-user"
+    assert saved.scope_resolution_error == {"code": "empty_scope"}
+    assert messages.user_messages["msg-user"]["room_id"] == "r1"
+    assert messages.user_messages["msg-user"]["message_type"] == "user"
+    assert messages.user_messages["msg-user"]["user_id"] == "u1"
+    assert messages.user_messages["msg-user"]["message_content"]["message_text"] == "hello"
+    assert messages.user_messages["msg-user"]["client_request_id"] == "client-1"
+    assert messages.user_messages["msg-user"]["message_created_at"] == NOW
+
+
+@pytest.mark.asyncio
+async def test_save_agent_message_verifies_room_and_preserves_metadata():
+    facade, _, messages, _, _ = _facade(
+        room_docs=[
+            {
+                "room_id": "r1",
+                "room_name": "Room",
+                "room_owner_id": "owner",
+                "room_owner_name": "Owner",
+                "room_agent_set": {"a1": "Agent One"},
+            }
+        ],
+        ids=["msg-agent"],
+    )
+
+    with pytest.raises(ValueError, match="Room not found"):
+        await facade.save_agent_message(
+            "missing",
+            AgentMessageInput(room_id="missing", agent_id="a1"),
+        )
+
+    message_id = await facade.save_agent_message(
+        "r1",
+        AgentMessageInput(
+            room_id="r1",
+            agent_id="a1",
+            content={"message_text": "working"},
+            parent_message_id="msg-user",
+            metadata={
+                "step_number": 1,
+                "total_steps": 2,
+                "has_task_tracking": True,
+                "turn_id": "msg-user",
+            },
+        ),
+    )
+
+    assert message_id == "msg-agent"
+    stored = messages.agent_messages["msg-agent"]
+    assert stored["room_id"] == "r1"
+    assert stored["message_type"] == "agent"
+    assert stored["agent_id"] == "a1"
+    assert stored["related_message_id"] == "msg-user"
+    assert stored["parent_message_id"] == "msg-user"
+    assert stored["message_content"] == {"message_text": "working"}
+    assert stored["step_number"] == 1
+    assert stored["has_task_tracking"] is True
+
+
+@pytest.mark.asyncio
+async def test_status_and_history_methods_delegate_and_translate_results():
+    facade, _, messages, _, _ = _facade()
+    messages.user_messages["u1"] = {
+        "room_id": "r1",
+        "message_id": "u1",
+        "message_type": "user",
+        "user_id": "user",
+        "message_content": {"message_text": "hello"},
+        "message_created_at": NOW,
+    }
+    messages.agent_messages["a1"] = {
+        "room_id": "r1",
+        "message_id": "a1",
+        "message_type": "agent",
+        "agent_id": "agent",
+        "related_message_id": "u1",
+        "message_content": {"message_text": "hi"},
+        "message_created_at": NOW,
+    }
+
+    assert await facade.update_agent_message_status("a1", "completed", task_updated_at=NOW)
+    assert messages.status_updates == [("a1", "completed", {"task_updated_at": NOW})]
+
+    user = await facade.get_message("u1")
+    history = await facade.get_messages_for_room("r1")
+    by_ids = await facade.get_messages_by_ids(["a1", "missing", "u1"])
+    thread = await facade.get_message_thread("u1")
+
+    assert user is not None
+    assert user.message_id == "u1"
+    assert [message.message_id for message in history] == ["u1", "a1"]
+    assert [message.message_id for message in by_ids] == ["a1", "u1"]
+    assert [message.message_id for message in thread] == ["a1"]
+
+
+@pytest.mark.asyncio
+async def test_track_hub_task_writes_message_task_paths_for_lineage_reader():
+    facade, _, messages, _, _ = _facade()
+    messages.agent_messages["a1"] = {
+        "room_id": "r1",
+        "message_id": "a1",
+        "message_type": "agent",
+        "agent_id": "agent",
+        "message_content": {"message_task": {}},
+        "message_created_at": NOW,
+    }
+
+    await facade.track_hub_task(
+        "a1",
+        {
+            "id": "hub-task-1",
+            "context_id": "ctx-1",
+            "status": {"state": "submitted", "message": "queued"},
+        },
+    )
+
+    assert messages.status_updates == [
+        (
+            "a1",
+            "processing",
+            {
+                "message_content.message_task.id": "hub-task-1",
+                "message_content.message_task.context_id": "ctx-1",
+                "message_content.message_task.status.message": "queued",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_hub_publish_lineage_walks_agent_parent_chain_to_root_user():
+    facade, _, messages, _, _ = _facade(
+        room_docs=[
+            {
+                "room_id": "r1",
+                "room_name": "Room",
+                "room_owner_id": "owner",
+                "room_owner_name": "Owner",
+                "room_created_at": NOW,
+            }
+        ],
+        agents=[AgentInfo(agent_id="agent", name="Agent", hub_id="hub-1")],
+    )
+    messages.user_messages["u1"] = {
+        "room_id": "r1",
+        "message_id": "u1",
+        "message_type": "user",
+        "message_created_at": NOW,
+    }
+    messages.agent_messages["parent"] = {
+        "room_id": "r1",
+        "message_id": "parent",
+        "message_type": "agent",
+        "agent_id": "agent",
+        "related_message_id": "u1",
+        "message_content": {"message_task": {}},
+        "message_created_at": NOW,
+    }
+    messages.agent_messages["child"] = {
+        "room_id": "r1",
+        "message_id": "child",
+        "message_type": "agent",
+        "agent_id": "agent",
+        "related_message_id": "parent",
+        "message_content": {"message_task": {}},
+        "message_created_at": NOW,
+    }
+
+    lineage = await facade.get_hub_publish_lineage(
+        room_id="r1",
+        agent_message_id="child",
+    )
+
+    assert lineage is not None
+    assert lineage.root_user_message_id == "u1"
+    assert lineage.lifecycle_message_id == "u1"
+    assert "u1" in lineage.cancellation_message_ids
+
+
+def _facade(
+    *,
+    room_docs: list[dict] | None = None,
+    agents: list[AgentInfo] | None = None,
+    saved_groups: dict[str, SavedAgentGroupSnapshot] | None = None,
+    current_agents: list[AgentInfo] | None = None,
+    ids: list[str] | None = None,
+):
+    rooms = FakeRoomRepository(room_docs or [])
+    messages = FakeMessageRepository()
+    registry = _registry(*(agents or []))
+    source = FakeMembershipSource(
+        saved_groups=saved_groups or {},
+        current_agents=current_agents or [],
+    )
+    id_iter = iter(ids or ["generated-id"])
+    facade = RoomFacade(
+        repository=rooms,
+        message_repository=messages,
+        agent_registry=registry,
+        membership_source=source,
+        id_factory=lambda: next(id_iter),
+        now=lambda: NOW,
+    )
+    return facade, rooms, messages, registry, source
+
+
+def _registry(*agents: AgentInfo):
+    by_id = {agent.agent_id: agent for agent in agents}
+    registry = AsyncMock()
+
+    async def get_agents_by_ids(agent_ids: list[str]) -> list[AgentInfo]:
+        return [by_id[agent_id] for agent_id in agent_ids if agent_id in by_id]
+
+    registry.get_agents_by_ids.side_effect = get_agents_by_ids
+    return registry
+
+
+class FakeMembershipSource:
+    def __init__(
+        self,
+        *,
+        saved_groups: dict[str, SavedAgentGroupSnapshot],
+        current_agents: list[AgentInfo],
+    ) -> None:
+        self.saved_groups = saved_groups
+        self.current_agents = current_agents
+        self.list_current_agents_calls: list[str | None] = []
+
+    async def get_saved_group(self, group_id: str) -> SavedAgentGroupSnapshot | None:
+        return self.saved_groups.get(group_id)
+
+    async def list_current_agents(self, user_id: str | None) -> list[AgentInfo]:
+        self.list_current_agents_calls.append(user_id)
+        return list(self.current_agents)
+
+
+class FakeRoomRepository:
+    def __init__(self, docs: list[dict]) -> None:
+        self.docs = {doc["room_id"]: deepcopy(doc) for doc in docs}
+        self.get_by_id_calls: list[str] = []
+        self.created_docs: list[dict] = []
+        self.deleted_ids: list[str] = []
+        self.membership_updates: list[dict] = []
+
+    async def get_by_id(self, room_id: str) -> dict | None:
+        self.get_by_id_calls.append(room_id)
+        doc = self.docs.get(room_id)
+        return deepcopy(doc) if doc is not None else None
+
+    async def get_by_owner(self, owner_id: str) -> list[dict]:
+        return [
+            deepcopy(doc)
+            for doc in self.docs.values()
+            if doc.get("room_owner_id") == owner_id
+        ]
+
+    async def create(self, room: dict) -> str:
+        self.created_docs.append(deepcopy(room))
+        self.docs[room["room_id"]] = deepcopy(room)
+        return room["room_id"]
+
+    async def update(self, room_id: str, updates: dict) -> bool:
+        if room_id not in self.docs:
+            return False
+        self.docs[room_id].update(deepcopy(updates))
+        return True
+
+    async def update_fields(self, room_id: str, updates: dict) -> dict | None:
+        if room_id not in self.docs:
+            return None
+        self.docs[room_id].update(deepcopy(updates))
+        return deepcopy(self.docs[room_id])
+
+    async def set_membership(
+        self,
+        room_id: str,
+        *,
+        agent_set: dict[str, str],
+        membership_origin: str,
+        membership_origin_status: str,
+        source_group_id: str | None = None,
+        source_group_name: str | None = None,
+    ) -> dict | None:
+        updates = {
+            "room_agent_set": deepcopy(agent_set),
+            "membership_origin": membership_origin,
+            "membership_origin_status": membership_origin_status,
+            "source_group_id": source_group_id,
+            "source_group_name": source_group_name,
+        }
+        self.membership_updates.append(deepcopy(updates))
+        return await self.update_fields(room_id, updates)
+
+    async def delete(self, room_id: str) -> bool:
+        if room_id not in self.docs:
+            return False
+        self.deleted_ids.append(room_id)
+        del self.docs[room_id]
+        return True
+
+
+class FakeMessageRepository:
+    def __init__(self) -> None:
+        self.deleted_rooms: list[str] = []
+        self.user_messages: dict[str, dict] = {}
+        self.agent_messages: dict[str, dict] = {}
+        self.status_updates: list[tuple[str, str, dict]] = []
+
+    async def save_user_message(self, message: dict) -> str:
+        self.user_messages[message["message_id"]] = deepcopy(message)
+        return message["message_id"]
+
+    async def save_agent_message(self, message: dict) -> str:
+        self.agent_messages[message["message_id"]] = deepcopy(message)
+        return message["message_id"]
+
+    async def get_by_id(self, message_id: str) -> dict | None:
+        doc = self.user_messages.get(message_id) or self.agent_messages.get(message_id)
+        return deepcopy(doc) if doc is not None else None
+
+    async def get_by_ids(self, message_ids: list[str]) -> list[dict]:
+        out = []
+        for message_id in message_ids:
+            doc = self.user_messages.get(message_id) or self.agent_messages.get(message_id)
+            if doc is not None:
+                out.append(deepcopy(doc))
+        return out
+
+    async def get_for_room(
+        self, room_id: str, limit: int, before: datetime | None = None
+    ) -> list[dict]:
+        docs = [
+            *[
+                deepcopy(doc)
+                for doc in self.user_messages.values()
+                if doc.get("room_id") == room_id
+            ],
+            *[
+                deepcopy(doc)
+                for doc in self.agent_messages.values()
+                if doc.get("room_id") == room_id
+            ],
+        ]
+        return docs[:limit]
+
+    async def get_thread(self, parent_message_id: str) -> list[dict]:
+        return [
+            deepcopy(doc)
+            for doc in self.agent_messages.values()
+            if doc.get("related_message_id") == parent_message_id
+            or doc.get("parent_message_id") == parent_message_id
+        ]
+
+    async def update_status(self, message_id: str, status: str, **fields) -> bool:
+        self.status_updates.append((message_id, status, deepcopy(fields)))
+        return message_id in self.agent_messages
+
+    async def delete_for_room(self, room_id: str) -> dict[str, int]:
+        self.deleted_rooms.append(room_id)
+        return {"user_messages": 0, "agent_messages": 0}
+
+    async def get_user_messages_for_room(
+        self, room_id: str, limit: int = 100, before: datetime | None = None
+    ) -> list[dict]:
+        return []
+
+    async def get_agent_messages_for_room(
+        self, room_id: str, limit: int = 100, before: datetime | None = None
+    ) -> list[dict]:
+        return []

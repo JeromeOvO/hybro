@@ -1,0 +1,593 @@
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Mapping
+from copy import deepcopy
+from typing import TYPE_CHECKING, Any, Protocol
+
+from common.dto import (
+    ExecutionAck,
+    ExecutionRequest,
+    HITLRequest,
+    HITLResponse,
+    HubAgentResponseInternal,
+    RunInfo,
+)
+from common.observability import traced_create_task
+from common.protocols import EventPublisher
+from common.utils.logger import get_logger
+from execution.dispatch.agent_event import AgentEvent
+from execution.events import emit_processing_status
+from execution.hitl.translators import (
+    hitl_cancel_none_to_success,
+    hitl_response_dict_to_common,
+    model_hitl_request_to_common,
+)
+from execution.ports import (
+    AgentResponseHandlerPort,
+    AgentTaskCleanupPort,
+    CancellationStatePort,
+    CancellationStorePort,
+    ClientRequestIdResolver,
+    HITLMessageCancellationPort,
+    RunEventEnabled,
+    RunLifecyclePort,
+    RunReadPort,
+    TaskFactory,
+)
+from execution.translators import room_response_to_execution_ack
+from models.request import OrchestrationRequest, RoomCenterUserMessageRequest
+
+if TYPE_CHECKING:
+    from models.response import OrchestrationResponse
+
+logger = get_logger(__name__)
+
+AGENT_EVENT_KINDS = {
+    "artifact_update",
+    "response",
+    "error",
+    "canceled",
+    "task_submitted",
+    "status_update",
+    "interactive",
+    "processing_status",
+}
+TERMINAL_AGENT_EVENT_KINDS = {"response", "error", "canceled"}
+LEGACY_COMMON_AGENT_EVENT_KIND_MAP = {
+    "final": "response",
+    "input_required": "interactive",
+    "status_update": "status_update",
+    "error": "error",
+}
+UNSUPPORTED_PHASE7B_HUB_EVENT_TYPES = {"partial"}
+LEGACY_TASK_STATE_VALUE_MAP = {
+    "input_required": "input-required",
+    "auth_required": "auth-required",
+}
+LEGACY_PROCESSING_STATUS_VALUE_MAP = {
+    "input_required": "awaiting_input",
+    "input-required": "awaiting_input",
+    "auth_required": "awaiting_input",
+    "auth-required": "awaiting_input",
+}
+VALID_ERROR_TASK_STATES = {"failed", "canceled", "rejected"}
+VALID_INTERACTIVE_TASK_STATES = {"input-required", "auth-required"}
+VALID_PROCESSING_STATUS_STATES = {
+    "queued",
+    "processing",
+    "awaiting_input",
+    "completed",
+    "failed",
+    "canceled",
+    "rejected",
+    "rate_limited",
+    "error",
+}
+
+
+class RoomCenterPort(Protocol):
+    async def send_message_to_room(
+        self,
+        request: RoomCenterUserMessageRequest,
+        target_group: Any = None,
+        mentioned_agent_ids: Any = None,
+    ) -> Any: ...
+
+
+class RoomMessageCenterPort(Protocol):
+    async def process_room_user_message(
+        self,
+        request: OrchestrationRequest,
+    ) -> OrchestrationResponse: ...
+
+
+class HITLServicePort(Protocol):
+    async def request_input(
+        self,
+        room_id: str,
+        user_message_id: str,
+        source: str,
+        prompt: str,
+        **kwargs: Any,
+    ) -> Any | None: ...
+
+    async def handle_response(
+        self,
+        room_id: str,
+        request_id: str,
+        user_input: str,
+        user_id: str,
+    ) -> dict[str, Any]: ...
+
+    async def get_pending_requests(self, room_id: str) -> list[Any]: ...
+
+    async def cancel_request(
+        self,
+        request_id: str,
+        room_id: str | None = None,
+    ) -> Any: ...
+
+
+def _thaw_hub_payload_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw_hub_payload_value(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_thaw_hub_payload_value(item) for item in value]
+    if isinstance(value, set | frozenset):
+        return [_thaw_hub_payload_value(item) for item in value]
+    return deepcopy(value)
+
+
+def _hub_payload_kind(payload: dict[str, Any]) -> str:
+    raw = payload.get("kind") or payload.get("event_type")
+    if raw is None or raw == "":
+        raise ValueError(
+            "HubAgentResponseInternal payload missing required field: kind"
+        )
+    raw_kind = str(raw)
+    if raw_kind in UNSUPPORTED_PHASE7B_HUB_EVENT_TYPES:
+        raise ValueError(
+            f"Unsupported non-terminal Hub AgentEvent event_type: {raw_kind}"
+        )
+    kind = LEGACY_COMMON_AGENT_EVENT_KIND_MAP.get(raw_kind, raw_kind)
+    if kind not in AGENT_EVENT_KINDS:
+        raise ValueError(f"Unsupported AgentEvent kind from Hub payload: {kind}")
+    return kind
+
+
+def _hub_payload_message_id(payload: dict[str, Any]) -> str:
+    value = payload.get("message_id")
+    if value is None:
+        value = payload.get("continuation_message_id")
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            "HubAgentResponseInternal payload requires non-empty string message_id "
+            "or continuation_message_id"
+        )
+    return value
+
+
+def _optional_hub_str(
+    payload: dict[str, Any],
+    key: str,
+    *,
+    default: str | None = None,
+) -> str | None:
+    value = payload.get(key, default)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"Hub AgentEvent field {key} must be a string")
+    return value
+
+
+def _optional_hub_bool(payload: dict[str, Any], key: str, *, default: bool) -> bool:
+    value = payload.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"Hub AgentEvent field {key} must be a boolean")
+    return value
+
+
+def _optional_hub_int(payload: dict[str, Any], key: str) -> int | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"Hub AgentEvent field {key} must be an integer")
+    return value
+
+
+def _optional_hub_list_of_dicts(
+    payload: dict[str, Any],
+    key: str,
+) -> list[dict[str, Any]] | None:
+    value = _thaw_hub_payload_value(payload.get(key))
+    if value is None:
+        return None
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise ValueError(f"Hub AgentEvent field {key} must be a list of objects")
+    return value
+
+
+def _agent_event_details(value: Any) -> str | None:
+    if value is None or isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _normalize_hub_state(kind: str, value: str | None) -> str | None:
+    if value is None:
+        return None
+    if kind == "processing_status":
+        normalized = LEGACY_PROCESSING_STATUS_VALUE_MAP.get(value, value)
+        allowed = VALID_PROCESSING_STATUS_STATES
+    elif kind == "error":
+        normalized = LEGACY_TASK_STATE_VALUE_MAP.get(value, value)
+        allowed = VALID_ERROR_TASK_STATES
+    elif kind == "interactive":
+        normalized = LEGACY_TASK_STATE_VALUE_MAP.get(value, value)
+        allowed = VALID_INTERACTIVE_TASK_STATES
+    else:
+        normalized = LEGACY_TASK_STATE_VALUE_MAP.get(value, value)
+        return normalized
+    if normalized not in allowed:
+        raise ValueError(f"Unsupported Hub AgentEvent state for {kind}: {value}")
+    return normalized
+
+
+def _hub_payload_state(kind: str, payload: dict[str, Any]) -> str | None:
+    return _normalize_hub_state(kind, _optional_hub_str(payload, "state"))
+
+
+def _validate_hub_payload_for_kind(kind: str, payload: dict[str, Any]) -> None:
+    state = _hub_payload_state(kind, payload)
+    text = _optional_hub_str(payload, "text", default="")
+    error_text = _optional_hub_str(payload, "error_text")
+    if kind == "processing_status" and not state:
+        raise ValueError("processing_status Hub payload requires state")
+    if kind == "error" and not (error_text or text):
+        raise ValueError("error Hub payload requires error_text or text")
+    if payload.get("is_final") is not None and not isinstance(
+        payload.get("is_final"), bool
+    ):
+        raise ValueError("Hub AgentEvent field is_final must be a boolean")
+    verified = payload.get("lifecycle_message_id_verified")
+    if verified is not None and not isinstance(verified, bool):
+        raise ValueError(
+            "Hub AgentEvent field lifecycle_message_id_verified must be a boolean"
+        )
+
+
+def _validate_hub_event_consistency(
+    event: HubAgentResponseInternal,
+    kind: str,
+    payload: dict[str, Any],
+) -> None:
+    payload_task_id = payload.get("task_id")
+    if payload_task_id is not None and payload_task_id != event.task_id:
+        raise ValueError("Hub payload task_id conflicts with event.task_id")
+    if not event.task_id:
+        raise ValueError("HubAgentResponseInternal requires top-level task_id")
+    if kind in TERMINAL_AGENT_EVENT_KINDS and not event.is_terminal:
+        raise ValueError(f"Hub AgentEvent kind {kind} requires terminal internal event")
+    if kind not in TERMINAL_AGENT_EVENT_KINDS and event.is_terminal:
+        raise ValueError(
+            f"Hub AgentEvent kind {kind} must not use a terminal internal event"
+        )
+    if kind in TERMINAL_AGENT_EVENT_KINDS and payload.get("is_final") is False:
+        raise ValueError(f"Hub AgentEvent kind {kind} cannot set is_final=False")
+
+
+def _hub_payload_lifecycle_message_id(kind: str, payload: dict[str, Any]) -> str | None:
+    value = _optional_hub_str(payload, "lifecycle_message_id")
+    if kind == "processing_status" and value is None:
+        raise ValueError("Hub processing_status requires verified lifecycle_message_id")
+    if (
+        value is not None
+        and kind == "processing_status"
+        and payload.get("lifecycle_message_id_verified") is not True
+    ):
+        raise ValueError(
+            "Hub processing_status lifecycle_message_id requires upstream "
+            "turn/root validation"
+        )
+    return value
+
+
+def hub_agent_response_internal_to_agent_event(
+    event: HubAgentResponseInternal,
+) -> AgentEvent:
+    payload = _thaw_hub_payload_value(event.payload)
+    kind = _hub_payload_kind(payload)
+    _validate_hub_event_consistency(event, kind, payload)
+    _validate_hub_payload_for_kind(kind, payload)
+    return AgentEvent(
+        kind=kind,
+        room_id=event.room_id,
+        message_id=_hub_payload_message_id(payload),
+        agent_id=event.agent_id,
+        task_id=event.task_id,
+        turn_id=_optional_hub_str(payload, "turn_id"),
+        text=_optional_hub_str(payload, "text", default="") or "",
+        state=_hub_payload_state(kind, payload),
+        parts=_optional_hub_list_of_dicts(payload, "parts"),
+        artifacts=_optional_hub_list_of_dicts(payload, "artifacts"),
+        context_id=_optional_hub_str(payload, "context_id"),
+        error_text=_optional_hub_str(payload, "error_text"),
+        related_message_id=_optional_hub_str(payload, "related_message_id"),
+        user_id=_optional_hub_str(payload, "user_id"),
+        client_request_id=_optional_hub_str(payload, "client_request_id"),
+        lifecycle_message_id=_hub_payload_lifecycle_message_id(kind, payload),
+        append=_optional_hub_bool(payload, "append", default=False),
+        last_chunk=_optional_hub_bool(payload, "last_chunk", default=False),
+        is_final=_optional_hub_bool(payload, "is_final", default=event.is_terminal),
+        agent_name=_optional_hub_str(payload, "agent_name"),
+        step_number=_optional_hub_int(payload, "step_number"),
+        total_steps=_optional_hub_int(payload, "total_steps"),
+        skip_persist=_optional_hub_bool(payload, "skip_persist", default=False),
+        s3_converted=_optional_hub_bool(payload, "s3_converted", default=False),
+        details=_agent_event_details(_thaw_hub_payload_value(payload.get("details"))),
+    )
+
+
+class ExecutionFacade:
+    def __init__(
+        self,
+        *,
+        room_center: RoomCenterPort,
+        room_message_center: RoomMessageCenterPort,
+        hitl_service: HITLServicePort,
+        run_lifecycle: RunLifecyclePort,
+        run_reader: RunReadPort,
+        cancellation_state: CancellationStatePort,
+        cancellation_store: CancellationStorePort,
+        hitl_message_cancellation: HITLMessageCancellationPort,
+        agent_task_cleanup: AgentTaskCleanupPort,
+        agent_response_handler: AgentResponseHandlerPort,
+        event_publisher: EventPublisher,
+        run_event_enabled: RunEventEnabled,
+        client_request_id_resolver: ClientRequestIdResolver,
+        task_factory: TaskFactory = traced_create_task,
+    ) -> None:
+        self._room_center = room_center
+        self._room_message_center = room_message_center
+        self._hitl_service = hitl_service
+        self._run_lifecycle = run_lifecycle
+        self._run_reader = run_reader
+        self._cancellation_state = cancellation_state
+        self._cancellation_store = cancellation_store
+        self._hitl_message_cancellation = hitl_message_cancellation
+        self._agent_task_cleanup = agent_task_cleanup
+        self._agent_response_handler = agent_response_handler
+        self._event_publisher = event_publisher
+        self._run_event_enabled = run_event_enabled
+        self._client_request_id_resolver = client_request_id_resolver
+        self._task_factory = task_factory
+        self._inflight: set[asyncio.Task] = set()
+        self._inflight_metadata: dict[asyncio.Task, dict[str, str | None]] = {}
+
+    async def execute(self, request: ExecutionRequest) -> ExecutionAck:
+        room_request = RoomCenterUserMessageRequest(
+            room_id=request.room_id,
+            user_id=request.sender_id,
+            user_name=request.sender_name,
+            message=request.message,
+            attachments=request.attachments,
+            inline_file_ids=request.inline_file_ids,
+            client_request_id=request.client_request_id,
+        )
+        response = await self._room_center.send_message_to_room(
+            room_request,
+            request.target_group,
+            request.mentioned_agent_ids,
+        )
+        return room_response_to_execution_ack(response)
+
+    async def start_orchestration(
+        self,
+        request: ExecutionRequest,
+        ack: ExecutionAck,
+    ) -> None:
+        if not ack.success or not ack.message_id or not ack.should_start_orchestration:
+            return
+        orchestration_request = OrchestrationRequest(
+            room_id=request.room_id,
+            room_user_message_id=ack.message_id,
+            room_related_message_id=request.parent_message_id,
+            user_id=request.sender_id,
+            client_request_id=request.client_request_id,
+        )
+        task = self._spawn_orchestration(
+            self._room_message_center.process_room_user_message(orchestration_request),
+            name=f"execution-orchestrate-{ack.message_id}",
+            room_id=request.room_id,
+            message_id=ack.message_id,
+            client_request_id=request.client_request_id,
+        )
+        await task
+
+    def schedule_recovery_orchestration(
+        self,
+        request: OrchestrationRequest,
+        *,
+        reason: str,
+    ) -> asyncio.Task[Any]:
+        message_id = (
+            request.room_user_message_id or request.room_agent_message_id or "unknown"
+        )
+        return self._spawn_orchestration(
+            self._room_message_center.process_room_user_message(request),
+            name=f"execution-recovery-{reason}-{message_id}",
+            room_id=request.room_id,
+            message_id=message_id,
+            client_request_id=request.client_request_id,
+        )
+
+    def _spawn_orchestration(
+        self,
+        coro,
+        *,
+        name: str,
+        room_id: str | None = None,
+        message_id: str | None = None,
+        client_request_id: str | None = None,
+    ) -> asyncio.Task[Any]:
+        task = self._task_factory(coro, name=name)
+        self._inflight.add(task)
+        self._inflight_metadata[task] = {
+            "room_id": room_id,
+            "message_id": message_id,
+            "client_request_id": client_request_id,
+        }
+
+        def _on_done(done: asyncio.Task) -> None:
+            self._inflight.discard(done)
+            self._inflight_metadata.pop(done, None)
+            if done.cancelled():
+                return
+            exc = done.exception()
+            if exc is not None:
+                logger.error(
+                    "execution orchestration task failed",
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
+
+        task.add_done_callback(_on_done)
+        return task
+
+    async def cancel(
+        self,
+        room_id: str,
+        message_id: str,
+        *,
+        requested_by_user_id: str,
+    ) -> bool:
+        persisted = await self._cancellation_store.cancel_message(
+            message_id,
+            requested_by_user_id,
+        )
+        if not persisted:
+            return False
+        await self._cancellation_state.cancel_message_and_broadcast(message_id)
+        await self._hitl_message_cancellation.cancel_requests_for_message(message_id)
+        await emit_processing_status(
+            room_id=room_id,
+            status="canceled",
+            message_id=message_id,
+            lifecycle_message_id=message_id,
+            run_lifecycle=self._run_lifecycle,
+            event_publisher=self._event_publisher,
+            run_event_enabled=self._run_event_enabled,
+            client_request_id_resolver=self._client_request_id_resolver,
+        )
+        try:
+            await self._agent_task_cleanup.cleanup_cancelled_message_tasks(
+                room_id=room_id,
+                message_id=message_id,
+            )
+        except Exception:
+            logger.warning("agent task cleanup failed for cancellation", exc_info=True)
+        return True
+
+    async def get_run(self, run_id: str) -> RunInfo | None:
+        return await self._run_reader.get_run(run_id)
+
+    async def get_runs_for_room(self, room_id: str) -> list[RunInfo]:
+        return await self._run_reader.get_runs_for_room(room_id)
+
+    async def cancel_inflight_tasks(self) -> int:
+        task_metadata = {
+            task: (self._inflight_metadata.get(task) or {})
+            for task in set(self._inflight)
+            if not task.done()
+        }
+        for task in task_metadata:
+            task.cancel()
+        if task_metadata:
+            await asyncio.gather(*task_metadata, return_exceptions=True)
+
+        canceled_count = 0
+        for task, metadata in task_metadata.items():
+            if not task.cancelled():
+                continue
+            room_id = metadata.get("room_id")
+            message_id = metadata.get("message_id")
+            if not room_id or not message_id:
+                continue
+            try:
+                await emit_processing_status(
+                    room_id=room_id,
+                    status="canceled",
+                    message_id=message_id,
+                    lifecycle_message_id=message_id,
+                    run_lifecycle=self._run_lifecycle,
+                    event_publisher=self._event_publisher,
+                    run_event_enabled=self._run_event_enabled,
+                    client_request_id_resolver=self._client_request_id_resolver,
+                    client_request_id=metadata.get("client_request_id"),
+                )
+            except Exception:
+                logger.warning(
+                    "execution shutdown failed to mark orchestration canceled",
+                    exc_info=True,
+                )
+            canceled_count += 1
+        return canceled_count
+
+    async def heal_diverged_runs(self, limit: int = 500) -> int:
+        return await self._run_lifecycle.heal_diverged_runs(limit=limit)
+
+    async def create_hitl_request(
+        self,
+        room_id: str,
+        user_message_id: str,
+        prompt: str,
+        source: str,
+        **kwargs: Any,
+    ) -> HITLRequest | None:
+        result = await self._hitl_service.request_input(
+            room_id=room_id,
+            user_message_id=user_message_id,
+            source=source,
+            prompt=prompt,
+            **kwargs,
+        )
+        return model_hitl_request_to_common(result) if result is not None else None
+
+    async def resolve_hitl(
+        self,
+        room_id: str,
+        request_id: str,
+        response: str,
+        responder_id: str,
+    ) -> HITLResponse:
+        result = await self._hitl_service.handle_response(
+            room_id=room_id,
+            request_id=request_id,
+            user_input=response,
+            user_id=responder_id,
+        )
+        return hitl_response_dict_to_common(result)
+
+    async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]:
+        requests = await self._hitl_service.get_pending_requests(room_id)
+        return [model_hitl_request_to_common(request) for request in requests]
+
+    async def cancel_hitl(self, room_id: str, request_id: str) -> bool:
+        result = await self._hitl_service.cancel_request(request_id, room_id=room_id)
+        return hitl_cancel_none_to_success(result)
+
+    async def handle_hub_agent_response(
+        self,
+        event: HubAgentResponseInternal,
+    ) -> None:
+        await self._agent_response_handler.handle(
+            hub_agent_response_internal_to_agent_event(event)
+        )
+
+
+__all__ = [
+    "ExecutionFacade",
+    "hub_agent_response_internal_to_agent_event",
+]

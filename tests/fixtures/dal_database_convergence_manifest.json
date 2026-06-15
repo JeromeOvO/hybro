@@ -1,0 +1,22 @@
+{
+    "exclude_dirs": [
+        ".git",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "__pycache__",
+        "database/migration",
+        "docs",
+        "logs",
+        "multi_agents_backend.egg-info",
+        "scripts",
+        "tests"
+    ],
+    "exclude_files": [],
+    "database_service_blockers": [],
+    "mongo_singleton_blockers": [],
+    "database_repository_blockers": [],
+    "pinecone_singleton_blockers": [],
+    "direct_pinecone_blockers": [],
+    "legacy_runtime_files": []
+}

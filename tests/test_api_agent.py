@@ -1,0 +1,520 @@
+"""
+Unit tests for Agent API endpoints.
+
+Tests cover:
+- Agent registration
+- Agent retrieval (by ID, by provider, all agents)
+- Agent deletion
+- Agent updates (rate limits, status, visibility)
+- Public vs private agent visibility
+- Authorization checks
+"""
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi import HTTPException
+
+from api.agent import (
+    delete_agent,
+    get_agent,
+    get_agent_by_provider,
+    get_agent_card_from_url,
+    get_agent_list,
+    get_all_active_agents,
+    register_agent,
+    update_agent,
+)
+from models.agent import AgentStatus
+from models.request import AgentSettingsUpdateRequest
+from models.response import AgentCenterResponse
+from tests.conftest import PATCH
+
+# =============================================================================
+# Agent Registration Tests
+# =============================================================================
+
+
+class TestRegisterAgent:
+    """Tests for register_agent endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_registers_agent_with_user_as_provider(
+        self, mock_user, patch_agent_deps, sample_agent_card
+    ):
+        """Should register agent with authenticated user as provider."""
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "agent_url": "https://test-agent.example.com/.well-known/agent.json",
+        })
+        
+        expected_response = AgentCenterResponse(
+            success=True,
+            agent_id="new-agent-id",
+            status_code=200,
+        )
+        patch_agent_deps.register_agent.return_value = expected_response
+        
+        response = await register_agent(mock_request, mock_user)
+        
+        assert response.success is True
+        
+        # Verify provider_id is set to user's ID
+        call_args = patch_agent_deps.register_agent.call_args[0][0]
+        assert call_args.provider_id == mock_user.user_id
+
+    @pytest.mark.asyncio
+    async def test_raises_400_when_agent_url_missing(self, mock_user):
+        """Should raise 400 when agent_url is not provided."""
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={})
+        
+        with pytest.raises(HTTPException) as exc_info:
+            await register_agent(mock_request, mock_user)
+        
+        assert exc_info.value.status_code == 400
+        assert "agent_url is required" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_raises_400_for_duplicate_agent(
+        self, mock_user, patch_agent_deps
+    ):
+        """Should raise 400 when agent URL is already registered."""
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "agent_url": "https://existing-agent.example.com/.well-known/agent.json",
+        })
+        
+        duplicate_response = AgentCenterResponse(
+            success=False,
+            error="Agent with this URL already exists",
+            status_code=400,
+        )
+        patch_agent_deps.register_agent.return_value = duplicate_response
+        
+        with pytest.raises(HTTPException) as exc_info:
+            await register_agent(mock_request, mock_user)
+        
+        assert exc_info.value.status_code == 400
+
+
+# =============================================================================
+# Agent Retrieval Tests
+# =============================================================================
+
+
+class TestGetAgentByProvider:
+    """Tests for get_agent_by_provider endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_returns_agents_for_authenticated_user(
+        self, mock_user, patch_agent_deps, sample_agent
+    ):
+        """Should return agents owned by the authenticated user."""
+        expected_response = AgentCenterResponse(
+            success=True,
+            agents=[sample_agent],
+        )
+        patch_agent_deps.get_agents_by_provider_id.return_value = expected_response
+        
+        response = await get_agent_by_provider(mock_user)
+        
+        assert response.success is True
+        assert len(response.agents) == 1
+
+    @pytest.mark.asyncio
+    async def test_populates_provider_name_when_agent_card_has_no_provider(
+        self, mock_user, patch_agent_deps, sample_agent
+    ):
+        """Should resolve and set provider_name when agent_card.provider is absent."""
+        sample_agent.agent_card.provider = None
+        expected_response = AgentCenterResponse(
+            success=True,
+            agents=[sample_agent],
+        )
+        patch_agent_deps.get_agents_by_provider_id.return_value = expected_response
+
+        with patch("api.agent.resolve_provider_name", return_value="Test User"):
+            response = await get_agent_by_provider(mock_user)
+
+        assert response.agents[0].provider_name == "Test User"
+
+    @pytest.mark.asyncio
+    async def test_does_not_overwrite_provider_name_when_organization_is_set(
+        self, mock_user, patch_agent_deps, sample_agent
+    ):
+        """Should not set provider_name when agent_card.provider.organization is already set."""
+        from a2a.types import AgentProvider
+        sample_agent.agent_card.provider = AgentProvider(
+            organization="Existing Org", url="http://example.com"
+        )
+        expected_response = AgentCenterResponse(
+            success=True,
+            agents=[sample_agent],
+        )
+        patch_agent_deps.get_agents_by_provider_id.return_value = expected_response
+
+        with patch("api.agent.resolve_provider_name", return_value="Test User"):
+            response = await get_agent_by_provider(mock_user)
+
+        assert response.agents[0].provider_name is None
+
+
+class TestGetAgent:
+    """Tests for get_agent endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_returns_public_agent_without_auth(
+        self, patch_agent_deps, sample_agent
+    ):
+        """Should return public agent even without authentication."""
+        expected_response = AgentCenterResponse(
+            success=True,
+            agent=sample_agent,
+        )
+        patch_agent_deps.query_agent_by_agent_id.return_value = expected_response
+        
+        response = await get_agent(sample_agent.agent_id, user=None)
+        
+        assert response.success is True
+        assert response.agent.agent_id == sample_agent.agent_id
+
+    @pytest.mark.asyncio
+    async def test_passes_user_id_for_visibility_check(
+        self, mock_user, patch_agent_deps, sample_agent
+    ):
+        """Should pass user_id for private agent visibility check."""
+        expected_response = AgentCenterResponse(
+            success=True,
+            agent=sample_agent,
+        )
+        patch_agent_deps.query_agent_by_agent_id.return_value = expected_response
+        
+        await get_agent(sample_agent.agent_id, user=mock_user)
+        
+        # Verify user_id was passed in request
+        call_args = patch_agent_deps.query_agent_by_agent_id.call_args[0][0]
+        assert call_args.user_id == mock_user.user_id
+
+    @pytest.mark.asyncio
+    async def test_raises_400_when_agent_id_empty(self, mock_user):
+        """Should raise 400 when agent_id is empty."""
+        with pytest.raises(HTTPException) as exc_info:
+            await get_agent("", user=mock_user)
+        
+        assert exc_info.value.status_code == 400
+
+
+class TestGetAgentList:
+    """Tests for get_agent_list endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_returns_all_agents(self, patch_agent_deps, sample_agent):
+        """Should return all agents."""
+        expected_response = AgentCenterResponse(
+            success=True,
+            agents=[sample_agent],
+        )
+        patch_agent_deps.get_all_agents.return_value = expected_response
+        
+        response = await get_agent_list(user=None)
+        
+        assert response.success is True
+
+
+class TestGetAllActiveAgents:
+    """Tests for get_all_active_agents endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_returns_only_active_agents(
+        self, patch_agent_deps, sample_agent
+    ):
+        """Should return only active agents."""
+        expected_response = AgentCenterResponse(
+            success=True,
+            agents=[sample_agent],
+        )
+        patch_agent_deps.get_all_active_agents.return_value = expected_response
+        
+        response = await get_all_active_agents(user=None)
+        
+        assert response.success is True
+
+    @pytest.mark.asyncio
+    async def test_includes_private_agents_for_owner(
+        self, mock_user, patch_agent_deps, sample_agent, sample_private_agent
+    ):
+        """Should include user's private agents when authenticated."""
+        expected_response = AgentCenterResponse(
+            success=True,
+            agents=[sample_agent, sample_private_agent],
+        )
+        patch_agent_deps.get_all_active_agents.return_value = expected_response
+        
+        await get_all_active_agents(user=mock_user)
+        
+        # Verify user_id was passed for visibility filtering
+        call_args = patch_agent_deps.get_all_active_agents.call_args[0][0]
+        assert call_args.user_id == mock_user.user_id
+
+
+# =============================================================================
+# Agent Deletion Tests
+# =============================================================================
+
+
+class TestDeleteAgent:
+    """Tests for delete_agent endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_deletes_agent_owned_by_user(
+        self, mock_user, patch_agent_deps, sample_agent
+    ):
+        """Should delete agent when user is the owner."""
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "agent_id": sample_agent.agent_id,
+        })
+        
+        mock_agent_service = MagicMock()
+        mock_agent_service.get_agent_by_agent_id = AsyncMock(
+            return_value=sample_agent
+        )
+        
+        expected_response = AgentCenterResponse(success=True)
+        patch_agent_deps.remove_agent.return_value = expected_response
+        
+        with patch(PATCH["agent.agent_service"], mock_agent_service):
+            response = await delete_agent(mock_request, mock_user)
+        
+        assert response.success is True
+
+    @pytest.mark.asyncio
+    async def test_raises_400_when_agent_id_missing(self, mock_user):
+        """Should raise 400 when agent_id is not provided."""
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={})
+        
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_agent(mock_request, mock_user)
+        
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_raises_404_when_agent_not_found(self, mock_user):
+        """Should raise 404 when agent doesn't exist."""
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "agent_id": "nonexistent-agent",
+        })
+        
+        mock_agent_service = MagicMock()
+        mock_agent_service.get_agent_by_agent_id = AsyncMock(return_value=None)
+        
+        with patch(PATCH["agent.agent_service"], mock_agent_service):
+            with pytest.raises(HTTPException) as exc_info:
+                await delete_agent(mock_request, mock_user)
+        
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_raises_403_when_not_owner(
+        self, mock_user_2, sample_agent
+    ):
+        """Should raise 403 when user is not the agent owner."""
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "agent_id": sample_agent.agent_id,
+        })
+        
+        mock_agent_service = MagicMock()
+        mock_agent_service.get_agent_by_agent_id = AsyncMock(
+            return_value=sample_agent
+        )
+        
+        with patch(PATCH["agent.agent_service"], mock_agent_service):
+            with pytest.raises(HTTPException) as exc_info:
+                await delete_agent(mock_request, mock_user_2)
+        
+        assert exc_info.value.status_code == 403
+
+
+# =============================================================================
+# Agent Update Tests
+# =============================================================================
+
+
+class TestUpdateAgent:
+    """Tests for update_agent endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_updates_rate_limits(
+        self, mock_user, patch_agent_deps, sample_agent
+    ):
+        """Should update agent rate limits."""
+        request_body = AgentSettingsUpdateRequest(
+            rate_limit_per_user_per_hour=100,
+            rate_limit_system_per_hour=1000,
+        )
+        
+        mock_agent_service = MagicMock()
+        mock_agent_service.get_agent_by_agent_id = AsyncMock(
+            return_value=sample_agent
+        )
+        
+        expected_response = AgentCenterResponse(success=True)
+        patch_agent_deps.update_agent.return_value = expected_response
+        
+        with patch(PATCH["agent.agent_service"], mock_agent_service):
+            response = await update_agent(
+                sample_agent.agent_id, request_body, mock_user
+            )
+        
+        assert response.success is True
+
+    @pytest.mark.asyncio
+    async def test_updates_agent_status(
+        self, mock_user, patch_agent_deps, sample_agent
+    ):
+        """Should update agent status."""
+        request_body = AgentSettingsUpdateRequest(
+            agent_status=AgentStatus.inactive,
+        )
+        
+        mock_agent_service = MagicMock()
+        mock_agent_service.get_agent_by_agent_id = AsyncMock(
+            return_value=sample_agent
+        )
+        
+        expected_response = AgentCenterResponse(success=True)
+        patch_agent_deps.update_agent.return_value = expected_response
+        
+        with patch(PATCH["agent.agent_service"], mock_agent_service):
+            response = await update_agent(
+                sample_agent.agent_id, request_body, mock_user
+            )
+        
+        assert response.success is True
+
+    @pytest.mark.asyncio
+    async def test_updates_visibility(
+        self, mock_user, patch_agent_deps, sample_agent
+    ):
+        """Should update agent visibility."""
+        request_body = AgentSettingsUpdateRequest(is_public=False)
+        
+        mock_agent_service = MagicMock()
+        mock_agent_service.get_agent_by_agent_id = AsyncMock(
+            return_value=sample_agent
+        )
+        
+        expected_response = AgentCenterResponse(success=True)
+        patch_agent_deps.update_agent.return_value = expected_response
+        
+        with patch(PATCH["agent.agent_service"], mock_agent_service):
+            response = await update_agent(
+                sample_agent.agent_id, request_body, mock_user
+            )
+        
+        assert response.success is True
+
+    @pytest.mark.asyncio
+    async def test_raises_400_for_invalid_rate_limit(
+        self, mock_user, sample_agent
+    ):
+        """Should raise 400 when rate limit is less than 1."""
+        request_body = AgentSettingsUpdateRequest(
+            rate_limit_per_user_per_hour=0,  # Invalid: must be >= 1 or None
+        )
+        
+        mock_agent_service = MagicMock()
+        mock_agent_service.get_agent_by_agent_id = AsyncMock(
+            return_value=sample_agent
+        )
+        
+        with patch(PATCH["agent.agent_service"], mock_agent_service):
+            with pytest.raises(HTTPException) as exc_info:
+                await update_agent(
+                    sample_agent.agent_id, request_body, mock_user
+                )
+        
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_raises_400_when_no_fields_to_update(
+        self, mock_user, sample_agent
+    ):
+        """Should raise 400 when no valid fields are provided."""
+        request_body = AgentSettingsUpdateRequest()  # Empty update
+        
+        mock_agent_service = MagicMock()
+        mock_agent_service.get_agent_by_agent_id = AsyncMock(
+            return_value=sample_agent
+        )
+        
+        with patch(PATCH["agent.agent_service"], mock_agent_service):
+            with pytest.raises(HTTPException) as exc_info:
+                await update_agent(
+                    sample_agent.agent_id, request_body, mock_user
+                )
+        
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_raises_403_when_not_owner(
+        self, mock_user_2, sample_agent
+    ):
+        """Should raise 403 when user is not the agent owner."""
+        request_body = AgentSettingsUpdateRequest(is_public=False)
+        
+        mock_agent_service = MagicMock()
+        mock_agent_service.get_agent_by_agent_id = AsyncMock(
+            return_value=sample_agent
+        )
+        
+        with patch(PATCH["agent.agent_service"], mock_agent_service):
+            with pytest.raises(HTTPException) as exc_info:
+                await update_agent(
+                    sample_agent.agent_id, request_body, mock_user_2
+                )
+        
+        assert exc_info.value.status_code == 403
+
+
+# =============================================================================
+# Agent Card from URL Tests
+# =============================================================================
+
+
+class TestGetAgentCardFromUrl:
+    """Tests for get_agent_card_from_url endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_returns_agent_card(self, patch_agent_deps, sample_agent_card):
+        """Should return agent card from URL."""
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "agent_url": "https://test-agent.example.com/.well-known/agent.json",
+        })
+        
+        expected_response = AgentCenterResponse(
+            success=True,
+            agent_card=sample_agent_card,
+        )
+        patch_agent_deps.get_agent_card_from_url.return_value = expected_response
+        
+        response = await get_agent_card_from_url(mock_request)
+        
+        assert response.success is True
+        assert response.agent_card.name == sample_agent_card.name
+
+    @pytest.mark.asyncio
+    async def test_raises_400_when_url_missing(self):
+        """Should raise 400 when agent_url is not provided."""
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={})
+        
+        with pytest.raises(HTTPException) as exc_info:
+            await get_agent_card_from_url(mock_request)
+        
+        assert exc_info.value.status_code == 400
