@@ -2,7 +2,7 @@
 
 This document describes the current architecture and core workflows of the
 `multi-agents-backend` codebase. It is based on the repository state as of
-2026-06-05 and focuses on the code that is currently present, not on older
+2026-06-14 and focuses on the code that is currently present, not on older
 design documents that may have existed previously.
 
 ## High-Level Shape
