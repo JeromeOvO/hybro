@@ -1,0 +1,523 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { http, HttpResponse } from 'msw'
+import { server } from '../../setup/msw-server'
+import { errorHandlers } from '../../setup/msw-handlers'
+import { getApiUrl } from '@/lib/utils'
+import {
+  createNewRoom,
+  inquiryActiveRuns,
+  inquiryRoomSetting,
+  inquiryRoomsByRoomOwnerId,
+  SendMessage,
+  inquiryRoomMessagesByRoomId,
+  updateRoomAgentSet,
+  updateRoomName,
+  suggestAgents,
+} from '@/lib/api/room'
+
+const roomCenter = getApiUrl('roomCenter')
+
+describe('Room API', () => {
+  beforeEach(() => {
+    server.resetHandlers()
+  })
+
+  describe('createNewRoom', () => {
+    it('should create a new room with correct request body', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/createNewRoom`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({
+            success: true,
+            room_id: 'test-room-id',
+            room: {
+              room_id: 'test-room-id',
+              room_name: capturedBody.room_name,
+              room_owner_id: capturedBody.room_owner_id,
+              room_owner_name: capturedBody.room_owner_name,
+              room_agent_set: capturedBody.room_agent_set || {},
+              room_created_at: new Date().toISOString(),
+            },
+          })
+        })
+      )
+
+      const result = await createNewRoom('Test Room', 'user-1', 'Test User')
+
+      expect(result.success).toBe(true)
+      expect(result.room?.room_name).toBe('Test Room')
+      expect(capturedBody).toMatchObject({
+        room_name: 'Test Room',
+        room_owner_id: 'user-1',
+        room_owner_name: 'Test User',
+      })
+    })
+
+    it('should include agent set in request body when provided', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/createNewRoom`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, room_id: 'test-room-id' })
+        })
+      )
+
+      const agentSet = { 'agent-1': 'Agent One' }
+      await createNewRoom('Test Room', 'user-1', 'Test User', undefined, agentSet)
+
+      expect(capturedBody).toMatchObject({
+        room_agent_set: { 'agent-1': 'Agent One' },
+      })
+    })
+  })
+
+  describe('inquiryRoomSetting', () => {
+    it('should fetch room settings with correct room_id', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/inquiryRoomSetting`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({
+            success: true,
+            room_id: capturedBody.room_id,
+            room: { room_id: capturedBody.room_id, room_name: 'Test Room' },
+          })
+        })
+      )
+
+      const result = await inquiryRoomSetting('room-42')
+
+      expect(result.success).toBe(true)
+      expect(capturedBody).toMatchObject({ room_id: 'room-42' })
+    })
+  })
+
+  describe('inquiryActiveRuns', () => {
+    it('should fetch active runs with correct room_id', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/inquiryActiveRuns`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({
+            success: true,
+            room_id: capturedBody.room_id,
+            active_runs: [{ run_id: 'run-1', state: 'processing', trigger_message_id: 'm1' }],
+          })
+        })
+      )
+
+      const result = await inquiryActiveRuns('room-42')
+
+      expect(result.success).toBe(true)
+      expect(result.active_runs).toHaveLength(1)
+      expect(capturedBody).toMatchObject({ room_id: 'room-42' })
+    })
+  })
+
+  describe('inquiryRoomsByRoomOwnerId', () => {
+    it('should fetch rooms with correct owner_id', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/inquiryRoomsByRoomOwnerId`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({
+            success: true,
+            room_list: [{ room_id: 'room-1', room_name: 'Room 1' }],
+          })
+        })
+      )
+
+      const result = await inquiryRoomsByRoomOwnerId('user-1')
+
+      expect(result.success).toBe(true)
+      expect(result.room_list).toHaveLength(1)
+      expect(capturedBody).toMatchObject({ room_owner_id: 'user-1' })
+    })
+  })
+
+  describe('SendMessage', () => {
+    const baseSendParams = {
+      roomId: 'room-1',
+      userInput: 'Hello',
+      userId: 'user-1',
+      userName: 'Test User',
+      clientRequestId: 'cr-uuid-123',
+      dispatch: { message_target_mode: 'room_default' as const },
+    }
+
+    it('sends room_default routing with client_request_id and no legacy routing field', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({
+            success: true,
+            room_id: capturedBody.room_id,
+            message_id: 'msg-new',
+          })
+        })
+      )
+
+      const result = await SendMessage(baseSendParams)
+
+      expect(result.success).toBe(true)
+      expect(result.message_id).toBe('msg-new')
+      expect(capturedBody).toMatchObject({
+        room_id: 'room-1',
+        user_input: 'Hello',
+        user_id: 'user-1',
+        user_name: 'Test User',
+        message_target_mode: 'room_default',
+        client_request_id: 'cr-uuid-123',
+      })
+      expect(capturedBody).not.toHaveProperty('target_group')
+    })
+
+    it('sends all_agents routing with client_request_id and no legacy routing field', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, message_id: 'msg-1' })
+        })
+      )
+
+      await SendMessage({
+        ...baseSendParams,
+        userInput: 'Hello all agents',
+        clientRequestId: 'cr-all-agents-123',
+        dispatch: { message_target_mode: 'all_agents' },
+      })
+
+      expect(capturedBody).toHaveProperty('client_request_id', 'cr-all-agents-123')
+      expect(capturedBody).toHaveProperty('message_target_mode', 'all_agents')
+      expect(capturedBody).not.toHaveProperty('mentioned_agent_ids')
+      expect(capturedBody).not.toHaveProperty('target_group_id')
+      expect(capturedBody).not.toHaveProperty('target_group')
+    })
+
+    it('should include quoted text in extend_info', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, message_id: 'msg-1' })
+        })
+      )
+
+      await SendMessage({
+        ...baseSendParams,
+        userInput: 'Reply',
+        relatedMessageId: 'related-msg-1',
+        quotedText: 'Quoted text here',
+      })
+
+      expect(capturedBody).not.toBeNull()
+      const body = capturedBody as unknown as Record<string, unknown>
+      const message = body.message as Record<string, unknown>
+      expect(message.related_message_id).toBe('related-msg-1')
+      expect(message.extend_info).toMatchObject({ quoted_text: 'Quoted text here' })
+    })
+
+    it('should include quoted sender name in extend_info', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, message_id: 'msg-1' })
+        })
+      )
+
+      await SendMessage({
+        ...baseSendParams,
+        userInput: 'Reply',
+        relatedMessageId: 'related-msg-1',
+        quotedText: 'Quoted text here',
+        quotedSenderName: 'Spec Agent',
+      })
+
+      expect(capturedBody).not.toBeNull()
+      const body = capturedBody as unknown as Record<string, unknown>
+      const message = body.message as Record<string, unknown>
+      expect(message.extend_info).toMatchObject({
+        quoted_text: 'Quoted text here',
+        quoted_sender_name: 'Spec Agent',
+      })
+    })
+
+    it('should send structured quote payload when structuredQuote is provided', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, message_id: 'msg-1' })
+        })
+      )
+
+      await SendMessage({
+        ...baseSendParams,
+        userInput: 'Get details',
+        relatedMessageId: null,
+        quotedText: null,
+        structuredQuote: {
+          text: 'The highlighted content',
+          source_message_id: 'agent-msg-42',
+          source_kind: 'agent',
+          sender_display_name: 'Research Agent',
+          source_agent_id: 'agent-42',
+        },
+      })
+
+      expect(capturedBody).not.toBeNull()
+      const body = capturedBody as unknown as Record<string, unknown>
+      const message = body.message as Record<string, unknown>
+      expect(message.quote).toMatchObject({
+        text: 'The highlighted content',
+        source_message_id: 'agent-msg-42',
+        source_kind: 'agent',
+        sender_display_name: 'Research Agent',
+        source_agent_id: 'agent-42',
+      })
+      expect(message.extend_info).toMatchObject({
+        quoted_text: 'The highlighted content',
+        quoted_sender_name: 'Research Agent',
+      })
+      expect(message.related_message_id).toBeNull()
+    })
+
+    it('should use legacy extend_info when structuredQuote is null but quoted_text provided', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, message_id: 'msg-1' })
+        })
+      )
+
+      await SendMessage({
+        ...baseSendParams,
+        userInput: 'Reply',
+        relatedMessageId: 'related-msg-1',
+        quotedText: 'Legacy quoted text',
+        quotedSenderName: 'Agent Name',
+        structuredQuote: null,
+      })
+
+      const body = capturedBody as unknown as Record<string, unknown>
+      const message = body.message as Record<string, unknown>
+      expect(message.quote).toBeUndefined()
+      expect(message.extend_info).toMatchObject({ quoted_text: 'Legacy quoted text', quoted_sender_name: 'Agent Name' })
+      expect(message.related_message_id).toBe('related-msg-1')
+    })
+
+    it('sends mentioned_agent_ids without message_target_mode or target_group_id', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, message_id: 'msg-1' })
+        })
+      )
+
+      await SendMessage({
+        ...baseSendParams,
+        userInput: 'Hello @agent',
+        clientRequestId: 'cr-mention-123',
+        dispatch: { mentioned_agent_ids: ['agent-a', 'agent-b'] },
+      })
+
+      expect(capturedBody).toHaveProperty('mentioned_agent_ids', ['agent-a', 'agent-b'])
+      expect(capturedBody).toHaveProperty('client_request_id', 'cr-mention-123')
+      expect(capturedBody).not.toHaveProperty('message_target_mode')
+      expect(capturedBody).not.toHaveProperty('target_group_id')
+      expect(capturedBody).not.toHaveProperty('target_group')
+    })
+
+    it('sends saved_group routing without mentions or legacy routing field', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, message_id: 'msg-1' })
+        })
+      )
+
+      await SendMessage({
+        ...baseSendParams,
+        userInput: 'Hello saved group',
+        clientRequestId: 'cr-saved-group-123',
+        dispatch: { message_target_mode: 'saved_group', target_group_id: 'grp-123' },
+      })
+
+      expect(capturedBody).toHaveProperty('client_request_id', 'cr-saved-group-123')
+      expect(capturedBody).toHaveProperty('message_target_mode', 'saved_group')
+      expect(capturedBody).toHaveProperty('target_group_id', 'grp-123')
+      expect(capturedBody).not.toHaveProperty('mentioned_agent_ids')
+      expect(capturedBody).not.toHaveProperty('target_group')
+    })
+
+    it('rejects malformed dispatch with mentions and message_target_mode', async () => {
+      await expect(SendMessage({
+        ...baseSendParams,
+        userInput: 'Invalid mixed dispatch',
+        clientRequestId: 'cr-invalid-mixed',
+        dispatch: {
+          mentioned_agent_ids: ['agent-a'],
+          message_target_mode: 'all_agents',
+        } as never,
+      })).rejects.toThrow('Invalid MessageDispatchInput')
+    })
+
+    it('rejects empty mentioned_agent_ids', async () => {
+      await expect(SendMessage({
+        ...baseSendParams,
+        userInput: 'Invalid empty mentions',
+        clientRequestId: 'cr-invalid-empty-mentions',
+        dispatch: { mentioned_agent_ids: [] } as never,
+      })).rejects.toThrow('Invalid MessageDispatchInput')
+    })
+
+    it('rejects saved_group without target_group_id', async () => {
+      await expect(SendMessage({
+        ...baseSendParams,
+        userInput: 'Invalid saved group',
+        clientRequestId: 'cr-invalid-saved-group',
+        dispatch: { message_target_mode: 'saved_group' } as never,
+      })).rejects.toThrow('Invalid MessageDispatchInput')
+    })
+
+    it('rejects dispatch objects with extra legacy routing fields', async () => {
+      const legacyRoutingKey = 'target' + '_group'
+      await expect(SendMessage({
+        ...baseSendParams,
+        userInput: 'Invalid legacy extra field',
+        clientRequestId: 'cr-invalid-extra-field',
+        dispatch: {
+          message_target_mode: 'room_default',
+          [legacyRoutingKey]: 'all_agents',
+        } as never,
+      })).rejects.toThrow('Invalid MessageDispatchInput')
+    })
+  })
+
+  describe('inquiryRoomMessagesByRoomId', () => {
+    it('should fetch room messages with correct room_id', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/inquiryRoomMessagesByRoomId`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, room_id: 'room-1', message_list: [] })
+        })
+      )
+
+      const result = await inquiryRoomMessagesByRoomId('room-1')
+
+      expect(result.success).toBe(true)
+      expect(result.message_list).toBeDefined()
+      expect(capturedBody).toMatchObject({ room_id: 'room-1' })
+    })
+  })
+
+  describe('updateRoomAgentSet', () => {
+    it('should send agent set in request body', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/updateRoomAgentSet`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true })
+        })
+      )
+
+      await updateRoomAgentSet('room-1', { 'a-1': 'Agent One', 'a-2': 'Agent Two' })
+
+      expect(capturedBody).toMatchObject({
+        room_id: 'room-1',
+        room_agent_set: { 'a-1': 'Agent One', 'a-2': 'Agent Two' },
+      })
+    })
+  })
+
+  describe('updateRoomName', () => {
+    it('should send new name in request body', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/updateRoomName`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true })
+        })
+      )
+
+      await updateRoomName('room-1', 'New Room Name')
+
+      expect(capturedBody).toMatchObject({
+        room_id: 'room-1',
+        room_name: 'New Room Name',
+      })
+    })
+  })
+
+  describe('suggestAgents', () => {
+    it('should send message_text and top_k in request body', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/suggestAgents`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({
+            success: true,
+            routing_strategy: 'single',
+            suggested_agents: [{ agent_id: 'a-1', name: 'Agent', reason: 'Best' }],
+          })
+        })
+      )
+
+      const result = await suggestAgents('Help me with coding', 5)
+
+      expect(result.success).toBe(true)
+      expect(result.suggested_agents).toHaveLength(1)
+      expect(capturedBody).toMatchObject({
+        message_text: 'Help me with coding',
+        top_k: 5,
+      })
+    })
+  })
+
+  describe('error handling', () => {
+    const errorSendParams = {
+      roomId: 'room-1',
+      userInput: 'Hello',
+      userId: 'user-1',
+      userName: 'Test User',
+      clientRequestId: 'cr-error-test',
+      dispatch: { message_target_mode: 'room_default' as const },
+    }
+
+    it('should handle network errors', async () => {
+      server.use(errorHandlers.networkError)
+      await expect(
+        SendMessage(errorSendParams)
+      ).rejects.toThrow()
+    })
+
+    it('should handle server errors (500)', async () => {
+      server.use(errorHandlers.serverError)
+      await expect(
+        SendMessage(errorSendParams)
+      ).rejects.toThrow()
+    })
+
+    it('should handle auth errors (401)', async () => {
+      server.use(errorHandlers.authError)
+      await expect(
+        SendMessage(errorSendParams)
+      ).rejects.toThrow()
+    })
+
+    it('should handle rate limit errors (429)', async () => {
+      server.use(errorHandlers.rateLimitError)
+      await expect(
+        SendMessage(errorSendParams)
+      ).rejects.toThrow()
+    })
+  })
+})
