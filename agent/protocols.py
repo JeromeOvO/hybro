@@ -6,8 +6,8 @@ from typing import Protocol, runtime_checkable
 from common.protocols.json_types import JsonValue
 from models.agent import Agent, AgentCapabilityIssue, IssueStatus
 from models.agent_group import AgentGroup
-from models.request import AgentSettingsUpdateRequest
-from models.response import AgentCenterResponse
+from models.request import AgentSettingsUpdateRequest, InspectionCenterRequest
+from models.response import AgentCenterResponse, InspectionCenterResponse
 
 
 @runtime_checkable
@@ -125,10 +125,21 @@ def serialize_agent_suggestion_result(result: AgentSuggestionResult) -> dict[str
     return payload
 
 
+@runtime_checkable
+class AgentInspection(Protocol):
+    async def inspect_a2a_connection(
+        self, request: InspectionCenterRequest
+    ) -> InspectionCenterResponse: ...
+    async def inspect_agent_card(
+        self, request: InspectionCenterRequest
+    ) -> InspectionCenterResponse: ...
+
+
 __all__ = [
     "AgentCapabilityIssueStore",
     "AgentCenterCompatibility",
     "AgentGroupStoreCompatibility",
+    "AgentInspection",
     "AgentLivenessChecker",
     "AgentSuggestion",
     "AgentSuggestionResult",

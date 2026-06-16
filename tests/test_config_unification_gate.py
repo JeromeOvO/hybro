@@ -170,7 +170,9 @@ def _collect_production_files() -> list[Path]:
             continue
         if _is_allowed(rel, allowed_paths):
             continue
-        files.append(ROOT / rel)
+        path = ROOT / rel
+        if path.exists():
+            files.append(path)
 
     return files
 

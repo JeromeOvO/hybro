@@ -1395,7 +1395,7 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_webhook_transport"
+      "get_webhook_receiver"
     ],
     "auth_dependencies": [],
     "include_in_schema": true

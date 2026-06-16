@@ -25,6 +25,7 @@ from common.a2a_constants import (
     is_terminal_state,
     normalize_task_state_value,
 )
+from common.protocols import JsonMap, JsonValue  # noqa: F401
 from common.utils.a2a_helpers import (
     extract_error_message,
     extract_parts_from_artifacts,
@@ -81,9 +82,9 @@ class WebhookTransport(AgentTransport):
     async def handle_webhook(
         self,
         message_id: str,
-        payload: dict[str, Any],
+        payload: JsonMap,
         token: str,
-    ) -> dict[str, Any]:
+    ) -> JsonMap:
         """Called by the FastAPI route. Validate, parse, delegate."""
         # 1. Validate webhook token (hash-based)
         if not token:

@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Protocol, runtime_checkable
 
 from common.dto import DeliveryEvent, InternalEvent
+from common.protocols.json_types import JsonValue
 
 
 @runtime_checkable
@@ -23,4 +24,19 @@ class SSETransport(Protocol):
     async def start_cancellation_watcher(self) -> None: ...
 
 
-__all__ = ["EventPublisher", "SSETransport"]
+@runtime_checkable
+class SSEConnectionLike(Protocol):
+    connection_id: str
+    is_active: bool
+
+    async def get_message(self, timeout: float | None = None) -> str: ...
+
+
+@runtime_checkable
+class SSERouteTransport(Protocol):
+    async def add_connection(self, room_id: str) -> SSEConnectionLike: ...
+    async def remove_connection(self, room_id: str, connection_id: str) -> None: ...
+    def get_room_status(self, room_id: str) -> dict[str, JsonValue]: ...
+
+
+__all__ = ["EventPublisher", "SSEConnectionLike", "SSERouteTransport", "SSETransport"]

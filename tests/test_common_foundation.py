@@ -936,6 +936,46 @@ def test_protocol_methods_match_design_doc():
             "set_draining",
             "start_cancellation_watcher",
         },
+        protocols.SSEConnectionLike: {"get_message"},
+        protocols.SSERouteTransport: {
+            "add_connection",
+            "remove_connection",
+            "get_room_status",
+        },
+        protocols.WebhookReceiver: {"handle_webhook"},
+        protocols.RoomDistributedLock: {"acquire", "release"},
+        protocols.RoomMembershipSeedSource: {
+            "get_saved_group",
+            "list_current_agents",
+        },
+        protocols.AgentAvatarManager: {"store_avatar"},
+        protocols.APIKeyStore: {
+            "add_api_key",
+            "deactivate_api_key",
+            "get_api_key_by_id",
+            "get_api_keys_by_user",
+        },
+        protocols.APIKeyValidationStore: {
+            "get_api_key_by_hash",
+            "update_api_key_usage",
+        },
+        protocols.APIKeyRateLimiter: {"check_rate_limit", "record_request"},
+        protocols.AttachmentCleanupPort: {"delete_for_room"},
+        protocols.AttachmentMetadataReader: {"get_for_room_file"},
+        protocols.EmbeddingServiceProtocol: {"get_embedding"},
+        protocols.RequiredEmbeddingServiceProtocol: {"get_embedding"},
+        protocols.ModelSelectableEmbeddingServiceProtocol: {"get_embedding"},
+        protocols.LLMTextGateway: {"generate"},
+        protocols.LLMStructuredGateway: {"generate_structured"},
+        protocols.LLMEmbeddingGateway: {"embed", "embed_batch"},
+        protocols.LLMStreamGateway: {"generate_stream"},
+        protocols.LLMStreamingProvider: {"generate_stream"},
+        protocols.LLMProviderAdapter: {
+            "embed",
+            "embed_batch",
+            "generate",
+            "generate_structured",
+        },
         protocols.AgentVectorIndexWriter: {"upsert", "delete"},
         protocols.ViewSetTransaction: {"start_transaction"},
         protocols.ViewSetSessionContext: {"__aenter__", "__aexit__"},
@@ -953,6 +993,124 @@ def test_protocol_methods_match_design_doc():
             "get_all",
             "patch",
             "update",
+        },
+        protocols.QuoteRepository: {
+            "delete_by_id",
+            "delete_for_room",
+            "get_by_id",
+            "insert",
+        },
+        protocols.RuntimeAgentRoomStore: {
+            "add_agent_group",
+            "delete_agent_group",
+            "get_agent_by_agent_id",
+            "get_agent_group_by_id",
+            "get_agent_groups_by_owner",
+            "get_agent_name_by_agent_id",
+            "get_agents_with_conditions",
+            "get_all_active_agents",
+            "get_room_by_room_id",
+            "get_rooms_by_room_owner_id",
+            "increment_agent_call_count",
+            "update_agent_group",
+            "update_room_by_room_id",
+        },
+        protocols.RuntimeHITLStore: {
+            "cas_update_hitl_request",
+            "claim_hitl_group_routing",
+            "claim_hitl_request",
+            "count_hitl_requests_for_message",
+            "count_pending_in_hitl_group",
+            "create_hitl_request",
+            "ensure_hitl_indexes",
+            "fenced_update_hitl_request",
+            "get_hitl_group_requests",
+            "get_hitl_request",
+            "get_pending_hitl_requests",
+            "get_pending_hitl_requests_for_message",
+            "iter_stale_processing_hitl_requests",
+            "persist_hitl_group_metadata",
+            "persist_hitl_user_answer",
+            "release_hitl_group_routing",
+            "update_agent_message_task_state",
+            "update_hitl_request",
+        },
+        protocols.RuntimeMemoryStore: {
+            "add_chat_context",
+            "delete_chat_context_by_session_id",
+            "get_chat_context_by_session_id",
+            "get_room_memory_by_room_id",
+            "increment_user_interactions",
+            "record_agent_call",
+            "update_chat_context_by_session_id",
+            "update_turn_notes",
+        },
+        protocols.RuntimeMessageStore: {
+            "accumulate_artifact_on_message",
+            "add_room_agent_message",
+            "add_room_user_message",
+            "cancel_agent_messages_by_ids",
+            "cancel_descendants",
+            "claim_or_reclaim_user_message",
+            "claim_user_message_for_processing",
+            "delete_room_agent_message_by_message_id",
+            "get_room_agent_message_by_message_id",
+            "get_room_agent_messages_by_related_message_id",
+            "get_room_agent_messages_by_room_id",
+            "get_room_user_message_by_message_id",
+            "get_room_user_messages_by_room_id",
+            "refresh_processing_claim",
+            "reset_last_notified_state",
+            "turn_exists",
+            "unclaim_user_message",
+            "update_last_notified_state",
+            "update_room_agent_message_by_message_id",
+            "update_room_agent_message_with_new_message_content_by_message_id",
+            "update_room_user_message_by_message_id",
+            "update_task_state_on_message",
+            "update_task_state_on_message_if_not_terminal",
+            "upsert_room_agent_message",
+        },
+        protocols.RuntimeTaskLifecycleStore: {
+            "cancel_message",
+            "check_task_limits",
+            "claim_stuck_supervisor_trajectory",
+            "enable_task_tracking_on_message",
+            "find_stale_non_terminal_runs",
+            "generate_webhook_token",
+            "get_active_runs_by_room_id",
+            "get_and_clear_continuation_on_message",
+            "get_and_clear_continuation_on_user_message",
+            "get_expired_task_messages",
+            "get_non_tracked_stale_task_messages",
+            "get_orphaned_agent_messages",
+            "get_pending_continuation_on_message",
+            "get_pending_task_messages_for_user",
+            "get_room_ids_with_non_terminal_runs",
+            "get_stale_task_messages",
+            "get_stuck_supervisor_trajectory_messages",
+            "get_task_messages_for_room",
+            "hash_webhook_token",
+            "is_message_cancelled",
+            "resolve_client_request_id_for_agent_message",
+            "resolve_client_request_id_for_message_id",
+            "save_continuation_on_message",
+            "save_continuation_on_user_message",
+            "touch_task_message",
+            "update_task_on_message",
+            "update_webhook_token_hash_on_message",
+            "verify_webhook_token",
+            "verify_webhook_token_for_task",
+            "verify_webhook_token_on_message",
+        },
+        protocols.HubStatusReader: {"get_hub_status"},
+        protocols.HubRelayManagement: {
+            "connect_hub",
+            "get_hub_status",
+            "process_publish",
+            "record_hub_heartbeat",
+            "register_hub",
+            "sync_agents",
         },
         protocols.HubManagement: {
             "register_hub",
@@ -1189,6 +1347,24 @@ def test_protocol_methods_match_design_doc():
     for protocol, methods in expected_methods.items():
         _assert_methods(protocol, methods)
 
+    protocol_exports = {
+        getattr(protocols, name)
+        for name in protocols.__all__
+        if inspect.isclass(getattr(protocols, name))
+        and getattr(getattr(protocols, name), "_is_protocol", False)
+    }
+    marker_protocols = {
+        protocols.APIKeyPrincipal,
+        protocols.APIKeyRecord,
+        protocols.LLMGateway,
+        protocols.MongoChangeStream,
+        protocols.ViewSetDatabase,
+    }
+    missing_coverage = protocol_exports - set(expected_methods) - marker_protocols
+    assert not missing_coverage, {
+        protocol.__name__ for protocol in missing_coverage
+    }
+
     assert not hasattr(protocols, "CrudRepository")
     assert not hasattr(protocols, "TaskRepository")
     _assert_params(
@@ -1219,6 +1395,23 @@ def test_protocol_methods_match_design_doc():
     _assert_params(
         protocols.ExecutionEngine.cancel,
         ["self", "room_id", "message_id", "requested_by_user_id"],
+    )
+    _assert_params(protocols.SSEConnectionLike.get_message, ["self", "timeout"])
+    _assert_params(
+        protocols.SSERouteTransport.add_connection,
+        ["self", "room_id"],
+    )
+    _assert_params(
+        protocols.SSERouteTransport.remove_connection,
+        ["self", "room_id", "connection_id"],
+    )
+    _assert_params(
+        protocols.SSERouteTransport.get_room_status,
+        ["self", "room_id"],
+    )
+    _assert_params(
+        protocols.WebhookReceiver.handle_webhook,
+        ["self", "message_id", "payload", "token"],
     )
     _assert_params(protocols.AgentVectorIndexWriter.upsert, ["self", "vectors"])
     _assert_params(protocols.AgentVectorIndexWriter.delete, ["self", "ids"])

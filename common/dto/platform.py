@@ -1,7 +1,6 @@
 from datetime import datetime
-from typing import Any
 
-from pydantic import Field
+from pydantic import Field, JsonValue
 
 from common.dto.base import FrozenDTO
 
@@ -22,7 +21,7 @@ class FileMetadata(FrozenDTO):
     file_name: str
     size_bytes: int
     created_at: datetime | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class GatewayRoute(FrozenDTO):
@@ -33,20 +32,20 @@ class GatewayRoute(FrozenDTO):
 
 class GatewayRequest(FrozenDTO):
     agent_id: str
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, JsonValue] = Field(default_factory=dict)
     user_id: str | None = None
     room_id: str | None = None
 
 
 class GatewayResponse(FrozenDTO):
     status_code: int
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, JsonValue] = Field(default_factory=dict)
     headers: dict[str, str] = Field(default_factory=dict)
 
 
 class GatewayDiscoveryAgentResult(FrozenDTO):
     agent_id: str
-    agent_card: dict[str, Any] = Field(default_factory=dict)
+    agent_card: dict[str, JsonValue] = Field(default_factory=dict)
     match_score: float
 
 

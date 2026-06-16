@@ -9,6 +9,7 @@ Tests cover:
 - Error handling
 """
 
+from typing import get_type_hints
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -22,6 +23,7 @@ from a2a.types import (
 from fastapi import HTTPException
 
 from api import webhooks
+from common.protocols import WebhookReceiver
 from execution.dispatch.agent_event import AgentEvent
 from execution.dispatch.response_handler import AgentResponseHandler
 from execution.dispatch.transports.webhook import (
@@ -308,6 +310,34 @@ class TestWebhookRouteAdapter:
             {"task": {"id": "task-001"}},
             "header-token",
         )
+
+    @pytest.mark.asyncio
+    async def test_route_rejects_non_object_json_payload(self):
+        class FakeRequest:
+            async def json(self):
+                return ["not", "an", "object"]
+
+        transport = MagicMock()
+        transport.handle_webhook = AsyncMock(return_value={"status": "accepted"})
+
+        with pytest.raises(HTTPException) as exc:
+            await webhooks.handle_a2a_webhook(
+                request=FakeRequest(),
+                message_id="msg-001",
+                authorization="Bearer bearer-token",
+                x_a2a_notification_token="",
+                transport=transport,
+            )
+
+        assert exc.value.status_code == 400
+        transport.handle_webhook.assert_not_awaited()
+
+    def test_webhook_transport_signature_matches_route_protocol(self):
+        protocol_hints = get_type_hints(WebhookReceiver.handle_webhook)
+        transport_hints = get_type_hints(WebhookTransport.handle_webhook)
+
+        assert transport_hints["payload"] == protocol_hints["payload"]
+        assert transport_hints["return"] == protocol_hints["return"]
 
 
 def _make_webhook_transport(*, db=None, handler=None):

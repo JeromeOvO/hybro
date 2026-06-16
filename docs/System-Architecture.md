@@ -811,6 +811,22 @@ route -> protocol/facade -> repository/DAL -> external service
 Avoid adding new direct dependencies on broad app-shell runtime singletons
 unless the surrounding module already requires that path.
 
+## API Route Protocol Ownership
+
+API route handlers remain thin adapters: they parse HTTP input, resolve injected
+dependencies, call route-facing protocols, and format compatible responses.
+Route owner contracts are no longer declared in `app_shell.bound`. Shared,
+common-safe contracts live under `common.protocols`, including viewset,
+Delivery/SSE, webhook, and JSON-shaped route aliases. Compatibility endpoints
+that still expose legacy `models.*` request or response types use module-owned
+protocols such as `agent.protocols.AgentCenterCompatibility`,
+`agent.protocols.AgentInspection`, `room.protocols.RoomCenterCompatibility`, and
+`context_memory.protocols.LegacyChatContextAPI`.
+
+The application shell remains responsible for concrete assembly in `main.py` and
+`container.py`; API Gateway route modules should not import app-shell protocol
+surfaces or concrete module facades/services directly.
+
 ## Testing and Verification
 
 The repository uses `pytest` and `ruff`.

@@ -5,6 +5,7 @@ from pathlib import Path
 FORBIDDEN_API_GATEWAY_IMPORTS = (
     "database.mongodb",
     "modules",
+    "app_shell.bound",
     "app_shell.gateway_service",
     "app_shell.file_upload_service",
     "app_shell.rate_limit_service",
@@ -12,8 +13,9 @@ FORBIDDEN_API_GATEWAY_IMPORTS = (
 MODULE_ROUTE_PROTOCOL_IMPORTS = {
     "agent.protocols",
     "room.protocols",
+    "context_memory.protocols",
 }
-FORBIDDEN_ROUTE_MODULE_ROOTS = {"agent", "room"}
+FORBIDDEN_ROUTE_MODULE_ROOTS = {"agent", "room", "context_memory", "a2a_adapter"}
 
 
 def _api_gateway_py_files():

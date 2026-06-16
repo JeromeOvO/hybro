@@ -7,22 +7,22 @@ from fastapi.params import Depends as DependsParam
 from fastapi.responses import StreamingResponse
 
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
-from app_shell.bound import SSEManagerRouteOwner
 from common.auth import ClerkUser, get_current_user, get_current_user_with_query_token
-from common.protocols import A2ATaskReader, ExecutionEngine
+from common.protocols import ExecutionEngine, SSERouteTransport
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from room.protocols import A2ATaskReaderCompatibility
 
 logger = get_logger(__name__)
 router = APIRouter()
 execution_engine: ExecutionEngine | None = None
-sse_store: A2ATaskReader | None = None
-sse_manager: SSEManagerRouteOwner | None = None
+sse_store: A2ATaskReaderCompatibility | None = None
+sse_manager: SSERouteTransport | None = None
 
 
 def bind_sse_dependencies(
-    store: A2ATaskReader,
-    manager: SSEManagerRouteOwner,
+    store: A2ATaskReaderCompatibility,
+    manager: SSERouteTransport,
 ) -> None:
     global sse_store, sse_manager
 
@@ -45,13 +45,13 @@ def get_execution_engine() -> ExecutionEngine:
     return _require_execution_engine()
 
 
-def get_sse_store() -> A2ATaskReader:
+def get_sse_store() -> A2ATaskReaderCompatibility:
     if sse_store is None:
         raise RuntimeError("SSE database dependency has not been bound")
     return sse_store
 
 
-def get_sse_manager() -> SSEManagerRouteOwner:
+def get_sse_manager() -> SSERouteTransport:
     if sse_manager is None:
         raise RuntimeError("SSE manager dependency has not been bound")
     return sse_manager
@@ -67,8 +67,8 @@ def _resolve_dependency(value: Any, provider) -> Any:
 async def stream_room_messages(
     room_id: str = Path(..., description="room ID"),
     user: ClerkUser = Depends(get_current_user_with_query_token),
-    manager: SSEManagerRouteOwner = Depends(get_sse_manager),
-    db: A2ATaskReader = Depends(get_sse_store),
+    manager: SSERouteTransport = Depends(get_sse_manager),
+    db: A2ATaskReaderCompatibility = Depends(get_sse_store),
 ):
     """
     create SSE message stream for specified room
@@ -143,8 +143,8 @@ async def stream_room_messages(
 async def get_room_sse_status(
     room_id: str = Path(..., description="room ID"),
     user: ClerkUser = Depends(get_current_user_with_query_token),
-    manager: SSEManagerRouteOwner = Depends(get_sse_manager),
-    db: A2ATaskReader = Depends(get_sse_store),
+    manager: SSERouteTransport = Depends(get_sse_manager),
+    db: A2ATaskReaderCompatibility = Depends(get_sse_store),
 ):
     """
     get SSE connection status for specified room
@@ -173,7 +173,7 @@ async def get_room_sse_status(
 async def cancel_message(
     message_id: str = Path(..., description="Message ID to cancel"),
     user: ClerkUser = Depends(get_current_user),
-    db: A2ATaskReader = Depends(get_sse_store),
+    db: A2ATaskReaderCompatibility = Depends(get_sse_store),
     engine: ExecutionEngine = Depends(get_execution_engine),
 ):
     """
