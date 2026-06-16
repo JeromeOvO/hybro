@@ -300,12 +300,11 @@ async def lifespan(app: FastAPI):
                 SummaryLLMService,
                 SupervisorLLMService,
             )
-            from platform_module import (
-                PlatformAttachmentCleanupPort,
-                PlatformAttachmentMetadataReader,
+            from common.enterprise_injection import (
+                NoOpAgentRateLimiter,
+                NoOpAttachmentCleanupPort,
+                NoOpAttachmentMetadataReader,
             )
-            from platform_module.adapters import RateLimitCollectionAdapter
-            from platform_module.rate_limit import PlatformAgentRateLimiter
 
             a2a_artifact_storage.bind_a2a_storage_dependencies(
                 storage_service=s3_service,
@@ -314,12 +313,10 @@ async def lifespan(app: FastAPI):
             )
             bind_a2a_artifact_storage(a2a_artifact_storage)
             await ensure_runtime_indexes(mongo=mongo_dal)
-            agent_rate_limiter = PlatformAgentRateLimiter(
-                collection=RateLimitCollectionAdapter(
-                    mongo_dal.collection("agent_requests"),
-                    "agent_requests",
-                ),
-            )
+            if hasattr(app.state, "agent_rate_limiter_factory") and app.state.agent_rate_limiter_factory:
+                agent_rate_limiter = app.state.agent_rate_limiter_factory(mongo_dal)
+            else:
+                agent_rate_limiter = NoOpAgentRateLimiter()
             viewset.bind_viewset_dependencies(
                 provider=AppShellDALViewSetRepositoryProvider(mongo=mongo_dal),
             )
@@ -728,42 +725,38 @@ async def lifespan(app: FastAPI):
                     summary_model="context_memory_legacy_json_model",
                 ),
             )
-            object_storage = create_object_storage_dal()
-            platform_config = create_platform_config(settings)
-            platform_deps = create_platform_deps(
-                agent_deps=_agent_deps,
-                mongo=mongo_dal,
-                agent_transport=AgentTransportImpl(),
-                agent_card_resolver=agent_card_resolver,
-                object_storage=object_storage,
-                content_storage_repository=context_memory_facade.content_repository,
-                discovery_query_expander=discovery_llm_service,
-                logger=logger,
-            )
-            room_runtime.bind_attachment_metadata_reader(
-                PlatformAttachmentMetadataReader(platform_deps.file_metadata_repository)
-            )
-            room_runtime.bind_attachment_cleanup(
-                PlatformAttachmentCleanupPort(platform_deps.file_metadata_repository)
-            )
-            platform_facade = create_platform_facade(
-                config=platform_config,
-                deps=platform_deps,
-            )
-
-            gateway.bind_gateway_dependencies(
-                platform_facade.gateway_service,
-                platform_facade.gateway_rate_limiter,
-            )
-            discovery.bind_discovery_dependencies(
-                platform_facade.discovery_service,
-                platform_facade.discovery_rate_limiter,
-                default_limit=settings.discovery_default_limit,
-            )
-            files.bind_file_dependencies(
-                platform_facade.file_storage,
-                _room_deps.room_registry,
-            )
+            if hasattr(app.state, "platform_facade_factory") and app.state.platform_facade_factory:
+                platform_facade = app.state.platform_facade_factory(
+                    mongo_dal=mongo_dal,
+                    agent_deps=_agent_deps,
+                    room_deps=_room_deps,
+                    context_memory_facade=context_memory_facade,
+                    s3_service=s3_service,
+                    discovery_query_expander=discovery_llm_service,
+                    agent_card_resolver=agent_card_resolver,
+                    logger=logger,
+                )
+                room_runtime.bind_attachment_metadata_reader(platform_facade.attachment_metadata_reader)
+                room_runtime.bind_attachment_cleanup(platform_facade.attachment_cleanup_port)
+            else:
+                platform_facade = None
+                room_runtime.bind_attachment_metadata_reader(NoOpAttachmentMetadataReader())
+                room_runtime.bind_attachment_cleanup(NoOpAttachmentCleanupPort())
+            if platform_facade:
+                gateway.bind_gateway_dependencies(
+                    platform_facade.gateway_service,
+                    platform_facade.gateway_rate_limiter,
+                )
+                if hasattr(api_gateway.routes, "discovery_routes"):
+                    api_gateway.routes.discovery_routes.bind_discovery_dependencies(
+                        platform_facade.discovery_service,
+                        platform_facade.discovery_rate_limiter,
+                        default_limit=settings.discovery_default_limit,
+                    )
+                files.bind_file_dependencies(
+                    platform_facade.file_storage,
+                    _room_deps.room_registry,
+                )
             app.state.platform_facade = platform_facade
             app.state.platform_deps = platform_deps
             # TODO(phase-6/7): Register ContextMemoryEventHandler with EventPublisher
@@ -772,7 +765,9 @@ async def lifespan(app: FastAPI):
             _context_memory_deps = create_context_memory_deps(context_memory_facade)
             context_assembly_service.bind_facade(context_memory_facade)
             memory_search_service.bind_facade(context_memory_facade)
-            compaction_service.bind_content_storage(platform_facade.content_storage)
+            compaction_service.bind_content_storage(
+                platform_facade.content_storage if platform_facade else None
+            )
             compaction_service.bind_room_memory_reader(context_memory_facade)
             compaction_service.bind_facade(context_memory_facade)
             room_memory_service.bind_facade(context_memory_facade)
@@ -1140,136 +1135,53 @@ async def lifespan(app: FastAPI):
             app.state.mongo_dal = None
 
 
-app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")
+def create_app(
+    platform_facade_factory=None,
+    agent_rate_limiter_factory=None,
+    extra_routes=None,
+) -> FastAPI:
+    app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")
+    app.state.platform_facade_factory = platform_facade_factory
+    app.state.agent_rate_limiter_factory = agent_rate_limiter_factory
 
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.frontend_origins,  # Allow all frontend URLs from env
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allow_headers=[
-        "Authorization",
-        "Content-Type",
-        "X-API-Key",
-        "Cache-Control",
-        "sentry-trace",
-        "baggage",
-    ],
-)
-
-# Add Discovery, Gateway & Relay API CORS middleware
-# This applies permissive CORS to /api/v1/discovery/*, /api/v1/gateway/*, and /api/v1/relay/* paths
-# Note: Middleware runs in reverse order, so adding after global CORS makes it run first.
-app.add_middleware(DiscoveryCORSMiddleware, api_prefix=settings.api_prefix)
-
-
-# Pure function — trivially testable without lifespan/DB
-def check_multi_worker_safety(
-    *,
-    is_gunicorn: bool,
-    delivery_pubsub_connected: bool,
-    delivery_kv_connected: bool,
-    redis_service_connected: bool,
-    relay_streams_connected: bool,
-    change_stream_connected: bool,
-) -> None:
-    """Refuse to start under gunicorn without fully connected Redis.
-
-    Gunicorn workers are separate processes. Without Redis:
-    - SSE broadcast is local-only (cross-worker delivery fails)
-    - Background jobs run N times (no leader election)
-    - Room locks use asyncio.Lock only (no cross-process coordination)
-    - Relay uses in-memory queues (hub messages lost across workers)
-
-    Raises:
-        RuntimeError: if gunicorn detected and any Redis service is not connected
-    """
-    if not is_gunicorn:
-        return
-
-    problems = []
-    if not delivery_pubsub_connected:
-        problems.append("Delivery Pub/Sub not connected")
-    if not delivery_kv_connected:
-        problems.append("Delivery KV not connected")
-    if not redis_service_connected:
-        problems.append("RedisService (key-value) not connected")
-    if not relay_streams_connected:
-        problems.append("Relay streams not connected")
-    if not change_stream_connected:
-        problems.append("Cancellation change stream not connected")
-
-    if problems:
-        raise RuntimeError(
-            "Running under gunicorn requires all Redis app_shell. "
-            "Issues: " + "; ".join(problems) + ". "
-            "Fix: set REDIS_URL to a running Redis instance, "
-            "or use 'uvicorn main:app' for single-process mode."
-        )
-    logger.info("Multi-worker safety check passed: gunicorn + Redis OK")
-
-
-# Pure function — trivially testable without lifespan/DB
-def compute_health_status(
-    *,
-    delivery_pubsub_connected: bool,
-    delivery_kv_connected: bool,
-    legacy_redis_service_connected: bool,
-    relay_streams_available: bool = False,
-    redis_url: str,
-    change_stream_connected: bool,
-) -> dict:
-    """Compute health status body and HTTP status code."""
-    redis_expected = bool(redis_url)
-    redis_degraded = redis_expected and not (
-        delivery_pubsub_connected
-        and delivery_kv_connected
-        and legacy_redis_service_connected
-        and relay_streams_available
+    # Add CORS middleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.frontend_origins,  # Allow all frontend URLs from env
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-API-Key",
+            "Cache-Control",
+            "sentry-trace",
+            "baggage",
+        ],
     )
-    degraded = redis_degraded or not change_stream_connected
-    return {
-        "body": {
-            "status": "degraded" if degraded else "ok",
-            "change_stream_connected": change_stream_connected,
-            "delivery_pubsub_connected": delivery_pubsub_connected,
-            "delivery_kv_connected": delivery_kv_connected,
-            "legacy_redis_service_connected": legacy_redis_service_connected,
-            "relay_streams_available": relay_streams_available,
-            "redis_expected": redis_expected,
-            "broker_connected": delivery_pubsub_connected,
-            "broker_expected": redis_expected,
-            "redis_service_connected": legacy_redis_service_connected,
-        },
-        "status_code": 503 if degraded else 200,
-    }
+
+    # Add Discovery, Gateway & Relay API CORS middleware
+    app.add_middleware(DiscoveryCORSMiddleware, api_prefix=settings.api_prefix)
+
+    @app.get("/health")
+    async def health_check_route(
+        request: Request,
+        health: HealthCheck = Depends(get_health_check),
+    ):
+        return await health.check(request)
+
+    # Include API routers with /api/v1 prefix and global authentication
+    app.include_router(api_gateway.router, prefix=settings.api_prefix)
+    
+    if extra_routes:
+        for router in extra_routes:
+            app.include_router(router, prefix=settings.api_prefix)
+
+    return app
 
 
-health_check_service: HealthCheck = AppShellHealthCheck(
-    redis_url=settings.redis_url,
-    compute_health_status=compute_health_status,
-)
-
-
-def get_health_check() -> HealthCheck:
-    return health_check_service
-
-
-# Health check endpoint (no prefix, no dependencies)
-@app.get("/health")
-async def health_check(
-    request: Request,
-    health: HealthCheck = Depends(get_health_check),
-):
-    return await health.check(request)
-
-
-# Include API routers with /api/v1 prefix and global authentication
-api_prefix = settings.api_prefix
-
-app.include_router(api_gateway.router, prefix=api_prefix)
-
+# For local development / uvicorn "main:app"
+app = create_app()
 
 def main() -> None:
     import uvicorn
