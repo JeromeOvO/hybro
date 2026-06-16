@@ -8,6 +8,7 @@ for agent selection with legacy RoutingStrategy and AgentSelectionResult types.
 from dataclasses import dataclass
 from enum import Enum
 
+from agent.protocols import AgentSuggestion, AgentSuggestionResult
 from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -127,33 +128,39 @@ class AgentSelectionService:
             needs_debate=False,  # Backward-compat: always False
         )
 
-    async def suggest_agents(self, message_text: str, top_k: int = 3) -> dict:
+    async def suggest_agents(
+        self, message_text: str, top_k: int = 3
+    ) -> AgentSuggestionResult:
         """
         Public API method to suggest agents for a message.
-        Returns a dict suitable for API response.
+        Returns a route-facing protocol DTO.
         
         Args:
             message_text: The user's message
             top_k: Maximum number of agents to suggest
             
         Returns:
-            Dict with routing_strategy and suggested_agents
+            AgentSuggestionResult with routing metadata and suggested agents
         """
         result = await self.select_agents_for_message(message_text, top_k)
         
-        return {
-            "routing_strategy": result.strategy.value,
-            "reasoning": result.reasoning,
-            "needs_debate": result.needs_debate,
-            "suggested_agents": [
-                {
-                    "agent_id": agent.agent_id,
-                    "name": agent.agent_name,
-                    "reason": agent.reason
-                }
+        return AgentSuggestionResult(
+            analysis=result.reasoning,
+            metadata={
+                "routing_strategy": result.strategy.value,
+                "needs_debate": result.needs_debate,
+                "reasoning": result.reasoning,
+            },
+            suggested_agents=[
+                AgentSuggestion(
+                    agent_id=agent.agent_id,
+                    name=agent.agent_name,
+                    reason=agent.reason,
+                    score=agent.score,
+                )
                 for agent in result.agents
-            ]
-        }
+            ],
+        )
 
 
 # Singleton instance

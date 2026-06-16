@@ -4361,65 +4361,67 @@ class AppShellRoomCenter:
             )
         return self.room_runtime
 
-    def create_new_room(
+    async def create_new_room(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
-        return self._require_room_services().create_new_room(request)
+        return await self._require_room_services().create_new_room(request)
 
-    def inquiry_room_setting(
+    async def inquiry_room_setting(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
-        return self._require_room_services().inquiry_room_setting(request)
+        return await self._require_room_services().inquiry_room_setting(request)
 
-    def inquiry_active_runs(
+    async def inquiry_active_runs(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterActiveRunsResponse:
-        return self._require_room_services().inquiry_active_runs(request)
+        return await self._require_room_services().inquiry_active_runs(request)
 
-    def delete_room_by_room_id(
+    async def delete_room_by_room_id(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
-        return self._require_room_services().delete_room_by_room_id(request)
+        return await self._require_room_services().delete_room_by_room_id(request)
 
-    def inquiry_rooms_by_room_owner_id(
+    async def inquiry_rooms_by_room_owner_id(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
-        return self._require_room_services().inquiry_rooms_by_room_owner_id(request)
+        return await self._require_room_services().inquiry_rooms_by_room_owner_id(request)
 
-    def update_room_agent_set(
+    async def update_room_agent_set(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
-        return self._require_room_services().update_room_agent_set(request)
+        return await self._require_room_services().update_room_agent_set(request)
 
-    def update_room_name(
+    async def update_room_name(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
-        return self._require_room_services().update_room_name(request)
+        return await self._require_room_services().update_room_name(request)
 
-    def update_room_extend_info(
+    async def update_room_extend_info(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
-        return self._require_room_services().update_room_extend_info(request)
+        return await self._require_room_services().update_room_extend_info(request)
 
-    def inquiry_room_messages_by_room_id(
+    async def inquiry_room_messages_by_room_id(
         self, request: RoomCenterRoomMessageRequest
     ) -> RoomCenterRoomMessageResponse:
-        return self._require_room_services().inquiry_room_messages_by_room_id(request)
-
-    def inquiry_agent_messages_by_related_message_id(
-        self, request: RoomCenterAgentMessageRequest
-    ) -> RoomCenterAgentMessageResponse:
-        return self._require_room_services().inquiry_agent_messages_by_related_message_id(
+        return await self._require_room_services().inquiry_room_messages_by_room_id(
             request
         )
 
-    def send_message_to_room(
+    async def inquiry_agent_messages_by_related_message_id(
+        self, request: RoomCenterAgentMessageRequest
+    ) -> RoomCenterAgentMessageResponse:
+        return await self._require_room_services().inquiry_agent_messages_by_related_message_id(
+            request
+        )
+
+    async def send_message_to_room(
         self,
         request: RoomCenterUserMessageRequest,
         target_group: str = "room_team",
         mentioned_agent_ids: list[str] | None = None,
     ) -> RoomCenterUserMessageResponse:
-        return self._require_room_services().send_message_to_room(
+        return await self._require_room_services().send_message_to_room(
             request, target_group, mentioned_agent_ids
         )
 

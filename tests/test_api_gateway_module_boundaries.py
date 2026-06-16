@@ -9,6 +9,11 @@ FORBIDDEN_API_GATEWAY_IMPORTS = (
     "app_shell.file_upload_service",
     "app_shell.rate_limit_service",
 )
+MODULE_ROUTE_PROTOCOL_IMPORTS = {
+    "agent.protocols",
+    "room.protocols",
+}
+FORBIDDEN_ROUTE_MODULE_ROOTS = {"agent", "room"}
 
 
 def _api_gateway_py_files():
@@ -46,6 +51,33 @@ def test_api_gateway_does_not_import_forbidden_concrete_modules():
                 for forbidden in FORBIDDEN_API_GATEWAY_IMPORTS
             ):
                 violations.append(f"{path}: from {module} import ...")
+
+    assert violations == []
+
+
+def test_gateway_routes_import_only_module_protocol_surfaces():
+    violations = []
+    paths = [
+        *Path("api_gateway/routes").glob("*.py"),
+        *Path("api_gateway/viewsets").glob("*.py"),
+    ]
+
+    for path in sorted(paths):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            modules: list[str] = []
+            if isinstance(node, ast.ImportFrom) and node.module:
+                modules.append(node.module)
+            elif isinstance(node, ast.Import):
+                modules.extend(alias.name for alias in node.names)
+
+            for module in modules:
+                root = module.split(".", 1)[0]
+                if root not in FORBIDDEN_ROUTE_MODULE_ROOTS:
+                    continue
+                if module in MODULE_ROUTE_PROTOCOL_IMPORTS:
+                    continue
+                violations.append(f"{path}: import {module}")
 
     assert violations == []
 
@@ -131,21 +163,20 @@ def test_old_api_route_modules_are_compatibility_shims_only():
 
 
 def test_room_route_owner_protocol_covers_room_route_calls():
-    import app_shell.bound as bound
+    import room.protocols as protocols
 
     required_methods = {
         "create_new_room",
         "inquiry_rooms_by_room_owner_id",
         "inquiry_room_messages_by_room_id",
         "inquiry_room_setting",
-        "update_room_setting",
+        "inquiry_active_runs",
         "update_room_agent_set",
         "update_room_name",
         "update_room_extend_info",
-        "send_message",
     }
 
-    assert required_methods.issubset(set(bound.RoomCenterRouteOwner.__dict__))
+    assert required_methods.issubset(set(protocols.RoomCenterCompatibility.__dict__))
 
 
 def test_api_gateway_packages_are_registered_for_distribution():

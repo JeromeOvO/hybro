@@ -192,8 +192,13 @@ def test_api_bindings_do_not_expose_concrete_store_or_service_names():
 
 def test_api_bindings_do_not_use_any_typed_dependency_seams():
     violations: list[str] = []
+    paths = [
+        *Path("api").glob("*.py"),
+        *Path("api_gateway/routes").glob("*.py"),
+        *Path("api_gateway/viewsets").glob("*.py"),
+    ]
 
-    for path in sorted(Path("api").glob("*.py")):
+    for path in sorted(paths):
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in tree.body:
             if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
@@ -522,6 +527,26 @@ def test_phase9_route_inventory_owners_are_protocol_symbols():
     )
 
 
+def test_phase9_route_inventory_supporting_protocols_are_protocol_symbols():
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    violations: list[str] = []
+
+    for route in routes:
+        for protocol_path in route.get("supporting_protocols") or []:
+            module_name, _, symbol_name = protocol_path.rpartition(".")
+            try:
+                symbol = getattr(importlib.import_module(module_name), symbol_name)
+            except (AttributeError, ModuleNotFoundError) as exc:
+                violations.append(f"{route['path']}: {protocol_path} ({exc})")
+                continue
+            if not getattr(symbol, "_is_protocol", False):
+                violations.append(f"{route['path']}: {protocol_path}")
+
+    assert not violations, "Supporting route protocols must resolve to Protocols:\n" + "\n".join(
+        violations
+    )
+
+
 def test_api_key_management_routes_are_owned_by_store_protocol():
     routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
     violations = [
@@ -585,15 +610,38 @@ def test_room_center_route_inventory_records_live_protocol_owners():
     }
     expected = {
         "inquiry_active_runs": {
-            "owner": "app_shell.bound.RoomCenterRouteOwner",
-            "supporting": set(),
+            "owner": "room.protocols.RoomCenterCompatibility",
+            "supporting": {
+                "common.protocols.ExecutionEngine",
+                "room.protocols.A2ATaskReaderCompatibility",
+            },
+        },
+        "inquiry_room_setting": {
+            "owner": "room.protocols.RoomCenterCompatibility",
+            "supporting": {"room.protocols.A2ATaskReaderCompatibility"},
+        },
+        "inquiry_room_messages": {
+            "owner": "room.protocols.RoomCenterCompatibility",
+            "supporting": {"room.protocols.A2ATaskReaderCompatibility"},
+        },
+        "update_room_agent_set": {
+            "owner": "room.protocols.RoomCenterCompatibility",
+            "supporting": {"room.protocols.A2ATaskReaderCompatibility"},
+        },
+        "update_room_name": {
+            "owner": "room.protocols.RoomCenterCompatibility",
+            "supporting": {"room.protocols.A2ATaskReaderCompatibility"},
+        },
+        "update_room_extend_info": {
+            "owner": "room.protocols.RoomCenterCompatibility",
+            "supporting": {"room.protocols.A2ATaskReaderCompatibility"},
         },
         "send_message": {
             "owner": "common.protocols.ExecutionEngine",
-            "supporting": {"common.protocols.A2ATaskReader"},
+            "supporting": {"room.protocols.A2ATaskReaderCompatibility"},
         },
         "suggest_agents": {
-            "owner": "app_shell.bound.AgentSelectionSuggester",
+            "owner": "agent.protocols.AgentSuggestionService",
             "supporting": set(),
         },
     }
@@ -606,9 +654,11 @@ def test_room_center_route_inventory_records_live_protocol_owners():
                 f"{name}: owner={route['owning_protocol']} expected={expectation['owner']}"
             )
         supporting = set(route.get("supporting_protocols") or [])
-        missing = expectation["supporting"] - supporting
-        if missing:
-            violations.append(f"{name}: missing supporting {sorted(missing)}")
+        if supporting != expectation["supporting"]:
+            violations.append(
+                f"{name}: supporting={sorted(supporting)} "
+                f"expected={sorted(expectation['supporting'])}"
+            )
 
     assert not violations, "Room-center route inventory mismatches live protocols:\n" + "\n".join(
         violations
@@ -620,7 +670,7 @@ def test_room_center_protocol_inventory_matches_handler_calls():
 
     expectations = {
         "inquiry_active_runs": (
-            "app_shell.bound.RoomCenterRouteOwner",
+            "room.protocols.RoomCenterCompatibility",
             ["inquiry_active_runs"],
         ),
         "send_message": (
@@ -628,7 +678,7 @@ def test_room_center_protocol_inventory_matches_handler_calls():
             ["execute(", "start_orchestration"],
         ),
         "suggest_agents": (
-            "app_shell.bound.AgentSelectionSuggester",
+            "agent.protocols.AgentSuggestionService",
             ["suggest_agents"],
         ),
     }
@@ -650,6 +700,24 @@ def test_room_center_protocol_inventory_matches_handler_calls():
 
     assert not violations, "Room-center protocol inventory does not match handlers:\n" + "\n".join(
         violations
+    )
+
+
+def test_room_active_runs_inventory_records_execution_support():
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    active_runs_route = next(
+        route
+        for route in routes
+        if route["module"] == "api_gateway.routes.room_routes"
+        and route["name"] == "inquiry_active_runs"
+    )
+    main_source = Path("main.py").read_text()
+    room_runtime_source = Path("app_shell/room_runtime.py").read_text()
+
+    assert "execution_facade.get_runs_for_room" in main_source
+    assert "_read_active_runs_for_room" in room_runtime_source
+    assert "common.protocols.ExecutionEngine" in set(
+        active_runs_route.get("supporting_protocols") or []
     )
 
 
@@ -712,22 +780,19 @@ def test_route_owner_protocols_match_handler_calls():
     from agent.protocols import (
         AgentCapabilityIssueStore,
         AgentCenterCompatibility,
+        AgentGroupStoreCompatibility,
         AgentLivenessChecker,
     )
-    from app_shell.bound import (
-        InspectionCenter,
-        WebhookTransport,
-    )
+    from app_shell.bound import InspectionCenter, WebhookTransport
     from app_shell.health_check import HealthCheck
     from common.protocols import (
-        A2ATaskReader,
         AgentAvatarManager,
-        AgentGroupStore,
         AgentRegistry,
         HubRelayManagement,
         HubStatusReader,
         ViewSetRepository,
     )
+    from room.protocols import A2ATaskReaderCompatibility
 
     expected_by_protocol = {
         AgentAvatarManager: {
@@ -760,16 +825,18 @@ def test_route_owner_protocols_match_handler_calls():
             "inspect_a2a_connection",
             "inspect_agent_card",
         },
-        AgentGroupStore: {
+        AgentGroupStoreCompatibility: {
             "add_agent_group",
             "delete_agent_group",
             "get_agent_group_by_id",
             "get_agent_groups_by_owner",
             "update_agent_group",
         },
-        A2ATaskReader: {
+        A2ATaskReaderCompatibility: {
             "get_pending_task_messages_for_user",
             "get_room_agent_message_by_message_id",
+            "get_room_by_room_id",
+            "get_room_user_message_by_message_id",
             "get_task_messages_for_room",
         },
         ViewSetRepository: {
@@ -831,11 +898,14 @@ def test_agent_center_route_protocol_excludes_legacy_internal_methods():
     assert forbidden.isdisjoint(AgentCenterCompatibility.__dict__)
 
 
-def test_agent_route_bound_compatibility_adapter_satisfies_protocol():
+def test_route_bound_compatibility_adapters_satisfy_protocols():
     from agent.protocols import AgentCenterCompatibility
     from app_shell.agent_runtime import AppShellAgentCenter
+    from app_shell.room_runtime import AppShellRoomCenter
+    from room.protocols import RoomCenterCompatibility
 
     assert isinstance(AppShellAgentCenter(), AgentCenterCompatibility)
+    assert isinstance(AppShellRoomCenter(), RoomCenterCompatibility)
 
 
 def test_hub_route_dependencies_are_typed_with_route_facing_protocol():
@@ -1206,20 +1276,22 @@ def test_health_check_service_uses_request_state_not_main_closures():
 
 
 def test_app_shell_protocol_surfaces_are_specific():
+    from agent.protocols import AgentGroupStoreCompatibility
     from app_shell.bound import (
         InspectionCenter,
         WebhookTransport,
         WebhookTransportFactory,
     )
-    from common.protocols import A2ATaskReader, AgentGroupStore, ViewSetRepository
+    from common.protocols import ViewSetRepository
+    from room.protocols import A2ATaskReaderCompatibility
 
     for protocol in (
         InspectionCenter,
         ViewSetRepository,
         WebhookTransport,
         WebhookTransportFactory,
-        A2ATaskReader,
-        AgentGroupStore,
+        AgentGroupStoreCompatibility,
+        A2ATaskReaderCompatibility,
     ):
         for name, value in protocol.__dict__.items():
             if not callable(value) or name.startswith("_"):
@@ -1237,14 +1309,19 @@ def test_app_shell_protocol_surfaces_are_specific():
 def test_route_owner_protocols_do_not_expose_any_annotations():
     from typing import Any
 
+    from agent.protocols import AgentGroupStoreCompatibility
     from common.protocols import (
-        A2ATaskReader,
-        AgentGroupStore,
         APIKeyStore,
         ViewSetRepository,
     )
+    from room.protocols import A2ATaskReaderCompatibility
 
-    protocols = (APIKeyStore, ViewSetRepository, A2ATaskReader, AgentGroupStore)
+    protocols = (
+        APIKeyStore,
+        ViewSetRepository,
+        AgentGroupStoreCompatibility,
+        A2ATaskReaderCompatibility,
+    )
     violations: list[str] = []
 
     for protocol in protocols:
@@ -1266,16 +1343,25 @@ def test_route_owner_protocols_do_not_expose_any_annotations():
 
 
 def test_app_shell_route_protocols_do_not_expose_broad_annotations():
+    import agent.protocols as agent_protocols
     import app_shell.bound as bound
     import app_shell.health_check as health_check
-    from common.protocols import A2ATaskReader, AgentGroupStore
+    import room.protocols as room_protocols
+    from agent.protocols import AgentGroupStoreCompatibility
+    from room.protocols import A2ATaskReaderCompatibility
 
     protocols = [
+        getattr(module, name)
+        for module in (agent_protocols, room_protocols)
+        for name in module.__all__
+        if isinstance(getattr(module, name, None), type)
+    ]
+    protocols.extend(
         getattr(bound, name)
         for name in bound.__all__
         if isinstance(getattr(bound, name, None), type)
-    ]
-    protocols.extend([A2ATaskReader, AgentGroupStore])
+    )
+    protocols.extend([A2ATaskReaderCompatibility, AgentGroupStoreCompatibility])
     protocols.append(health_check.HealthCheck)
     violations: list[str] = []
 
@@ -1357,7 +1443,11 @@ def test_platform_route_protocols_do_not_expose_any_or_wildcard_params():
 
 
 def test_app_shell_protocols_have_single_runtime_marker():
-    for path in (Path("app_shell/bound.py"),):
+    for path in (
+        Path("app_shell/bound.py"),
+        Path("agent/protocols.py"),
+        Path("room/protocols.py"),
+    ):
         source = path.read_text()
         assert "@runtime_checkable\n@runtime_checkable" not in source
 

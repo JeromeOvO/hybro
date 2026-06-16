@@ -188,9 +188,10 @@ def test_create_room_request_payloads_are_frozen():
 def test_protocols_are_runtime_checkable():
     import common.protocols as protocols
 
+    non_protocol_exports = {"ViewSetFilterParams", "ViewSetPaginationParams"}
     for name in protocols.__all__:
         obj = getattr(protocols, name)
-        if inspect.isclass(obj):
+        if inspect.isclass(obj) and name not in non_protocol_exports:
             assert getattr(obj, "_is_runtime_protocol", False), name
 
 
