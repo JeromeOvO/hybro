@@ -46,6 +46,7 @@ from common.protocols.hub_protocols import (
     HubStatusReader,
     OfflineHubFailurePort,
 )
+from common.protocols.json_types import JsonMap, JsonScalar, JsonValue
 from common.protocols.llm_protocols import (
     EmbeddingServiceProtocol,
     LLMEmbeddingGateway,
@@ -155,6 +156,9 @@ __all__ = [
     "HubPublishAuthorizationReader",
     "HubPublishLineageReader",
     "IndexRegistry",
+    "JsonMap",
+    "JsonScalar",
+    "JsonValue",
     "EmbeddingServiceProtocol",
     "LLMEmbeddingGateway",
     "LLMGateway",
