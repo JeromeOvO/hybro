@@ -3,9 +3,14 @@ from collections.abc import Callable, Iterable
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
-from app_shell.bound import ViewSetRepository, ViewSetRepositoryProvider, ViewSetResult
 from common.auth import get_current_user
-from models.request import FilterParams, PaginationParams
+from common.protocols import (
+    ViewSetFilterParams,
+    ViewSetPaginationParams,
+    ViewSetRepository,
+    ViewSetRepositoryProvider,
+    ViewSetResult,
+)
 
 # from models.response import PaginatedResponse
 
@@ -162,10 +167,10 @@ class ViewSet:
             # Create pagination params if page or limit is provided
             pagination = None
             if page is not None or limit is not None:
-                pagination = PaginationParams(page=page or 1, limit=limit or 10)
+                pagination = ViewSetPaginationParams(page=page or 1, limit=limit or 10)
 
             # Create filter params
-            filter_params = FilterParams(
+            filter_params = ViewSetFilterParams(
                 filters=filter_dict, sort_by=sort_by, sort_order=sort_order
             )
 
@@ -296,7 +301,7 @@ class ViewSet:
         return await operation()
 
     def get_filters(
-        self, filter_params: FilterParams | None = None
+        self, filter_params: ViewSetFilterParams | None = None
     ) -> dict:
         """
         Get the base query filter for the list endpoint.
@@ -331,14 +336,14 @@ class ViewSet:
     async def _list(
         self,
         repo: ViewSetRepository,
-        pagination: PaginationParams | None = None,
-        filters: FilterParams | None = None,
+        pagination: ViewSetPaginationParams | None = None,
+        filters: ViewSetFilterParams | None = None,
     ):
         # Use the customizable get_filters method
         custom_filters = self.get_filters(filters)
 
-        # Create a new FilterParams with the processed query
-        processed_filters = FilterParams(
+        # Create a new ViewSetFilterParams with the processed query
+        processed_filters = ViewSetFilterParams(
             filters=custom_filters,
             sort_by=filters.sort_by if filters else None,
             sort_order=filters.sort_order if filters else -1,
