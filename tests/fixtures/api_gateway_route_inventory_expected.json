@@ -56,7 +56,6 @@
     "status_code": null,
     "dependencies": [
       "get_agent_center",
-      "get_agent_service",
       "get_current_user"
     ],
     "auth_dependencies": [
@@ -223,7 +222,6 @@
     "status_code": null,
     "dependencies": [
       "get_agent_center",
-      "get_agent_service",
       "get_current_user"
     ],
     "auth_dependencies": [

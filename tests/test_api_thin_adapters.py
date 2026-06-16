@@ -709,11 +709,12 @@ def test_legacy_410_routes_are_not_bound_to_legacy_execution_centers_at_startup(
 
 
 def test_route_owner_protocols_match_handler_calls():
-    from app_shell.bound import (
+    from agent.protocols import (
         AgentCapabilityIssueStore,
-        AgentCenterRouteOwner,
+        AgentCenterCompatibility,
         AgentLivenessChecker,
-        AgentLookup,
+    )
+    from app_shell.bound import (
         InspectionCenter,
         WebhookTransport,
     )
@@ -722,6 +723,7 @@ def test_route_owner_protocols_match_handler_calls():
         A2ATaskReader,
         AgentAvatarManager,
         AgentGroupStore,
+        AgentRegistry,
         HubRelayManagement,
         HubStatusReader,
         ViewSetRepository,
@@ -737,23 +739,22 @@ def test_route_owner_protocols_match_handler_calls():
             "resolve_all_for_agent",
             "resolve_issue",
         },
-        AgentCenterRouteOwner: {
-            "_mask_sensitive_information",
-            "get_agent_card_from_url",
-            "get_agents_by_provider_id",
-            "get_agents_with_conditions",
-            "get_all_active_agents",
-            "get_all_agents",
-            "query_agent_by_agent_id",
-            "register_agent",
-            "remove_agent",
-            "update_agent",
+        AgentCenterCompatibility: {
+            "delete_agent_from_route",
+            "finalize_agent_response_for_route",
+            "get_agent_card_from_url_for_route",
+            "get_agents_by_provider_for_route",
+            "get_visible_agent_for_route",
+            "list_agents_with_conditions_for_route",
+            "list_visible_agents_for_route",
+            "register_agent_from_route",
+            "update_agent_settings_from_route",
         },
         AgentLivenessChecker: {
             "__call__",
         },
-        AgentLookup: {
-            "get_agent_by_agent_id",
+        AgentRegistry: {
+            "get_agent",
         },
         InspectionCenter: {
             "inspect_a2a_connection",
@@ -811,6 +812,32 @@ def test_route_owner_protocols_match_handler_calls():
     )
 
 
+def test_agent_center_route_protocol_excludes_legacy_internal_methods():
+    from agent.protocols import AgentCenterCompatibility
+
+    forbidden = {
+        "_mask_sensitive_information",
+        "get_agent_card_from_url",
+        "get_agents_by_provider_id",
+        "get_agents_with_conditions",
+        "get_all_active_agents",
+        "get_all_agents",
+        "query_agent_by_agent_id",
+        "register_agent",
+        "remove_agent",
+        "update_agent",
+    }
+
+    assert forbidden.isdisjoint(AgentCenterCompatibility.__dict__)
+
+
+def test_agent_route_bound_compatibility_adapter_satisfies_protocol():
+    from agent.protocols import AgentCenterCompatibility
+    from app_shell.agent_runtime import AppShellAgentCenter
+
+    assert isinstance(AppShellAgentCenter(), AgentCenterCompatibility)
+
+
 def test_hub_route_dependencies_are_typed_with_route_facing_protocol():
     import inspect
     from typing import get_type_hints
@@ -832,18 +859,17 @@ def test_agent_routes_expose_typed_dependency_providers():
     import inspect
     from typing import get_type_hints
 
-    from api import agent
-    from app_shell.bound import (
+    from agent.protocols import (
         AgentCapabilityIssueStore,
-        AgentCenterRouteOwner,
+        AgentCenterCompatibility,
         AgentLivenessChecker,
-        AgentLookup,
     )
-    from common.protocols import AgentAvatarManager
+    from api import agent
+    from common.protocols import AgentAvatarManager, AgentRegistry
 
     provider_expectations = {
-        agent.get_agent_center: AgentCenterRouteOwner,
-        agent.get_agent_service: AgentLookup,
+        agent.get_agent_center: AgentCenterCompatibility,
+        agent.get_agent_service: AgentRegistry,
         agent.get_capability_issue_service: AgentCapabilityIssueStore,
         agent.get_agent_avatar_manager: AgentAvatarManager,
         agent.get_agent_liveness_checker: AgentLivenessChecker,
@@ -852,40 +878,38 @@ def test_agent_routes_expose_typed_dependency_providers():
         assert get_type_hints(provider)["return"] is expected_type
 
     route_expectations = {
-        agent.register_agent: {"center": AgentCenterRouteOwner},
-        agent.get_agent_by_provider: {"center": AgentCenterRouteOwner},
+        agent.register_agent: {"center": AgentCenterCompatibility},
+        agent.get_agent_by_provider: {"center": AgentCenterCompatibility},
         agent.delete_agent: {
-            "center": AgentCenterRouteOwner,
-            "agent_lookup": AgentLookup,
+            "center": AgentCenterCompatibility,
         },
         agent.update_agent: {
-            "center": AgentCenterRouteOwner,
-            "agent_lookup": AgentLookup,
+            "center": AgentCenterCompatibility,
         },
         agent.upload_agent_avatar: {
-            "agent_lookup": AgentLookup,
+            "agent_lookup": AgentRegistry,
             "avatar_manager": AgentAvatarManager,
         },
         agent.get_capability_issues: {
-            "agent_lookup": AgentLookup,
+            "agent_lookup": AgentRegistry,
             "issue_store": AgentCapabilityIssueStore,
         },
         agent.resolve_all_capability_issues: {
-            "agent_lookup": AgentLookup,
+            "agent_lookup": AgentRegistry,
             "issue_store": AgentCapabilityIssueStore,
         },
         agent.resolve_capability_issue: {
-            "agent_lookup": AgentLookup,
+            "agent_lookup": AgentRegistry,
             "issue_store": AgentCapabilityIssueStore,
         },
-        agent.get_agent_card_from_url: {"center": AgentCenterRouteOwner},
+        agent.get_agent_card_from_url: {"center": AgentCenterCompatibility},
         agent.get_agent: {
-            "center": AgentCenterRouteOwner,
+            "center": AgentCenterCompatibility,
             "liveness_checker": AgentLivenessChecker,
         },
-        agent.get_agent_list: {"center": AgentCenterRouteOwner},
-        agent.get_all_active_agents: {"center": AgentCenterRouteOwner},
-        agent.get_agent_list_with_conditions: {"center": AgentCenterRouteOwner},
+        agent.get_agent_list: {"center": AgentCenterCompatibility},
+        agent.get_all_active_agents: {"center": AgentCenterCompatibility},
+        agent.get_agent_list_with_conditions: {"center": AgentCenterCompatibility},
     }
     missing: list[str] = []
     for handler, expected_params in route_expectations.items():
@@ -934,41 +958,41 @@ def test_agent_route_inventory_records_live_protocol_owners():
     }
     expectations = {
         "delete_agent": (
-            "app_shell.bound.AgentCenterRouteOwner",
-            {"app_shell.bound.AgentLookup"},
-        ),
-        "get_agent_by_provider": ("app_shell.bound.AgentCenterRouteOwner", set()),
-        "get_agent": (
-            "app_shell.bound.AgentCenterRouteOwner",
-            {"app_shell.bound.AgentLivenessChecker"},
-        ),
-        "get_agent_card_from_url": ("app_shell.bound.AgentCenterRouteOwner", set()),
-        "get_agent_list_with_conditions": (
-            "app_shell.bound.AgentCenterRouteOwner",
+            "agent.protocols.AgentCenterCompatibility",
             set(),
         ),
-        "get_all_active_agents": ("app_shell.bound.AgentCenterRouteOwner", set()),
-        "get_agent_list": ("app_shell.bound.AgentCenterRouteOwner", set()),
-        "register_agent": ("app_shell.bound.AgentCenterRouteOwner", set()),
+        "get_agent_by_provider": ("agent.protocols.AgentCenterCompatibility", set()),
+        "get_agent": (
+            "agent.protocols.AgentCenterCompatibility",
+            {"agent.protocols.AgentLivenessChecker"},
+        ),
+        "get_agent_card_from_url": ("agent.protocols.AgentCenterCompatibility", set()),
+        "get_agent_list_with_conditions": (
+            "agent.protocols.AgentCenterCompatibility",
+            set(),
+        ),
+        "get_all_active_agents": ("agent.protocols.AgentCenterCompatibility", set()),
+        "get_agent_list": ("agent.protocols.AgentCenterCompatibility", set()),
+        "register_agent": ("agent.protocols.AgentCenterCompatibility", set()),
         "update_agent": (
-            "app_shell.bound.AgentCenterRouteOwner",
-            {"app_shell.bound.AgentLookup"},
+            "agent.protocols.AgentCenterCompatibility",
+            set(),
         ),
         "upload_agent_avatar": (
             "common.protocols.AgentAvatarManager",
-            {"app_shell.bound.AgentLookup"},
+            {"common.protocols.AgentRegistry"},
         ),
         "get_capability_issues": (
-            "app_shell.bound.AgentCapabilityIssueStore",
-            {"app_shell.bound.AgentLookup"},
+            "agent.protocols.AgentCapabilityIssueStore",
+            {"common.protocols.AgentRegistry"},
         ),
         "resolve_all_capability_issues": (
-            "app_shell.bound.AgentCapabilityIssueStore",
-            {"app_shell.bound.AgentLookup"},
+            "agent.protocols.AgentCapabilityIssueStore",
+            {"common.protocols.AgentRegistry"},
         ),
         "resolve_capability_issue": (
-            "app_shell.bound.AgentCapabilityIssueStore",
-            {"app_shell.bound.AgentLookup"},
+            "agent.protocols.AgentCapabilityIssueStore",
+            {"common.protocols.AgentRegistry"},
         ),
     }
     violations: list[str] = []
