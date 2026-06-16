@@ -538,22 +538,37 @@ def test_api_key_management_routes_are_owned_by_store_protocol():
 
 def test_agent_viewset_mutations_record_vector_side_effect_protocols():
     routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
-    expected = {
-        "common.protocols.EmbeddingServiceProtocol",
-        "app_shell.bound.VectorIndex",
+    expected_by_method = {
+        "POST": {
+            "common.protocols.EmbeddingServiceProtocol",
+            "common.protocols.AgentVectorIndexWriter",
+        },
+        "PUT": {
+            "common.protocols.EmbeddingServiceProtocol",
+            "common.protocols.AgentVectorIndexWriter",
+        },
+        "PATCH": {
+            "common.protocols.EmbeddingServiceProtocol",
+            "common.protocols.AgentVectorIndexWriter",
+        },
+        "DELETE": {
+            "common.protocols.AgentVectorIndexWriter",
+        },
     }
     violations: list[str] = []
 
     for route in routes:
         if route["path"] not in {"/api/v1/agents", "/api/v1/agents/{item_id}"}:
             continue
-        if not set(route["methods"]) & {"POST", "PUT", "PATCH", "DELETE"}:
+        mutation_methods = set(route["methods"]) & set(expected_by_method)
+        if not mutation_methods:
             continue
+        expected = set().union(*(expected_by_method[method] for method in mutation_methods))
         supporting = set(route.get("supporting_protocols") or [])
-        missing = expected - supporting
-        if missing:
+        if supporting != expected:
             violations.append(
-                f"{route['path']} {','.join(route['methods'])}: missing {sorted(missing)}"
+                f"{route['path']} {','.join(route['methods'])}: "
+                f"supporting={sorted(supporting)} expected={sorted(expected)}"
             )
 
     assert not violations, "Agent mutation route inventory omits side-effect protocols:\n" + "\n".join(
@@ -700,7 +715,6 @@ def test_route_owner_protocols_match_handler_calls():
         AgentLivenessChecker,
         AgentLookup,
         InspectionCenter,
-        ViewSetRepository,
         WebhookTransport,
     )
     from app_shell.health_check import HealthCheck
@@ -710,6 +724,7 @@ def test_route_owner_protocols_match_handler_calls():
         AgentGroupStore,
         HubRelayManagement,
         HubStatusReader,
+        ViewSetRepository,
     )
 
     expected_by_protocol = {
@@ -1169,11 +1184,10 @@ def test_health_check_service_uses_request_state_not_main_closures():
 def test_app_shell_protocol_surfaces_are_specific():
     from app_shell.bound import (
         InspectionCenter,
-        ViewSetRepository,
         WebhookTransport,
         WebhookTransportFactory,
     )
-    from common.protocols import A2ATaskReader, AgentGroupStore
+    from common.protocols import A2ATaskReader, AgentGroupStore, ViewSetRepository
 
     for protocol in (
         InspectionCenter,
@@ -1199,8 +1213,12 @@ def test_app_shell_protocol_surfaces_are_specific():
 def test_route_owner_protocols_do_not_expose_any_annotations():
     from typing import Any
 
-    from app_shell.bound import ViewSetRepository
-    from common.protocols import A2ATaskReader, AgentGroupStore, APIKeyStore
+    from common.protocols import (
+        A2ATaskReader,
+        AgentGroupStore,
+        APIKeyStore,
+        ViewSetRepository,
+    )
 
     protocols = (APIKeyStore, ViewSetRepository, A2ATaskReader, AgentGroupStore)
     violations: list[str] = []

@@ -3,26 +3,28 @@ from pydantic import BaseModel
 
 from api_gateway.viewsets import base as viewset
 from api_gateway.viewsets.base import REPO_ACTIONS_MAP
-from app_shell.bound import VectorIndex
 from common.auth import ClerkUser, get_current_user, get_optional_user
-from common.protocols import EmbeddingServiceProtocol
+from common.protocols import (
+    AgentVectorIndexWriter,
+    EmbeddingServiceProtocol,
+    ViewSetFilterParams,
+    ViewSetPaginationParams,
+)
 from models.request import (
     AgentCreate,
     AgentPatch,
     AgentUpdate,
-    FilterParams,
-    PaginationParams,
 )
 from models.response import AgentResponse, PaginatedResponse, PaginationMeta
 
 embedding_provider: EmbeddingServiceProtocol | None = None
-vector_index: VectorIndex | None = None
+vector_index: AgentVectorIndexWriter | None = None
 
 
 def bind_agent_viewset_dependencies(
     *,
     embedding_source: EmbeddingServiceProtocol,
-    vector_index_service: VectorIndex,
+    vector_index_service: AgentVectorIndexWriter,
 ) -> None:
     global embedding_provider, vector_index
 
@@ -36,7 +38,7 @@ def _require_embedding_provider() -> EmbeddingServiceProtocol:
     return embedding_provider
 
 
-def _require_vector_index() -> VectorIndex:
+def _require_vector_index() -> AgentVectorIndexWriter:
     if vector_index is None:
         raise RuntimeError("AgentViewSet vector dependency has not been bound")
     return vector_index
@@ -122,8 +124,8 @@ class AgentViewSet(viewset.ViewSet):
             }
             pagination = None
             if page is not None or limit is not None:
-                pagination = PaginationParams(page=page or 1, limit=limit or 10)
-            filter_params = FilterParams(
+                pagination = ViewSetPaginationParams(page=page or 1, limit=limit or 10)
+            filter_params = ViewSetFilterParams(
                 filters=filter_dict, sort_by=sort_by, sort_order=sort_order
             )
             result = await self._list(repo, pagination, filter_params, user=user)
@@ -325,13 +327,13 @@ class AgentViewSet(viewset.ViewSet):
     async def _list(
         self,
         repo: viewset.ViewSetRepository,
-        pagination: PaginationParams | None = None,
-        filters: FilterParams | None = None,
+        pagination: ViewSetPaginationParams | None = None,
+        filters: ViewSetFilterParams | None = None,
         *,
         user: ClerkUser | None = None,
     ):
         custom_filters = self.get_filters(filters, user=user)
-        processed_filters = FilterParams(
+        processed_filters = ViewSetFilterParams(
             filters=custom_filters,
             sort_by=filters.sort_by if filters else None,
             sort_order=filters.sort_order if filters else -1,

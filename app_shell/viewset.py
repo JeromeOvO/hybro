@@ -1,17 +1,17 @@
 import math
 from typing import Any
 
-from pydantic import BaseModel
-
-from app_shell.bound import (
+from common.protocols import (
+    MongoDAL,
+    RoutePayload,
     ViewSetDatabaseProvider,
+    ViewSetFilterParams,
     ViewSetOperation,
+    ViewSetPaginationParams,
     ViewSetRepository,
     ViewSetRepositoryFactory,
     ViewSetResult,
 )
-from common.protocols import MongoDAL
-from models.request import FilterParams, PaginationParams
 from models.response import PaginatedResponse, PaginationMeta
 
 
@@ -51,14 +51,16 @@ class AppShellDALViewSetRepository:
 
     async def get_all(
         self,
-        pagination: PaginationParams | None = None,
-        filters: FilterParams | None = None,
+        pagination: ViewSetPaginationParams | None = None,
+        filters: ViewSetFilterParams | None = None,
     ):
         query = dict(filters.filters) if filters and filters.filters else {}
         total = await self._collection.count(query)
 
         if pagination is None:
-            pagination = PaginationParams(page=1, limit=total if total > 0 else 10)
+            pagination = ViewSetPaginationParams(
+                page=1, limit=total if total > 0 else 10
+            )
 
         sort = [(filters.sort_by, filters.sort_order)] if filters and filters.sort_by else None
         items = await self._collection.find(
@@ -83,16 +85,17 @@ class AppShellDALViewSetRepository:
     async def get(self, item_id: str | int):
         return await self._collection.find_one({self._pk_field: item_id})
 
-    async def create(self, item):
+    async def create(self, item: RoutePayload):
         item_dict = _payload_to_dict(item)
         inserted_id = await self._collection.insert_one(item_dict)
         lookup_value = item_dict.get(self._pk_field, inserted_id)
         return await self.get(lookup_value)
 
-    async def update(self, item_id: str | int, item: BaseModel):
+    async def update(self, item_id: str | int, item: RoutePayload):
+        item_dict = _payload_to_dict(item)
         await self._collection.update_one(
             {self._pk_field: item_id},
-            {"$set": item.model_dump()},
+            {"$set": item_dict},
         )
         return await self.get(item_id)
 
@@ -100,10 +103,11 @@ class AppShellDALViewSetRepository:
         await self._collection.delete_one({self._pk_field: item_id})
         return {"deleted": True}
 
-    async def patch(self, item_id: str | int, item: BaseModel):
+    async def patch(self, item_id: str | int, item: RoutePayload):
+        item_dict = _payload_to_dict(item, exclude_unset=True)
         await self._collection.update_one(
             {self._pk_field: item_id},
-            {"$set": item.model_dump(exclude_unset=True)},
+            {"$set": item_dict},
         )
         return await self.get(item_id)
 
@@ -127,11 +131,11 @@ class AppShellDALViewSetRepositoryProvider:
         return await operation()
 
 
-def _payload_to_dict(item: Any) -> dict:
+def _payload_to_dict(item: Any, *, exclude_unset: bool = False) -> dict:
     if hasattr(item, "model_dump"):
-        return item.model_dump()
+        return item.model_dump(exclude_unset=exclude_unset)
     if hasattr(item, "dict"):
-        return item.dict()
+        return item.dict(exclude_unset=exclude_unset)
     return dict(item)
 
 

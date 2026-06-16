@@ -489,7 +489,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.ViewSetRepository",
+    "owning_protocol": "common.protocols.ViewSetRepository",
     "path": "/api/v1/agents",
     "response_class": null,
     "response_model": "PaginatedResponse[AgentResponse]",
@@ -513,7 +513,7 @@
       "201",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.ViewSetRepository",
+    "owning_protocol": "common.protocols.ViewSetRepository",
     "path": "/api/v1/agents",
     "response_class": null,
     "response_model": "AgentResponse",
@@ -521,7 +521,7 @@
     "streaming_response": null,
     "supporting_protocols": [
       "common.protocols.EmbeddingServiceProtocol",
-      "app_shell.bound.VectorIndex"
+      "common.protocols.AgentVectorIndexWriter"
     ]
   },
   {
@@ -541,15 +541,14 @@
       "204",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.ViewSetRepository",
+    "owning_protocol": "common.protocols.ViewSetRepository",
     "path": "/api/v1/agents/{item_id}",
     "response_class": null,
     "response_model": null,
     "status_code": 204,
     "streaming_response": null,
     "supporting_protocols": [
-      "common.protocols.EmbeddingServiceProtocol",
-      "app_shell.bound.VectorIndex"
+      "common.protocols.AgentVectorIndexWriter"
     ]
   },
   {
@@ -569,7 +568,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.ViewSetRepository",
+    "owning_protocol": "common.protocols.ViewSetRepository",
     "path": "/api/v1/agents/{item_id}",
     "response_class": null,
     "response_model": "AgentResponse",
@@ -593,7 +592,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.ViewSetRepository",
+    "owning_protocol": "common.protocols.ViewSetRepository",
     "path": "/api/v1/agents/{item_id}",
     "response_class": null,
     "response_model": "AgentResponse",
@@ -601,7 +600,7 @@
     "streaming_response": null,
     "supporting_protocols": [
       "common.protocols.EmbeddingServiceProtocol",
-      "app_shell.bound.VectorIndex"
+      "common.protocols.AgentVectorIndexWriter"
     ]
   },
   {
@@ -621,7 +620,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.ViewSetRepository",
+    "owning_protocol": "common.protocols.ViewSetRepository",
     "path": "/api/v1/agents/{item_id}",
     "response_class": null,
     "response_model": "AgentResponse",
@@ -629,7 +628,7 @@
     "streaming_response": null,
     "supporting_protocols": [
       "common.protocols.EmbeddingServiceProtocol",
-      "app_shell.bound.VectorIndex"
+      "common.protocols.AgentVectorIndexWriter"
     ]
   },
   {

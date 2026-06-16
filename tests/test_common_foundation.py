@@ -531,9 +531,10 @@ def test_room_info_preserves_legacy_membership_status_default():
 def test_protocols_are_runtime_checkable():
     import common.protocols as protocols
 
+    non_protocol_exports = {"ViewSetFilterParams", "ViewSetPaginationParams"}
     for name in protocols.__all__:
         obj = getattr(protocols, name)
-        if inspect.isclass(obj):
+        if inspect.isclass(obj) and name not in non_protocol_exports:
             assert getattr(obj, "_is_runtime_protocol", False), name
 
 
@@ -834,7 +835,11 @@ def _public_protocol_methods(protocol):
     return {
         name
         for name, member in protocol.__dict__.items()
-        if inspect.isfunction(member) and not name.startswith("_")
+        if inspect.isfunction(member)
+        and (
+            not name.startswith("_")
+            or name in {"__aenter__", "__aexit__", "__call__"}
+        )
     }
 
 
@@ -930,6 +935,24 @@ def test_protocol_methods_match_design_doc():
             "mark_cancelled",
             "set_draining",
             "start_cancellation_watcher",
+        },
+        protocols.AgentVectorIndexWriter: {"upsert", "delete"},
+        protocols.ViewSetTransaction: {"start_transaction"},
+        protocols.ViewSetSessionContext: {"__aenter__", "__aexit__"},
+        protocols.ViewSetDatabaseClient: {"start_session"},
+        protocols.ViewSetDatabaseProvider: {"__call__"},
+        protocols.ViewSetRepositoryFactory: {"__call__"},
+        protocols.ViewSetRepositoryProvider: {
+            "get_repository",
+            "run_in_transaction",
+        },
+        protocols.ViewSetRepository: {
+            "create",
+            "delete",
+            "get",
+            "get_all",
+            "patch",
+            "update",
         },
         protocols.HubManagement: {
             "register_hub",
@@ -1197,6 +1220,37 @@ def test_protocol_methods_match_design_doc():
         protocols.ExecutionEngine.cancel,
         ["self", "room_id", "message_id", "requested_by_user_id"],
     )
+    _assert_params(protocols.AgentVectorIndexWriter.upsert, ["self", "vectors"])
+    _assert_params(protocols.AgentVectorIndexWriter.delete, ["self", "ids"])
+    _assert_params(protocols.ViewSetTransaction.start_transaction, ["self"])
+    _assert_params(protocols.ViewSetSessionContext.__aenter__, ["self"])
+    _assert_params(
+        protocols.ViewSetSessionContext.__aexit__,
+        ["self", "exc_type", "exc", "traceback"],
+    )
+    _assert_params(protocols.ViewSetDatabaseClient.start_session, ["self"])
+    _assert_params(protocols.ViewSetDatabaseProvider.__call__, ["self"])
+    _assert_params(
+        protocols.ViewSetRepositoryFactory.__call__,
+        ["self", "collection_name", "db", "pinecone", "pk_field"],
+    )
+    _assert_params(
+        protocols.ViewSetRepositoryProvider.get_repository,
+        ["self", "collection_name", "pk_field"],
+    )
+    _assert_params(
+        protocols.ViewSetRepositoryProvider.run_in_transaction,
+        ["self", "operation"],
+    )
+    _assert_params(protocols.ViewSetRepository.create, ["self", "data"])
+    _assert_params(protocols.ViewSetRepository.delete, ["self", "item_id"])
+    _assert_params(protocols.ViewSetRepository.get, ["self", "item_id"])
+    _assert_params(
+        protocols.ViewSetRepository.get_all,
+        ["self", "pagination", "filters"],
+    )
+    _assert_params(protocols.ViewSetRepository.patch, ["self", "item_id", "data"])
+    _assert_params(protocols.ViewSetRepository.update, ["self", "item_id", "data"])
     _assert_params(protocols.MongoCollection.find, ["self", "query", "kwargs"])
     _assert_params(
         protocols.DistributedLock.acquire, ["self", "key", "owner", "ttl"]
