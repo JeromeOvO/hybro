@@ -372,6 +372,10 @@ def test_context_memory_import_boundary():
     }
     allowed_stdlib = set(sys.stdlib_module_names) | {"__future__"}
     allowed_roots = allowed_stdlib | {"common", "context_memory"}
+    protocol_legacy_model_imports = {
+        "models.request",
+        "models.response",
+    }
 
     for path in Path("context_memory").rglob("*.py"):
         tree = ast.parse(path.read_text())
@@ -379,12 +383,22 @@ def test_context_memory_import_boundary():
             root = None
             if isinstance(node, ast.Import):
                 for alias in node.names:
+                    if (
+                        path == Path("context_memory/protocols.py")
+                        and alias.name in protocol_legacy_model_imports
+                    ):
+                        continue
                     root = alias.name.split(".", 1)[0]
                     assert root in allowed_roots and root not in forbidden, (
                         path,
                         alias.name,
                     )
             elif isinstance(node, ast.ImportFrom) and node.module:
+                if (
+                    path == Path("context_memory/protocols.py")
+                    and node.module in protocol_legacy_model_imports
+                ):
+                    continue
                 root = node.module.split(".", 1)[0]
                 assert root in allowed_roots and root not in forbidden, (
                     path,

@@ -97,17 +97,6 @@ class AgentCallCounter(Protocol):
     async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> None: ...
 
 
-@runtime_checkable
-class AgentGroupStore(Protocol):
-    async def add_agent_group(self, group: dict[str, Any]) -> bool: ...
-    async def delete_agent_group(self, group_id: str) -> bool: ...
-    async def get_agent_group_by_id(self, group_id: str) -> dict[str, Any] | None: ...
-    async def get_agent_groups_by_owner(self, owner_id: str) -> list[dict[str, Any]]: ...
-    async def update_agent_group(
-        self, group_id: str, updates: dict[str, str | list[str]]
-    ) -> bool: ...
-
-
 __all__ = [
     "AgentCallCounter",
     "AgentAvatarManager",
@@ -118,5 +107,4 @@ __all__ = [
     "AgentRegistry",
     "AgentRegistryWriter",
     "HubAgentStatusReader",
-    "AgentGroupStore",
 ]

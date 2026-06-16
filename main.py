@@ -656,8 +656,6 @@ async def lifespan(app: FastAPI):
                     task_notifier=notify_task_update_with_string_state,
                 )
 
-            webhooks.bind_webhook_dependencies(create_webhook_transport)
-
             execution_facade = create_execution_facade(
                 room_center=room_center.room_center,
                 room_message_center=execution_room_message_center,
@@ -703,6 +701,7 @@ async def lifespan(app: FastAPI):
                     client_request_id_resolver=app_shell_client_request_id_resolver,
                 )
 
+            webhooks.bind_webhook_dependencies(create_webhook_transport())
             bind_task_processing_status_emitter(emit_room_processing_status)
             room_runtime.bind_hitl_pending_checker(hitl_service.get_pending_requests)
             room_runtime.bind_active_run_reader(read_room_active_runs)

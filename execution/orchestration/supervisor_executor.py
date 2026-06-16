@@ -45,9 +45,10 @@ from models.supervisor import (
 )
 
 if TYPE_CHECKING:
+    from app_shell.rate_limit_service import RateLimitService
+
     from app_shell.delivery_runtime import SSEManager
     from app_shell.memory_service import RoomMemoryService
-    from app_shell.rate_limit_service import RateLimitService
     from app_shell.room_coordinator_service import RoomCoordinatorService
     from app_shell.room_runtime import RoomServices
     from execution.dispatch.agent_dispatcher import AgentDispatcher

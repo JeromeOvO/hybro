@@ -3,7 +3,6 @@ from common.protocols.agent_protocols import (
     AgentAvatarManager,
     AgentCallCounter,
     AgentExclusionReader,
-    AgentGroupStore,
     AgentManagement,
     AgentMatcher,
     AgentMessageMatcher,
@@ -29,12 +28,18 @@ from common.protocols.dal_protocols import (
     RedisStreams,
     VectorDAL,
 )
-from common.protocols.delivery_protocols import EventPublisher, SSETransport
+from common.protocols.delivery_protocols import (
+    EventPublisher,
+    SSEConnectionLike,
+    SSERouteTransport,
+    SSETransport,
+)
 from common.protocols.execution_protocols import (
     ExecutionEngine,
     HITLManager,
     HubAgentResponseSink,
     RoomDistributedLock,
+    WebhookReceiver,
 )
 from common.protocols.hub_protocols import (
     HubDispatchPolicy,
@@ -90,7 +95,6 @@ from common.protocols.repository_protocols import (
     RunRepository,
 )
 from common.protocols.room_protocols import (
-    A2ATaskReader,
     HubPublishAuthorizationReader,
     HubPublishLineageReader,
     MessageCancellationReader,
@@ -130,7 +134,6 @@ from common.protocols.viewset_protocols import (
 __all__ = [
     "AgentCallCounter",
     "AgentVectorIndexWriter",
-    "AgentGroupStore",
     "AgentAvatarManager",
     "AgentCardResolver",
     "AgentExclusionReader",
@@ -206,7 +209,6 @@ __all__ = [
     "RedisStreams",
     "RequiredEmbeddingServiceProtocol",
     "RoomHistoryReader",
-    "A2ATaskReader",
     "RoomDistributedLock",
     "RoomAgentTaskTracker",
     "RoomManagement",
@@ -223,6 +225,8 @@ __all__ = [
     "RuntimeMessageStore",
     "RuntimeTaskLifecycleStore",
     "RoutePayload",
+    "SSEConnectionLike",
+    "SSERouteTransport",
     "SSETransport",
     "VectorDAL",
     "VectorIndexResult",
@@ -238,4 +242,5 @@ __all__ = [
     "ViewSetResult",
     "ViewSetSessionContext",
     "ViewSetTransaction",
+    "WebhookReceiver",
 ]

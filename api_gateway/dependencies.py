@@ -93,7 +93,7 @@ def missing_gateway_route_bindings() -> list[str]:
         ),
         "api_gateway.routes.webhook_routes": (
             webhook_routes,
-            ("webhook_transport_factory",),
+            ("webhook_receiver",),
         ),
         "api_gateway.viewsets.agent": (
             agent_viewset,

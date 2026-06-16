@@ -1,3 +1,5 @@
+import importlib
+
 import pytest
 
 
@@ -30,12 +32,28 @@ def test_bind_api_gateway_deps_rejects_incomplete_bindings():
         bind_api_gateway_deps(deps)
 
 
-def test_gateway_dependency_validation_checks_route_module_bindings(monkeypatch):
+@pytest.mark.parametrize(
+    ("module_name", "binding_name"),
+    [
+        ("api_gateway.routes.files_routes", "file_storage"),
+        ("api_gateway.routes.agent_routes", "agent_center"),
+        ("api_gateway.routes.agent_routes", "agent_liveness_checker"),
+        ("api_gateway.routes.room_routes", "room_center"),
+        ("api_gateway.routes.room_routes", "room_store"),
+        ("api_gateway.routes.sse_routes", "sse_manager"),
+        ("api_gateway.routes.webhook_routes", "webhook_receiver"),
+        ("api_gateway.routes.inspection_routes", "inspection_center"),
+        ("api_gateway.routes.memory_routes", "memory_center"),
+    ],
+)
+def test_gateway_dependency_validation_checks_route_module_bindings(
+    monkeypatch,
+    module_name,
+    binding_name,
+):
     from api_gateway.dependencies import missing_gateway_route_bindings
-    from api_gateway.routes import files_routes
 
-    monkeypatch.setattr(files_routes, "file_storage", None)
+    module = importlib.import_module(module_name)
+    monkeypatch.setattr(module, binding_name, None)
 
-    assert "api_gateway.routes.files_routes.file_storage" in (
-        missing_gateway_route_bindings()
-    )
+    assert f"{module_name}.{binding_name}" in missing_gateway_route_bindings()
