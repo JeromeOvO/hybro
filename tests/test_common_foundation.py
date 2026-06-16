@@ -538,8 +538,23 @@ def test_protocols_are_runtime_checkable():
 
 
 def test_common_json_aliases_are_protocol_safe():
+    import subprocess
     import sys
     from typing import get_args
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                "import common.json_types; "
+                "import common.protocols; "
+                "assert 'app_shell.bound' not in sys.modules"
+            ),
+        ],
+        check=True,
+    )
 
     import common.protocols as protocols
     from common.json_types import JsonMap, JsonScalar, JsonValue
@@ -547,7 +562,6 @@ def test_common_json_aliases_are_protocol_safe():
     assert protocols.JsonScalar is JsonScalar
     assert protocols.JsonValue is JsonValue
     assert protocols.JsonMap is JsonMap
-    assert "app_shell.bound" not in sys.modules
 
     assert set(get_args(JsonScalar)) == {str, int, float, bool, type(None)}
     json_value_args = set(get_args(JsonValue))
