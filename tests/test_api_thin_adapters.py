@@ -77,6 +77,45 @@ def _annotation_contains_broad_object(annotation) -> bool:
     )
 
 
+def test_route_protocol_broad_shape_rules_cover_nested_any_and_bare_containers():
+    from typing import Any, get_args, get_origin
+
+    from common.dto.base import FrozenDTO
+    from common.protocols import JsonValue
+
+    class NestedBroadDTO(FrozenDTO):
+        payload: dict[str, Any]
+
+    def annotation_is_broad(annotation, seen: set[object] | None = None) -> bool:
+        if seen is None:
+            seen = set()
+        if annotation in seen:
+            return False
+        seen.add(annotation)
+        if annotation in {Any, object, inspect.Signature.empty}:
+            return True
+        if annotation in {dict, list, set, tuple}:
+            return True
+        origin = get_origin(annotation)
+        if origin is None:
+            if inspect.isclass(annotation) and issubclass(annotation, FrozenDTO):
+                return any(
+                    annotation_is_broad(field.annotation, seen)
+                    for field in annotation.model_fields.values()
+                )
+            return False
+        if origin in {dict, list, set, tuple} and not get_args(annotation):
+            return True
+        return any(annotation_is_broad(arg, seen) for arg in get_args(annotation))
+
+    assert annotation_is_broad(dict)
+    assert annotation_is_broad(list)
+    assert annotation_is_broad(dict[str, Any])
+    assert annotation_is_broad(list[dict[str, Any]])
+    assert annotation_is_broad(NestedBroadDTO)
+    assert not annotation_is_broad(dict[str, JsonValue])
+
+
 def _load_allowlist() -> set[tuple[str, str]]:
     raw = json.loads(ALLOWLIST_PATH.read_text())
     allowed: set[tuple[str, str]] = set()

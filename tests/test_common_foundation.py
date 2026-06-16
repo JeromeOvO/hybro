@@ -537,6 +537,40 @@ def test_protocols_are_runtime_checkable():
             assert getattr(obj, "_is_runtime_protocol", False), name
 
 
+def test_common_json_aliases_are_protocol_safe():
+    import subprocess
+    import sys
+    from typing import get_args
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                "import common.json_types; "
+                "import common.protocols; "
+                "assert 'app_shell.bound' not in sys.modules"
+            ),
+        ],
+        check=True,
+    )
+
+    import common.protocols as protocols
+    from common.json_types import JsonMap, JsonScalar, JsonValue
+
+    assert protocols.JsonScalar is JsonScalar
+    assert protocols.JsonValue is JsonValue
+    assert protocols.JsonMap is JsonMap
+
+    assert set(get_args(JsonScalar)) == {str, int, float, bool, type(None)}
+    json_value_args = set(get_args(JsonValue))
+    assert {str, int, float, bool, type(None)}.issubset(json_value_args)
+    assert list["JsonValue"] in json_value_args
+    assert dict[str, "JsonValue"] in json_value_args
+    assert get_args(JsonMap) == (str, JsonValue)
+
+
 def test_hub_liveness_validation_rejects_sync_runtime_protocol_match():
     import common.protocols as protocols
     from common.protocols.hub_protocols import validate_hub_liveness_reader
