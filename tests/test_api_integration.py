@@ -168,10 +168,7 @@ class TestAgentHTTPIntegration:
     async def test_get_active_agents_returns_json(self, http_client):
         """GET /agent/getAllActiveAgents should serialize correctly."""
         mock_ac = MagicMock()
-        mock_ac.get_all_active_agents = AsyncMock(
-            return_value=AgentCenterResponse(success=True, agents=[])
-        )
-        mock_ac._mask_sensitive_information = MagicMock(
+        mock_ac.list_visible_agents_for_route = AsyncMock(
             return_value=AgentCenterResponse(success=True, agents=[])
         )
 

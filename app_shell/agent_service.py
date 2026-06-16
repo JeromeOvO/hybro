@@ -339,6 +339,9 @@ class AgentService:
         info = await self._require_facade().get_agent(agent_id)
         return _agent_info_to_legacy_agent(info) if info else None
 
+    async def get_agent(self, agent_id: str) -> AgentInfo | None:
+        return await self._require_facade().get_agent(agent_id)
+
     def _mask_sensitive_information(
         self, response: AgentCenterResponse, fields: list[str]
     ) -> AgentCenterResponse:

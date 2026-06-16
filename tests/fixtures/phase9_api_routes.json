@@ -41,14 +41,14 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.AgentCapabilityIssueStore",
+    "owning_protocol": "agent.protocols.AgentCapabilityIssueStore",
     "path": "/api/v1/agent/capability-issues/{issue_id}/resolve",
     "response_class": null,
     "response_model": null,
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.AgentLookup"
+      "common.protocols.AgentRegistry"
     ]
   },
   {
@@ -57,7 +57,6 @@
     ],
     "dependencies": [
       "get_agent_center",
-      "get_agent_service",
       "get_current_user"
     ],
     "methods": [
@@ -68,15 +67,12 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/deleteAgent",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "app_shell.bound.AgentLookup"
-    ]
+    "streaming_response": null
   },
   {
     "auth_dependencies": [
@@ -94,7 +90,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/getAgent/me",
     "response_class": null,
     "response_model": null,
@@ -119,14 +115,14 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/getAgent/{agent_id}",
     "response_class": null,
     "response_model": null,
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.AgentLivenessChecker"
+      "agent.protocols.AgentLivenessChecker"
     ]
   },
   {
@@ -142,7 +138,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/getAgentCardFromUrl",
     "response_class": null,
     "response_model": null,
@@ -165,7 +161,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/getAgentListWithConditions",
     "response_class": null,
     "response_model": null,
@@ -188,7 +184,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/getAllActiveAgents",
     "response_class": null,
     "response_model": null,
@@ -211,7 +207,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/getAllAgents",
     "response_class": null,
     "response_model": null,
@@ -234,7 +230,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/registerAgent",
     "response_class": null,
     "response_model": null,
@@ -247,7 +243,6 @@
     ],
     "dependencies": [
       "get_agent_center",
-      "get_agent_service",
       "get_current_user"
     ],
     "methods": [
@@ -259,15 +254,12 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/updateAgent/{agent_id}",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "app_shell.bound.AgentLookup"
-    ]
+    "streaming_response": null
   },
   {
     "auth_dependencies": [
@@ -294,7 +286,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.AgentLookup"
+      "common.protocols.AgentRegistry"
     ]
   },
   {
@@ -315,14 +307,14 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.AgentCapabilityIssueStore",
+    "owning_protocol": "agent.protocols.AgentCapabilityIssueStore",
     "path": "/api/v1/agent/{agent_id}/capability-issues",
     "response_class": null,
     "response_model": null,
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.AgentLookup"
+      "common.protocols.AgentRegistry"
     ]
   },
   {
@@ -343,14 +335,14 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.AgentCapabilityIssueStore",
+    "owning_protocol": "agent.protocols.AgentCapabilityIssueStore",
     "path": "/api/v1/agent/{agent_id}/capability-issues/resolve-all",
     "response_class": null,
     "response_model": null,
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.AgentLookup"
+      "common.protocols.AgentRegistry"
     ]
   },
   {
