@@ -16,7 +16,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "common.protocols.A2ATaskReader",
+    "owning_protocol": "room.protocols.A2ATaskReaderCompatibility",
     "path": "/api/v1/a2a-tasks/{message_id}",
     "response_class": null,
     "response_model": "dict",
@@ -362,7 +362,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "common.protocols.AgentGroupStore",
+    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
     "path": "/api/v1/agentGroups",
     "response_class": null,
     "response_model": null,
@@ -385,7 +385,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "common.protocols.AgentGroupStore",
+    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
     "path": "/api/v1/agentGroups",
     "response_class": null,
     "response_model": null,
@@ -409,7 +409,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "common.protocols.AgentGroupStore",
+    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
     "path": "/api/v1/agentGroups/{group_id}",
     "response_class": null,
     "response_model": null,
@@ -433,7 +433,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "common.protocols.AgentGroupStore",
+    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
     "path": "/api/v1/agentGroups/{group_id}",
     "response_class": null,
     "response_model": null,
@@ -457,7 +457,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "common.protocols.AgentGroupStore",
+    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
     "path": "/api/v1/agentGroups/{group_id}",
     "response_class": null,
     "response_model": null,
@@ -1196,7 +1196,8 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "methods": [
       "POST"
@@ -1206,7 +1207,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/createNewRoom",
     "response_class": null,
     "response_model": null,
@@ -1218,7 +1219,8 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "methods": [
       "POST"
@@ -1228,19 +1230,24 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/inquiryActiveRuns",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.ExecutionEngine",
+      "room.protocols.A2ATaskReaderCompatibility"
+    ]
   },
   {
     "auth_dependencies": [
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "methods": [
       "POST"
@@ -1250,19 +1257,23 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/inquiryRoomMessagesByRoomId",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "room.protocols.A2ATaskReaderCompatibility"
+    ]
   },
   {
     "auth_dependencies": [
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "methods": [
       "POST"
@@ -1272,19 +1283,23 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/inquiryRoomSetting",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "room.protocols.A2ATaskReaderCompatibility"
+    ]
   },
   {
     "auth_dependencies": [
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "methods": [
       "POST"
@@ -1294,7 +1309,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/inquiryRoomsByRoomOwnerId",
     "response_class": null,
     "response_model": null,
@@ -1323,7 +1338,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "common.protocols.A2ATaskReader"
+      "room.protocols.A2ATaskReaderCompatibility"
     ]
   },
   {
@@ -1342,7 +1357,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.AgentSelectionSuggester",
+    "owning_protocol": "agent.protocols.AgentSuggestionService",
     "path": "/api/v1/roomCenter/suggestAgents",
     "response_class": null,
     "response_model": null,
@@ -1354,7 +1369,8 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "methods": [
       "POST"
@@ -1364,19 +1380,23 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/updateRoomAgentSet",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "room.protocols.A2ATaskReaderCompatibility"
+    ]
   },
   {
     "auth_dependencies": [
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "methods": [
       "POST"
@@ -1386,19 +1406,23 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/updateRoomExtendInfo",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "room.protocols.A2ATaskReaderCompatibility"
+    ]
   },
   {
     "auth_dependencies": [
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "methods": [
       "POST"
@@ -1408,12 +1432,15 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/updateRoomName",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "room.protocols.A2ATaskReaderCompatibility"
+    ]
   },
   {
     "auth_dependencies": [
@@ -1432,7 +1459,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "common.protocols.A2ATaskReader",
+    "owning_protocol": "room.protocols.A2ATaskReaderCompatibility",
     "path": "/api/v1/rooms/{room_id}/a2a-tasks",
     "response_class": null,
     "response_model": "dict",
@@ -1625,7 +1652,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "common.protocols.A2ATaskReader",
+    "owning_protocol": "room.protocols.A2ATaskReaderCompatibility",
     "path": "/api/v1/users/me/a2a-tasks",
     "response_class": null,
     "response_model": "dict",

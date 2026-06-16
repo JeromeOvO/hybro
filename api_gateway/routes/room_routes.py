@@ -1,13 +1,14 @@
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.params import Depends as DependsParam
 
+from agent.protocols import AgentSuggestionService, serialize_agent_suggestion_result
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
-from app_shell.bound import AgentSelectionSuggester, RoomCenterRouteOwner
 from common.auth import ClerkUser, get_current_user
 from common.dto import ExecutionRequest, RunInfo
-from common.protocols import A2ATaskReader, ExecutionEngine
+from common.protocols import ExecutionEngine
 from models.file_upload import MAX_ATTACHMENT_REFS_PER_REQUEST
 from models.request import (
     RoomCenterRoomMessageRequest,
@@ -17,19 +18,20 @@ from models.response import (
     ActiveRunRef,
     RoomCenterUserMessageResponse,
 )
+from room.protocols import A2ATaskReaderCompatibility, RoomCenterCompatibility
 
 router = APIRouter()
-room_center: RoomCenterRouteOwner | None = None
-room_store: A2ATaskReader | None = None
-agent_selection_service: AgentSelectionSuggester | None = None
+room_center: RoomCenterCompatibility | None = None
+room_store: A2ATaskReaderCompatibility | None = None
+agent_selection_service: AgentSuggestionService | None = None
 execution_engine: ExecutionEngine | None = None
 
 
 def bind_room_dependencies(
     *,
-    center: RoomCenterRouteOwner,
-    store: A2ATaskReader,
-    selection_service: AgentSelectionSuggester,
+    center: RoomCenterCompatibility,
+    store: A2ATaskReaderCompatibility,
+    selection_service: AgentSuggestionService,
 ) -> None:
     global room_center, room_store, agent_selection_service
 
@@ -43,19 +45,23 @@ def bind_execution_deps(deps) -> None:
     execution_engine = deps.execution_engine
 
 
-def _require_room_center() -> RoomCenterRouteOwner:
+def _require_room_center() -> RoomCenterCompatibility:
     if room_center is None:
         raise RuntimeError("Room center dependency has not been bound")
     return room_center
 
 
-def _require_room_store() -> A2ATaskReader:
+def get_room_center() -> RoomCenterCompatibility:
+    return _require_room_center()
+
+
+def _require_room_store() -> A2ATaskReaderCompatibility:
     if room_store is None:
         raise RuntimeError("Room database dependency has not been bound")
     return room_store
 
 
-def get_agent_selection_service() -> AgentSelectionSuggester:
+def get_agent_selection_service() -> AgentSuggestionService:
     if agent_selection_service is None:
         raise RuntimeError("Agent selection dependency has not been bound")
     return agent_selection_service
@@ -147,7 +153,9 @@ async def verify_room_ownership(room_id: str, user: ClerkUser) -> None:
 
 @router.post("/roomCenter/createNewRoom")
 async def create_new_room(
-    request: Request, user: ClerkUser = Depends(get_current_user)
+    request: Request,
+    user: ClerkUser = Depends(get_current_user),
+    center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     request_data = await request.json()
     room_center_request = RoomCenterRoomSettingRequest(
@@ -165,7 +173,8 @@ async def create_new_room(
         seed_group_id=request_data.get("seed_group_id"),
         seed_all_current_agents=request_data.get("seed_all_current_agents"),
     )
-    room_center_response = await room_center.create_new_room(room_center_request)
+    center = _resolve_dependency(center, get_room_center)
+    room_center_response = await center.create_new_room(room_center_request)
     return room_center_response
 
 
@@ -173,6 +182,7 @@ async def create_new_room(
 async def inquiry_room_setting(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
+    center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     """Get room settings - PROTECTED (requires room ownership)"""
     request_data = await request.json()
@@ -182,7 +192,8 @@ async def inquiry_room_setting(
     await verify_room_ownership(room_id, user)
 
     room_center_request = RoomCenterRoomSettingRequest(room_id=room_id, requesting_user_id=user.user_id)
-    room_center_response = await room_center.inquiry_room_setting(room_center_request)
+    center = _resolve_dependency(center, get_room_center)
+    room_center_response = await center.inquiry_room_setting(room_center_request)
     return room_center_response
 
 
@@ -190,6 +201,7 @@ async def inquiry_room_setting(
 async def inquiry_active_runs(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
+    center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     """List non-terminal orchestration runs for a room — same auth as inquiryRoomSetting."""
     request_data = await request.json()
@@ -203,15 +215,16 @@ async def inquiry_active_runs(
         requesting_user_id=user.user_id,
         trigger_message_id=trigger_message_id,
     )
-    room_center_response = await _require_room_center().inquiry_active_runs(
-        room_center_request
-    )
+    center = _resolve_dependency(center, get_room_center)
+    room_center_response = await center.inquiry_active_runs(room_center_request)
     return room_center_response
 
 
 @router.post("/roomCenter/inquiryRoomsByRoomOwnerId")
 async def inquiry_rooms_by_room_owner_id(
-    request: Request, user: ClerkUser = Depends(get_current_user)
+    request: Request,
+    user: ClerkUser = Depends(get_current_user),
+    center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     request_data = await request.json()
     room_owner_id = request_data.get("room_owner_id")
@@ -222,7 +235,8 @@ async def inquiry_rooms_by_room_owner_id(
             status_code=403, detail="You do not have permission to access these rooms"
         )
     room_center_request = RoomCenterRoomSettingRequest(room_owner_id=room_owner_id)
-    room_center_response = await room_center.inquiry_rooms_by_room_owner_id(
+    center = _resolve_dependency(center, get_room_center)
+    room_center_response = await center.inquiry_rooms_by_room_owner_id(
         room_center_request
     )
     return room_center_response
@@ -232,6 +246,7 @@ async def inquiry_rooms_by_room_owner_id(
 async def update_room_agent_set(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
+    center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     """Update room agent set - PROTECTED (requires room ownership)"""
     request_data = await request.json()
@@ -251,7 +266,8 @@ async def update_room_agent_set(
         seed_group_id=request_data.get("seed_group_id"),
         seed_all_current_agents=request_data.get("seed_all_current_agents"),
     )
-    room_center_response = await room_center.update_room_agent_set(room_center_request)
+    center = _resolve_dependency(center, get_room_center)
+    room_center_response = await center.update_room_agent_set(room_center_request)
     return room_center_response
 
 
@@ -259,6 +275,7 @@ async def update_room_agent_set(
 async def update_room_name(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
+    center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     """Update room name - PROTECTED (requires room ownership)"""
     request_data = await request.json()
@@ -271,7 +288,8 @@ async def update_room_name(
     room_center_request = RoomCenterRoomSettingRequest(
         room_id=room_id, room_name=room_name
     )
-    room_center_response = await room_center.update_room_name(room_center_request)
+    center = _resolve_dependency(center, get_room_center)
+    room_center_response = await center.update_room_name(room_center_request)
     return room_center_response
 
 
@@ -279,6 +297,7 @@ async def update_room_name(
 async def update_room_extend_info(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
+    center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     """Update room extended info - PROTECTED (requires room ownership)"""
     request_data = await request.json()
@@ -291,7 +310,8 @@ async def update_room_extend_info(
     room_center_request = RoomCenterRoomSettingRequest(
         room_id=room_id, extend_info=extend_info
     )
-    room_center_response = await room_center.update_room_extend_info(
+    center = _resolve_dependency(center, get_room_center)
+    room_center_response = await center.update_room_extend_info(
         room_center_request
     )
     return room_center_response
@@ -301,6 +321,7 @@ async def update_room_extend_info(
 async def inquiry_room_messages(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
+    center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     """Read room messages - PROTECTED (requires room ownership)"""
     request_data = await request.json()
@@ -310,7 +331,8 @@ async def inquiry_room_messages(
     await verify_room_ownership(room_id, user)
 
     room_center_request = RoomCenterRoomMessageRequest(room_id=room_id)
-    room_center_response = await room_center.inquiry_room_messages_by_room_id(
+    center = _resolve_dependency(center, get_room_center)
+    room_center_response = await center.inquiry_room_messages_by_room_id(
         room_center_request
     )
     return room_center_response
@@ -465,8 +487,8 @@ async def send_message(
         room_id=room_id,
         sender_id=user.user_id,
         sender_name=getattr(user, "username", None) or getattr(user, "email", None),
-        message=message,
-        attachments=attachments,
+        message=jsonable_encoder(message),
+        attachments=jsonable_encoder(attachments),
         inline_file_ids=inline_file_ids,
         client_request_id=client_request_id,
         target_group=target_group,
@@ -492,7 +514,7 @@ async def send_message(
 async def suggest_agents(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
-    selection_service: AgentSelectionSuggester = Depends(get_agent_selection_service),
+    selection_service: AgentSuggestionService = Depends(get_agent_selection_service),
 ):
     """
     Suggest agents for a message based on content analysis.
@@ -517,7 +539,11 @@ async def suggest_agents(
         suggestion_result = await selection_service.suggest_agents(
             message_text, top_k
         )
-        return {"success": True, **suggestion_result, "status_code": 200}
+        return {
+            "success": True,
+            **serialize_agent_suggestion_result(suggestion_result),
+            "status_code": 200,
+        }
     except Exception as e:
         return {"success": False, "error": str(e), "status_code": 500}
 

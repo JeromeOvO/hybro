@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+from agent.protocols import AgentSuggestion, AgentSuggestionResult
 from api.room_center import (
     create_new_room,
     inquiry_active_runs,
@@ -881,12 +882,24 @@ class TestSuggestAgents:
         })
         
         mock_selection_service = MagicMock()
-        mock_selection_service.suggest_agents = AsyncMock(return_value={
-            "agents": [
-                {"agent_id": "agent-1", "score": 0.9},
-                {"agent_id": "agent-2", "score": 0.8},
-            ]
-        })
+        mock_selection_service.suggest_agents = AsyncMock(
+            return_value=AgentSuggestionResult(
+                suggested_agents=[
+                    AgentSuggestion(
+                        agent_id="agent-1",
+                        name="Agent 1",
+                        reason="Match",
+                        score=0.9,
+                    ),
+                    AgentSuggestion(
+                        agent_id="agent-2",
+                        name="Agent 2",
+                        reason="Match",
+                        score=0.8,
+                    ),
+                ]
+            )
+        )
         
         response = await suggest_agents(
             mock_request,
@@ -894,7 +907,20 @@ class TestSuggestAgents:
         )
         
         assert response["success"] is True
-        assert "agents" in response
+        assert response["suggested_agents"] == [
+            {
+                "agent_id": "agent-1",
+                "name": "Agent 1",
+                "reason": "Match",
+                "score": 0.9,
+            },
+            {
+                "agent_id": "agent-2",
+                "name": "Agent 2",
+                "reason": "Match",
+                "score": 0.8,
+            },
+        ]
 
     @pytest.mark.asyncio
     async def test_returns_error_for_empty_message(self):
