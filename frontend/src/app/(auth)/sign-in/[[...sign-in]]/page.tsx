@@ -1,4 +1,4 @@
-import { SignIn } from '@clerk/nextjs'
+import { SignIn } from '@/lib/auth'
 import Link from 'next/link'
 import { isWaitlistEnabled } from '@/lib/utils'
 

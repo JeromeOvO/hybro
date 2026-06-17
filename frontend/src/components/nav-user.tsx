@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { UserPlus, LogOut, Settings, Sun, Moon, Monitor } from "lucide-react"
-import { useUser, useClerk } from "@clerk/nextjs"
+import { useUser, useClerk } from "@/lib/auth"
 import { useTheme } from "next-themes"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { isWaitlistEnabled } from "@/lib/utils"

@@ -1,4 +1,4 @@
-import { SignUp, Waitlist } from '@clerk/nextjs'
+import { SignUp, Waitlist } from '@/lib/auth'
 import { isWaitlistEnabled } from '@/lib/utils'
 
 export default async function Page ({

@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react"
 import { Camera, Loader2 } from "lucide-react"
-import type { UserResource } from "@clerk/shared/types"
+import type { ClerkUser as UserResource } from "@/lib/auth"
 import { toast } from "sonner"
 import { getClerkErrorMessage } from "@/lib/clerk-error"
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useEffect } from 'react'
-import { useAuth } from '@clerk/nextjs'
+import { useAuth } from '@/lib/auth'
 import { setDefaultGetToken } from '@/lib/auth'
 
 /**

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Logo } from '@/components/logo';
-import { useUser } from '@clerk/nextjs';
+import { useUser } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 
 const MARKETING_PAGES = ['/', '/about', '/pricing', '/agents', '/c', '/c/about', '/c/pricing', '/c/agents']

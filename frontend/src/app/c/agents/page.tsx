@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { useQuery } from "@tanstack/react-query"
 import { cn } from "@/lib/utils"
 
-import { useAuth } from "@clerk/nextjs"
+import { useAuth } from "@/lib/auth"
 import { getAllAgents } from "@/lib/api"
 import type { Agent, AgentCenterResponse } from "@/lib/types"
 

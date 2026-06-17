@@ -1,7 +1,7 @@
 "use client"
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { useUser, useAuth } from "@clerk/nextjs"
+import { useUser, useAuth } from "@/lib/auth"
 import { getAgentsByProviderId } from "@/lib/api"
 import type { Agent } from "@/lib/types"
 import { useCallback } from "react"

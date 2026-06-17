@@ -7,8 +7,7 @@ Validation is delegated to an app-shell-bound authenticator.
 
 import hashlib
 
-from fastapi import HTTPException, Request, status
-from loguru import logger
+from fastapi import Request
 
 from common.protocols import APIKeyAuthenticator, APIKeyPrincipal
 
@@ -88,17 +87,7 @@ async def get_api_key(request: Request) -> APIKeyPrincipal:
         HTTPException: If the key is missing, invalid, or inactive
     """
     # Extract API key from header
-    api_key = request.headers.get("X-API-Key")
-
-    if not api_key:
-        logger.warning("API key validation failed: X-API-Key header missing")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "error": "missing_key",
-                "message": "X-API-Key header is required",
-            },
-        )
+    api_key = request.headers.get("X-API-Key", "")
 
     # Validate the key and track usage
     return await validate_api_key(api_key)
@@ -123,16 +112,6 @@ async def get_api_key_no_track(request: Request) -> APIKeyPrincipal:
     Raises:
         HTTPException: If the key is missing, invalid, or inactive
     """
-    api_key = request.headers.get("X-API-Key")
-
-    if not api_key:
-        logger.warning("API key validation failed: X-API-Key header missing")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "error": "missing_key",
-                "message": "X-API-Key header is required",
-            },
-        )
+    api_key = request.headers.get("X-API-Key", "")
 
     return await validate_api_key(api_key, track_usage=False)

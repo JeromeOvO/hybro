@@ -2,7 +2,7 @@
 
 import { Suspense, useState, useEffect, useMemo, useCallback } from "react"
 import { useSearchParams } from "next/navigation"
-import { useUser, useAuth } from "@clerk/nextjs"
+import { useUser, useAuth } from "@/lib/auth"
 import { RoomChatInput } from "@/components/room-chat-input"
 import { GroupManagementModal } from "@/components/group-management-modal"
 import { banner } from "@/components/ui/banner"

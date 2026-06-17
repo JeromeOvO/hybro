@@ -12,7 +12,7 @@ import {
   AlertCircle,
   Save,
 } from "lucide-react"
-import { useAuth } from "@clerk/nextjs"
+import { useAuth } from "@/lib/auth"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"

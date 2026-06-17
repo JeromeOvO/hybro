@@ -18,6 +18,10 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
+from platform_module.content_storage import (
+    ContentExpiredError,
+    hash_content,
+)
 
 from app_shell.compaction_service import (
     CompactionService,
@@ -36,10 +40,6 @@ from models.memory import (
     RoomMemory,
     TurnRepresentation,
     TurnRole,
-)
-from platform_module.content_storage import (
-    ContentExpiredError,
-    hash_content,
 )
 
 # =============================================================================

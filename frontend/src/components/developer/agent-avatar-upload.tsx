@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react"
 import { Camera, Loader2 } from "lucide-react"
-import { useAuth } from "@clerk/nextjs"
+import { useAuth } from "@/lib/auth"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { banner } from "@/components/ui/banner"
 import { getAgentAvatarUri } from "@/lib/agent-avatar"

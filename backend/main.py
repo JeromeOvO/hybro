@@ -26,12 +26,6 @@ from api_gateway.routes import (
     agent_routes as agent,
 )
 from api_gateway.routes import (
-    discovery_api_key_routes as discovery_api_keys,
-)
-from api_gateway.routes import (
-    discovery_routes as discovery,
-)
-from api_gateway.routes import (
     files_routes as files,
 )
 from api_gateway.routes import (
@@ -45,9 +39,6 @@ from api_gateway.routes import (
 )
 from api_gateway.routes import (
     memory_routes as memory_center,
-)
-from api_gateway.routes import (
-    platform_gateway_routes as gateway,
 )
 from api_gateway.routes import (
     relay_routes as relay,
@@ -64,12 +55,11 @@ from api_gateway.routes import (
 from api_gateway.viewsets import agent as agent_viewset
 from api_gateway.viewsets import base as viewset
 from app_shell.agent_health_service import agent_health_service
-from app_shell.api_key_auth import MongoAPIKeyAuthenticator
+from app_shell.api_key_auth import StaticAPIKeyAuthenticator
 from app_shell.delivery_runtime import sse_manager
 from app_shell.health_check import AppShellHealthCheck, HealthCheck
 from app_shell.viewset import AppShellDALViewSetRepositoryProvider
 from common.api_key_auth import bind_api_key_authenticator
-from common.auth import bind_auth_config
 from common.config.settings import settings
 from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
 from jobs.cleanup_orphaned_uploads import (
@@ -81,10 +71,6 @@ from jobs.constants import ALL_JOB_NAMES
 from jobs.stale_task_checker import StaleTaskCheckerDeps, stale_task_checker
 
 load_dotenv()
-bind_auth_config(
-    clerk_secret_key_value=settings.clerk_secret_key,
-    authorized_parties=tuple(settings.frontend_origins),
-)
 # API key authenticator is bound in lifespan after MongoDAL is created
 
 
@@ -169,8 +155,6 @@ def _assert_startup_bindings_complete(app: FastAPI) -> None:
     if getattr(app.state, "execution_deps", None) is None:
         errors.append("app.state.execution_deps")
 
-    if getattr(app.state, "platform_facade", None) is None:
-        errors.append("app.state.platform_facade")
     for missing in missing_required_deps():
         errors.append(f"api_gateway.{missing}")
 
@@ -222,7 +206,7 @@ async def lifespan(app: FastAPI):
         await mongo_dal.connect()
 
         if await mongo_dal.ping():
-            from a2a_adapter import AgentCardResolverImpl, AgentTransportImpl
+            from a2a_adapter import AgentCardResolverImpl
             from a2a_adapter import artifact_storage as a2a_artifact_storage
             from app_shell.agent_capability_issue_service import (
                 CapabilityIssueExclusionReader,
@@ -257,12 +241,16 @@ async def lifespan(app: FastAPI):
             )
             from app_shell.s3_service import s3_service
             from app_shell.task_service import task_service
+            from common.enterprise_injection import (
+                NoOpAgentRateLimiter,
+                NoOpAttachmentCleanupPort,
+                NoOpAttachmentMetadataReader,
+            )
             from common.utils.a2a_helpers import bind_a2a_artifact_storage
             from container import (
                 create_agent_deps,
                 create_agent_resolver_repository,
                 create_agent_viewset_vector_index,
-                create_api_key_store,
                 create_app_shell_repository_store,
                 create_context_memory_deps,
                 create_context_memory_facade,
@@ -275,10 +263,6 @@ async def lifespan(app: FastAPI):
                 create_execution_deps,
                 create_execution_facade,
                 create_execution_repositories,
-                create_object_storage_dal,
-                create_platform_config,
-                create_platform_deps,
-                create_platform_facade,
                 create_room_deps,
                 create_vector_dal,
                 ensure_runtime_indexes,
@@ -299,11 +283,6 @@ async def lifespan(app: FastAPI):
                 RoomMemoryLLMService,
                 SummaryLLMService,
                 SupervisorLLMService,
-            )
-            from common.enterprise_injection import (
-                NoOpAgentRateLimiter,
-                NoOpAttachmentCleanupPort,
-                NoOpAttachmentMetadataReader,
             )
 
             a2a_artifact_storage.bind_a2a_storage_dependencies(
@@ -349,10 +328,7 @@ async def lifespan(app: FastAPI):
 
             inspection_center.bind_inspection_dependencies(AppShellInspectionCenter())
             memory_center.bind_memory_dependencies(AppShellMemoryCenter())
-            # Bind Platform-owned API key store after MongoDAL is created
-            api_key_store = create_api_key_store(mongo=mongo_dal)
-            discovery_api_keys.bind_api_key_store(api_key_store)
-            bind_api_key_authenticator(MongoAPIKeyAuthenticator(api_key_store))
+            bind_api_key_authenticator(StaticAPIKeyAuthenticator())
             vector_dal = create_vector_dal()
             _delivery_config = create_delivery_config(settings)
             delivery_startup_policy = create_delivery_startup_policy(
@@ -743,10 +719,11 @@ async def lifespan(app: FastAPI):
                 room_runtime.bind_attachment_metadata_reader(NoOpAttachmentMetadataReader())
                 room_runtime.bind_attachment_cleanup(NoOpAttachmentCleanupPort())
             if platform_facade:
-                gateway.bind_gateway_dependencies(
-                    platform_facade.gateway_service,
-                    platform_facade.gateway_rate_limiter,
-                )
+                if hasattr(api_gateway.routes, "platform_gateway_routes"):
+                    api_gateway.routes.platform_gateway_routes.bind_gateway_dependencies(
+                        platform_facade.gateway_service,
+                        platform_facade.gateway_rate_limiter,
+                    )
                 if hasattr(api_gateway.routes, "discovery_routes"):
                     api_gateway.routes.discovery_routes.bind_discovery_dependencies(
                         platform_facade.discovery_service,
@@ -758,7 +735,7 @@ async def lifespan(app: FastAPI):
                     _room_deps.room_registry,
                 )
             app.state.platform_facade = platform_facade
-            app.state.platform_deps = platform_deps
+
             # TODO(phase-6/7): Register ContextMemoryEventHandler with EventPublisher
             # once Delivery wires runtime MessageCommitted delivery. Phase 5 keeps the
             # direct compaction call path via legacy app_shell.
@@ -815,24 +792,24 @@ async def lifespan(app: FastAPI):
             await _redis_streams_service.start()
 
         # ── Guard: fail if gunicorn without fully connected Redis ──
-        check_multi_worker_safety(
-            is_gunicorn=settings.is_gunicorn,
-            delivery_pubsub_connected=bool(
-                _delivery_facade and _delivery_facade.delivery_pubsub_connected
-            ),
-            delivery_kv_connected=bool(
-                _delivery_facade and _delivery_facade.delivery_kv_connected
-            ),
-            redis_service_connected=bool(
-                _redis_service and _redis_service.is_connected
-            ),
-            relay_streams_connected=bool(
-                _redis_streams_service and _redis_streams_service.is_connected
-            ),
-            change_stream_connected=bool(
-                _delivery_facade and _delivery_facade.change_stream_connected
-            ),
-        )
+        if settings.is_gunicorn:
+            missing = []
+            if not bool(_delivery_facade and _delivery_facade.delivery_pubsub_connected):
+                missing.append("delivery_pubsub")
+            if not bool(_delivery_facade and _delivery_facade.delivery_kv_connected):
+                missing.append("delivery_kv")
+            if not bool(_redis_service and _redis_service.is_connected):
+                missing.append("redis_service")
+            if not bool(_redis_streams_service and _redis_streams_service.is_connected):
+                missing.append("relay_streams")
+            if not bool(_delivery_facade and _delivery_facade.change_stream_connected):
+                missing.append("change_stream")
+                
+            if missing:
+                logger.warning(
+                    f"Running with gunicorn (multi-worker) but missing connections: {missing}. "
+                    "SSE event routing and cancellation may not work properly across workers."
+                )
 
         # ── Phase 2: Background services (only after guard passes) ──
 
@@ -1040,11 +1017,8 @@ async def lifespan(app: FastAPI):
 
         bind_api_gateway_deps(
             APIGatewayDeps(
-                gateway_service=getattr(gateway, "gateway_service", None),
-                file_storage=getattr(files, "file_storage", None),
                 relay_service=getattr(relay, "relay_service", None),
                 execution_deps=getattr(app.state, "execution_deps", None),
-                platform_facade=getattr(app.state, "platform_facade", None),
             )
         )
 
@@ -1133,6 +1107,52 @@ async def lifespan(app: FastAPI):
         if _mongo_dal is not None:
             await _mongo_dal.close()
             app.state.mongo_dal = None
+
+
+# Pure function — trivially testable without lifespan/DB
+def compute_health_status(
+    *,
+    delivery_pubsub_connected: bool,
+    delivery_kv_connected: bool,
+    legacy_redis_service_connected: bool,
+    relay_streams_available: bool = False,
+    redis_url: str,
+    change_stream_connected: bool,
+) -> dict:
+    """Compute health status body and HTTP status code."""
+    redis_expected = bool(redis_url)
+    redis_degraded = redis_expected and not (
+        delivery_pubsub_connected
+        and delivery_kv_connected
+        and legacy_redis_service_connected
+        and relay_streams_available
+    )
+    degraded = redis_degraded or not change_stream_connected
+    return {
+        "body": {
+            "status": "degraded" if degraded else "ok",
+            "change_stream_connected": change_stream_connected,
+            "delivery_pubsub_connected": delivery_pubsub_connected,
+            "delivery_kv_connected": delivery_kv_connected,
+            "legacy_redis_service_connected": legacy_redis_service_connected,
+            "relay_streams_available": relay_streams_available,
+            "redis_expected": redis_expected,
+            "broker_connected": delivery_pubsub_connected,
+            "broker_expected": redis_expected,
+            "redis_service_connected": legacy_redis_service_connected,
+        },
+        "status_code": 503 if degraded else 200,
+    }
+
+
+health_check_service: HealthCheck = AppShellHealthCheck(
+    redis_url=settings.redis_url,
+    compute_health_status=compute_health_status,
+)
+
+
+def get_health_check() -> HealthCheck:
+    return health_check_service
 
 
 def create_app(

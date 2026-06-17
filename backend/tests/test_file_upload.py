@@ -3,12 +3,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
+from platform_module import PlatformConfig, PlatformDeps
+from platform_module.files import PlatformFileStorage
 
 from api.files import upload_file as upload_file_route
 from common.dto import FileInfo
 from common.errors import FileStoragePlatformError
-from platform_module import PlatformConfig, PlatformDeps
-from platform_module.files import PlatformFileStorage
 
 
 class FakeFileStorage:

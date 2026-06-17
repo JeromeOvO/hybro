@@ -4,7 +4,7 @@ import React from 'react';
 import Link from 'next/link';
 import { SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Logo } from '@/components/logo';
-import { useUser } from '@clerk/nextjs';
+import { useUser } from '@/lib/auth';
 
 export const DeveloperHeader = () => {
   const [mounted, setMounted] = React.useState(false);

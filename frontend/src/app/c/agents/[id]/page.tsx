@@ -25,7 +25,7 @@ import {
   Sparkles,
   Share2,
 } from "lucide-react"
-import { useAuth } from "@clerk/nextjs"
+import { useAuth } from "@/lib/auth"
 import { useQuery } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"

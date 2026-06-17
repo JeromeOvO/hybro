@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useCallback, useRef } from "react"
 import { Loader2, Monitor, Smartphone, Globe, Shield } from "lucide-react"
-import type { UserResource, SessionWithActivitiesResource } from "@clerk/shared/types"
-import { useSession } from "@clerk/nextjs"
+import type { ClerkUser as UserResource } from "@/lib/auth"
+type SessionWithActivitiesResource = any;
+import { useSession } from "@/lib/auth"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"

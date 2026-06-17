@@ -13,7 +13,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { useRouter } from "next/navigation"
-import { useAuth } from "@clerk/nextjs"
+import { useAuth } from "@/lib/auth"
 import { banner } from "@/components/ui/banner"
 import { getAgentsByProviderId } from "@/lib/api"
 import type { Agent } from "@/lib/types"

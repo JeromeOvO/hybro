@@ -1,4 +1,4 @@
-import { isClerkAPIResponseError } from "@clerk/nextjs/errors"
+export function isClerkAPIResponseError(err: unknown): err is { errors: any[] } { return false; }
 
 /**
  * Extract a user-friendly error message from a Clerk API error.

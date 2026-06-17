@@ -1,5 +1,7 @@
 from typing import Any, Protocol
 
+from common.dto.platform import RateLimitResult
+
 
 class PlatformFacadeProtocol(Protocol):
     @property
@@ -15,13 +17,15 @@ class PlatformFacadeProtocol(Protocol):
     @property
     def content_storage(self) -> Any: ...
 
-
 class AgentRateLimiterProtocol(Protocol):
-    async def check_limit(self, agent_id: str, *args, **kwargs) -> None: ...
-
+    async def check_rate_limit(self, agent_id: str, *args, **kwargs) -> RateLimitResult: ...
+    async def record_request(self, agent_id: str, user_id: str) -> None: ...
 
 class NoOpAgentRateLimiter:
-    async def check_limit(self, agent_id: str, *args, **kwargs) -> None:
+    async def check_rate_limit(self, agent_id: str, *args, **kwargs) -> RateLimitResult:
+        return RateLimitResult(allowed=True)
+    
+    async def record_request(self, agent_id: str, user_id: str) -> None:
         pass
 
 

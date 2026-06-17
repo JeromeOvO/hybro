@@ -5,7 +5,7 @@ import Image from "next/image"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { Code, History, PanelLeftIcon } from "lucide-react"
-import { useUser } from "@clerk/nextjs"
+import { useUser } from "@/lib/auth"
 
 import { NavAgent } from "@/components/nav-agent"
 import { NavHub } from "@/components/nav-hub"

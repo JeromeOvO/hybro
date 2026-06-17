@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation"
 import { useEffect } from "react"
-import { useUser, useClerk } from "@clerk/nextjs"
+import { useUser, useClerk } from "@/lib/auth"
 import { Button } from "@/components/ui/button"
 import { ArrowRight, Rocket, SquareArrowOutUpRight, Sparkles } from "lucide-react"
 import { isWaitlistEnabled } from "@/lib/utils"

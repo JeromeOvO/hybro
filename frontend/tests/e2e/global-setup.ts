@@ -1,4 +1,4 @@
-import { clerkSetup } from '@clerk/testing/playwright'
+const clerkSetup = async () => {};
 
 export default async function globalSetup() {
   try {

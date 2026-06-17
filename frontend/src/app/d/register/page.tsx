@@ -17,7 +17,7 @@ import type {
   InspectionCenterResponse,
   InsepectionCenterConnectionValidationResponse
 } from "@/lib/types"
-import { useUser, useClerk} from "@clerk/nextjs"
+import { useUser, useClerk} from "@/lib/auth"
 import { isWaitlistEnabled } from "@/lib/utils"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { AgentSettingsCard, validateAgentSettings, settingsToUpdatePayload } from "@/components/developer/agent-settings-card"

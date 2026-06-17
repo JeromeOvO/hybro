@@ -18,8 +18,6 @@
   },
   "dependencies": {
     "@a2a-js/sdk": "^0.3.13",
-    "@clerk/nextjs": "^7.0.4",
-    "@clerk/types": "^4.101.20",
     "@dicebear/collection": "^9.4.0",
     "@dicebear/core": "^9.4.0",
     "@hookform/resolvers": "^5.2.1",
@@ -62,7 +60,6 @@
     "zustand": "^5.0.9"
   },
   "devDependencies": {
-    "@clerk/testing": "^2.0.4",
     "@eslint/eslintrc": "^3",
     "@playwright/test": "^1.58.2",
     "@tailwindcss/postcss": "^4.1.11",

@@ -12,11 +12,8 @@ from typing import Any
 
 @dataclass(frozen=True)
 class APIGatewayDeps:
-    gateway_service: Any
-    file_storage: Any
     relay_service: Any
     execution_deps: Any
-    platform_facade: Any
 
 
 _deps: APIGatewayDeps | None = None
@@ -27,14 +24,10 @@ def missing_gateway_route_bindings() -> list[str]:
         a2a_task_routes,
         agent_group_routes,
         agent_routes,
-        discovery_api_key_routes,
-        discovery_routes,
-        files_routes,
         hitl_routes,
         hub_routes,
         inspection_routes,
         memory_routes,
-        platform_gateway_routes,
         relay_routes,
         room_routes,
         sse_routes,
@@ -56,18 +49,6 @@ def missing_gateway_route_bindings() -> list[str]:
                 "agent_liveness_checker",
             ),
         ),
-        "api_gateway.routes.discovery_api_key_routes": (
-            discovery_api_key_routes,
-            ("api_key_store",),
-        ),
-        "api_gateway.routes.discovery_routes": (
-            discovery_routes,
-            ("discovery_service", "discovery_rate_limit_service"),
-        ),
-        "api_gateway.routes.files_routes": (
-            files_routes,
-            ("file_storage", "room_ownership_reader"),
-        ),
         "api_gateway.routes.hitl_routes": (
             hitl_routes,
             ("hitl_manager", "room_ownership_reader"),
@@ -78,10 +59,6 @@ def missing_gateway_route_bindings() -> list[str]:
             ("inspection_center",),
         ),
         "api_gateway.routes.memory_routes": (memory_routes, ("memory_center",)),
-        "api_gateway.routes.platform_gateway_routes": (
-            platform_gateway_routes,
-            ("gateway_service", "gateway_rate_limit_service"),
-        ),
         "api_gateway.routes.relay_routes": (relay_routes, ("relay_service",)),
         "api_gateway.routes.room_routes": (
             room_routes,

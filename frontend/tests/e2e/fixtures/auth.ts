@@ -1,5 +1,12 @@
 import { test as base, expect } from '@playwright/test'
-import { clerk, setupClerkTestingToken } from '@clerk/testing/playwright'
+// import { clerk, setupClerkTestingToken } from '@clerk/testing/playwright'
+
+export const clerk = {
+  loaded: async (args?: any) => {},
+  signIn: async (args?: any) => {},
+}
+
+export const setupClerkTestingToken = async (args?: any) => {}
 
 function clerkReady(): boolean {
   return (

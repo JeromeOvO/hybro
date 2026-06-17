@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useParams } from 'next/navigation'
-import { useUser, useAuth } from '@clerk/nextjs'
+import { useUser, useAuth } from '@/lib/auth'
 import { RequireAuth } from '@/components/require-auth'
 import { toast } from 'sonner'
 import { GroupManagementModal } from '@/components/group-management-modal'

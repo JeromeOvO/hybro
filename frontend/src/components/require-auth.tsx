@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
-import { useUser } from '@clerk/nextjs'
+import { useUser } from '@/lib/auth'
 import { usePathname } from 'next/navigation'
 import { Loader2 } from 'lucide-react'
 

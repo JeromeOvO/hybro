@@ -1,4 +1,4 @@
-import { clerkMiddleware } from '@clerk/nextjs/server'
+
 import { NextResponse } from 'next/server'
 import type { NextRequest, NextFetchEvent } from 'next/server'
 
@@ -25,12 +25,6 @@ const SHARED_PATH_PREFIXES = ['/api/', '/_next/', '/sign-in', '/sign-up', '/priv
 /** Determine if running locally based on NEXT_PUBLIC_CONSUMER_URL */
 const IS_LOCAL = process.env.NEXT_PUBLIC_CONSUMER_URL?.includes('localhost')
 
-/** Authorized parties for Clerk - includes localhost in local dev */
-const AUTHORIZED_PARTIES = [
-  'https://hybro.ai',
-  'https://developer.hybro.ai',
-  ...(IS_LOCAL ? ['http://localhost:3000', 'http://dev.localhost:3000'] : []),
-]
 
 /** Static file extensions to skip. */
 const STATIC_EXT = /\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)$/
@@ -75,19 +69,10 @@ function handleSubdomainRewrite(request: NextRequest): NextResponse | null {
 
 export { isDeveloperHost, isSharedPath, isStaticFile, handleSubdomainRewrite }
 
-const clerkHandler = clerkMiddleware(
-  async (_auth, request) => {
-    const rewrite = handleSubdomainRewrite(request)
-    if (rewrite) return rewrite
-    return NextResponse.next()
-  },
-  {
-    authorizedParties: AUTHORIZED_PARTIES,
-  }
-)
-
-export default function proxy(request: NextRequest, event: NextFetchEvent) {
-  return clerkHandler(request, event)
+export default function proxy(request: NextRequest) {
+  const rewrite = handleSubdomainRewrite(request)
+  if (rewrite) return rewrite
+  return NextResponse.next()
 }
 
 export const config = {

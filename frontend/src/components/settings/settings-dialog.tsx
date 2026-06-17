@@ -1,6 +1,6 @@
 "use client"
 
-import { useUser } from "@clerk/nextjs"
+import { useUser } from "@/lib/auth"
 import { usePathname } from "next/navigation"
 import { RefreshCw, House, ArrowRight } from "lucide-react"
 import Link from "next/link"

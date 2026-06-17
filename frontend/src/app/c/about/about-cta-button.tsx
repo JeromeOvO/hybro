@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button"
 import { ArrowRight } from "lucide-react"
-import { useClerk } from "@clerk/nextjs"
+import { useClerk } from "@/lib/auth"
 import { isWaitlistEnabled } from "@/lib/utils"
 
 export function AboutCtaButton() {
