@@ -28,6 +28,8 @@ from a2a.types import (
     TextPart,
 )
 
+from app_shell.a2a_runtime import A2ARuntimeConfig
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -80,6 +82,10 @@ def _build_mock_response() -> MagicMock:
     outer = MagicMock()
     outer.root = inner
     return outer
+
+
+def _bind_webhook_base_url(service, value: str) -> None:
+    service.bind_runtime_config(A2ARuntimeConfig(webhook_base_url=value))
 
 
 def _task_facade_response() -> dict:
@@ -137,13 +143,9 @@ class TestSendMessageTrackedAgentWebhookFallback:
                 service, "has_push_notification_capability", return_value=True
             ),
             patch("app_shell.a2a_runtime.adapter_send_message", fake_send_message),
-            patch.object(
-                service, "_resolve_accepted_modes", return_value=["text/plain"]
-            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
-            patch("app_shell.a2a_runtime.settings") as mock_settings,
         ):
-            mock_settings.webhook_base_url = "https://api.example.com"
+            _bind_webhook_base_url(service, "https://api.example.com")
 
             await service.send_message_to_tracked_agent(
                 agent_card=_make_agent_card(push_capable=True),
@@ -182,13 +184,9 @@ class TestSendMessageTrackedAgentWebhookFallback:
                 service, "has_push_notification_capability", return_value=True
             ),
             patch("app_shell.a2a_runtime.adapter_send_message", fake_send_message),
-            patch.object(
-                service, "_resolve_accepted_modes", return_value=["text/plain"]
-            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
-            patch("app_shell.a2a_runtime.settings") as mock_settings,
         ):
-            mock_settings.webhook_base_url = ""
+            _bind_webhook_base_url(service, "")
 
             await service.send_message_to_tracked_agent(
                 agent_card=_make_agent_card(push_capable=True),
@@ -223,13 +221,9 @@ class TestSendMessageTrackedAgentWebhookFallback:
                 service, "has_push_notification_capability", return_value=True
             ),
             patch("app_shell.a2a_runtime.adapter_send_message", fake_send_message),
-            patch.object(
-                service, "_resolve_accepted_modes", return_value=["text/plain"]
-            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
-            patch("app_shell.a2a_runtime.settings") as mock_settings,
         ):
-            mock_settings.webhook_base_url = "https://api.example.com/"
+            _bind_webhook_base_url(service, "https://api.example.com/")
 
             await service.send_message_to_tracked_agent(
                 agent_card=_make_agent_card(push_capable=True),
@@ -268,13 +262,9 @@ class TestSendMessageTrackedAgentWebhookFallback:
                 service, "has_push_notification_capability", return_value=False
             ),
             patch("app_shell.a2a_runtime.adapter_send_message", fake_send_message),
-            patch.object(
-                service, "_resolve_accepted_modes", return_value=["text/plain"]
-            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
-            patch("app_shell.a2a_runtime.settings") as mock_settings,
         ):
-            mock_settings.webhook_base_url = "https://api.example.com"
+            _bind_webhook_base_url(service, "https://api.example.com")
 
             await service.send_message_to_tracked_agent(
                 agent_card=_make_agent_card(push_capable=False),
@@ -309,13 +299,9 @@ class TestSendMessageTrackedAgentWebhookFallback:
                 service, "has_push_notification_capability", return_value=True
             ),
             patch("app_shell.a2a_runtime.adapter_send_message", fake_send_message),
-            patch.object(
-                service, "_resolve_accepted_modes", return_value=["text/plain"]
-            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
-            patch("app_shell.a2a_runtime.settings") as mock_settings,
         ):
-            mock_settings.webhook_base_url = ""
+            _bind_webhook_base_url(service, "")
 
             await service.send_message_to_tracked_agent(
                 agent_card=_make_agent_card(push_capable=True),
@@ -325,7 +311,7 @@ class TestSendMessageTrackedAgentWebhookFallback:
                 context_id="ctx-005",
             )
 
-        assert captured_timeout["value"] == A2AService.DEFAULT_REQUEST_TIMEOUT
+        assert captured_timeout["value"] == A2ARuntimeConfig().default_request_timeout
 
 
 # ---------------------------------------------------------------------------
@@ -380,17 +366,15 @@ class TestReplyToTaskWebhookFallback:
         )
         mock_db.update_task_on_message = AsyncMock()
         service.bind_task_db(mock_db)
+        _bind_webhook_base_url(service, "https://api.example.com")
 
         with (
-            patch("app_shell.a2a_runtime.settings") as mock_settings,
             patch(
                 "app_shell.a2a_runtime.adapter_send_hitl_reply",
                 fake_send_hitl_reply,
             ),
             patch.dict("sys.modules", {}),
         ):
-            mock_settings.webhook_base_url = "https://api.example.com"
-
             await service.reply_to_task(
                 message_id="msg-hitl-001",
                 task_id="task-hitl-001",
@@ -430,6 +414,7 @@ class TestReplyToTaskWebhookFallback:
         )
         mock_db.update_task_on_message = AsyncMock()
         service.bind_task_db(mock_db)
+        _bind_webhook_base_url(service, "")
 
         async def fake_send_hitl_reply(agent_url, message_data, **kwargs):
             captured_request["agent_url"] = agent_url
@@ -438,14 +423,11 @@ class TestReplyToTaskWebhookFallback:
             return _task_facade_response()
 
         with (
-            patch("app_shell.a2a_runtime.settings") as mock_settings,
             patch(
                 "app_shell.a2a_runtime.adapter_send_hitl_reply",
                 fake_send_hitl_reply,
             ),
         ):
-            mock_settings.webhook_base_url = ""
-
             await service.reply_to_task(
                 message_id="msg-hitl-002",
                 task_id="task-hitl-002",
@@ -478,6 +460,7 @@ class TestReplyToTaskWebhookFallback:
         )
         mock_db.update_task_on_message = AsyncMock()
         service.bind_task_db(mock_db)
+        _bind_webhook_base_url(service, "https://api.example.com")
 
         async def fake_send_hitl_reply(agent_url, message_data, **kwargs):
             captured_request["agent_url"] = agent_url
@@ -486,14 +469,11 @@ class TestReplyToTaskWebhookFallback:
             return _task_facade_response()
 
         with (
-            patch("app_shell.a2a_runtime.settings") as mock_settings,
             patch(
                 "app_shell.a2a_runtime.adapter_send_hitl_reply",
                 fake_send_hitl_reply,
             ),
         ):
-            mock_settings.webhook_base_url = "https://api.example.com"
-
             await service.reply_to_task(
                 message_id="msg-hitl-003",
                 task_id="task-hitl-003",
@@ -524,6 +504,7 @@ class TestReplyToTaskWebhookFallback:
         mock_db.get_agent_by_agent_id = AsyncMock(return_value=None)
         mock_db.update_task_on_message = AsyncMock()
         service.bind_task_db(mock_db)
+        _bind_webhook_base_url(service, "https://api.example.com")
 
         async def fake_send_hitl_reply(agent_url, message_data, **kwargs):
             captured_request["agent_url"] = agent_url
@@ -532,14 +513,11 @@ class TestReplyToTaskWebhookFallback:
             return _task_facade_response()
 
         with (
-            patch("app_shell.a2a_runtime.settings") as mock_settings,
             patch(
                 "app_shell.a2a_runtime.adapter_send_hitl_reply",
                 fake_send_hitl_reply,
             ),
         ):
-            mock_settings.webhook_base_url = "https://api.example.com"
-
             await service.reply_to_task(
                 message_id="msg-hitl-004",
                 task_id="task-hitl-004",
@@ -584,6 +562,7 @@ class TestSendMessageTrackedAgentPersistedFlag:
         mock_db = MagicMock()
         mock_db.update_task_on_message = AsyncMock(return_value=True)
         service.bind_task_db(mock_db)
+        _bind_webhook_base_url(service, "")
 
         with (
             patch.object(
@@ -593,14 +572,8 @@ class TestSendMessageTrackedAgentPersistedFlag:
                 "app_shell.a2a_runtime.adapter_send_message",
                 AsyncMock(return_value=_message_facade_response()),
             ),
-            patch.object(
-                service, "_resolve_accepted_modes", return_value=["text/plain"]
-            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
-            patch("app_shell.a2a_runtime.settings") as mock_settings,
         ):
-            mock_settings.webhook_base_url = ""
-
             result = await service.send_message_to_tracked_agent(
                 agent_card=_make_agent_card(push_capable=False),
                 message=_make_message(),
@@ -621,6 +594,7 @@ class TestSendMessageTrackedAgentPersistedFlag:
         mock_db = MagicMock()
         mock_db.update_task_on_message = AsyncMock(return_value=False)
         service.bind_task_db(mock_db)
+        _bind_webhook_base_url(service, "")
 
         with (
             patch.object(
@@ -630,14 +604,8 @@ class TestSendMessageTrackedAgentPersistedFlag:
                 "app_shell.a2a_runtime.adapter_send_message",
                 AsyncMock(return_value=_message_facade_response()),
             ),
-            patch.object(
-                service, "_resolve_accepted_modes", return_value=["text/plain"]
-            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
-            patch("app_shell.a2a_runtime.settings") as mock_settings,
         ):
-            mock_settings.webhook_base_url = ""
-
             result = await service.send_message_to_tracked_agent(
                 agent_card=_make_agent_card(push_capable=False),
                 message=_make_message(),

@@ -1,4 +1,13 @@
-from common.protocols.a2a_protocols import AgentCardResolver, AgentTransport
+from common.protocols.a2a_protocols import (
+    A2ATaskStatusMessage,
+    A2ATaskStatusReader,
+    AgentCardResolver,
+    AgentTransport,
+    RoomRouteReader,
+    RoomRouteRecord,
+    SSEStateReader,
+    SSEUserMessageRecord,
+)
 from common.protocols.agent_protocols import (
     AgentAvatarManager,
     AgentCallCounter,
@@ -152,6 +161,8 @@ __all__ = [
     "APIKeyRecord",
     "APIKeyStore",
     "APIKeyValidationStore",
+    "A2ATaskStatusMessage",
+    "A2ATaskStatusReader",
     "AttachmentCleanupPort",
     "AttachmentMetadataReader",
     "ContextAssembler",
@@ -221,6 +232,7 @@ __all__ = [
     "RoomOwnershipReader",
     "RoomRegistry",
     "RoomRepository",
+    "RoomRouteRecord",
     "RunEventRepository",
     "RunRepository",
     "RuntimeAgentRoomStore",
@@ -229,7 +241,10 @@ __all__ = [
     "RuntimeMessageStore",
     "RuntimeTaskLifecycleStore",
     "RoutePayload",
+    "RoomRouteReader",
     "SSEConnectionLike",
+    "SSEStateReader",
+    "SSEUserMessageRecord",
     "SSERouteTransport",
     "SSETransport",
     "VectorDAL",

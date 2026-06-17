@@ -632,32 +632,32 @@ def test_room_center_route_inventory_records_live_protocol_owners():
             "owner": "room.protocols.RoomCenterCompatibility",
             "supporting": {
                 "common.protocols.ExecutionEngine",
-                "room.protocols.A2ATaskReaderCompatibility",
+                "common.protocols.RoomRouteReader",
             },
         },
         "inquiry_room_setting": {
             "owner": "room.protocols.RoomCenterCompatibility",
-            "supporting": {"room.protocols.A2ATaskReaderCompatibility"},
+            "supporting": {"common.protocols.RoomRouteReader"},
         },
         "inquiry_room_messages": {
             "owner": "room.protocols.RoomCenterCompatibility",
-            "supporting": {"room.protocols.A2ATaskReaderCompatibility"},
+            "supporting": {"common.protocols.RoomRouteReader"},
         },
         "update_room_agent_set": {
             "owner": "room.protocols.RoomCenterCompatibility",
-            "supporting": {"room.protocols.A2ATaskReaderCompatibility"},
+            "supporting": {"common.protocols.RoomRouteReader"},
         },
         "update_room_name": {
             "owner": "room.protocols.RoomCenterCompatibility",
-            "supporting": {"room.protocols.A2ATaskReaderCompatibility"},
+            "supporting": {"common.protocols.RoomRouteReader"},
         },
         "update_room_extend_info": {
             "owner": "room.protocols.RoomCenterCompatibility",
-            "supporting": {"room.protocols.A2ATaskReaderCompatibility"},
+            "supporting": {"common.protocols.RoomRouteReader"},
         },
         "send_message": {
             "owner": "common.protocols.ExecutionEngine",
-            "supporting": {"room.protocols.A2ATaskReaderCompatibility"},
+            "supporting": {"common.protocols.RoomRouteReader"},
         },
         "suggest_agents": {
             "owner": "agent.protocols.AgentSuggestionService",
@@ -805,14 +805,16 @@ def test_route_owner_protocols_match_handler_calls():
     )
     from app_shell.health_check import HealthCheck
     from common.protocols import (
+        A2ATaskStatusReader,
         AgentAvatarManager,
         AgentRegistry,
         HubRelayManagement,
         HubStatusReader,
+        RoomRouteReader,
+        SSEStateReader,
         ViewSetRepository,
         WebhookReceiver,
     )
-    from room.protocols import A2ATaskReaderCompatibility
 
     expected_by_protocol = {
         AgentAvatarManager: {
@@ -852,12 +854,15 @@ def test_route_owner_protocols_match_handler_calls():
             "get_agent_groups_by_owner",
             "update_agent_group",
         },
-        A2ATaskReaderCompatibility: {
+        A2ATaskStatusReader: {
             "get_pending_task_messages_for_user",
             "get_room_agent_message_by_message_id",
+            "get_task_messages_for_room",
+        },
+        RoomRouteReader: {"get_room_by_room_id"},
+        SSEStateReader: {
             "get_room_by_room_id",
             "get_room_user_message_by_message_id",
-            "get_task_messages_for_room",
         },
         ViewSetRepository: {
             "create",
@@ -886,7 +891,8 @@ def test_route_owner_protocols_match_handler_calls():
     for protocol, expected_methods in expected_by_protocol.items():
         protocol_methods = {
             name
-            for name, value in protocol.__dict__.items()
+            for base in protocol.__mro__
+            for name, value in base.__dict__.items()
             if callable(value)
             and (not name.startswith("_") or name in {"__call__", "_mask_sensitive_information"})
         }
@@ -1106,7 +1112,7 @@ def test_sse_cancel_route_inventory_records_execution_owner():
     assert route["module"] == "api_gateway.routes.sse_routes"
     assert route["owning_protocol"] == "common.protocols.ExecutionEngine"
     assert set(route.get("supporting_protocols") or []) == {
-        "room.protocols.A2ATaskReaderCompatibility",
+        "common.protocols.SSEStateReader",
     }
 
 
@@ -1374,16 +1380,20 @@ def test_health_check_service_uses_request_state_not_main_closures():
 def test_route_protocol_surfaces_are_specific():
     from agent.protocols import AgentGroupStoreCompatibility, AgentInspection
     from common.protocols import (
+        A2ATaskStatusReader,
+        RoomRouteReader,
+        SSEStateReader,
         ViewSetRepository,
         WebhookReceiver,
     )
-    from room.protocols import A2ATaskReaderCompatibility
 
     for protocol in (
         AgentInspection,
         ViewSetRepository,
         AgentGroupStoreCompatibility,
-        A2ATaskReaderCompatibility,
+        A2ATaskStatusReader,
+        RoomRouteReader,
+        SSEStateReader,
         WebhookReceiver,
     ):
         for name, value in protocol.__dict__.items():
@@ -1404,16 +1414,20 @@ def test_route_owner_protocols_do_not_expose_any_annotations():
 
     from agent.protocols import AgentGroupStoreCompatibility
     from common.protocols import (
+        A2ATaskStatusReader,
         APIKeyStore,
+        RoomRouteReader,
+        SSEStateReader,
         ViewSetRepository,
     )
-    from room.protocols import A2ATaskReaderCompatibility
 
     protocols = (
+        A2ATaskStatusReader,
         APIKeyStore,
+        RoomRouteReader,
+        SSEStateReader,
         ViewSetRepository,
         AgentGroupStoreCompatibility,
-        A2ATaskReaderCompatibility,
     )
     violations: list[str] = []
 
@@ -1441,7 +1455,7 @@ def test_route_protocols_do_not_expose_broad_annotations():
     import context_memory.protocols as memory_protocols
     import room.protocols as room_protocols
     from agent.protocols import AgentGroupStoreCompatibility
-    from room.protocols import A2ATaskReaderCompatibility
+    from common.protocols import A2ATaskStatusReader, RoomRouteReader, SSEStateReader
 
     protocols = [
         getattr(module, name)
@@ -1449,7 +1463,8 @@ def test_route_protocols_do_not_expose_broad_annotations():
         for name in module.__all__
         if isinstance(getattr(module, name, None), type)
     ]
-    protocols.extend([A2ATaskReaderCompatibility, AgentGroupStoreCompatibility])
+    protocols.extend([A2ATaskStatusReader, RoomRouteReader, SSEStateReader])
+    protocols.append(AgentGroupStoreCompatibility)
     protocols.append(health_check.HealthCheck)
     violations: list[str] = []
 

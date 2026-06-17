@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -17,15 +18,21 @@ from a2a_adapter.client_facade import (
 from a2a_adapter.client_facade import (
     stream_message as adapter_stream_message,
 )
+from a2a_adapter.translators import (
+    coerce_parts as adapter_coerce_parts,
+)
+from a2a_adapter.translators import (
+    facade_result_to_model,
+    message_to_completed_task,
+    resolve_accepted_output_modes,
+)
 from common.a2a_constants import (
     INTERACTIVE_STATES,
     SyntheticTaskId,
     is_terminal_state,
 )
-from common.config.settings import settings
 from common.types import (
     AgentCard,
-    Artifact,
     Message,
     Part,
     Task,
@@ -44,66 +51,39 @@ from models.room import RoomAgentMessage
 logger = get_logger(__name__)
 
 
-PLATFORM_SUPPORTED_MODES = {
-    "text/plain",
-    "text/markdown",
-    "text/html",
-    "text/csv",
-    "image/png",
-    "image/jpeg",
-    "image/gif",
-    "image/webp",
-    "audio/wav",
-    "audio/mpeg",
-    "audio/mp4",
-    "audio/webm",
-    "video/mp4",
-    "video/webm",
-    "application/json",
-    "application/pdf",
-    "application/xml",
-    "application/zip",
-}
-
-MODE_TO_MIMES: dict[str, set[str]] = {
-    "text": {"text/plain"},
-    "image": {"image/png", "image/jpeg", "image/gif", "image/webp"},
-    "audio": {"audio/wav", "audio/mpeg", "audio/mp4", "audio/webm"},
-    "video": {"video/mp4", "video/webm"},
-    "json": {"application/json"},
-    "form": {"text/plain"},
-    "markdown": {"text/markdown", "text/plain"},
-}
+@dataclass(frozen=True)
+class A2ARuntimeConfig:
+    webhook_base_url: str = ""
+    agent_card_fetch_timeout: float = 30.0
+    default_request_timeout: float = 600.0
+    push_notification_timeout: float = 60.0
 
 
 class A2AService:
     def __init__(self):
         self._task_db = None
+        self._call_counter = None
+        self._runtime_config = A2ARuntimeConfig()
 
-    def bind_task_db(self, task_db: Any) -> None:
+    def bind_runtime_config(self, config: A2ARuntimeConfig) -> None:
+        self._runtime_config = config
+
+    def bind_task_db(self, task_db: Any, *, call_counter: Any | None = None) -> None:
         self._task_db = task_db
+        if call_counter is not None:
+            self._call_counter = call_counter
+        elif hasattr(task_db, "increment_agent_call_count"):
+            self._call_counter = task_db
 
     def _get_task_db(self) -> Any | None:
         return getattr(self, "_task_db", None)
 
+    def _get_call_counter(self) -> Any | None:
+        return getattr(self, "_call_counter", None)
+
     def _resolve_accepted_modes(self, agent_card: AgentCard) -> list[str]:
         """Intersect agent's output modes with platform capabilities."""
-        raw_modes = getattr(agent_card, "default_output_modes", None)
-        agent_modes = set(raw_modes if raw_modes is not None else ["text"])
-
-        agent_mime_modes: set[str] = set()
-        for mode in agent_modes:
-            if "/" in mode:
-                agent_mime_modes.add(mode)
-            elif mode in MODE_TO_MIMES:
-                agent_mime_modes.update(MODE_TO_MIMES[mode])
-            else:
-                agent_mime_modes.add("text/plain")
-
-        accepted = agent_mime_modes & PLATFORM_SUPPORTED_MODES
-        if not accepted:
-            accepted = {"text/plain"}
-        return sorted(accepted)
+        return resolve_accepted_output_modes(agent_card)
 
     async def _fetch_agent_card_with_fallback(
         self, _client: Any, agent_url: str
@@ -112,13 +92,25 @@ class A2AService:
         return AgentCard.model_validate(
             await adapter_fetch_card(
                 agent_url,
-                timeout=self.AGENT_CARD_FETCH_TIMEOUT,
+                timeout=self._agent_card_fetch_timeout,
             )
         )
 
-    AGENT_CARD_FETCH_TIMEOUT = 30.0
-    DEFAULT_REQUEST_TIMEOUT = 600.0
-    PUSH_NOTIFICATION_TIMEOUT = 60.0
+    @property
+    def _webhook_base_url(self) -> str:
+        return self._runtime_config.webhook_base_url.rstrip("/")
+
+    @property
+    def _agent_card_fetch_timeout(self) -> float:
+        return self._runtime_config.agent_card_fetch_timeout
+
+    @property
+    def _default_request_timeout(self) -> float:
+        return self._runtime_config.default_request_timeout
+
+    @property
+    def _push_notification_timeout(self) -> float:
+        return self._runtime_config.push_notification_timeout
 
     async def get_agent_card_from_url(self, agent_url: str) -> AgentCard:
         if not agent_url:
@@ -128,7 +120,7 @@ class A2AService:
             return AgentCard.model_validate(
                 await adapter_fetch_card(
                     agent_url,
-                    timeout=self.AGENT_CARD_FETCH_TIMEOUT,
+                    timeout=self._agent_card_fetch_timeout,
                 )
             )
 
@@ -274,14 +266,14 @@ class A2AService:
         """Atomically increment call_count (and call_success_count) for an agent."""
         if not agent_id:
             return
-        task_db = self._get_task_db()
-        if task_db is None:
+        call_counter = self._get_call_counter()
+        if call_counter is None:
             return
 
         increment_agent_call_count = None
         try:
             increment_agent_call_count = getattr(
-                task_db,
+                call_counter,
                 "increment_agent_call_count",
                 None,
             )
@@ -336,9 +328,7 @@ class A2AService:
         # of posting to an unreachable localhost URL.
         push_config = None
         has_capability = self.has_push_notification_capability(agent_card)
-        webhook_url = (
-            settings.webhook_base_url.rstrip("/") if settings.webhook_base_url else ""
-        )
+        webhook_url = self._webhook_base_url
 
         logger.info(
             f"Push notification check: has_capability={has_capability}, "
@@ -378,9 +368,9 @@ class A2AService:
         # Blocking agents hold the connection for the full task duration.
         try:
             dispatch_timeout = (
-                self.PUSH_NOTIFICATION_TIMEOUT
+                self._push_notification_timeout
                 if push_config
-                else self.DEFAULT_REQUEST_TIMEOUT
+                else self._default_request_timeout
             )
             response = await adapter_send_message(
                 agent_card,
@@ -599,49 +589,22 @@ class A2AService:
 
     def _message_to_completed_task(self, message: Message, context_id: str) -> Task:
         """Convert a Message response to a completed Task."""
-        return Task(
-            id=str(uuid4()),
-            context_id=context_id,
-            status=TaskStatus(state=TaskState.completed),
-            artifacts=[
-                Artifact(
-                    artifact_id=str(uuid4()),
-                    name="response",
-                    parts=self._coerce_parts(message.parts),
-                )
-            ],
+        return message_to_completed_task(
+            message,
+            context_id,
+            task_id=str(uuid4()),
+            artifact_id=str(uuid4()),
         )
 
     @staticmethod
     def _coerce_parts(parts: list[Any] | None) -> list[Part]:
-        coerced: list[Part] = []
-        for part in parts or []:
-            if isinstance(part, Part):
-                coerced.append(part)
-            elif isinstance(part, dict):
-                data = dict(part)
-                if "kind" not in data and "text" in data:
-                    data["kind"] = "text"
-                coerced.append(Part.model_validate(data))
-            elif hasattr(part, "root"):
-                coerced.append(Part(root=part.root))
-            elif hasattr(part, "model_dump"):
-                data = part.model_dump(mode="json")
-                if "kind" not in data and "text" in data:
-                    data["kind"] = "text"
-                coerced.append(Part.model_validate(data))
-            elif hasattr(part, "text"):
-                coerced.append(Part(root=TextPart(text=part.text)))
-        return coerced
+        return adapter_coerce_parts(parts)
 
     def _facade_result_to_model(self, response: dict[str, Any]) -> Message | Task:
-        kind = response.get("kind")
-        result = response.get("result") or {}
-        if kind == "message":
-            return Message.model_validate(result)
-        if kind == "task":
-            return Task.model_validate(result)
-        raise A2AServiceError(str(response.get("error") or "Unknown A2A response"))
+        try:
+            return facade_result_to_model(response)
+        except ValueError as exc:
+            raise A2AServiceError(str(exc)) from exc
 
     def _extract_text_from_message(self, message: Message) -> str:
         """Extract text content from a Message."""
@@ -704,7 +667,7 @@ class A2AService:
                 message,
                 accepted_output_modes=self._resolve_accepted_modes(agent_card),
                 blocking=True,
-                timeout=self.DEFAULT_REQUEST_TIMEOUT,
+                timeout=self._default_request_timeout,
             )
             if response.get("kind") == "error":
                 error_payload = response.get("error")
@@ -757,7 +720,7 @@ class A2AService:
                 agent_card,
                 message,
                 accepted_output_modes=self._resolve_accepted_modes(agent_card),
-                timeout=self.DEFAULT_REQUEST_TIMEOUT,
+                timeout=self._default_request_timeout,
             ):
                 success = response.get("kind") != "error"
                 yield response
@@ -823,7 +786,7 @@ class A2AService:
                 message,
                 accepted_output_modes=self._resolve_accepted_modes(aegnt_card),
                 blocking=True,
-                timeout=self.DEFAULT_REQUEST_TIMEOUT,
+                timeout=self._default_request_timeout,
             )
             inspection_center_response = await self.validate_a2a_response(response)
             inspection_center_response.agent_url = aegnt_card.url
@@ -1005,9 +968,7 @@ class A2AService:
         # agent can POST back asynchronously — but only if the agent advertises
         # push-notification capability (mirrors the check in send_message_to_tracked_agent).
         # Otherwise fall back to blocking=True.
-        webhook_url = (
-            settings.webhook_base_url.rstrip("/") if settings.webhook_base_url else ""
-        )
+        webhook_url = self._webhook_base_url
 
         has_capability = False
         if webhook_url and msg.agent_id:
@@ -1034,11 +995,11 @@ class A2AService:
                 push_config["url"],
             )
             hitl_blocking = False
-            hitl_timeout = self.PUSH_NOTIFICATION_TIMEOUT
+            hitl_timeout = self._push_notification_timeout
         else:
             push_config = None
             hitl_blocking = True
-            hitl_timeout = self.DEFAULT_REQUEST_TIMEOUT
+            hitl_timeout = self._default_request_timeout
             reason = (
                 "WEBHOOK_BASE_URL not set"
                 if not webhook_url

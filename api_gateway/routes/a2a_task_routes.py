@@ -16,21 +16,21 @@ from common.a2a_constants import (
     get_retry_after_seconds,
 )
 from common.auth import ClerkUser, get_current_user
+from common.protocols import A2ATaskStatusReader
 from common.utils.logger import get_logger
-from room.protocols import A2ATaskReaderCompatibility
 
 logger = get_logger(__name__)
 
 router = APIRouter()
-task_store: A2ATaskReaderCompatibility | None = None
+task_store: A2ATaskStatusReader | None = None
 
-def bind_a2a_task_dependencies(store: A2ATaskReaderCompatibility) -> None:
+def bind_a2a_task_dependencies(store: A2ATaskStatusReader) -> None:
     global task_store
 
     task_store = store
 
 
-def get_task_store() -> A2ATaskReaderCompatibility:
+def get_task_store() -> A2ATaskStatusReader:
     if task_store is None:
         raise RuntimeError("A2A task database dependency has not been bound")
     return task_store
@@ -46,7 +46,7 @@ def _resolve_dependency(value: Any, provider) -> Any:
 async def get_task_status(
     message_id: str,
     current_user: ClerkUser = Depends(get_current_user),
-    db: A2ATaskReaderCompatibility = Depends(get_task_store),
+    db: A2ATaskStatusReader = Depends(get_task_store),
 ) -> dict[str, Any]:
     """
     Get the status of a long-running A2A task.
@@ -92,7 +92,7 @@ async def list_room_tasks(
     room_id: str,
     limit: int = 50,
     current_user: ClerkUser = Depends(get_current_user),
-    db: A2ATaskReaderCompatibility = Depends(get_task_store),
+    db: A2ATaskStatusReader = Depends(get_task_store),
 ) -> dict[str, Any]:
     """
     List all A2A tasks for a room.
@@ -146,7 +146,7 @@ async def list_room_tasks(
 @router.get("/users/me/a2a-tasks")
 async def list_user_pending_tasks(
     current_user: ClerkUser = Depends(get_current_user),
-    db: A2ATaskReaderCompatibility = Depends(get_task_store),
+    db: A2ATaskStatusReader = Depends(get_task_store),
 ) -> dict[str, Any]:
     """
     List all pending A2A tasks for the current user.
