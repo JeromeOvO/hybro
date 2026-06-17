@@ -12,6 +12,7 @@ from common.protocols.agent_protocols import (
 )
 from common.protocols.context_memory_protocols import (
     ContextAssembler,
+    ContextMemoryRuntime,
     MemoryManager,
     MemoryProjector,
 )
@@ -192,6 +193,7 @@ __all__ = [
     "LLMTextGateway",
     "LeaderElector",
     "MongoChangeStream",
+    "ContextMemoryRuntime",
     "MemoryManager",
     "MessageCancellationReader",
     "MemoryProjector",

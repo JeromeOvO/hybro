@@ -23,6 +23,7 @@ from common.protocols import (
     AgentTransport,
     ContentStorageRepository,
     ContextAssembler,
+    ContextMemoryRuntime,
     EventPublisher,
     ExecutionEngine,
     GatewayDiscoveryProvider,
@@ -120,6 +121,7 @@ class ContextMemoryDeps:
     context_assembler: ContextAssembler
     memory_manager: MemoryManager
     memory_projector: MemoryProjector
+    context_memory_runtime: ContextMemoryRuntime
 
 
 @dataclass(frozen=True)
@@ -943,6 +945,7 @@ def create_context_memory_deps(facade: ContextMemoryFacade) -> ContextMemoryDeps
         context_assembler=facade,
         memory_manager=facade,
         memory_projector=facade,
+        context_memory_runtime=facade,
     )
 
 

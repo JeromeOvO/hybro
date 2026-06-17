@@ -22,6 +22,7 @@ from common.dto import (
     RoomInfo,
 )
 from common.protocols import RoomActiveRunReader
+from common.protocols.context_memory_protocols import ContextMemoryRuntime
 from common.types import (
     Message,
     Part,
@@ -152,6 +153,7 @@ class RoomServices:
         self._facade = None
         self._bound = False
         self._context_memory_manager = None
+        self._context_memory_runtime: ContextMemoryRuntime | None = None
         self._active_run_reader: RoomActiveRunReader | None = None
         self._hitl_pending_checker: Callable[[str], Awaitable[list[Any]]] | None = None
         self._processing_status_emitter: Callable[..., Awaitable[dict[str, Any] | None]] | None = None
@@ -179,8 +181,13 @@ class RoomServices:
         self._facade = facade
         self._bound = True
 
-    def bind_context_memory(self, memory_manager) -> None:
+    def bind_context_memory(
+        self,
+        memory_manager,
+        context_memory_runtime: ContextMemoryRuntime | None = None,
+    ) -> None:
         self._context_memory_manager = memory_manager
+        self._context_memory_runtime = context_memory_runtime or memory_manager
 
     def bind_message_parser_service(self, service) -> None:
         self.message_parser_service = service
@@ -222,6 +229,89 @@ class RoomServices:
                 "RoomServices.bind_facade() not called - startup incomplete"
             )
         return self._facade
+
+    def _require_context_memory_runtime(self) -> ContextMemoryRuntime:
+        if self._context_memory_runtime is None:
+            raise RuntimeError(
+                "RoomServices.bind_context_memory() not called - startup incomplete"
+            )
+        return self._context_memory_runtime
+
+    @staticmethod
+    def _assembled_context_text(assembled) -> str:
+        metadata = getattr(assembled, "metadata", {}) or {}
+        return metadata.get("context", "")
+
+    async def _search_context_memory_results(
+        self,
+        *,
+        query: str,
+        room_id: str,
+    ) -> list:
+        runtime = self._require_context_memory_runtime()
+        payload = await runtime.legacy_search(query=query, room_id=room_id)
+        if isinstance(payload, dict):
+            return list(payload.get("results") or [])
+        return list(getattr(payload, "results", []) or [])
+
+    async def _build_supervisor_conversation_context(
+        self,
+        *,
+        room,
+        room_memory,
+        message_text: str,
+        agent_registry: list[dict],
+        log_context: str,
+    ) -> str | None:
+        if not room_memory:
+            return None
+        memory_search_results = None
+        try:
+            results = await self._search_context_memory_results(
+                query=message_text,
+                room_id=room.room_id,
+            )
+            if results:
+                memory_search_results = results
+        except Exception as e:
+            logger.debug("RoomServices: MemorySearch skipped%s: %s", log_context, e)
+        try:
+            assembled = self._require_context_memory_runtime().assemble_supervisor_context_from_memory(
+                room_memory,
+                message_text,
+                agent_registry=agent_registry,
+                max_turns=5,
+                memory_search_results=memory_search_results,
+            )
+            return self._assembled_context_text(assembled)
+        except Exception as e:
+            logger.warning(
+                "RoomServices: ContextMemoryRuntime failed%s: %s",
+                log_context,
+                e,
+            )
+            return None
+
+    def _build_agent_execution_context_from_memory(
+        self,
+        *,
+        room_memory,
+        current_task: str,
+        agent_name: str | None,
+        room_awareness: str | None,
+        quoted_text: str | None,
+        agent_task: str | None,
+    ) -> str:
+        assembled = self._require_context_memory_runtime().assemble_agent_execution_context_from_memory(
+            room_memory,
+            current_task,
+            agent_name=agent_name,
+            room_awareness=room_awareness,
+            quoted_text=quoted_text,
+            agent_task=agent_task,
+            include_system_instruction=True,
+        )
+        return self._assembled_context_text(assembled)
 
     async def _read_active_runs_for_room(self, room_id: str) -> list[dict[str, Any]]:
         reader = getattr(self, "_active_run_reader", None)
@@ -1556,7 +1646,6 @@ class RoomServices:
         Agent messages are created one at a time inside
         ``SupervisorExecutor._dispatch_targets``.
         """
-        from app_shell.context_assembly_service import context_assembly_service
         from models.supervisor import RoomConfig
 
         if token and token.is_cancelled:
@@ -1577,35 +1666,13 @@ class RoomServices:
 
         # Build budget-aware context via ContextAssemblyService (§11.1)
         agent_dicts = [p.model_dump(mode="json") for p in agent_registry]
-        conversation_context: str | None = None
-        memory_search_results = None
-        if room_memory:
-            try:
-                from app_shell.memory_search_service import memory_search_service
-
-                search_response = await memory_search_service.search(
-                    query=message_text,
-                    room_id=room.room_id,
-                )
-                if search_response.results:
-                    memory_search_results = search_response.results
-            except Exception as e:
-                logger.debug(
-                    "RoomServices: MemorySearch skipped: %s", e
-                )
-            try:
-                result = context_assembly_service.build_supervisor_context(
-                    room_memory=room_memory,
-                    current_task=message_text,
-                    agent_registry=agent_dicts,
-                    max_turns=5,
-                    memory_search_results=memory_search_results,
-                )
-                conversation_context = result.context
-            except Exception as e:
-                logger.warning(
-                    "RoomServices: ContextAssemblyService failed, falling back: %s", e
-                )
+        conversation_context = await self._build_supervisor_conversation_context(
+            room=room,
+            room_memory=room_memory,
+            message_text=message_text,
+            agent_registry=agent_dicts,
+            log_context="",
+        )
 
         user_message.extend_info = {
             **(user_message.extend_info or {}),
@@ -1737,39 +1804,15 @@ class RoomServices:
             explicit_mentions=explicit_mentions or [],
         )
 
-        # Build budget-aware context via ContextAssemblyService (§11.1)
-        conversation_context: str | None = None
-        if room_memory:
-            from app_shell.context_assembly_service import context_assembly_service
-
-            memory_search_results = None
-            try:
-                from app_shell.memory_search_service import memory_search_service
-
-                search_response = await memory_search_service.search(
-                    query=message_text,
-                    room_id=room.room_id,
-                )
-                if search_response.results:
-                    memory_search_results = search_response.results
-            except Exception as e:
-                logger.debug(
-                    "RoomServices: MemorySearch skipped in clarify-resume: %s", e
-                )
-            try:
-                agent_dicts = [p.model_dump(mode="json") for p in agent_registry]
-                ctx_result = context_assembly_service.build_supervisor_context(
-                    room_memory=room_memory,
-                    current_task=message_text,
-                    agent_registry=agent_dicts,
-                    max_turns=5,
-                    memory_search_results=memory_search_results,
-                )
-                conversation_context = ctx_result.context
-            except Exception as e:
-                logger.warning(
-                    "RoomServices: ContextAssemblyService failed in clarify-resume: %s", e
-                )
+        # Build budget-aware context via ContextMemoryRuntime (§11.1)
+        agent_dicts = [p.model_dump(mode="json") for p in agent_registry]
+        conversation_context = await self._build_supervisor_conversation_context(
+            room=room,
+            room_memory=room_memory,
+            message_text=message_text,
+            agent_registry=agent_dicts,
+            log_context=" in clarify-resume",
+        )
 
         user_message.extend_info = {
             **(user_message.extend_info or {}),
@@ -3096,25 +3139,19 @@ class RoomServices:
                 )
 
                 if isinstance(room_memory_content, MemoryContent):
-                    # Budget-aware context via ContextAssemblyService (§11.2)
-                    from app_shell.context_assembly_service import (
-                        context_assembly_service,
-                    )
-
+                    # Budget-aware context via ContextMemoryRuntime (§11.2)
                     try:
-                        result = context_assembly_service.build_agent_execution_context(
+                        context = self._build_agent_execution_context_from_memory(
                             room_memory=room_memory,
                             current_task=current_task_for_cas,
                             agent_name=agent_name,
                             room_awareness=room_awareness,
                             quoted_text=quoted_for_cas,
                             agent_task=agent_task_for_cas,
-                            include_system_instruction=True,
                         )
-                        context = result.context
                     except Exception as e:
                         logger.warning(
-                            "ContextAssemblyService failed for agent, falling back to "
+                            "ContextMemoryRuntime failed for agent, falling back to "
                             "DEPRECATED build_context_for_agent (to be removed): %s", e
                         )
                         context = build_context_for_agent(

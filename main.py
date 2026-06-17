@@ -235,12 +235,10 @@ async def lifespan(app: FastAPI):
             from app_shell.agent_service import agent_service
             from app_shell.bedrock_service import bedrock_service
             from app_shell.compaction_service import compaction_service
-            from app_shell.context_assembly_service import context_assembly_service
             from app_shell.context_memory_runtime import AppShellMemoryCenter
             from app_shell.debate_service import debate_service
             from app_shell.gemini_service import gemini_service
             from app_shell.inspection_runtime import AppShellInspectionCenter
-            from app_shell.memory_search_service import memory_search_service
             from app_shell.memory_service import (
                 chat_memory_service,
                 room_memory_service,
@@ -503,7 +501,6 @@ async def lifespan(app: FastAPI):
             agent_resolver_service.bind_agent_selection_service(
                 agent_selection_llm_service
             )
-            memory_search_service.bind_embedding_service(embedding_llm_service)
             room_coordinator_service.bind_summary_service(summary_llm_service)
             openai_service.bind_debate_service(debate_llm_service)
             agent_viewset.bind_agent_viewset_dependencies(
@@ -602,6 +599,17 @@ async def lifespan(app: FastAPI):
             room_runtime.bind_s3_service(s3_service)
             room_center.room_center.bind_facade(_room_facade)
             hitl.bind_room_ownership_reader(_room_facade)
+            context_memory_facade = create_context_memory_facade(
+                mongo=mongo_dal,
+                vector=vector_dal,
+                llm_provider=llm_provider,
+                room_history_reader=_room_deps.room_history_reader,
+                llm_config=ContextMemoryLLMConfig(
+                    turn_notes_model="context_memory_legacy_json_model",
+                    summary_model="context_memory_legacy_json_model",
+                ),
+            )
+            _context_memory_deps = create_context_memory_deps(context_memory_facade)
             execution_room_message_center.bind(
                 create_room_message_center(
                     room_services=room_services,
@@ -625,8 +633,7 @@ async def lifespan(app: FastAPI):
                     agent_health_service=agent_health_service,
                     s3_service=s3_service,
                     capability_issue_service=capability_issue_service,
-                    context_assembly_service=context_assembly_service,
-                    memory_search_service=memory_search_service,
+                    context_memory_runtime=_context_memory_deps.context_memory_runtime,
                     compaction_service=compaction_service,
                     build_turn_content_func=build_turn_content,
                     supervisor_planning_error_cls=SupervisorPlanningError,
@@ -722,16 +729,6 @@ async def lifespan(app: FastAPI):
             app.state.execution_facade = execution_facade
             app.state.execution_deps = _execution_deps
 
-            context_memory_facade = create_context_memory_facade(
-                mongo=mongo_dal,
-                vector=vector_dal,
-                llm_provider=llm_provider,
-                room_history_reader=_room_deps.room_history_reader,
-                llm_config=ContextMemoryLLMConfig(
-                    turn_notes_model="context_memory_legacy_json_model",
-                    summary_model="context_memory_legacy_json_model",
-                ),
-            )
             object_storage = create_object_storage_dal()
             platform_config = create_platform_config(settings)
             platform_deps = create_platform_deps(
@@ -773,14 +770,14 @@ async def lifespan(app: FastAPI):
             # TODO(phase-6/7): Register ContextMemoryEventHandler with EventPublisher
             # once Delivery wires runtime MessageCommitted delivery. Phase 5 keeps the
             # direct compaction call path via legacy app_shell.
-            _context_memory_deps = create_context_memory_deps(context_memory_facade)
-            context_assembly_service.bind_facade(context_memory_facade)
-            memory_search_service.bind_facade(context_memory_facade)
             compaction_service.bind_content_storage(platform_facade.content_storage)
             compaction_service.bind_room_memory_reader(context_memory_facade)
             compaction_service.bind_facade(context_memory_facade)
             room_memory_service.bind_facade(context_memory_facade)
-            room_runtime.bind_context_memory(_context_memory_deps.memory_manager)
+            room_runtime.bind_context_memory(
+                _context_memory_deps.memory_manager,
+                _context_memory_deps.context_memory_runtime,
+            )
         else:
             raise RuntimeError("MongoDAL ping failed after connect")
 
