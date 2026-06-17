@@ -643,167 +643,21 @@ class A2AService:
         Uses the same task_id and context_id to continue the conversation
         rather than starting a new task.
         """
-        task_db = self._get_task_db()
-        if task_db is None:
-            raise ValueError("Task DB is unavailable for HITL reply handling")
-
-        msg = await task_db.get_room_agent_message_by_message_id(message_id)
-        if not msg:
-            raise ValueError(f"Agent message {message_id} not found")
-
-        agent_url = msg.agent_url
-        if not agent_url:
-            raise ValueError(f"Agent message {message_id} has no agent_url")
-
-        # Generate a NEW webhook token (original plaintext was never stored)
-        webhook_token = task_db.generate_webhook_token()
-        webhook_token_hash = task_db.hash_webhook_token(webhook_token)
-        token_updated = await task_db.update_webhook_token_hash_on_message(
-            message_id, webhook_token_hash
-        )
-        if not token_updated:
+        self._require_task_db()
+        if self._task_tracking is None:
             raise RuntimeError(
-                f"Failed to rotate webhook token for message {message_id} — "
-                "agent callback would fail verification; aborting reply"
+                "A2AService.bind_task_db() not called - startup incomplete"
             )
-
-        # When WEBHOOK_BASE_URL is configured, use push-notification mode so the
-        # agent can POST back asynchronously — but only if the agent advertises
-        # push-notification capability (mirrors the check in send_message_to_tracked_agent).
-        # Otherwise fall back to blocking=True.
-        webhook_url = self._webhook_base_url
-
-        has_capability = False
-        if webhook_url and msg.agent_id:
-            agent_record = await task_db.get_agent_by_agent_id(msg.agent_id)
-            if agent_record and agent_record.agent_card:
-                has_capability = self.has_push_notification_capability(
-                    agent_record.agent_card
-                )
-            else:
-                logger.warning(
-                    "hitl: could not load agent card for agent %s — disabling push notifications",
-                    msg.agent_id,
-                )
-
-        if has_capability and webhook_url:
-            push_config = {
-                "id": message_id,
-                "url": f"{webhook_url}/api/v1/webhooks/a2a/{message_id}",
-                "token": webhook_token,
-            }
-            logger.info(
-                "hitl: push-notification mode for task %s (callback → %s)",
-                message_id,
-                push_config["url"],
-            )
-            hitl_blocking = False
-            hitl_timeout = self._push_notification_timeout
-        else:
-            push_config = None
-            hitl_blocking = True
-            hitl_timeout = self._default_request_timeout
-            reason = (
-                "WEBHOOK_BASE_URL not set"
-                if not webhook_url
-                else "agent missing push-notification capability"
-            )
-            logger.warning(
-                "hitl: %s — using blocking=True for task %s", reason, message_id
-            )
-
-        reply_message = {
-            "kind": "message",
-            "role": "user",
-            "parts": [{"kind": "text", "text": user_input}],
-            "messageId": str(uuid4()),
-            "taskId": task_id,
-            "contextId": context_id,
-            "referenceTaskIds": [task_id],
-        }
-
-        response = await adapter_send_hitl_reply(
-            agent_url,
-            reply_message,
-            push_notification_config=push_config,
-            blocking=hitl_blocking,
-            timeout=hitl_timeout,
+        return await self._task_tracking.reply_to_task(
+            message_id=message_id,
+            task_id=task_id,
+            context_id=context_id,
+            user_input=user_input,
+            webhook_base_url=self._webhook_base_url,
+            push_notification_timeout=self._push_notification_timeout,
+            default_request_timeout=self._default_request_timeout,
+            send_hitl_reply=adapter_send_hitl_reply,
         )
-
-        # Extract response and persist task to DB in one shot so that
-        # message_text is written atomically with the task.  Without this,
-        # the terminal-state guard in update_task_on_message blocks the
-        # subsequent update_task_state_on_message call in hitl_service,
-        # leaving message_text empty.
-        task_obj = None
-        task_result = (
-            self._facade_result_to_model(response)
-            if response.get("kind") != "error"
-            else None
-        )
-
-        # --- Extract response text from artifacts or message ---
-        response_text: str | None = None
-        if hasattr(task_result, "kind") and task_result.kind == "task":
-            task_obj = task_result
-            if task_obj.artifacts:
-                from common.utils.a2a_helpers import extract_text_from_artifacts
-
-                response_text = extract_text_from_artifacts(task_obj.artifacts)
-        elif hasattr(task_result, "kind") and task_result.kind == "message":
-            parts = getattr(task_result, "parts", []) or []
-            for p in parts:
-                if hasattr(p, "root") and hasattr(p.root, "text"):
-                    response_text = p.root.text
-                    break
-
-        # Fallback: check task.status.message for the agent's follow-up prompt
-        # (e.g. when task is input_required / auth_required)
-        if (
-            not response_text
-            and task_obj
-            and hasattr(task_obj, "status")
-            and task_obj.status
-        ):
-            status_msg = getattr(task_obj.status, "message", None)
-            if status_msg:
-                parts = getattr(status_msg, "parts", []) or []
-                for p in parts:
-                    if hasattr(p, "root") and hasattr(p.root, "text"):
-                        response_text = p.root.text
-                        break
-                    if hasattr(p, "text"):
-                        response_text = p.text
-                        break
-
-        # --- Persist task + message_text together ---
-        if task_obj:
-            await task_db.update_task_on_message(
-                message_id,
-                task_obj.model_dump(mode="json"),
-                message_text=response_text,
-            )
-
-        logger.info(
-            "hitl_reply_to_task_sent",
-            extra={
-                "message_id": message_id,
-                "task_id": task_id,
-                "context_id": context_id,
-            },
-        )
-
-        task_state: str | None = None
-        if task_obj and hasattr(task_obj, "status") and task_obj.status:
-            st = task_obj.status.state
-            task_state = st.value if hasattr(st, "value") else str(st)
-
-        return {
-            "status": "sent",
-            "blocking": hitl_blocking,
-            "task_state": task_state,
-            "response_text": response_text,
-        }
 
 
 a2a_service = A2AService()

@@ -24,6 +24,7 @@ from models.error import A2AServiceError
 logger = get_logger(__name__)
 RecordCall = Callable[[str | None], Awaitable[None]]
 SendMessageCall = Callable[..., Awaitable[dict[str, Any]]]
+SendHitlReplyCall = Callable[..., Awaitable[dict[str, Any]]]
 
 
 class A2ATaskTrackingService:
@@ -180,6 +181,104 @@ class A2ATaskTrackingService:
             )
 
         raise A2AServiceError(f"Unexpected response kind: {result.kind}")
+
+    async def reply_to_task(
+        self,
+        *,
+        message_id: str,
+        task_id: str,
+        context_id: str,
+        user_input: str,
+        webhook_base_url: str,
+        push_notification_timeout: float,
+        default_request_timeout: float,
+        send_hitl_reply: SendHitlReplyCall,
+    ) -> dict[str, Any]:
+        msg = await self._task_store.get_room_agent_message_by_message_id(message_id)
+        if not msg:
+            raise ValueError(f"Agent message {message_id} not found")
+
+        agent_url = msg.agent_url
+        if not agent_url:
+            raise ValueError(f"Agent message {message_id} has no agent_url")
+
+        webhook_token = self._task_store.generate_webhook_token()
+        webhook_token_hash = self._task_store.hash_webhook_token(webhook_token)
+        token_updated = await self._task_store.update_webhook_token_hash_on_message(
+            message_id,
+            webhook_token_hash,
+        )
+        if not token_updated:
+            raise RuntimeError(
+                f"Failed to rotate webhook token for message {message_id} - "
+                "agent callback would fail verification; aborting reply"
+            )
+
+        agent_card = None
+        if webhook_base_url and msg.agent_id:
+            agent_record = await self._task_store.get_agent_by_agent_id(msg.agent_id)
+            agent_card = getattr(agent_record, "agent_card", None)
+            if agent_card is None:
+                logger.warning(
+                    "hitl: could not load agent card for agent %s - disabling push notifications",
+                    msg.agent_id,
+                )
+
+        push_config = _build_push_config(
+            agent_card=agent_card,
+            message_id=message_id,
+            webhook_token=webhook_token,
+            webhook_base_url=webhook_base_url,
+        )
+        hitl_blocking = push_config is None
+        hitl_timeout = (
+            default_request_timeout if hitl_blocking else push_notification_timeout
+        )
+
+        response = await send_hitl_reply(
+            agent_url,
+            _build_hitl_reply_message(
+                task_id=task_id,
+                context_id=context_id,
+                user_input=user_input,
+            ),
+            push_notification_config=push_config,
+            blocking=hitl_blocking,
+            timeout=hitl_timeout,
+        )
+
+        task_result = (
+            facade_result_to_model(response) if response.get("kind") != "error" else None
+        )
+        task_obj = task_result if getattr(task_result, "kind", None) == "task" else None
+        response_text = _extract_reply_response_text(task_result)
+
+        if task_obj:
+            await self._task_store.update_task_on_message(
+                message_id,
+                task_obj.model_dump(mode="json"),
+                message_text=response_text,
+            )
+
+        logger.info(
+            "hitl_reply_to_task_sent",
+            extra={
+                "message_id": message_id,
+                "task_id": task_id,
+                "context_id": context_id,
+            },
+        )
+
+        task_state = None
+        if task_obj and task_obj.status:
+            task_state = _state_value(task_obj.status.state)
+
+        return {
+            "status": "sent",
+            "blocking": hitl_blocking,
+            "task_state": task_state,
+            "response_text": response_text,
+        }
 
     async def _handle_message_result(
         self,
@@ -338,7 +437,26 @@ def _build_push_config(
     }
 
 
+def _build_hitl_reply_message(
+    *,
+    task_id: str,
+    context_id: str,
+    user_input: str,
+) -> dict[str, Any]:
+    return {
+        "kind": "message",
+        "role": "user",
+        "parts": [{"kind": "text", "text": user_input}],
+        "messageId": str(uuid4()),
+        "taskId": task_id,
+        "contextId": context_id,
+        "referenceTaskIds": [task_id],
+    }
+
+
 def _has_push_notification_capability(agent_card) -> bool:
+    if agent_card is None:
+        return False
     has_caps = agent_card.capabilities is not None
     if not has_caps:
         return False
@@ -378,6 +496,17 @@ def _extract_status_message(task: Task) -> str | None:
                 return part.text
             if hasattr(part, "root") and hasattr(part.root, "text"):
                 return part.root.text
+    return None
+
+
+def _extract_reply_response_text(task_result) -> str | None:
+    if getattr(task_result, "kind", None) == "task":
+        task_text = _extract_text_from_task(task_result)
+        if task_text:
+            return task_text
+        return _extract_status_message(task_result)
+    if getattr(task_result, "kind", None) == "message":
+        return _extract_text_from_message(task_result)
     return None
 
 

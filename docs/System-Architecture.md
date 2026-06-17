@@ -118,8 +118,9 @@ Examples:
   runtime behavior into `hub_runtime_bridge.HubFacade`.
 - `app_shell.a2a_runtime.A2AService` keeps legacy method names while delegating
   task-tracking placeholder creation, tracked-send push configuration, failure
-  persistence, and terminal response persistence to `execution.task_tracking`;
-  A2A SDK transport/coercion work stays in `a2a_adapter`.
+  persistence, terminal response persistence, and HITL reply token/task
+  persistence to `execution.task_tracking`; A2A SDK transport/coercion work
+  stays in `a2a_adapter`.
 
 ## Major Code Areas
 
