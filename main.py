@@ -255,6 +255,9 @@ async def lifespan(app: FastAPI):
                 room_runtime,
                 room_services,
             )
+
+            # TODO(P2): replace this app-shell object-storage singleton import with
+            # a platform-owned ObjectStoragePort once S3 confinement is complete.
             from app_shell.s3_service import s3_service
             from app_shell.task_service import task_service
             from common.utils.a2a_helpers import bind_a2a_artifact_storage
@@ -594,6 +597,8 @@ async def lifespan(app: FastAPI):
             sse.bind_sse_dependencies(app_shell_store, sse_manager)
             room_runtime.bind_store(app_shell_store)
             room_runtime.bind_facade(_room_facade)
+            # Temporary P2 bridge: RoomServices now requires explicit object-storage
+            # binding and no longer imports app_shell.s3_service lazily.
             room_runtime.bind_s3_service(s3_service)
             room_center.room_center.bind_facade(_room_facade)
             hitl.bind_room_ownership_reader(_room_facade)

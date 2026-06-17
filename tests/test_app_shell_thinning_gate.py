@@ -19,7 +19,7 @@ FORBIDDEN_APP_SHELL_IMPORT_PREFIXES = (
 )
 
 EXPECTED_APP_SHELL_BASELINE = {
-    "app_shell/room_runtime.py": {"lines": 3995, "public_business_methods": 54},
+    "app_shell/room_runtime.py": {"lines": 3811, "public_business_methods": 53},
     "app_shell/a2a_runtime.py": {"lines": 1145, "public_business_methods": 15},
     "app_shell/relay_service.py": {"lines": 862, "public_business_methods": 27},
     "app_shell/context_assembly_service.py": {

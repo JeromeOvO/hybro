@@ -1,7 +1,6 @@
 import re
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 from uuid import uuid4
@@ -24,8 +23,6 @@ from common.dto import (
 )
 from common.protocols import RoomActiveRunReader
 from common.types import (
-    FileContent,
-    FilePart,
     Message,
     Part,
     Task,
@@ -46,9 +43,9 @@ from common.utils.context_utils import (
 )
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
+from context_memory.projection import _human_size, build_turn_content
 from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import AgentStatus
-from models.file_upload import MAX_ATTACHMENTS_PER_MESSAGE
 from models.memory import MemoryContent, RoomMemory
 from models.request import (
     AgentCenterRequest,
@@ -80,6 +77,17 @@ from models.room import (
     UserAttachment,
 )
 from models.room_services_models import ParseResult
+from room.attachments import (
+    ResolvedAttachments as _ResolvedAttachments,
+)
+from room.attachments import (
+    build_message_parts as platform_build_message_parts,
+)
+from room.attachments import (
+    refresh_artifact_presigned_urls,
+    resolve_and_apply_room_attachments,
+    resolve_room_attachments,
+)
 
 logger = get_logger(__name__)
 
@@ -107,16 +115,6 @@ def resolve_strategy(
     return DispatchStrategy.SINGLE
 
 
-def _human_size(size_bytes: int) -> str:
-    """Format bytes as human-readable string: 512B, 245KB, 1.2MB."""
-    if size_bytes < 1024:
-        return f"{size_bytes}B"
-    elif size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.0f}KB"
-    else:
-        return f"{size_bytes / (1024 * 1024):.1f}MB"
-
-
 def _agent_to_routing_candidate(agent) -> AgentRoutingCandidate:
     card = agent.agent_card
     capabilities = card.capabilities if isinstance(card.capabilities, dict) else {}
@@ -134,26 +132,6 @@ def _agent_to_routing_candidate(agent) -> AgentRoutingCandidate:
         capabilities=capabilities,
         skills=skills,
     )
-
-
-def build_turn_content(
-    message_text: str, attachments: list[UserAttachment] | None
-) -> str:
-    """Build conversation turn content with optional attachment annotations."""
-    content = message_text or ""
-    if attachments:
-        descriptions = []
-        for att in attachments:
-            size_str = _human_size(att.size_bytes) if att.size_bytes else "unknown size"
-            descriptions.append(f"{att.file_name} ({att.mime_type}, {size_str})")
-        content += f"\n[Attachments: {', '.join(descriptions)}]"
-    return content
-
-
-@dataclass
-class _ResolvedAttachments:
-    attachments: list[UserAttachment]
-    content_summary: dict | None
 
 
 class RoomServices:
@@ -192,9 +170,9 @@ class RoomServices:
     @property
     def s3_service(self):
         if self._s3_service is None:
-            from app_shell.s3_service import s3_service
-
-            self._s3_service = s3_service
+            raise RuntimeError(
+                "RoomServices.bind_s3_service() not called - startup incomplete"
+            )
         return self._s3_service
 
     def bind_facade(self, facade) -> None:
@@ -931,58 +909,10 @@ class RoomServices:
         file_ids: list[str],
         room_id: str,
     ) -> "_ResolvedAttachments | RoomCenterUserMessageResponse":
-        """Resolve file_id list to server-authoritative UserAttachment objects."""
-        if len(file_ids) > MAX_ATTACHMENTS_PER_MESSAGE:
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error=f"Maximum {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message",
-                status_code=400,
-            )
-
-        attachments: list[UserAttachment] = []
-        attachment_reader = getattr(self, "_attachment_metadata_reader", None)
-        for file_id in file_ids:
-            if attachment_reader is None:
-                return RoomCenterUserMessageResponse(
-                    message_id=None,
-                    message=None,
-                    success=False,
-                    error="Attachment resolution unavailable",
-                    status_code=503,
-                )
-            file_meta = await attachment_reader.get_for_room_file(room_id, file_id)
-            if not file_meta:
-                return RoomCenterUserMessageResponse(
-                    message_id=None,
-                    message=None,
-                    success=False,
-                    error=f"File {file_id} not found",
-                    status_code=404,
-                )
-            attachments.append(
-                UserAttachment(
-                    file_id=file_id,
-                    s3_key=file_meta["s3_key"],
-                    mime_type=file_meta["mime_type"],
-                    file_name=file_meta["file_name"],
-                    size_bytes=file_meta["size_bytes"],
-                )
-            )
-
-        content_summary = None
-        if attachments:
-            mime_types = [a.mime_type for a in attachments]
-            content_summary = {
-                "has_images": any(m.startswith("image/") for m in mime_types),
-                "has_files": any(not m.startswith("image/") for m in mime_types),
-                "attachment_count": len(attachments),
-                "mime_types": mime_types,
-            }
-
-        return _ResolvedAttachments(
-            attachments=attachments, content_summary=content_summary
+        return await resolve_room_attachments(
+            file_ids=file_ids,
+            room_id=room_id,
+            attachment_reader=getattr(self, "_attachment_metadata_reader", None),
         )
 
     async def _resolve_and_apply_attachments(
@@ -990,49 +920,11 @@ class RoomServices:
         request: RoomCenterUserMessageRequest,
         user_message: RoomUserMessage,
     ) -> RoomCenterUserMessageResponse | None:
-        """Collect file_ids from both sources, resolve, and apply to message.
-
-        Returns an error response if validation fails, or None on success.
-        """
-        file_ids: list[str] = []
-        seen: set[str] = set()
-
-        if request.attachments:
-            for att in request.attachments:
-                if att.file_id not in seen:
-                    file_ids.append(att.file_id)
-                    seen.add(att.file_id)
-
-        if request.inline_file_ids:
-            for fid in request.inline_file_ids:
-                if fid not in seen:
-                    file_ids.append(fid)
-                    seen.add(fid)
-
-        if user_message.message_content:
-            user_message.message_content.attachments = None
-            user_message.message_content.content_summary = None
-
-        if file_ids:
-            resolved = await self._resolve_attachments(file_ids, request.room_id)
-            if isinstance(resolved, RoomCenterUserMessageResponse):
-                return resolved
-            user_message.message_content.attachments = resolved.attachments
-            user_message.message_content.content_summary = resolved.content_summary
-
-        return None
-
-    FILE_CAPABLE_EXACT = frozenset({"file", "*/*"})
-    FILE_CAPABLE_PREFIXES = frozenset({"image/", "audio/", "video/"})
-    FILE_CAPABLE_MIMES = frozenset(
-        {
-            "application/pdf",
-            "application/octet-stream",
-            "application/zip",
-            "application/x-tar",
-            "application/gzip",
-        }
-    )
+        return await resolve_and_apply_room_attachments(
+            request=request,
+            user_message=user_message,
+            attachment_reader=getattr(self, "_attachment_metadata_reader", None),
+        )
 
     async def _build_message_parts(
         self,
@@ -1040,42 +932,12 @@ class RoomServices:
         attachments: list[UserAttachment] | None,
         agent_card,
     ) -> list[Part]:
-        """Build A2A message parts from text and optional attachments."""
-        parts = [Part(root=TextPart(text=text))]
-
-        if not attachments:
-            return parts
-
-        agent_input_modes_raw = getattr(agent_card, "default_input_modes", None)
-        if agent_input_modes_raw is None:
-            agent_input_modes_raw = getattr(agent_card, "defaultInputModes", None)
-        agent_input_modes = set(agent_input_modes_raw or ["text"])
-
-        supports_files = bool(
-            agent_input_modes & self.FILE_CAPABLE_EXACT
-            or agent_input_modes & self.FILE_CAPABLE_MIMES
-            or any(
-                any(m.startswith(prefix) for prefix in self.FILE_CAPABLE_PREFIXES)
-                for m in agent_input_modes
-            )
+        return await platform_build_message_parts(
+            text=text,
+            attachments=attachments,
+            agent_card=agent_card,
+            object_storage=self.s3_service,
         )
-
-        if supports_files:
-            for att in attachments:
-                presigned_url = await self.s3_service.generate_presigned_url(att.s3_key)
-                parts.append(
-                    Part(
-                        root=FilePart(
-                            file=FileContent(
-                                uri=presigned_url,
-                                mimeType=att.mime_type,
-                                name=att.file_name,
-                            )
-                        )
-                    )
-                )
-
-        return parts
 
     # room user message management
     def parse_agent_mentions(
@@ -3460,59 +3322,13 @@ class RoomServices:
     async def _refresh_artifact_presigned_urls(
         self, messages: list[RoomAgentMessage],
     ) -> None:
-        """Re-sign S3 presigned URLs embedded in agent artifact file parts.
-
-        Scans every artifact part for ``metadata.s3_key`` written during the
-        S3-upload step.  Collects them, batch-generates fresh presigned URLs,
-        and patches each ``file.uri`` in-place so the frontend always receives
-        a valid URL regardless of when the original was created.
-        """
-        s3_service = self.s3_service
-
-        key_refs: list[tuple[object, str]] = []
-        key_filenames: dict[str, str] = {}
-
-        for msg in messages:
-            task = msg.message_content.message_task if msg.message_content else None
-            if not task or not task.artifacts:
-                continue
-            for artifact in task.artifacts:
-                if not artifact.parts:
-                    continue
-                for part in artifact.parts:
-                    root = getattr(part, "root", part)
-                    if getattr(root, "kind", None) != "file":
-                        continue
-                    meta = getattr(root, "metadata", None)
-                    if not meta:
-                        continue
-                    s3_key = meta.get("s3_key") if isinstance(meta, dict) else None
-                    if not s3_key:
-                        continue
-                    file_content = getattr(root, "file", None)
-                    if file_content is None:
-                        continue
-                    key_refs.append((file_content, s3_key))
-                    fname = getattr(file_content, "name", None)
-                    if fname:
-                        key_filenames[s3_key] = fname
-
-        if not key_refs:
-            return
-
-        unique_keys = list({k for _, k in key_refs})
         try:
-            url_map = await s3_service.batch_presigned_urls(
-                unique_keys, filenames=key_filenames,
+            await refresh_artifact_presigned_urls(
+                messages=messages,
+                object_storage=self.s3_service,
             )
         except Exception:
             logger.warning("Failed to refresh artifact presigned URLs")
-            return
-
-        for file_content, s3_key in key_refs:
-            new_url = url_map.get(s3_key)
-            if new_url:
-                file_content.uri = new_url
 
     async def inquiry_agent_messages_by_room_id(
         self, request: RoomCenterAgentMessageRequest
