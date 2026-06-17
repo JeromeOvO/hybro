@@ -54,6 +54,19 @@ class ExternalServiceError(AppError):
         super().__init__(message, code="EXTERNAL_SERVICE", details=error_details)
 
 
+class ObjectStorageError(ExternalServiceError):
+    def __init__(
+        self,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ):
+        super().__init__(
+            message,
+            service="object_storage",
+            details=details,
+        )
+
+
 HybroError = AppError
 
 
@@ -108,6 +121,7 @@ __all__ = [
     "ExternalServiceError",
     "HybroError",
     "NotFoundError",
+    "ObjectStorageError",
     "TransientError",
     "UpstreamError",
     "ValidationError",
