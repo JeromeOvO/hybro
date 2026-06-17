@@ -170,8 +170,8 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 > runtime ports. A2A SDK calls and response coercion live in `a2a_adapter`;
 > room CRUD/message behavior lives in Room; orchestration scheduling lives in
 > Execution; context assembly, legacy turn selection, and context metrics live
-> in Context & Memory; relay queues/liveness live in HubRuntimeBridge; hub
-> publish authorization adapters live in
+> in Context & Memory; relay queues/liveness and legacy push/offline failure
+> handling live in HubRuntimeBridge; hub publish authorization adapters live in
 > HubRuntimeBridge; A2A task-tracking placeholder creation, tracked-send push
 > configuration, failure persistence, terminal response persistence, and HITL
 > reply task persistence live in Execution; object-storage behavior lives in

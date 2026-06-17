@@ -131,19 +131,19 @@ def _make_relay_service(
 
 
 @pytest.mark.asyncio
-async def test_relay_service_uses_injected_offline_failure_port():
+async def test_hub_facade_uses_injected_offline_failure_port_for_legacy_rejections():
     offline_failure_port = MagicMock()
     offline_failure_port.mark_hub_message_failed = AsyncMock()
     svc = _make_relay_service(offline_failure_port=offline_failure_port)
 
-    await svc._fail_offline_message(
-        RelayToHubEvent(
-            type="user_message",
-            room_id="room-1",
-            agent_message_id="agent-message-1",
-            agent_id="agent-1",
-            task_id="task-1",
-        ),
+    await svc._facade._mark_rejected_legacy_event(
+        {
+            "type": "user_message",
+            "room_id": "room-1",
+            "agent_message_id": "agent-message-1",
+            "agent_id": "agent-1",
+            "task_id": "task-1",
+        },
         "Agent is offline",
     )
 

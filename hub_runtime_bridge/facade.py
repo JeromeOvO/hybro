@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -41,6 +42,8 @@ from hub_runtime_bridge.task_ownership import (
     MongoHubTaskOwnershipStore,
 )
 from hub_runtime_bridge.transport.offline_queue import OfflineQueue
+
+legacy_relay_logger = logging.getLogger("app_shell.relay_service")
 
 
 @dataclass(frozen=True)
@@ -579,6 +582,36 @@ class HubFacade:
     async def push_event_to_hub(self, hub_id: str, event: dict) -> bool | None:
         return await self._push_event_dict(hub_id, event)
 
+    async def push_legacy_event_to_hub(
+        self,
+        hub_id: str,
+        event: dict,
+        *,
+        mark_agents_offline: bool = False,
+    ) -> bool:
+        was_online = await self.is_hub_online(hub_id)
+        if (
+            not was_online
+            and mark_agents_offline
+            and self.deps.agent_registry_writer is not None
+        ):
+            await self.deps.agent_registry_writer.mark_hub_agents_offline(hub_id)
+
+        result = await self.push_event_to_hub(hub_id, event)
+        if result is False:
+            legacy_relay_logger.warning(
+                "Hub %s push rejected: redis_alive=False event_type=%s "
+                "agent_message_id=%s room_id=%s local_agent_id=%s",
+                hub_id,
+                event.get("type"),
+                event.get("agent_message_id"),
+                event.get("room_id"),
+                event.get("local_agent_id"),
+            )
+            await self._mark_rejected_legacy_event(event, "Agent is offline")
+            return False
+        return bool(result) and was_online
+
     async def _push_event_dict(self, hub_id: str, event: dict) -> bool:
         if self.deps.streams:
             alive = await self.deps.streams.is_hub_alive(hub_id)
@@ -648,6 +681,23 @@ class HubFacade:
                 agent_id=event.get("agent_id", ""),
                 task_id=event.get("task_id") or event.get("agent_message_id", ""),
                 error_text="Hub agent offline queue overflowed before delivery",
+            )
+        )
+
+    async def _mark_rejected_legacy_event(
+        self,
+        event: dict,
+        error_text: str,
+    ) -> None:
+        if self.deps.offline_failure_port is None:
+            return
+        await self.deps.offline_failure_port.mark_hub_message_failed(
+            OfflineHubFailureCommand(
+                room_id=event.get("room_id", ""),
+                agent_message_id=event.get("agent_message_id", ""),
+                agent_id=event.get("agent_id", ""),
+                task_id=event.get("task_id"),
+                error_text=error_text,
             )
         )
 

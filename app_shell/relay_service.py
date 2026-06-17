@@ -18,7 +18,6 @@ from common.dto import (
     HubDispatchCommand,
     HubDispatchResult,
     HubReplyCommand,
-    OfflineHubFailureCommand,
 )
 from common.utils.logger import get_logger
 from hub_runtime_bridge.adapters.legacy_lifecycle import LegacyHubLifecycleAdapter
@@ -268,38 +267,10 @@ class RelayService:
         )
 
     async def push_to_hub(self, hub_id: str, event: RelayToHubEvent) -> bool:
-        was_online = await self._facade.is_hub_online(hub_id)
-        if not was_online and self._agent_registry_writer is not None:
-            await self.mark_hub_agents_offline(hub_id)
-        result = await self._facade.push_event_to_hub(
-            hub_id, event.model_dump(mode="json")
-        )
-        if result is False:
-            logger.warning(
-                "Hub %s push rejected: redis_alive=False event_type=%s "
-                "agent_message_id=%s room_id=%s local_agent_id=%s",
-                hub_id,
-                event.type,
-                event.agent_message_id,
-                event.room_id,
-                event.local_agent_id,
-            )
-            await self._fail_offline_message(event, "Agent is offline")
-            return False
-        return bool(result) and was_online
-
-    async def _fail_offline_message(
-        self, event: RelayToHubEvent, error_text: str | None = None
-    ) -> None:
-        await self._offline_failure_port.mark_hub_message_failed(
-            OfflineHubFailureCommand(
-                room_id=event.room_id,
-                agent_message_id=event.agent_message_id,
-                agent_id=event.agent_id,
-                task_id=event.task_id,
-                error_text=error_text
-                or "Hub agent message expired (offline queue overflow)",
-            )
+        return await self._facade.push_legacy_event_to_hub(
+            hub_id,
+            event.model_dump(mode="json"),
+            mark_agents_offline=self._agent_registry_writer is not None,
         )
 
     async def process_publish(
