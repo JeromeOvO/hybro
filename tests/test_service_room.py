@@ -333,6 +333,7 @@ async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
     svc = object.__new__(RoomServices)
     svc._store = MagicMock()
     svc._store.get_active_runs_by_room_id = AsyncMock(return_value=[])
+    svc._active_run_reader = AsyncMock(return_value=[])
     svc._bound = False
     svc._facade = None
     facade = AsyncMock()
@@ -407,6 +408,116 @@ async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
     facade.update_room.assert_any_await("r1", {"room_name": "Renamed"})
     facade.update_room.assert_any_await("r1", {"extend_info": {"x": 1}})
     facade.delete_room.assert_awaited_once_with("r1", "owner")
+
+
+@pytest.mark.asyncio
+async def test_room_services_active_runs_use_bound_reader_and_room_facade():
+    svc = object.__new__(RoomServices)
+    svc._store = MagicMock()
+    svc._store.get_room_by_room_id = AsyncMock(
+        side_effect=AssertionError("legacy room store should not be used")
+    )
+    svc._store.get_room_user_message_by_message_id = AsyncMock(
+        side_effect=AssertionError("legacy message store should not be used")
+    )
+    svc._bound = False
+    svc._facade = None
+    active_run_reader = AsyncMock(
+        return_value=[
+            {
+                "run_id": "run-1",
+                "state": "running",
+                "trigger_message_id": "other-message",
+                "agent_id": "agent-1",
+                "seq": 1,
+                "updated_at": None,
+            }
+        ]
+    )
+    facade = AsyncMock()
+    facade.get_room.return_value = RoomInfo(
+        room_id="r1",
+        room_name="Room",
+        owner_id="owner",
+        owner_name="Owner",
+    )
+    facade.get_turn_completion_kind.return_value = "synthesis"
+
+    svc.bind_facade(facade)
+    svc.bind_active_run_reader(active_run_reader)
+
+    response = await svc.inquiry_active_runs(
+        RoomCenterRoomSettingRequest(
+            room_id="r1",
+            trigger_message_id="trigger-1",
+        )
+    )
+
+    assert response.success is True
+    assert response.room_id == "r1"
+    assert response.active_runs[0].run_id == "run-1"
+    assert response.turn_completion_kind == "synthesis"
+    facade.get_room.assert_awaited_once_with("r1")
+    active_run_reader.assert_awaited_once_with("r1")
+    facade.get_turn_completion_kind.assert_awaited_once_with("trigger-1")
+    svc._store.get_room_by_room_id.assert_not_awaited()
+    svc._store.get_room_user_message_by_message_id.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_room_services_active_runs_reader_is_required_after_facade_bind():
+    svc = object.__new__(RoomServices)
+    svc._store = MagicMock()
+    svc._active_run_reader = None
+    svc._bound = False
+    svc._facade = None
+    facade = AsyncMock()
+    facade.get_room.return_value = RoomInfo(
+        room_id="r1",
+        room_name="Room",
+        owner_id="owner",
+        owner_name="Owner",
+    )
+    svc.bind_facade(facade)
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"RoomServices\.bind_active_run_reader\(\) not called - startup incomplete",
+    ):
+        await svc.inquiry_active_runs(RoomCenterRoomSettingRequest(room_id="r1"))
+
+
+def test_room_services_migrated_crud_methods_do_not_keep_legacy_store_branches():
+    forbidden_by_method = {
+        "inquiry_room_setting": {"get_room_by_room_id", "update_room_by_room_id"},
+        "inquiry_active_runs": {
+            "get_room_by_room_id",
+            "get_room_user_message_by_message_id",
+        },
+        "inquiry_rooms_by_room_owner_id": {"get_rooms_by_room_owner_id"},
+        "update_room_agent_set": {"get_room_by_room_id", "update_room_by_room_id"},
+        "update_room_name": {"get_room_by_room_id", "update_room_by_room_id"},
+        "update_room_extend_info": {"get_room_by_room_id", "update_room_by_room_id"},
+    }
+    source = _ROOT / "app_shell" / "room_runtime.py"
+    tree = ast.parse(source.read_text())
+    methods = {
+        item.name: item
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "RoomServices"
+        for item in node.body
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    violations: list[str] = []
+    for method_name, forbidden_attrs in forbidden_by_method.items():
+        method = methods[method_name]
+        for node in ast.walk(method):
+            if isinstance(node, ast.Attribute) and node.attr in forbidden_attrs:
+                violations.append(f"{method_name}:{node.lineno}: {node.attr}")
+
+    assert not violations, "Migrated methods still use legacy store branches:\n" + "\n".join(
+        violations
+    )
 
 
 @pytest.mark.asyncio

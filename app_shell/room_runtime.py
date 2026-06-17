@@ -23,6 +23,7 @@ from common.dto import (
     ParsedUserMessageRequest,
     RoomInfo,
 )
+from common.protocols import RoomActiveRunReader
 from common.types import (
     FileContent,
     FilePart,
@@ -175,7 +176,7 @@ class RoomServices:
         self._facade = None
         self._bound = False
         self._context_memory_manager = None
-        self._active_run_reader: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None
+        self._active_run_reader: RoomActiveRunReader | None = None
         self._hitl_pending_checker: Callable[[str], Awaitable[list[Any]]] | None = None
         self._processing_status_emitter: Callable[..., Awaitable[dict[str, Any] | None]] | None = None
         self._attachment_metadata_reader = None
@@ -213,7 +214,7 @@ class RoomServices:
 
     def bind_active_run_reader(
         self,
-        reader: Callable[[str], Awaitable[list[dict[str, Any]]]],
+        reader: RoomActiveRunReader,
     ) -> None:
         self._active_run_reader = reader
 
@@ -249,10 +250,9 @@ class RoomServices:
     async def _read_active_runs_for_room(self, room_id: str) -> list[dict[str, Any]]:
         reader = getattr(self, "_active_run_reader", None)
         if reader is None:
-            active_runs_raw = await self._store.get_active_runs_by_room_id(
-                room_id
+            raise RuntimeError(
+                "RoomServices.bind_active_run_reader() not called - startup incomplete"
             )
-            return self._active_run_payloads_from_raw(active_runs_raw)
         try:
             return await reader(room_id)
         except Exception as e:
@@ -638,59 +638,11 @@ class RoomServices:
             active_runs=await self._read_active_runs_for_room(room_id),
         )
 
-        room = await self._store.get_room_by_room_id(room_id)
-        if room is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room not found",
-                status_code=404,
-            )
-        else:
-            # Ensure room_agent_set is always returned in canonical {agent_id: agent_name} form
-            normalized_agent_set = self._normalize_room_agent_set(room.room_agent_set)
-            needs_write = normalized_agent_set != (room.room_agent_set or {})
-            if needs_write:
-                room.room_agent_set = normalized_agent_set
-
-            # Backfill canonical provenance for legacy rooms
-            if room.membership_origin is None:
-                if room.applied_from_group:
-                    room.membership_origin = MembershipOrigin.SAVED_GROUP
-                    room.membership_origin_status = MembershipOriginStatus.SEEDED_NEVER_EDITED
-                    room.source_group_id = room.applied_from_group
-                elif room.room_agent_set:
-                    room.membership_origin = MembershipOrigin.MANUAL
-                    room.membership_origin_status = MembershipOriginStatus.MANUAL
-                else:
-                    room.membership_origin = MembershipOrigin.MANUAL
-                    room.membership_origin_status = MembershipOriginStatus.MANUAL
-                needs_write = True
-
-            if needs_write:
-                await self._store.update_room_by_room_id(room_id, room)
-
-            resolved_agents, room_default_status = await self._resolve_room_agent_refs(
-                room.room_agent_set, viewer_user_id=request.requesting_user_id
-            )
-            active_runs = await self._read_active_runs_for_room(room.room_id)
-
-            return RoomCenterRoomSettingResponse(
-                room_id=room.room_id,
-                room=room,
-                resolved_agents=resolved_agents,
-                room_default_status=room_default_status,
-                active_runs=active_runs,
-                success=True,
-                error=None,
-                status_code=200,
-            )
-
     async def inquiry_active_runs(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterActiveRunsResponse:
         """Return non-terminal runs for a room (same run shape as inquiry_room_setting)."""
+        facade = self._require_facade()
         if request.room_id is None:
             return RoomCenterActiveRunsResponse(
                 room_id=None,
@@ -701,8 +653,8 @@ class RoomServices:
             )
 
         room_id = request.room_id
-        room = await self._store.get_room_by_room_id(room_id)
-        if room is None:
+        info = await facade.get_room(room_id)
+        if info is None:
             return RoomCenterActiveRunsResponse(
                 room_id=None,
                 active_runs=None,
@@ -711,7 +663,7 @@ class RoomServices:
                 status_code=404,
             )
 
-        active_runs = await self._read_active_runs_for_room(room.room_id)
+        active_runs = await self._read_active_runs_for_room(info.room_id)
 
         turn_completion_kind: str | None = None
         trigger_msg_id = request.trigger_message_id
@@ -719,20 +671,14 @@ class RoomServices:
             r.get("trigger_message_id") == trigger_msg_id for r in active_runs
         ):
             try:
-                user_msg = (
-                    await self._store.get_room_user_message_by_message_id(
-                        trigger_msg_id
-                    )
+                turn_completion_kind = await facade.get_turn_completion_kind(
+                    trigger_msg_id
                 )
-                if user_msg and isinstance(user_msg.extend_info, dict):
-                    kind = user_msg.extend_info.get("turn_completion_kind")
-                    if kind in ("synthesis", "deterministic"):
-                        turn_completion_kind = kind
             except Exception:
                 pass
 
         return RoomCenterActiveRunsResponse(
-            room_id=room.room_id,
+            room_id=info.room_id,
             active_runs=active_runs,
             turn_completion_kind=turn_completion_kind,
             success=True,
@@ -759,11 +705,6 @@ class RoomServices:
             success=True,
             error=None,
             status_code=200,
-        )
-
-        rooms = await self._store.get_rooms_by_room_owner_id(room_owner_id)
-        return RoomCenterRoomSettingResponse(
-            room_list=rooms, success=True, error=None, status_code=200
         )
 
     async def update_room_agent_set(
@@ -802,82 +743,6 @@ class RoomServices:
             return self._room_error_response(room_id=room_id, error=str(exc))
         return self._room_setting_response_from_info(info)
 
-        room = await self._store.get_room_by_room_id(room_id)
-        if room is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room not found",
-                status_code=404,
-            )
-
-        has_membership_input = (
-            request.membership_seed_input is not None
-            or request.room_agent_set is not None
-        )
-        if not has_membership_input:
-            return RoomCenterRoomSettingResponse(
-                room_id=None, room=None, success=False,
-                error="Room agent set or canonical membership input is required",
-                status_code=400,
-            )
-
-        result = await self._resolve_membership_input(request, existing_room=room)
-        if isinstance(result, RoomCenterRoomSettingResponse):
-            return result
-        new_agent_set, origin, origin_status, source_group_id, source_group_name = result
-
-        # Validate access to NEW agents
-        if request.requesting_user_id:
-            existing_ids = set(room.room_agent_set.keys()) if room.room_agent_set else set()
-            new_ids = set(new_agent_set.keys()) - existing_ids
-            if new_ids:
-                inaccessible = await self._validate_agents_access(
-                    list(new_ids), request.requesting_user_id
-                )
-                if inaccessible:
-                    return RoomCenterRoomSettingResponse(
-                        room_id=room_id, room=None, success=False,
-                        error=f"Access denied to private agents: {', '.join(inaccessible)}",
-                        status_code=403,
-                    )
-
-        room.room_agent_set = new_agent_set
-
-        # Update provenance from the resolved result.
-        if request.membership_seed_input is not None or request.applied_from_group:
-            room.membership_origin = origin
-            room.membership_origin_status = origin_status
-            room.source_group_id = source_group_id
-            room.source_group_name = source_group_name
-        else:
-            # Legacy manual edit without applied_from_group
-            if room.membership_origin in (MembershipOrigin.SAVED_GROUP, MembershipOrigin.ALL_CURRENT_AGENTS):
-                room.membership_origin_status = MembershipOriginStatus.SEEDED_EDITED
-            else:
-                room.membership_origin = MembershipOrigin.MANUAL
-                room.membership_origin_status = MembershipOriginStatus.MANUAL
-        success = await self._store.update_room_by_room_id(room_id, room)
-        if success:
-            resolved_agents, room_default_status = await self._resolve_room_agent_refs(
-                room.room_agent_set, viewer_user_id=request.requesting_user_id
-            )
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id, room=room,
-                resolved_agents=resolved_agents,
-                room_default_status=room_default_status,
-                success=True, error=None, status_code=200,
-            )
-        else:
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id,
-                room=None,
-                success=False,
-                error="Failed to update room agent set",
-                status_code=500,
-            )
-
     async def update_room_name(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
@@ -912,40 +777,6 @@ class RoomServices:
             )
         return self._room_setting_response_from_info(info)
 
-        room = await self._store.get_room_by_room_id(room_id)
-        if room is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room not found",
-                status_code=404,
-            )
-
-        if request.room_name is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room name is required",
-                status_code=400,
-            )
-
-        room.room_name = request.room_name
-        success = await self._store.update_room_by_room_id(room_id, room)
-        if success:
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id, room=room, success=True, error=None, status_code=200
-            )
-        else:
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id,
-                room=None,
-                success=False,
-                error="Failed to update room name",
-                status_code=500,
-            )
-
     async def update_room_extend_info(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
@@ -979,40 +810,6 @@ class RoomServices:
                 status_code=404,
             )
         return self._room_setting_response_from_info(info)
-
-        room = await self._store.get_room_by_room_id(room_id)
-        if room is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room not found",
-                status_code=404,
-            )
-
-        if request.extend_info is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Extend info is required",
-                status_code=400,
-            )
-
-        room.extend_info = request.extend_info
-        success = await self._store.update_room_by_room_id(room_id, room)
-        if success:
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id, room=room, success=True, error=None, status_code=200
-            )
-        else:
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id,
-                room=None,
-                success=False,
-                error="Failed to update room extend info",
-                status_code=500,
-            )
 
     async def delete_room_by_room_id(
         self, request: RoomCenterRoomSettingRequest

@@ -273,6 +273,16 @@ class RoomFacade:
             if message_id in by_id
         ]
 
+    async def get_turn_completion_kind(self, message_id: str) -> str | None:
+        doc = await self._message_repository.get_by_id(message_id)
+        if not isinstance(doc, dict):
+            return None
+        extend_info = doc.get("extend_info")
+        if not isinstance(extend_info, dict):
+            return None
+        kind = extend_info.get("turn_completion_kind")
+        return kind if kind in {"synthesis", "deterministic"} else None
+
     async def get_message_thread(
         self, parent_message_id: str
     ) -> list[RoomMessageInfo]:

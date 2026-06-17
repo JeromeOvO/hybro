@@ -10,6 +10,7 @@ def test_room_facade_exposes_hub_publish_support_protocol_methods() -> None:
     assert inspect.iscoroutinefunction(RoomFacade.authorize_hub_publish)
     assert inspect.iscoroutinefunction(RoomFacade.get_hub_publish_lineage)
     assert inspect.iscoroutinefunction(RoomFacade.is_message_cancelled)
+    assert inspect.iscoroutinefunction(RoomFacade.get_turn_completion_kind)
 
 
 async def test_room_facade_cancellation_reader_uses_repository_cancel_store() -> None:
