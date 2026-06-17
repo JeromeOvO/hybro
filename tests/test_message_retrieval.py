@@ -35,7 +35,9 @@ def _make_msg_with_attachment(s3_key="uploads/r/f1/photo.png"):
 class TestMessageRetrieval:
     async def test_presigned_url_injected(self, room_runtime):
         msg = _make_msg_with_attachment()
-        room_runtime._store.get_room_user_messages_by_room_id = AsyncMock(return_value=[msg])
+        facade = MagicMock()
+        facade.get_user_messages_for_room = AsyncMock(return_value=[msg])
+        room_runtime.bind_facade(facade)
 
         with patch("app_shell.s3_service.s3_service") as mock_s3:
             mock_s3.batch_presigned_urls = AsyncMock(return_value={"uploads/r/f1/photo.png": "https://presigned"})
@@ -51,7 +53,9 @@ class TestMessageRetrieval:
             room_id="room1", message_id="msg1", message_type="user",
             message_content=MessageContent(message_text="hi"),
         )
-        room_runtime._store.get_room_user_messages_by_room_id = AsyncMock(return_value=[msg])
+        facade = MagicMock()
+        facade.get_user_messages_for_room = AsyncMock(return_value=[msg])
+        room_runtime.bind_facade(facade)
 
         result = await room_runtime.inquiry_user_messages_by_room_id(
             RoomCenterUserMessageRequest(room_id="room1")

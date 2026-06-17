@@ -19,6 +19,7 @@ import pytest
 from app_shell.room_runtime import RoomServices
 from common.dto import RoomInfo
 from models.request import RoomCenterRoomSettingRequest
+from models.room import MessageContent, Room, RoomUserMessage
 
 
 @pytest.fixture
@@ -516,6 +517,101 @@ def test_room_services_migrated_crud_methods_do_not_keep_legacy_store_branches()
                 violations.append(f"{method_name}:{node.lineno}: {node.attr}")
 
     assert not violations, "Migrated methods still use legacy store branches:\n" + "\n".join(
+        violations
+    )
+
+
+@pytest.mark.asyncio
+async def test_room_services_persist_user_message_delegates_to_room_facade():
+    svc = object.__new__(RoomServices)
+    svc._store = MagicMock()
+    svc._store.add_room_user_message = AsyncMock(
+        side_effect=AssertionError("legacy message store should not be used")
+    )
+    svc._bound = False
+    svc._facade = None
+    facade = AsyncMock()
+    facade.persist_user_message.return_value = True
+    svc.bind_facade(facade)
+    user_message = RoomUserMessage(
+        room_id="r1",
+        message_id="u1",
+        message_content=MessageContent(message_text="hello"),
+    )
+
+    assert await svc._persist_user_message(user_message) is True
+    facade.persist_user_message.assert_awaited_once_with(user_message)
+    svc._store.add_room_user_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_room_services_quote_materialization_delegates_to_room_facade():
+    svc = object.__new__(RoomServices)
+    svc._bound = False
+    svc._facade = None
+    facade = AsyncMock()
+    facade.materialize_quote.return_value = None
+    svc.bind_facade(facade)
+    room = Room(
+        room_id="r1",
+        room_name="Room",
+        room_owner_id="owner",
+        room_owner_name="Owner",
+    )
+    user_message = RoomUserMessage(
+        room_id="r1",
+        message_id="u1",
+        message_content=MessageContent(message_text="hello"),
+    )
+    request = MagicMock()
+
+    assert await svc._materialize_room_quote(room, request, user_message) is None
+    facade.materialize_quote.assert_awaited_once_with(
+        room=room,
+        request=request,
+        user_message=user_message,
+    )
+
+
+def test_room_services_migrated_message_methods_do_not_call_legacy_store():
+    forbidden_by_method = {
+        "_persist_user_message": {"add_room_user_message"},
+        "update_agent_message_by_message_id": {
+            "get_room_agent_message_by_message_id",
+            "update_room_agent_message_by_message_id",
+        },
+        "inquiry_user_messages_by_room_id": {"get_room_user_messages_by_room_id"},
+        "inquiry_agent_messages_by_room_id": {
+            "get_room_agent_messages_by_room_id",
+            "update_room_agent_message_by_message_id",
+        },
+        "inquiry_agent_message_by_message_id": {
+            "get_room_agent_message_by_message_id",
+        },
+        "inquiry_user_message_by_message_id": {
+            "get_room_user_message_by_message_id",
+        },
+        "inquiry_agent_messages_by_related_message_id": {
+            "get_room_agent_messages_by_related_message_id",
+        },
+    }
+    source = _ROOT / "app_shell" / "room_runtime.py"
+    tree = ast.parse(source.read_text())
+    methods = {
+        item.name: item
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "RoomServices"
+        for item in node.body
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    violations: list[str] = []
+    for method_name, forbidden_attrs in forbidden_by_method.items():
+        method = methods[method_name]
+        for node in ast.walk(method):
+            if isinstance(node, ast.Attribute) and node.attr in forbidden_attrs:
+                violations.append(f"{method_name}:{node.lineno}: {node.attr}")
+
+    assert not violations, "Migrated message methods still use legacy store:\n" + "\n".join(
         violations
     )
 

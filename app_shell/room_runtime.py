@@ -2,7 +2,6 @@ import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import timedelta
 from enum import Enum
 from typing import Any
 from uuid import uuid4
@@ -14,7 +13,7 @@ from app_shell.delivery_runtime import sse_manager
 from app_shell.memory_service import room_memory_service
 from app_shell.runtime_store import UNBOUND_RUNTIME_STORE
 from app_shell.task_service import task_service
-from common.a2a_constants import SSEProcessingStatus, is_terminal_state
+from common.a2a_constants import SSEProcessingStatus
 from common.dto import (
     AgentRoutingCandidate,
     CreateRoomRequest,
@@ -51,7 +50,6 @@ from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import AgentStatus
 from models.file_upload import MAX_ATTACHMENTS_PER_MESSAGE
 from models.memory import MemoryContent, RoomMemory
-from models.quote import QuoteSourceKind
 from models.request import (
     AgentCenterRequest,
     RoomCenterAgentMessageRequest,
@@ -2154,25 +2152,16 @@ class RoomServices:
 
         if not await self._persist_user_message(user_message):
             if getattr(user_message, "quote_id", None):
-                quote_writer = getattr(self, "_quote_writer", None)
                 quote_id = user_message.quote_id
-                delete_by_id = getattr(quote_writer, "delete_by_id", None)
-                if callable(delete_by_id):
-                    try:
-                        await delete_by_id(quote_id)
-                    except Exception:
-                        logger.warning(
-                            "Failed to remove quoted snippet %s for room %s after "
-                            "message persistence failure",
-                            quote_id,
-                            request.room_id,
-                            exc_info=True,
-                        )
-                else:
+                try:
+                    await self._require_facade().delete_room_quote(quote_id)
+                except Exception:
                     logger.warning(
-                        "Quote writer missing delete_by_id for room %s, quote %s",
-                        request.room_id,
+                        "Failed to remove quoted snippet %s for room %s after "
+                        "message persistence failure",
                         quote_id,
+                        request.room_id,
+                        exc_info=True,
                     )
             return RoomCenterUserMessageResponse(
                 message_id=None,
@@ -2483,114 +2472,16 @@ class RoomServices:
         request: RoomCenterUserMessageRequest,
         user_message: RoomUserMessage,
     ) -> RoomCenterUserMessageResponse | None:
-        """Persist ``QuotedSnippet`` when ``user_message.quote`` is set; dual-write extend_info."""
-        payload = user_message.quote
-        if payload is None:
-            return None
-
-        quote_writer = getattr(self, "_quote_writer", None)
-        text = payload.text.strip()
-        if not text:
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="Quote text is required",
-                status_code=400,
-            )
-
-        source_kind = (
-            payload.source_kind.value
-            if hasattr(payload.source_kind, "value")
-            else payload.source_kind
+        facade = self._require_facade()
+        return await facade.materialize_quote(
+            room=room,
+            request=request,
+            user_message=user_message,
         )
-        source_kind_value = str(source_kind)
-        if source_kind_value not in {"unknown", QuoteSourceKind.UNKNOWN.value, ""}:
-            source_message = None
-            expected_message_type = {
-                "user_turn": "user",
-                "agent": "agent",
-                "synthesis": "agent",
-            }.get(source_kind_value.lower())
-            if self._facade is not None:
-                source_message = await self._facade.get_message(
-                    payload.source_message_id
-                )
-                if source_message is None or source_message.room_id != room.room_id:
-                    return RoomCenterUserMessageResponse(
-                        message_id=None,
-                        message=None,
-                        success=False,
-                        error="Invalid quote source",
-                        status_code=400,
-                    )
-            else:
-                logger.warning(
-                    "Quote source validation skipped for message %s because no room facade "
-                    "is available.",
-                    payload.source_message_id,
-                )
-            if (
-                expected_message_type is not None
-                and source_message is not None
-                and source_message.message_type != expected_message_type
-            ):
-                return RoomCenterUserMessageResponse(
-                    message_id=None,
-                    message=None,
-                    success=False,
-                    error="Invalid quote source type",
-                    status_code=400,
-                )
-
-        if quote_writer is None:
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="Could not save quoted context. Try again.",
-                status_code=503,
-            )
-
-        try:
-            from models.quote import QuotedSnippet
-
-            snippet = QuotedSnippet(
-                room_id=room.room_id,
-                created_by_user_id=request.user_id or user_message.user_id or "",
-                text=text,
-                source_message_id=payload.source_message_id,
-                source_kind=str(source_kind),
-                source_agent_id=payload.source_agent_id,
-                sender_display_name=payload.sender_display_name,
-            )
-            qid = await quote_writer.insert(snippet)
-        except Exception as e:
-            logger.exception("Quote snippet creation failed: %s", e)
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="Could not save quoted context. Try again.",
-                status_code=500,
-            )
-
-        if not isinstance(qid, str):
-            qid = str(qid)
-
-        user_message.quote_id = qid
-        ei = dict(user_message.extend_info or {})
-        ei["quoted_text"] = text
-        if payload.sender_display_name:
-            ei["quoted_sender_name"] = payload.sender_display_name
-        ei["quote_id"] = qid
-        user_message.extend_info = ei
-        user_message.quote = None
-        return None
 
     async def _persist_user_message(self, user_message: RoomUserMessage) -> bool:
         """Persist user message to the database."""
-        return await self._store.add_room_user_message(user_message)
+        return await self._require_facade().persist_user_message(user_message)
 
     async def _send_processing_status(self, room_id: str, message_id: str, client_request_id: str | None = None) -> None:
         """Notify client that processing has started.
@@ -3513,31 +3404,9 @@ class RoomServices:
                 status_code=400,
             )
 
-        # Preserve existing task metadata if incoming message omits it.
-        if (
-            message.message_content
-            and message.message_content.message_task
-            and message.message_content.message_task.metadata is None
-        ):
-            existing_message = (
-                await self._store.get_room_agent_message_by_message_id(
-                    message_id
-                )
-            )
-            if (
-                existing_message
-                and existing_message.message_content
-                and existing_message.message_content.message_task
-                and existing_message.message_content.message_task.metadata is not None
-            ):
-                message.message_content.message_task.metadata = (
-                    existing_message.message_content.message_task.metadata
-                )
-
-        update_message_success = (
-            await self._store.update_room_agent_message_by_message_id(
-                message_id, message
-            )
+        update_message_success = await self._require_facade().update_agent_message(
+            message_id,
+            message,
         )
         if update_message_success:
             return RoomCenterAgentMessageResponse(
@@ -3563,9 +3432,7 @@ class RoomServices:
             )
 
         room_id = request.room_id
-        messages = await self._store.get_room_user_messages_by_room_id(
-            room_id
-        )
+        messages = await self._require_facade().get_user_messages_for_room(room_id)
 
         # Inject presigned URLs for attachments
         s3_keys = []
@@ -3659,108 +3526,7 @@ class RoomServices:
             )
 
         room_id = request.room_id
-        messages = await self._store.get_room_agent_messages_by_room_id(
-            room_id
-        )
-
-        # Sync task status for non-terminal tasks
-        # This handles cases where SSE updates were missed or task state changed in background
-        # Also auto-fails stale tasks that have no recovery path (e.g., server restarted mid-task)
-
-        STALE_TASK_THRESHOLD = timedelta(minutes=10)
-
-        def _is_task_stale(msg: RoomAgentMessage) -> bool:
-            """Check if a task's last update is older than the staleness threshold."""
-            ts = msg.task_updated_at or msg.task_created_at
-            if ts is None:
-                return True  # No timestamp at all => treat as stale
-            return (utcnow() - ensure_utc(ts)) > STALE_TASK_THRESHOLD
-
-        def _mark_msg_as_failed(msg: RoomAgentMessage, error_text: str) -> None:
-            """Set the task on a message to failed state in-place."""
-            task = msg.message_content.message_task if msg.message_content else None
-            if task:
-                task.status = TaskStatus(
-                    state=TaskState.failed,
-                    message=Message(
-                        message_id=uuid4().hex,
-                        role=Role.AGENT,
-                        parts=[Part(root=TextPart(text=error_text))],
-                    ),
-                )
-            msg.task_updated_at = utcnow()
-
-        for msg in messages:
-            if not (
-                msg.message_content
-                and msg.message_content.message_task
-            ):
-                continue
-
-            current_state = msg.message_content.message_task.status.state
-            if is_terminal_state(current_state):
-                continue
-
-            # --- Case 1: Task WITHOUT task tracking (streaming-only) ---
-            # Only auto-fail non-tracked tasks in "working" state, which means
-            # the streaming connection died mid-stream (e.g., server restart).
-            #
-            # Non-tracked tasks in "submitted" state are NOT touched here —
-            # they are likely queued pipeline steps waiting for earlier steps
-            # to complete.  Genuinely orphaned submitted tasks are cleaned up
-            # by the background StaleTaskChecker instead, which avoids
-            # killing active pipeline steps on every message fetch.
-            if not msg.has_task_tracking:
-                if current_state == TaskState.working and _is_task_stale(msg):
-                    logger.info(
-                        "Auto-failing stale non-tracked task for msg %s (state: %s)",
-                        msg.message_id,
-                        current_state,
-                    )
-                    _mark_msg_as_failed(
-                        msg,
-                        "Task did not complete — the connection was lost, "
-                        "possibly due to a server restart.",
-                    )
-                    try:
-                        await self._store.update_room_agent_message_by_message_id(
-                            msg.message_id, msg
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to persist auto-fail for non-tracked message %s: %s",
-                            msg.message_id,
-                            e,
-                        )
-                continue
-
-            # --- Case 2: Task WITH task tracking ---
-            # Active task tracking is stored on room_agent_messages. If webhook
-            # updates stop arriving and the message remains non-terminal past the
-            # threshold, mark it failed so stale UI placeholders clear.
-            if _is_task_stale(msg):
-                logger.info(
-                    "Auto-failing stale tracked task for msg %s "
-                    "(state: %s, no task progress received)",
-                    msg.message_id,
-                    current_state,
-                )
-                _mark_msg_as_failed(
-                    msg,
-                    "Task did not complete — no progress was received within "
-                    "the expected timeframe. This may have been caused by "
-                    "a server restart or agent failure.",
-                )
-                try:
-                    await self._store.update_room_agent_message_by_message_id(
-                        msg.message_id, msg
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to persist auto-fail for tracked message %s: %s",
-                        msg.message_id,
-                        e,
-                    )
+        messages = await self._require_facade().get_agent_messages_for_room(room_id)
 
         await self._refresh_artifact_presigned_urls(messages)
 
@@ -3780,9 +3546,7 @@ class RoomServices:
             )
 
         message_id = request.message_id
-        message = await self._store.get_room_agent_message_by_message_id(
-            message_id
-        )
+        message = await self._require_facade().get_agent_message_model(message_id)
         if message:
             await self._refresh_artifact_presigned_urls([message])
         return RoomCenterAgentMessageResponse(
@@ -3801,9 +3565,7 @@ class RoomServices:
             )
 
         message_id = request.message_id
-        message = await self._store.get_room_user_message_by_message_id(
-            message_id
-        )
+        message = await self._require_facade().get_user_message_model(message_id)
         return RoomCenterUserMessageResponse(
             message=message, success=True, error=None, status_code=200
         )
@@ -3820,10 +3582,8 @@ class RoomServices:
             )
 
         related_message_id = request.related_message_id
-        messages = (
-            await self._store.get_room_agent_messages_by_related_message_id(
-                related_message_id
-            )
+        messages = await self._require_facade().get_agent_messages_by_related_message_id(
+            related_message_id
         )
         return RoomCenterAgentMessageResponse(
             message_list=messages, success=True, error=None, status_code=200
