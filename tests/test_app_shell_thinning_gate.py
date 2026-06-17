@@ -23,7 +23,7 @@ EXPECTED_APP_SHELL_BASELINE = {
     "app_shell/a2a_runtime.py": {"lines": 1145, "public_business_methods": 15},
     "app_shell/relay_service.py": {"lines": 862, "public_business_methods": 27},
     "app_shell/context_assembly_service.py": {
-        "lines": 246,
+        "lines": 164,
         "public_business_methods": 4,
     },
     "app_shell/repository_store.py": {"lines": 759, "public_business_methods": 93},

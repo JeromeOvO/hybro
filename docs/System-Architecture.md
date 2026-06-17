@@ -290,6 +290,9 @@ context assembly. `app_shell.context_assembly_service` and
 `app_shell.memory_search_service` remain compatibility shims for tests and
 legacy callers; production `RoomServices` and `RoomMessageCenter` use the
 injected context-memory protocol instead of importing those app-shell singletons.
+Legacy turn-selection and context metric logging helpers live in
+`context_memory.legacy_assembly`, leaving the app-shell context assembly shim to
+convert result shapes and expose the legacy truncation counter.
 `app_shell.compaction_service` and `app_shell.memory_service` are still bound to
 the facade during startup while their compatibility surfaces remain in use.
 
