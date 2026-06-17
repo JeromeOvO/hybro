@@ -370,6 +370,13 @@ Hub relay responsibilities:
 - Accept published hub agent responses.
 - Journal internal responses and replay them if needed.
 - Maintain task ownership leases for multi-worker safety.
+- Own legacy hub publish authorization and cancellation-reader adapters used by
+  relay publish processing; `app_shell.relay_service` wires these adapters into
+  `HubFacade` instead of querying room/agent message state directly.
+- Own legacy relay lifecycle adapter behavior for hub registration,
+  owner/room authorization, heartbeat validation, hub status aggregation, and
+  disconnect bookkeeping. The app-shell relay service keeps compatibility
+  method names and delegates these operations to HubRuntimeBridge adapters.
 
 When Redis Streams are available, relay events use streams for durable-ish hub
 event delivery. Without streams, the facade falls back to in-memory/offline

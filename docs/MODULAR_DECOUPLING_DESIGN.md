@@ -2330,6 +2330,7 @@ class AgentService:
 | Hub relay | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_relay.py` |
 | Hub liveness | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_liveness.py` |
 | Hub connection | `api/hub.py` | HubRuntimeBridge | `service/hub_connection.py` |
+| Hub route lifecycle compatibility | `app_shell/relay_service.py` shim | HubRuntimeBridge | `adapters/legacy_lifecycle.py` |
 | Hub publish intake | `hub_runtime_bridge/service/hub_publish.py` | HubRuntimeBridge | `service/hub_publish.py` |
 | Offline queue | `hub_runtime_bridge/` | HubRuntimeBridge | `transport/offline_queue.py` |
 | Redis Streams relay | `app_shell/redis_runtime.py` | HubRuntimeBridge | `transport/relay_transport.py` |

@@ -10,7 +10,6 @@ import asyncio
 from collections.abc import AsyncGenerator, Callable
 from types import SimpleNamespace
 from typing import Any
-from uuid import uuid4
 
 from app_shell.delivery_runtime import SSEManager
 from app_shell.redis_runtime import AppShellLeaderElection, AppShellRelayStreamService
@@ -18,107 +17,21 @@ from common.dto import (
     HubCancelCommand,
     HubDispatchCommand,
     HubDispatchResult,
-    HubPublishLineageSnapshot,
     HubReplyCommand,
     OfflineHubFailureCommand,
 )
 from common.utils.logger import get_logger
-from common.utils.time import utcnow
+from hub_runtime_bridge.adapters.legacy_lifecycle import LegacyHubLifecycleAdapter
+from hub_runtime_bridge.adapters.legacy_publish import (
+    LegacyHubPublishAuthorizationReader,
+    LegacyRelayCancellationReader,
+)
 from hub_runtime_bridge.config import HubRuntimeBridgeConfig
 from hub_runtime_bridge.facade import HubFacade
 from models.api_key import APIKey
 from models.hub import Hub, HubAgentSync, HubPublishRequest, HubStatus, RelayToHubEvent
 
 logger = get_logger(__name__)
-
-
-def _get_field(obj: Any, name: str, default: Any = None) -> Any:
-    if isinstance(obj, dict):
-        return obj.get(name, default)
-    return getattr(obj, name, default)
-
-
-class _RelayPublishAuthorizationReader:
-    def __init__(self, db: Any) -> None:
-        self._db = db
-
-    async def authorize_hub_publish(
-        self, *, hub_id: str, owner_id: str, room_id: str, agent_message_id: str
-    ) -> HubPublishLineageSnapshot | None:
-        msg = await self._db.get_room_agent_message_by_message_id(agent_message_id)
-        if not msg or _get_field(msg, "room_id") != room_id:
-            return None
-        agent_id = _get_field(msg, "agent_id")
-        if not agent_id:
-            return None
-        agent = await self._db.get_agent_by_agent_id(agent_id)
-        if not agent or _get_field(agent, "hub_id") != hub_id:
-            return None
-        related_message_id = _get_field(msg, "related_message_id")
-        turn_id = _get_field(msg, "turn_id")
-        root_user_message_id = turn_id or await self._resolve_root_user_message_id(
-            related_message_id
-        )
-        lifecycle_message_id = turn_id or root_user_message_id
-        return HubPublishLineageSnapshot(
-            room_id=room_id,
-            room_owner_id=owner_id,
-            agent_message_id=agent_message_id,
-            agent_id=agent_id,
-            agent_hub_id=hub_id,
-            related_message_id=related_message_id,
-            turn_id=turn_id,
-            run_id=_get_field(msg, "run_id"),
-            root_user_message_id=root_user_message_id,
-            lifecycle_message_id=lifecycle_message_id,
-            client_request_id=_get_field(msg, "client_request_id"),
-            cancellation_message_ids=[
-                item
-                for item in [agent_message_id, related_message_id, root_user_message_id]
-                if item
-            ],
-        )
-
-    async def _resolve_root_user_message_id(self, message_id: str | None) -> str | None:
-        cursor = message_id
-        visited: set[str] = set()
-        for _ in range(20):
-            if not isinstance(cursor, str) or not cursor or cursor in visited:
-                return None
-            visited.add(cursor)
-            user_lookup = getattr(self._db, "get_room_user_message_by_message_id", None)
-            if callable(user_lookup):
-                user_msg = user_lookup(cursor)
-                if hasattr(user_msg, "__await__"):
-                    user_msg = await user_msg
-                if _get_field(user_msg, "message_type") == "user":
-                    return cursor
-            parent_lookup = getattr(
-                self._db, "get_room_agent_message_by_message_id", None
-            )
-            if not callable(parent_lookup):
-                return cursor
-            parent = parent_lookup(cursor)
-            if hasattr(parent, "__await__"):
-                parent = await parent
-            if parent is None:
-                return cursor
-            parent_message_id = _get_field(parent, "message_id")
-            if parent_message_id and parent_message_id != cursor:
-                return cursor
-            parent_turn_id = _get_field(parent, "turn_id")
-            if isinstance(parent_turn_id, str) and parent_turn_id:
-                return parent_turn_id
-            cursor = _get_field(parent, "related_message_id")
-        return None
-
-
-class _RelayCancellationReader:
-    def __init__(self, db: Any) -> None:
-        self._db = db
-
-    async def is_message_cancelled(self, message_id: str) -> bool:
-        return bool(await self._db.is_message_cancelled(message_id))
 
 
 class _LegacyPublishSink:
@@ -223,9 +136,16 @@ class RelayService:
             worker_id=worker_id or "local-worker",
             agent_call_counter=self.agent_call_counter,
             event_publisher=event_publisher,
-            publish_authorization_reader=_RelayPublishAuthorizationReader(self._db),
-            cancellation_reader=_RelayCancellationReader(self._db),
+            publish_authorization_reader=LegacyHubPublishAuthorizationReader(self._db),
+            cancellation_reader=LegacyRelayCancellationReader(self._db),
             offline_failure_port=self._offline_failure_port,
+        )
+        self._lifecycle = LegacyHubLifecycleAdapter(
+            mongo=self._mongo,
+            db=self._db,
+            facade=self._facade,
+            get_agent_registry_writer=lambda: self._agent_registry_writer,
+            require_agent_registry_writer=self._require_agent_registry_writer,
         )
 
     @property
@@ -294,62 +214,29 @@ class RelayService:
         await self._facade.stop()
 
     async def register_hub(self, hub_id: str, api_key: APIKey) -> Hub:
-        hub = Hub(hub_id=hub_id, user_id=api_key.user_id, registered_at=utcnow())
-        await self._mongo.upsert_hub(hub.model_dump(mode="json"))
-        return hub
+        return await self._lifecycle.register_hub(hub_id, api_key)
 
     async def get_hub_owner_id(self, hub_id: str) -> str | None:
-        hub = await self._mongo.get_hub(hub_id)
-        return hub.get("user_id") if hub else None
+        return await self._lifecycle.get_hub_owner_id(hub_id)
 
     async def connect_hub(
         self, hub_id: str, api_key: APIKey, last_event_id: str | None = None
     ) -> AsyncGenerator[dict, None]:
-        hub_doc = await self._mongo.get_hub(hub_id)
-        if not hub_doc or hub_doc["user_id"] != api_key.user_id:
-            raise PermissionError("Hub not owned by this API key")
-
-        connection_id = str(uuid4())
-        await self._mongo.update_hub_status(
+        async for event in self._lifecycle.connect_hub(
             hub_id,
-            is_online=True,
-            last_connected_at=utcnow(),
-            connection_id=connection_id,
-        )
-        stream = self._facade.connect_hub_stream(hub_id, last_event_id=last_event_id)
-        try:
-            async for event in stream:
-                yield event
-        finally:
-            result = await self._mongo.update_hub_status_if_current(
-                hub_id, connection_id=connection_id, is_online=False
-            )
-            if result:
-                if self._agent_registry_writer is not None:
-                    await self._agent_registry_writer.mark_hub_agents_offline(hub_id)
+            api_key,
+            last_event_id=last_event_id,
+        ):
+            yield event
 
     async def _disconnect_hub(
         self, hub_id: str, queue: asyncio.Queue, connection_id: str
     ) -> None:
-        await self._facade.disconnect_hub(hub_id)
-        result = await self._mongo.update_hub_status_if_current(
-            hub_id, connection_id=connection_id, is_online=False
-        )
-        if result:
-            await self._require_agent_registry_writer().mark_hub_agents_offline(hub_id)
+        del queue
+        await self._lifecycle.disconnect_hub(hub_id, connection_id)
 
     async def record_hub_heartbeat(self, hub_id: str, api_key: APIKey) -> None:
-        hub_doc = await self._mongo.get_hub(hub_id)
-        if not hub_doc or hub_doc["user_id"] != api_key.user_id:
-            logger.warning(
-                "Hub %s heartbeat rejected: owner_id=%s caller_user_id=%s hub_exists=%s",
-                hub_id,
-                hub_doc.get("user_id") if hub_doc else None,
-                api_key.user_id,
-                hub_doc is not None,
-            )
-            raise PermissionError("Hub not owned by this API key")
-        await self._facade.record_hub_heartbeat(hub_id, api_key.user_id)
+        await self._lifecycle.record_hub_heartbeat(hub_id, api_key)
 
     async def is_hub_alive(self, hub_id: str) -> bool:
         return await self._facade.is_hub_online(hub_id)
@@ -363,15 +250,7 @@ class RelayService:
     async def mark_hub_agents_offline(
         self, hub_id: str, connection_id: str | None = None
     ) -> None:
-        if connection_id:
-            result = await self._mongo.update_hub_status_if_current(
-                hub_id, connection_id=connection_id, is_online=False
-            )
-            if not result:
-                return
-        else:
-            await self._mongo.update_hub_status(hub_id, is_online=False)
-        await self._require_agent_registry_writer().mark_hub_agents_offline(hub_id)
+        await self._lifecycle.mark_hub_agents_offline(hub_id, connection_id)
 
     async def sync_agents(
         self,
@@ -381,15 +260,10 @@ class RelayService:
         *,
         prune_missing: bool = True,
     ) -> list[dict]:
-        hub_doc = await self._mongo.get_hub(hub_id)
-        if not hub_doc or hub_doc["user_id"] != api_key.user_id:
-            raise PermissionError("Hub not owned by this API key")
-        self._require_agent_registry_writer()
-
-        return await self._facade.sync_agents(
+        return await self._lifecycle.sync_agents(
             hub_id,
             agents,
-            hub_doc["user_id"],
+            api_key,
             prune_missing=prune_missing,
         )
 
@@ -431,24 +305,7 @@ class RelayService:
     async def process_publish(
         self, hub_id: str, request: HubPublishRequest, api_key: APIKey
     ) -> None:
-        hub_doc = await self._mongo.get_hub(hub_id)
-        if not hub_doc:
-            raise PermissionError("Unknown hub")
-        if hub_doc["user_id"] != api_key.user_id:
-            raise PermissionError("Hub not owned by this API key")
-        room = await self._db.get_room_by_room_id(request.room_id)
-        if not room:
-            raise ValueError(f"Room {request.room_id} not found")
-        if hub_doc["user_id"] != room.room_owner_id:
-            raise PermissionError("Hub owner does not match room owner")
-        await self._facade.publish_from_hub(
-            hub_id,
-            {
-                "room_id": request.room_id,
-                "owner_id": hub_doc["user_id"],
-                "events": [event.model_dump(mode="json") for event in request.events],
-            },
-        )
+        await self._lifecycle.process_publish(hub_id, request, api_key)
 
     async def cancel_relay_task(
         self,
@@ -498,25 +355,7 @@ class RelayService:
         return await self._facade.send_to_hub(command)
 
     async def get_hub_status(self, user_id: str) -> list[HubStatus]:
-        # Compatibility note: this method preserves the legacy HubStatus response
-        # shape and count fields until a behavior-equivalent facade adapter exists.
-        hubs = await self._mongo.get_hubs_by_user(user_id)
-        result: list[HubStatus] = []
-        for hub in hubs:
-            hub_id = hub["hub_id"]
-            online = await self.is_hub_alive(hub_id)
-            active, inactive = await self._mongo.count_hub_agents(hub_id)
-            result.append(
-                HubStatus(
-                    hub_id=hub_id,
-                    is_online=online,
-                    last_connected_at=hub.get("last_connected_at"),
-                    agent_count=active + inactive,
-                    active_agent_count=active,
-                    inactive_agent_count=inactive,
-                )
-            )
-        return result
+        return await self._lifecycle.get_hub_status(user_id)
 
     async def _do_heartbeat_check(self, stale_threshold: float) -> None:
         await self._facade.run_heartbeat_iteration()
