@@ -7,12 +7,6 @@
             "reason": "App-shell agent health runtime still reads settings directly pending runtime config injection."
         },
         {
-            "path": "app_shell/relay_service.py",
-            "contract": "legacy_import_boundary",
-            "forbidden_prefix": "common.config.settings",
-            "reason": "App-shell relay runtime still reads settings directly pending Task 8 relay config injection."
-        },
-        {
             "path": "common/protocols/runtime_store_protocols.py",
             "contract": "common_import_boundary",
             "reason": "Runtime store protocols require importing concrete domain models to provide a type-safe contract."

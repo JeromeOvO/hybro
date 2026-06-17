@@ -465,8 +465,10 @@ Examples:
   protocol or focused part.
 - `app_shell.relay_service`: relay route surface over
   `hub_runtime_bridge`. Hub-owned liveness, stream binding, agent sync,
-  ownership, and internal response router setup are handled by `HubFacade`;
-  persistence reaches Mongo through repository-backed app-shell adapters.
+  offline queues, heartbeat monitoring, command dispatch, ownership, and
+  internal response router setup are handled by `HubFacade`; relay runtime
+  settings are injected as `HubRuntimeBridgeConfig`, and persistence reaches
+  Mongo through repository-backed app-shell adapters.
 - `execution.dispatch.task_notifications`: terminal task update notifications.
 - `app_shell.hitl_service`: HITL lifecycle and response handling.
 

@@ -1021,6 +1021,7 @@ async def lifespan(app: FastAPI):
         from hub_runtime_bridge.adapters.legacy_failure import (
             RelayOfflineFailureAdapter,
         )
+        from hub_runtime_bridge.config import config_from_settings
         from hub_runtime_bridge.repository.mongo import HubMongoRepository
 
         _rmc = get_bound_room_message_center()
@@ -1045,6 +1046,7 @@ async def lifespan(app: FastAPI):
                 app_shell_store,
                 sse_manager,
             ),
+            config=config_from_settings(settings),
         )
         app.state.relay_service = _relay_svc
         relay.bind_relay_dependencies(_relay_svc)

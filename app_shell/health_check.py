@@ -25,8 +25,7 @@ class AppShellHealthCheck:
             await delivery_facade.refresh_health()
         redis_runtime = getattr(request.app.state, "redis_runtime", None)
         redis_service = getattr(redis_runtime, "command_client", None)
-        relay_service = getattr(request.app.state, "relay_service", None)
-        relay_streams = getattr(relay_service, "_streams", None)
+        relay_streams = getattr(redis_runtime, "relay_streams", None)
         result = self._compute_health_status(
             delivery_pubsub_connected=bool(
                 delivery_facade and delivery_facade.delivery_pubsub_connected

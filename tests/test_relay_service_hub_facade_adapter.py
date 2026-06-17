@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from app_shell.relay_service import RelayService
@@ -44,9 +42,14 @@ class _FacadeSpy:
         self.synced = False
         self.sync_args = None
         self.sync_kwargs = None
+        self.bound_leader = None
+        self.heartbeat_iterations = 0
 
     def bind_streams(self, streams):
         self.bound_streams = streams
+
+    def bind_leader_elector(self, leader):
+        self.bound_leader = leader
 
     def bind_agent_registry_writer(self, writer):
         self.bound_writer = writer
@@ -54,6 +57,9 @@ class _FacadeSpy:
     async def sweep_stream_liveness(self) -> list[_StaleHub]:
         self.swept = True
         return list(self.stale_hubs)
+
+    async def run_heartbeat_iteration(self) -> None:
+        self.heartbeat_iterations += 1
 
     def bind_internal_response_sink(self, sink):
         self.bound_response_sink = sink
@@ -85,8 +91,16 @@ def test_relay_service_binds_streams_through_hub_facade(service) -> None:
 
     relay.set_stream_service(streams)
 
-    assert relay._streams is streams
     assert spy.bound_streams is streams
+
+
+def test_relay_service_binds_leader_through_hub_facade(service) -> None:
+    relay, spy = service
+    leader = object()
+
+    relay.set_leader_election(leader)
+
+    assert spy.bound_leader is leader
 
 
 def test_relay_service_binds_agent_writer_through_hub_facade(service) -> None:
@@ -110,24 +124,26 @@ def test_relay_service_reads_ownership_accessors_through_hub_facade(service) -> 
 @pytest.mark.asyncio
 async def test_relay_service_delegates_stream_liveness_sweep(service) -> None:
     relay, spy = service
-    relay._streams = object()
 
     await relay._do_heartbeat_check(stale_threshold=30)
 
-    assert spy.swept is True
+    assert spy.heartbeat_iterations == 1
 
 
 @pytest.mark.asyncio
-async def test_relay_service_sets_disconnect_event_for_stale_hub(service) -> None:
+async def test_relay_service_sweeps_offline_queues_through_hub_facade(
+    service,
+) -> None:
     relay, spy = service
-    relay._streams = object()
-    spy.stale_hubs = [_StaleHub("hub-1", "conn-1")]
-    disconnect = asyncio.Event()
-    relay._hub_disconnect_events["hub-1"] = disconnect
 
-    await relay._do_heartbeat_check(stale_threshold=30)
+    async def sweep_offline_queues():
+        spy.swept = True
 
-    assert disconnect.is_set()
+    spy.sweep_offline_queues = sweep_offline_queues
+
+    await relay.sweep_offline_queues()
+
+    assert spy.swept is True
 
 
 def test_relay_service_binds_internal_response_sink_through_hub_facade(service) -> None:
