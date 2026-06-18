@@ -83,6 +83,7 @@ def test_hub_runtime_bridge_import_boundaries() -> None:
         "hub_runtime_bridge.adapters.legacy_models",
         "hub_runtime_bridge.adapters.api_key",
         "hub_runtime_bridge.adapters.legacy_failure",
+        "hub_runtime_bridge.adapters.legacy_lifecycle",
     }
     a2a_agent_card_allowlist = {"hub_runtime_bridge.adapters.a2a_card"}
     a2a_task_status_allowlist = {"hub_runtime_bridge.adapters.legacy_failure"}

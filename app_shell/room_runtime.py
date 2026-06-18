@@ -2419,7 +2419,6 @@ class RoomServices:
         record_lifecycle: bool = True,
     ) -> None:
         emitter = getattr(self, "_processing_status_emitter", None)
-        status_value = status.value if hasattr(status, "value") else str(status)
         if emitter is not None:
             await emitter(
                 room_id=room_id,
@@ -2428,23 +2427,7 @@ class RoomServices:
                 lifecycle_message_id=message_id,
                 record_lifecycle=record_lifecycle,
                 client_request_id=client_request_id,
-                details=(
-                    details
-                    if isinstance(details, dict)
-                    else {"message": details}
-                    if isinstance(details, str)
-                    else None
-                ),
-                error_message=(
-                    details
-                    if isinstance(details, str)
-                    and status_value
-                    in {
-                        SSEProcessingStatus.FAILED.value,
-                        SSEProcessingStatus.CANCELED.value,
-                    }
-                    else None
-                ),
+                details=details,
             )
             return
 
