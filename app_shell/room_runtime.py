@@ -1,7 +1,6 @@
 import re
 import uuid
 from collections.abc import Awaitable, Callable
-from enum import Enum
 from typing import Any
 from uuid import uuid4
 
@@ -45,6 +44,7 @@ from common.utils.context_utils import (
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from context_memory.projection import _human_size, build_turn_content
+from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
 from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import AgentStatus
 from models.memory import MemoryContent, RoomMemory
@@ -91,29 +91,6 @@ from room.attachments import (
 )
 
 logger = get_logger(__name__)
-
-
-class DispatchStrategy(str, Enum):
-    """Dispatch strategy resolved after agent selection."""
-    SINGLE = "single"
-    SEQUENTIAL = "sequential"
-    SEQUENTIAL_DEBATE = "sequential_debate"
-    SUPERVISOR = "supervisor"
-
-
-def resolve_strategy(
-    use_supervisor: bool,
-    is_debate_mode: bool,
-    agent_count: int,
-) -> DispatchStrategy:
-    """Resolve dispatch strategy from room flags and agent count."""
-    if use_supervisor:
-        return DispatchStrategy.SUPERVISOR
-    if is_debate_mode:
-        return DispatchStrategy.SEQUENTIAL_DEBATE
-    if agent_count > 1:
-        return DispatchStrategy.SEQUENTIAL
-    return DispatchStrategy.SINGLE
 
 
 def _agent_to_routing_candidate(agent) -> AgentRoutingCandidate:
