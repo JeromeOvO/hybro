@@ -410,6 +410,7 @@ async def lifespan(app: FastAPI):
                 TaskNotificationAdapter,
                 _notify_task_update_impl,
                 bind_notification_store,
+                bind_task_notification_runtime,
                 notify_task_update,
             )
             from execution.dispatch.task_notifications import (
