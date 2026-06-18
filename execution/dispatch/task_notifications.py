@@ -54,8 +54,7 @@ if TYPE_CHECKING:
             self, room_agent_message
         ) -> str | None: ...
 
-    from app_shell.delivery_runtime import SSEManager
-    from app_shell.notification_service import NotificationService
+    from execution.ports import NotificationServicePort, SSEDeliveryPort
 
 logger = get_logger(__name__)
 
@@ -142,8 +141,8 @@ def _map_task_state_to_processing_status(state: TaskState) -> SSEProcessingStatu
 
 async def _notify_task_update_impl(
     notification_store: TaskNotificationStore,
-    notification_svc: NotificationService,
-    sse: SSEManager,
+    notification_svc: NotificationServicePort,
+    sse: SSEDeliveryPort,
     *,
     message_id: str,
     state: TaskState,

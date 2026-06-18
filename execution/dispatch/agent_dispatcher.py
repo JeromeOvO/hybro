@@ -19,7 +19,7 @@ from models.dispatcher import AssignResult
 from models.room import RoomAgentMessage
 
 if TYPE_CHECKING:
-    from app_shell.agent_resolver_service import AgentResolverService
+    from execution.ports import AgentResolverPort
 
     class DispatchMessageWriter(Protocol):
         async def update_room_agent_message_by_message_id(
@@ -50,7 +50,7 @@ class AgentDispatcher:
     def __init__(
         self,
         *,
-        agent_resolver: AgentResolverService,
+        agent_resolver: AgentResolverPort,
         message_writer: DispatchMessageWriter,
         agent_lookup: DispatchAgentLookup,
         agent_group_reader: DispatchAgentGroupReader,
