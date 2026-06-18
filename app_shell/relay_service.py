@@ -259,6 +259,9 @@ class RelayService:
         *,
         prune_missing: bool = True,
     ) -> list[dict]:
+        self._lifecycle._mongo = self._mongo
+        self._lifecycle._db = self._db
+        self._lifecycle._facade = self._facade
         return await self._lifecycle.sync_agents(
             hub_id,
             agents,

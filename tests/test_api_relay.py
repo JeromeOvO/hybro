@@ -18,7 +18,6 @@ import pytest
 from app_shell.relay_service import (
     RelayService,
     _LegacyPublishSink,
-    _RelayPublishAuthorizationReader,
     init_relay_service,
 )
 from common.dto import HubDispatchCommand
@@ -26,6 +25,9 @@ from common.dto.agent import SyncedHubAgent
 from execution.dispatch.agent_event import AgentEvent
 from execution.dispatch.response_handler import AgentResponseHandler
 from execution.dispatch.transports.relay import RelayTransport
+from hub_runtime_bridge.adapters.legacy_publish import (
+    LegacyHubPublishAuthorizationReader,
+)
 from hub_runtime_bridge.config import HubRuntimeBridgeConfig
 from models.api_key import APIKey
 from models.hub import (
@@ -325,7 +327,7 @@ async def test_relay_publish_authorization_uses_related_message_as_legacy_lifecy
     )
     db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
     db.get_agent_by_agent_id = AsyncMock(return_value=MagicMock(hub_id="hub-001"))
-    reader = _RelayPublishAuthorizationReader(db)
+    reader = LegacyHubPublishAuthorizationReader(db)
 
     lineage = await reader.authorize_hub_publish(
         hub_id="hub-001",
@@ -361,7 +363,7 @@ async def test_relay_publish_authorization_walks_agent_parent_chain_to_root_user
         side_effect=[None, MagicMock(message_type="user")]
     )
     db.get_agent_by_agent_id = AsyncMock(return_value=MagicMock(hub_id="hub-001"))
-    reader = _RelayPublishAuthorizationReader(db)
+    reader = LegacyHubPublishAuthorizationReader(db)
 
     lineage = await reader.authorize_hub_publish(
         hub_id="hub-001",
