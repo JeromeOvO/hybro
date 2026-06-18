@@ -284,9 +284,17 @@ The facade uses:
   chat-context generation, and turn-note extraction.
 - `RoomHistoryReader` from `room.RoomFacade` for source message history.
 
-App-shell adapters such as `app_shell.context_assembly_service`,
-`app_shell.memory_search_service`, `app_shell.compaction_service`, and
-`app_shell.memory_service` are bound to this facade in `main.py`.
+`main.py` creates the facade before execution orchestration and exposes it
+through `ContextMemoryDeps.context_memory_runtime` for supervisor and agent
+context assembly. `app_shell.context_assembly_service` and
+`app_shell.memory_search_service` remain compatibility shims for tests and
+legacy callers; production `RoomServices` and `RoomMessageCenter` use the
+injected context-memory protocol instead of importing those app-shell singletons.
+Legacy turn-selection and context metric logging helpers live in
+`context_memory.legacy_assembly`, leaving the app-shell context assembly shim to
+convert result shapes and expose the legacy truncation counter.
+`app_shell.compaction_service` and `app_shell.memory_service` are still bound to
+the facade during startup while their compatibility surfaces remain in use.
 
 ### `delivery`
 
@@ -723,10 +731,12 @@ The design keeps current task context, recent conversation context, room summary
 memory search results, and quoted reply context separate so each can be bounded
 and tested independently.
 
-App-shell memory search is a compatibility adapter over `ContextMemoryFacade`.
-Vector retrieval goes through `VectorDAL`, and keyword search/hydration goes
-through the context-memory content repository rather than private
-legacy database runtime backends.
+Memory search is provided by `ContextMemoryFacade` through the injected
+context-memory runtime protocol. The app-shell memory-search service is a
+compatibility adapter over the same facade, not a production orchestration
+dependency. Vector retrieval goes through `VectorDAL`, and keyword
+search/hydration goes through the context-memory content repository rather than
+private legacy database runtime backends.
 
 ## Background Jobs
 

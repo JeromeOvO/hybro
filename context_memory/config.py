@@ -66,6 +66,18 @@ class TokenBudgetConfig:
             current_task_pct=self.current_task_pct,
         )
 
+    def get_budget_summary(self) -> dict[str, int]:
+        return {
+            "model_context_window": self.model_context_window,
+            "system_prompt": self.system_prompt,
+            "tool_schemas": self.tool_schemas,
+            "response_reserve": self.response_reserve,
+            "available_for_content": self.available_for_content,
+            "room_context": self.room_context_tokens,
+            "conversation_history": self.conversation_history_tokens,
+            "current_task": self.current_task_tokens,
+        }
+
 
 @dataclass(frozen=True)
 class CompactionConfig:

@@ -19,11 +19,11 @@ FORBIDDEN_APP_SHELL_IMPORT_PREFIXES = (
 )
 
 EXPECTED_APP_SHELL_BASELINE = {
-    "app_shell/room_runtime.py": {"lines": 3811, "public_business_methods": 53},
+    "app_shell/room_runtime.py": {"lines": 3848, "public_business_methods": 53},
     "app_shell/a2a_runtime.py": {"lines": 1145, "public_business_methods": 15},
     "app_shell/relay_service.py": {"lines": 862, "public_business_methods": 27},
     "app_shell/context_assembly_service.py": {
-        "lines": 931,
+        "lines": 164,
         "public_business_methods": 4,
     },
     "app_shell/repository_store.py": {"lines": 759, "public_business_methods": 93},
@@ -147,3 +147,26 @@ def test_app_shell_focus_file_baseline_sizes_are_recorded():
     }
 
     assert actual == EXPECTED_APP_SHELL_BASELINE
+
+
+def test_context_memory_runtime_wiring_avoids_app_shell_singletons():
+    forbidden = {
+        "app_shell.context_assembly_service",
+        "app_shell.memory_search_service",
+    }
+    targets = [
+        Path("app_shell/room_runtime.py"),
+        Path("execution/orchestration/room_message_center.py"),
+        Path("execution/orchestration/factory.py"),
+        Path("main.py"),
+    ]
+    violations: list[str] = []
+
+    for path in targets:
+        for lineno, module in _import_modules(path):
+            if module in forbidden:
+                violations.append(f"{path}:{lineno}: {module}")
+
+    assert not violations, "App-shell context singleton imports remain:\n" + "\n".join(
+        violations
+    )

@@ -293,6 +293,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
             "summary_service",
             "hitl_coordinator",
             "task_notifications",
+            "context_memory_runtime",
         ]
     }
     runtime = create_room_message_center(**deps, debate_rounds=5)
@@ -333,6 +334,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.supervisor_executor.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.agent_response_handler.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.task_notifications is deps["task_notifications"]
+    assert runtime.context_memory_runtime is deps["context_memory_runtime"]
 
 
 def test_room_message_center_factory_owns_default_dependency_wiring():
@@ -358,6 +360,7 @@ def test_room_message_center_factory_owns_default_dependency_wiring():
         "debate_service": MagicMock(),
         "rate_limit_service": MagicMock(),
         "room_supervisor_service": MagicMock(),
+        "context_memory_runtime": MagicMock(),
     }
     runtime = create_room_message_center(**deps, debate_rounds=6)
 
@@ -365,6 +368,7 @@ def test_room_message_center_factory_owns_default_dependency_wiring():
     assert runtime.sse_manager is deps["sse_manager"]
     assert runtime.room_runtime is deps["room_services"]
     assert runtime.debate_rounds == 6
+    assert runtime.context_memory_runtime is deps["context_memory_runtime"]
 
 
 def test_room_message_center_constructor_requires_explicit_dependencies():

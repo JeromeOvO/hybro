@@ -165,6 +165,17 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 > must use string/domain-state ports, and the allowlist should shrink as A2A
 > protocol adapters are introduced.
 
+> **P3 app-shell thinning status (2026-06-17):** `app_shell` focus files are
+> fail-fast compatibility shims over module-owned facades, adapters, and focused
+> runtime ports. A2A SDK calls and response coercion live in `a2a_adapter`;
+> room CRUD/message behavior lives in Room; orchestration scheduling lives in
+> Execution; context assembly, legacy turn selection, and context metrics live
+> in Context & Memory; relay queues/liveness live in HubRuntimeBridge; hub
+> publish authorization adapters live in
+> HubRuntimeBridge; A2A task-tracking placeholder creation, tracked-send push
+> configuration, failure persistence, and terminal response persistence live in
+> Execution; object-storage behavior lives in Platform/DAL.
+
 ### 3.4 Cross-Module Communication Rules
 
 | From | To | Mechanism | Notes |
@@ -2277,13 +2288,13 @@ class AgentService:
 | is_directly_callable (hub 502) | implicit in gateway_service | Agent | `facade.is_directly_callable()` |
 | Hub agent enrichment (is_hub_online) | mongodb._enrich_hub_fields | Agent + HubRuntimeBridge | Agent calls `HubLivenessReader` |
 | **Room & messages** | | | |
-| Room CRUD | `app_shell/room_runtime.py` | Room | `service/room_crud.py` |
-| Room membership (3 seed modes) | `app_shell/room_runtime.py` | Room | `service/room_membership.py` (handles MembershipSeed) |
-| User message persistence | `app_shell/room_runtime.py` | Room | `service/message_service.py` |
-| Agent message persistence | `app_shell/room_runtime.py` | Room | `service/message_service.py` |
-| Message graph | `app_shell/room_runtime.py` | Room | `repository/message_repo.py` |
+| Room CRUD | `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `room/repository/` |
+| Room membership (3 seed modes) | `app_shell/room_runtime.py` shim | Room | `room/facade.py` compatibility methods |
+| User message persistence | `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `MessageMongoRepository` |
+| Agent message persistence | `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `MessageMongoRepository` |
+| Message graph | `app_shell/room_runtime.py` shim | Room | `room/repository/` message queries |
 | **Context & Memory** | | | |
-| Context assembly | `app_shell/context_assembly_service.py` | Context & Memory | `service/context_assembly.py` |
+| Context assembly and legacy selection/metrics | `app_shell/context_assembly_service.py` shim | Context & Memory | `context_memory/facade.py`, `context_memory/assembly.py`, `context_memory/legacy_assembly.py` |
 | Memory compaction | `app_shell/compaction_service.py` | Context & Memory | `service/compaction.py` |
 | Memory search | `app_shell/memory_search_service.py` | Context & Memory | `service/memory_search.py` |
 | User memories | `app_shell/memory_service.py` | Context & Memory | `service/user_memory.py` |

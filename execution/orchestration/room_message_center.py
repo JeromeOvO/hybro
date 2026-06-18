@@ -10,7 +10,7 @@ from uuid import uuid4
 from a2a_adapter.task_status import build_completed_text_task
 from common.a2a_constants import CommonTaskState, SSEProcessingStatus, is_terminal_state
 from common.dto import RoomMessageSummary
-from common.protocols import RoomDistributedLock
+from common.protocols import ContextMemoryRuntime, RoomDistributedLock
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from common.utils.summary_streaming import stream_summary_to_sse
@@ -63,8 +63,7 @@ room_services = None
 room_supervisor_service = None
 sse_manager = None
 task_service = None
-context_assembly_service = None
-memory_search_service = None
+context_memory_runtime = None
 compaction_service = None
 build_turn_content = None
 SupervisorPlanningError = RuntimeError
@@ -128,8 +127,7 @@ class RoomMessageCenter:
         agent_health_service=None,
         s3_service=None,
         capability_issue_service=None,
-        context_assembly_service=None,
-        memory_search_service=None,
+        context_memory_runtime: ContextMemoryRuntime | None = None,
         compaction_service=None,
         build_turn_content_func=None,
         supervisor_planning_error_cls=RuntimeError,
@@ -145,8 +143,7 @@ class RoomMessageCenter:
         self.summary_service = summary_service
         self.task_notifications = task_notifications
         self.room_memory_service = room_memory_service
-        self.context_assembly_service = context_assembly_service
-        self.memory_search_service = memory_search_service
+        self.context_memory_runtime = context_memory_runtime
         self.compaction_service = compaction_service
         self.build_turn_content = build_turn_content_func
         self.supervisor_planning_error_cls = supervisor_planning_error_cls
@@ -339,6 +336,12 @@ class RoomMessageCenter:
         self._room_facade = facade
         self._room_bound = True
 
+    def bind_context_memory_runtime(
+        self,
+        context_memory: ContextMemoryRuntime,
+    ) -> None:
+        self.context_memory_runtime = context_memory
+
     def _require_room_facade(self):
         if (
             not getattr(self, "_room_bound", False)
@@ -348,6 +351,49 @@ class RoomMessageCenter:
                 "RoomMessageCenter.bind_facade() not called - startup incomplete"
             )
         return self._room_facade
+
+    @staticmethod
+    def _assembled_context_text(assembled) -> str:
+        metadata = getattr(assembled, "metadata", {}) or {}
+        return metadata.get("context", "")
+
+    async def _refresh_supervisor_conversation_context(
+        self,
+        *,
+        room_id: str,
+        room_memory,
+        room_agent_set: dict,
+        message_text: str,
+    ) -> tuple[str | None, float | None]:
+        runtime = self.context_memory_runtime
+        if room_memory is None or runtime is None:
+            return None, None
+
+        agent_dicts = [
+            {"agent_id": aid, "agent_name": aname}
+            for aid, aname in (room_agent_set or {}).items()
+        ]
+        memory_search_results = None
+        try:
+            payload = await runtime.legacy_search(query=message_text, room_id=room_id)
+            if isinstance(payload, dict):
+                results = list(payload.get("results") or [])
+            else:
+                results = list(getattr(payload, "results", []) or [])
+            if results:
+                memory_search_results = results
+        except Exception as search_err:
+            logger.debug("supervisor_resume: memory search skipped: %s", search_err)
+
+        assembled = runtime.assemble_supervisor_context_from_memory(
+            room_memory,
+            message_text,
+            agent_registry=agent_dicts,
+            max_turns=5,
+            memory_search_results=memory_search_results,
+        )
+        metadata = getattr(assembled, "metadata", {}) or {}
+        return self._assembled_context_text(assembled), metadata.get("occupancy_pct")
 
     def set_room_distributed_lock(
         self, room_lock: RoomDistributedLock | None
@@ -1475,30 +1521,19 @@ class RoomMessageCenter:
             # conversation_context to avoid staleness.
             try:
                 room_memory = await self._store.get_room_memory_by_room_id(room_id)
-                if room_memory and self.context_assembly_service is not None:
+                if room_memory and self.context_memory_runtime is not None:
                     room_tmp = await self._store.get_room_by_room_id(room_id)
-                    agent_dicts = [
-                        {"agent_id": aid, "agent_name": aname}
-                        for aid, aname in ((room_tmp.room_agent_set or {}).items() if room_tmp else [])
-                    ]
-                    memory_search_results = None
-                    if self.memory_search_service is not None:
-                        try:
-                            search_response = await self.memory_search_service.search(
-                                query=message_text, room_id=room_id,
-                            )
-                            if search_response.results:
-                                memory_search_results = search_response.results
-                        except Exception:
-                            pass
-                    result_ctx = self.context_assembly_service.build_supervisor_context(
-                        room_memory=room_memory,
-                        current_task=message_text,
-                        agent_registry=agent_dicts,
-                        max_turns=5,
-                        memory_search_results=memory_search_results,
+                    refreshed_context, _occupancy = (
+                        await self._refresh_supervisor_conversation_context(
+                            room_id=room_id,
+                            room_memory=room_memory,
+                            room_agent_set=(room_tmp.room_agent_set or {})
+                            if room_tmp
+                            else {},
+                            message_text=message_text,
+                        )
                     )
-                    conversation_context = result_ctx.context
+                    conversation_context = refreshed_context
             except Exception as e:
                 logger.warning(
                     "supervisor_resume: failed to refresh conversation_context "
@@ -1548,37 +1583,20 @@ class RoomMessageCenter:
         if interrupt_kind != InterruptKind.HITL_SUPERVISOR:
             try:
                 room_memory = await self._store.get_room_memory_by_room_id(room_id)
-                if room_memory and self.context_assembly_service is not None:
-                    agent_dicts = [
-                        {"agent_id": aid, "agent_name": aname}
-                        for aid, aname in (room.room_agent_set or {}).items()
-                    ]
-                    memory_search_results = None
-                    if self.memory_search_service is not None:
-                        try:
-                            search_response = await self.memory_search_service.search(
-                                query=message_text,
-                                room_id=room_id,
-                            )
-                            if search_response.results:
-                                memory_search_results = search_response.results
-                        except Exception as search_err:
-                            logger.debug(
-                                "supervisor_resume: memory search skipped: %s",
-                                search_err,
-                            )
-                    result_ctx = self.context_assembly_service.build_supervisor_context(
-                        room_memory=room_memory,
-                        current_task=message_text,
-                        agent_registry=agent_dicts,
-                        max_turns=5,
-                        memory_search_results=memory_search_results,
+                if room_memory and self.context_memory_runtime is not None:
+                    conversation_context, occupancy = (
+                        await self._refresh_supervisor_conversation_context(
+                            room_id=room_id,
+                            room_memory=room_memory,
+                            room_agent_set=room.room_agent_set or {},
+                            message_text=message_text,
+                        )
                     )
-                    conversation_context = result_ctx.context
                     logger.debug(
                         "supervisor_resume: refreshed conversation_context for %s "
                         "(occupancy=%.1f%%)",
-                        room_id, result_ctx.occupancy_pct,
+                        room_id,
+                        occupancy or 0.0,
                     )
             except Exception as e:
                 logger.warning(
