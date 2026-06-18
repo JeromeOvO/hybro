@@ -24,8 +24,7 @@ from models.request import RoomCenterAgentMessageRequest
 from models.room import RoomAgentMessage
 
 if TYPE_CHECKING:
-    from app_shell.notification_service import NotificationService
-    from app_shell.room_runtime import RoomServices
+    from execution.ports import NotificationServicePort, RoomRuntimePort
 
 logger = get_logger(__name__)
 
@@ -72,8 +71,8 @@ class TaskStateManager:
 
     def __init__(
         self,
-        room_services: RoomServices,
-        notification_service: NotificationService,
+        room_services: RoomRuntimePort,
+        notification_service: NotificationServicePort,
     ) -> None:
         self.room_runtime = room_services
         self.notification_service = notification_service

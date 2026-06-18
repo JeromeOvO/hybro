@@ -23,7 +23,7 @@ from execution.dispatch.dispatch_middleware import DispatchContext
 from models.agent import AgentStatus
 
 if TYPE_CHECKING:
-    from app_shell.agent_health_service import AgentHealthService
+    from execution.ports import AgentHealthPort
     from models.processing import ProcessingResult
 
 logger = get_logger(__name__)
@@ -32,7 +32,7 @@ logger = get_logger(__name__)
 class CloudHealthMiddleware:
     def __init__(
         self,
-        health_service: AgentHealthService,
+        health_service: AgentHealthPort,
         *,
         cache_ttl: float = 30.0,
         check_timeout: float = 5.0,

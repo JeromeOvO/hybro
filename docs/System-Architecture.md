@@ -255,6 +255,10 @@ Key components:
 - `execution.orchestration.dispatch_strategy`: owns dispatch strategy selection
   after room agent selection. App-shell keeps a compatibility re-export only
   for legacy imports.
+- `execution.ports`: owns the narrow type contracts used inside Execution for
+  room runtime, delivery/SSE, rate limit, memory, resolver, health, and
+  notification collaborators. Execution modules must not import `app_shell`
+  types, including type-only imports.
 - `QueueExecutor`: sequentially processes pre-created agent messages for
   non-supervisor flows and explicit non-supervisor mention flows.
 - `SupervisorExecutor`: adaptive supervisor loop for rooms with

@@ -30,14 +30,15 @@ from models.processing import ProcessingResult, ProcessingStatus
 from models.room import CoordinatorAgentId, RoomAgentMessage
 
 if TYPE_CHECKING:
-    from app_shell.rate_limit_service import RateLimitService
-
-    from app_shell.a2a_runtime import A2AService
-    from app_shell.debate_service import DebateService
-    from app_shell.delivery_runtime import SSEManager
-    from app_shell.memory_service import RoomMemoryService
-    from app_shell.room_runtime import RoomServices
     from execution.dispatch.response_handler import AgentResponseHandler
+    from execution.ports import (
+        A2AServicePort,
+        DebateServicePort,
+        RateLimitPort,
+        RoomMemoryPort,
+        RoomRuntimePort,
+        SSEDeliveryPort,
+    )
 
 logger = get_logger(__name__)
 
@@ -90,13 +91,13 @@ class QueueExecutor:
         self,
         *,
         tsm: TaskStateManager,
-        sse_manager: SSEManager,
-        a2a_service: A2AService,
-        room_services: RoomServices,
-        room_memory_service: RoomMemoryService,
+        sse_manager: SSEDeliveryPort,
+        a2a_service: A2AServicePort,
+        room_services: RoomRuntimePort,
+        room_memory_service: RoomMemoryPort,
         store,
-        debate_service: DebateService,
-        rate_limit_service: RateLimitService,
+        debate_service: DebateServicePort,
+        rate_limit_service: RateLimitPort,
         agent_dispatcher: AgentDispatcher,
         agent_message_processor: AgentMessageProcessor,
         response_handler: AgentResponseHandler,
