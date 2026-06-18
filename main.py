@@ -3,6 +3,7 @@ import logging
 import sys
 import time
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Request
@@ -386,6 +387,7 @@ async def lifespan(app: FastAPI):
 
             from a2a_adapter.task_status import coerce_task_state
             from app_shell.a2a_runtime import (
+                A2ARuntimeConfig,
                 a2a_service,
             )
             from app_shell.hitl_service import (
@@ -408,6 +410,7 @@ async def lifespan(app: FastAPI):
                 TaskNotificationAdapter,
                 _notify_task_update_impl,
                 bind_notification_store,
+                bind_task_notification_runtime,
                 notify_task_update,
             )
             from execution.dispatch.task_notifications import (
@@ -563,7 +566,21 @@ async def lifespan(app: FastAPI):
             chat_memory_service.bind_store(app_shell_store)
             room_memory_service.bind_store(app_shell_store)
             bind_notification_store(app_shell_store)
-            a2a_service.bind_task_db(app_shell_store)
+            bind_task_notification_runtime(
+                notification_service=notification_service,
+                sse_manager=sse_manager,
+            )
+            a2a_service.bind_runtime_config(
+                A2ARuntimeConfig(webhook_base_url=settings.webhook_base_url)
+            )
+            a2a_service.bind_task_db(
+                app_shell_store,
+                call_counter=SimpleNamespace(
+                    increment_agent_call_count=(
+                        app_shell_store.increment_agent_call_count
+                    ),
+                ),
+            )
             app_shell_client_request_id_resolver = SSEClientRequestIdResolver(
                 resolver=app_shell_store,
             )
@@ -584,14 +601,32 @@ async def lifespan(app: FastAPI):
                     ),
                 )
             )
+            route_room_reader = SimpleNamespace(
+                get_room_by_room_id=app_shell_store.get_room_by_room_id,
+            )
+            a2a_task_status_reader = SimpleNamespace(
+                get_room_agent_message_by_message_id=(
+                    app_shell_store.get_room_agent_message_by_message_id
+                ),
+                get_task_messages_for_room=app_shell_store.get_task_messages_for_room,
+                get_pending_task_messages_for_user=(
+                    app_shell_store.get_pending_task_messages_for_user
+                ),
+            )
+            sse_state_reader = SimpleNamespace(
+                get_room_by_room_id=app_shell_store.get_room_by_room_id,
+                get_room_user_message_by_message_id=(
+                    app_shell_store.get_room_user_message_by_message_id
+                ),
+            )
             room_center.bind_room_dependencies(
                 center=AppShellRoomCenter(),
-                store=app_shell_store,
+                store=route_room_reader,
                 selection_service=agent_selection_service,
             )
-            a2a_tasks.bind_a2a_task_dependencies(app_shell_store)
+            a2a_tasks.bind_a2a_task_dependencies(a2a_task_status_reader)
             agent_group.bind_agent_group_dependencies(app_shell_store)
-            sse.bind_sse_dependencies(app_shell_store, sse_manager)
+            sse.bind_sse_dependencies(sse_state_reader, sse_manager)
             room_runtime.bind_store(app_shell_store)
             room_runtime.bind_facade(_room_facade)
             # Temporary P2 bridge: RoomServices now requires explicit object-storage

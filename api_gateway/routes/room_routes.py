@@ -8,7 +8,7 @@ from agent.protocols import AgentSuggestionService, serialize_agent_suggestion_r
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
 from common.dto import ExecutionRequest, RunInfo
-from common.protocols import ExecutionEngine
+from common.protocols import ExecutionEngine, RoomRouteReader
 from models.file_upload import MAX_ATTACHMENT_REFS_PER_REQUEST
 from models.request import (
     RoomCenterRoomMessageRequest,
@@ -18,11 +18,11 @@ from models.response import (
     ActiveRunRef,
     RoomCenterUserMessageResponse,
 )
-from room.protocols import A2ATaskReaderCompatibility, RoomCenterCompatibility
+from room.protocols import RoomCenterCompatibility
 
 router = APIRouter()
 room_center: RoomCenterCompatibility | None = None
-room_store: A2ATaskReaderCompatibility | None = None
+room_store: RoomRouteReader | None = None
 agent_selection_service: AgentSuggestionService | None = None
 execution_engine: ExecutionEngine | None = None
 
@@ -30,7 +30,7 @@ execution_engine: ExecutionEngine | None = None
 def bind_room_dependencies(
     *,
     center: RoomCenterCompatibility,
-    store: A2ATaskReaderCompatibility,
+    store: RoomRouteReader,
     selection_service: AgentSuggestionService,
 ) -> None:
     global room_center, room_store, agent_selection_service
@@ -55,7 +55,7 @@ def get_room_center() -> RoomCenterCompatibility:
     return _require_room_center()
 
 
-def _require_room_store() -> A2ATaskReaderCompatibility:
+def _require_room_store() -> RoomRouteReader:
     if room_store is None:
         raise RuntimeError("Room database dependency has not been bound")
     return room_store

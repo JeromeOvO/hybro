@@ -1,12 +1,6 @@
 {
     "blocked_cleanup": [
         {
-            "path": "app_shell/a2a_runtime.py",
-            "contract": "legacy_import_boundary",
-            "forbidden_prefix": "common.config.settings",
-            "reason": "App-shell A2A runtime still reads settings directly pending Task 7 runtime config injection."
-        },
-        {
             "path": "app_shell/agent_health_service.py",
             "contract": "legacy_import_boundary",
             "forbidden_prefix": "common.config.settings",

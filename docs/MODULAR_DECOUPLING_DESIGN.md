@@ -173,8 +173,9 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 > in Context & Memory; relay queues/liveness live in HubRuntimeBridge; hub
 > publish authorization adapters live in
 > HubRuntimeBridge; A2A task-tracking placeholder creation, tracked-send push
-> configuration, failure persistence, and terminal response persistence live in
-> Execution; object-storage behavior lives in Platform/DAL.
+> configuration, failure persistence, terminal response persistence, and HITL
+> reply task persistence live in Execution; object-storage behavior lives in
+> Platform/DAL.
 
 ### 3.4 Cross-Module Communication Rules
 
@@ -2340,7 +2341,8 @@ class AgentService:
 | Embedding generation | `app_shell/openai_service.py`, memory/search adapters | LLM Gateway | `EmbeddingLLMService` + `gateway.py` |
 | Supervisor, summary, parsing, memory prompts | legacy app-shell prompt owners | LLM Gateway services | `llm_gateway/services/` |
 | **A2A Adapter** | | | |
-| A2A message send/stream | `app_shell/a2a_runtime.py` | A2A Adapter | `transport.py` |
+| A2A message send/stream | `app_shell/a2a_runtime.py` shim | A2A Adapter | `a2a_adapter/client_facade.py` |
+| A2A task tracking setup, tracked-send persistence, and HITL reply task persistence | `app_shell/a2a_runtime.py` shim | Execution | `execution/task_tracking.py` |
 | A2A card resolution | `common/client/card_resolver.py` | A2A Adapter | `card_resolver.py` |
 | A2A type mapping | scattered | A2A Adapter | `translators/` |
 | Push notification auth | `common/utils/push_notification_auth.py` | A2A Adapter | `push_notification.py` |

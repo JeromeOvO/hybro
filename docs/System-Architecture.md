@@ -116,6 +116,11 @@ Examples:
   `agent.AgentFacade`.
 - `app_shell.relay_service` exposes relay route behavior while delegating
   runtime behavior into `hub_runtime_bridge.HubFacade`.
+- `app_shell.a2a_runtime.A2AService` keeps legacy method names while delegating
+  task-tracking placeholder creation, tracked-send push configuration, failure
+  persistence, terminal response persistence, and HITL reply token/task
+  persistence to `execution.task_tracking`; A2A SDK transport/coercion work
+  stays in `a2a_adapter`.
 
 ## Major Code Areas
 
@@ -379,6 +384,8 @@ queues for single-process/degraded operation.
 - Build outbound A2A send, stream, cancellation, HITL, and task-fetch requests.
 - Translate internal common models to SDK payloads and normalize SDK responses
   back to SDK-free dictionaries or `common.types` models.
+- Own A2A output-mode negotiation and response/task coercion helpers used by
+  app-shell compatibility services.
 - Normalize task status and artifacts.
 - Parse webhook stream response payloads.
 - Probe inspection and dry-send flows without leaking SDK clients into app-shell
@@ -447,6 +454,10 @@ Examples:
 
 - `app_shell.room_runtime`: room send-message preparation, target resolution,
   attachment resolution, supervisor preparation, and message parsing.
+- `app_shell.a2a_runtime`: route/execution compatibility over `a2a_adapter`.
+  Runtime settings are injected through `A2ARuntimeConfig`; task tracking and
+  call counting are bound as explicit ports rather than read from global
+  settings or broad stores during calls.
 - `app_shell.agent_service`: route-facing adapter over `AgentFacade`.
 - `app_shell.repository_store`: compatibility composite over focused runtime
   store parts in `app_shell.repository_parts`. Existing app-shell and execution
@@ -458,6 +469,12 @@ Examples:
   persistence reaches Mongo through repository-backed app-shell adapters.
 - `execution.dispatch.task_notifications`: terminal task update notifications.
 - `app_shell.hitl_service`: HITL lifecycle and response handling.
+
+A2A-facing API routes bind narrow readers from `common.protocols`:
+`A2ATaskStatusReader` for task inspection, `RoomRouteReader` for room ownership
+checks, and `SSEStateReader` for SSE status and cancellation lookup. These
+replace the older combined room compatibility reader in route modules while
+leaving legacy room protocol shims available for non-route migration work.
 
 ### `jobs` and App-Shell Infrastructure
 

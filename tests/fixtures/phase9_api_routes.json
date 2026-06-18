@@ -16,7 +16,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "room.protocols.A2ATaskReaderCompatibility",
+    "owning_protocol": "common.protocols.A2ATaskStatusReader",
     "path": "/api/v1/a2a-tasks/{message_id}",
     "response_class": null,
     "response_model": "dict",
@@ -1238,7 +1238,7 @@
     "streaming_response": null,
     "supporting_protocols": [
       "common.protocols.ExecutionEngine",
-      "room.protocols.A2ATaskReaderCompatibility"
+      "common.protocols.RoomRouteReader"
     ]
   },
   {
@@ -1264,7 +1264,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "room.protocols.A2ATaskReaderCompatibility"
+      "common.protocols.RoomRouteReader"
     ]
   },
   {
@@ -1290,7 +1290,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "room.protocols.A2ATaskReaderCompatibility"
+      "common.protocols.RoomRouteReader"
     ]
   },
   {
@@ -1338,7 +1338,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "room.protocols.A2ATaskReaderCompatibility"
+      "common.protocols.RoomRouteReader"
     ]
   },
   {
@@ -1387,7 +1387,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "room.protocols.A2ATaskReaderCompatibility"
+      "common.protocols.RoomRouteReader"
     ]
   },
   {
@@ -1413,7 +1413,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "room.protocols.A2ATaskReaderCompatibility"
+      "common.protocols.RoomRouteReader"
     ]
   },
   {
@@ -1439,7 +1439,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "room.protocols.A2ATaskReaderCompatibility"
+      "common.protocols.RoomRouteReader"
     ]
   },
   {
@@ -1459,7 +1459,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "room.protocols.A2ATaskReaderCompatibility",
+    "owning_protocol": "common.protocols.A2ATaskStatusReader",
     "path": "/api/v1/rooms/{room_id}/a2a-tasks",
     "response_class": null,
     "response_model": "dict",
@@ -1569,7 +1569,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "room.protocols.A2ATaskReaderCompatibility"
+      "common.protocols.SSEStateReader"
     ]
   },
   {
@@ -1597,7 +1597,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "room.protocols.A2ATaskReaderCompatibility"
+      "common.protocols.SSEStateReader"
     ]
   },
   {
@@ -1633,7 +1633,7 @@
       "media_type": "text/event-stream"
     },
     "supporting_protocols": [
-      "room.protocols.A2ATaskReaderCompatibility"
+      "common.protocols.SSEStateReader"
     ]
   },
   {
@@ -1652,7 +1652,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "room.protocols.A2ATaskReaderCompatibility",
+    "owning_protocol": "common.protocols.A2ATaskStatusReader",
     "path": "/api/v1/users/me/a2a-tasks",
     "response_class": null,
     "response_model": "dict",
