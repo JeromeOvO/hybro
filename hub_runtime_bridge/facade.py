@@ -574,12 +574,23 @@ class HubFacade:
     def is_hub_connected_locally(self, hub_id: str) -> bool:
         return hub_id in self._queues
 
-    def _is_within_offline_grace_period(self, hub_id: str) -> bool:
+    def _has_exceeded_offline_grace_period(self, hub_id: str) -> bool:
         disconnected_at = self._hub_disconnected_at.get(hub_id)
         if disconnected_at is None:
             return False
         elapsed = time.monotonic() - disconnected_at
-        return elapsed <= self.deps.config.offline_grace_period_seconds
+        return elapsed > self.deps.config.offline_grace_period_seconds
+
+    def _log_legacy_push_rejected(self, hub_id: str, event: dict) -> None:
+        legacy_relay_logger.warning(
+            "Hub %s push rejected: redis_alive=False event_type=%s "
+            "agent_message_id=%s room_id=%s local_agent_id=%s",
+            hub_id,
+            event.get("type"),
+            event.get("agent_message_id"),
+            event.get("room_id"),
+            event.get("local_agent_id"),
+        )
 
     async def disconnect_hub(self, hub_id: str) -> None:
         queue = self._queues.get(hub_id)
@@ -604,22 +615,28 @@ class HubFacade:
         ):
             await self.deps.agent_registry_writer.mark_hub_agents_offline(hub_id)
 
-        result = await self.push_event_to_hub(hub_id, event)
-        if result is False:
-            legacy_relay_logger.warning(
-                "Hub %s push rejected: redis_alive=False event_type=%s "
-                "agent_message_id=%s room_id=%s local_agent_id=%s",
-                hub_id,
-                event.get("type"),
-                event.get("agent_message_id"),
-                event.get("room_id"),
-                event.get("local_agent_id"),
-            )
-            if self._is_within_offline_grace_period(hub_id):
+        if self.deps.streams:
+            if not was_online:
+                self._log_legacy_push_rejected(hub_id, event)
+                await self._mark_rejected_legacy_event(event, "Agent is offline")
                 return False
+            return bool(await self.deps.streams.push_event(hub_id, event))
+
+        queue = self._queues.get(hub_id)
+        if queue is not None:
+            await queue.put(event)
+            return True
+
+        if self._has_exceeded_offline_grace_period(hub_id):
+            self._log_legacy_push_rejected(hub_id, event)
             await self._mark_rejected_legacy_event(event, "Agent is offline")
             return False
-        return bool(result) and was_online
+
+        self._liveness_cache[hub_id] = False
+        dropped = self._offline_queue(hub_id).append(event)
+        if dropped is not None:
+            await self._mark_dropped_offline_event(dropped)
+        return False
 
     async def _push_event_dict(self, hub_id: str, event: dict) -> bool:
         if self.deps.streams:

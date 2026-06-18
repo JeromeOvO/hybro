@@ -666,7 +666,7 @@ class TestRelayServicePush:
         offline_failure_port.mark_hub_message_failed.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_push_to_recently_disconnected_hub_respects_grace_period(self):
+    async def test_push_to_offline_streams_hub_marks_failed_without_queue(self):
         offline_failure_port = MagicMock()
         offline_failure_port.mark_hub_message_failed = AsyncMock()
         svc = _make_relay_service(offline_failure_port=offline_failure_port)
@@ -682,19 +682,19 @@ class TestRelayServicePush:
 
         assert delivered is False
         writer.mark_hub_agents_offline.assert_awaited_once_with("hub-002")
-        offline_failure_port.mark_hub_message_failed.assert_not_awaited()
+        assert "hub-002" not in svc._facade._offline_queues
+        offline_failure_port.mark_hub_message_failed.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_push_to_disconnected_hub_marks_failed_after_grace_period(self):
+    async def test_push_to_disconnected_in_memory_hub_marks_failed_after_grace_period(
+        self,
+    ):
         offline_failure_port = MagicMock()
         offline_failure_port.mark_hub_message_failed = AsyncMock()
         svc = _make_relay_service(
             offline_failure_port=offline_failure_port,
             config=HubRuntimeBridgeConfig(offline_grace_period_seconds=1),
         )
-        streams = MagicMock()
-        streams.is_hub_alive = AsyncMock(return_value=False)
-        svc._facade.bind_streams(streams)
         svc._facade._hub_disconnected_at["hub-002"] = time.monotonic() - 2
 
         event = RelayToHubEvent(
@@ -705,6 +705,7 @@ class TestRelayServicePush:
         delivered = await svc.push_to_hub("hub-002", event)
 
         assert delivered is False
+        assert "hub-002" not in svc._facade._offline_queues
         offline_failure_port.mark_hub_message_failed.assert_awaited_once()
 
     @pytest.mark.asyncio
