@@ -10,15 +10,15 @@ Tests cover:
 - Offline queue behavior (enqueue, overflow)
 """
 
+import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app_shell.relay_service import (
     RelayService,
     _LegacyPublishSink,
-    _RelayPublishAuthorizationReader,
     init_relay_service,
 )
 from common.dto import HubDispatchCommand
@@ -26,6 +26,10 @@ from common.dto.agent import SyncedHubAgent
 from execution.dispatch.agent_event import AgentEvent
 from execution.dispatch.response_handler import AgentResponseHandler
 from execution.dispatch.transports.relay import RelayTransport
+from hub_runtime_bridge.adapters.legacy_publish import (
+    LegacyHubPublishAuthorizationReader,
+)
+from hub_runtime_bridge.config import HubRuntimeBridgeConfig
 from models.api_key import APIKey
 from models.hub import (
     HubAgentSync,
@@ -70,6 +74,7 @@ def _make_relay_service(
     db_service=None,
     sse_manager=None,
     offline_failure_port=None,
+    config=None,
 ) -> RelayService:
     if mongo is None:
         mongo = MagicMock()
@@ -110,6 +115,7 @@ def _make_relay_service(
         db=db_service,
         sse_manager=sse_manager,
         offline_failure_port=offline_failure_port,
+        config=config,
     )
 
     # Wire up RelayTransport for publish event delegation
@@ -128,19 +134,19 @@ def _make_relay_service(
 
 
 @pytest.mark.asyncio
-async def test_relay_service_uses_injected_offline_failure_port():
+async def test_hub_facade_uses_injected_offline_failure_port_for_legacy_rejections():
     offline_failure_port = MagicMock()
     offline_failure_port.mark_hub_message_failed = AsyncMock()
     svc = _make_relay_service(offline_failure_port=offline_failure_port)
 
-    await svc._fail_offline_message(
-        RelayToHubEvent(
-            type="user_message",
-            room_id="room-1",
-            agent_message_id="agent-message-1",
-            agent_id="agent-1",
-            task_id="task-1",
-        ),
+    await svc._facade._mark_rejected_legacy_event(
+        {
+            "type": "user_message",
+            "room_id": "room-1",
+            "agent_message_id": "agent-message-1",
+            "agent_id": "agent-1",
+            "task_id": "task-1",
+        },
         "Agent is offline",
     )
 
@@ -322,7 +328,7 @@ async def test_relay_publish_authorization_uses_related_message_as_legacy_lifecy
     )
     db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
     db.get_agent_by_agent_id = AsyncMock(return_value=MagicMock(hub_id="hub-001"))
-    reader = _RelayPublishAuthorizationReader(db)
+    reader = LegacyHubPublishAuthorizationReader(db)
 
     lineage = await reader.authorize_hub_publish(
         hub_id="hub-001",
@@ -358,7 +364,7 @@ async def test_relay_publish_authorization_walks_agent_parent_chain_to_root_user
         side_effect=[None, MagicMock(message_type="user")]
     )
     db.get_agent_by_agent_id = AsyncMock(return_value=MagicMock(hub_id="hub-001"))
-    reader = _RelayPublishAuthorizationReader(db)
+    reader = LegacyHubPublishAuthorizationReader(db)
 
     lineage = await reader.authorize_hub_publish(
         hub_id="hub-001",
@@ -434,27 +440,15 @@ class TestIsHubConnectedLocally:
         svc = _make_relay_service()
         assert svc._is_hub_connected_locally("hub-001") is False
 
-    def test_returns_true_for_queue_path(self):
+    @pytest.mark.asyncio
+    async def test_returns_true_for_live_facade_stream(self):
         svc = _make_relay_service()
-        svc._hub_queues["hub-001"] = MagicMock()
+        stream = svc._facade.connect_hub_stream("hub-001")
+
+        assert await stream.__anext__() == {"type": "connection_ready"}
         assert svc._is_hub_connected_locally("hub-001") is True
 
-    def test_returns_true_for_streams_path(self):
-        """Streams path uses _hub_disconnect_events, not _hub_queues."""
-        import asyncio
-
-        svc = _make_relay_service()
-        svc._hub_disconnect_events["hub-001"] = asyncio.Event()
-        assert svc._is_hub_connected_locally("hub-001") is True
-
-    def test_returns_true_for_both_paths(self):
-        """If somehow both are present, still returns True."""
-        import asyncio
-
-        svc = _make_relay_service()
-        svc._hub_queues["hub-001"] = MagicMock()
-        svc._hub_disconnect_events["hub-001"] = asyncio.Event()
-        assert svc._is_hub_connected_locally("hub-001") is True
+        await stream.aclose()
 
 
 # ===========================================================================
@@ -643,21 +637,23 @@ class TestRelayServiceAgentSync:
 class TestRelayServicePush:
     @pytest.mark.asyncio
     async def test_push_to_online_hub(self):
-        import asyncio
-
         svc = _make_relay_service()
-        q = asyncio.Queue()
-        svc._hub_queues["hub-001"] = q
+        stream = svc._facade.connect_hub_stream("hub-001")
+        assert await stream.__anext__() == {"type": "connection_ready"}
 
         event = RelayToHubEvent(type="user_message", room_id="room-1")
         delivered = await svc.push_to_hub("hub-001", event)
 
         assert delivered is True
-        assert q.qsize() == 1
+        queued = await stream.__anext__()
+        assert queued["type"] == "user_message"
+        await stream.aclose()
 
     @pytest.mark.asyncio
     async def test_push_to_offline_hub_queues(self):
-        svc = _make_relay_service()
+        offline_failure_port = MagicMock()
+        offline_failure_port.mark_hub_message_failed = AsyncMock()
+        svc = _make_relay_service(offline_failure_port=offline_failure_port)
         writer = _make_writer()
         svc.bind_agent_registry_writer(writer)
 
@@ -665,63 +661,105 @@ class TestRelayServicePush:
         delivered = await svc.push_to_hub("hub-002", event)
 
         assert delivered is False
-        assert len(svc._offline_queues["hub-002"]) == 1
+        assert len(svc._facade._offline_queues["hub-002"]) == 1
         writer.mark_hub_agents_offline.assert_awaited_once_with("hub-002")
+        offline_failure_port.mark_hub_message_failed.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_offline_queue_overflow_drops_oldest(self):
-        svc = _make_relay_service()
-        svc.bind_agent_registry_writer(_make_writer())
-
-        with patch("app_shell.relay_service.settings") as mock_settings:
-            mock_settings.relay_offline_queue_max = 2
-            mock_settings.relay_offline_queue_ttl = 86400
-
-            for i in range(3):
-                event = RelayToHubEvent(
-                    type="user_message",
-                    room_id="room-1",
-                    agent_message_id=f"msg-{i}",
-                )
-                await svc.push_to_hub("hub-002", event)
-
-        assert len(svc._offline_queues["hub-002"]) == 2
-
-    @pytest.mark.asyncio
-    async def test_disconnect_preserves_pending_queue_events(self):
-        import asyncio
-
-        svc = _make_relay_service()
+    async def test_push_to_offline_streams_hub_marks_failed_without_queue(self):
+        offline_failure_port = MagicMock()
+        offline_failure_port.mark_hub_message_failed = AsyncMock()
+        svc = _make_relay_service(offline_failure_port=offline_failure_port)
         writer = _make_writer()
         svc.bind_agent_registry_writer(writer)
-        q = asyncio.Queue()
+        streams = MagicMock()
+        streams.is_hub_alive = AsyncMock(return_value=False)
+        svc._facade.bind_streams(streams)
+        svc._facade._hub_disconnected_at["hub-002"] = time.monotonic()
+
+        event = RelayToHubEvent(type="user_message", room_id="room-1")
+        delivered = await svc.push_to_hub("hub-002", event)
+
+        assert delivered is False
+        writer.mark_hub_agents_offline.assert_awaited_once_with("hub-002")
+        assert "hub-002" not in svc._facade._offline_queues
+        offline_failure_port.mark_hub_message_failed.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_push_to_disconnected_in_memory_hub_marks_failed_after_grace_period(
+        self,
+    ):
+        offline_failure_port = MagicMock()
+        offline_failure_port.mark_hub_message_failed = AsyncMock()
+        svc = _make_relay_service(
+            offline_failure_port=offline_failure_port,
+            config=HubRuntimeBridgeConfig(offline_grace_period_seconds=1),
+        )
+        svc._facade._hub_disconnected_at["hub-002"] = time.monotonic() - 2
+
         event = RelayToHubEvent(
             type="user_message",
             room_id="room-1",
             agent_message_id="msg-1",
-            agent_id="agent-1",
         )
-        await q.put(event.model_dump(mode="json"))
-        svc._hub_queues["hub-001"] = q
+        delivered = await svc.push_to_hub("hub-002", event)
 
-        await svc._disconnect_hub("hub-001", q, "conn-1")
+        assert delivered is False
+        assert "hub-002" not in svc._facade._offline_queues
+        offline_failure_port.mark_hub_message_failed.assert_awaited_once()
 
-        offline = svc._offline_queues["hub-001"]
+    @pytest.mark.asyncio
+    async def test_offline_queue_overflow_drops_oldest(self):
+        svc = _make_relay_service(
+            config=HubRuntimeBridgeConfig(
+                offline_queue_max=2,
+                offline_queue_ttl_seconds=86400,
+            )
+        )
+        svc.bind_agent_registry_writer(_make_writer())
+
+        for i in range(3):
+            event = RelayToHubEvent(
+                type="user_message",
+                room_id="room-1",
+                agent_message_id=f"msg-{i}",
+            )
+            await svc.push_to_hub("hub-002", event)
+
+        assert len(svc._facade._offline_queues["hub-002"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_disconnect_preserves_pending_queue_events(self):
+        svc = _make_relay_service()
+        writer = _make_writer()
+        svc.bind_agent_registry_writer(writer)
+        stream = svc._facade.connect_hub_stream("hub-001")
+        assert await stream.__anext__() == {"type": "connection_ready"}
+        await svc.send_to_hub(
+            HubDispatchCommand(
+                hub_id="hub-001",
+                agent_id="agent-1",
+                local_agent_id="local-1",
+                room_id="room-1",
+                user_message_id="user-msg-1",
+                agent_message_id="msg-1",
+                payload={"text": "hello"},
+                task_id="task-1",
+            )
+        )
+
+        await stream.aclose()
+
+        offline = svc._facade._offline_queues["hub-001"]
         assert len(offline) == 1
-        assert offline[0].event.agent_message_id == "msg-1"
-        svc._mongo.update_hub_status_if_current.assert_awaited_once_with(
-            "hub-001", connection_id="conn-1", is_online=False
-        )
-        writer.mark_hub_agents_offline.assert_awaited_once_with("hub-001")
+        assert offline.pop_fresh()[0]["agent_message_id"] == "msg-1"
 
 
 @pytest.mark.asyncio
 async def test_cancel_relay_task_uses_in_memory_live_queue_without_streams():
-    import asyncio
-
     svc = _make_relay_service()
-    q = asyncio.Queue()
-    svc._hub_queues["hub-001"] = q
+    stream = svc._facade.connect_hub_stream("hub-001")
+    assert await stream.__anext__() == {"type": "connection_ready"}
 
     delivered = await svc.cancel_relay_task(
         "hub-001",
@@ -730,19 +768,18 @@ async def test_cancel_relay_task_uses_in_memory_live_queue_without_streams():
         task_id="task-1",
     )
 
-    event = await q.get()
+    event = await stream.__anext__()
     assert delivered is True
     assert event["type"] == "cancel_task"
     assert event["task_id"] == "task-1"
+    await stream.aclose()
 
 
 @pytest.mark.asyncio
 async def test_reply_to_relay_task_uses_in_memory_live_queue_without_streams():
-    import asyncio
-
     svc = _make_relay_service()
-    q = asyncio.Queue()
-    svc._hub_queues["hub-001"] = q
+    stream = svc._facade.connect_hub_stream("hub-001")
+    assert await stream.__anext__() == {"type": "connection_ready"}
 
     delivered = await svc.reply_to_relay_task(
         "hub-001",
@@ -754,19 +791,18 @@ async def test_reply_to_relay_task_uses_in_memory_live_queue_without_streams():
         context_id="ctx-1",
     )
 
-    event = await q.get()
+    event = await stream.__anext__()
     assert delivered is True
     assert event["type"] == "user_reply"
     assert event["reply_text"] == "yes"
+    await stream.aclose()
 
 
 @pytest.mark.asyncio
 async def test_send_to_hub_uses_in_memory_live_queue_without_streams():
-    import asyncio
-
     svc = _make_relay_service()
-    q = asyncio.Queue()
-    svc._hub_queues["hub-001"] = q
+    stream = svc._facade.connect_hub_stream("hub-001")
+    assert await stream.__anext__() == {"type": "connection_ready"}
 
     result = await svc.send_to_hub(
         HubDispatchCommand(
@@ -781,12 +817,13 @@ async def test_send_to_hub_uses_in_memory_live_queue_without_streams():
         )
     )
 
-    event = await q.get()
+    event = await stream.__anext__()
     assert result.accepted is True
     assert event["type"] == "user_message"
     assert event["task_id"] == "task-1"
     assert event["agent_message_id"] == "agent-msg-1"
     assert event["message"] == {"text": "hello"}
+    await stream.aclose()
 
 
 # ===========================================================================

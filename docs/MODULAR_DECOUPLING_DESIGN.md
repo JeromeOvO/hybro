@@ -170,8 +170,8 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 > runtime ports. A2A SDK calls and response coercion live in `a2a_adapter`;
 > room CRUD/message behavior lives in Room; orchestration scheduling lives in
 > Execution; context assembly, legacy turn selection, and context metrics live
-> in Context & Memory; relay queues/liveness live in HubRuntimeBridge; hub
-> publish authorization adapters live in
+> in Context & Memory; relay queues/liveness and legacy push/offline failure
+> handling live in HubRuntimeBridge; hub publish authorization adapters live in
 > HubRuntimeBridge; A2A task-tracking placeholder creation, tracked-send push
 > configuration, failure persistence, terminal response persistence, and HITL
 > reply task persistence live in Execution; object-storage behavior lives in
@@ -2330,6 +2330,7 @@ class AgentService:
 | Hub relay | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_relay.py` |
 | Hub liveness | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_liveness.py` |
 | Hub connection | `api/hub.py` | HubRuntimeBridge | `service/hub_connection.py` |
+| Hub route lifecycle compatibility | `app_shell/relay_service.py` shim | HubRuntimeBridge | `adapters/legacy_lifecycle.py` |
 | Hub publish intake | `hub_runtime_bridge/service/hub_publish.py` | HubRuntimeBridge | `service/hub_publish.py` |
 | Offline queue | `hub_runtime_bridge/` | HubRuntimeBridge | `transport/offline_queue.py` |
 | Redis Streams relay | `app_shell/redis_runtime.py` | HubRuntimeBridge | `transport/relay_transport.py` |
