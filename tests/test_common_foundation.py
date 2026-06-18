@@ -928,6 +928,13 @@ def test_protocol_methods_match_design_doc():
         },
         protocols.HubAgentResponseSink: {"handle_hub_agent_response"},
         protocols.RoomActiveRunReader: {"__call__"},
+        protocols.A2ATaskStatusReader: {
+            "get_room_agent_message_by_message_id",
+            "get_task_messages_for_room",
+            "get_pending_task_messages_for_user",
+        },
+        protocols.RoomRouteReader: {"get_room_by_room_id"},
+        protocols.SSEStateReader: {"get_room_user_message_by_message_id"},
         protocols.EventPublisher: {
             "emit",
             "emit_internal",
@@ -1372,8 +1379,11 @@ def test_protocol_methods_match_design_doc():
     marker_protocols = {
         protocols.APIKeyPrincipal,
         protocols.APIKeyRecord,
+        protocols.A2ATaskStatusMessage,
         protocols.LLMGateway,
         protocols.MongoChangeStream,
+        protocols.RoomRouteRecord,
+        protocols.SSEUserMessageRecord,
         protocols.ViewSetDatabase,
     }
     missing_coverage = protocol_exports - set(expected_methods) - marker_protocols
