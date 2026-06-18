@@ -1,8 +1,6 @@
 import re
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
-from datetime import timedelta
 from enum import Enum
 from typing import Any
 from uuid import uuid4
@@ -14,7 +12,7 @@ from app_shell.delivery_runtime import sse_manager
 from app_shell.memory_service import room_memory_service
 from app_shell.runtime_store import UNBOUND_RUNTIME_STORE
 from app_shell.task_service import task_service
-from common.a2a_constants import SSEProcessingStatus, is_terminal_state
+from common.a2a_constants import SSEProcessingStatus
 from common.dto import (
     AgentRoutingCandidate,
     CreateRoomRequest,
@@ -23,9 +21,8 @@ from common.dto import (
     ParsedUserMessageRequest,
     RoomInfo,
 )
+from common.protocols import RoomActiveRunReader
 from common.types import (
-    FileContent,
-    FilePart,
     Message,
     Part,
     Task,
@@ -46,11 +43,10 @@ from common.utils.context_utils import (
 )
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
+from context_memory.projection import _human_size, build_turn_content
 from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import AgentStatus
-from models.file_upload import MAX_ATTACHMENTS_PER_MESSAGE
 from models.memory import MemoryContent, RoomMemory
-from models.quote import QuoteSourceKind
 from models.request import (
     AgentCenterRequest,
     RoomCenterAgentMessageRequest,
@@ -81,6 +77,17 @@ from models.room import (
     UserAttachment,
 )
 from models.room_services_models import ParseResult
+from room.attachments import (
+    ResolvedAttachments as _ResolvedAttachments,
+)
+from room.attachments import (
+    build_message_parts as platform_build_message_parts,
+)
+from room.attachments import (
+    refresh_artifact_presigned_urls,
+    resolve_and_apply_room_attachments,
+    resolve_room_attachments,
+)
 
 logger = get_logger(__name__)
 
@@ -108,16 +115,6 @@ def resolve_strategy(
     return DispatchStrategy.SINGLE
 
 
-def _human_size(size_bytes: int) -> str:
-    """Format bytes as human-readable string: 512B, 245KB, 1.2MB."""
-    if size_bytes < 1024:
-        return f"{size_bytes}B"
-    elif size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.0f}KB"
-    else:
-        return f"{size_bytes / (1024 * 1024):.1f}MB"
-
-
 def _agent_to_routing_candidate(agent) -> AgentRoutingCandidate:
     card = agent.agent_card
     capabilities = card.capabilities if isinstance(card.capabilities, dict) else {}
@@ -135,26 +132,6 @@ def _agent_to_routing_candidate(agent) -> AgentRoutingCandidate:
         capabilities=capabilities,
         skills=skills,
     )
-
-
-def build_turn_content(
-    message_text: str, attachments: list[UserAttachment] | None
-) -> str:
-    """Build conversation turn content with optional attachment annotations."""
-    content = message_text or ""
-    if attachments:
-        descriptions = []
-        for att in attachments:
-            size_str = _human_size(att.size_bytes) if att.size_bytes else "unknown size"
-            descriptions.append(f"{att.file_name} ({att.mime_type}, {size_str})")
-        content += f"\n[Attachments: {', '.join(descriptions)}]"
-    return content
-
-
-@dataclass
-class _ResolvedAttachments:
-    attachments: list[UserAttachment]
-    content_summary: dict | None
 
 
 class RoomServices:
@@ -175,7 +152,7 @@ class RoomServices:
         self._facade = None
         self._bound = False
         self._context_memory_manager = None
-        self._active_run_reader: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None
+        self._active_run_reader: RoomActiveRunReader | None = None
         self._hitl_pending_checker: Callable[[str], Awaitable[list[Any]]] | None = None
         self._processing_status_emitter: Callable[..., Awaitable[dict[str, Any] | None]] | None = None
         self._attachment_metadata_reader = None
@@ -193,9 +170,9 @@ class RoomServices:
     @property
     def s3_service(self):
         if self._s3_service is None:
-            from app_shell.s3_service import s3_service
-
-            self._s3_service = s3_service
+            raise RuntimeError(
+                "RoomServices.bind_s3_service() not called - startup incomplete"
+            )
         return self._s3_service
 
     def bind_facade(self, facade) -> None:
@@ -213,7 +190,7 @@ class RoomServices:
 
     def bind_active_run_reader(
         self,
-        reader: Callable[[str], Awaitable[list[dict[str, Any]]]],
+        reader: RoomActiveRunReader,
     ) -> None:
         self._active_run_reader = reader
 
@@ -249,10 +226,9 @@ class RoomServices:
     async def _read_active_runs_for_room(self, room_id: str) -> list[dict[str, Any]]:
         reader = getattr(self, "_active_run_reader", None)
         if reader is None:
-            active_runs_raw = await self._store.get_active_runs_by_room_id(
-                room_id
+            raise RuntimeError(
+                "RoomServices.bind_active_run_reader() not called - startup incomplete"
             )
-            return self._active_run_payloads_from_raw(active_runs_raw)
         try:
             return await reader(room_id)
         except Exception as e:
@@ -638,59 +614,11 @@ class RoomServices:
             active_runs=await self._read_active_runs_for_room(room_id),
         )
 
-        room = await self._store.get_room_by_room_id(room_id)
-        if room is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room not found",
-                status_code=404,
-            )
-        else:
-            # Ensure room_agent_set is always returned in canonical {agent_id: agent_name} form
-            normalized_agent_set = self._normalize_room_agent_set(room.room_agent_set)
-            needs_write = normalized_agent_set != (room.room_agent_set or {})
-            if needs_write:
-                room.room_agent_set = normalized_agent_set
-
-            # Backfill canonical provenance for legacy rooms
-            if room.membership_origin is None:
-                if room.applied_from_group:
-                    room.membership_origin = MembershipOrigin.SAVED_GROUP
-                    room.membership_origin_status = MembershipOriginStatus.SEEDED_NEVER_EDITED
-                    room.source_group_id = room.applied_from_group
-                elif room.room_agent_set:
-                    room.membership_origin = MembershipOrigin.MANUAL
-                    room.membership_origin_status = MembershipOriginStatus.MANUAL
-                else:
-                    room.membership_origin = MembershipOrigin.MANUAL
-                    room.membership_origin_status = MembershipOriginStatus.MANUAL
-                needs_write = True
-
-            if needs_write:
-                await self._store.update_room_by_room_id(room_id, room)
-
-            resolved_agents, room_default_status = await self._resolve_room_agent_refs(
-                room.room_agent_set, viewer_user_id=request.requesting_user_id
-            )
-            active_runs = await self._read_active_runs_for_room(room.room_id)
-
-            return RoomCenterRoomSettingResponse(
-                room_id=room.room_id,
-                room=room,
-                resolved_agents=resolved_agents,
-                room_default_status=room_default_status,
-                active_runs=active_runs,
-                success=True,
-                error=None,
-                status_code=200,
-            )
-
     async def inquiry_active_runs(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterActiveRunsResponse:
         """Return non-terminal runs for a room (same run shape as inquiry_room_setting)."""
+        facade = self._require_facade()
         if request.room_id is None:
             return RoomCenterActiveRunsResponse(
                 room_id=None,
@@ -701,8 +629,8 @@ class RoomServices:
             )
 
         room_id = request.room_id
-        room = await self._store.get_room_by_room_id(room_id)
-        if room is None:
+        info = await facade.get_room(room_id)
+        if info is None:
             return RoomCenterActiveRunsResponse(
                 room_id=None,
                 active_runs=None,
@@ -711,7 +639,7 @@ class RoomServices:
                 status_code=404,
             )
 
-        active_runs = await self._read_active_runs_for_room(room.room_id)
+        active_runs = await self._read_active_runs_for_room(info.room_id)
 
         turn_completion_kind: str | None = None
         trigger_msg_id = request.trigger_message_id
@@ -719,20 +647,14 @@ class RoomServices:
             r.get("trigger_message_id") == trigger_msg_id for r in active_runs
         ):
             try:
-                user_msg = (
-                    await self._store.get_room_user_message_by_message_id(
-                        trigger_msg_id
-                    )
+                turn_completion_kind = await facade.get_turn_completion_kind(
+                    trigger_msg_id
                 )
-                if user_msg and isinstance(user_msg.extend_info, dict):
-                    kind = user_msg.extend_info.get("turn_completion_kind")
-                    if kind in ("synthesis", "deterministic"):
-                        turn_completion_kind = kind
             except Exception:
                 pass
 
         return RoomCenterActiveRunsResponse(
-            room_id=room.room_id,
+            room_id=info.room_id,
             active_runs=active_runs,
             turn_completion_kind=turn_completion_kind,
             success=True,
@@ -759,11 +681,6 @@ class RoomServices:
             success=True,
             error=None,
             status_code=200,
-        )
-
-        rooms = await self._store.get_rooms_by_room_owner_id(room_owner_id)
-        return RoomCenterRoomSettingResponse(
-            room_list=rooms, success=True, error=None, status_code=200
         )
 
     async def update_room_agent_set(
@@ -802,82 +719,6 @@ class RoomServices:
             return self._room_error_response(room_id=room_id, error=str(exc))
         return self._room_setting_response_from_info(info)
 
-        room = await self._store.get_room_by_room_id(room_id)
-        if room is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room not found",
-                status_code=404,
-            )
-
-        has_membership_input = (
-            request.membership_seed_input is not None
-            or request.room_agent_set is not None
-        )
-        if not has_membership_input:
-            return RoomCenterRoomSettingResponse(
-                room_id=None, room=None, success=False,
-                error="Room agent set or canonical membership input is required",
-                status_code=400,
-            )
-
-        result = await self._resolve_membership_input(request, existing_room=room)
-        if isinstance(result, RoomCenterRoomSettingResponse):
-            return result
-        new_agent_set, origin, origin_status, source_group_id, source_group_name = result
-
-        # Validate access to NEW agents
-        if request.requesting_user_id:
-            existing_ids = set(room.room_agent_set.keys()) if room.room_agent_set else set()
-            new_ids = set(new_agent_set.keys()) - existing_ids
-            if new_ids:
-                inaccessible = await self._validate_agents_access(
-                    list(new_ids), request.requesting_user_id
-                )
-                if inaccessible:
-                    return RoomCenterRoomSettingResponse(
-                        room_id=room_id, room=None, success=False,
-                        error=f"Access denied to private agents: {', '.join(inaccessible)}",
-                        status_code=403,
-                    )
-
-        room.room_agent_set = new_agent_set
-
-        # Update provenance from the resolved result.
-        if request.membership_seed_input is not None or request.applied_from_group:
-            room.membership_origin = origin
-            room.membership_origin_status = origin_status
-            room.source_group_id = source_group_id
-            room.source_group_name = source_group_name
-        else:
-            # Legacy manual edit without applied_from_group
-            if room.membership_origin in (MembershipOrigin.SAVED_GROUP, MembershipOrigin.ALL_CURRENT_AGENTS):
-                room.membership_origin_status = MembershipOriginStatus.SEEDED_EDITED
-            else:
-                room.membership_origin = MembershipOrigin.MANUAL
-                room.membership_origin_status = MembershipOriginStatus.MANUAL
-        success = await self._store.update_room_by_room_id(room_id, room)
-        if success:
-            resolved_agents, room_default_status = await self._resolve_room_agent_refs(
-                room.room_agent_set, viewer_user_id=request.requesting_user_id
-            )
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id, room=room,
-                resolved_agents=resolved_agents,
-                room_default_status=room_default_status,
-                success=True, error=None, status_code=200,
-            )
-        else:
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id,
-                room=None,
-                success=False,
-                error="Failed to update room agent set",
-                status_code=500,
-            )
-
     async def update_room_name(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
@@ -912,40 +753,6 @@ class RoomServices:
             )
         return self._room_setting_response_from_info(info)
 
-        room = await self._store.get_room_by_room_id(room_id)
-        if room is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room not found",
-                status_code=404,
-            )
-
-        if request.room_name is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room name is required",
-                status_code=400,
-            )
-
-        room.room_name = request.room_name
-        success = await self._store.update_room_by_room_id(room_id, room)
-        if success:
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id, room=room, success=True, error=None, status_code=200
-            )
-        else:
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id,
-                room=None,
-                success=False,
-                error="Failed to update room name",
-                status_code=500,
-            )
-
     async def update_room_extend_info(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
@@ -979,40 +786,6 @@ class RoomServices:
                 status_code=404,
             )
         return self._room_setting_response_from_info(info)
-
-        room = await self._store.get_room_by_room_id(room_id)
-        if room is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room not found",
-                status_code=404,
-            )
-
-        if request.extend_info is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Extend info is required",
-                status_code=400,
-            )
-
-        room.extend_info = request.extend_info
-        success = await self._store.update_room_by_room_id(room_id, room)
-        if success:
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id, room=room, success=True, error=None, status_code=200
-            )
-        else:
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id,
-                room=None,
-                success=False,
-                error="Failed to update room extend info",
-                status_code=500,
-            )
 
     async def delete_room_by_room_id(
         self, request: RoomCenterRoomSettingRequest
@@ -1136,58 +909,10 @@ class RoomServices:
         file_ids: list[str],
         room_id: str,
     ) -> "_ResolvedAttachments | RoomCenterUserMessageResponse":
-        """Resolve file_id list to server-authoritative UserAttachment objects."""
-        if len(file_ids) > MAX_ATTACHMENTS_PER_MESSAGE:
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error=f"Maximum {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message",
-                status_code=400,
-            )
-
-        attachments: list[UserAttachment] = []
-        attachment_reader = getattr(self, "_attachment_metadata_reader", None)
-        for file_id in file_ids:
-            if attachment_reader is None:
-                return RoomCenterUserMessageResponse(
-                    message_id=None,
-                    message=None,
-                    success=False,
-                    error="Attachment resolution unavailable",
-                    status_code=503,
-                )
-            file_meta = await attachment_reader.get_for_room_file(room_id, file_id)
-            if not file_meta:
-                return RoomCenterUserMessageResponse(
-                    message_id=None,
-                    message=None,
-                    success=False,
-                    error=f"File {file_id} not found",
-                    status_code=404,
-                )
-            attachments.append(
-                UserAttachment(
-                    file_id=file_id,
-                    s3_key=file_meta["s3_key"],
-                    mime_type=file_meta["mime_type"],
-                    file_name=file_meta["file_name"],
-                    size_bytes=file_meta["size_bytes"],
-                )
-            )
-
-        content_summary = None
-        if attachments:
-            mime_types = [a.mime_type for a in attachments]
-            content_summary = {
-                "has_images": any(m.startswith("image/") for m in mime_types),
-                "has_files": any(not m.startswith("image/") for m in mime_types),
-                "attachment_count": len(attachments),
-                "mime_types": mime_types,
-            }
-
-        return _ResolvedAttachments(
-            attachments=attachments, content_summary=content_summary
+        return await resolve_room_attachments(
+            file_ids=file_ids,
+            room_id=room_id,
+            attachment_reader=getattr(self, "_attachment_metadata_reader", None),
         )
 
     async def _resolve_and_apply_attachments(
@@ -1195,49 +920,11 @@ class RoomServices:
         request: RoomCenterUserMessageRequest,
         user_message: RoomUserMessage,
     ) -> RoomCenterUserMessageResponse | None:
-        """Collect file_ids from both sources, resolve, and apply to message.
-
-        Returns an error response if validation fails, or None on success.
-        """
-        file_ids: list[str] = []
-        seen: set[str] = set()
-
-        if request.attachments:
-            for att in request.attachments:
-                if att.file_id not in seen:
-                    file_ids.append(att.file_id)
-                    seen.add(att.file_id)
-
-        if request.inline_file_ids:
-            for fid in request.inline_file_ids:
-                if fid not in seen:
-                    file_ids.append(fid)
-                    seen.add(fid)
-
-        if user_message.message_content:
-            user_message.message_content.attachments = None
-            user_message.message_content.content_summary = None
-
-        if file_ids:
-            resolved = await self._resolve_attachments(file_ids, request.room_id)
-            if isinstance(resolved, RoomCenterUserMessageResponse):
-                return resolved
-            user_message.message_content.attachments = resolved.attachments
-            user_message.message_content.content_summary = resolved.content_summary
-
-        return None
-
-    FILE_CAPABLE_EXACT = frozenset({"file", "*/*"})
-    FILE_CAPABLE_PREFIXES = frozenset({"image/", "audio/", "video/"})
-    FILE_CAPABLE_MIMES = frozenset(
-        {
-            "application/pdf",
-            "application/octet-stream",
-            "application/zip",
-            "application/x-tar",
-            "application/gzip",
-        }
-    )
+        return await resolve_and_apply_room_attachments(
+            request=request,
+            user_message=user_message,
+            attachment_reader=getattr(self, "_attachment_metadata_reader", None),
+        )
 
     async def _build_message_parts(
         self,
@@ -1245,42 +932,12 @@ class RoomServices:
         attachments: list[UserAttachment] | None,
         agent_card,
     ) -> list[Part]:
-        """Build A2A message parts from text and optional attachments."""
-        parts = [Part(root=TextPart(text=text))]
-
-        if not attachments:
-            return parts
-
-        agent_input_modes_raw = getattr(agent_card, "default_input_modes", None)
-        if agent_input_modes_raw is None:
-            agent_input_modes_raw = getattr(agent_card, "defaultInputModes", None)
-        agent_input_modes = set(agent_input_modes_raw or ["text"])
-
-        supports_files = bool(
-            agent_input_modes & self.FILE_CAPABLE_EXACT
-            or agent_input_modes & self.FILE_CAPABLE_MIMES
-            or any(
-                any(m.startswith(prefix) for prefix in self.FILE_CAPABLE_PREFIXES)
-                for m in agent_input_modes
-            )
+        return await platform_build_message_parts(
+            text=text,
+            attachments=attachments,
+            agent_card=agent_card,
+            object_storage=self.s3_service,
         )
-
-        if supports_files:
-            for att in attachments:
-                presigned_url = await self.s3_service.generate_presigned_url(att.s3_key)
-                parts.append(
-                    Part(
-                        root=FilePart(
-                            file=FileContent(
-                                uri=presigned_url,
-                                mimeType=att.mime_type,
-                                name=att.file_name,
-                            )
-                        )
-                    )
-                )
-
-        return parts
 
     # room user message management
     def parse_agent_mentions(
@@ -2357,25 +2014,16 @@ class RoomServices:
 
         if not await self._persist_user_message(user_message):
             if getattr(user_message, "quote_id", None):
-                quote_writer = getattr(self, "_quote_writer", None)
                 quote_id = user_message.quote_id
-                delete_by_id = getattr(quote_writer, "delete_by_id", None)
-                if callable(delete_by_id):
-                    try:
-                        await delete_by_id(quote_id)
-                    except Exception:
-                        logger.warning(
-                            "Failed to remove quoted snippet %s for room %s after "
-                            "message persistence failure",
-                            quote_id,
-                            request.room_id,
-                            exc_info=True,
-                        )
-                else:
+                try:
+                    await self._require_facade().delete_room_quote(quote_id)
+                except Exception:
                     logger.warning(
-                        "Quote writer missing delete_by_id for room %s, quote %s",
-                        request.room_id,
+                        "Failed to remove quoted snippet %s for room %s after "
+                        "message persistence failure",
                         quote_id,
+                        request.room_id,
+                        exc_info=True,
                     )
             return RoomCenterUserMessageResponse(
                 message_id=None,
@@ -2686,114 +2334,16 @@ class RoomServices:
         request: RoomCenterUserMessageRequest,
         user_message: RoomUserMessage,
     ) -> RoomCenterUserMessageResponse | None:
-        """Persist ``QuotedSnippet`` when ``user_message.quote`` is set; dual-write extend_info."""
-        payload = user_message.quote
-        if payload is None:
-            return None
-
-        quote_writer = getattr(self, "_quote_writer", None)
-        text = payload.text.strip()
-        if not text:
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="Quote text is required",
-                status_code=400,
-            )
-
-        source_kind = (
-            payload.source_kind.value
-            if hasattr(payload.source_kind, "value")
-            else payload.source_kind
+        facade = self._require_facade()
+        return await facade.materialize_quote(
+            room=room,
+            request=request,
+            user_message=user_message,
         )
-        source_kind_value = str(source_kind)
-        if source_kind_value not in {"unknown", QuoteSourceKind.UNKNOWN.value, ""}:
-            source_message = None
-            expected_message_type = {
-                "user_turn": "user",
-                "agent": "agent",
-                "synthesis": "agent",
-            }.get(source_kind_value.lower())
-            if self._facade is not None:
-                source_message = await self._facade.get_message(
-                    payload.source_message_id
-                )
-                if source_message is None or source_message.room_id != room.room_id:
-                    return RoomCenterUserMessageResponse(
-                        message_id=None,
-                        message=None,
-                        success=False,
-                        error="Invalid quote source",
-                        status_code=400,
-                    )
-            else:
-                logger.warning(
-                    "Quote source validation skipped for message %s because no room facade "
-                    "is available.",
-                    payload.source_message_id,
-                )
-            if (
-                expected_message_type is not None
-                and source_message is not None
-                and source_message.message_type != expected_message_type
-            ):
-                return RoomCenterUserMessageResponse(
-                    message_id=None,
-                    message=None,
-                    success=False,
-                    error="Invalid quote source type",
-                    status_code=400,
-                )
-
-        if quote_writer is None:
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="Could not save quoted context. Try again.",
-                status_code=503,
-            )
-
-        try:
-            from models.quote import QuotedSnippet
-
-            snippet = QuotedSnippet(
-                room_id=room.room_id,
-                created_by_user_id=request.user_id or user_message.user_id or "",
-                text=text,
-                source_message_id=payload.source_message_id,
-                source_kind=str(source_kind),
-                source_agent_id=payload.source_agent_id,
-                sender_display_name=payload.sender_display_name,
-            )
-            qid = await quote_writer.insert(snippet)
-        except Exception as e:
-            logger.exception("Quote snippet creation failed: %s", e)
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="Could not save quoted context. Try again.",
-                status_code=500,
-            )
-
-        if not isinstance(qid, str):
-            qid = str(qid)
-
-        user_message.quote_id = qid
-        ei = dict(user_message.extend_info or {})
-        ei["quoted_text"] = text
-        if payload.sender_display_name:
-            ei["quoted_sender_name"] = payload.sender_display_name
-        ei["quote_id"] = qid
-        user_message.extend_info = ei
-        user_message.quote = None
-        return None
 
     async def _persist_user_message(self, user_message: RoomUserMessage) -> bool:
         """Persist user message to the database."""
-        return await self._store.add_room_user_message(user_message)
+        return await self._require_facade().persist_user_message(user_message)
 
     async def _send_processing_status(self, room_id: str, message_id: str, client_request_id: str | None = None) -> None:
         """Notify client that processing has started.
@@ -3716,31 +3266,9 @@ class RoomServices:
                 status_code=400,
             )
 
-        # Preserve existing task metadata if incoming message omits it.
-        if (
-            message.message_content
-            and message.message_content.message_task
-            and message.message_content.message_task.metadata is None
-        ):
-            existing_message = (
-                await self._store.get_room_agent_message_by_message_id(
-                    message_id
-                )
-            )
-            if (
-                existing_message
-                and existing_message.message_content
-                and existing_message.message_content.message_task
-                and existing_message.message_content.message_task.metadata is not None
-            ):
-                message.message_content.message_task.metadata = (
-                    existing_message.message_content.message_task.metadata
-                )
-
-        update_message_success = (
-            await self._store.update_room_agent_message_by_message_id(
-                message_id, message
-            )
+        update_message_success = await self._require_facade().update_agent_message(
+            message_id,
+            message,
         )
         if update_message_success:
             return RoomCenterAgentMessageResponse(
@@ -3766,9 +3294,7 @@ class RoomServices:
             )
 
         room_id = request.room_id
-        messages = await self._store.get_room_user_messages_by_room_id(
-            room_id
-        )
+        messages = await self._require_facade().get_user_messages_for_room(room_id)
 
         # Inject presigned URLs for attachments
         s3_keys = []
@@ -3796,59 +3322,13 @@ class RoomServices:
     async def _refresh_artifact_presigned_urls(
         self, messages: list[RoomAgentMessage],
     ) -> None:
-        """Re-sign S3 presigned URLs embedded in agent artifact file parts.
-
-        Scans every artifact part for ``metadata.s3_key`` written during the
-        S3-upload step.  Collects them, batch-generates fresh presigned URLs,
-        and patches each ``file.uri`` in-place so the frontend always receives
-        a valid URL regardless of when the original was created.
-        """
-        s3_service = self.s3_service
-
-        key_refs: list[tuple[object, str]] = []
-        key_filenames: dict[str, str] = {}
-
-        for msg in messages:
-            task = msg.message_content.message_task if msg.message_content else None
-            if not task or not task.artifacts:
-                continue
-            for artifact in task.artifacts:
-                if not artifact.parts:
-                    continue
-                for part in artifact.parts:
-                    root = getattr(part, "root", part)
-                    if getattr(root, "kind", None) != "file":
-                        continue
-                    meta = getattr(root, "metadata", None)
-                    if not meta:
-                        continue
-                    s3_key = meta.get("s3_key") if isinstance(meta, dict) else None
-                    if not s3_key:
-                        continue
-                    file_content = getattr(root, "file", None)
-                    if file_content is None:
-                        continue
-                    key_refs.append((file_content, s3_key))
-                    fname = getattr(file_content, "name", None)
-                    if fname:
-                        key_filenames[s3_key] = fname
-
-        if not key_refs:
-            return
-
-        unique_keys = list({k for _, k in key_refs})
         try:
-            url_map = await s3_service.batch_presigned_urls(
-                unique_keys, filenames=key_filenames,
+            await refresh_artifact_presigned_urls(
+                messages=messages,
+                object_storage=self.s3_service,
             )
         except Exception:
             logger.warning("Failed to refresh artifact presigned URLs")
-            return
-
-        for file_content, s3_key in key_refs:
-            new_url = url_map.get(s3_key)
-            if new_url:
-                file_content.uri = new_url
 
     async def inquiry_agent_messages_by_room_id(
         self, request: RoomCenterAgentMessageRequest
@@ -3862,108 +3342,7 @@ class RoomServices:
             )
 
         room_id = request.room_id
-        messages = await self._store.get_room_agent_messages_by_room_id(
-            room_id
-        )
-
-        # Sync task status for non-terminal tasks
-        # This handles cases where SSE updates were missed or task state changed in background
-        # Also auto-fails stale tasks that have no recovery path (e.g., server restarted mid-task)
-
-        STALE_TASK_THRESHOLD = timedelta(minutes=10)
-
-        def _is_task_stale(msg: RoomAgentMessage) -> bool:
-            """Check if a task's last update is older than the staleness threshold."""
-            ts = msg.task_updated_at or msg.task_created_at
-            if ts is None:
-                return True  # No timestamp at all => treat as stale
-            return (utcnow() - ensure_utc(ts)) > STALE_TASK_THRESHOLD
-
-        def _mark_msg_as_failed(msg: RoomAgentMessage, error_text: str) -> None:
-            """Set the task on a message to failed state in-place."""
-            task = msg.message_content.message_task if msg.message_content else None
-            if task:
-                task.status = TaskStatus(
-                    state=TaskState.failed,
-                    message=Message(
-                        message_id=uuid4().hex,
-                        role=Role.AGENT,
-                        parts=[Part(root=TextPart(text=error_text))],
-                    ),
-                )
-            msg.task_updated_at = utcnow()
-
-        for msg in messages:
-            if not (
-                msg.message_content
-                and msg.message_content.message_task
-            ):
-                continue
-
-            current_state = msg.message_content.message_task.status.state
-            if is_terminal_state(current_state):
-                continue
-
-            # --- Case 1: Task WITHOUT task tracking (streaming-only) ---
-            # Only auto-fail non-tracked tasks in "working" state, which means
-            # the streaming connection died mid-stream (e.g., server restart).
-            #
-            # Non-tracked tasks in "submitted" state are NOT touched here —
-            # they are likely queued pipeline steps waiting for earlier steps
-            # to complete.  Genuinely orphaned submitted tasks are cleaned up
-            # by the background StaleTaskChecker instead, which avoids
-            # killing active pipeline steps on every message fetch.
-            if not msg.has_task_tracking:
-                if current_state == TaskState.working and _is_task_stale(msg):
-                    logger.info(
-                        "Auto-failing stale non-tracked task for msg %s (state: %s)",
-                        msg.message_id,
-                        current_state,
-                    )
-                    _mark_msg_as_failed(
-                        msg,
-                        "Task did not complete — the connection was lost, "
-                        "possibly due to a server restart.",
-                    )
-                    try:
-                        await self._store.update_room_agent_message_by_message_id(
-                            msg.message_id, msg
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to persist auto-fail for non-tracked message %s: %s",
-                            msg.message_id,
-                            e,
-                        )
-                continue
-
-            # --- Case 2: Task WITH task tracking ---
-            # Active task tracking is stored on room_agent_messages. If webhook
-            # updates stop arriving and the message remains non-terminal past the
-            # threshold, mark it failed so stale UI placeholders clear.
-            if _is_task_stale(msg):
-                logger.info(
-                    "Auto-failing stale tracked task for msg %s "
-                    "(state: %s, no task progress received)",
-                    msg.message_id,
-                    current_state,
-                )
-                _mark_msg_as_failed(
-                    msg,
-                    "Task did not complete — no progress was received within "
-                    "the expected timeframe. This may have been caused by "
-                    "a server restart or agent failure.",
-                )
-                try:
-                    await self._store.update_room_agent_message_by_message_id(
-                        msg.message_id, msg
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to persist auto-fail for tracked message %s: %s",
-                        msg.message_id,
-                        e,
-                    )
+        messages = await self._require_facade().get_agent_messages_for_room(room_id)
 
         await self._refresh_artifact_presigned_urls(messages)
 
@@ -3983,9 +3362,7 @@ class RoomServices:
             )
 
         message_id = request.message_id
-        message = await self._store.get_room_agent_message_by_message_id(
-            message_id
-        )
+        message = await self._require_facade().get_agent_message_model(message_id)
         if message:
             await self._refresh_artifact_presigned_urls([message])
         return RoomCenterAgentMessageResponse(
@@ -4004,9 +3381,7 @@ class RoomServices:
             )
 
         message_id = request.message_id
-        message = await self._store.get_room_user_message_by_message_id(
-            message_id
-        )
+        message = await self._require_facade().get_user_message_model(message_id)
         return RoomCenterUserMessageResponse(
             message=message, success=True, error=None, status_code=200
         )
@@ -4023,10 +3398,8 @@ class RoomServices:
             )
 
         related_message_id = request.related_message_id
-        messages = (
-            await self._store.get_room_agent_messages_by_related_message_id(
-                related_message_id
-            )
+        messages = await self._require_facade().get_agent_messages_by_related_message_id(
+            related_message_id
         )
         return RoomCenterAgentMessageResponse(
             message_list=messages, success=True, error=None, status_code=200

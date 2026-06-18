@@ -15,6 +15,9 @@ from common.dto import (
     SavedAgentGroupSnapshot,
     UserMessageInput,
 )
+from models.quote import QuoteSourceKind
+from models.request import RoomCenterUserMessageRequest
+from models.room import MessageContent, Room, RoomUserMessage, UserAttachment
 from room import RoomFacade
 
 NOW = datetime(2026, 5, 11, tzinfo=UTC)
@@ -469,6 +472,124 @@ async def test_status_and_history_methods_delegate_and_translate_results():
 
 
 @pytest.mark.asyncio
+async def test_legacy_user_message_persistence_strips_ephemeral_fields():
+    facade, _, messages, _, _ = _facade(ids=["unused-id"])
+    user_message = RoomUserMessage(
+        room_id="r1",
+        message_id="legacy-user",
+        user_id="user",
+        message_content=MessageContent(
+            message_text="hello",
+            attachments=[
+                UserAttachment(
+                    file_id="file-1",
+                    s3_key="rooms/r1/file-1",
+                    mime_type="text/plain",
+                    file_name="note.txt",
+                    size_bytes=10,
+                    file_url="https://presigned.example/file-1",
+                )
+            ],
+        ),
+    )
+
+    assert await facade.persist_user_message(user_message) is True
+
+    stored = messages.user_messages["legacy-user"]
+    assert "quote" not in stored
+    assert "file_url" not in stored["message_content"]["attachments"][0]
+
+
+@pytest.mark.asyncio
+async def test_quote_materialization_validates_source_and_dual_writes_extend_info():
+    quote_repo = FakeQuoteRepository()
+    facade, _, messages, _, _ = _facade(quote_repository=quote_repo)
+    messages.agent_messages["agent-source"] = {
+        "room_id": "r1",
+        "message_id": "agent-source",
+        "message_type": "agent",
+        "agent_id": "a1",
+        "message_content": {"message_text": "source"},
+        "message_created_at": NOW,
+    }
+    room = Room(
+        room_id="r1",
+        room_name="Room",
+        room_owner_id="owner",
+        room_owner_name="Owner",
+    )
+    user_message = RoomUserMessage(
+        room_id="r1",
+        message_id="u1",
+        user_id="user",
+        message_content=MessageContent(message_text="reply"),
+        quote={
+            "text": " quoted text ",
+            "source_message_id": "agent-source",
+            "source_kind": QuoteSourceKind.AGENT,
+            "sender_display_name": "Agent One",
+        },
+    )
+
+    response = await facade.materialize_quote(
+        room=room,
+        request=RoomCenterUserMessageRequest(user_id="user"),
+        user_message=user_message,
+    )
+
+    assert response is None
+    assert user_message.quote is None
+    assert user_message.quote_id == "quote-1"
+    assert user_message.extend_info == {
+        "quoted_text": "quoted text",
+        "quoted_sender_name": "Agent One",
+        "quote_id": "quote-1",
+    }
+    assert quote_repo.inserted[0].room_id == "r1"
+    assert quote_repo.inserted[0].text == "quoted text"
+
+
+@pytest.mark.asyncio
+async def test_quote_materialization_rejects_invalid_source_room():
+    quote_repo = FakeQuoteRepository()
+    facade, _, messages, _, _ = _facade(quote_repository=quote_repo)
+    messages.user_messages["other-room-source"] = {
+        "room_id": "other",
+        "message_id": "other-room-source",
+        "message_type": "user",
+        "message_content": {"message_text": "source"},
+        "message_created_at": NOW,
+    }
+    room = Room(
+        room_id="r1",
+        room_name="Room",
+        room_owner_id="owner",
+        room_owner_name="Owner",
+    )
+    user_message = RoomUserMessage(
+        room_id="r1",
+        message_id="u1",
+        message_content=MessageContent(message_text="reply"),
+        quote={
+            "text": "quoted text",
+            "source_message_id": "other-room-source",
+            "source_kind": QuoteSourceKind.USER_TURN,
+        },
+    )
+
+    response = await facade.materialize_quote(
+        room=room,
+        request=RoomCenterUserMessageRequest(user_id="user"),
+        user_message=user_message,
+    )
+
+    assert response is not None
+    assert response.success is False
+    assert response.error == "Invalid quote source"
+    assert quote_repo.inserted == []
+
+
+@pytest.mark.asyncio
 async def test_track_hub_task_writes_message_task_paths_for_lineage_reader():
     facade, _, messages, _, _ = _facade()
     messages.agent_messages["a1"] = {
@@ -559,6 +680,7 @@ def _facade(
     saved_groups: dict[str, SavedAgentGroupSnapshot] | None = None,
     current_agents: list[AgentInfo] | None = None,
     ids: list[str] | None = None,
+    quote_repository=None,
 ):
     rooms = FakeRoomRepository(room_docs or [])
     messages = FakeMessageRepository()
@@ -573,6 +695,7 @@ def _facade(
         message_repository=messages,
         agent_registry=registry,
         membership_source=source,
+        quote_repository=quote_repository,
         id_factory=lambda: next(id_iter),
         now=lambda: NOW,
     )
@@ -693,6 +816,14 @@ class FakeMessageRepository:
         doc = self.user_messages.get(message_id) or self.agent_messages.get(message_id)
         return deepcopy(doc) if doc is not None else None
 
+    async def get_user_message_by_id(self, message_id: str) -> dict | None:
+        doc = self.user_messages.get(message_id)
+        return deepcopy(doc) if doc is not None else None
+
+    async def get_agent_message_by_id(self, message_id: str) -> dict | None:
+        doc = self.agent_messages.get(message_id)
+        return deepcopy(doc) if doc is not None else None
+
     async def get_by_ids(self, message_ids: list[str]) -> list[dict]:
         out = []
         for message_id in message_ids:
@@ -730,6 +861,12 @@ class FakeMessageRepository:
         self.status_updates.append((message_id, status, deepcopy(fields)))
         return message_id in self.agent_messages
 
+    async def update_agent_message(self, message_id: str, updates: dict) -> bool:
+        if message_id not in self.agent_messages:
+            return False
+        self.agent_messages[message_id].update(deepcopy(updates))
+        return True
+
     async def delete_for_room(self, room_id: str) -> dict[str, int]:
         self.deleted_rooms.append(room_id)
         return {"user_messages": 0, "agent_messages": 0}
@@ -737,9 +874,40 @@ class FakeMessageRepository:
     async def get_user_messages_for_room(
         self, room_id: str, limit: int = 100, before: datetime | None = None
     ) -> list[dict]:
-        return []
+        return [
+            deepcopy(doc)
+            for doc in self.user_messages.values()
+            if doc.get("room_id") == room_id
+        ][:limit]
 
     async def get_agent_messages_for_room(
         self, room_id: str, limit: int = 100, before: datetime | None = None
     ) -> list[dict]:
-        return []
+        return [
+            deepcopy(doc)
+            for doc in self.agent_messages.values()
+            if doc.get("room_id") == room_id
+        ][:limit]
+
+    async def get_agent_messages_by_related_message_id(
+        self, related_message_id: str
+    ) -> list[dict]:
+        return [
+            deepcopy(doc)
+            for doc in self.agent_messages.values()
+            if doc.get("related_message_id") == related_message_id
+        ]
+
+
+class FakeQuoteRepository:
+    def __init__(self) -> None:
+        self.inserted = []
+        self.deleted_ids: list[str] = []
+
+    async def insert(self, snippet) -> str:
+        self.inserted.append(snippet)
+        return f"quote-{len(self.inserted)}"
+
+    async def delete_by_id(self, quote_id: str) -> bool:
+        self.deleted_ids.append(quote_id)
+        return True

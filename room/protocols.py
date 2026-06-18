@@ -48,6 +48,9 @@ class RoomCenterCompatibility(Protocol):
     async def inquiry_active_runs(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterActiveRunsResponse: ...
+    async def delete_room_by_room_id(
+        self, request: RoomCenterRoomSettingRequest
+    ) -> RoomCenterRoomSettingResponse: ...
     async def update_room_agent_set(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse: ...

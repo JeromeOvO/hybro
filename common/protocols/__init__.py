@@ -38,6 +38,7 @@ from common.protocols.execution_protocols import (
     ExecutionEngine,
     HITLManager,
     HubAgentResponseSink,
+    RoomActiveRunReader,
     RoomDistributedLock,
     WebhookReceiver,
 )
@@ -208,6 +209,7 @@ __all__ = [
     "RedisPubSub",
     "RedisStreams",
     "RequiredEmbeddingServiceProtocol",
+    "RoomActiveRunReader",
     "RoomHistoryReader",
     "RoomDistributedLock",
     "RoomAgentTaskTracker",
