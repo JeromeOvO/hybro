@@ -1008,6 +1008,7 @@ class SupervisorExecutor:
                                 await self.sse_manager.send_task_update(
                                     room_id=room_id,
                                     message_id=trajectory.system_agent_message_id,
+                                    status="working",
                                     task_content="Summarizing agent responses\u2026",
                                     client_request_id=client_req_id,
                                 )

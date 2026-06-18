@@ -6,6 +6,12 @@ from enum import Enum
 from typing import Any, Protocol
 
 from common.dto import HITLRequestEvent, HITLResolvedEvent, RunInfo
+from common.types import AgentCard
+from common.utils.cancellation import CancellationToken
+from models.memory import RoomMemory
+from models.request import RoomCenterAgentMessageRequest
+from models.response import RoomCenterAgentMessageResponse, RoomCenterMemoryResponse
+from models.room import RoomAgentMessage
 
 ProcessingStatusLike = str | Enum
 
@@ -161,7 +167,13 @@ class AgentDispatchPort(Protocol):
 
 
 class A2AServicePort(Protocol):
-    """Execution-facing A2A capability port."""
+    """Reserved for direct execution calls into the shell-owned A2A runtime.
+
+    Queue construction still receives this capability to preserve factory wiring,
+    but the current queue executor does not invoke it directly. Add only methods
+    that execution calls itself; transport-level A2A contracts remain local to the
+    transport that uses them.
+    """
 
 
 class AgentHealthPort(Protocol):
@@ -177,43 +189,180 @@ class AgentResolverPort(Protocol):
 
 
 class DebateServicePort(Protocol):
-    async def inject_short_debate_for_agent_message(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def inject_short_debate_for_agent_message(
+        self, agent_message: RoomAgentMessage
+    ) -> RoomAgentMessage | None: ...
 
 
 class NotificationServicePort(Protocol):
-    async def send_task_update(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def send_task_update(
+        self,
+        *,
+        room_id: str,
+        message_id: str | None,
+        status: ProcessingStatusLike,
+        agent_card: AgentCard | None = None,
+        agent_name: str | None = None,
+        agent_id: str | None = None,
+        created_at: str | None = None,
+        content: str | None = None,
+        error: str | None = None,
+        requires_input: bool | None = None,
+        requires_auth: bool | None = None,
+        status_message: str | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+        task_content: str | None = None,
+        related_message_id: str | None = None,
+        parts: list[dict[str, Any]] | None = None,
+        client_request_id: str | None = None,
+    ) -> None: ...
+
+
+class AgentRateLimitResultPort(Protocol):
+    allowed: bool
+    reason: str | None
+    user_requests_used: int
+    user_requests_limit: int | None
+    system_requests_used: int
+    system_requests_limit: int | None
+    retry_after_seconds: int | None
 
 
 class RateLimitPort(Protocol):
-    async def check_rate_limit(self, *args: Any, **kwargs: Any) -> Any: ...
-    async def record_request(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def check_rate_limit(
+        self,
+        agent_id: str,
+        user_id: str,
+        rate_limit_per_user: int | None,
+        rate_limit_system: int | None,
+    ) -> AgentRateLimitResultPort: ...
+
+    async def record_request(self, agent_id: str, user_id: str) -> None: ...
 
 
 class RoomCoordinatorPort(Protocol):
-    """Execution-facing room coordinator port."""
+    """Reserved for direct execution calls into the shell-owned room coordinator.
+
+    Supervisor wiring still carries the coordinator dependency for compatibility,
+    but direct orchestration behavior is expressed through narrower execution
+    ports. Add methods here only when SupervisorExecutor calls the coordinator
+    itself.
+    """
 
 
 class RoomMemoryPort(Protocol):
-    async def add_agent_response_to_memory(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def add_agent_response_to_memory(
+        self,
+        room_id: str,
+        agent_id: str,
+        agent_name: str,
+        response_text: str,
+        was_successful: bool = True,
+        message_id: str | None = None,
+    ) -> RoomCenterMemoryResponse: ...
 
 
 class RoomRuntimePort(Protocol):
-    def create_agent_message(self, *args: Any, **kwargs: Any) -> Any: ...
-    async def process_agent_message(self, *args: Any, **kwargs: Any) -> Any: ...
+    def create_agent_message(
+        self,
+        room_id: str,
+        related_message_id: str,
+        agent_id: str,
+        content: str,
+        user_id: str | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+        task_content: str | None = None,
+        turn_id: str | None = None,
+        client_request_id: str | None = None,
+    ) -> RoomAgentMessage: ...
+
+    async def process_agent_message(
+        self,
+        request: RoomCenterAgentMessageRequest,
+        room_memory: RoomMemory | None = None,
+        quoted_text: str | None = None,
+        orchestration_user_message_id: str | None = None,
+    ) -> RoomCenterAgentMessageResponse: ...
+
     async def update_agent_message_by_message_id(
-        self, message_id: str, room_agent_message: Any
-    ) -> Any: ...
+        self, request: RoomCenterAgentMessageRequest
+    ) -> RoomCenterAgentMessageResponse: ...
 
 
 class SSEDeliveryPort(Protocol):
-    async def send_task_submitted(self, *args: Any, **kwargs: Any) -> Any: ...
-    async def send_task_update(self, *args: Any, **kwargs: Any) -> Any: ...
-    async def send_rate_limit_error(self, *args: Any, **kwargs: Any) -> Any: ...
-    async def send_agent_response(self, *args: Any, **kwargs: Any) -> Any: ...
-    async def send_error(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def send_task_submitted(
+        self,
+        room_id: str,
+        message_id: str,
+        task_id: str,
+        agent_name: str,
+        agent_id: str | None = None,
+        status: ProcessingStatusLike = "working",
+        related_message_id: str | None = None,
+        created_at: str | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+        task_content: str | None = None,
+        client_request_id: str | None = None,
+    ) -> None: ...
+
+    async def send_task_update(
+        self,
+        room_id: str,
+        message_id: str,
+        status: ProcessingStatusLike,
+        content: str | None = None,
+        error: str | None = None,
+        requires_input: bool = False,
+        requires_auth: bool = False,
+        status_message: str | None = None,
+        agent_name: str | None = None,
+        agent_id: str | None = None,
+        related_message_id: str | None = None,
+        created_at: str | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+        task_content: str | None = None,
+        parts: list[dict[str, Any]] | None = None,
+        client_request_id: str | None = None,
+    ) -> None: ...
+
+    async def send_rate_limit_error(
+        self,
+        room_id: str,
+        message_id: str,
+        agent_id: str,
+        reason: str,
+        retry_after_seconds: int | None = None,
+        user_requests_used: int = 0,
+        user_requests_limit: int | None = None,
+        system_requests_used: int = 0,
+        system_requests_limit: int | None = None,
+    ) -> None: ...
+
+    async def send_agent_response(
+        self,
+        room_id: str,
+        message_id: str,
+        agent_id: str,
+        content: str,
+        related_message_id: str | None = None,
+        parts: list[dict[str, Any]] | None = None,
+        client_request_id: str | None = None,
+    ) -> None: ...
+
+    async def send_error(
+        self,
+        room_id: str,
+        error: str,
+        message_id: str | None = None,
+    ) -> None: ...
+
     def clear_cancellation(self, message_id: str) -> None: ...
-    def get_token(self, message_id: str) -> Any | None: ...
-    def create_token(self, message_id: str) -> Any: ...
+    def get_token(self, message_id: str) -> CancellationToken | None: ...
+    def create_token(self, message_id: str) -> CancellationToken: ...
 
 
 class RunReadPort(Protocol):
