@@ -18,6 +18,12 @@ from a2a_adapter.client_facade import (
 from a2a_adapter.client_facade import (
     stream_message as adapter_stream_message,
 )
+from a2a_adapter.inspection import (
+    validate_message_data as adapter_validate_message_data,
+)
+from a2a_adapter.inspection import (
+    validate_response_data as adapter_validate_response_data,
+)
 from a2a_adapter.translators import (
     coerce_parts as adapter_coerce_parts,
 )
@@ -510,17 +516,14 @@ class A2AService:
         self, result: dict[str, Any]
     ) -> InsepectionCenterConnectionValidationResponse:
         """Validate a response from the A2A client."""
-        if result.get("kind") == "error":
+        validation_errors, is_transport_error = adapter_validate_response_data(result)
+        if is_transport_error:
             return InsepectionCenterConnectionValidationResponse(
                 agent_url="",
-                result=[str(result.get("error"))],
+                result=validation_errors,
                 is_valid=False,
                 status_code=500,
             )
-
-        response_data = result.get("result") or {}
-        logger.info(f"validate_a2a_response: response_data: {response_data}")
-        validation_errors = self.validate_message(response_data)
 
         return InsepectionCenterConnectionValidationResponse(
             agent_url="", result=validation_errors, is_valid=True, status_code=200
@@ -528,60 +531,7 @@ class A2AService:
 
     def validate_message(self, data: dict[str, Any]) -> list[str]:
         """Validate an incoming message from the agent based on its kind."""
-        if "kind" not in data:
-            return ["Response from agent is missing required 'kind' field."]
-
-        kind = data.get("kind")
-        validators = {
-            "task": self._validate_task,
-            "status-update": self._validate_status_update,
-            "artifact-update": self._validate_artifact_update,
-            "message": self._validate_message,
-        }
-
-        validator = validators.get(str(kind))
-        if validator:
-            return validator(data)
-
-        return [f"Unknown message kind received: '{kind}'."]
-
-    def _validate_task(self, data: dict[str, Any]) -> list[str]:
-        errors = []
-        if "id" not in data:
-            errors.append("Task object missing required field: 'id'.")
-        if "status" not in data or "state" not in data.get("status", {}):
-            errors.append("Task object missing required field: 'status.state'.")
-        return errors
-
-    def _validate_status_update(self, data: dict[str, Any]) -> list[str]:
-        errors = []
-        if "status" not in data or "state" not in data.get("status", {}):
-            errors.append("StatusUpdate object missing required field: 'status.state'.")
-        return errors
-
-    def _validate_artifact_update(self, data: dict[str, Any]) -> list[str]:
-        errors = []
-        if "artifact" not in data:
-            errors.append("ArtifactUpdate object missing required field: 'artifact'.")
-        elif (
-            "parts" not in data.get("artifact", {})
-            or not isinstance(data.get("artifact", {}).get("parts"), list)
-            or not data.get("artifact", {}).get("parts")
-        ):
-            errors.append("Artifact object must have a non-empty 'parts' array.")
-        return errors
-
-    def _validate_message(self, data: dict[str, Any]) -> list[str]:
-        errors = []
-        if (
-            "parts" not in data
-            or not isinstance(data.get("parts"), list)
-            or not data.get("parts")
-        ):
-            errors.append("Message object must have a non-empty 'parts' array.")
-        if "role" not in data or data.get("role") != "agent":
-            errors.append("Message from agent must have 'role' set to 'agent'.")
-        return errors
+        return adapter_validate_message_data(data)
 
     async def process_a2a_response(
         self, response: dict[str, Any]

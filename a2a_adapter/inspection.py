@@ -122,8 +122,25 @@ def _validate_response(result: Any) -> dict[str, Any]:
         return {"result": [str(error_data)], "status_code": 500}
 
     response_data = result.root.result.model_dump(exclude_none=True)
-    validation_errors = _validate_message(response_data)
+    validation_errors = validate_message_data(response_data)
     return {"result": validation_errors, "status_code": 500 if validation_errors else 200}
+
+
+def validate_response_data(result: dict[str, Any]) -> tuple[list[str], bool]:
+    """Validate an SDK-free adapter response payload.
+
+    Returns ``(errors, is_transport_error)`` so legacy app-shell callers can
+    preserve their existing response model/status behavior.
+    """
+    if result.get("kind") == "error":
+        return [str(result.get("error"))], True
+    response_data = result.get("result") or {}
+    return validate_message_data(response_data), False
+
+
+def validate_message_data(data: dict[str, Any]) -> list[str]:
+    """Validate an incoming SDK-free A2A message payload by kind."""
+    return _validate_message(data)
 
 
 def _validate_message(data: dict[str, Any]) -> list[str]:
@@ -195,4 +212,9 @@ def _to_internal_card(card: SDKAgentCard) -> AgentCard:
     return AgentCard.model_validate(card.model_dump(mode="json"))
 
 
-__all__ = ["fetch_agent_card_for_inspection", "inspect_a2a_connection"]
+__all__ = [
+    "fetch_agent_card_for_inspection",
+    "inspect_a2a_connection",
+    "validate_message_data",
+    "validate_response_data",
+]
