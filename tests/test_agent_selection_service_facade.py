@@ -12,7 +12,7 @@ from app_shell.agent_selection_service import (
     AgentSelectionService,
     RoutingStrategy,
 )
-from app_shell.room_runtime import DispatchStrategy, resolve_strategy
+from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
 from models.agent import Agent, AgentStatus
 from models.room import MessageContent, RoomUserMessage, UserAttachment
 

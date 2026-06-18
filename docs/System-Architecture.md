@@ -252,6 +252,9 @@ Key components:
 - `RoomMessageCenter`: orchestrates a single room user message. It handles
   idempotent claims, per-room locks, cancellation tokens, routing between
   queue and supervisor modes, and terminal processing status.
+- `execution.orchestration.dispatch_strategy`: owns dispatch strategy selection
+  after room agent selection. App-shell keeps a compatibility re-export only
+  for legacy imports.
 - `QueueExecutor`: sequentially processes pre-created agent messages for
   non-supervisor flows and explicit non-supervisor mention flows.
 - `SupervisorExecutor`: adaptive supervisor loop for rooms with

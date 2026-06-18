@@ -24,8 +24,9 @@ from app_shell.agent_matcher import (
 )
 from app_shell.agent_selection_service import AgentSelectionService, RoutingStrategy
 from app_shell.debate_service import debate_service
-from app_shell.room_runtime import DispatchStrategy, RoomServices, resolve_strategy
+from app_shell.room_runtime import RoomServices
 from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
+from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
 from models.agent import Agent, AgentStatus
 from models.room import MessageContent, RoomUserMessage, UserAttachment
 
