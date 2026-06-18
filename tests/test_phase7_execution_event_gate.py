@@ -12,6 +12,7 @@ from execution.client_request_id import SSEClientRequestIdResolver
 from execution.events import (
     _normalize_processing_status,
     emit_processing_status,
+    emit_room_processing_status,
     run_event_notification_from_payload,
 )
 
@@ -221,6 +222,38 @@ async def test_emit_processing_status_routes_awaiting_input_to_typed_event():
     assert isinstance(event, ProcessingStatusEvent)
     assert event.status == "awaiting_input"
     assert event.details == {"prompt": "Need input"}
+
+
+@pytest.mark.asyncio
+async def test_emit_room_processing_status_normalizes_legacy_string_details():
+    lifecycle = AsyncMock()
+    publisher = AsyncMock()
+    resolver = make_client_request_id_resolver()
+
+    await emit_room_processing_status(
+        room_id="room-1",
+        status="failed",
+        message_id="msg-1",
+        lifecycle_message_id="msg-1",
+        client_request_id="cr-1",
+        details="parse failed",
+        run_lifecycle=lifecycle,
+        event_publisher=publisher,
+        run_event_enabled=lambda: False,
+        client_request_id_resolver=resolver,
+    )
+
+    lifecycle.record_processing_status.assert_awaited_once()
+    assert lifecycle.record_processing_status.await_args.kwargs["details"] == {
+        "message": "parse failed"
+    }
+    assert (
+        lifecycle.record_processing_status.await_args.kwargs["error_message"]
+        == "parse failed"
+    )
+    event = publisher.emit.await_args.args[0]
+    assert isinstance(event, ProcessingStatusEvent)
+    assert event.details == {"message": "parse failed"}
 
 
 @pytest.mark.asyncio

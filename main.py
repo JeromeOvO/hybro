@@ -421,6 +421,9 @@ async def lifespan(app: FastAPI):
                 emit_processing_status,
                 run_event_notification_from_payload,
             )
+            from execution.events import (
+                emit_room_processing_status as emit_execution_room_processing_status,
+            )
             from execution.hitl.adapters import (
                 A2AHITLContinuationAdapter,
                 HITLDeliveryAdapter,
@@ -740,7 +743,7 @@ async def lifespan(app: FastAPI):
                 ]
 
             async def emit_room_processing_status(**kwargs):
-                return await emit_processing_status(
+                return await emit_execution_room_processing_status(
                     **kwargs,
                     run_lifecycle=run_lifecycle,
                     event_publisher=_delivery_deps.event_publisher,

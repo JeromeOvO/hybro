@@ -307,6 +307,27 @@ async def test_room_services_processing_status_uses_bound_execution_emitter():
     assert emitter.await_args.kwargs["client_request_id"] == "cr-1"
 
 
+@pytest.mark.asyncio
+async def test_room_services_processing_status_shim_does_not_normalize_details():
+    svc = object.__new__(RoomServices)
+    emitter = AsyncMock(return_value=None)
+
+    svc.bind_execution_event_deps(processing_status_emitter=emitter)
+
+    await svc._emit_processing_status_event(
+        "room-1",
+        "failed",
+        "msg-1",
+        client_request_id="cr-1",
+        details="parse failed",
+    )
+
+    emitter.assert_awaited_once()
+    assert emitter.await_args.kwargs["status"] == "failed"
+    assert emitter.await_args.kwargs["details"] == "parse failed"
+    assert "error_message" not in emitter.await_args.kwargs
+
+
 def test_room_services_bind_store_sets_runtime_store():
     svc = object.__new__(RoomServices)
     store = object()

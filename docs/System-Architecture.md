@@ -245,6 +245,10 @@ Key components:
 - `ExecutionFacade`: external execution API used by routes. It accepts a
   `common.dto.ExecutionRequest`, delegates message creation to RoomCenter, and
   starts orchestration.
+- `execution.events.emit_room_processing_status`: compatibility entrypoint for
+  room-message processing status. It normalizes legacy string `details` into the
+  typed processing-status payload before lifecycle recording and Delivery
+  emission.
 - `RoomMessageCenter`: orchestrates a single room user message. It handles
   idempotent claims, per-room locks, cancellation tokens, routing between
   queue and supervisor modes, and terminal processing status.
@@ -315,6 +319,8 @@ shape is always:
 `ProcessingStatusEvent` supports the final status set (`queued`, `processing`,
 `awaiting_input`, `completed`, `failed`, `canceled`, `rejected`,
 `rate_limited`, `error`) and carries `details` as `dict | null`.
+Legacy room-runtime callers may pass string details only through Execution's
+room processing-status helper; Delivery receives typed DTO fields.
 
 It is composed from:
 
@@ -532,7 +538,8 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - resolves and validates attachments,
    - loads the room and target scope,
    - persists the user message,
-   - emits initial `processing` status,
+   - delegates initial `processing` status to Execution-owned processing-status
+     emission,
    - creates a cancellation token,
    - initializes context memory if needed,
    - chooses a dispatch strategy:
