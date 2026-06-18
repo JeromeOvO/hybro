@@ -905,6 +905,12 @@ def test_protocol_methods_match_design_doc():
             "delete_room_memory",
         },
         protocols.MemoryProjector: {"project_message", "run_compaction"},
+        protocols.ContextMemoryRuntime: {
+            "assemble_supervisor_context_from_memory",
+            "assemble_agent_execution_context_from_memory",
+            "legacy_search",
+            "get_budget_summary",
+        },
         protocols.ExecutionEngine: {
             "execute",
             "start_orchestration",
@@ -921,6 +927,7 @@ def test_protocol_methods_match_design_doc():
             "cancel_hitl",
         },
         protocols.HubAgentResponseSink: {"handle_hub_agent_response"},
+        protocols.RoomActiveRunReader: {"__call__"},
         protocols.EventPublisher: {
             "emit",
             "emit_internal",
