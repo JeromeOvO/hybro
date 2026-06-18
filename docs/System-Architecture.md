@@ -468,14 +468,15 @@ file uploads and converted binary artifacts.
 
 ### `app_shell`
 
-`app_shell` contains route-facing runtime adapters and process-level service
-facades. Some app-shell modules still contain business logic directly, while
-others are thin adapters over canonical facades.
+`app_shell` contains route-facing runtime adapters, process-level compatibility
+bindings, and fail-fast shims. Business ownership for the P3 focus areas lives
+in module facades, services, repositories, adapters, and narrow runtime-store
+ports; app-shell modules preserve legacy import and route method names.
 
 Examples:
 
-- `app_shell.room_runtime`: room send-message preparation, target resolution,
-  attachment resolution, supervisor preparation, and message parsing.
+- `app_shell.room_runtime`: legacy room-center and room-runtime method surface
+  over Room, Execution, ContextMemory, Platform, and Delivery ports.
 - `app_shell.a2a_runtime`: route/execution compatibility over `a2a_adapter`.
   Runtime settings are injected through `A2ARuntimeConfig`; task tracking and
   call counting are bound as explicit ports rather than read from global
@@ -490,9 +491,9 @@ Examples:
   `hub_runtime_bridge`. Hub-owned liveness, stream binding, agent sync,
   legacy push delivery, offline queues, offline failure persistence, heartbeat
   monitoring, command dispatch, ownership, and internal response router setup
-  are handled by `HubFacade`; relay runtime
-  settings are injected as `HubRuntimeBridgeConfig`, and persistence reaches
-  Mongo through repository-backed app-shell adapters.
+  are handled by `HubFacade`; relay runtime settings are injected as
+  `HubRuntimeBridgeConfig`, and persistence reaches Mongo through
+  repository-backed app-shell adapters.
 - `execution.dispatch.task_notifications`: terminal task update notifications.
 - `app_shell.hitl_service`: HITL lifecycle and response handling.
 
@@ -643,12 +644,11 @@ cancellation persistence, HITL lifecycle, task notification persistence, webhook
 response handling, and stale-task cleanup is routed through focused runtime-store
 ports assembled in `main.py`. `AppShellRepositoryStore` still backs those ports
 with module repositories and `MongoDAL` collections, but production bindings use
-its scoped `repository_parts` surfaces instead of passing the full aggregate
-where a narrower port is sufficient. Relay route registration, hub status, and
-liveness use explicit repository-backed app-shell adapters. Room runtime, room
-message center, queue executor, supervisor executor, debate injection, and room
-coordinator compatibility remain documented aggregate-store blockers until those
-callers move to narrower room/execution ports.
+its scoped `repository_parts` surfaces or focused startup adapters wherever a
+narrower port is sufficient. Relay route registration, hub status, and liveness
+use explicit repository-backed app-shell adapters. Remaining aggregate-store use
+is limited to documented compatibility shims rather than new production
+business owners.
 
 **Agent display text:** Terminal `message_text` and artifact text parts are persisted as received from agents. List/section markdown repair runs only in the frontend remark plugin pipeline (`hybro-frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown render time. Hybro-controlled LLM paths (supervisor synthesis, `SummaryLLMService`) append `HYBRO_MARKDOWN_RESPONSE_FORMAT` so synthesis uses `###` section headers; third-party agent text is still stored as-is. Backend terminal helpers in `common/utils/a2a_helpers.py` (`prepare_terminal_agent_content`, `resolve_terminal_sse_content`, `sync_artifact_dicts_to_canonical_text`) resolve canonical text from artifacts and align artifact payloads without transforming markdown. Terminal resolution is owned by `update_task_state_on_message`; streaming text parts collapse to a single canonical text part while file/data parts are preserved. SSE terminal `content` is authoritative for display text; `parts` carries only non-text payloads.
 
@@ -845,7 +845,9 @@ The current codebase has a mixed architecture:
 
 - Newer modules use explicit facades, protocol interfaces, DTOs, and container
   construction.
-- Some app-shell modules still use singleton-style process runtime objects.
+- Some app-shell modules still expose singleton-style process runtime objects as
+  compatibility shims, but focus-area behavior is bound through fail-fast
+  facades, adapters, and narrow ports.
 - Legacy database files still exist for the final deletion phase, but
   production startup no longer imports or binds them.
 - Room orchestration still has a compatibility store surface, but it is backed

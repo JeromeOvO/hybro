@@ -116,15 +116,15 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 |---|--------|---------------|----------------|
 | 1 | **Common** | Protocols, DTOs, auth, config, utils, errors | `common/`, `models/` |
 | 2 | **DAL** | Unified data access clients (split by concern) | `dal/`, `database/` (legacy migrations only) |
-| 3 | **A2A Protocol Adapter** | Anti-corruption for a2a-sdk, internal model ↔ A2A types | `app_shell/a2a_runtime.py`, `common/client/` |
+| 3 | **A2A Protocol Adapter** | Anti-corruption for a2a-sdk, internal model ↔ A2A types | `a2a_adapter/`, with `app_shell/a2a_runtime.py` as compatibility shim |
 | 4 | **LLM Gateway** | Unified LLM invocation, provider routing, capability registry | `app_shell/openai_service.py`, `app_shell/gemini_service.py`, `app_shell/bedrock_service.py` |
 | 5 | **Agent** | Agent lifecycle, health, matching, discovery | `app_shell/agent_*.py`, `api/agent.py`, `api/discovery.py` |
-| 6 | **Room** | Room CRUD, membership, raw message persistence, message graph | `app_shell/room_runtime.py` |
-| 7 | **Context & Memory** | Context assembly, compaction, search, user memory, ~~chat contexts~~ (legacy; source removed in Phase 0d/8) | `app_shell/memory_*.py`, `app_shell/compaction_service.py`, `app_shell/context_assembly_service.py` |
+| 6 | **Room** | Room CRUD, membership, raw message persistence, message graph | `room/`, with `app_shell/room_runtime.py` as compatibility shim |
+| 7 | **Context & Memory** | Context assembly, compaction, search, user memory, ~~chat contexts~~ (legacy; source removed in Phase 0d/8) | `context_memory/`, with app-shell memory/context shims for compatibility |
 | 8 | **Execution** | Run lifecycle, supervisor, debate, HITL, dispatch (NOT workflow) | `execution/`, `app_shell/hitl_service.py` |
 | 9 | **Delivery** | SSE connections, event broker, dedup, domain→frontend event translation | `app_shell/delivery_runtime.py`, `delivery/` |
 | 10 | **Platform** | Gateway API, rate limiting, file storage | `platform_module/`, `api/gateway.py`, `api/discovery.py`, `api/files.py` |
-| 11 | **HubRuntimeBridge** | Hub connection, relay, liveness, offline queue, agent sync | `hub_runtime_bridge/`, `api/relay.py`, `api/hub.py` |
+| 11 | **HubRuntimeBridge** | Hub connection, relay, liveness, offline queue, agent sync | `hub_runtime_bridge/`, `api/relay.py`, `api/hub.py`, `app_shell/relay_service.py` shim |
 | 12 | **Jobs** | Background tasks with leader election | `jobs/`, app-shell Redis runtime |
 
 > **NOTE (Workflow decommission)**: The legacy `base_tasks` / `meta_tasks` / `task_sessions` data model
@@ -165,7 +165,7 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 > must use string/domain-state ports, and the allowlist should shrink as A2A
 > protocol adapters are introduced.
 
-> **P3 app-shell thinning status (2026-06-17):** `app_shell` focus files are
+> **P3 app-shell thinning final state (2026-06-18):** `app_shell` focus files are
 > fail-fast compatibility shims over module-owned facades, adapters, and focused
 > runtime ports. A2A SDK calls and response coercion live in `a2a_adapter`;
 > room CRUD/message behavior lives in Room; orchestration scheduling lives in
@@ -175,7 +175,8 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 > HubRuntimeBridge; A2A task-tracking placeholder creation, tracked-send push
 > configuration, failure persistence, terminal response persistence, and HITL
 > reply task persistence live in Execution; object-storage behavior lives in
-> Platform/DAL.
+> Platform/DAL. The cleanup gates now ratchet both exact forbidden imports and
+> the explicit public app-shell shim method surface.
 
 ### 3.4 Cross-Module Communication Rules
 
@@ -2282,12 +2283,12 @@ class AgentService:
 | Agent health checking | `app_shell/agent_health_service.py` | Agent + Jobs | `service/agent_health.py` |
 | Agent matching (vector) | `app_shell/agent_selection_service.py` | Agent | `service/agent_matching.py` |
 | Agent groups | `api/agent_group.py` | Agent | `repository/agent_group_repo.py` |
-| Agent card fetching | `app_shell/a2a_runtime.py` | A2A Adapter | `card_resolver.py` |
+| Agent card fetching | `a2a_adapter/` via `app_shell/a2a_runtime.py` shim | A2A Adapter | `card_resolver.py` / `client_facade.py` |
 | Agent inspection | `app_shell/inspection_runtime.py` | Agent | `service/agent_crud.py` |
 | Discovery API (no visibility filter) | `api/discovery.py` | Agent | `facade.match_agents(respect_visibility=False)` |
 | Listings (owner-scoped, masked) | `app_shell/agent_service.py` | Agent | `facade.match_agents(respect_visibility=True)` |
 | is_directly_callable (hub 502) | implicit in gateway_service | Agent | `facade.is_directly_callable()` |
-| Hub agent enrichment (is_hub_online) | mongodb._enrich_hub_fields | Agent + HubRuntimeBridge | Agent calls `HubLivenessReader` |
+| Hub agent enrichment (is_hub_online) | Agent facade + `HubLivenessReader` | Agent + HubRuntimeBridge | Agent calls `HubLivenessReader` |
 | **Room & messages** | | | |
 | Room CRUD | `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `room/repository/` |
 | Room membership (3 seed modes) | `app_shell/room_runtime.py` shim | Room | `room/facade.py` compatibility methods |
