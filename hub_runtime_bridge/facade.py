@@ -574,6 +574,13 @@ class HubFacade:
     def is_hub_connected_locally(self, hub_id: str) -> bool:
         return hub_id in self._queues
 
+    def _is_within_offline_grace_period(self, hub_id: str) -> bool:
+        disconnected_at = self._hub_disconnected_at.get(hub_id)
+        if disconnected_at is None:
+            return False
+        elapsed = time.monotonic() - disconnected_at
+        return elapsed <= self.deps.config.offline_grace_period_seconds
+
     async def disconnect_hub(self, hub_id: str) -> None:
         queue = self._queues.get(hub_id)
         if queue is not None:
@@ -608,6 +615,8 @@ class HubFacade:
                 event.get("room_id"),
                 event.get("local_agent_id"),
             )
+            if self._is_within_offline_grace_period(hub_id):
+                return False
             await self._mark_rejected_legacy_event(event, "Agent is offline")
             return False
         return bool(result) and was_online
