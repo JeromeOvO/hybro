@@ -1,6 +1,8 @@
+import ast
 import inspect
 import subprocess
 import sys
+from pathlib import Path
 from typing import get_type_hints
 
 from common.protocols import (
@@ -193,3 +195,71 @@ def test_app_shell_repository_store_part_properties_do_not_recreate_missing_part
         except AttributeError:
             continue
         raise AssertionError(f"{attribute} should expose missing store wiring")
+
+
+def _dotted_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _dotted_name(node.value)
+        if parent:
+            return f"{parent}.{node.attr}"
+    return None
+
+
+def _references_name(node: ast.AST, name: str) -> bool:
+    return any(isinstance(child, ast.Name) and child.id == name for child in ast.walk(node))
+
+
+def test_main_binds_focused_runtime_store_parts_before_aggregate_shims():
+    tree = ast.parse(Path("main.py").read_text())
+    expected_assignments = {
+        "agent_room_store": "agent_room",
+        "message_store": "messages",
+        "task_store": "tasks",
+        "hitl_store": "hitl",
+        "memory_store": "memory",
+    }
+
+    assignments: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if (
+            isinstance(node.value, ast.Attribute)
+            and isinstance(node.value.value, ast.Name)
+            and node.value.value.id == "app_shell_store"
+        ):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    assignments[target.id] = node.value.attr
+
+    assert expected_assignments.items() <= assignments.items()
+
+
+def test_main_keeps_broad_repository_store_only_for_documented_compatibility_points():
+    tree = ast.parse(Path("main.py").read_text())
+    allowed_broad_calls = {
+        "debate_service.bind_store",
+        "room_coordinator_service.bind_store",
+        "room_runtime.bind_store",
+        "create_room_message_center",
+        "init_relay_service",
+    }
+    broad_calls: list[str] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        call_name = _dotted_name(node.func) or "<unknown>"
+        call_refs_broad_store = any(
+            _references_name(arg, "app_shell_store") for arg in node.args
+        ) or any(
+            keyword.value is not None
+            and _references_name(keyword.value, "app_shell_store")
+            for keyword in node.keywords
+        )
+        if call_refs_broad_store and call_name not in allowed_broad_calls:
+            broad_calls.append(f"{call_name}:{node.lineno}")
+
+    assert broad_calls == []
