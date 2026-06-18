@@ -482,9 +482,10 @@ Examples:
   settings or broad stores during calls.
 - `app_shell.agent_service`: route-facing adapter over `AgentFacade`.
 - `app_shell.repository_store`: compatibility composite over focused runtime
-  store parts in `app_shell.repository_parts`. Existing app-shell and execution
-  callers still bind the composite, but new consumers should depend on a narrow
-  protocol or focused part.
+  store parts in `app_shell.repository_parts`. Startup splits the composite into
+  focused agent/room, message, task lifecycle, HITL, and memory ports before
+  binding production consumers; only documented compatibility shims still receive
+  the composite.
 - `app_shell.relay_service`: relay route surface over
   `hub_runtime_bridge`. Hub-owned liveness, stream binding, agent sync,
   legacy push delivery, offline queues, offline failure persistence, heartbeat
@@ -638,18 +639,16 @@ in one response handler regardless of whether the response came from direct
 transport, relay, or webhook.
 
 Task lifecycle data access for A2A task submission, webhook token validation,
-cancellation persistence, and stale-task cleanup is routed through
-`AppShellRepositoryStore` backed by module repositories and `MongoDAL`
-collections. The store delegates task lifecycle, HITL, and context-memory
-operations to scoped `repository_parts` classes while preserving the legacy
-method surface for callers. HITL lifecycle persistence, CAS/fencing updates,
-continuation metadata, stale-processing recovery, and HITL index creation also
-use `AppShellRepositoryStore`. Relay route registration, hub status, liveness,
-and offline failure persistence use explicit repository-backed app-shell
-adapters. Room runtime, room message center, queue executor, and supervisor
-executor also receive `AppShellRepositoryStore` at startup, so orchestration
-reads, writes, continuation state, cancellation fan-out, and room memory lookups
-no longer bind to the broad legacy database service object.
+cancellation persistence, HITL lifecycle, task notification persistence, webhook
+response handling, and stale-task cleanup is routed through focused runtime-store
+ports assembled in `main.py`. `AppShellRepositoryStore` still backs those ports
+with module repositories and `MongoDAL` collections, but production bindings use
+its scoped `repository_parts` surfaces instead of passing the full aggregate
+where a narrower port is sufficient. Relay route registration, hub status, and
+liveness use explicit repository-backed app-shell adapters. Room runtime, room
+message center, queue executor, supervisor executor, debate injection, and room
+coordinator compatibility remain documented aggregate-store blockers until those
+callers move to narrower room/execution ports.
 
 **Agent display text:** Terminal `message_text` and artifact text parts are persisted as received from agents. List/section markdown repair runs only in the frontend remark plugin pipeline (`hybro-frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown render time. Hybro-controlled LLM paths (supervisor synthesis, `SummaryLLMService`) append `HYBRO_MARKDOWN_RESPONSE_FORMAT` so synthesis uses `###` section headers; third-party agent text is still stored as-is. Backend terminal helpers in `common/utils/a2a_helpers.py` (`prepare_terminal_agent_content`, `resolve_terminal_sse_content`, `sync_artifact_dicts_to_canonical_text`) resolve canonical text from artifacts and align artifact payloads without transforming markdown. Terminal resolution is owned by `update_task_state_on_message`; streaming text parts collapse to a single canonical text part while file/data parts are preserved. SSE terminal `content` is authoritative for display text; `parts` carries only non-text payloads.
 
@@ -752,10 +751,11 @@ Main responsibilities live in `app_shell.hitl_service` and execution adapters:
 `ExecutionFacade` exposes HITL operations through the `HITLManager` protocol so
 routes do not need to know app-shell runtime internals.
 
-HITL storage is exposed as explicit store methods on `AppShellRepositoryStore`
-instead of raw `database_service` or Mongo access. `HITLService` uses store
-ports for request creation, CAS/fenced updates, group routing claims,
-continuation persistence, and stale processing iteration.
+HITL storage is exposed through a focused startup adapter over the HITL, message,
+and task lifecycle runtime-store parts instead of raw `database_service`, Mongo
+access, or the full repository-store aggregate. `HITLService` uses store ports
+for request creation, CAS/fenced updates, group routing claims, continuation
+persistence, and stale processing iteration.
 
 ## Context Memory Workflow
 

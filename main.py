@@ -563,12 +563,148 @@ async def lifespan(app: FastAPI):
                 room_deps=_room_deps,
                 agent_deps=_agent_deps,
             )
-            membership_source.bind_store(app_shell_store)
+            agent_room_store = app_shell_store.agent_room
+            message_store = app_shell_store.messages
+            task_store = app_shell_store.tasks
+            hitl_store = app_shell_store.hitl
+            memory_store = app_shell_store.memory
+            max_tasks_per_user = app_shell_store.MAX_TASKS_PER_USER
+            max_tasks_per_room = app_shell_store.MAX_TASKS_PER_ROOM
+
+            # Transitional P3 adapters: keep startup wiring narrow without
+            # introducing long-lived app-shell classes in this slice. Follow-up
+            # hardening can replace these SimpleNamespace seams with concrete
+            # protocol adapters when static type enforcement becomes the goal.
+            async def check_task_limits(
+                user_id: str,
+                room_id: str,
+                non_terminal_states: list[str],
+            ) -> None:
+                await task_store.check_task_limits(
+                    user_id,
+                    room_id,
+                    non_terminal_states,
+                    max_tasks_per_user=max_tasks_per_user,
+                    max_tasks_per_room=max_tasks_per_room,
+                )
+
+            task_notification_store = SimpleNamespace(
+                update_last_notified_state=message_store.update_last_notified_state,
+                get_room_agent_message_by_message_id=(
+                    message_store.get_room_agent_message_by_message_id
+                ),
+                update_room_agent_message_by_message_id=(
+                    message_store.update_room_agent_message_by_message_id
+                ),
+                get_room_by_room_id=agent_room_store.get_room_by_room_id,
+                resolve_client_request_id_for_agent_message=(
+                    task_store.resolve_client_request_id_for_agent_message
+                ),
+            )
+            a2a_task_tracking_store = SimpleNamespace(
+                check_task_limits=check_task_limits,
+                generate_webhook_token=task_store.generate_webhook_token,
+                hash_webhook_token=task_store.hash_webhook_token,
+                enable_task_tracking_on_message=(
+                    task_store.enable_task_tracking_on_message
+                ),
+                get_room_agent_message_by_message_id=(
+                    message_store.get_room_agent_message_by_message_id
+                ),
+                update_webhook_token_hash_on_message=(
+                    task_store.update_webhook_token_hash_on_message
+                ),
+                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
+                update_task_on_message=task_store.update_task_on_message,
+            )
+            hitl_runtime_store = SimpleNamespace(
+                count_hitl_requests_for_message=(
+                    hitl_store.count_hitl_requests_for_message
+                ),
+                create_hitl_request=hitl_store.create_hitl_request,
+                update_agent_message_task_state=(
+                    hitl_store.update_agent_message_task_state
+                ),
+                persist_hitl_user_answer=hitl_store.persist_hitl_user_answer,
+                persist_hitl_group_metadata=hitl_store.persist_hitl_group_metadata,
+                get_hitl_request=hitl_store.get_hitl_request,
+                claim_hitl_request=hitl_store.claim_hitl_request,
+                fenced_update_hitl_request=hitl_store.fenced_update_hitl_request,
+                count_pending_in_hitl_group=hitl_store.count_pending_in_hitl_group,
+                get_hitl_group_requests=hitl_store.get_hitl_group_requests,
+                release_hitl_group_routing=hitl_store.release_hitl_group_routing,
+                claim_hitl_group_routing=hitl_store.claim_hitl_group_routing,
+                reset_last_notified_state=message_store.reset_last_notified_state,
+                get_room_agent_message_by_message_id=(
+                    message_store.get_room_agent_message_by_message_id
+                ),
+                get_pending_continuation_on_message=(
+                    task_store.get_pending_continuation_on_message
+                ),
+                save_continuation_on_user_message=(
+                    task_store.save_continuation_on_user_message
+                ),
+                get_pending_hitl_requests=hitl_store.get_pending_hitl_requests,
+                get_pending_hitl_requests_for_message=(
+                    hitl_store.get_pending_hitl_requests_for_message
+                ),
+                cas_update_hitl_request=hitl_store.cas_update_hitl_request,
+                get_and_clear_continuation_on_message=(
+                    task_store.get_and_clear_continuation_on_message
+                ),
+                get_and_clear_continuation_on_user_message=(
+                    task_store.get_and_clear_continuation_on_user_message
+                ),
+                iter_stale_processing_hitl_requests=(
+                    hitl_store.iter_stale_processing_hitl_requests
+                ),
+            )
+            response_client_request_resolver = SimpleNamespace(
+                resolve_client_request_id_for_message_id=(
+                    task_store.resolve_client_request_id_for_message_id
+                ),
+                get_room_agent_message_by_message_id=(
+                    message_store.get_room_agent_message_by_message_id
+                ),
+                resolve_client_request_id_for_agent_message=(
+                    task_store.resolve_client_request_id_for_agent_message
+                ),
+            )
+            stale_task_store = SimpleNamespace(
+                get_stale_task_messages=task_store.get_stale_task_messages,
+                get_expired_task_messages=task_store.get_expired_task_messages,
+                get_non_tracked_stale_task_messages=(
+                    task_store.get_non_tracked_stale_task_messages
+                ),
+                find_stale_non_terminal_runs=task_store.find_stale_non_terminal_runs,
+                touch_task_message=task_store.touch_task_message,
+                is_message_cancelled=task_store.is_message_cancelled,
+                update_task_on_message=task_store.update_task_on_message,
+                get_and_clear_continuation_on_message=(
+                    task_store.get_and_clear_continuation_on_message
+                ),
+                get_and_clear_continuation_on_user_message=(
+                    task_store.get_and_clear_continuation_on_user_message
+                ),
+                get_room_ids_with_non_terminal_runs=(
+                    task_store.get_room_ids_with_non_terminal_runs
+                ),
+                get_orphaned_agent_messages=task_store.get_orphaned_agent_messages,
+                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
+                get_stuck_supervisor_trajectory_messages=(
+                    task_store.get_stuck_supervisor_trajectory_messages
+                ),
+                claim_stuck_supervisor_trajectory=(
+                    task_store.claim_stuck_supervisor_trajectory
+                ),
+            )
+
+            membership_source.bind_store(agent_room_store)
             debate_service.bind_store(app_shell_store)
             room_coordinator_service.bind_store(app_shell_store)
-            chat_memory_service.bind_store(app_shell_store)
-            room_memory_service.bind_store(app_shell_store)
-            bind_notification_store(app_shell_store)
+            chat_memory_service.bind_store(memory_store)
+            room_memory_service.bind_store(memory_store)
+            bind_notification_store(task_notification_store)
             bind_task_notification_runtime(
                 notification_service=notification_service,
                 sse_manager=sse_manager,
@@ -577,22 +713,18 @@ async def lifespan(app: FastAPI):
                 A2ARuntimeConfig(webhook_base_url=settings.webhook_base_url)
             )
             a2a_service.bind_task_db(
-                app_shell_store,
-                call_counter=SimpleNamespace(
-                    increment_agent_call_count=(
-                        app_shell_store.increment_agent_call_count
-                    ),
-                ),
+                a2a_task_tracking_store,
+                call_counter=agent_room_store,
             )
             app_shell_client_request_id_resolver = SSEClientRequestIdResolver(
-                resolver=app_shell_store,
+                resolver=task_store,
             )
             app.state.execution_client_request_id_resolver = (
                 app_shell_client_request_id_resolver
             )
             bind_hitl_service(
                 create_hitl_service(
-                    store=app_shell_store,
+                    store=hitl_runtime_store,
                     delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
                     a2a_service=a2a_service,
                     continuation=A2AHITLContinuationAdapter(
@@ -605,21 +737,21 @@ async def lifespan(app: FastAPI):
                 )
             )
             route_room_reader = SimpleNamespace(
-                get_room_by_room_id=app_shell_store.get_room_by_room_id,
+                get_room_by_room_id=agent_room_store.get_room_by_room_id,
             )
             a2a_task_status_reader = SimpleNamespace(
                 get_room_agent_message_by_message_id=(
-                    app_shell_store.get_room_agent_message_by_message_id
+                    message_store.get_room_agent_message_by_message_id
                 ),
-                get_task_messages_for_room=app_shell_store.get_task_messages_for_room,
+                get_task_messages_for_room=task_store.get_task_messages_for_room,
                 get_pending_task_messages_for_user=(
-                    app_shell_store.get_pending_task_messages_for_user
+                    task_store.get_pending_task_messages_for_user
                 ),
             )
             sse_state_reader = SimpleNamespace(
-                get_room_by_room_id=app_shell_store.get_room_by_room_id,
+                get_room_by_room_id=agent_room_store.get_room_by_room_id,
                 get_room_user_message_by_message_id=(
-                    app_shell_store.get_room_user_message_by_message_id
+                    message_store.get_room_user_message_by_message_id
                 ),
             )
             room_center.bind_room_dependencies(
@@ -628,7 +760,7 @@ async def lifespan(app: FastAPI):
                 selection_service=agent_selection_service,
             )
             a2a_tasks.bind_a2a_task_dependencies(a2a_task_status_reader)
-            agent_group.bind_agent_group_dependencies(app_shell_store)
+            agent_group.bind_agent_group_dependencies(agent_room_store)
             sse.bind_sse_dependencies(sse_state_reader, sse_manager)
             room_runtime.bind_store(app_shell_store)
             room_runtime.bind_facade(_room_facade)
@@ -648,49 +780,48 @@ async def lifespan(app: FastAPI):
                 ),
             )
             _context_memory_deps = create_context_memory_deps(context_memory_facade)
-            execution_room_message_center.bind(
-                create_room_message_center(
-                    room_services=room_services,
-                    store=app_shell_store,
-                    sse_manager=sse_manager,
-                    room_coordinator_service=room_coordinator_service,
-                    summary_service=summary_llm_service,
-                    notification_service=notification_service,
-                    agent_resolver_service=agent_resolver_service,
-                    a2a_service=a2a_service,
-                    task_service=task_service,
-                    room_memory_service=room_memory_service,
-                    debate_service=debate_service,
-                    rate_limit_service=agent_rate_limiter,
-                    room_supervisor_service=room_supervisor_service,
-                    hitl_coordinator=hitl_service,
-                    task_notifications=TaskNotificationAdapter(
-                        notify_task_update_with_string_state
-                    ),
-                    task_notification_impl=_notify_task_update_impl,
-                    agent_health_service=agent_health_service,
-                    s3_service=s3_service,
-                    capability_issue_service=capability_issue_service,
-                    context_memory_runtime=_context_memory_deps.context_memory_runtime,
-                    compaction_service=compaction_service,
-                    build_turn_content_func=build_turn_content,
-                    supervisor_planning_error_cls=SupervisorPlanningError,
-                    orphan_threshold_minutes=settings.orphan_threshold_minutes,
-                    debate_rounds=settings.debate_rounds,
-                    cloud_health_cache_ttl=settings.cloud_health_cache_ttl,
-                    cloud_health_check_timeout=settings.cloud_health_check_timeout,
-                )
+            room_message_center_impl = create_room_message_center(
+                room_services=room_services,
+                store=app_shell_store,
+                sse_manager=sse_manager,
+                room_coordinator_service=room_coordinator_service,
+                summary_service=summary_llm_service,
+                notification_service=notification_service,
+                agent_resolver_service=agent_resolver_service,
+                a2a_service=a2a_service,
+                task_service=task_service,
+                room_memory_service=room_memory_service,
+                debate_service=debate_service,
+                rate_limit_service=agent_rate_limiter,
+                room_supervisor_service=room_supervisor_service,
+                hitl_coordinator=hitl_service,
+                task_notifications=TaskNotificationAdapter(
+                    notify_task_update_with_string_state
+                ),
+                task_notification_impl=_notify_task_update_impl,
+                agent_health_service=agent_health_service,
+                s3_service=s3_service,
+                capability_issue_service=capability_issue_service,
+                context_memory_runtime=_context_memory_deps.context_memory_runtime,
+                compaction_service=compaction_service,
+                build_turn_content_func=build_turn_content,
+                supervisor_planning_error_cls=SupervisorPlanningError,
+                orphan_threshold_minutes=settings.orphan_threshold_minutes,
+                debate_rounds=settings.debate_rounds,
+                cloud_health_cache_ttl=settings.cloud_health_cache_ttl,
+                cloud_health_check_timeout=settings.cloud_health_check_timeout,
             )
+            execution_room_message_center.bind(room_message_center_impl)
             execution_room_message_center.bind_facade(_room_facade)
 
             def create_webhook_transport():
                 handler = AgentResponseHandler(
-                    message_writer=app_shell_store,
-                    task_writer=app_shell_store,
-                    continuation_store=app_shell_store,
-                    client_request_resolver=app_shell_store,
-                    room_reader=app_shell_store,
-                    hitl_reader=app_shell_store,
+                    message_writer=message_store,
+                    task_writer=message_store,
+                    continuation_store=task_store,
+                    client_request_resolver=response_client_request_resolver,
+                    room_reader=agent_room_store,
+                    hitl_reader=hitl_store,
                     sse_manager=sse_manager,
                     room_message_center=execution_room_message_center,
                     hitl_coordinator=hitl_service,
@@ -700,9 +831,9 @@ async def lifespan(app: FastAPI):
                 handler.bind_execution_event_deps(emit_room_processing_status)
                 return WebhookTransport(
                     response_handler=handler,
-                    webhook_auth=app_shell_store,
-                    message_reader=app_shell_store,
-                    cancellation_reader=app_shell_store,
+                    webhook_auth=task_store,
+                    message_reader=message_store,
+                    cancellation_reader=task_store,
                     task_notifier=notify_task_update_with_string_state,
                 )
 
@@ -713,10 +844,10 @@ async def lifespan(app: FastAPI):
                 run_lifecycle=run_lifecycle,
                 run_reader=RunQueryAdapter(_execution_repos["run_repository"]),
                 cancellation_state=CancellationStateC3Adapter(sse_manager),
-                cancellation_store=MongoCancellationStoreAdapter(app_shell_store),
+                cancellation_store=MongoCancellationStoreAdapter(task_store),
                 hitl_message_cancellation=HITLMessageCancellationAdapter(hitl_service),
                 agent_task_cleanup=AgentTaskCleanupAdapter(
-                    store=app_shell_store,
+                    store=message_store,
                     get_agent_card_from_url=a2a_service.get_agent_card_from_url,
                     cancel_remote_task=a2a_service.cancel_remote_task,
                     notify_task_update=notify_task_update_with_string_state,
@@ -833,7 +964,7 @@ async def lifespan(app: FastAPI):
             if healed:
                 logger.info("startup heal: healed %s diverged run(s)", healed)
         if settings.webhook_signing_key:
-            await app_shell_store.ensure_hitl_indexes()
+            await hitl_store.ensure_hitl_indexes()
 
         # Init app-shell Redis subsystems before the guard. Delivery-owned
         # Pub/Sub/KV clients are constructed through container.py above.
@@ -895,7 +1026,7 @@ async def lifespan(app: FastAPI):
         )
         stale_task_checker.set_runtime_deps(
             StaleTaskCheckerDeps(
-                store=app_shell_store,
+                store=stale_task_store,
                 rooms_collection=mongo_dal.collection("rooms"),
                 notify_task_update=notify_task_update,
                 increment_counter=increment_counter,
@@ -1046,7 +1177,7 @@ async def lifespan(app: FastAPI):
             ),
             response_converter=hub_agent_response_internal_to_agent_event,
             offline_failure_port=RelayOfflineFailureAdapter(
-                app_shell_store,
+                message_store,
                 sse_manager,
             ),
             config=config_from_settings(settings),
