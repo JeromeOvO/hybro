@@ -11,7 +11,6 @@ from collections.abc import AsyncGenerator, Callable
 from types import SimpleNamespace
 from typing import Any
 
-from app_shell.delivery_runtime import SSEManager
 from app_shell.redis_runtime import AppShellLeaderElection, AppShellRelayStreamService
 from common.dto import (
     HubCancelCommand,
@@ -93,7 +92,7 @@ class RelayService:
         mongo: Any,
         db: Any | None = None,
         legacy_store: Any | None = None,
-        sse_manager: SSEManager,
+        sse_manager: Any,
         event_publisher: Any | None = None,
         worker_id: str | None = None,
         response_converter: Callable[[Any], Any] | None = None,
@@ -111,7 +110,6 @@ class RelayService:
         self._db = db if db is not None else legacy_store
         if self._db is None:
             raise ValueError("RelayService requires a mongo-compatible db/service")
-        self._sse = sse_manager
         self._agent_registry_writer = None
         self._publish_handler: Any | None = None
         self._relay_transport: Any | None = None
@@ -357,7 +355,7 @@ def init_relay_service(
     mongo: Any,
     db: Any | None = None,
     legacy_store: Any | None = None,
-    sse_manager: SSEManager,
+    sse_manager: Any,
     room_message_center: object,
     hitl_coordinator: object | None = None,
     event_publisher: Any | None = None,
