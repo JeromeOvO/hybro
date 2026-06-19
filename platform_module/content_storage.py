@@ -127,12 +127,9 @@ class PlatformContentStorage:
         object_storage = self._deps.object_storage
         if object_storage is None:
             raise RuntimeError("Platform content storage requires object_storage")
-        if hasattr(object_storage, "download_text"):
-            content = await object_storage.download_text(s3_key)
-        elif hasattr(object_storage, "get_text"):
-            content = await object_storage.get_text(s3_key)
-        else:
+        if not hasattr(object_storage, "get_text"):
             raise RuntimeError("Object storage cannot read text content")
+        content = await object_storage.get_text(s3_key)
         if content is None:
             raise ContentExpiredError(turn_id, s3_key)
         return content

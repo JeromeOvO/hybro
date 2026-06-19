@@ -1,14 +1,15 @@
 import pytest
 
-from common.errors import FileStoragePlatformError
+from common.errors import FileStoragePlatformError, ObjectStorageError
 from platform_module import PlatformConfig, PlatformDeps
 from platform_module.files import PlatformFileStorage
 
 
 class FakeObjectStorage:
-    def __init__(self) -> None:
+    def __init__(self, *, delete_error: Exception | None = None) -> None:
         self.puts: list[tuple[str, bytes, str]] = []
         self.deleted: list[str] = []
+        self.delete_error = delete_error
 
     async def put(self, key: str, data: bytes, content_type: str = "") -> str:
         self.puts.append((key, data, content_type))
@@ -19,6 +20,8 @@ class FakeObjectStorage:
 
     async def delete(self, key: str) -> bool:
         self.deleted.append(key)
+        if self.delete_error is not None:
+            raise self.delete_error
         return True
 
 
@@ -216,6 +219,28 @@ async def test_upload_deletes_object_when_metadata_write_fails():
     assert objects.deleted == ["uploads/room-1/file-1/image.png"]
 
 
+async def test_upload_metadata_failure_preserves_original_error_when_rollback_delete_fails():
+    metadata = FakeFileMetadataRepository(fail_create=True)
+    objects = FakeObjectStorage(delete_error=ObjectStorageError("delete failed"))
+    service, objects, _metadata = _storage(
+        metadata_repository=metadata,
+        object_storage=objects,
+    )
+
+    with pytest.raises(FileStoragePlatformError) as exc_info:
+        await service.upload(
+            b"\x89PNG\r\n\x1a\n",
+            "image.png",
+            owner_id="user-1",
+            room_id="room-1",
+            content_type="image/png",
+        )
+
+    assert exc_info.value.status_code == 500
+    assert str(exc_info.value) == "Failed to store file metadata"
+    assert objects.deleted == ["uploads/room-1/file-1/image.png"]
+
+
 async def test_get_url_uses_metadata_key_and_requested_ttl():
     service, _objects, metadata = _storage()
     await service.upload(
@@ -248,6 +273,25 @@ async def test_delete_removes_object_then_metadata():
     assert objects.deleted == ["uploads/room-1/file-1/image.png"]
     assert metadata.deleted == ["file-1"]
     assert await service.delete("missing") is False
+
+
+async def test_delete_does_not_remove_metadata_when_object_delete_fails():
+    objects = FakeObjectStorage(delete_error=ObjectStorageError("delete failed"))
+    service, objects, metadata = _storage(object_storage=objects)
+    await service.upload(
+        b"\x89PNG\r\n\x1a\n",
+        "image.png",
+        owner_id="user-1",
+        room_id="room-1",
+        content_type="image/png",
+    )
+
+    with pytest.raises(ObjectStorageError):
+        await service.delete("file-1")
+
+    assert objects.deleted == ["uploads/room-1/file-1/image.png"]
+    assert metadata.deleted == []
+    assert "file-1" in metadata.records
 
 
 async def test_list_for_room_returns_file_info_records():

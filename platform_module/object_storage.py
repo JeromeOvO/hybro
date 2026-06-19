@@ -1,16 +1,17 @@
-"""Object-storage port protocol.
+"""SDK-free platform object-storage adapter.
 
-Defines the minimal surface that production code should depend on when it needs
-S3-compatible object-storage operations (presigned URLs, prefix deletion, etc.).
-
-The concrete implementation lives in ``app_shell.s3_service`` — this module
-exists so that domain and orchestration layers can depend on the *protocol*
-without importing infrastructure singletons directly.
+Defines the runtime compatibility surface used by room, execution, artifact,
+and cleanup code while delegating SDK-owned behavior to the DAL layer.
 """
 
 from __future__ import annotations
 
-from typing import Protocol
+import time
+from collections.abc import Callable
+from typing import BinaryIO, Protocol
+
+from common.errors import ObjectStorageError
+from common.protocols import ObjectStorageDAL
 
 
 class ObjectStoragePort(Protocol):
@@ -18,19 +19,18 @@ class ObjectStoragePort(Protocol):
 
     async def upload_file(
         self,
-        *,
-        file_data: bytes,
+        file_data: BinaryIO | bytes,
         s3_key: str,
         content_type: str,
-        content_length: int,
-    ) -> None: ...
+        content_length: int | None = None,
+    ) -> str: ...
 
     async def generate_presigned_url(
         self,
         s3_key: str,
         *,
         filename: str | None = None,
-        expires_in: int = 3600,
+        expires_in: int | None = None,
     ) -> str: ...
 
     async def batch_presigned_urls(
@@ -38,9 +38,116 @@ class ObjectStoragePort(Protocol):
         s3_keys: list[str],
         *,
         filenames: dict[str, str] | None = None,
-        expires_in: int = 3600,
+        expires_in: int | None = None,
     ) -> dict[str, str]: ...
 
-    async def delete_prefix(self, prefix: str) -> None: ...
+    async def delete_file(self, s3_key: str) -> bool: ...
+    async def head_file(self, s3_key: str) -> dict | None: ...
+    async def delete_prefix(self, prefix: str) -> int: ...
 
     def get_public_url(self, s3_key: str) -> str: ...
+
+    async def download_text(self, s3_key: str) -> str | None: ...
+
+
+class PlatformObjectStorage:
+    """Compatibility-shaped object-storage adapter over ``ObjectStorageDAL``."""
+
+    def __init__(
+        self,
+        dal: ObjectStorageDAL,
+        *,
+        default_presigned_url_ttl: int,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        self._dal = dal
+        self._default_presigned_url_ttl = default_presigned_url_ttl
+        self._clock = clock
+        self._presigned_cache: dict[tuple[str, str | None, int], tuple[float, str]] = {}
+
+    async def upload_file(
+        self,
+        file_data: BinaryIO | bytes,
+        s3_key: str,
+        content_type: str,
+        content_length: int | None = None,
+    ) -> str:
+        if isinstance(file_data, bytes):
+            result = await self._dal.put(s3_key, file_data, content_type)
+        else:
+            result = await self._dal.put_file(
+                s3_key,
+                file_data,
+                content_type=content_type,
+                content_length=content_length,
+            )
+        self._invalidate_presigned_cache(s3_key)
+        return result
+
+    async def generate_presigned_url(
+        self,
+        s3_key: str,
+        *,
+        filename: str | None = None,
+        expires_in: int | None = None,
+    ) -> str:
+        ttl = self._effective_ttl(expires_in)
+        cache_key = (s3_key, filename, ttl)
+        now = self._clock()
+        cached = self._presigned_cache.get(cache_key)
+        if cached is not None:
+            expires_at, url = cached
+            if expires_at > now:
+                return url
+
+        url = await self._dal.get_presigned_url(s3_key, ttl=ttl, filename=filename)
+        self._presigned_cache[cache_key] = (now + max(ttl / 2, 0), url)
+        return url
+
+    async def batch_presigned_urls(
+        self,
+        s3_keys: list[str],
+        *,
+        filenames: dict[str, str] | None = None,
+        expires_in: int | None = None,
+    ) -> dict[str, str]:
+        return {
+            s3_key: await self.generate_presigned_url(
+                s3_key,
+                filename=(filenames or {}).get(s3_key),
+                expires_in=expires_in,
+            )
+            for s3_key in s3_keys
+        }
+
+    async def delete_file(self, s3_key: str) -> bool:
+        try:
+            deleted = await self._dal.delete(s3_key)
+        except ObjectStorageError:
+            return False
+        if deleted:
+            self._invalidate_presigned_cache(s3_key)
+        return deleted
+
+    async def head_file(self, s3_key: str) -> dict | None:
+        return await self._dal.head(s3_key)
+
+    async def delete_prefix(self, prefix: str) -> int:
+        return await self._dal.delete_prefix(prefix)
+
+    def get_public_url(self, s3_key: str) -> str:
+        return self._dal.get_public_url(s3_key)
+
+    async def download_text(self, s3_key: str) -> str | None:
+        return await self._dal.get_text(s3_key)
+
+    def _effective_ttl(self, expires_in: int | None) -> int:
+        return self._default_presigned_url_ttl if expires_in is None else expires_in
+
+    def _invalidate_presigned_cache(self, s3_key: str) -> None:
+        for cache_key in list(self._presigned_cache):
+            if cache_key[0] == s3_key:
+                self._presigned_cache.pop(cache_key, None)
+
+
+__all__ = ["ObjectStoragePort", "PlatformObjectStorage"]

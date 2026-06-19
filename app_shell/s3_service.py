@@ -192,5 +192,9 @@ class S3Service:
                 return None
             raise
 
+    async def get_text(self, s3_key: str) -> str | None:
+        """ObjectStorageDAL-compatible alias for text reads."""
+        return await self.download_text(s3_key)
+
 
 s3_service = S3Service()

@@ -54,6 +54,13 @@ class TestS3ServiceErrors:
             result = await svc.download_text("missing/key")
         assert result is None
 
+    async def test_get_text_delegates_to_download_text(self):
+        svc = S3Service()
+        svc.download_text = AsyncMock(return_value="text content")
+
+        assert await svc.get_text("objects/content.txt") == "text content"
+        svc.download_text.assert_awaited_once_with("objects/content.txt")
+
 
 class TestInlineBase64ConversionErrors:
     async def test_s3_upload_failure_logs_error(self):

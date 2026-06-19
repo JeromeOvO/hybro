@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from common.dto import FileInfo
-from common.errors import FileStoragePlatformError
+from common.errors import FileStoragePlatformError, ObjectStorageError
 from platform_module.config import PlatformConfig
 from platform_module.deps import PlatformDeps
 
@@ -77,7 +77,14 @@ class PlatformFileStorage:
                 self._deps.logger.error(
                     "File metadata write failed after object upload: %s", s3_key
                 )
-            await object_storage.delete(s3_key)
+            try:
+                await object_storage.delete(s3_key)
+            except ObjectStorageError:
+                if self._deps.logger is not None:
+                    self._deps.logger.warning(
+                        "Object cleanup failed after metadata write failure: %s",
+                        s3_key,
+                    )
             raise FileStoragePlatformError(
                 500, "Failed to store file metadata"
             ) from exc
