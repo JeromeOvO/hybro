@@ -305,6 +305,7 @@ async def lifespan(app: FastAPI):
             from platform_module import (
                 PlatformAttachmentCleanupPort,
                 PlatformAttachmentMetadataReader,
+                PlatformObjectStorage,
             )
             from platform_module.adapters import RateLimitCollectionAdapter
             from platform_module.rate_limit import PlatformAgentRateLimiter
@@ -899,6 +900,11 @@ async def lifespan(app: FastAPI):
             app.state.execution_deps = _execution_deps
 
             object_storage = create_object_storage_dal()
+            platform_object_storage = PlatformObjectStorage(
+                object_storage,
+                default_presigned_url_ttl=settings.s3_presigned_url_ttl,
+            )
+            s3_service.bind_object_storage(platform_object_storage)
             platform_config = create_platform_config(settings)
             platform_deps = create_platform_deps(
                 agent_deps=_agent_deps,

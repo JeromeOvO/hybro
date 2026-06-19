@@ -2154,8 +2154,8 @@ Motor/DAL scripts and must not restore `database/mongodb.py`,
 presigned URL, metadata, public URL, text download, and prefix cleanup surface
 over `ObjectStorageDAL`. Platform file/content services now use DAL-shaped
 object storage dependencies; SDK ownership stays in `dal/s3/`, with
-`app_shell/s3_service.py` retained only as a compatibility shim until the final
-S3 service removal phase.
+`app_shell/s3_service.py` retained only as an SDK-free compatibility shim until
+the final S3 service removal phase.
 
 **Implemented LLM migration note (2026-06-05):** `LLMGatewayImpl` now owns
 logical model routing, retry/timeout behavior, structured JSON-object mode, and
@@ -2376,7 +2376,7 @@ class AgentService:
 | Redis Pub/Sub | `delivery/` | DAL | `redis/pubsub.py` |
 | Redis Streams | `app_shell/redis_runtime.py` | DAL | `redis/streams.py` |
 | Pinecone | `database/pinecone_db.py` | DAL | `pinecone/client.py` |
-| S3 | `app_shell/s3_service.py` | DAL | `s3/client.py` |
+| S3 SDK calls | `app_shell/s3_service.py` shim | DAL | `s3/client.py` |
 | Leader election | `app_shell/redis_runtime.py` | DAL | `redis/leader.py` |
 | **Jobs** | | | |
 | Health check | `jobs/agent_health_service.py` | Jobs | `agent_health_job.py` |

@@ -440,9 +440,9 @@ Business modules use module-scoped repositories built from `MongoDAL`,
 
 Platform-facing file/content services depend on `ObjectStorageDAL` or the
 `PlatformObjectStorage` compatibility adapter instead of importing SDK clients.
-`app_shell.s3_service` remains a route/runtime compatibility shim while the
-object-storage migration finishes; it must not become a new dependency target
-for domain or platform modules.
+`app_shell.s3_service` is an SDK-free compatibility shim bound to
+`PlatformObjectStorage` during startup; it must not become a new dependency
+target for domain or platform modules.
 
 The legacy runtime database files `database/mongodb.py`,
 `database/pinecone_db.py`, `database/repository.py`, and

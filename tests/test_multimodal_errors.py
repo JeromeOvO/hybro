@@ -1,126 +1,134 @@
 import base64
-import io
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from botocore.exceptions import ClientError
 
 from app_shell.s3_service import S3Service
 
 
-class TestS3ServiceErrors:
-    async def test_upload_client_error_raises(self):
+class FakeObjectStoragePort:
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    async def upload_file(
+        self,
+        file_data,
+        s3_key: str,
+        content_type: str,
+        content_length: int | None = None,
+    ) -> str:
+        self.calls.append(("upload_file", file_data, s3_key, content_type, content_length))
+        return s3_key
+
+    async def generate_presigned_url(
+        self,
+        s3_key: str,
+        *,
+        filename: str | None = None,
+        expires_in: int | None = None,
+    ) -> str:
+        self.calls.append(("generate_presigned_url", s3_key, filename, expires_in))
+        return f"https://files.example/{s3_key}?name={filename or ''}"
+
+    async def batch_presigned_urls(
+        self,
+        s3_keys: list[str],
+        *,
+        filenames: dict[str, str] | None = None,
+        expires_in: int | None = None,
+    ) -> dict[str, str]:
+        self.calls.append(("batch_presigned_urls", s3_keys, filenames, expires_in))
+        return {key: f"https://files.example/{key}" for key in s3_keys}
+
+    async def delete_file(self, s3_key: str) -> bool:
+        self.calls.append(("delete_file", s3_key))
+        return True
+
+    async def head_file(self, s3_key: str) -> dict | None:
+        self.calls.append(("head_file", s3_key))
+        return {"content_type": "text/plain"}
+
+    async def delete_prefix(self, prefix: str) -> int:
+        self.calls.append(("delete_prefix", prefix))
+        return 3
+
+    def get_public_url(self, s3_key: str) -> str:
+        self.calls.append(("get_public_url", s3_key))
+        return f"https://public.example/{s3_key}"
+
+    async def download_text(self, s3_key: str) -> str | None:
+        self.calls.append(("download_text", s3_key))
+        return f"text:{s3_key}"
+
+
+class TestS3ServiceShim:
+    async def test_unbound_s3_service_fails_fast(self):
         svc = S3Service()
-        error = ClientError({"Error": {"Code": "NoSuchBucket", "Message": "Not found"}}, "PutObject")
-        with patch.object(svc, "_session") as mock_session:
-            mock_client = AsyncMock()
-            mock_client.upload_fileobj = AsyncMock(side_effect=error)
-            ctx = AsyncMock()
-            ctx.__aenter__ = AsyncMock(return_value=mock_client)
-            ctx.__aexit__ = AsyncMock(return_value=False)
-            mock_session.client.return_value = ctx
-            with pytest.raises(ClientError):
-                await svc.upload_file(
-                    file_data=io.BytesIO(b"data"),
-                    s3_key="test/key",
-                    content_type="text/plain",
-                    content_length=4,
-                )
 
-    async def test_presigned_url_client_error_raises(self):
+        with pytest.raises(RuntimeError, match="S3Service.bind_object_storage"):
+            await svc.generate_presigned_url("test/key")
+        with pytest.raises(RuntimeError, match="S3Service.bind_object_storage"):
+            svc.get_public_url("test/key")
+
+    async def test_s3_service_delegates_to_bound_object_storage(self):
+        delegate = FakeObjectStoragePort()
+        svc = S3Service(delegate)
+
+        assert (
+            await svc.upload_file(b"data", "objects/a.txt", "text/plain", 4)
+            == "objects/a.txt"
+        )
+        assert (
+            await svc.generate_presigned_url(
+                "objects/a.txt",
+                filename="a.txt",
+                expires_in=30,
+            )
+            == "https://files.example/objects/a.txt?name=a.txt"
+        )
+        assert await svc.batch_presigned_urls(
+            ["objects/a.txt"],
+            filenames={"objects/a.txt": "a.txt"},
+            expires_in=30,
+        ) == {"objects/a.txt": "https://files.example/objects/a.txt"}
+        assert await svc.delete_file("objects/a.txt") is True
+        assert await svc.head_file("objects/a.txt") == {"content_type": "text/plain"}
+        assert await svc.delete_prefix("objects/") == 3
+        assert svc.get_public_url("objects/a.txt") == (
+            "https://public.example/objects/a.txt"
+        )
+        assert await svc.download_text("objects/a.txt") == "text:objects/a.txt"
+        assert await svc.get_text("objects/a.txt") == "text:objects/a.txt"
+
+        assert delegate.calls == [
+            ("upload_file", b"data", "objects/a.txt", "text/plain", 4),
+            ("generate_presigned_url", "objects/a.txt", "a.txt", 30),
+            (
+                "batch_presigned_urls",
+                ["objects/a.txt"],
+                {"objects/a.txt": "a.txt"},
+                30,
+            ),
+            ("delete_file", "objects/a.txt"),
+            ("head_file", "objects/a.txt"),
+            ("delete_prefix", "objects/"),
+            ("get_public_url", "objects/a.txt"),
+            ("download_text", "objects/a.txt"),
+            ("download_text", "objects/a.txt"),
+        ]
+
+    async def test_s3_service_can_bind_delegate_after_construction(self):
+        delegate = FakeObjectStoragePort()
         svc = S3Service()
-        error = ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "GetObject")
-        with patch.object(svc, "_session") as mock_session:
-            mock_client = AsyncMock()
-            mock_client.generate_presigned_url = AsyncMock(side_effect=error)
-            ctx = AsyncMock()
-            ctx.__aenter__ = AsyncMock(return_value=mock_client)
-            ctx.__aexit__ = AsyncMock(return_value=False)
-            mock_session.client.return_value = ctx
-            svc._url_cache.clear()
-            with pytest.raises(ClientError):
-                await svc.generate_presigned_url("test/key")
 
-    async def test_download_text_returns_none_on_missing(self):
-        svc = S3Service()
-        error = ClientError({"Error": {"Code": "NoSuchKey", "Message": "not found"}}, "GetObject")
-        with patch.object(svc, "_session") as mock_session:
-            mock_client = AsyncMock()
-            mock_client.get_object = AsyncMock(side_effect=error)
-            ctx = AsyncMock()
-            ctx.__aenter__ = AsyncMock(return_value=mock_client)
-            ctx.__aexit__ = AsyncMock(return_value=False)
-            mock_session.client.return_value = ctx
-            result = await svc.download_text("missing/key")
-        assert result is None
+        svc.bind_object_storage(delegate)
 
-    async def test_get_text_delegates_to_download_text(self):
-        svc = S3Service()
-        svc.download_text = AsyncMock(return_value="text content")
-
-        assert await svc.get_text("objects/content.txt") == "text content"
-        svc.download_text.assert_awaited_once_with("objects/content.txt")
-
-    async def test_presigned_url_cache_removes_expired_entries_before_write(self):
-        svc = S3Service()
-        svc._url_cache[("old/key", None)] = ("old-url", 1.0)
-        svc._cache_ttl = 10
-
-        with patch("app_shell.s3_service.time.time", return_value=100.0):
-            with patch.object(svc, "_session") as mock_session:
-                mock_client = AsyncMock()
-                mock_client.generate_presigned_url = AsyncMock(return_value="new-url")
-                ctx = AsyncMock()
-                ctx.__aenter__ = AsyncMock(return_value=mock_client)
-                ctx.__aexit__ = AsyncMock(return_value=False)
-                mock_session.client.return_value = ctx
-
-                assert await svc.generate_presigned_url("new/key") == "new-url"
-
-        assert ("old/key", None) not in svc._url_cache
-        assert ("new/key", None) in svc._url_cache
-
-    async def test_presigned_url_cache_is_bounded(self):
-        svc = S3Service()
-        svc._max_url_cache_entries = 2
-        svc._url_cache[("oldest/key", None)] = ("oldest-url", 200.0)
-        svc._url_cache[("middle/key", None)] = ("middle-url", 300.0)
-
-        with patch("app_shell.s3_service.time.time", return_value=100.0):
-            with patch.object(svc, "_session") as mock_session:
-                mock_client = AsyncMock()
-                mock_client.generate_presigned_url = AsyncMock(return_value="new-url")
-                ctx = AsyncMock()
-                ctx.__aenter__ = AsyncMock(return_value=mock_client)
-                ctx.__aexit__ = AsyncMock(return_value=False)
-                mock_session.client.return_value = ctx
-
-                await svc.generate_presigned_url("new/key")
-
-        assert len(svc._url_cache) == 2
-        assert ("oldest/key", None) not in svc._url_cache
-        assert ("middle/key", None) in svc._url_cache
-        assert ("new/key", None) in svc._url_cache
-
-    async def test_delete_file_invalidates_all_presigned_filename_variants(self):
-        svc = S3Service()
-        svc._url_cache[("test/key", None)] = ("plain-url", 200.0)
-        svc._url_cache[("test/key", "a.txt")] = ("named-url", 200.0)
-        svc._url_cache[("other/key", None)] = ("other-url", 200.0)
-
-        with patch.object(svc, "_session") as mock_session:
-            mock_client = AsyncMock()
-            mock_client.delete_object = AsyncMock()
-            ctx = AsyncMock()
-            ctx.__aenter__ = AsyncMock(return_value=mock_client)
-            ctx.__aexit__ = AsyncMock(return_value=False)
-            mock_session.client.return_value = ctx
-
-            assert await svc.delete_file("test/key") is True
-
-        assert ("test/key", None) not in svc._url_cache
-        assert ("test/key", "a.txt") not in svc._url_cache
-        assert ("other/key", None) in svc._url_cache
+        assert await svc.generate_presigned_url("objects/a.txt") == (
+            "https://files.example/objects/a.txt?name="
+        )
+        assert delegate.calls == [
+            ("generate_presigned_url", "objects/a.txt", None, None)
+        ]
 
 
 class TestInlineBase64ConversionErrors:
