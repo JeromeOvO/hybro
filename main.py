@@ -766,7 +766,7 @@ async def lifespan(app: FastAPI):
             sse.bind_sse_dependencies(sse_state_reader, sse_manager)
             room_runtime.bind_store(app_shell_store)
             room_runtime.bind_facade(_room_facade)
-            room_runtime.bind_s3_service(platform_object_storage)
+            room_runtime.bind_object_storage(platform_object_storage)
             room_center.room_center.bind_facade(_room_facade)
             hitl.bind_room_ownership_reader(_room_facade)
             context_memory_facade = create_context_memory_facade(
@@ -800,7 +800,7 @@ async def lifespan(app: FastAPI):
                 ),
                 task_notification_impl=_notify_task_update_impl,
                 agent_health_service=agent_health_service,
-                s3_service=platform_object_storage,
+                object_storage=platform_object_storage,
                 capability_issue_service=capability_issue_service,
                 context_memory_runtime=_context_memory_deps.context_memory_runtime,
                 compaction_service=compaction_service,

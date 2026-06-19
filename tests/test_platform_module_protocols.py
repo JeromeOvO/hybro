@@ -334,8 +334,9 @@ def test_main_passes_platform_object_storage_directly_to_runtime_consumers():
     assert "s3_service.bind_object_storage(" not in source
     assert "storage_service=platform_object_storage" in source
     assert "AppShellAgentAvatarManager(\n                    platform_object_storage" in source
-    assert "room_runtime.bind_s3_service(platform_object_storage)" in source
-    assert "s3_service=platform_object_storage" in source
+    assert "room_runtime.bind_object_storage(platform_object_storage)" in source
+    assert "room_runtime.bind_s3_service(platform_object_storage)" not in source
+    assert "s3_service=platform_object_storage" not in source
     assert "object_storage=platform_object_storage" in source
     assert source.index("platform_object_storage = PlatformObjectStorage(") < source.index(
         "storage_service=platform_object_storage"

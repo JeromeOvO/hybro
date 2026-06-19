@@ -33,7 +33,7 @@ def create_room_message_center(
         "task_notifications": None,
         "task_notification_impl": None,
         "agent_health_service": None,
-        "s3_service": None,
+        "object_storage": None,
         "capability_issue_service": None,
         "context_memory_runtime": _defaults.context_memory_runtime,
         "compaction_service": _defaults.compaction_service,
@@ -49,6 +49,8 @@ def create_room_message_center(
     for key in legacy_db_keys:
         if key in kwargs:
             kwargs["store"] = kwargs.pop(key)
+    if "s3_service" in kwargs and "object_storage" not in kwargs:
+        kwargs["object_storage"] = kwargs.pop("s3_service")
     deps.update(kwargs)
     return RoomMessageCenter(**deps)
 
