@@ -2159,6 +2159,10 @@ still need the legacy upload/presign methods through object-storage-named
 injection points, while `app_shell/s3_service.py` is retained only as an
 SDK-free compatibility shim for tests and legacy import paths until the final
 S3 service removal phase.
+The startup wiring also configures `a2a_adapter.artifact_storage` once with the
+platform object-storage adapter, bucket name, and file-size limit. Execution
+transports must call the shared A2A helper without rebinding artifact storage so
+those startup settings remain intact during inline artifact conversion.
 
 **Implemented LLM migration note (2026-06-05):** `LLMGatewayImpl` now owns
 logical model routing, retry/timeout behavior, structured JSON-object mode, and

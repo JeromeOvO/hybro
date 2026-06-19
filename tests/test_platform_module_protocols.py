@@ -344,6 +344,25 @@ def test_main_passes_platform_object_storage_directly_to_runtime_consumers():
     assert "object_storage=object_storage" in source
 
 
+def test_direct_transport_does_not_partially_rebind_a2a_artifact_storage():
+    path = Path("execution/dispatch/transports/direct.py")
+    source = path.read_text()
+    tree = ast.parse(source, filename=str(path))
+    violations = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "bind_a2a_storage_dependencies"
+    ]
+
+    assert "from a2a_adapter import artifact_storage" not in source
+    assert not violations, (
+        "DirectTransport must use the startup-configured A2A artifact storage; "
+        f"partial rebinds found at lines {violations}"
+    )
+
+
 def test_file_route_dependencies_can_be_rebound_without_concrete_services():
     from api.files import (
         bind_file_dependencies,
