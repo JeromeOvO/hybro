@@ -615,6 +615,12 @@ def test_a2a_sdk_imports_are_confined_or_manifest_blocked():
     assert not violations, "Undocumented A2A SDK imports remain:\n" + "\n".join(violations)
 
 
+def test_phase9_sdk_confinement_gate_is_a2a_only_by_design():
+    """AWS SDK confinement is enforced by test_dal_database_convergence_gate."""
+
+    assert FORBIDDEN_SDK_IMPORT_PREFIXES == ("a2a",)
+
+
 def test_phase9_import_smoke_modules_are_importable():
     missing: list[str] = []
     for module_name in PHASE9_IMPORT_SMOKE_MODULES:

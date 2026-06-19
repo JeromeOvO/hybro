@@ -360,6 +360,8 @@ typed delivery events are emitted.
   URLs, metadata, and prefix cleanup. Its presigned URL cache is bounded and
   TTL-swept so alternate object-storage DALs do not need to implement their own
   cache to avoid duplicate signing work safely.
+- `PlatformAgentAvatarManager`: avatar upload/public URL persistence for the
+  agent avatar route, backed by the same `PlatformObjectStorage` adapter.
 - Gateway/discovery/agent rate limiters backed by Mongo collections.
 
 This module is used by:
@@ -440,12 +442,20 @@ Business modules use module-scoped repositories built from `MongoDAL`,
 
 Platform-facing file/content services depend on `ObjectStorageDAL` or the
 `PlatformObjectStorage` compatibility adapter instead of importing SDK clients.
+`PlatformAgentAvatarManager` also uses the platform object-storage adapter for
+avatar bytes and persists the resulting public URL through the agent repository.
 Production startup passes `PlatformObjectStorage` directly into runtime
 consumers through object-storage-named injection points where they still
 require the legacy upload/presign surface. The
 `app_shell.s3_service` module remains an SDK-free compatibility shim for tests
 and legacy import paths only; it is not imported by `main.py` and must not
 become a new dependency target for domain or platform modules.
+The object-storage convergence gate scans static and dynamic imports across
+production code, including `main.py` and `app_shell/`, and exempts only
+`app_shell/s3_service.py` itself. AWS SDK imports are confined to `dal/s3/`;
+the only temporary exception is `llm_gateway/providers/bedrock_provider.py`
+importing `aioboto3` for Bedrock until that provider's SDK access moves behind
+a dedicated transport.
 Startup also configures A2A artifact storage once with the platform object
 storage adapter, S3 bucket name, and maximum file size. Direct execution
 transports call the shared A2A conversion helper and must not partially rebind
