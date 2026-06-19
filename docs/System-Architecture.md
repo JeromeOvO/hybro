@@ -451,6 +451,10 @@ storage adapter, S3 bucket name, and maximum file size. Direct execution
 transports call the shared A2A conversion helper and must not partially rebind
 artifact storage at runtime, because doing so would discard bucket and size
 settings from startup.
+Tracked A2A terminal message/task persistence treats artifact upload conversion
+as best-effort: conversion failures are logged, but the terminal task update is
+still written so remote agent completion is not lost due to object-storage
+transient failures.
 
 The legacy runtime database files `database/mongodb.py`,
 `database/pinecone_db.py`, `database/repository.py`, and

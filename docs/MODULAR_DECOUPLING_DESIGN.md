@@ -2163,6 +2163,9 @@ The startup wiring also configures `a2a_adapter.artifact_storage` once with the
 platform object-storage adapter, bucket name, and file-size limit. Execution
 transports must call the shared A2A helper without rebinding artifact storage so
 those startup settings remain intact during inline artifact conversion.
+Tracked terminal A2A message/task responses also keep artifact conversion
+best-effort: object-storage conversion failures are logged, but
+`update_task_on_message()` still persists the terminal task state.
 
 **Implemented LLM migration note (2026-06-05):** `LLMGatewayImpl` now owns
 logical model routing, retry/timeout behavior, structured JSON-object mode, and
