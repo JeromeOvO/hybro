@@ -6,16 +6,28 @@ from platform_module.files import PlatformFileStorage
 
 
 class FakeObjectStorage:
-    def __init__(self, *, delete_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        put_error: Exception | None = None,
+        presigned_error: Exception | None = None,
+        delete_error: Exception | None = None,
+    ) -> None:
         self.puts: list[tuple[str, bytes, str]] = []
         self.deleted: list[str] = []
+        self.put_error = put_error
+        self.presigned_error = presigned_error
         self.delete_error = delete_error
 
     async def put(self, key: str, data: bytes, content_type: str = "") -> str:
         self.puts.append((key, data, content_type))
+        if self.put_error is not None:
+            raise self.put_error
         return key
 
     async def get_presigned_url(self, key: str, ttl: int = 3600) -> str:
+        if self.presigned_error is not None:
+            raise self.presigned_error
         return f"https://files.example/{key}?ttl={ttl}"
 
     async def delete(self, key: str) -> bool:
@@ -219,6 +231,46 @@ async def test_upload_deletes_object_when_metadata_write_fails():
     assert objects.deleted == ["uploads/room-1/file-1/image.png"]
 
 
+async def test_upload_wraps_object_storage_put_errors():
+    objects = FakeObjectStorage(put_error=ObjectStorageError("put failed"))
+    service, objects, metadata = _storage(object_storage=objects)
+
+    with pytest.raises(FileStoragePlatformError) as exc_info:
+        await service.upload(
+            b"\x89PNG\r\n\x1a\n",
+            "image.png",
+            owner_id="user-1",
+            room_id="room-1",
+            content_type="image/png",
+        )
+
+    assert exc_info.value.status_code == 500
+    assert str(exc_info.value) == "Failed to store file object"
+    assert exc_info.value.__cause__ is objects.put_error
+    assert metadata.created == []
+
+
+async def test_upload_wraps_object_storage_presigned_errors():
+    objects = FakeObjectStorage(
+        presigned_error=ObjectStorageError("presign failed")
+    )
+    service, objects, metadata = _storage(object_storage=objects)
+
+    with pytest.raises(FileStoragePlatformError) as exc_info:
+        await service.upload(
+            b"\x89PNG\r\n\x1a\n",
+            "image.png",
+            owner_id="user-1",
+            room_id="room-1",
+            content_type="image/png",
+        )
+
+    assert exc_info.value.status_code == 500
+    assert str(exc_info.value) == "Failed to generate file URL"
+    assert exc_info.value.__cause__ is objects.presigned_error
+    assert "file-1" in metadata.records
+
+
 async def test_upload_metadata_failure_preserves_original_error_when_rollback_delete_fails():
     metadata = FakeFileMetadataRepository(fail_create=True)
     objects = FakeObjectStorage(delete_error=ObjectStorageError("delete failed"))
@@ -259,6 +311,29 @@ async def test_get_url_uses_metadata_key_and_requested_ttl():
     assert metadata.deleted == []
 
 
+async def test_get_url_wraps_object_storage_presigned_errors():
+    objects = FakeObjectStorage(
+        presigned_error=ObjectStorageError("presign failed")
+    )
+    service, _objects, metadata = _storage(object_storage=objects)
+    metadata.records["file-1"] = {
+        "file_id": "file-1",
+        "room_id": "room-1",
+        "user_id": "user-1",
+        "s3_key": "uploads/room-1/file-1/image.png",
+        "mime_type": "image/png",
+        "file_name": "image.png",
+        "size_bytes": 8,
+    }
+
+    with pytest.raises(FileStoragePlatformError) as exc_info:
+        await service.get_url("file-1", ttl=42)
+
+    assert exc_info.value.status_code == 500
+    assert str(exc_info.value) == "Failed to generate file URL"
+    assert exc_info.value.__cause__ is objects.presigned_error
+
+
 async def test_delete_removes_object_then_metadata():
     service, objects, metadata = _storage()
     await service.upload(
@@ -286,9 +361,12 @@ async def test_delete_does_not_remove_metadata_when_object_delete_fails():
         content_type="image/png",
     )
 
-    with pytest.raises(ObjectStorageError):
+    with pytest.raises(FileStoragePlatformError) as exc_info:
         await service.delete("file-1")
 
+    assert exc_info.value.status_code == 500
+    assert str(exc_info.value) == "Failed to delete file object"
+    assert exc_info.value.__cause__ is objects.delete_error
     assert objects.deleted == ["uploads/room-1/file-1/image.png"]
     assert metadata.deleted == []
     assert "file-1" in metadata.records

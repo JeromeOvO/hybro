@@ -5,6 +5,8 @@ from common.errors import FileStoragePlatformError, ObjectStorageError
 from platform_module.config import PlatformConfig
 from platform_module.deps import PlatformDeps
 
+_OBJECT_STORAGE_FAILURES = (ObjectStorageError, OSError)
+
 
 class PlatformFileStorage:
     MAGIC_BYTES = {
@@ -58,7 +60,12 @@ class PlatformFileStorage:
         file_name = filename or "unnamed"
         s3_key = f"uploads/{room_id}/{file_id}/{file_name}"
 
-        await object_storage.put(s3_key, file_bytes, content_type)
+        try:
+            await object_storage.put(s3_key, file_bytes, content_type)
+        except _OBJECT_STORAGE_FAILURES as exc:
+            raise FileStoragePlatformError(
+                500, "Failed to store file object"
+            ) from exc
 
         metadata = {
             "file_id": file_id,
@@ -79,7 +86,7 @@ class PlatformFileStorage:
                 )
             try:
                 await object_storage.delete(s3_key)
-            except ObjectStorageError:
+            except _OBJECT_STORAGE_FAILURES:
                 if self._deps.logger is not None:
                     self._deps.logger.warning(
                         "Object cleanup failed after metadata write failure: %s",
@@ -89,25 +96,40 @@ class PlatformFileStorage:
                 500, "Failed to store file metadata"
             ) from exc
 
-        url = await object_storage.get_presigned_url(
-            s3_key, ttl=self._config.presigned_url_ttl_seconds
-        )
+        try:
+            url = await object_storage.get_presigned_url(
+                s3_key, ttl=self._config.presigned_url_ttl_seconds
+            )
+        except _OBJECT_STORAGE_FAILURES as exc:
+            raise FileStoragePlatformError(
+                500, "Failed to generate file URL"
+            ) from exc
         return self._to_file_info(metadata, url=url)
 
     async def get_url(self, file_id: str, ttl: int = 3600) -> str | None:
         metadata = await self._require_metadata_repository().get(file_id)
         if metadata is None:
             return None
-        return await self._require_object_storage().get_presigned_url(
-            metadata["s3_key"], ttl=ttl
-        )
+        try:
+            return await self._require_object_storage().get_presigned_url(
+                metadata["s3_key"], ttl=ttl
+            )
+        except _OBJECT_STORAGE_FAILURES as exc:
+            raise FileStoragePlatformError(
+                500, "Failed to generate file URL"
+            ) from exc
 
     async def delete(self, file_id: str) -> bool:
         metadata_repository = self._require_metadata_repository()
         metadata = await metadata_repository.get(file_id)
         if metadata is None:
             return False
-        await self._require_object_storage().delete(metadata["s3_key"])
+        try:
+            await self._require_object_storage().delete(metadata["s3_key"])
+        except _OBJECT_STORAGE_FAILURES as exc:
+            raise FileStoragePlatformError(
+                500, "Failed to delete file object"
+            ) from exc
         return await metadata_repository.delete(file_id)
 
     async def list_for_room(self, room_id: str) -> list[FileInfo]:
