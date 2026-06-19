@@ -54,6 +54,74 @@ class TestS3ServiceErrors:
             result = await svc.download_text("missing/key")
         assert result is None
 
+    async def test_get_text_delegates_to_download_text(self):
+        svc = S3Service()
+        svc.download_text = AsyncMock(return_value="text content")
+
+        assert await svc.get_text("objects/content.txt") == "text content"
+        svc.download_text.assert_awaited_once_with("objects/content.txt")
+
+    async def test_presigned_url_cache_removes_expired_entries_before_write(self):
+        svc = S3Service()
+        svc._url_cache[("old/key", None)] = ("old-url", 1.0)
+        svc._cache_ttl = 10
+
+        with patch("app_shell.s3_service.time.time", return_value=100.0):
+            with patch.object(svc, "_session") as mock_session:
+                mock_client = AsyncMock()
+                mock_client.generate_presigned_url = AsyncMock(return_value="new-url")
+                ctx = AsyncMock()
+                ctx.__aenter__ = AsyncMock(return_value=mock_client)
+                ctx.__aexit__ = AsyncMock(return_value=False)
+                mock_session.client.return_value = ctx
+
+                assert await svc.generate_presigned_url("new/key") == "new-url"
+
+        assert ("old/key", None) not in svc._url_cache
+        assert ("new/key", None) in svc._url_cache
+
+    async def test_presigned_url_cache_is_bounded(self):
+        svc = S3Service()
+        svc._max_url_cache_entries = 2
+        svc._url_cache[("oldest/key", None)] = ("oldest-url", 200.0)
+        svc._url_cache[("middle/key", None)] = ("middle-url", 300.0)
+
+        with patch("app_shell.s3_service.time.time", return_value=100.0):
+            with patch.object(svc, "_session") as mock_session:
+                mock_client = AsyncMock()
+                mock_client.generate_presigned_url = AsyncMock(return_value="new-url")
+                ctx = AsyncMock()
+                ctx.__aenter__ = AsyncMock(return_value=mock_client)
+                ctx.__aexit__ = AsyncMock(return_value=False)
+                mock_session.client.return_value = ctx
+
+                await svc.generate_presigned_url("new/key")
+
+        assert len(svc._url_cache) == 2
+        assert ("oldest/key", None) not in svc._url_cache
+        assert ("middle/key", None) in svc._url_cache
+        assert ("new/key", None) in svc._url_cache
+
+    async def test_delete_file_invalidates_all_presigned_filename_variants(self):
+        svc = S3Service()
+        svc._url_cache[("test/key", None)] = ("plain-url", 200.0)
+        svc._url_cache[("test/key", "a.txt")] = ("named-url", 200.0)
+        svc._url_cache[("other/key", None)] = ("other-url", 200.0)
+
+        with patch.object(svc, "_session") as mock_session:
+            mock_client = AsyncMock()
+            mock_client.delete_object = AsyncMock()
+            ctx = AsyncMock()
+            ctx.__aenter__ = AsyncMock(return_value=mock_client)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_session.client.return_value = ctx
+
+            assert await svc.delete_file("test/key") is True
+
+        assert ("test/key", None) not in svc._url_cache
+        assert ("test/key", "a.txt") not in svc._url_cache
+        assert ("other/key", None) in svc._url_cache
+
 
 class TestInlineBase64ConversionErrors:
     async def test_s3_upload_failure_logs_error(self):

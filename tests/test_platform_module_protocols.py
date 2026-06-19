@@ -31,7 +31,13 @@ def test_platform_module_packages_are_registered():
 
 def test_platform_facade_exposes_common_protocol_surfaces():
     from common.protocols import GatewayDiscoveryProvider
-    from platform_module import PlatformConfig, PlatformDeps, PlatformFacade
+    from platform_module import (
+        ObjectStoragePort,
+        PlatformConfig,
+        PlatformDeps,
+        PlatformFacade,
+        PlatformObjectStorage,
+    )
 
     facade = PlatformFacade(config=PlatformConfig(), deps=PlatformDeps())
 
@@ -42,6 +48,8 @@ def test_platform_facade_exposes_common_protocol_surfaces():
     assert isinstance(facade.agent_rate_limiter, RateLimiter)
     assert isinstance(facade.file_storage, FileStorage)
     assert facade.content_storage is not None
+    assert "upload_file" in ObjectStoragePort.__dict__
+    assert PlatformObjectStorage is not None
 
 
 def test_platform_facade_properties_are_annotated_as_common_protocols():

@@ -1330,8 +1330,21 @@ class ObjectStorageDAL(Protocol):
     """S3-compatible object storage."""
 
     async def put(self, key: str, data: bytes, content_type: str = "") -> str: ...
-    async def get_presigned_url(self, key: str, ttl: int = 3600) -> str: ...
+    async def put_file(
+        self,
+        key: str,
+        file_data: Any,
+        content_type: str = "",
+        content_length: int | None = None,
+    ) -> str: ...
+    async def get_text(self, key: str) -> str | None: ...
+    async def get_presigned_url(
+        self, key: str, ttl: int = 3600, filename: str | None = None
+    ) -> str: ...
     async def delete(self, key: str) -> bool: ...
+    async def delete_prefix(self, prefix: str) -> int: ...
+    def get_public_url(self, key: str) -> str: ...
+    async def head(self, key: str) -> dict | None: ...
 
 
 @runtime_checkable
@@ -2136,6 +2149,14 @@ Motor/DAL scripts and must not restore `database/mongodb.py`,
 - `llm_gateway/` with OpenAI/Gemini/Bedrock providers + ModelRegistry + retry/fallback
 - Verify: no business module imports `a2a`, `openai`, `google.genai`, `aioboto3`
 
+**Implemented object-storage platform adapter note (2026-06-19):**
+`platform_module.PlatformObjectStorage` provides the legacy-compatible upload,
+presigned URL, metadata, public URL, text download, and prefix cleanup surface
+over `ObjectStorageDAL`. Platform file/content services now use DAL-shaped
+object storage dependencies; SDK ownership stays in `dal/s3/`, with
+`app_shell/s3_service.py` retained only as a compatibility shim until the final
+S3 service removal phase.
+
 **Implemented LLM migration note (2026-06-05):** `LLMGatewayImpl` now owns
 logical model routing, retry/timeout behavior, structured JSON-object mode, and
 streaming. Provider adapters own SDK translation only. Legacy
@@ -2327,6 +2348,7 @@ class AgentService:
 | Rate limiting | `platform_module/rate_limit.py` | Platform | `rate_limit/rate_limiter.py` |
 | File uploads | `platform_module/` | Platform | `files/upload_service.py` |
 | Content storage | `platform_module/` | Platform | `files/content_storage.py` |
+| Object storage compatibility | `platform_module/object_storage.py` | Platform over DAL | `object_storage.py` |
 | **HubRuntimeBridge** | | | |
 | Hub relay | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_relay.py` |
 | Hub liveness | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_liveness.py` |

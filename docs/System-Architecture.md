@@ -355,6 +355,9 @@ typed delivery events are emitted.
 - `PlatformDiscovery`: discovery service abstraction.
 - `PlatformFileStorage`: file uploads and presigned URLs.
 - `PlatformContentStorage`: binary/full-content storage used by context memory.
+- `PlatformObjectStorage`: SDK-free compatibility adapter over
+  `ObjectStorageDAL` for uploaded-object reads, writes, presigned URLs, public
+  URLs, metadata, and prefix cleanup.
 - Gateway/discovery/agent rate limiters backed by Mongo collections.
 
 This module is used by:
@@ -429,8 +432,15 @@ Business modules use module-scoped repositories built from `MongoDAL`,
 - `dal.mongo`: generic Mongo collection/DAL adapter.
 - `dal.pinecone`: vector adapter.
 - `dal.redis`: Redis KV, Pub/Sub, and related support.
-- `dal.s3`: object storage adapter.
+- `dal.s3`: object storage adapter and the sole runtime owner of S3-compatible
+  SDK calls.
 - `dal.index_registry`: startup index registration across modules.
+
+Platform-facing file/content services depend on `ObjectStorageDAL` or the
+`PlatformObjectStorage` compatibility adapter instead of importing SDK clients.
+`app_shell.s3_service` remains a route/runtime compatibility shim while the
+object-storage migration finishes; it must not become a new dependency target
+for domain or platform modules.
 
 The legacy runtime database files `database/mongodb.py`,
 `database/pinecone_db.py`, `database/repository.py`, and

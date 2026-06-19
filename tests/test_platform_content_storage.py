@@ -50,16 +50,6 @@ class FakeContentStorageRepository:
         return []
 
 
-class FakeObjectTextStorage:
-    def __init__(self, objects: dict[str, str | None]) -> None:
-        self.objects = objects
-        self.reads: list[str] = []
-
-    async def download_text(self, key: str) -> str | None:
-        self.reads.append(key)
-        return self.objects.get(key)
-
-
 class FakeObjectProtocolStorage:
     def __init__(self, objects: dict[str, str | None]) -> None:
         self.objects = objects
@@ -73,7 +63,7 @@ class FakeObjectProtocolStorage:
 def _service(
     *,
     repository: FakeContentStorageRepository | None = None,
-    object_storage: FakeObjectTextStorage | None = None,
+    object_storage: object | None = None,
     ttl_seconds: int = 0,
 ) -> tuple[PlatformContentStorage, FakeContentStorageRepository]:
     repo = repository or FakeContentStorageRepository()
@@ -196,21 +186,7 @@ async def test_expand_mongodb_reference_missing_document_raises_expired():
     assert exc_info.value.document_id == "missing-doc"
 
 
-async def test_expand_s3_reference_uses_injected_object_storage():
-    objects = FakeObjectTextStorage({"objects/content.txt": "s3 content"})
-    service, _repo = _service(object_storage=objects)
-    content_ref = ContentReference(
-        storage_type=StorageType.S3,
-        s3_bucket="bucket",
-        s3_key="objects/content.txt",
-        created_at=datetime.now(UTC),
-    )
-
-    assert await service.expand_content_reference(content_ref, "turn-1") == "s3 content"
-    assert objects.reads == ["objects/content.txt"]
-
-
-async def test_expand_s3_reference_supports_object_storage_protocol_get_text():
+async def test_expand_s3_reference_uses_object_storage_get_text():
     objects = FakeObjectProtocolStorage({"objects/content.txt": "s3 content"})
     service, _repo = _service(object_storage=objects)
     content_ref = ContentReference(
@@ -224,8 +200,26 @@ async def test_expand_s3_reference_supports_object_storage_protocol_get_text():
     assert objects.reads == ["objects/content.txt"]
 
 
+async def test_expand_s3_reference_does_not_use_legacy_download_text_when_get_text_exists():
+    class DualObjectStorage(FakeObjectProtocolStorage):
+        async def download_text(self, key: str) -> str | None:
+            raise AssertionError("download_text should not be used")
+
+    objects = DualObjectStorage({"objects/content.txt": "s3 content"})
+    service, _repo = _service(object_storage=objects)
+    content_ref = ContentReference(
+        storage_type=StorageType.S3,
+        s3_bucket="bucket",
+        s3_key="objects/content.txt",
+        created_at=datetime.now(UTC),
+    )
+
+    assert await service.expand_content_reference(content_ref, "turn-1") == "s3 content"
+    assert objects.reads == ["objects/content.txt"]
+
+
 async def test_expand_s3_reference_missing_key_or_object_fails():
-    service, _repo = _service(object_storage=FakeObjectTextStorage({}))
+    service, _repo = _service(object_storage=FakeObjectProtocolStorage({}))
     missing_key = ContentReference(
         storage_type=StorageType.S3,
         s3_bucket="bucket",

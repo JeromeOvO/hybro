@@ -19,6 +19,8 @@ logger = get_logger(__name__)
 
 
 class S3Service:
+    MAX_PRESIGNED_URL_CACHE_ENTRIES = 1024
+
     def __init__(self):
         self._session = aioboto3.Session(
             aws_access_key_id=settings.aws_access_key_id or None,
@@ -28,8 +30,9 @@ class S3Service:
         self._bucket = settings.s3_bucket_name
         self._region = settings.s3_region
         self._presigned_url_ttl = settings.s3_presigned_url_ttl
-        self._url_cache: dict[str, tuple[str, float]] = {}
+        self._url_cache: dict[tuple[str, str | None], tuple[str, float]] = {}
         self._cache_ttl = self._presigned_url_ttl / 2
+        self._max_url_cache_entries = self.MAX_PRESIGNED_URL_CACHE_ENTRIES
 
     async def upload_file(
         self,
@@ -57,11 +60,13 @@ class S3Service:
         header is baked into the URL so browsers download the file with
         the original name instead of the S3 key.
         """
-        cache_key = (s3_key, filename)
+        cache_key = self._cache_key(s3_key, filename)
+        now = time.time()
+        self._sweep_expired_presigned_urls(now)
         cached = self._url_cache.get(cache_key)
         if cached:
             url, expiry = cached
-            if time.time() < expiry:
+            if now < expiry:
                 return url
 
         params: dict = {"Bucket": self._bucket, "Key": s3_key}
@@ -80,7 +85,7 @@ class S3Service:
                 ExpiresIn=self._presigned_url_ttl,
             )
 
-        self._url_cache[cache_key] = (url, time.time() + self._cache_ttl)
+        self._cache_presigned_url(cache_key, url, now=time.time())
         return url
 
     async def batch_presigned_urls(
@@ -100,14 +105,16 @@ class S3Service:
         filenames = filenames or {}
         result: dict[str, str] = {}
         uncached: list[str] = []
+        now = time.time()
+        self._sweep_expired_presigned_urls(now)
 
         for key in s3_keys:
             fname = filenames.get(key)
-            cache_key = (key, fname) if fname else (key, None)
+            cache_key = self._cache_key(key, fname)
             cached = self._url_cache.get(cache_key)
             if cached:
                 url, expiry = cached
-                if time.time() < expiry:
+                if now < expiry:
                     result[key] = url
                     continue
             uncached.append(key)
@@ -129,8 +136,8 @@ class S3Service:
                         ExpiresIn=self._presigned_url_ttl,
                     )
                     result[key] = url
-                    cache_key = (key, fname) if fname else (key, None)
-                    self._url_cache[cache_key] = (url, now + self._cache_ttl)
+                    cache_key = self._cache_key(key, fname)
+                    self._cache_presigned_url(cache_key, url, now=now)
 
         return result
 
@@ -139,7 +146,7 @@ class S3Service:
         try:
             async with self._session.client("s3", region_name=self._region) as client:
                 await client.delete_object(Bucket=self._bucket, Key=s3_key)
-            self._url_cache.pop(s3_key, None)
+            self._invalidate_presigned_url_cache(s3_key)
             return True
         except ClientError:
             logger.exception("Failed to delete S3 object: %s", s3_key)
@@ -191,6 +198,40 @@ class S3Service:
             if e.response["Error"]["Code"] == "NoSuchKey":
                 return None
             raise
+
+    async def get_text(self, s3_key: str) -> str | None:
+        """ObjectStorageDAL-compatible alias for text reads."""
+        return await self.download_text(s3_key)
+
+    @staticmethod
+    def _cache_key(s3_key: str, filename: str | None) -> tuple[str, str | None]:
+        return (s3_key, filename or None)
+
+    def _sweep_expired_presigned_urls(self, now: float) -> None:
+        for cache_key, (_url, expiry) in list(self._url_cache.items()):
+            if expiry <= now:
+                self._url_cache.pop(cache_key, None)
+
+    def _cache_presigned_url(
+        self,
+        cache_key: tuple[str, str | None],
+        url: str,
+        *,
+        now: float,
+    ) -> None:
+        self._sweep_expired_presigned_urls(now)
+        while (
+            cache_key not in self._url_cache
+            and len(self._url_cache) >= self._max_url_cache_entries
+        ):
+            oldest_key = min(self._url_cache, key=lambda key: self._url_cache[key][1])
+            self._url_cache.pop(oldest_key, None)
+        self._url_cache[cache_key] = (url, now + self._cache_ttl)
+
+    def _invalidate_presigned_url_cache(self, s3_key: str) -> None:
+        for cache_key in list(self._url_cache):
+            if cache_key[0] == s3_key:
+                self._url_cache.pop(cache_key, None)
 
 
 s3_service = S3Service()
