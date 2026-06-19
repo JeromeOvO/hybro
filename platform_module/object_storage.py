@@ -53,6 +53,8 @@ class ObjectStoragePort(Protocol):
 class PlatformObjectStorage:
     """Compatibility-shaped object-storage adapter over ``ObjectStorageDAL``."""
 
+    MAX_PRESIGNED_URL_CACHE_ENTRIES = 1024
+
     def __init__(
         self,
         dal: ObjectStorageDAL,
@@ -64,6 +66,7 @@ class PlatformObjectStorage:
         self._default_presigned_url_ttl = default_presigned_url_ttl
         self._clock = clock
         self._presigned_cache: dict[tuple[str, str | None, int], tuple[float, str]] = {}
+        self._max_presigned_cache_entries = self.MAX_PRESIGNED_URL_CACHE_ENTRIES
 
     async def upload_file(
         self,
@@ -92,8 +95,9 @@ class PlatformObjectStorage:
         expires_in: int | None = None,
     ) -> str:
         ttl = self._effective_ttl(expires_in)
-        cache_key = (s3_key, filename, ttl)
+        cache_key = self._cache_key(s3_key, filename, ttl)
         now = self._clock()
+        self._sweep_expired_presigned_cache(now)
         cached = self._presigned_cache.get(cache_key)
         if cached is not None:
             expires_at, url = cached
@@ -101,7 +105,12 @@ class PlatformObjectStorage:
                 return url
 
         url = await self._dal.get_presigned_url(s3_key, ttl=ttl, filename=filename)
-        self._presigned_cache[cache_key] = (now + max(ttl / 2, 0), url)
+        self._cache_presigned_url(
+            cache_key,
+            url,
+            now=now,
+            expires_at=now + max(ttl / 2, 0),
+        )
         return url
 
     async def batch_presigned_urls(
@@ -143,6 +152,41 @@ class PlatformObjectStorage:
 
     def _effective_ttl(self, expires_in: int | None) -> int:
         return self._default_presigned_url_ttl if expires_in is None else expires_in
+
+    @staticmethod
+    def _cache_key(
+        s3_key: str,
+        filename: str | None,
+        ttl: int,
+    ) -> tuple[str, str | None, int]:
+        return (s3_key, filename, ttl)
+
+    def _sweep_expired_presigned_cache(self, now: float) -> None:
+        for cache_key, (expires_at, _url) in list(self._presigned_cache.items()):
+            if expires_at <= now:
+                self._presigned_cache.pop(cache_key, None)
+
+    def _cache_presigned_url(
+        self,
+        cache_key: tuple[str, str | None, int],
+        url: str,
+        *,
+        now: float,
+        expires_at: float,
+    ) -> None:
+        if self._max_presigned_cache_entries <= 0:
+            return
+        self._sweep_expired_presigned_cache(now)
+        while (
+            cache_key not in self._presigned_cache
+            and len(self._presigned_cache) >= self._max_presigned_cache_entries
+        ):
+            oldest_key = min(
+                self._presigned_cache,
+                key=lambda key: self._presigned_cache[key][0],
+            )
+            self._presigned_cache.pop(oldest_key, None)
+        self._presigned_cache[cache_key] = (expires_at, url)
 
     def _invalidate_presigned_cache(self, s3_key: str) -> None:
         for cache_key in list(self._presigned_cache):
