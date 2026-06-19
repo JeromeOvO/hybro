@@ -325,6 +325,17 @@ def test_main_injects_discovery_query_expander_into_platform_deps():
     assert "discovery_query_expander=discovery_llm_service" in source
 
 
+def test_main_binds_s3_service_shim_to_platform_object_storage():
+    source = Path("main.py").read_text()
+
+    assert "PlatformObjectStorage" in source
+    assert "platform_object_storage = PlatformObjectStorage(" in source
+    assert "s3_service.bind_object_storage(platform_object_storage)" in source
+    assert source.index("platform_object_storage = PlatformObjectStorage(") < source.index(
+        "s3_service.bind_object_storage(platform_object_storage)"
+    )
+
+
 def test_file_route_dependencies_can_be_rebound_without_concrete_services():
     from api.files import (
         bind_file_dependencies,
