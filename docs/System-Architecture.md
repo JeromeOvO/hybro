@@ -446,6 +446,11 @@ require the legacy upload/presign surface. The
 `app_shell.s3_service` module remains an SDK-free compatibility shim for tests
 and legacy import paths only; it is not imported by `main.py` and must not
 become a new dependency target for domain or platform modules.
+Startup also configures A2A artifact storage once with the platform object
+storage adapter, S3 bucket name, and maximum file size. Direct execution
+transports call the shared A2A conversion helper and must not partially rebind
+artifact storage at runtime, because doing so would discard bucket and size
+settings from startup.
 
 The legacy runtime database files `database/mongodb.py`,
 `database/pinecone_db.py`, `database/repository.py`, and

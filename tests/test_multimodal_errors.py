@@ -1,9 +1,17 @@
 import base64
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app_shell.s3_service import S3Service
+
+
+def _bind_test_a2a_artifact_storage(monkeypatch, storage) -> None:
+    from a2a_adapter import artifact_storage as a2a_artifact_storage
+    from common.utils import a2a_helpers
+
+    a2a_artifact_storage.bind_a2a_storage_dependencies(storage_service=storage)
+    monkeypatch.setattr(a2a_helpers, "a2a_artifact_storage", a2a_artifact_storage)
 
 
 class FakeObjectStoragePort:
@@ -132,7 +140,7 @@ class TestS3ServiceShim:
 
 
 class TestInlineBase64ConversionErrors:
-    async def test_s3_upload_failure_logs_error(self):
+    async def test_s3_upload_failure_logs_error(self, monkeypatch):
         from execution.dispatch.transports.direct import DirectTransport
 
         db = MagicMock()
@@ -148,6 +156,7 @@ class TestInlineBase64ConversionErrors:
         )
         processor._s3_service = AsyncMock()
         processor._s3_service.upload_file = AsyncMock(side_effect=Exception("S3 down"))
+        _bind_test_a2a_artifact_storage(monkeypatch, processor.object_storage)
 
         artifact = MagicMock()
         file_content = MagicMock()
@@ -171,7 +180,7 @@ class TestSharedInlineConversionCap:
     started its own counter from 0, so combining both paths could exceed
     MAX_INLINE_CONVERSIONS_PER_MESSAGE."""
 
-    async def test_total_conversions_respect_cap_across_both_paths(self):
+    async def test_total_conversions_respect_cap_across_both_paths(self, monkeypatch):
         from execution.dispatch.transports.direct import (
             DirectTransport,
             MessageStreamingState,
@@ -201,6 +210,7 @@ class TestSharedInlineConversionCap:
             task_updater=db,
             s3_service=mock_s3,
         )
+        _bind_test_a2a_artifact_storage(monkeypatch, processor.object_storage)
 
         cap = MAX_INLINE_CONVERSIONS_PER_MESSAGE
         raw_b64 = base64.b64encode(b"pixel data").decode()
@@ -216,11 +226,10 @@ class TestSharedInlineConversionCap:
             artifact = A2AArtifact(artifact_id=f"art-{idx}", parts=[Part(root=fp)])
 
             shared_counter = [streaming_state.inline_conversion_count]
-            with patch("app_shell.s3_service.s3_service", mock_s3):
-                await processor._convert_inline_bytes_to_s3(
-                    artifact, "room1", "msg1",
-                    conversion_counter=shared_counter,
-                )
+            await processor._convert_inline_bytes_to_s3(
+                artifact, "room1", "msg1",
+                conversion_counter=shared_counter,
+            )
             streaming_state.inline_conversion_count = shared_counter[0]
 
         assert streaming_state.inline_conversion_count == cap - 2
@@ -232,14 +241,11 @@ class TestSharedInlineConversionCap:
             for _ in range(5)
         ]
 
-        with patch(
-            "app_shell.s3_service.s3_service", mock_s3
-        ):
-            new_total = await processor._convert_streaming_parts_to_s3(
-                non_text_parts, "room1", "msg1",
-                converted_so_far=streaming_state.inline_conversion_count,
-            )
-            streaming_state.inline_conversion_count = new_total
+        new_total = await processor._convert_streaming_parts_to_s3(
+            non_text_parts, "room1", "msg1",
+            converted_so_far=streaming_state.inline_conversion_count,
+        )
+        streaming_state.inline_conversion_count = new_total
 
         total_uploads = len(upload_calls)
         assert total_uploads == cap, (
