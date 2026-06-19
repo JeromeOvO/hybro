@@ -114,6 +114,57 @@ def _message_facade_response() -> dict:
     }
 
 
+def _message_with_file_facade_response() -> dict:
+    return {
+        "kind": "message",
+        "result": {
+            "kind": "message",
+            "role": "agent",
+            "messageId": "agent-msg-file-001",
+            "parts": [
+                {
+                    "kind": "file",
+                    "file": {
+                        "bytes": "aGVsbG8=",
+                        "mimeType": "text/plain",
+                        "name": "hello.txt",
+                    },
+                }
+            ],
+        },
+        "error": None,
+    }
+
+
+def _terminal_task_with_file_facade_response() -> dict:
+    return {
+        "kind": "task",
+        "result": {
+            "kind": "task",
+            "id": "task-file-001",
+            "contextId": "ctx-task-file-001",
+            "status": {"state": "completed"},
+            "artifacts": [
+                {
+                    "artifactId": "artifact-file-001",
+                    "name": "file-result",
+                    "parts": [
+                        {
+                            "kind": "file",
+                            "file": {
+                                "bytes": "aGVsbG8=",
+                                "mimeType": "text/plain",
+                                "name": "hello.txt",
+                            },
+                        }
+                    ],
+                }
+            ],
+        },
+        "error": None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -616,3 +667,81 @@ class TestSendMessageTrackedAgentPersistedFlag:
 
         assert result["type"] == "message"
         assert result["persisted"] is False
+
+    @pytest.mark.asyncio
+    async def test_message_artifact_conversion_failure_still_persists_task(self):
+        from app_shell.a2a_runtime import A2AService
+
+        service = A2AService.__new__(A2AService)
+        mock_db = MagicMock()
+        mock_db.update_task_on_message = AsyncMock(return_value=True)
+        service.bind_task_db(mock_db)
+        _bind_webhook_base_url(service, "")
+
+        converter = AsyncMock(side_effect=RuntimeError("conversion failed"))
+        with (
+            patch.object(
+                service, "has_push_notification_capability", return_value=False
+            ),
+            patch(
+                "app_shell.a2a_runtime.adapter_send_message",
+                AsyncMock(return_value=_message_with_file_facade_response()),
+            ),
+            patch(
+                "execution.task_tracking.convert_pydantic_artifacts_to_s3",
+                converter,
+            ),
+            patch.object(service, "_record_call", new_callable=AsyncMock),
+        ):
+            result = await service.send_message_to_tracked_agent(
+                agent_card=_make_agent_card(push_capable=False),
+                message=_make_message(),
+                message_id="msg-convert-message-001",
+                webhook_token="tok-convert-message",
+                context_id="ctx-convert-message",
+                room_id="room-convert",
+            )
+
+        converter.assert_awaited_once()
+        mock_db.update_task_on_message.assert_awaited_once()
+        assert result["type"] == "message"
+        assert result["persisted"] is True
+
+    @pytest.mark.asyncio
+    async def test_terminal_task_artifact_conversion_failure_still_persists_task(self):
+        from app_shell.a2a_runtime import A2AService
+
+        service = A2AService.__new__(A2AService)
+        mock_db = MagicMock()
+        mock_db.update_task_on_message = AsyncMock(return_value=True)
+        service.bind_task_db(mock_db)
+        _bind_webhook_base_url(service, "")
+
+        converter = AsyncMock(side_effect=RuntimeError("conversion failed"))
+        with (
+            patch.object(
+                service, "has_push_notification_capability", return_value=False
+            ),
+            patch(
+                "app_shell.a2a_runtime.adapter_send_message",
+                AsyncMock(return_value=_terminal_task_with_file_facade_response()),
+            ),
+            patch(
+                "execution.task_tracking.convert_pydantic_artifacts_to_s3",
+                converter,
+            ),
+            patch.object(service, "_record_call", new_callable=AsyncMock),
+        ):
+            result = await service.send_message_to_tracked_agent(
+                agent_card=_make_agent_card(push_capable=False),
+                message=_make_message(),
+                message_id="msg-convert-task-001",
+                webhook_token="tok-convert-task",
+                context_id="ctx-convert-task",
+                room_id="room-convert",
+            )
+
+        converter.assert_awaited_once()
+        mock_db.update_task_on_message.assert_awaited_once()
+        assert result["type"] == "message"
+        assert result["persisted"] is True
