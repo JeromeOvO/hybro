@@ -2016,6 +2016,18 @@ class RoomMessageCenter:
                     except Exception:
                         pass
 
+                sys_msg_id = result.trajectory.system_agent_message_id or f"sys-{user_message_id}"
+                try:
+                    await self.sse_manager.send_task_update(
+                        room_id=room_id,
+                        message_id=sys_msg_id,
+                        status="completed",
+                        task_content="Orchestration complete.",
+                        agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+                    )
+                except Exception:
+                    pass
+
                 await self._persist_turn_completion_kind(
                     user_message_id, turn_completion_kind
                 )
@@ -2093,6 +2105,19 @@ class RoomMessageCenter:
                     await self._store.cancel_agent_messages_by_ids(
                         canceled_parent_ids
                     )
+                    
+                sys_msg_id = result.trajectory.system_agent_message_id or f"sys-{user_message_id}"
+                try:
+                    await self.sse_manager.send_task_update(
+                        room_id=room_id,
+                        message_id=sys_msg_id,
+                        status="canceled",
+                        task_content="Orchestration canceled.",
+                        agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+                    )
+                except Exception:
+                    pass
+
                 # Emit turn_canceled event
                 if getattr(self, '_turn_event_appender', None):
                     try:
@@ -2126,6 +2151,19 @@ class RoomMessageCenter:
                     await self._store.cancel_agent_messages_by_ids(
                         failed_parent_ids
                     )
+
+                sys_msg_id = result.trajectory.system_agent_message_id or f"sys-{user_message_id}"
+                try:
+                    await self.sse_manager.send_task_update(
+                        room_id=room_id,
+                        message_id=sys_msg_id,
+                        status="failed",
+                        task_content="Orchestration failed.",
+                        agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+                    )
+                except Exception:
+                    pass
+
                 # Emit turn_failed event
                 if getattr(self, '_turn_event_appender', None):
                     try:

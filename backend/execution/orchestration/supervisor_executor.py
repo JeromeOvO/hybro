@@ -795,10 +795,23 @@ class SupervisorExecutor:
                                 message_id=getattr(result, "agent_message_id", None),
                             )
 
+                    # Attach results to entry now so reconciliation mutates them correctly
+                    entry.results = results
+
                     # Check for PAUSED (push notification agent)
-                    paused = [r for r in results if r.status == StepStatus.PAUSED]
+                    paused = [r for r in entry.results if r.status == StepStatus.PAUSED]
                     if paused:
-                        entry.results = results
+                        # Reconcile against DB: a relay agent may have completed
+                        # before its continuation was saved (race between webhook
+                        # response and _save_interrupted_state during concurrent
+                        # dispatch). Check actual DB state and upgrade if terminal.
+                        await self._reconcile_paused_results(
+                            paused, trajectory, room_id
+                        )
+                        # Re-evaluate paused after reconciliation
+                        paused = [r for r in entry.results if r.status == StepStatus.PAUSED]
+                        
+                    if paused:
                         trajectory.status = TrajectoryStatus.RUNNING
                         saved = await self._save_interrupted_state(
                             kind=InterruptKind.PUSH_NOTIFICATION,
@@ -832,7 +845,7 @@ class SupervisorExecutor:
 
                     # Check for AWAITING_INPUT (agent returned input_required)
                     awaiting = [
-                        r for r in results if r.status == StepStatus.AWAITING_INPUT
+                        r for r in entry.results if r.status == StepStatus.AWAITING_INPUT
                     ]
                     if awaiting:
                         # Mark non-first awaiting agents as FAILED so the
@@ -875,7 +888,6 @@ class SupervisorExecutor:
                                 "Max HITL rounds exceeded for message %s — failing trajectory",
                                 user_message_id,
                             )
-                            entry.results = results
                             trajectory.status = TrajectoryStatus.FAILED
                             return await self._log_and_return(
                                 room_id,
@@ -924,7 +936,6 @@ class SupervisorExecutor:
                             ),
                         )
 
-                    entry.results = results
                     entry.completed_at = utcnow()
 
                     # Post-dispatch checkpoint: persist completed results.

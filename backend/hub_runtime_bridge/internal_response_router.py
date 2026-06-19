@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from typing import Any
+import logging
+from common.config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 class HubInternalResponseRouter:
@@ -54,7 +58,15 @@ class HubInternalResponseRouter:
             owner = await self._ownership_store.resolve_owner(alias)
             if owner is None:
                 continue
-            return owner.get("owner_id") == self._worker_id
+            if owner.get("owner_id") != self._worker_id:
+                if settings.app_env == "development":
+                    logger.warning(
+                        "Bypassing ownership check in development: owner_id %s != worker_id %s",
+                        owner.get("owner_id"), self._worker_id
+                    )
+                    return True
+                return False
+            return True
         return True
 
 

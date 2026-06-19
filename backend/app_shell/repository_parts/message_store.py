@@ -457,8 +457,8 @@ class AppShellMessageStore:
     def _artifact_id_match_expr(artifact_id: str) -> dict[str, Any]:
         return {
             "$or": [
-                {"$eq": ["$$art.artifactId", artifact_id]},
-                {"$eq": ["$$art.artifact_id", artifact_id]},
+                {"$eq": ["$$art.artifactId", {"$literal": artifact_id}]},
+                {"$eq": ["$$art.artifact_id", {"$literal": artifact_id}]},
             ]
         }
 
@@ -473,7 +473,7 @@ class AppShellMessageStore:
                 "in": {
                     "$cond": {
                         "if": cls._artifact_id_match_expr(artifact_id),
-                        "then": artifact,
+                        "then": {"$literal": artifact},
                         "else": "$$art",
                     }
                 },
@@ -498,7 +498,7 @@ class AppShellMessageStore:
                                     "parts": {
                                         "$concatArrays": [
                                             {"$ifNull": ["$$art.parts", []]},
-                                            new_parts,
+                                            {"$literal": new_parts},
                                         ]
                                     }
                                 },
@@ -545,7 +545,7 @@ class AppShellMessageStore:
             set_fields["message_content.message_text"] = {
                 "$concat": [
                     {"$ifNull": ["$message_content.message_text", ""]},
-                    artifact_text,
+                    {"$literal": artifact_text},
                 ]
             }
         result = await self._room_agent_messages.update_one(
@@ -599,7 +599,7 @@ class AppShellMessageStore:
             "task_updated_at": utcnow(),
         }
         if artifact_text:
-            set_fields["message_content.message_text"] = artifact_text
+            set_fields["message_content.message_text"] = {"$literal": artifact_text}
         result = await self._room_agent_messages.update_one(
             filter_with_artifact,
             [{"$set": set_fields}],
