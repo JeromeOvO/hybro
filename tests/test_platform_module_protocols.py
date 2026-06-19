@@ -325,15 +325,23 @@ def test_main_injects_discovery_query_expander_into_platform_deps():
     assert "discovery_query_expander=discovery_llm_service" in source
 
 
-def test_main_binds_s3_service_shim_to_platform_object_storage():
+def test_main_passes_platform_object_storage_directly_to_runtime_consumers():
     source = Path("main.py").read_text()
 
     assert "PlatformObjectStorage" in source
     assert "platform_object_storage = PlatformObjectStorage(" in source
-    assert "s3_service.bind_object_storage(platform_object_storage)" in source
+    assert "from app_shell.s3_service import s3_service" not in source
+    assert "s3_service.bind_object_storage(" not in source
+    assert "storage_service=platform_object_storage" in source
+    assert "AppShellAgentAvatarManager(\n                    platform_object_storage" in source
+    assert "room_runtime.bind_object_storage(platform_object_storage)" in source
+    assert "room_runtime.bind_s3_service(platform_object_storage)" not in source
+    assert "s3_service=platform_object_storage" not in source
+    assert "object_storage=platform_object_storage" in source
     assert source.index("platform_object_storage = PlatformObjectStorage(") < source.index(
-        "s3_service.bind_object_storage(platform_object_storage)"
+        "storage_service=platform_object_storage"
     )
+    assert "object_storage=object_storage" in source
 
 
 def test_file_route_dependencies_can_be_rebound_without_concrete_services():

@@ -126,6 +126,7 @@ class RoomServices:
         self.room_memory_service = room_memory_service  # Use singleton
         self.sse_manager = sse_manager  # Use singleton
         self.task_service = task_service  # Use singleton
+        self._object_storage = None
         self._s3_service = None
         self._facade = None
         self._bound = False
@@ -138,21 +139,31 @@ class RoomServices:
         self._attachment_cleanup = None
         self._quote_writer = None
 
-    def bind_s3_service(self, service) -> None:
+    def bind_object_storage(self, service) -> None:
         """Inject object-storage service (avoids lazy singleton import)."""
+        self._object_storage = service
         self._s3_service = service
+
+    bind_s3_service = bind_object_storage
 
     def bind_store(self, store) -> None:
         """Inject the room runtime persistence store explicitly at startup."""
         self._store = store
 
     @property
-    def s3_service(self):
-        if self._s3_service is None:
+    def object_storage(self):
+        service = getattr(self, "_object_storage", None)
+        if service is None:
+            service = getattr(self, "_s3_service", None)
+        if service is None:
             raise RuntimeError(
-                "RoomServices.bind_s3_service() not called - startup incomplete"
+                "RoomServices.bind_object_storage() not called - startup incomplete"
             )
-        return self._s3_service
+        return service
+
+    @property
+    def s3_service(self):
+        return self.object_storage
 
     def bind_facade(self, facade) -> None:
         self._facade = facade
@@ -936,8 +947,8 @@ class RoomServices:
     async def _delete_transitional_non_room_data(self, room_id: str) -> None:
         s3_cleanup_ok = True
         try:
-            await self.s3_service.delete_prefix(f"uploads/{room_id}/")
-            await self.s3_service.delete_prefix(f"artifacts/{room_id}/")
+            await self.object_storage.delete_prefix(f"uploads/{room_id}/")
+            await self.object_storage.delete_prefix(f"artifacts/{room_id}/")
         except Exception:
             s3_cleanup_ok = False
             logger.warning(
@@ -1003,7 +1014,7 @@ class RoomServices:
             text=text,
             attachments=attachments,
             agent_card=agent_card,
-            object_storage=self.s3_service,
+            object_storage=self.object_storage,
         )
 
     # room user message management
@@ -3302,7 +3313,7 @@ class RoomServices:
 
         if s3_keys:
             try:
-                url_map = await self.s3_service.batch_presigned_urls(s3_keys)
+                url_map = await self.object_storage.batch_presigned_urls(s3_keys)
                 for msg in messages:
                     if msg.message_content and msg.message_content.attachments:
                         for att in msg.message_content.attachments:
@@ -3322,7 +3333,7 @@ class RoomServices:
         try:
             await refresh_artifact_presigned_urls(
                 messages=messages,
-                object_storage=self.s3_service,
+                object_storage=self.object_storage,
             )
         except Exception:
             logger.warning("Failed to refresh artifact presigned URLs")

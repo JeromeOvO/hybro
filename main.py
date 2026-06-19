@@ -254,10 +254,6 @@ async def lifespan(app: FastAPI):
                 room_runtime,
                 room_services,
             )
-
-            # TODO(P2): replace this app-shell object-storage singleton import with
-            # a platform-owned ObjectStoragePort once S3 confinement is complete.
-            from app_shell.s3_service import s3_service
             from app_shell.task_service import task_service
             from common.utils.a2a_helpers import bind_a2a_artifact_storage
             from container import (
@@ -310,8 +306,13 @@ async def lifespan(app: FastAPI):
             from platform_module.adapters import RateLimitCollectionAdapter
             from platform_module.rate_limit import PlatformAgentRateLimiter
 
+            object_storage = create_object_storage_dal()
+            platform_object_storage = PlatformObjectStorage(
+                object_storage,
+                default_presigned_url_ttl=settings.s3_presigned_url_ttl,
+            )
             a2a_artifact_storage.bind_a2a_storage_dependencies(
-                storage_service=s3_service,
+                storage_service=platform_object_storage,
                 s3_bucket_name=settings.s3_bucket_name,
                 max_file_size_mb=settings.max_file_size_mb,
             )
@@ -536,7 +537,7 @@ async def lifespan(app: FastAPI):
                 service=agent_service,
                 issue_service=capability_issue_service,
                 avatar_manager=AppShellAgentAvatarManager(
-                    s3_service,
+                    platform_object_storage,
                     _agent_deps.agent_repository,
                 ),
             )
@@ -765,9 +766,7 @@ async def lifespan(app: FastAPI):
             sse.bind_sse_dependencies(sse_state_reader, sse_manager)
             room_runtime.bind_store(app_shell_store)
             room_runtime.bind_facade(_room_facade)
-            # Temporary P2 bridge: RoomServices now requires explicit object-storage
-            # binding and no longer imports app_shell.s3_service lazily.
-            room_runtime.bind_s3_service(s3_service)
+            room_runtime.bind_object_storage(platform_object_storage)
             room_center.room_center.bind_facade(_room_facade)
             hitl.bind_room_ownership_reader(_room_facade)
             context_memory_facade = create_context_memory_facade(
@@ -801,7 +800,7 @@ async def lifespan(app: FastAPI):
                 ),
                 task_notification_impl=_notify_task_update_impl,
                 agent_health_service=agent_health_service,
-                s3_service=s3_service,
+                object_storage=platform_object_storage,
                 capability_issue_service=capability_issue_service,
                 context_memory_runtime=_context_memory_deps.context_memory_runtime,
                 compaction_service=compaction_service,
@@ -899,12 +898,6 @@ async def lifespan(app: FastAPI):
             app.state.execution_facade = execution_facade
             app.state.execution_deps = _execution_deps
 
-            object_storage = create_object_storage_dal()
-            platform_object_storage = PlatformObjectStorage(
-                object_storage,
-                default_presigned_url_ttl=settings.s3_presigned_url_ttl,
-            )
-            s3_service.bind_object_storage(platform_object_storage)
             platform_config = create_platform_config(settings)
             platform_deps = create_platform_deps(
                 agent_deps=_agent_deps,
@@ -1124,7 +1117,7 @@ async def lifespan(app: FastAPI):
             OrphanedUploadCleanerDeps(
                 file_uploads_collection=mongo_dal.collection("file_uploads"),
                 room_user_messages_collection=mongo_dal.collection("room_user_messages"),
-                object_storage=s3_service,
+                object_storage=platform_object_storage,
             )
         )
 

@@ -125,6 +125,7 @@ class RoomMessageCenter:
         task_notifications,
         task_notification_impl=None,
         agent_health_service=None,
+        object_storage=None,
         s3_service=None,
         capability_issue_service=None,
         context_memory_runtime: ContextMemoryRuntime | None = None,
@@ -160,6 +161,7 @@ class RoomMessageCenter:
             agent_lookup=self._store,
             agent_group_reader=self._store,
         )
+        storage_service = object_storage if object_storage is not None else s3_service
 
         # Shared result handler used by all transports
         self.agent_response_handler = AgentResponseHandler(
@@ -186,7 +188,7 @@ class RoomMessageCenter:
             message_reader=self._store,
             artifact_store=self._store,
             task_updater=self._store,
-            s3_service=s3_service,
+            object_storage=storage_service,
             capability_issue_service=capability_issue_service,
         )
 

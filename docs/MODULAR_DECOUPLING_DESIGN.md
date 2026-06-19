@@ -2153,9 +2153,12 @@ Motor/DAL scripts and must not restore `database/mongodb.py`,
 `platform_module.PlatformObjectStorage` provides the legacy-compatible upload,
 presigned URL, metadata, public URL, text download, and prefix cleanup surface
 over `ObjectStorageDAL`. Platform file/content services now use DAL-shaped
-object storage dependencies; SDK ownership stays in `dal/s3/`, with
-`app_shell/s3_service.py` retained only as an SDK-free compatibility shim until
-the final S3 service removal phase.
+object storage dependencies; SDK ownership stays in `dal/s3/`. Production
+startup passes `PlatformObjectStorage` directly into runtime consumers that
+still need the legacy upload/presign methods through object-storage-named
+injection points, while `app_shell/s3_service.py` is retained only as an
+SDK-free compatibility shim for tests and legacy import paths until the final
+S3 service removal phase.
 
 **Implemented LLM migration note (2026-06-05):** `LLMGatewayImpl` now owns
 logical model routing, retry/timeout behavior, structured JSON-object mode, and
