@@ -202,7 +202,7 @@ async def test_facade_offline_dispatch_replays_when_in_memory_stream_connects() 
     event = await asyncio.wait_for(anext(stream), timeout=1)
     assert event["type"] == "user_message"
     assert event["agent_message_id"] == "agent-msg-1"
-    assert "task_id" not in event
+    assert event["task_id"] == "relay-pending-agent"
     await stream.aclose()
 
 
@@ -261,7 +261,7 @@ async def test_facade_marks_dropped_offline_queue_event_failed() -> None:
 
     assert len(failures.commands) == 1
     assert failures.commands[0].agent_message_id == "agent-msg-0"
-    assert failures.commands[0].task_id == "agent-msg-0"
+    assert failures.commands[0].task_id == "task-0"
 
 
 @pytest.mark.asyncio

@@ -146,8 +146,10 @@ class TestIsHubAlive:
         svc = _make_service(streams=None)
         assert await svc.is_hub_alive("hub-1") is False
 
-        svc._hub_queues["hub-1"] = asyncio.Queue()
+        stream = svc._facade.connect_hub_stream("hub-1")
+        assert await stream.__anext__() == {"type": "connection_ready"}
         assert await svc.is_hub_alive("hub-1") is True
+        await stream.aclose()
 
     async def test_liveness_reader_delegates_to_authoritative_relay_liveness(self):
         streams = _make_streams()
@@ -174,8 +176,10 @@ class TestIsHubAlive:
         reader = RelayHubLivenessReader(svc)
 
         assert await reader.is_hub_online("hub-1") is False
-        svc._hub_queues["hub-1"] = asyncio.Queue()
+        stream = svc._facade.connect_hub_stream("hub-1")
+        assert await stream.__anext__() == {"type": "connection_ready"}
         assert await reader.is_hub_online("hub-1") is True
+        await stream.aclose()
 
     async def test_agent_liveness_bind_rejects_sync_liveness_reader(self):
         with pytest.raises(TypeError, match="is_hub_online must be async"):
@@ -393,12 +397,19 @@ class TestHeartbeatCheckConnectionIdGuard:
         svc = _make_service(mongo=mongo, streams=streams)
         writer = _make_writer()
         svc.bind_agent_registry_writer(writer)
-        disconnect = asyncio.Event()
-        svc._hub_disconnect_events["hub-race"] = disconnect
+        async def wait_for_events(*args, **kwargs):
+            await asyncio.sleep(10)
+            return []
+
+        streams.read_events = AsyncMock(side_effect=wait_for_events)
+        stream = svc._facade.connect_hub_stream("hub-race")
+        assert await stream.__anext__() == {"type": "connection_ready"}
+        pending = asyncio.ensure_future(stream.__anext__())
 
         await svc._do_heartbeat_check(stale_threshold=90)
 
-        assert disconnect.is_set()
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(pending, timeout=1)
         mongo.update_hub_status_if_current.assert_awaited_once()
         writer.mark_hub_agents_offline.assert_not_awaited()
         mongo.agents_collection.update_many.assert_not_awaited()
@@ -424,16 +435,17 @@ class TestHeartbeatCheckConnectionIdGuard:
 
         mongo.hubs_collection.find = MagicMock(side_effect=find_router)
         svc = _make_service(mongo=mongo, streams=streams)
-        svc.bind_agent_registry_writer(_make_writer())
-        svc._hub_disconnect_events["hub-stale"] = asyncio.Event()
+        writer = _make_writer()
+        svc.bind_agent_registry_writer(writer)
 
-        with caplog.at_level(logging.WARNING, logger="app_shell.relay_service"):
-            await svc._do_heartbeat_check(stale_threshold=90)
+        await svc._do_heartbeat_check(stale_threshold=90)
 
-        assert "hub-stale" in caplog.text
-        assert "connection_id=conn-old-123" in caplog.text
-        assert "redis_alive=False" in caplog.text
-        assert "local_disconnect_event=True" in caplog.text
+        mongo.update_hub_status_if_current.assert_awaited_once_with(
+            "hub-stale",
+            connection_id="conn-old-123",
+            is_online=False,
+        )
+        writer.mark_hub_agents_offline.assert_awaited_once_with("hub-stale")
 
 
 @pytest.mark.asyncio
@@ -646,13 +658,19 @@ class TestHeartbeatExpiryDisconnect:
 
         svc = _make_service(mongo=mongo, streams=streams)
         svc.bind_agent_registry_writer(_make_writer())
+        async def wait_for_events(*args, **kwargs):
+            await asyncio.sleep(10)
+            return []
 
-        disconnect_event = asyncio.Event()
-        svc._hub_disconnect_events["hub-stale"] = disconnect_event
+        streams.read_events = AsyncMock(side_effect=wait_for_events)
+        stream = svc._facade.connect_hub_stream("hub-stale")
+        assert await stream.__anext__() == {"type": "connection_ready"}
+        pending = asyncio.ensure_future(stream.__anext__())
 
         await svc._do_heartbeat_check(stale_threshold=90)
 
-        assert disconnect_event.is_set()
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(pending, timeout=1)
 
     async def test_no_error_when_disconnect_event_missing(self):
         """No error if the hub has no local disconnect event (multi-instance)."""

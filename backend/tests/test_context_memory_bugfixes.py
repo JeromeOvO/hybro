@@ -349,7 +349,7 @@ class TestLegacyTokenFallback:
     """Tests that estimated_tokens_full=0 falls back to estimate_tokens()."""
 
     def test_select_turns_within_budget_handles_zero_tokens(self, mock_compaction_config):
-        from app_shell.context_assembly_service import ContextAssemblyService
+        from context_memory.legacy_assembly import select_legacy_turns_within_budget
 
         mock_compaction_config.context_model_window = 32000
         mock_compaction_config.context_system_prompt_tokens = 2000
@@ -359,15 +359,13 @@ class TestLegacyTokenFallback:
         mock_compaction_config.context_history_pct = 0.60
         mock_compaction_config.context_task_pct = 0.25
 
-        service = ContextAssemblyService()
-
         legacy_turn = _make_turn(
             content="A " * 500,
             estimated_tokens_full=0,  # Legacy turn with no token estimate
         )
         recent_turn = _make_turn(content="Recent message")
 
-        selected, truncated = service._select_turns_within_budget(
+        selected, truncated = select_legacy_turns_within_budget(
             turns=[legacy_turn, recent_turn],
             budget_tokens=50,
         )

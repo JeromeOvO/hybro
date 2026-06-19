@@ -24,9 +24,8 @@ from models.request import RoomCenterAgentMessageRequest
 from models.room import RoomAgentMessage
 
 if TYPE_CHECKING:
-    from app_shell.delivery_runtime import SSEManager
-    from app_shell.room_runtime import RoomServices
     from execution.dispatch.transports.base import AgentTransport
+    from execution.ports import RoomRuntimePort, SSEDeliveryPort
     from models.agent import Agent
 
 
@@ -60,8 +59,8 @@ class AgentMessageProcessor:
     def __init__(
         self,
         *,
-        sse_manager: SSEManager,
-        room_services: RoomServices,
+        sse_manager: SSEDeliveryPort,
+        room_services: RoomRuntimePort,
         room_memory_reader: RoomMemoryReader,
         task_tracker: TaskTrackerPort,
         transports: dict[str, AgentTransport],

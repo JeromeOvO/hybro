@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -40,6 +42,8 @@ from hub_runtime_bridge.task_ownership import (
     MongoHubTaskOwnershipStore,
 )
 from hub_runtime_bridge.transport.offline_queue import OfflineQueue
+
+legacy_relay_logger = logging.getLogger("app_shell.relay_service")
 
 
 @dataclass(frozen=True)
@@ -95,6 +99,8 @@ class HubFacade:
         self.deps = deps
         self._queues: dict[str, asyncio.Queue] = {}
         self._offline_queues: dict[str, OfflineQueue] = {}
+        self._last_hub_heartbeat: dict[str, float] = {}
+        self._hub_disconnected_at: dict[str, float] = {}
         self._liveness_cache: dict[str, bool] = {}
         self._dispatcher = None
         self._replay_worker: HubResponseReplayWorker | None = None
@@ -102,6 +108,7 @@ class HubFacade:
         self._replay_worker_restart_task: Any | None = None
         self._replay_worker_restart_old_workers: list[HubResponseReplayWorker] = []
         self._replay_worker_generation = 0
+        self._heartbeat_task: Any | None = None
         self.ownership_lease_maintainer = (
             OwnershipLeaseMaintainer(
                 task_runner=deps.task_runner,
@@ -188,6 +195,9 @@ class HubFacade:
         self._connection = self._build_connection_service()
         self._sync = self._build_sync_service()
 
+    def bind_leader_elector(self, leader_elector: Any | None) -> None:
+        self.deps.leader_elector = leader_elector
+
     def bind_agent_registry_writer(self, writer: AgentRegistryWriter) -> None:
         self.deps.agent_registry_writer = writer
         self._sync = self._build_sync_service()
@@ -217,6 +227,12 @@ class HubFacade:
 
     async def stop(self) -> None:
         self._started = False
+        heartbeat_task = self._heartbeat_task
+        self._heartbeat_task = None
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
         self._replay_worker_generation += 1
         restart_task = self._replay_worker_restart_task
         self._replay_worker_restart_task = None
@@ -237,10 +253,49 @@ class HubFacade:
         for queue in list(self._queues.values()):
             await queue.put({"type": "_disconnect"})
         self._queues.clear()
+        self._last_hub_heartbeat.clear()
+        self._hub_disconnected_at.clear()
         self._liveness_cache.clear()
 
     async def start_heartbeat_monitor(self) -> None:
-        return None
+        if self._heartbeat_task is None:
+            self._heartbeat_task = self.deps.task_runner(self._heartbeat_loop())
+
+    async def _heartbeat_loop(self) -> None:
+        while self._started:
+            try:
+                await asyncio.sleep(self.deps.config.heartbeat_interval_seconds)
+                await self.run_heartbeat_iteration()
+            except asyncio.CancelledError:
+                break
+
+    async def run_heartbeat_iteration(self) -> None:
+        leader = self.deps.leader_elector
+        if leader is not None:
+            ttl = self.deps.config.heartbeat_interval_seconds * 2
+            acquired = await leader.try_acquire("relay_heartbeat_monitor", ttl)
+            if not acquired:
+                return
+            try:
+                await self._run_heartbeat_checks()
+            finally:
+                await leader.release("relay_heartbeat_monitor")
+            return
+        await self._run_heartbeat_checks()
+
+    async def _run_heartbeat_checks(self) -> None:
+        stale_events = await self.sweep_stream_liveness()
+        for stale in stale_events:
+            await self.disconnect_hub(stale.hub_id)
+
+        if self.deps.streams is None:
+            stale_threshold = (
+                self.deps.config.heartbeat_interval_seconds
+                * self.deps.config.heartbeat_miss_limit
+            )
+            await self._disconnect_stale_local_hubs(stale_threshold)
+
+        await self.sweep_offline_queues()
 
     def bind_internal_response_dispatcher(self, dispatcher: Any) -> None:
         old_worker = self._replay_worker
@@ -362,6 +417,8 @@ class HubFacade:
             if old_queue is not None:
                 await old_queue.put({"type": "_disconnect"})
             self._queues[hub_id] = queue
+            self._last_hub_heartbeat[hub_id] = time.monotonic()
+            self._hub_disconnected_at.pop(hub_id, None)
             self._liveness_cache[hub_id] = True
             if self.deps.streams:
                 await self.deps.streams.record_heartbeat(hub_id)
@@ -376,7 +433,11 @@ class HubFacade:
                     while True:
                         read_task = asyncio.ensure_future(
                             self.deps.streams.read_events(
-                                hub_id, last_id=last_id, block_ms=5000
+                                hub_id,
+                                last_id=last_id,
+                                block_ms=(
+                                    self.deps.config.heartbeat_interval_seconds * 1000
+                                ),
                             )
                         )
                         disconnect_task = asyncio.ensure_future(queue.get())
@@ -423,6 +484,8 @@ class HubFacade:
                 if self._queues.get(hub_id) is queue:
                     self._queues.pop(hub_id, None)
                     await self._preserve_pending_queue_events(hub_id, queue)
+                    self._last_hub_heartbeat.pop(hub_id, None)
+                    self._hub_disconnected_at[hub_id] = time.monotonic()
                     self._liveness_cache[hub_id] = False
 
         return stream()
@@ -475,6 +538,10 @@ class HubFacade:
     ) -> None:
         if self.deps.streams:
             await self.deps.streams.record_heartbeat(hub_id)
+        elif hub_id not in self._queues:
+            raise PermissionError(f"Hub {hub_id} is not connected")
+        else:
+            self._last_hub_heartbeat[hub_id] = time.monotonic()
         self._liveness_cache[hub_id] = True
         if self.deps.hub_repository:
             await self.deps.hub_repository.update_hub_status(
@@ -501,6 +568,76 @@ class HubFacade:
     def is_hub_online_cached(self, hub_id: str) -> bool:
         return bool(self._liveness_cache.get(hub_id, False))
 
+    def has_streams(self) -> bool:
+        return self.deps.streams is not None
+
+    def is_hub_connected_locally(self, hub_id: str) -> bool:
+        return hub_id in self._queues
+
+    def _has_exceeded_offline_grace_period(self, hub_id: str) -> bool:
+        disconnected_at = self._hub_disconnected_at.get(hub_id)
+        if disconnected_at is None:
+            return False
+        elapsed = time.monotonic() - disconnected_at
+        return elapsed > self.deps.config.offline_grace_period_seconds
+
+    def _log_legacy_push_rejected(self, hub_id: str, event: dict) -> None:
+        legacy_relay_logger.warning(
+            "Hub %s push rejected: redis_alive=False event_type=%s "
+            "agent_message_id=%s room_id=%s local_agent_id=%s",
+            hub_id,
+            event.get("type"),
+            event.get("agent_message_id"),
+            event.get("room_id"),
+            event.get("local_agent_id"),
+        )
+
+    async def disconnect_hub(self, hub_id: str) -> None:
+        queue = self._queues.get(hub_id)
+        if queue is not None:
+            await queue.put({"type": "_disconnect"})
+
+    async def push_event_to_hub(self, hub_id: str, event: dict) -> bool | None:
+        return await self._push_event_dict(hub_id, event)
+
+    async def push_legacy_event_to_hub(
+        self,
+        hub_id: str,
+        event: dict,
+        *,
+        mark_agents_offline: bool = False,
+    ) -> bool:
+        was_online = await self.is_hub_online(hub_id)
+        if (
+            not was_online
+            and mark_agents_offline
+            and self.deps.agent_registry_writer is not None
+        ):
+            await self.deps.agent_registry_writer.mark_hub_agents_offline(hub_id)
+
+        if self.deps.streams:
+            if not was_online:
+                self._log_legacy_push_rejected(hub_id, event)
+                await self._mark_rejected_legacy_event(event, "Agent is offline")
+                return False
+            return bool(await self.deps.streams.push_event(hub_id, event))
+
+        queue = self._queues.get(hub_id)
+        if queue is not None:
+            await queue.put(event)
+            return True
+
+        if self._has_exceeded_offline_grace_period(hub_id):
+            self._log_legacy_push_rejected(hub_id, event)
+            await self._mark_rejected_legacy_event(event, "Agent is offline")
+            return False
+
+        self._liveness_cache[hub_id] = False
+        dropped = self._offline_queue(hub_id).append(event)
+        if dropped is not None:
+            await self._mark_dropped_offline_event(dropped)
+        return False
+
     async def _push_event_dict(self, hub_id: str, event: dict) -> bool:
         if self.deps.streams:
             alive = await self.deps.streams.is_hub_alive(hub_id)
@@ -518,6 +655,21 @@ class HubFacade:
             return True
         await self._queues[hub_id].put(event)
         return True
+
+    async def _disconnect_stale_local_hubs(self, stale_threshold: float) -> None:
+        now = time.monotonic()
+        for hub_id in list(self._queues):
+            last = self._last_hub_heartbeat.get(hub_id)
+            if last is not None and (now - last) > stale_threshold:
+                await self.disconnect_hub(hub_id)
+
+    async def sweep_offline_queues(self) -> None:
+        for hub_id, queue in list(self._offline_queues.items()):
+            expired = queue.sweep_expired()
+            for event in expired:
+                await self._mark_dropped_offline_event(event)
+            if len(queue) == 0:
+                self._offline_queues.pop(hub_id, None)
 
     async def _preserve_pending_queue_events(
         self, hub_id: str, queue: asyncio.Queue
@@ -555,6 +707,23 @@ class HubFacade:
                 agent_id=event.get("agent_id", ""),
                 task_id=event.get("task_id") or event.get("agent_message_id", ""),
                 error_text="Hub agent offline queue overflowed before delivery",
+            )
+        )
+
+    async def _mark_rejected_legacy_event(
+        self,
+        event: dict,
+        error_text: str,
+    ) -> None:
+        if self.deps.offline_failure_port is None:
+            return
+        await self.deps.offline_failure_port.mark_hub_message_failed(
+            OfflineHubFailureCommand(
+                room_id=event.get("room_id", ""),
+                agent_message_id=event.get("agent_message_id", ""),
+                agent_id=event.get("agent_id", ""),
+                task_id=event.get("task_id"),
+                error_text=error_text,
             )
         )
 

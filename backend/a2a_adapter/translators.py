@@ -7,8 +7,38 @@ from common.dto import (
     AgentTaskResult,
     InternalAgentMessage,
 )
+from common.types import Artifact, Message, Part, Task, TaskState, TaskStatus, TextPart
 
 TERMINAL_STATES = {"completed", "failed", "canceled", "cancelled", "rejected"}
+PLATFORM_SUPPORTED_MODES = {
+    "text/plain",
+    "text/markdown",
+    "text/html",
+    "text/csv",
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "audio/wav",
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/webm",
+    "video/mp4",
+    "video/webm",
+    "application/json",
+    "application/pdf",
+    "application/xml",
+    "application/zip",
+}
+MODE_TO_MIMES: dict[str, set[str]] = {
+    "text": {"text/plain"},
+    "image": {"image/png", "image/jpeg", "image/gif", "image/webp"},
+    "audio": {"audio/wav", "audio/mpeg", "audio/mp4", "audio/webm"},
+    "video": {"video/mp4", "video/webm"},
+    "json": {"application/json"},
+    "form": {"text/plain"},
+    "markdown": {"text/markdown", "text/plain"},
+}
 
 
 def internal_message_to_a2a(msg: InternalAgentMessage) -> dict[str, Any]:
@@ -95,7 +125,6 @@ def a2a_card_to_snapshot(card: Any, agent_url: str) -> AgentCardSnapshot:
         "defaultOutputModes",
         "output_modes",
     )
-
     return AgentCardSnapshot(
         agent_id=_first_non_empty(
             _read(card, "id"),
@@ -114,6 +143,81 @@ def a2a_card_to_snapshot(card: Any, agent_url: str) -> AgentCardSnapshot:
         raw_card=raw_card,
     )
 
+
+def resolve_accepted_output_modes(agent_card: Any) -> list[str]:
+    """Intersect an agent's declared output modes with platform capabilities."""
+    raw_modes = getattr(agent_card, "default_output_modes", None)
+    agent_modes = set(raw_modes if raw_modes is not None else ["text"])
+    if not agent_modes:
+        agent_modes = {"text"}
+
+    agent_mime_modes: set[str] = set()
+    for mode in agent_modes:
+        if "/" in mode:
+            agent_mime_modes.add(mode)
+        elif mode in MODE_TO_MIMES:
+            agent_mime_modes.update(MODE_TO_MIMES[mode])
+        else:
+            agent_mime_modes.add("text/plain")
+
+    accepted = agent_mime_modes & PLATFORM_SUPPORTED_MODES
+    if not accepted:
+        accepted = {"text/plain"}
+    return sorted(accepted)
+
+
+def coerce_parts(parts: list[Any] | None) -> list[Part]:
+    coerced: list[Part] = []
+    for part in parts or []:
+        if isinstance(part, Part):
+            coerced.append(part)
+        elif isinstance(part, dict):
+            data = dict(part)
+            if "kind" not in data and "text" in data:
+                data["kind"] = "text"
+            coerced.append(Part.model_validate(data))
+        elif hasattr(part, "root"):
+            coerced.append(Part(root=part.root))
+        elif hasattr(part, "model_dump"):
+            data = part.model_dump(mode="json")
+            if "kind" not in data and "text" in data:
+                data["kind"] = "text"
+            coerced.append(Part.model_validate(data))
+        elif hasattr(part, "text"):
+            coerced.append(Part(root=TextPart(text=part.text)))
+    return coerced
+
+
+def message_to_completed_task(
+    message: Message,
+    context_id: str,
+    *,
+    task_id: str,
+    artifact_id: str,
+) -> Task:
+    """Convert a message response into a completed task artifact."""
+    return Task(
+        id=task_id,
+        context_id=context_id,
+        status=TaskStatus(state=TaskState.completed),
+        artifacts=[
+            Artifact(
+                artifact_id=artifact_id,
+                name="response",
+                parts=coerce_parts(message.parts),
+            )
+        ],
+    )
+
+
+def facade_result_to_model(response: dict[str, Any]) -> Message | Task:
+    kind = response.get("kind")
+    result = response.get("result") or {}
+    if kind == "message":
+        return Message.model_validate(result)
+    if kind == "task":
+        return Task.model_validate(result)
+    raise ValueError(str(response.get("error") or "Unknown A2A response"))
 
 def _normalize_status(status_data: Any) -> str:
     state = _read(status_data, "state")

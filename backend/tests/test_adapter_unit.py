@@ -114,7 +114,12 @@ async def test_inspection_fetch_sdk_agent_card_falls_back_after_current_404(
 
 
 def test_inspection_adapter_validates_probe_response_shapes():
-    from a2a_adapter.inspection import _validate_message, _validate_response
+    from a2a_adapter.inspection import (
+        _validate_message,
+        _validate_response,
+        validate_message_data,
+        validate_response_data,
+    )
 
     assert _validate_message({"kind": "task"}) == [
         "Task object missing required field: 'id'.",
@@ -133,6 +138,21 @@ def test_inspection_adapter_validates_probe_response_shapes():
     assert _validate_message({"kind": "unexpected"}) == [
         "Unknown message kind received: 'unexpected'."
     ]
+    assert validate_message_data({"kind": "task"}) == [
+        "Task object missing required field: 'id'.",
+        "Task object missing required field: 'status.state'.",
+    ]
+    assert validate_response_data({"kind": "error", "error": "boom"}) == (
+        ["boom"],
+        True,
+    )
+    assert validate_response_data({"result": {"kind": "message"}}) == (
+        [
+            "Message object must have a non-empty 'parts' array.",
+            "Message from agent must have 'role' set to 'agent'.",
+        ],
+        False,
+    )
 
     response = SimpleNamespace(
         root=SimpleNamespace(

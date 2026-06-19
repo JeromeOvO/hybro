@@ -54,14 +54,15 @@ if TYPE_CHECKING:
             self, room_agent_message
         ) -> str | None: ...
 
-    from app_shell.delivery_runtime import SSEManager
-    from app_shell.notification_service import NotificationService
+    from execution.ports import NotificationServicePort, SSEDeliveryPort
 
 logger = get_logger(__name__)
 
 ProcessingStatusEmitter = Callable[..., Awaitable[dict[str, Any] | None]]
 _processing_status_emitter: ProcessingStatusEmitter | None = None
 _notification_store: TaskNotificationStore | None = None
+_notification_service = None
+_sse_manager = None
 
 
 def bind_notification_store(notification_store: TaskNotificationStore) -> None:
@@ -76,6 +77,15 @@ def bind_processing_status_emitter(
     global _processing_status_emitter
 
     _processing_status_emitter = processing_status_emitter
+
+
+def bind_task_notification_runtime(
+    *,
+    notification_service,
+    sse_manager,
+) -> None:
+    globals()["_notification_service"] = notification_service
+    globals()["_sse_manager"] = sse_manager
 
 
 class TaskNotificationAdapter:
@@ -131,8 +141,8 @@ def _map_task_state_to_processing_status(state: TaskState) -> SSEProcessingStatu
 
 async def _notify_task_update_impl(
     notification_store: TaskNotificationStore,
-    notification_svc: NotificationService,
-    sse: SSEManager,
+    notification_svc: NotificationServicePort,
+    sse: SSEDeliveryPort,
     *,
     message_id: str,
     state: TaskState,
@@ -509,22 +519,21 @@ async def notify_task_update(
     error: str | None = None,
     parts: list[dict] | None = None,
 ) -> bool:
-    """Standalone entry point — thin wrapper passing global singletons.
+    """Standalone entry point over explicitly bound runtime dependencies.
 
     Prefer ``AgentResponseHandler.notify_task_update`` when a handler
     instance is available.  This wrapper exists for background jobs
     (``stale_task_checker``) and safety-net paths (``RoomMessageCenter``)
     that have no handler context.
     """
-    from app_shell.delivery_runtime import sse_manager
-    from app_shell.notification_service import notification_service
-
     if _notification_store is None:
         raise RuntimeError("Task notification store dependency has not been bound")
+    if _notification_service is None or _sse_manager is None:
+        raise RuntimeError("Task notification runtime dependencies have not been bound")
     return await _notify_task_update_impl(
         _notification_store,
-        notification_service,
-        sse_manager,
+        _notification_service,
+        _sse_manager,
         message_id=message_id,
         state=state,
         room_id=room_id,
@@ -538,6 +547,8 @@ async def notify_task_update(
 __all__ = [
     "TaskNotificationAdapter",
     "bind_notification_store",
+    "bind_processing_status_emitter",
+    "bind_task_notification_runtime",
     "_map_task_state_to_processing_status",
     "_notify_task_update_impl",
     "notify_task_update",

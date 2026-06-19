@@ -818,14 +818,15 @@ def test_bound_context_assembly_logs_metrics():
     service = ContextAssemblyService()
     service.bind_facade(facade)
 
-    with patch.object(service, "_log_context_metrics") as log_metrics:
+    with patch("context_memory.legacy_assembly.record_context_metrics") as record_metrics:
+        record_metrics.return_value = False
         service.build_supervisor_context(room_memory(), "task")
 
-    log_metrics.assert_called_once()
-    assert log_metrics.call_args.kwargs["room_id"] == "r1"
-    assert log_metrics.call_args.kwargs["context_type"] == "supervisor"
-    assert log_metrics.call_args.kwargs["full_turns"] == 1
-    assert log_metrics.call_args.kwargs["compact_turns"] == 0
+    record_metrics.assert_called_once()
+    assert record_metrics.call_args.kwargs["room_id"] == "r1"
+    assert record_metrics.call_args.kwargs["context_type"] == "supervisor"
+    assert record_metrics.call_args.kwargs["metadata"]["full_turns"] == 1
+    assert record_metrics.call_args.kwargs["metadata"]["compact_turns"] == 0
 
 
 @pytest.mark.asyncio

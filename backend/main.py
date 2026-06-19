@@ -3,6 +3,7 @@ import logging
 import sys
 import time
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Request
@@ -219,12 +220,10 @@ async def lifespan(app: FastAPI):
             from app_shell.agent_service import agent_service
             from app_shell.bedrock_service import bedrock_service
             from app_shell.compaction_service import compaction_service
-            from app_shell.context_assembly_service import context_assembly_service
             from app_shell.context_memory_runtime import AppShellMemoryCenter
             from app_shell.debate_service import debate_service
             from app_shell.gemini_service import gemini_service
             from app_shell.inspection_runtime import AppShellInspectionCenter
-            from app_shell.memory_search_service import memory_search_service
             from app_shell.memory_service import (
                 chat_memory_service,
                 room_memory_service,
@@ -239,6 +238,9 @@ async def lifespan(app: FastAPI):
                 room_runtime,
                 room_services,
             )
+
+            # TODO(P2): replace this app-shell object-storage singleton import with
+            # a platform-owned ObjectStoragePort once S3 confinement is complete.
             from app_shell.s3_service import s3_service
             from app_shell.task_service import task_service
             from common.enterprise_injection import (
@@ -358,6 +360,7 @@ async def lifespan(app: FastAPI):
 
             from a2a_adapter.task_status import coerce_task_state
             from app_shell.a2a_runtime import (
+                A2ARuntimeConfig,
                 a2a_service,
             )
             from app_shell.hitl_service import (
@@ -380,6 +383,7 @@ async def lifespan(app: FastAPI):
                 TaskNotificationAdapter,
                 _notify_task_update_impl,
                 bind_notification_store,
+                bind_task_notification_runtime,
                 notify_task_update,
             )
             from execution.dispatch.task_notifications import (
@@ -389,6 +393,9 @@ async def lifespan(app: FastAPI):
             from execution.events import (
                 emit_processing_status,
                 run_event_notification_from_payload,
+            )
+            from execution.events import (
+                emit_room_processing_status as emit_execution_room_processing_status,
             )
             from execution.hitl.adapters import (
                 A2AHITLContinuationAdapter,
@@ -473,7 +480,6 @@ async def lifespan(app: FastAPI):
             agent_resolver_service.bind_agent_selection_service(
                 agent_selection_llm_service
             )
-            memory_search_service.bind_embedding_service(embedding_llm_service)
             room_coordinator_service.bind_summary_service(summary_llm_service)
             openai_service.bind_debate_service(debate_llm_service)
             agent_viewset.bind_agent_viewset_dependencies(
@@ -536,7 +542,21 @@ async def lifespan(app: FastAPI):
             chat_memory_service.bind_store(app_shell_store)
             room_memory_service.bind_store(app_shell_store)
             bind_notification_store(app_shell_store)
-            a2a_service.bind_task_db(app_shell_store)
+            bind_task_notification_runtime(
+                notification_service=notification_service,
+                sse_manager=sse_manager,
+            )
+            a2a_service.bind_runtime_config(
+                A2ARuntimeConfig(webhook_base_url=settings.webhook_base_url)
+            )
+            a2a_service.bind_task_db(
+                app_shell_store,
+                call_counter=SimpleNamespace(
+                    increment_agent_call_count=(
+                        app_shell_store.increment_agent_call_count
+                    ),
+                ),
+            )
             app_shell_client_request_id_resolver = SSEClientRequestIdResolver(
                 resolver=app_shell_store,
             )
@@ -557,19 +577,50 @@ async def lifespan(app: FastAPI):
                     ),
                 )
             )
+            route_room_reader = SimpleNamespace(
+                get_room_by_room_id=app_shell_store.get_room_by_room_id,
+            )
+            a2a_task_status_reader = SimpleNamespace(
+                get_room_agent_message_by_message_id=(
+                    app_shell_store.get_room_agent_message_by_message_id
+                ),
+                get_task_messages_for_room=app_shell_store.get_task_messages_for_room,
+                get_pending_task_messages_for_user=(
+                    app_shell_store.get_pending_task_messages_for_user
+                ),
+            )
+            sse_state_reader = SimpleNamespace(
+                get_room_by_room_id=app_shell_store.get_room_by_room_id,
+                get_room_user_message_by_message_id=(
+                    app_shell_store.get_room_user_message_by_message_id
+                ),
+            )
             room_center.bind_room_dependencies(
                 center=AppShellRoomCenter(),
-                store=app_shell_store,
+                store=route_room_reader,
                 selection_service=agent_selection_service,
             )
-            a2a_tasks.bind_a2a_task_dependencies(app_shell_store)
+            a2a_tasks.bind_a2a_task_dependencies(a2a_task_status_reader)
             agent_group.bind_agent_group_dependencies(app_shell_store)
-            sse.bind_sse_dependencies(app_shell_store, sse_manager)
+            sse.bind_sse_dependencies(sse_state_reader, sse_manager)
             room_runtime.bind_store(app_shell_store)
             room_runtime.bind_facade(_room_facade)
+            # Temporary P2 bridge: RoomServices now requires explicit object-storage
+            # binding and no longer imports app_shell.s3_service lazily.
             room_runtime.bind_s3_service(s3_service)
             room_center.room_center.bind_facade(_room_facade)
             hitl.bind_room_ownership_reader(_room_facade)
+            context_memory_facade = create_context_memory_facade(
+                mongo=mongo_dal,
+                vector=vector_dal,
+                llm_provider=llm_provider,
+                room_history_reader=_room_deps.room_history_reader,
+                llm_config=ContextMemoryLLMConfig(
+                    turn_notes_model="context_memory_legacy_json_model",
+                    summary_model="context_memory_legacy_json_model",
+                ),
+            )
+            _context_memory_deps = create_context_memory_deps(context_memory_facade)
             execution_room_message_center.bind(
                 create_room_message_center(
                     room_services=room_services,
@@ -593,8 +644,7 @@ async def lifespan(app: FastAPI):
                     agent_health_service=agent_health_service,
                     s3_service=s3_service,
                     capability_issue_service=capability_issue_service,
-                    context_assembly_service=context_assembly_service,
-                    memory_search_service=memory_search_service,
+                    context_memory_runtime=_context_memory_deps.context_memory_runtime,
                     compaction_service=compaction_service,
                     build_turn_content_func=build_turn_content,
                     supervisor_planning_error_cls=SupervisorPlanningError,
@@ -628,8 +678,6 @@ async def lifespan(app: FastAPI):
                     cancellation_reader=app_shell_store,
                     task_notifier=notify_task_update_with_string_state,
                 )
-
-            webhooks.bind_webhook_dependencies(create_webhook_transport)
 
             execution_facade = create_execution_facade(
                 room_center=room_center.room_center,
@@ -668,7 +716,7 @@ async def lifespan(app: FastAPI):
                 ]
 
             async def emit_room_processing_status(**kwargs):
-                return await emit_processing_status(
+                return await emit_execution_room_processing_status(
                     **kwargs,
                     run_lifecycle=run_lifecycle,
                     event_publisher=_delivery_deps.event_publisher,
@@ -676,6 +724,7 @@ async def lifespan(app: FastAPI):
                     client_request_id_resolver=app_shell_client_request_id_resolver,
                 )
 
+            webhooks.bind_webhook_dependencies(create_webhook_transport())
             bind_task_processing_status_emitter(emit_room_processing_status)
             room_runtime.bind_hitl_pending_checker(hitl_service.get_pending_requests)
             room_runtime.bind_active_run_reader(read_room_active_runs)
@@ -691,16 +740,6 @@ async def lifespan(app: FastAPI):
             app.state.execution_facade = execution_facade
             app.state.execution_deps = _execution_deps
 
-            context_memory_facade = create_context_memory_facade(
-                mongo=mongo_dal,
-                vector=vector_dal,
-                llm_provider=llm_provider,
-                room_history_reader=_room_deps.room_history_reader,
-                llm_config=ContextMemoryLLMConfig(
-                    turn_notes_model="context_memory_legacy_json_model",
-                    summary_model="context_memory_legacy_json_model",
-                ),
-            )
             if hasattr(app.state, "platform_facade_factory") and app.state.platform_facade_factory:
                 platform_facade = app.state.platform_facade_factory(
                     mongo_dal=mongo_dal,
@@ -748,7 +787,10 @@ async def lifespan(app: FastAPI):
             compaction_service.bind_room_memory_reader(context_memory_facade)
             compaction_service.bind_facade(context_memory_facade)
             room_memory_service.bind_facade(context_memory_facade)
-            room_runtime.bind_context_memory(_context_memory_deps.memory_manager)
+            room_runtime.bind_context_memory(
+                _context_memory_deps.memory_manager,
+                _context_memory_deps.context_memory_runtime,
+            )
         else:
             raise RuntimeError("MongoDAL ping failed after connect")
 
@@ -957,6 +999,7 @@ async def lifespan(app: FastAPI):
         from hub_runtime_bridge.adapters.legacy_failure import (
             RelayOfflineFailureAdapter,
         )
+        from hub_runtime_bridge.config import config_from_settings
         from hub_runtime_bridge.repository.mongo import HubMongoRepository
 
         _rmc = get_bound_room_message_center()
@@ -981,6 +1024,7 @@ async def lifespan(app: FastAPI):
                 app_shell_store,
                 sse_manager,
             ),
+            config=config_from_settings(settings),
         )
         app.state.relay_service = _relay_svc
         relay.bind_relay_dependencies(_relay_svc)

@@ -12,6 +12,7 @@ def dispatch_command_to_event(command: HubDispatchCommand) -> dict:
         "agent_id": command.agent_id,
         "local_agent_id": command.local_agent_id,
         "message": command.payload,
+        "task_id": command.task_id,
     }
 
 

@@ -1,4 +1,4 @@
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from common.dto import (
     AssembledContext,
@@ -36,4 +36,45 @@ class MemoryProjector(Protocol):
     async def run_compaction(self, room_id: str) -> CompactionResult: ...
 
 
-__all__ = ["ContextAssembler", "MemoryManager", "MemoryProjector"]
+@runtime_checkable
+class ContextMemoryRuntime(Protocol):
+    def assemble_supervisor_context_from_memory(
+        self,
+        room_memory_doc: Any,
+        current_task: str,
+        *,
+        agent_registry: list[dict] | None = None,
+        max_turns: int = 5,
+        memory_search_results: list | None = None,
+    ) -> AssembledContext: ...
+
+    def assemble_agent_execution_context_from_memory(
+        self,
+        room_memory_doc: Any,
+        current_task: str,
+        *,
+        agent_id: str | None = None,
+        agent_name: str | None = None,
+        room_awareness: str | None = None,
+        quoted_text: str | None = None,
+        agent_task: str | None = None,
+        include_system_instruction: bool = True,
+    ) -> AssembledContext: ...
+
+    async def legacy_search(
+        self,
+        query: str,
+        room_id: str,
+        user_id: str | None = None,
+        limit: int | None = None,
+    ) -> dict: ...
+
+    def get_budget_summary(self) -> dict[str, Any]: ...
+
+
+__all__ = [
+    "ContextAssembler",
+    "ContextMemoryRuntime",
+    "MemoryManager",
+    "MemoryProjector",
+]

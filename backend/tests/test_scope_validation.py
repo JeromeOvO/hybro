@@ -662,8 +662,7 @@ class TestAllAgentsPostPersistMessageId:
             lifecycle_message_id="msg-real-123",
             record_lifecycle=True,
             client_request_id=None,
-            details={"message": "Agent selection failed."},
-            error_message="Agent selection failed.",
+            details="Agent selection failed.",
         )
 
 

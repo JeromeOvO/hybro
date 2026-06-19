@@ -11,9 +11,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.params import Depends as DependsParam
 
+from agent.protocols import AgentGroupStoreCompatibility
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
-from common.protocols import AgentGroupStore
 from models.agent_group import (
     BUILTIN_GROUP_ALL_AGENTS,
     BUILTIN_GROUP_ROOM_TEAM,
@@ -21,16 +21,16 @@ from models.agent_group import (
 )
 
 router = APIRouter()
-agent_group_store: AgentGroupStore | None = None
+agent_group_store: AgentGroupStoreCompatibility | None = None
 
 
-def bind_agent_group_dependencies(store: AgentGroupStore) -> None:
+def bind_agent_group_dependencies(store: AgentGroupStoreCompatibility) -> None:
     global agent_group_store
 
     agent_group_store = store
 
 
-def get_agent_group_store() -> AgentGroupStore:
+def get_agent_group_store() -> AgentGroupStoreCompatibility:
     if agent_group_store is None:
         raise RuntimeError("Agent group database dependency has not been bound")
     return agent_group_store
@@ -60,7 +60,7 @@ def _owns_group(group: AgentGroup, user_id: str | None) -> bool:
 async def create_agent_group(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
-    db: AgentGroupStore = Depends(get_agent_group_store),
+    db: AgentGroupStoreCompatibility = Depends(get_agent_group_store),
 ):
     """
     Create a new agent group.
@@ -110,7 +110,7 @@ async def create_agent_group(
 async def list_agent_groups(
     owner_id: str | None = Query(default=None),
     user: ClerkUser = Depends(get_current_user),
-    db: AgentGroupStore = Depends(get_agent_group_store),
+    db: AgentGroupStoreCompatibility = Depends(get_agent_group_store),
 ):
     """
     List all agent groups for a user.
@@ -156,7 +156,7 @@ async def list_agent_groups(
 async def get_agent_group(
     group_id: str,
     user: ClerkUser = Depends(get_current_user),
-    db: AgentGroupStore = Depends(get_agent_group_store),
+    db: AgentGroupStoreCompatibility = Depends(get_agent_group_store),
 ):
     """
     Get a specific agent group by ID.
@@ -213,7 +213,7 @@ async def update_agent_group(
     group_id: str,
     request: Request,
     user: ClerkUser = Depends(get_current_user),
-    db: AgentGroupStore = Depends(get_agent_group_store),
+    db: AgentGroupStoreCompatibility = Depends(get_agent_group_store),
 ):
     """
     Update an agent group.
@@ -276,7 +276,7 @@ async def update_agent_group(
 async def delete_agent_group(
     group_id: str,
     user: ClerkUser = Depends(get_current_user),
-    db: AgentGroupStore = Depends(get_agent_group_store),
+    db: AgentGroupStoreCompatibility = Depends(get_agent_group_store),
 ):
     """
     Delete an agent group.

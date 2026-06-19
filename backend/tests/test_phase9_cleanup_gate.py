@@ -129,6 +129,18 @@ def _blocked_cleanup_paths(*, contract: str | None = None) -> set[str]:
     return paths
 
 
+def _blocked_cleanup_prefixes(*, contract: str) -> set[tuple[str, str]]:
+    prefixes: set[tuple[str, str]] = set()
+    for entry in _manifest().get("blocked_cleanup", []):
+        if entry.get("contract") != contract:
+            continue
+        path = entry.get("path")
+        prefix = entry.get("forbidden_prefix")
+        if isinstance(path, str) and isinstance(prefix, str):
+            prefixes.add((path, prefix))
+    return prefixes
+
+
 def _is_blocked(path: Path, blocked_paths: set[str]) -> bool:
     rel = path.as_posix()
     return any(
@@ -138,9 +150,26 @@ def _is_blocked(path: Path, blocked_paths: set[str]) -> bool:
 
 
 def _is_forbidden(module: str) -> bool:
+    return _forbidden_prefix(module, FORBIDDEN_PRODUCTION_IMPORT_PREFIXES) is not None
+
+
+def _forbidden_prefix(module: str, prefixes: tuple[str, ...]) -> str | None:
+    for prefix in prefixes:
+        if module == prefix or module.startswith(f"{prefix}."):
+            return prefix
+    return None
+
+
+def _is_forbidden_import_blocked(
+    path: Path,
+    module: str,
+    blocked_prefixes: set[tuple[str, str]],
+) -> bool:
+    rel = path.as_posix()
     return any(
-        module == prefix or module.startswith(f"{prefix}.")
-        for prefix in FORBIDDEN_PRODUCTION_IMPORT_PREFIXES
+        rel == blocked_path
+        and (module == forbidden_prefix or module.startswith(f"{forbidden_prefix}."))
+        for blocked_path, forbidden_prefix in blocked_prefixes
     )
 
 
@@ -155,11 +184,9 @@ def _production_python_files() -> list[Path]:
 
 def _import_violations() -> list[str]:
     violations: list[str] = []
-    blocked_paths = _blocked_cleanup_paths(contract="legacy_import_boundary")
+    blocked_prefixes = _blocked_cleanup_prefixes(contract="legacy_import_boundary")
     for path in _production_python_files():
         if path == Path("common/config/settings.py"):
-            continue
-        if _is_blocked(path, blocked_paths):
             continue
         tree = ast.parse(path.read_text(), filename=str(path))
         type_checking_lines: set[int] = set()
@@ -182,7 +209,11 @@ def _import_violations() -> list[str]:
             else:
                 continue
             for imported_name, module in names:
-                if _is_forbidden(module):
+                if _is_forbidden(module) and not _is_forbidden_import_blocked(
+                    path,
+                    module,
+                    blocked_prefixes,
+                ):
                     violations.append(f"{path}:{node.lineno}: {imported_name}")
     return violations
 
@@ -527,6 +558,55 @@ def test_no_production_imports_from_legacy_singletons():
     violations = _import_violations()
 
     assert not violations, "Legacy production imports remain:\n" + "\n".join(violations)
+
+
+def test_legacy_import_boundary_blockers_are_prefix_exact():
+    blocked = {("app_shell/example.py", "common.config.settings")}
+    path = Path("app_shell/example.py")
+
+    assert _is_forbidden_import_blocked(
+        path,
+        "common.config.settings",
+        blocked,
+    )
+    assert _is_forbidden_import_blocked(
+        path,
+        "common.config.settings.runtime",
+        blocked,
+    )
+    assert not _is_forbidden_import_blocked(path, "database.mongodb", blocked)
+    assert not _is_forbidden_import_blocked(path, "a2a.client", blocked)
+    assert not _is_forbidden_import_blocked(
+        Path("app_shell/other.py"),
+        "common.config.settings",
+        blocked,
+    )
+
+
+def test_legacy_import_boundary_blockers_are_exact_current_files():
+    bad: list[str] = []
+    for entry in _manifest().get("blocked_cleanup", []):
+        if entry.get("contract") != "legacy_import_boundary":
+            continue
+        path_value = entry.get("path")
+        prefix = entry.get("forbidden_prefix")
+        if not isinstance(path_value, str):
+            bad.append(f"{entry}: missing path")
+            continue
+        if not isinstance(prefix, str):
+            bad.append(f"{path_value}: missing forbidden_prefix")
+            continue
+        path = Path(path_value)
+        if not path.exists() or path.is_dir():
+            continue
+        modules = _import_modules_including_type_checking(path)
+        if not any(
+            module == prefix or module.startswith(f"{prefix}.")
+            for module in modules
+        ):
+            bad.append(f"{path}: missing live import for {prefix}")
+
+    assert not bad, "Legacy import blockers are stale:\n" + "\n".join(bad)
 
 
 def test_a2a_sdk_imports_are_confined_or_manifest_blocked():

@@ -165,6 +165,18 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 > must use string/domain-state ports, and the allowlist should shrink as A2A
 > protocol adapters are introduced.
 
+> **P3 app-shell thinning status (2026-06-17):** `app_shell` focus files are
+> fail-fast compatibility shims over module-owned facades, adapters, and focused
+> runtime ports. A2A SDK calls and response coercion live in `a2a_adapter`;
+> room CRUD/message behavior lives in Room; orchestration scheduling lives in
+> Execution; context assembly, legacy turn selection, and context metrics live
+> in Context & Memory; relay queues/liveness and legacy push/offline failure
+> handling live in HubRuntimeBridge; hub publish authorization adapters live in
+> HubRuntimeBridge; A2A task-tracking placeholder creation, tracked-send push
+> configuration, failure persistence, terminal response persistence, and HITL
+> reply task persistence live in Execution; object-storage behavior lives in
+> Platform/DAL.
+
 ### 3.4 Cross-Module Communication Rules
 
 | From | To | Mechanism | Notes |
@@ -2277,13 +2289,13 @@ class AgentService:
 | is_directly_callable (hub 502) | implicit in gateway_service | Agent | `facade.is_directly_callable()` |
 | Hub agent enrichment (is_hub_online) | mongodb._enrich_hub_fields | Agent + HubRuntimeBridge | Agent calls `HubLivenessReader` |
 | **Room & messages** | | | |
-| Room CRUD | `app_shell/room_runtime.py` | Room | `service/room_crud.py` |
-| Room membership (3 seed modes) | `app_shell/room_runtime.py` | Room | `service/room_membership.py` (handles MembershipSeed) |
-| User message persistence | `app_shell/room_runtime.py` | Room | `service/message_service.py` |
-| Agent message persistence | `app_shell/room_runtime.py` | Room | `service/message_service.py` |
-| Message graph | `app_shell/room_runtime.py` | Room | `repository/message_repo.py` |
+| Room CRUD | `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `room/repository/` |
+| Room membership (3 seed modes) | `app_shell/room_runtime.py` shim | Room | `room/facade.py` compatibility methods |
+| User message persistence | `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `MessageMongoRepository` |
+| Agent message persistence | `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `MessageMongoRepository` |
+| Message graph | `app_shell/room_runtime.py` shim | Room | `room/repository/` message queries |
 | **Context & Memory** | | | |
-| Context assembly | `app_shell/context_assembly_service.py` | Context & Memory | `service/context_assembly.py` |
+| Context assembly and legacy selection/metrics | `app_shell/context_assembly_service.py` shim | Context & Memory | `context_memory/facade.py`, `context_memory/assembly.py`, `context_memory/legacy_assembly.py` |
 | Memory compaction | `app_shell/compaction_service.py` | Context & Memory | `service/compaction.py` |
 | Memory search | `app_shell/memory_search_service.py` | Context & Memory | `service/memory_search.py` |
 | User memories | `app_shell/memory_service.py` | Context & Memory | `service/user_memory.py` |
@@ -2318,6 +2330,7 @@ class AgentService:
 | Hub relay | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_relay.py` |
 | Hub liveness | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_liveness.py` |
 | Hub connection | `api/hub.py` | HubRuntimeBridge | `service/hub_connection.py` |
+| Hub route lifecycle compatibility | `app_shell/relay_service.py` shim | HubRuntimeBridge | `adapters/legacy_lifecycle.py` |
 | Hub publish intake | `hub_runtime_bridge/service/hub_publish.py` | HubRuntimeBridge | `service/hub_publish.py` |
 | Offline queue | `hub_runtime_bridge/` | HubRuntimeBridge | `transport/offline_queue.py` |
 | Redis Streams relay | `app_shell/redis_runtime.py` | HubRuntimeBridge | `transport/relay_transport.py` |
@@ -2329,7 +2342,8 @@ class AgentService:
 | Embedding generation | `app_shell/openai_service.py`, memory/search adapters | LLM Gateway | `EmbeddingLLMService` + `gateway.py` |
 | Supervisor, summary, parsing, memory prompts | legacy app-shell prompt owners | LLM Gateway services | `llm_gateway/services/` |
 | **A2A Adapter** | | | |
-| A2A message send/stream | `app_shell/a2a_runtime.py` | A2A Adapter | `transport.py` |
+| A2A message send/stream | `app_shell/a2a_runtime.py` shim | A2A Adapter | `a2a_adapter/client_facade.py` |
+| A2A task tracking setup, tracked-send persistence, and HITL reply task persistence | `app_shell/a2a_runtime.py` shim | Execution | `execution/task_tracking.py` |
 | A2A card resolution | `common/client/card_resolver.py` | A2A Adapter | `card_resolver.py` |
 | A2A type mapping | scattered | A2A Adapter | `translators/` |
 | Push notification auth | `common/utils/push_notification_auth.py` | A2A Adapter | `push_notification.py` |
@@ -3058,3 +3072,4 @@ Current `_enrich_hub_fields` joins `agents × hubs` to set `hub_owner_id` and `i
 | 2026-05-17 | Phase 6 tracing uses contextvars/task names, not OpenTelemetry links | Implemented helper preserves explicit trace ids without synthesizing ids; OTel span links remain future work |
 | 2026-06-04 | Temporary raw-frame isolation removed from active Delivery architecture | Room SSE production emitters use typed `DeliveryEvent` DTOs translated by Delivery |
 | 2026-05-17 | Main app shell no longer owns concrete DAL or legacy SSE broker construction | `container.py` owns concrete DAL/Delivery wiring; health uses explicit Delivery KV/PubSub and legacy RedisService fields |
+| 2026-06-15 | API route owner protocols moved out of `app_shell.bound` | Route inventory now records common protocols for reusable contracts and module-owned `agent.protocols`, `room.protocols`, and `context_memory.protocols` compatibility contracts for legacy model-shaped routes; `app_shell.bound.py` was removed |

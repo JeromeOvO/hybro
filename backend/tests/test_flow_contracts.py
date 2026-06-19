@@ -268,18 +268,18 @@ class TestAgentLifecycleFlow:
         )
 
         mock_ac = MagicMock()
-        mock_ac.register_agent = AsyncMock(
+        mock_ac.register_agent_from_route = AsyncMock(
             return_value=AgentCenterResponse(
                 success=True, agent_id=agent_id, agent=mock_agent,
             )
         )
-        mock_ac.query_agent_by_agent_id = AsyncMock(
+        mock_ac.get_visible_agent_for_route = AsyncMock(
             return_value=AgentCenterResponse(success=True, agent=mock_agent)
         )
-        mock_ac.remove_agent = AsyncMock(
+        mock_ac.delete_agent_from_route = AsyncMock(
             return_value=AgentCenterResponse(success=True)
         )
-        mock_ac._mask_sensitive_information = MagicMock(side_effect=lambda r, _: r)
+        mock_ac.finalize_agent_response_for_route = MagicMock(side_effect=lambda r: r)
 
         mock_as = MagicMock()
         mock_as.get_agent_by_agent_id = AsyncMock(return_value=mock_agent)
@@ -300,19 +300,23 @@ class TestAgentLifecycleFlow:
                     assert reg_resp.success is True
                     assert reg_resp.agent_id == agent_id
 
-                    reg_call = mock_ac.register_agent.call_args[0][0]
-                    assert reg_call.provider_id == flow_user.user_id
+                    assert (
+                        mock_ac.register_agent_from_route.call_args.kwargs["provider_id"]
+                        == flow_user.user_id
+                    )
 
-                    # Step 2: Query (real endpoint constructs AgentCenterRequest)
+                    # Step 2: Query (real endpoint delegates visibility to adapter)
                     query_resp = await get_agent(agent_id, user=flow_user)
                     assert query_resp.success is True
                     assert query_resp.agent.agent_id == agent_id
 
-                    query_call = mock_ac.query_agent_by_agent_id.call_args[0][0]
-                    assert query_call.user_id == flow_user.user_id
+                    assert (
+                        mock_ac.get_visible_agent_for_route.call_args.kwargs["user_id"]
+                        == flow_user.user_id
+                    )
 
                     # Step 3: Delete (real endpoint verifies ownership,
-                    # then calls agent_center.remove_agent)
+                    # then calls agent_center.delete_agent_from_route)
                     req3 = MagicMock()
                     req3.json = AsyncMock(return_value={"agent_id": agent_id})
                     del_resp = await delete_agent(req3, flow_user)

@@ -132,10 +132,10 @@ class TestGetAgentByProvider:
             success=True,
             agents=[sample_agent],
         )
+        sample_agent.provider_name = "Test User"
         patch_agent_deps.get_agents_by_provider_id.return_value = expected_response
 
-        with patch("api.agent.resolve_provider_name", return_value="Test User"):
-            response = await get_agent_by_provider(mock_user)
+        response = await get_agent_by_provider(mock_user)
 
         assert response.agents[0].provider_name == "Test User"
 
@@ -154,8 +154,7 @@ class TestGetAgentByProvider:
         )
         patch_agent_deps.get_agents_by_provider_id.return_value = expected_response
 
-        with patch("api.agent.resolve_provider_name", return_value="Test User"):
-            response = await get_agent_by_provider(mock_user)
+        response = await get_agent_by_provider(mock_user)
 
         assert response.agents[0].provider_name is None
 
@@ -301,25 +300,28 @@ class TestDeleteAgent:
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_raises_404_when_agent_not_found(self, mock_user):
+    async def test_raises_404_when_agent_not_found(self, mock_user, patch_agent_deps):
         """Should raise 404 when agent doesn't exist."""
         mock_request = MagicMock()
         mock_request.json = AsyncMock(return_value={
             "agent_id": "nonexistent-agent",
         })
         
-        mock_agent_service = MagicMock()
-        mock_agent_service.get_agent_by_agent_id = AsyncMock(return_value=None)
+        patch_agent_deps.delete_agent_from_route.side_effect = None
+        patch_agent_deps.delete_agent_from_route.return_value = AgentCenterResponse(
+            success=False,
+            error="Agent not found",
+            status_code=404,
+        )
         
-        with patch(PATCH["agent.agent_service"], mock_agent_service):
-            with pytest.raises(HTTPException) as exc_info:
-                await delete_agent(mock_request, mock_user)
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_agent(mock_request, mock_user)
         
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
     async def test_raises_403_when_not_owner(
-        self, mock_user_2, sample_agent
+        self, mock_user_2, sample_agent, patch_agent_deps
     ):
         """Should raise 403 when user is not the agent owner."""
         mock_request = MagicMock()
@@ -327,14 +329,15 @@ class TestDeleteAgent:
             "agent_id": sample_agent.agent_id,
         })
         
-        mock_agent_service = MagicMock()
-        mock_agent_service.get_agent_by_agent_id = AsyncMock(
-            return_value=sample_agent
+        patch_agent_deps.delete_agent_from_route.side_effect = None
+        patch_agent_deps.delete_agent_from_route.return_value = AgentCenterResponse(
+            success=False,
+            error="You do not have permission to delete this agent",
+            status_code=403,
         )
         
-        with patch(PATCH["agent.agent_service"], mock_agent_service):
-            with pytest.raises(HTTPException) as exc_info:
-                await delete_agent(mock_request, mock_user_2)
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_agent(mock_request, mock_user_2)
         
         assert exc_info.value.status_code == 403
 
@@ -420,63 +423,60 @@ class TestUpdateAgent:
 
     @pytest.mark.asyncio
     async def test_raises_400_for_invalid_rate_limit(
-        self, mock_user, sample_agent
+        self, mock_user, sample_agent, patch_agent_deps
     ):
         """Should raise 400 when rate limit is less than 1."""
         request_body = AgentSettingsUpdateRequest(
             rate_limit_per_user_per_hour=0,  # Invalid: must be >= 1 or None
         )
         
-        mock_agent_service = MagicMock()
-        mock_agent_service.get_agent_by_agent_id = AsyncMock(
-            return_value=sample_agent
+        patch_agent_deps.update_agent_settings_from_route.side_effect = None
+        patch_agent_deps.update_agent_settings_from_route.return_value = AgentCenterResponse(
+            success=False,
+            error="rate_limit_per_user_per_hour must be null or >= 1",
+            status_code=400,
         )
         
-        with patch(PATCH["agent.agent_service"], mock_agent_service):
-            with pytest.raises(HTTPException) as exc_info:
-                await update_agent(
-                    sample_agent.agent_id, request_body, mock_user
-                )
+        with pytest.raises(HTTPException) as exc_info:
+            await update_agent(sample_agent.agent_id, request_body, mock_user)
         
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_raises_400_when_no_fields_to_update(
-        self, mock_user, sample_agent
+        self, mock_user, sample_agent, patch_agent_deps
     ):
         """Should raise 400 when no valid fields are provided."""
         request_body = AgentSettingsUpdateRequest()  # Empty update
         
-        mock_agent_service = MagicMock()
-        mock_agent_service.get_agent_by_agent_id = AsyncMock(
-            return_value=sample_agent
+        patch_agent_deps.update_agent_settings_from_route.side_effect = None
+        patch_agent_deps.update_agent_settings_from_route.return_value = AgentCenterResponse(
+            success=False,
+            error="No valid fields to update",
+            status_code=400,
         )
         
-        with patch(PATCH["agent.agent_service"], mock_agent_service):
-            with pytest.raises(HTTPException) as exc_info:
-                await update_agent(
-                    sample_agent.agent_id, request_body, mock_user
-                )
+        with pytest.raises(HTTPException) as exc_info:
+            await update_agent(sample_agent.agent_id, request_body, mock_user)
         
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_raises_403_when_not_owner(
-        self, mock_user_2, sample_agent
+        self, mock_user_2, sample_agent, patch_agent_deps
     ):
         """Should raise 403 when user is not the agent owner."""
         request_body = AgentSettingsUpdateRequest(is_public=False)
         
-        mock_agent_service = MagicMock()
-        mock_agent_service.get_agent_by_agent_id = AsyncMock(
-            return_value=sample_agent
+        patch_agent_deps.update_agent_settings_from_route.side_effect = None
+        patch_agent_deps.update_agent_settings_from_route.return_value = AgentCenterResponse(
+            success=False,
+            error="You do not have permission to update this agent",
+            status_code=403,
         )
         
-        with patch(PATCH["agent.agent_service"], mock_agent_service):
-            with pytest.raises(HTTPException) as exc_info:
-                await update_agent(
-                    sample_agent.agent_id, request_body, mock_user_2
-                )
+        with pytest.raises(HTTPException) as exc_info:
+            await update_agent(sample_agent.agent_id, request_body, mock_user_2)
         
         assert exc_info.value.status_code == 403
 

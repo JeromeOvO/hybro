@@ -149,3 +149,65 @@ async def emit_processing_status(
         )
     )
     return payload
+
+
+def _room_processing_status_details(
+    details: dict[str, Any] | str | None,
+    error_message: str | None,
+) -> dict[str, Any] | None:
+    if isinstance(details, dict):
+        return details
+    if isinstance(details, str):
+        return {"message": details}
+    if error_message:
+        return {"message": error_message}
+    return None
+
+
+def _room_processing_status_error_message(
+    status: ProcessingStatusLike,
+    details: dict[str, Any] | str | None,
+    error_message: str | None,
+) -> str | None:
+    if error_message:
+        return error_message
+    status_value = _processing_status_value(status)
+    if isinstance(details, str) and status_value in {"failed", "canceled"}:
+        return details
+    return None
+
+
+async def emit_room_processing_status(
+    *,
+    room_id: str,
+    status: ProcessingStatusLike,
+    message_id: str | None,
+    run_lifecycle: RunLifecyclePort,
+    event_publisher: EventPublisher,
+    run_event_enabled: Callable[[], bool],
+    client_request_id_resolver: ClientRequestIdResolver,
+    lifecycle_message_id: str | None = None,
+    record_lifecycle: bool = True,
+    client_request_id: str | None = None,
+    details: dict[str, Any] | str | None = None,
+    error_message: str | None = None,
+    agents: list[dict] | None = None,
+) -> dict[str, Any] | None:
+    normalized_error = _room_processing_status_error_message(
+        status, details, error_message
+    )
+    return await emit_processing_status(
+        room_id=room_id,
+        status=status,
+        message_id=message_id,
+        run_lifecycle=run_lifecycle,
+        event_publisher=event_publisher,
+        run_event_enabled=run_event_enabled,
+        client_request_id_resolver=client_request_id_resolver,
+        lifecycle_message_id=lifecycle_message_id,
+        record_lifecycle=record_lifecycle,
+        client_request_id=client_request_id,
+        details=_room_processing_status_details(details, normalized_error),
+        error_message=normalized_error,
+        agents=agents,
+    )

@@ -1,9 +1,17 @@
-from common.protocols.a2a_protocols import AgentCardResolver, AgentTransport
+from common.protocols.a2a_protocols import (
+    A2ATaskStatusMessage,
+    A2ATaskStatusReader,
+    AgentCardResolver,
+    AgentTransport,
+    RoomRouteReader,
+    RoomRouteRecord,
+    SSEStateReader,
+    SSEUserMessageRecord,
+)
 from common.protocols.agent_protocols import (
     AgentAvatarManager,
     AgentCallCounter,
     AgentExclusionReader,
-    AgentGroupStore,
     AgentManagement,
     AgentMatcher,
     AgentMessageMatcher,
@@ -13,6 +21,7 @@ from common.protocols.agent_protocols import (
 )
 from common.protocols.context_memory_protocols import (
     ContextAssembler,
+    ContextMemoryRuntime,
     MemoryManager,
     MemoryProjector,
 )
@@ -29,12 +38,19 @@ from common.protocols.dal_protocols import (
     RedisStreams,
     VectorDAL,
 )
-from common.protocols.delivery_protocols import EventPublisher, SSETransport
+from common.protocols.delivery_protocols import (
+    EventPublisher,
+    SSEConnectionLike,
+    SSERouteTransport,
+    SSETransport,
+)
 from common.protocols.execution_protocols import (
     ExecutionEngine,
     HITLManager,
     HubAgentResponseSink,
+    RoomActiveRunReader,
     RoomDistributedLock,
+    WebhookReceiver,
 )
 from common.protocols.hub_protocols import (
     HubDispatchPolicy,
@@ -46,6 +62,7 @@ from common.protocols.hub_protocols import (
     HubStatusReader,
     OfflineHubFailurePort,
 )
+from common.protocols.json_types import JsonMap, JsonScalar, JsonValue
 from common.protocols.llm_protocols import (
     EmbeddingServiceProtocol,
     LLMEmbeddingGateway,
@@ -89,7 +106,6 @@ from common.protocols.repository_protocols import (
     RunRepository,
 )
 from common.protocols.room_protocols import (
-    A2ATaskReader,
     HubPublishAuthorizationReader,
     HubPublishLineageReader,
     MessageCancellationReader,
@@ -108,10 +124,27 @@ from common.protocols.runtime_store_protocols import (
     RuntimeMessageStore,
     RuntimeTaskLifecycleStore,
 )
+from common.protocols.viewset_protocols import (
+    AgentVectorIndexWriter,
+    RoutePayload,
+    VectorIndexResult,
+    ViewSetDatabase,
+    ViewSetDatabaseClient,
+    ViewSetDatabaseProvider,
+    ViewSetFilterParams,
+    ViewSetOperation,
+    ViewSetPaginationParams,
+    ViewSetRepository,
+    ViewSetRepositoryFactory,
+    ViewSetRepositoryProvider,
+    ViewSetResult,
+    ViewSetSessionContext,
+    ViewSetTransaction,
+)
 
 __all__ = [
     "AgentCallCounter",
-    "AgentGroupStore",
+    "AgentVectorIndexWriter",
     "AgentAvatarManager",
     "AgentCardResolver",
     "AgentExclusionReader",
@@ -128,6 +161,8 @@ __all__ = [
     "APIKeyRecord",
     "APIKeyStore",
     "APIKeyValidationStore",
+    "A2ATaskStatusMessage",
+    "A2ATaskStatusReader",
     "AttachmentCleanupPort",
     "AttachmentMetadataReader",
     "ContextAssembler",
@@ -155,6 +190,9 @@ __all__ = [
     "HubPublishAuthorizationReader",
     "HubPublishLineageReader",
     "IndexRegistry",
+    "JsonMap",
+    "JsonScalar",
+    "JsonValue",
     "EmbeddingServiceProtocol",
     "LLMEmbeddingGateway",
     "LLMGateway",
@@ -166,6 +204,7 @@ __all__ = [
     "LLMTextGateway",
     "LeaderElector",
     "MongoChangeStream",
+    "ContextMemoryRuntime",
     "MemoryManager",
     "MessageCancellationReader",
     "MemoryProjector",
@@ -183,8 +222,8 @@ __all__ = [
     "RedisPubSub",
     "RedisStreams",
     "RequiredEmbeddingServiceProtocol",
+    "RoomActiveRunReader",
     "RoomHistoryReader",
-    "A2ATaskReader",
     "RoomDistributedLock",
     "RoomAgentTaskTracker",
     "RoomManagement",
@@ -193,6 +232,7 @@ __all__ = [
     "RoomOwnershipReader",
     "RoomRegistry",
     "RoomRepository",
+    "RoomRouteRecord",
     "RunEventRepository",
     "RunRepository",
     "RuntimeAgentRoomStore",
@@ -200,6 +240,26 @@ __all__ = [
     "RuntimeMemoryStore",
     "RuntimeMessageStore",
     "RuntimeTaskLifecycleStore",
+    "RoutePayload",
+    "RoomRouteReader",
+    "SSEConnectionLike",
+    "SSEStateReader",
+    "SSEUserMessageRecord",
+    "SSERouteTransport",
     "SSETransport",
     "VectorDAL",
+    "VectorIndexResult",
+    "ViewSetDatabase",
+    "ViewSetDatabaseClient",
+    "ViewSetDatabaseProvider",
+    "ViewSetFilterParams",
+    "ViewSetOperation",
+    "ViewSetPaginationParams",
+    "ViewSetRepository",
+    "ViewSetRepositoryFactory",
+    "ViewSetRepositoryProvider",
+    "ViewSetResult",
+    "ViewSetSessionContext",
+    "ViewSetTransaction",
+    "WebhookReceiver",
 ]

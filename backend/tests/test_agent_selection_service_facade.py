@@ -5,13 +5,14 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from a2a.types import AgentCapabilities, AgentCard
 
+from agent.protocols import AgentSuggestion
 from app_shell.agent_matcher import MatchedAgent, MatchResult
 from app_shell.agent_selection_service import (
     AgentSelectionResult,
     AgentSelectionService,
     RoutingStrategy,
 )
-from app_shell.room_runtime import DispatchStrategy, resolve_strategy
+from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
 from models.agent import Agent, AgentStatus
 from models.room import MessageContent, RoomUserMessage, UserAttachment
 
@@ -384,15 +385,11 @@ async def test_suggest_agents_uses_facade(mock_matched_agents):
             top_k=3,
         )
 
-        # Verify result structure
-        assert "routing_strategy" in result
-        assert "reasoning" in result
-        assert "needs_debate" in result
-        assert "suggested_agents" in result
-
-        assert result["routing_strategy"] == "parallel"  # 2 agents
-        assert result["needs_debate"] is False
-        assert len(result["suggested_agents"]) == 2
-        assert result["suggested_agents"][0]["agent_id"] == "agent-0"
-        assert result["suggested_agents"][0]["name"] == "Agent 0"
-        assert "reason" in result["suggested_agents"][0]
+        assert result.metadata["routing_strategy"] == "parallel"  # 2 agents
+        assert result.metadata["reasoning"] == result.analysis
+        assert result.metadata["needs_debate"] is False
+        assert len(result.suggested_agents) == 2
+        assert isinstance(result.suggested_agents[0], AgentSuggestion)
+        assert result.suggested_agents[0].agent_id == "agent-0"
+        assert result.suggested_agents[0].name == "Agent 0"
+        assert result.suggested_agents[0].reason

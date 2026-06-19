@@ -13,9 +13,9 @@ from execution.dispatch.transports.base import AgentTransport
 from models.processing import ProcessingResult, ProcessingStatus
 
 if TYPE_CHECKING:
-    from app_shell.delivery_runtime import SSEManager
     from execution.dispatch.dispatch_middleware import DispatchContext
     from execution.dispatch.response_handler import AgentResponseHandler
+    from execution.ports import SSEDeliveryPort
     from models.room import RoomAgentMessage
 
 logger = get_logger(__name__)
@@ -46,7 +46,7 @@ class RelayTransport(AgentTransport):
         response_handler: AgentResponseHandler,
         relay_service: Any,
         task_tracker: RelayTaskTracker,
-        sse_manager: SSEManager,
+        sse_manager: SSEDeliveryPort,
         call_counter: RelayAgentCallCounter | None = None,
         ownership_store: Any | None = None,
         ownership_lease_maintainer: Any | None = None,

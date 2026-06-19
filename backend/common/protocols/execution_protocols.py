@@ -1,4 +1,4 @@
-from typing import Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from common.dto import (
     ExecutionAck,
@@ -8,6 +8,7 @@ from common.dto import (
     HubAgentResponseInternal,
     RunInfo,
 )
+from common.protocols.json_types import JsonValue
 
 
 @runtime_checkable
@@ -78,9 +79,23 @@ class RoomDistributedLock(Protocol):
     async def release(self, room_id: str, owner: str) -> None: ...
 
 
+@runtime_checkable
+class RoomActiveRunReader(Protocol):
+    async def __call__(self, room_id: str) -> list[dict[str, Any]]: ...
+
+
+@runtime_checkable
+class WebhookReceiver(Protocol):
+    async def handle_webhook(
+        self, message_id: str, payload: dict[str, JsonValue], token: str
+    ) -> dict[str, JsonValue]: ...
+
+
 __all__ = [
     "ExecutionEngine",
     "HITLManager",
     "HubAgentResponseSink",
+    "RoomActiveRunReader",
     "RoomDistributedLock",
+    "WebhookReceiver",
 ]

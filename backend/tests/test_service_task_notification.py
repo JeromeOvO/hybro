@@ -97,11 +97,17 @@ def _setup_db_mock(db, *, msg=None, idempotency_return=True, idempotency_error=F
 def _setup_notif_mock(notif):
     """Ensure notification_service methods are AsyncMock."""
     notif.send_task_update = AsyncMock()
+    from execution.dispatch import task_notifications
+
+    task_notifications._notification_service = notif
 
 
 def _setup_sse_mock(sse):
     """Ensure sse_manager methods are AsyncMock."""
     sse.send_processing_status = AsyncMock()
+    from execution.dispatch import task_notifications
+
+    task_notifications._sse_manager = sse
 
 
 CALL_KWARGS = dict(

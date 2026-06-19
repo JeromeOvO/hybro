@@ -246,6 +246,9 @@ class ContextMemoryFacade:
             include_system_instruction=include_system_instruction,
         )
 
+    def get_budget_summary(self) -> dict[str, int]:
+        return self.token_budget.get_budget_summary()
+
     async def legacy_create_room_memory(self, memory_doc: dict) -> dict | None:
         doc = dict(memory_doc)
         doc.setdefault("memory_id", self.id_factory())

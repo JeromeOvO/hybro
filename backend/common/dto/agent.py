@@ -1,6 +1,4 @@
-from typing import Any
-
-from pydantic import Field
+from pydantic import Field, JsonValue
 
 from common.dto.base import FrozenDTO
 
@@ -21,7 +19,7 @@ class AgentInfo(FrozenDTO):
     rate_limit_per_user_per_hour: int | None = None
     rate_limit_system_per_hour: int | None = None
     call_count: int = 0
-    raw_card: dict[str, Any] = Field(default_factory=dict)
+    raw_card: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class AgentCardSnapshot(FrozenDTO):
@@ -30,7 +28,7 @@ class AgentCardSnapshot(FrozenDTO):
     name: str | None = None
     description: str | None = None
     capabilities: list[str] = Field(default_factory=list)
-    raw_card: dict[str, Any] = Field(default_factory=dict)
+    raw_card: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class AgentMatchResult(FrozenDTO):
@@ -46,7 +44,7 @@ class HubAgentDescriptor(FrozenDTO):
     name: str | None = None
     url: str | None = None
     capabilities: list[str] = Field(default_factory=list)
-    raw_card: dict[str, Any] = Field(default_factory=dict)
+    raw_card: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class SyncedHubAgent(FrozenDTO):

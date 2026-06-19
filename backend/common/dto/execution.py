@@ -1,8 +1,8 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, JsonValue, model_validator
 
 from common.dto.base import FrozenDTO
 
@@ -20,9 +20,9 @@ class ExecutionRequest(FrozenDTO):
     room_id: str
     sender_id: str
     sender_name: str | None = None
-    message: dict[str, Any] | None = None
+    message: dict[str, JsonValue] | None = None
     message_text: str | None = None
-    attachments: list[dict[str, Any]] | None = None
+    attachments: list[dict[str, JsonValue]] | None = None
     inline_file_ids: list[str] | None = None
     target_agent_ids: list[str] | None = None
     target_group: str | None = None
@@ -39,7 +39,7 @@ class ExecutionResult(FrozenDTO):
     run_id: str | None = None
     message_id: str | None = None
     error: str | None = None
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class WorkflowState(FrozenDTO):
@@ -48,7 +48,7 @@ class WorkflowState(FrozenDTO):
     state: str
     updated_at: datetime
     current_agent_id: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class ExecutionAck(FrozenDTO):
@@ -57,9 +57,9 @@ class ExecutionAck(FrozenDTO):
     dispatch_root_message_id: str | None = None
     user_id: str | None = None
     user_name: str | None = None
-    message: dict[str, Any] | None = None
-    message_list: list[dict[str, Any]] | None = None
-    scope_resolution_error: dict[str, Any] | None = None
+    message: dict[str, JsonValue] | None = None
+    message_list: list[dict[str, JsonValue]] | None = None
+    scope_resolution_error: dict[str, JsonValue] | None = None
     success: bool = True
     error: str | None = None
     status_code: int = 200
@@ -143,7 +143,7 @@ class AgentEvent(FrozenDTO):
     agent_id: str
     message_id: str
     event_type: Literal["partial", "final", "status_update", "error", "input_required"]
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, JsonValue] = Field(default_factory=dict)
     hub_id: str | None = None
 
 

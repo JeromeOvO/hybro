@@ -45,14 +45,16 @@ from models.supervisor import (
 )
 
 if TYPE_CHECKING:
-    from app_shell.delivery_runtime import SSEManager
-    from app_shell.memory_service import RoomMemoryService
-    from app_shell.rate_limit_service import RateLimitService
-    from app_shell.room_coordinator_service import RoomCoordinatorService
-    from app_shell.room_runtime import RoomServices
     from execution.dispatch.agent_dispatcher import AgentDispatcher
     from execution.dispatch.agent_message_processor import AgentMessageProcessor
     from execution.orchestration.room_supervisor_service import RoomSupervisorService
+    from execution.ports import (
+        RateLimitPort,
+        RoomCoordinatorPort,
+        RoomMemoryPort,
+        RoomRuntimePort,
+        SSEDeliveryPort,
+    )
     from execution.state.task_state_manager import TaskStateManager
 
 logger = get_logger(__name__)
@@ -74,15 +76,15 @@ class SupervisorExecutor:
         self,
         *,
         supervisor_service: RoomSupervisorService,
-        room_services: RoomServices,
+        room_services: RoomRuntimePort,
         tsm: TaskStateManager,
-        sse_manager: SSEManager,
+        sse_manager: SSEDeliveryPort,
         store,
-        room_memory_service: RoomMemoryService,
-        rate_limit_service: RateLimitService,
+        room_memory_service: RoomMemoryPort,
+        rate_limit_service: RateLimitPort,
         agent_dispatcher: AgentDispatcher,
         agent_message_processor: AgentMessageProcessor,
-        room_coordinator_service: RoomCoordinatorService,
+        room_coordinator_service: RoomCoordinatorPort,
         slot_lifecycle=None,
         hitl_coordinator=None,
         debate_rounds: int = 2,
@@ -1017,6 +1019,7 @@ class SupervisorExecutor:
                                 await self.sse_manager.send_task_update(
                                     room_id=room_id,
                                     message_id=trajectory.system_agent_message_id,
+                                    status="working",
                                     task_content="Summarizing agent responses\u2026",
                                     client_request_id=client_req_id,
                                 )

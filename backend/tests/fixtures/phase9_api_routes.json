@@ -16,7 +16,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "common.protocols.A2ATaskReader",
+    "owning_protocol": "common.protocols.A2ATaskStatusReader",
     "path": "/api/v1/a2a-tasks/{message_id}",
     "response_class": null,
     "response_model": "dict",
@@ -41,14 +41,14 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.AgentCapabilityIssueStore",
+    "owning_protocol": "agent.protocols.AgentCapabilityIssueStore",
     "path": "/api/v1/agent/capability-issues/{issue_id}/resolve",
     "response_class": null,
     "response_model": null,
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.AgentLookup"
+      "common.protocols.AgentRegistry"
     ]
   },
   {
@@ -57,7 +57,6 @@
     ],
     "dependencies": [
       "get_agent_center",
-      "get_agent_service",
       "get_current_user"
     ],
     "methods": [
@@ -68,15 +67,12 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/deleteAgent",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "app_shell.bound.AgentLookup"
-    ]
+    "streaming_response": null
   },
   {
     "auth_dependencies": [
@@ -94,7 +90,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/getAgent/me",
     "response_class": null,
     "response_model": null,
@@ -119,14 +115,14 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/getAgent/{agent_id}",
     "response_class": null,
     "response_model": null,
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.AgentLivenessChecker"
+      "agent.protocols.AgentLivenessChecker"
     ]
   },
   {
@@ -142,7 +138,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/getAgentCardFromUrl",
     "response_class": null,
     "response_model": null,
@@ -165,7 +161,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/getAgentListWithConditions",
     "response_class": null,
     "response_model": null,
@@ -188,7 +184,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/getAllActiveAgents",
     "response_class": null,
     "response_model": null,
@@ -211,7 +207,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/getAllAgents",
     "response_class": null,
     "response_model": null,
@@ -234,7 +230,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/registerAgent",
     "response_class": null,
     "response_model": null,
@@ -247,7 +243,6 @@
     ],
     "dependencies": [
       "get_agent_center",
-      "get_agent_service",
       "get_current_user"
     ],
     "methods": [
@@ -259,15 +254,12 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.AgentCenterRouteOwner",
+    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/updateAgent/{agent_id}",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "app_shell.bound.AgentLookup"
-    ]
+    "streaming_response": null
   },
   {
     "auth_dependencies": [
@@ -294,7 +286,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.AgentLookup"
+      "common.protocols.AgentRegistry"
     ]
   },
   {
@@ -315,14 +307,14 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.AgentCapabilityIssueStore",
+    "owning_protocol": "agent.protocols.AgentCapabilityIssueStore",
     "path": "/api/v1/agent/{agent_id}/capability-issues",
     "response_class": null,
     "response_model": null,
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.AgentLookup"
+      "common.protocols.AgentRegistry"
     ]
   },
   {
@@ -343,14 +335,14 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.AgentCapabilityIssueStore",
+    "owning_protocol": "agent.protocols.AgentCapabilityIssueStore",
     "path": "/api/v1/agent/{agent_id}/capability-issues/resolve-all",
     "response_class": null,
     "response_model": null,
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "app_shell.bound.AgentLookup"
+      "common.protocols.AgentRegistry"
     ]
   },
   {
@@ -370,7 +362,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "common.protocols.AgentGroupStore",
+    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
     "path": "/api/v1/agentGroups",
     "response_class": null,
     "response_model": null,
@@ -393,7 +385,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "common.protocols.AgentGroupStore",
+    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
     "path": "/api/v1/agentGroups",
     "response_class": null,
     "response_model": null,
@@ -417,7 +409,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "common.protocols.AgentGroupStore",
+    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
     "path": "/api/v1/agentGroups/{group_id}",
     "response_class": null,
     "response_model": null,
@@ -441,7 +433,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "common.protocols.AgentGroupStore",
+    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
     "path": "/api/v1/agentGroups/{group_id}",
     "response_class": null,
     "response_model": null,
@@ -465,7 +457,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "common.protocols.AgentGroupStore",
+    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
     "path": "/api/v1/agentGroups/{group_id}",
     "response_class": null,
     "response_model": null,
@@ -489,7 +481,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.ViewSetRepository",
+    "owning_protocol": "common.protocols.ViewSetRepository",
     "path": "/api/v1/agents",
     "response_class": null,
     "response_model": "PaginatedResponse[AgentResponse]",
@@ -513,7 +505,7 @@
       "201",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.ViewSetRepository",
+    "owning_protocol": "common.protocols.ViewSetRepository",
     "path": "/api/v1/agents",
     "response_class": null,
     "response_model": "AgentResponse",
@@ -521,7 +513,7 @@
     "streaming_response": null,
     "supporting_protocols": [
       "common.protocols.EmbeddingServiceProtocol",
-      "app_shell.bound.VectorIndex"
+      "common.protocols.AgentVectorIndexWriter"
     ]
   },
   {
@@ -541,15 +533,14 @@
       "204",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.ViewSetRepository",
+    "owning_protocol": "common.protocols.ViewSetRepository",
     "path": "/api/v1/agents/{item_id}",
     "response_class": null,
     "response_model": null,
     "status_code": 204,
     "streaming_response": null,
     "supporting_protocols": [
-      "common.protocols.EmbeddingServiceProtocol",
-      "app_shell.bound.VectorIndex"
+      "common.protocols.AgentVectorIndexWriter"
     ]
   },
   {
@@ -569,7 +560,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.ViewSetRepository",
+    "owning_protocol": "common.protocols.ViewSetRepository",
     "path": "/api/v1/agents/{item_id}",
     "response_class": null,
     "response_model": "AgentResponse",
@@ -593,7 +584,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.ViewSetRepository",
+    "owning_protocol": "common.protocols.ViewSetRepository",
     "path": "/api/v1/agents/{item_id}",
     "response_class": null,
     "response_model": "AgentResponse",
@@ -601,7 +592,7 @@
     "streaming_response": null,
     "supporting_protocols": [
       "common.protocols.EmbeddingServiceProtocol",
-      "app_shell.bound.VectorIndex"
+      "common.protocols.AgentVectorIndexWriter"
     ]
   },
   {
@@ -621,7 +612,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.ViewSetRepository",
+    "owning_protocol": "common.protocols.ViewSetRepository",
     "path": "/api/v1/agents/{item_id}",
     "response_class": null,
     "response_model": "AgentResponse",
@@ -629,7 +620,7 @@
     "streaming_response": null,
     "supporting_protocols": [
       "common.protocols.EmbeddingServiceProtocol",
-      "app_shell.bound.VectorIndex"
+      "common.protocols.AgentVectorIndexWriter"
     ]
   },
   {
@@ -928,7 +919,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.InspectionCenter",
+    "owning_protocol": "agent.protocols.AgentInspection",
     "path": "/api/v1/inspectionCenter/inspectA2AConnection",
     "response_class": null,
     "response_model": null,
@@ -951,7 +942,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.InspectionCenter",
+    "owning_protocol": "agent.protocols.AgentInspection",
     "path": "/api/v1/inspectionCenter/inspectAgentCard",
     "response_class": null,
     "response_model": null,
@@ -974,7 +965,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.LegacyMemoryCenter",
+    "owning_protocol": "context_memory.protocols.LegacyChatContextAPI",
     "path": "/api/v1/memoryCenter/addChatContext",
     "response_class": null,
     "response_model": null,
@@ -997,7 +988,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.LegacyMemoryCenter",
+    "owning_protocol": "context_memory.protocols.LegacyChatContextAPI",
     "path": "/api/v1/memoryCenter/deleteChatContextBySessionId",
     "response_class": null,
     "response_model": null,
@@ -1020,7 +1011,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.LegacyMemoryCenter",
+    "owning_protocol": "context_memory.protocols.LegacyChatContextAPI",
     "path": "/api/v1/memoryCenter/getChatContextBySessionId",
     "response_class": null,
     "response_model": null,
@@ -1043,7 +1034,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.LegacyMemoryCenter",
+    "owning_protocol": "context_memory.protocols.LegacyChatContextAPI",
     "path": "/api/v1/memoryCenter/updateChatContextBySessionId",
     "response_class": null,
     "response_model": null,
@@ -1205,7 +1196,8 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "methods": [
       "POST"
@@ -1215,7 +1207,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/createNewRoom",
     "response_class": null,
     "response_model": null,
@@ -1227,7 +1219,8 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "methods": [
       "POST"
@@ -1237,19 +1230,24 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/inquiryActiveRuns",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.ExecutionEngine",
+      "common.protocols.RoomRouteReader"
+    ]
   },
   {
     "auth_dependencies": [
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "methods": [
       "POST"
@@ -1259,19 +1257,23 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/inquiryRoomMessagesByRoomId",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.RoomRouteReader"
+    ]
   },
   {
     "auth_dependencies": [
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "methods": [
       "POST"
@@ -1281,19 +1283,23 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/inquiryRoomSetting",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.RoomRouteReader"
+    ]
   },
   {
     "auth_dependencies": [
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "methods": [
       "POST"
@@ -1303,7 +1309,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/inquiryRoomsByRoomOwnerId",
     "response_class": null,
     "response_model": null,
@@ -1332,7 +1338,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "common.protocols.A2ATaskReader"
+      "common.protocols.RoomRouteReader"
     ]
   },
   {
@@ -1351,7 +1357,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.AgentSelectionSuggester",
+    "owning_protocol": "agent.protocols.AgentSuggestionService",
     "path": "/api/v1/roomCenter/suggestAgents",
     "response_class": null,
     "response_model": null,
@@ -1363,7 +1369,8 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "methods": [
       "POST"
@@ -1373,19 +1380,23 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/updateRoomAgentSet",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.RoomRouteReader"
+    ]
   },
   {
     "auth_dependencies": [
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "methods": [
       "POST"
@@ -1395,19 +1406,23 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/updateRoomExtendInfo",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.RoomRouteReader"
+    ]
   },
   {
     "auth_dependencies": [
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "methods": [
       "POST"
@@ -1417,12 +1432,15 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.bound.RoomCenterRouteOwner",
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/updateRoomName",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.RoomRouteReader"
+    ]
   },
   {
     "auth_dependencies": [
@@ -1441,7 +1459,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "common.protocols.A2ATaskReader",
+    "owning_protocol": "common.protocols.A2ATaskStatusReader",
     "path": "/api/v1/rooms/{room_id}/a2a-tasks",
     "response_class": null,
     "response_model": "dict",
@@ -1551,7 +1569,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "common.protocols.A2ATaskReader"
+      "common.protocols.SSEStateReader"
     ]
   },
   {
@@ -1572,14 +1590,14 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.SSEManagerRouteOwner",
+    "owning_protocol": "common.protocols.SSERouteTransport",
     "path": "/api/v1/sse/room/{room_id}/status",
     "response_class": null,
     "response_model": null,
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "common.protocols.A2ATaskReader"
+      "common.protocols.SSEStateReader"
     ]
   },
   {
@@ -1600,7 +1618,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.SSEManagerRouteOwner",
+    "owning_protocol": "common.protocols.SSERouteTransport",
     "path": "/api/v1/sse/room/{room_id}/stream",
     "response_class": null,
     "response_model": null,
@@ -1615,7 +1633,7 @@
       "media_type": "text/event-stream"
     },
     "supporting_protocols": [
-      "common.protocols.A2ATaskReader"
+      "common.protocols.SSEStateReader"
     ]
   },
   {
@@ -1634,7 +1652,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "common.protocols.A2ATaskReader",
+    "owning_protocol": "common.protocols.A2ATaskStatusReader",
     "path": "/api/v1/users/me/a2a-tasks",
     "response_class": null,
     "response_model": "dict",
@@ -1644,7 +1662,7 @@
   {
     "auth_dependencies": [],
     "dependencies": [
-      "get_webhook_transport"
+      "get_webhook_receiver"
     ],
     "methods": [
       "POST"
@@ -1655,10 +1673,10 @@
       "200",
       "422"
     ],
-    "owning_protocol": "app_shell.bound.WebhookTransportFactory",
+    "owning_protocol": "common.protocols.WebhookReceiver",
     "path": "/api/v1/webhooks/a2a/{message_id}",
     "response_class": null,
-    "response_model": "dict",
+    "response_model": null,
     "status_code": null,
     "streaming_response": null
   },

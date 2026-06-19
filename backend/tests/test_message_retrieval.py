@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -35,13 +35,18 @@ def _make_msg_with_attachment(s3_key="uploads/r/f1/photo.png"):
 class TestMessageRetrieval:
     async def test_presigned_url_injected(self, room_runtime):
         msg = _make_msg_with_attachment()
-        room_runtime._store.get_room_user_messages_by_room_id = AsyncMock(return_value=[msg])
+        facade = MagicMock()
+        facade.get_user_messages_for_room = AsyncMock(return_value=[msg])
+        room_runtime.bind_facade(facade)
 
-        with patch("app_shell.s3_service.s3_service") as mock_s3:
-            mock_s3.batch_presigned_urls = AsyncMock(return_value={"uploads/r/f1/photo.png": "https://presigned"})
-            result = await room_runtime.inquiry_user_messages_by_room_id(
-                RoomCenterUserMessageRequest(room_id="room1")
-            )
+        mock_s3 = MagicMock()
+        mock_s3.batch_presigned_urls = AsyncMock(
+            return_value={"uploads/r/f1/photo.png": "https://presigned"}
+        )
+        room_runtime.bind_s3_service(mock_s3)
+        result = await room_runtime.inquiry_user_messages_by_room_id(
+            RoomCenterUserMessageRequest(room_id="room1")
+        )
 
         assert result.success
         assert result.message_list[0].message_content.attachments[0].file_url == "https://presigned"
@@ -51,7 +56,9 @@ class TestMessageRetrieval:
             room_id="room1", message_id="msg1", message_type="user",
             message_content=MessageContent(message_text="hi"),
         )
-        room_runtime._store.get_room_user_messages_by_room_id = AsyncMock(return_value=[msg])
+        facade = MagicMock()
+        facade.get_user_messages_for_room = AsyncMock(return_value=[msg])
+        room_runtime.bind_facade(facade)
 
         result = await room_runtime.inquiry_user_messages_by_room_id(
             RoomCenterUserMessageRequest(room_id="room1")
@@ -108,17 +115,18 @@ class TestRefreshArtifactPresignedUrls:
             ),
         )
 
-        with patch("app_shell.s3_service.s3_service") as mock_s3:
-            mock_s3.batch_presigned_urls = AsyncMock(
-                return_value={"artifacts/room1/msg1/inline-0.xlsx": "https://new-presigned"}
-            )
-            await room_runtime._refresh_artifact_presigned_urls([msg])
+        mock_s3 = MagicMock()
+        mock_s3.batch_presigned_urls = AsyncMock(
+            return_value={"artifacts/room1/msg1/inline-0.xlsx": "https://new-presigned"}
+        )
+        room_runtime.bind_s3_service(mock_s3)
+        await room_runtime._refresh_artifact_presigned_urls([msg])
 
-            mock_s3.batch_presigned_urls.assert_called_once()
-            call_kwargs = mock_s3.batch_presigned_urls.call_args
-            assert call_kwargs.kwargs["filenames"] == {
-                "artifacts/room1/msg1/inline-0.xlsx": "report.xlsx"
-            }
+        mock_s3.batch_presigned_urls.assert_called_once()
+        call_kwargs = mock_s3.batch_presigned_urls.call_args
+        assert call_kwargs.kwargs["filenames"] == {
+            "artifacts/room1/msg1/inline-0.xlsx": "report.xlsx"
+        }
 
         # URI should be updated
         refreshed_uri = msg.message_content.message_task.artifacts[0].parts[0].root.file.uri
@@ -167,11 +175,12 @@ class TestRefreshArtifactPresignedUrls:
             ),
         )
 
-        with patch("app_shell.s3_service.s3_service") as mock_s3:
-            mock_s3.batch_presigned_urls = AsyncMock(
-                return_value={"artifacts/room1/msg1/inline-0.png": "https://new-presigned"}
-            )
-            await room_runtime._refresh_artifact_presigned_urls([msg])
+        mock_s3 = MagicMock()
+        mock_s3.batch_presigned_urls = AsyncMock(
+            return_value={"artifacts/room1/msg1/inline-0.png": "https://new-presigned"}
+        )
+        room_runtime.bind_s3_service(mock_s3)
+        await room_runtime._refresh_artifact_presigned_urls([msg])
 
-            call_kwargs = mock_s3.batch_presigned_urls.call_args
-            assert call_kwargs.kwargs["filenames"] == {}
+        call_kwargs = mock_s3.batch_presigned_urls.call_args
+        assert call_kwargs.kwargs["filenames"] == {}

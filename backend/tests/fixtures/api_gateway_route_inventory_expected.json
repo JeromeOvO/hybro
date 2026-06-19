@@ -56,7 +56,6 @@
     "status_code": null,
     "dependencies": [
       "get_agent_center",
-      "get_agent_service",
       "get_current_user"
     ],
     "auth_dependencies": [
@@ -223,7 +222,6 @@
     "status_code": null,
     "dependencies": [
       "get_agent_center",
-      "get_agent_service",
       "get_current_user"
     ],
     "auth_dependencies": [
@@ -1017,7 +1015,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1037,7 +1036,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1057,7 +1057,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1077,7 +1078,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1097,7 +1099,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1158,7 +1161,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1178,7 +1182,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1198,7 +1203,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1389,7 +1395,7 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_webhook_transport"
+      "get_webhook_receiver"
     ],
     "auth_dependencies": [],
     "include_in_schema": true

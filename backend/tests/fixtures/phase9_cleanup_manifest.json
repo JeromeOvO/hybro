@@ -1,34 +1,10 @@
 {
     "blocked_cleanup": [
         {
-            "path": "app_shell/a2a_runtime.py",
-            "contract": "legacy_import_boundary",
-            "reason": "App-shell A2A runtime still uses database.mongodb directly pending DAL injection."
-        },
-        {
-            "path": "app_shell/agent_capability_issue_service.py",
-            "contract": "legacy_import_boundary",
-            "reason": "App-shell agent capability issue runtime still uses database.mongodb directly pending DAL injection."
-        },
-        {
             "path": "app_shell/agent_health_service.py",
             "contract": "legacy_import_boundary",
-            "reason": "App-shell agent health runtime still uses database.mongodb directly pending DAL injection."
-        },
-        {
-            "path": "app_shell/domain_alias_service.py",
-            "contract": "legacy_import_boundary",
-            "reason": "App-shell domain alias runtime still uses database.mongodb directly pending DAL injection."
-        },
-        {
-            "path": "app_shell/memory_search_service.py",
-            "contract": "legacy_import_boundary",
-            "reason": "App-shell memory search runtime still uses database.mongodb directly pending DAL injection."
-        },
-        {
-            "path": "app_shell/room_runtime.py",
-            "contract": "legacy_import_boundary",
-            "reason": "App-shell room runtime still uses database.mongodb directly pending DAL injection."
+            "forbidden_prefix": "common.config.settings",
+            "reason": "App-shell agent health runtime still reads settings directly pending runtime config injection."
         },
         {
             "path": "common/protocols/runtime_store_protocols.py",
