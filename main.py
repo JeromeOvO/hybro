@@ -299,6 +299,7 @@ async def lifespan(app: FastAPI):
                 SupervisorLLMService,
             )
             from platform_module import (
+                PlatformAgentAvatarManager,
                 PlatformAttachmentCleanupPort,
                 PlatformAttachmentMetadataReader,
                 PlatformObjectStorage,
@@ -327,32 +328,6 @@ async def lifespan(app: FastAPI):
             viewset.bind_viewset_dependencies(
                 provider=AppShellDALViewSetRepositoryProvider(mongo=mongo_dal),
             )
-
-            class AppShellAgentAvatarManager:
-                def __init__(self, storage, agent_repository) -> None:
-                    self._storage = storage
-                    self._agent_repository = agent_repository
-
-                async def store_avatar(
-                    self,
-                    *,
-                    agent_id: str,
-                    s3_key: str,
-                    content: bytes,
-                    content_type: str,
-                ) -> str:
-                    await self._storage.upload_file(
-                        file_data=content,
-                        s3_key=s3_key,
-                        content_type=content_type,
-                        content_length=len(content),
-                    )
-                    icon_url = self._storage.get_public_url(s3_key)
-                    await self._agent_repository.update(
-                        agent_id,
-                        {"agent_card.iconUrl": icon_url},
-                    )
-                    return icon_url
 
             inspection_center.bind_inspection_dependencies(AppShellInspectionCenter())
             memory_center.bind_memory_dependencies(AppShellMemoryCenter())
@@ -536,7 +511,7 @@ async def lifespan(app: FastAPI):
                 center=AppShellAgentCenter(),
                 service=agent_service,
                 issue_service=capability_issue_service,
-                avatar_manager=AppShellAgentAvatarManager(
+                avatar_manager=PlatformAgentAvatarManager(
                     platform_object_storage,
                     _agent_deps.agent_repository,
                 ),

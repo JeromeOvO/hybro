@@ -27,6 +27,16 @@ LEGACY_RUNTIME_FILES = (
     "database/pinecone_db.py",
     "database/repository.py",
 )
+OBJECT_STORAGE_SHIM_IMPORT_PREFIX = "app_shell.s3_service"
+OBJECT_STORAGE_SHIM_EXEMPT_FILES = {"app_shell/s3_service.py"}
+AWS_SDK_IMPORT_PREFIXES = {"aioboto3", "botocore"}
+AWS_SDK_ALLOWED_PREFIXES = ("dal/s3/",)
+AWS_SDK_TEMPORARY_ALLOWLIST = {
+    ("llm_gateway/providers/bedrock_provider.py", "aioboto3"): {
+        "reason": "Bedrock remains an LLM Gateway provider with direct Bedrock SDK ownership during the broader provider-adapter migration.",
+        "deletion_condition": "Remove when Bedrock SDK access is moved behind a dedicated provider transport or no longer imports aioboto3 directly.",
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -130,8 +140,9 @@ def _iter_dynamic_imports(path: Path) -> list[Blocker]:
             and isinstance(func.value, ast.Name)
             and func.value.id == "importlib"
         ) or (isinstance(func, ast.Name) and func.id == "import_module")
+        is_dunder_import = isinstance(func, ast.Name) and func.id == "__import__"
         if (
-            is_import_module
+            (is_import_module or is_dunder_import)
             and node.args
             and isinstance(node.args[0], ast.Constant)
             and isinstance(node.args[0].value, str)
@@ -391,6 +402,29 @@ def _unique_blockers(blockers: list[Blocker]) -> list[Blocker]:
     return sorted(set(blockers), key=lambda item: item.as_manifest_entry())
 
 
+def _import_root(symbol: str) -> str:
+    return symbol.split(".", 1)[0]
+
+
+def _is_aws_sdk_import_allowed(blocker: Blocker) -> bool:
+    root = _import_root(blocker.symbol)
+    allowlisted = (blocker.path, root) in AWS_SDK_TEMPORARY_ALLOWLIST
+    return blocker.path.startswith(AWS_SDK_ALLOWED_PREFIXES) or allowlisted
+
+
+def _aws_sdk_import_blockers() -> list[str]:
+    blockers: list[str] = []
+    for path in _py_files():
+        for blocker in [*_iter_imports(path), *_iter_dynamic_imports(path)]:
+            root = _import_root(blocker.symbol)
+            if (
+                root in AWS_SDK_IMPORT_PREFIXES
+                and not _is_aws_sdk_import_allowed(blocker)
+            ):
+                blockers.append(blocker.as_manifest_entry())
+    return sorted(blockers)
+
+
 def _entries(blockers: list[Blocker]) -> list[str]:
     return sorted(blocker.as_manifest_entry() for blocker in blockers)
 
@@ -482,6 +516,31 @@ def test_convergence_scanner_detects_dynamic_imports_and_pinecone_calls(tmp_path
     assert "sample.py:6:pc.Index" in direct
     assert "sample.py:7:client.Index" in direct
     assert "sample.py:8:self.client.Index" in direct
+
+
+def test_dynamic_import_scanner_detects_dunder_import_app_shell_s3_service(tmp_path):
+    sample = tmp_path / "sample.py"
+    sample.write_text('__import__("app_shell.s3_service")')
+
+    assert "sample.py:1:app_shell.s3_service" in _entries(
+        _iter_dynamic_imports(sample)
+    )
+
+
+def test_dynamic_import_scanner_detects_importlib_app_shell_s3_service(tmp_path):
+    sample = tmp_path / "sample.py"
+    sample.write_text(
+        "\n".join(
+            [
+                "import importlib",
+                'importlib.import_module("app_shell.s3_service")',
+            ]
+        )
+    )
+
+    assert "sample.py:2:app_shell.s3_service" in _entries(
+        _iter_dynamic_imports(sample)
+    )
 
 
 def test_convergence_scanner_detects_from_import_legacy_modules(tmp_path):
@@ -581,31 +640,31 @@ def test_legacy_runtime_files_are_exact():
 def test_production_object_storage_access_goes_through_dal():
     """Ensure no production module directly imports app_shell.s3_service.
 
-    The app_shell/ layer itself and main.py are excluded since they ARE the
-    infrastructure wiring layer.
+    app_shell.s3_service is a compatibility shim, not a production dependency
+    target. Only the shim implementation may refer to itself.
     """
-    production_roots = [
-        ROOT / "api_gateway",
-        ROOT / "agent",
-        ROOT / "room",
-        ROOT / "context_memory",
-        ROOT / "delivery",
-        ROOT / "execution",
-        ROOT / "hub_runtime_bridge",
-        ROOT / "a2a_adapter",
-        ROOT / "platform_module",
-        ROOT / "llm_gateway",
-        ROOT / "jobs",
-        ROOT / "common",
-    ]
     offenders = []
-    for root in production_roots:
-        if not root.exists():
+    for path in _py_files():
+        rel = _rel(path)
+        if rel in OBJECT_STORAGE_SHIM_EXEMPT_FILES:
             continue
-        for path in root.rglob("*.py"):
-            if any(
-                _is_module_match(blocker.symbol, "app_shell.s3_service")
-                for blocker in _iter_imports(path)
-            ):
-                offenders.append(path.relative_to(ROOT).as_posix())
+        for blocker in [*_iter_imports(path), *_iter_dynamic_imports(path)]:
+            if _is_module_match(blocker.symbol, OBJECT_STORAGE_SHIM_IMPORT_PREFIX):
+                offenders.append(blocker.as_manifest_entry())
     assert offenders == [], f"Direct S3 imports in production code: {offenders}"
+
+
+def test_aws_sdk_imports_are_confined_to_dal_s3_with_exact_bedrock_allowlist():
+    assert _aws_sdk_import_blockers() == []
+
+
+def test_aws_sdk_temporary_allowlist_is_exact_and_documented():
+    expected = {("llm_gateway/providers/bedrock_provider.py", "aioboto3")}
+
+    assert set(AWS_SDK_TEMPORARY_ALLOWLIST) == expected
+    for path, symbol in AWS_SDK_TEMPORARY_ALLOWLIST:
+        assert (ROOT / path).is_file()
+        assert symbol == "aioboto3"
+        metadata = AWS_SDK_TEMPORARY_ALLOWLIST[(path, symbol)]
+        assert metadata["reason"]
+        assert metadata["deletion_condition"]

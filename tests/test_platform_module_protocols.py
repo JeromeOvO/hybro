@@ -33,6 +33,7 @@ def test_platform_facade_exposes_common_protocol_surfaces():
     from common.protocols import GatewayDiscoveryProvider
     from platform_module import (
         ObjectStoragePort,
+        PlatformAgentAvatarManager,
         PlatformConfig,
         PlatformDeps,
         PlatformFacade,
@@ -49,6 +50,7 @@ def test_platform_facade_exposes_common_protocol_surfaces():
     assert isinstance(facade.file_storage, FileStorage)
     assert facade.content_storage is not None
     assert "upload_file" in ObjectStoragePort.__dict__
+    assert PlatformAgentAvatarManager is not None
     assert PlatformObjectStorage is not None
 
 
@@ -333,7 +335,10 @@ def test_main_passes_platform_object_storage_directly_to_runtime_consumers():
     assert "from app_shell.s3_service import s3_service" not in source
     assert "s3_service.bind_object_storage(" not in source
     assert "storage_service=platform_object_storage" in source
-    assert "AppShellAgentAvatarManager(\n                    platform_object_storage" in source
+    avatar_manager_binding = (
+        "PlatformAgentAvatarManager(\n                    platform_object_storage"
+    )
+    assert avatar_manager_binding in source
     assert "room_runtime.bind_object_storage(platform_object_storage)" in source
     assert "room_runtime.bind_s3_service(platform_object_storage)" not in source
     assert "s3_service=platform_object_storage" not in source
@@ -342,6 +347,41 @@ def test_main_passes_platform_object_storage_directly_to_runtime_consumers():
         "storage_service=platform_object_storage"
     )
     assert "object_storage=object_storage" in source
+
+
+def test_main_uses_platform_agent_avatar_manager_for_avatar_uploads():
+    source = Path("main.py").read_text()
+
+    assert "class AppShellAgentAvatarManager" not in source
+    assert "PlatformAgentAvatarManager" in source
+    assert "avatar_manager=PlatformAgentAvatarManager(" in source
+    assert "agent_card.iconUrl" not in source
+
+
+def test_main_constructs_object_storage_once_for_platform_wiring():
+    source = Path("main.py").read_text()
+
+    object_storage_pos = source.index("object_storage = create_object_storage_dal()")
+    platform_storage_pos = source.index(
+        "platform_object_storage = PlatformObjectStorage("
+    )
+    platform_deps_pos = source.index("platform_deps = create_platform_deps(")
+    platform_deps_block = source[
+        platform_deps_pos : source.index(
+            "room_runtime.bind_attachment_metadata_reader",
+            platform_deps_pos,
+        )
+    ]
+
+    assert source.count("object_storage = create_object_storage_dal()") == 1
+    assert source.count("platform_object_storage = PlatformObjectStorage(") == 1
+    assert object_storage_pos < platform_storage_pos < platform_deps_pos
+    platform_storage_binding = (
+        "platform_object_storage = PlatformObjectStorage(\n                object_storage,"
+    )
+    assert platform_storage_binding in source
+    assert "object_storage=object_storage" in platform_deps_block
+    assert "object_storage=platform_object_storage" not in platform_deps_block
 
 
 def test_direct_transport_does_not_partially_rebind_a2a_artifact_storage():

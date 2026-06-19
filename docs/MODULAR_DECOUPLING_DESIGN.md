@@ -2152,13 +2152,16 @@ Motor/DAL scripts and must not restore `database/mongodb.py`,
 **Implemented object-storage platform adapter note (2026-06-19):**
 `platform_module.PlatformObjectStorage` provides the legacy-compatible upload,
 presigned URL, metadata, public URL, text download, and prefix cleanup surface
-over `ObjectStorageDAL`. Platform file/content services now use DAL-shaped
-object storage dependencies; SDK ownership stays in `dal/s3/`. Production
-startup passes `PlatformObjectStorage` directly into runtime consumers that
-still need the legacy upload/presign methods through object-storage-named
-injection points, while `app_shell/s3_service.py` is retained only as an
-SDK-free compatibility shim for tests and legacy import paths until the final
-S3 service removal phase.
+over `ObjectStorageDAL` operations: `put`, `put_file`, `get_text`,
+`get_presigned_url`, `delete`, `delete_prefix`, `get_public_url`, and `head`.
+`platform_module.PlatformAgentAvatarManager` owns agent avatar upload/public URL
+persistence through that adapter. Platform file/content/avatar services now use
+DAL-shaped object storage dependencies; SDK ownership stays in `dal/s3/`.
+Production startup passes `PlatformObjectStorage` directly into runtime
+consumers that still need the legacy upload/presign methods through
+object-storage-named injection points, while `app_shell/s3_service.py` is
+retained only as an SDK-free compatibility shim for tests and legacy import
+paths until the final S3 service removal phase.
 The startup wiring also configures `a2a_adapter.artifact_storage` once with the
 platform object-storage adapter, bucket name, and file-size limit. Execution
 transports must call the shared A2A helper without rebinding artifact storage so
@@ -2166,6 +2169,12 @@ those startup settings remain intact during inline artifact conversion.
 Tracked terminal A2A message/task responses also keep artifact conversion
 best-effort: object-storage conversion failures are logged, but
 `update_task_on_message()` still persists the terminal task state.
+Boundary gates scan static and dynamic production imports, including `main.py`
+and `app_shell/`, so new `app_shell.s3_service` dependencies fail outside the
+shim file itself. AWS SDK imports are confined to `dal/s3/`, with a single
+documented temporary exception for `llm_gateway/providers/bedrock_provider.py`
+importing `aioboto3` until Bedrock SDK access is moved behind a dedicated
+provider transport.
 
 **Implemented LLM migration note (2026-06-05):** `LLMGatewayImpl` now owns
 logical model routing, retry/timeout behavior, structured JSON-object mode, and
@@ -2358,6 +2367,7 @@ class AgentService:
 | Rate limiting | `platform_module/rate_limit.py` | Platform | `rate_limit/rate_limiter.py` |
 | File uploads | `platform_module/` | Platform | `files/upload_service.py` |
 | Content storage | `platform_module/` | Platform | `files/content_storage.py` |
+| Agent avatar uploads | `platform_module/agent_avatar.py` | Platform over DAL | `api/agent.py` avatar route |
 | Object storage compatibility | `platform_module/object_storage.py` | Platform over DAL | `object_storage.py` |
 | **HubRuntimeBridge** | | | |
 | Hub relay | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_relay.py` |

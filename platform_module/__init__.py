@@ -1,3 +1,4 @@
+from platform_module.agent_avatar import PlatformAgentAvatarManager
 from platform_module.attachments import (
     PlatformAttachmentCleanupPort,
     PlatformAttachmentMetadataReader,
@@ -9,6 +10,7 @@ from platform_module.object_storage import ObjectStoragePort, PlatformObjectStor
 
 __all__ = [
     "ObjectStoragePort",
+    "PlatformAgentAvatarManager",
     "PlatformAttachmentCleanupPort",
     "PlatformAttachmentMetadataReader",
     "PlatformConfig",

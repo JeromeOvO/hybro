@@ -100,7 +100,6 @@ def test_llm_gateway_import_boundary():
     allowed_roots = set(sys.stdlib_module_names) | {
         "__future__",
         "aioboto3",
-        "botocore",
         "common",
         "dal",
         "google",
@@ -122,7 +121,7 @@ def test_llm_gateway_import_boundary():
 
 
 def test_llm_gateway_provider_sdks_are_limited_to_provider_adapters():
-    provider_sdk_roots = {"aioboto3", "botocore", "google", "openai"}
+    provider_sdk_roots = {"aioboto3", "google", "openai"}
     provider_dir = Path("llm_gateway/providers")
     violations: list[str] = []
 
