@@ -357,7 +357,9 @@ typed delivery events are emitted.
 - `PlatformContentStorage`: binary/full-content storage used by context memory.
 - `PlatformObjectStorage`: SDK-free compatibility adapter over
   `ObjectStorageDAL` for uploaded-object reads, writes, presigned URLs, public
-  URLs, metadata, and prefix cleanup.
+  URLs, metadata, and prefix cleanup. Its presigned URL cache is bounded and
+  TTL-swept so alternate object-storage DALs do not need to implement their own
+  cache to avoid duplicate signing work safely.
 - Gateway/discovery/agent rate limiters backed by Mongo collections.
 
 This module is used by:

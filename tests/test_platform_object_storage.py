@@ -152,6 +152,55 @@ async def test_presigned_url_cache_refreshes_after_half_ttl() -> None:
 
 
 @pytest.mark.asyncio
+async def test_presigned_url_cache_sweeps_expired_entries_before_write() -> None:
+    current_time = 1000.0
+    dal = FakeObjectStorageDAL()
+    storage = PlatformObjectStorage(
+        dal,
+        default_presigned_url_ttl=100,
+        clock=lambda: current_time,
+    )
+    storage._presigned_cache[("objects/expired", None, 100)] = (
+        current_time - 1,
+        "expired-url",
+    )
+
+    await storage.generate_presigned_url("objects/new")
+
+    assert ("objects/expired", None, 100) not in storage._presigned_cache
+    assert ("objects/new", None, 100) in storage._presigned_cache
+    assert dal.presigned == [("objects/new", 100, None)]
+
+
+@pytest.mark.asyncio
+async def test_presigned_url_cache_is_bounded_by_earliest_expiry() -> None:
+    current_time = 1000.0
+    dal = FakeObjectStorageDAL()
+    storage = PlatformObjectStorage(
+        dal,
+        default_presigned_url_ttl=100,
+        clock=lambda: current_time,
+    )
+    storage._max_presigned_cache_entries = 2
+    storage._presigned_cache[("objects/oldest", None, 100)] = (
+        current_time + 20,
+        "oldest-url",
+    )
+    storage._presigned_cache[("objects/newer", None, 100)] = (
+        current_time + 30,
+        "newer-url",
+    )
+
+    await storage.generate_presigned_url("objects/new")
+
+    assert len(storage._presigned_cache) == 2
+    assert ("objects/oldest", None, 100) not in storage._presigned_cache
+    assert ("objects/newer", None, 100) in storage._presigned_cache
+    assert ("objects/new", None, 100) in storage._presigned_cache
+    assert dal.presigned == [("objects/new", 100, None)]
+
+
+@pytest.mark.asyncio
 async def test_batch_presigned_urls_preserves_keys_and_filename_mapping() -> None:
     dal = FakeObjectStorageDAL()
     storage = PlatformObjectStorage(dal, default_presigned_url_ttl=90)
