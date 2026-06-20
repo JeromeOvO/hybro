@@ -209,9 +209,11 @@ def test_app_shell_routes_internal_hub_events_through_hub_router() -> None:
     assert "class HubDeps" in container
     assert "def create_hub_facade" in container
     assert "def create_hub_deps" in container
-    assert "_execution_deps.hub_agent_response_sink.handle_hub_agent_response" not in main
-    assert "internal_response_dispatcher" in main
-    assert "router.dispatch_hub_internal_response" in main
+    assert (
+        "_execution_deps.hub_agent_response_sink.handle_hub_agent_response" not in main
+    )
+    assert "internal_response_dispatcher" in container
+    assert "router.dispatch_hub_internal_response" in container
 
 
 def test_relay_and_hub_route_inventory_matches_fixture() -> None:
@@ -225,9 +227,7 @@ def test_relay_and_hub_route_inventory_matches_fixture() -> None:
         }
         for route in [*relay_router.routes, *hub_router.routes]
     ]
-    expected = json.loads(
-        (ROOT / "tests/fixtures/phase8_hub_routes.json").read_text()
-    )
+    expected = json.loads((ROOT / "tests/fixtures/phase8_hub_routes.json").read_text())
 
     assert sorted(actual, key=lambda item: (item["path"], item["methods"])) == sorted(
         expected, key=lambda item: (item["path"], item["methods"])

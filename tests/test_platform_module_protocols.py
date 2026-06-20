@@ -117,29 +117,41 @@ def test_api_routes_call_only_api_key_rate_limiter_protocol_methods():
             if node.value.id == "rate_limiter" and node.attr not in protocol_methods:
                 violations.append(f"{path}:{node.lineno}: rate_limiter.{node.attr}")
 
-    assert not violations, "Route rate limiter calls are outside the protocol:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Route rate limiter calls are outside the protocol:\n" + "\n".join(violations)
     )
 
 
-def test_main_binds_gateway_and_discovery_rate_limiters_from_platform_facade():
-    source = Path("main.py").read_text()
+def test_container_binds_gateway_and_discovery_rate_limiters_from_platform_facade():
+    source = Path("container.py").read_text()
+    main_source = Path("main.py").read_text()
 
     assert "PlatformRouteAPIKeyRateLimiter" not in source
-    assert "gateway.bind_gateway_dependencies(\n                platform_facade.gateway_service,\n                platform_facade.gateway_rate_limiter" in source
-    assert "discovery.bind_discovery_dependencies(\n                platform_facade.discovery_service,\n                platform_facade.discovery_rate_limiter" in source
+    assert "gateway.bind_gateway_dependencies(" not in main_source
+    assert "discovery.bind_discovery_dependencies(" not in main_source
+    assert (
+        "gateway.bind_gateway_dependencies(\n                platform_facade.gateway_service,\n                platform_facade.gateway_rate_limiter"
+        in source
+    )
+    assert (
+        "discovery.bind_discovery_dependencies(\n                platform_facade.discovery_service,\n                platform_facade.discovery_rate_limiter"
+        in source
+    )
 
 
-def test_main_uses_execution_room_message_center_runtime_for_startup_wiring():
-    source = Path("main.py").read_text()
+def test_container_uses_execution_room_message_center_runtime_for_startup_wiring():
+    source = Path("container.py").read_text()
+    main_source = Path("main.py").read_text()
 
     assert "room_center.room_message_center" not in source
+    assert "execution_room_message_center.bind(" not in main_source
     assert "execution_room_message_center.bind(" in source
     assert "room_message_center=execution_room_message_center" in source
 
 
-def test_main_imports_room_runtime_singleton_for_lifespan_bindings():
-    tree = ast.parse(Path("main.py").read_text(), filename="main.py")
+def test_container_imports_room_runtime_singleton_for_lifespan_bindings():
+    tree = ast.parse(Path("container.py").read_text(), filename="container.py")
+    main_tree = ast.parse(Path("main.py").read_text(), filename="main.py")
     room_runtime_uses = [
         node.lineno
         for node in ast.walk(tree)
@@ -155,8 +167,15 @@ def test_main_imports_room_runtime_singleton_for_lifespan_bindings():
             continue
         imported_names.update(alias.asname or alias.name for alias in node.names)
 
+    main_room_runtime_imports = [
+        node
+        for node in ast.walk(main_tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "app_shell.room_runtime"
+    ]
+
     assert room_runtime_uses
     assert "room_runtime" in imported_names
+    assert main_room_runtime_imports == []
 
 
 def test_container_builds_platform_config_from_scalar_settings():
@@ -321,14 +340,16 @@ def test_platform_config_carries_discovery_confidence_threshold_from_settings():
     assert config.discovery_confidence_threshold == 0.73
 
 
-def test_main_injects_discovery_query_expander_into_platform_deps():
-    source = Path("main.py").read_text()
+def test_container_injects_discovery_query_expander_into_platform_deps():
+    source = Path("container.py").read_text()
+    main_source = Path("main.py").read_text()
 
     assert "discovery_query_expander=discovery_llm_service" in source
+    assert "discovery_query_expander=discovery_llm_service" not in main_source
 
 
-def test_main_passes_platform_object_storage_directly_to_runtime_consumers():
-    source = Path("main.py").read_text()
+def test_container_passes_platform_object_storage_directly_to_runtime_consumers():
+    source = Path("container.py").read_text()
 
     assert "PlatformObjectStorage" in source
     assert "platform_object_storage = PlatformObjectStorage(" in source
@@ -349,8 +370,8 @@ def test_main_passes_platform_object_storage_directly_to_runtime_consumers():
     assert "object_storage=object_storage" in source
 
 
-def test_main_uses_platform_agent_avatar_manager_for_avatar_uploads():
-    source = Path("main.py").read_text()
+def test_container_uses_platform_agent_avatar_manager_for_avatar_uploads():
+    source = Path("container.py").read_text()
 
     assert "class AppShellAgentAvatarManager" not in source
     assert "PlatformAgentAvatarManager" in source
@@ -358,8 +379,8 @@ def test_main_uses_platform_agent_avatar_manager_for_avatar_uploads():
     assert "agent_card.iconUrl" not in source
 
 
-def test_main_constructs_object_storage_once_for_platform_wiring():
-    source = Path("main.py").read_text()
+def test_container_constructs_object_storage_once_for_platform_wiring():
+    source = Path("container.py").read_text()
 
     object_storage_pos = source.index("object_storage = create_object_storage_dal()")
     platform_storage_pos = source.index(
@@ -440,7 +461,9 @@ def test_platform_module_does_not_import_app_shell_or_legacy_services():
             if isinstance(node, ast.Import):
                 imports = [(alias.name, alias.name) for alias in node.names]
             elif isinstance(node, ast.ImportFrom) and node.module is not None:
-                imports = [(f"{node.module}.{alias.name}", node.module) for alias in node.names]
+                imports = [
+                    (f"{node.module}.{alias.name}", node.module) for alias in node.names
+                ]
             else:
                 continue
             for imported_name, module in imports:
@@ -450,10 +473,15 @@ def test_platform_module_does_not_import_app_shell_or_legacy_services():
     assert not violations, "Forbidden platform imports:\n" + "\n".join(violations)
 
 
-def test_main_binds_discovery_route_to_platform_facade():
-    source = Path("main.py").read_text()
+def test_container_binds_discovery_route_to_platform_facade():
+    source = Path("container.py").read_text()
+    main_source = Path("main.py").read_text()
 
-    assert "discovery.bind_discovery_dependencies(\n                platform_facade.discovery_service" in source
+    assert (
+        "discovery.bind_discovery_dependencies(\n                platform_facade.discovery_service"
+        in source
+    )
+    assert "discovery.bind_discovery_dependencies(" not in main_source
 
 
 def test_gateway_discovery_is_not_backed_by_legacy_discovery_service():

@@ -211,8 +211,8 @@ def _references_name(node: ast.AST, name: str) -> bool:
     return any(isinstance(child, ast.Name) and child.id == name for child in ast.walk(node))
 
 
-def test_main_binds_focused_runtime_store_parts_before_aggregate_shims():
-    tree = ast.parse(Path("main.py").read_text())
+def test_container_binds_focused_runtime_store_parts_before_aggregate_shims():
+    tree = ast.parse(Path("container.py").read_text())
     expected_assignments = {
         "agent_room_store": "agent_room",
         "message_store": "messages",
@@ -276,8 +276,8 @@ def _simple_namespace_keywords(tree: ast.AST, assignment_name: str) -> set[str]:
     return set()
 
 
-def test_main_binds_debate_and_coordinator_to_focused_message_adapters():
-    tree = ast.parse(Path("main.py").read_text())
+def test_container_binds_debate_and_coordinator_to_focused_message_adapters():
+    tree = ast.parse(Path("container.py").read_text())
     bound_adapters: dict[str, str] = {}
 
     for node in ast.walk(tree):
@@ -311,8 +311,8 @@ def test_main_binds_debate_and_coordinator_to_focused_message_adapters():
     }
 
 
-def test_main_binds_room_runtime_to_focused_room_store_adapter():
-    tree = ast.parse(Path("main.py").read_text())
+def test_container_binds_room_runtime_to_focused_room_store_adapter():
+    tree = ast.parse(Path("container.py").read_text())
     bound_store_name = None
 
     for node in ast.walk(tree):
@@ -339,8 +339,8 @@ def test_main_binds_room_runtime_to_focused_room_store_adapter():
     }
 
 
-def test_main_binds_relay_to_focused_runtime_store_adapter():
-    tree = ast.parse(Path("main.py").read_text())
+def test_container_binds_relay_to_focused_runtime_store_adapter():
+    tree = ast.parse(Path("container.py").read_text())
     bound_store_name = None
 
     for node in ast.walk(tree):
@@ -364,8 +364,8 @@ def test_main_binds_relay_to_focused_runtime_store_adapter():
     }
 
 
-def test_main_binds_room_message_center_to_focused_execution_store_adapter():
-    tree = ast.parse(Path("main.py").read_text())
+def test_container_binds_room_message_center_to_focused_execution_store_adapter():
+    tree = ast.parse(Path("container.py").read_text())
     bound_store_name = None
 
     for node in ast.walk(tree):

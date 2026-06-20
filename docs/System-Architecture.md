@@ -57,16 +57,22 @@ flowchart TD
 
 ## Runtime Entry Point
 
-`main.py` creates the FastAPI app and owns process startup/shutdown through the
-lifespan context manager.
+`main.py` creates the FastAPI app, configures process logging, installs
+middleware, mounts `api_gateway.router`, and delegates runtime assembly to
+container-owned entrypoints:
+
+- `create_application_runtime(settings)`
+- `startup_runtime(app, runtime)`
+- `validate_runtime_bindings(app, runtime)`
+- `shutdown_runtime(app, runtime)`
 
 Startup has three practical phases:
 
 1. Infrastructure setup:
    - Load settings and auth configuration.
-   - Build `MongoDAL`, `VectorDAL`, Redis, object-storage adapters, facades,
-     and repositories through `container.py`.
-   - Bind route modules and app-shell runtime adapters.
+   - `container.py` builds `MongoDAL`, `VectorDAL`, Redis, object-storage
+     adapters, facades, repositories, route dependencies, and app-shell
+     compatibility adapters.
 
 2. Runtime guard and background services:
    - Start Delivery/SSE runtime.
@@ -75,7 +81,7 @@ Startup has three practical phases:
    - Start background jobs after the guard passes.
 
 3. Serving and normal shutdown:
-   - Verify all required bindings in `_assert_startup_bindings_complete`.
+   - Verify all required bindings in `validate_runtime_bindings`.
    - Serve `/health` and `/api/v1/*`.
    - On shutdown, stop relay, jobs, leader locks, in-flight execution tasks,
      Delivery/SSE connections, Redis, and MongoDB.
@@ -202,8 +208,8 @@ without importing domain models:
   and `DebateLLMService`: DTO-backed compatibility workflows for legacy app-shell
   callers while migration continues.
 
-`main.py` constructs one `LLMGatewayImpl` and binds these focused services into
-production consumers. Legacy `app_shell.openai_service`,
+`container.py` constructs one `LLMGatewayImpl` during runtime startup and binds
+these focused services into production consumers. Legacy `app_shell.openai_service`,
 `app_shell.gemini_service`, and `app_shell.bedrock_service` remain as
 side-effect-free compatibility adapters, but they no longer construct provider
 SDK clients or read LLM environment variables directly.
@@ -302,7 +308,7 @@ The facade uses:
   chat-context generation, and turn-note extraction.
 - `RoomHistoryReader` from `room.RoomFacade` for source message history.
 
-`main.py` creates the facade before execution orchestration and exposes it
+`container.py` creates the facade before execution orchestration and exposes it
 through `ContextMemoryDeps.context_memory_runtime` for supervisor and agent
 context assembly. `app_shell.context_assembly_service` and
 `app_shell.memory_search_service` remain compatibility shims for tests and
@@ -312,7 +318,8 @@ Legacy turn-selection and context metric logging helpers live in
 `context_memory.legacy_assembly`, leaving the app-shell context assembly shim to
 convert result shapes and expose the legacy truncation counter.
 `app_shell.compaction_service` and `app_shell.memory_service` are still bound to
-the facade during startup while their compatibility surfaces remain in use.
+the facade by the container runtime while their compatibility surfaces remain in
+use.
 
 ### `delivery`
 
@@ -475,7 +482,7 @@ transient failures.
 The legacy runtime database files `database/mongodb.py`,
 `database/pinecone_db.py`, `database/repository.py`, and
 `app_shell/database_service.py` have been removed. Production startup wiring in
-`main.py` uses `MongoDAL`, `VectorDAL`, DAL-backed repositories, and narrow
+`container.py` uses `MongoDAL`, `VectorDAL`, DAL-backed repositories, and narrow
 app-shell adapters directly. The remaining `database/` package is limited to
 retired migration scripts and is not part of production runtime wiring.
 
@@ -827,7 +834,8 @@ private legacy database runtime backends.
 
 ## Background Jobs
 
-Background jobs are initialized from `main.py` after Redis/leader election setup.
+Background jobs are initialized by the container runtime after Redis/leader
+election setup.
 
 - `agent_health_service`: health/liveness checks.
 - `stale_task_checker`: expires stale task messages, recovers orphaned
@@ -922,9 +930,11 @@ protocols such as `agent.protocols.AgentCenterCompatibility`,
 `agent.protocols.AgentInspection`, `room.protocols.RoomCenterCompatibility`, and
 `context_memory.protocols.LegacyChatContextAPI`.
 
-The application shell remains responsible for concrete assembly in `main.py` and
-`container.py`; API Gateway route modules should not import app-shell protocol
-surfaces or concrete module facades/services directly.
+The application shell remains responsible for compatibility adapters, but
+concrete startup assembly is container-owned. `main.py` should not import or bind
+app-shell, execution, delivery, platform, or LLM concrete implementations
+directly. API Gateway route modules should not import app-shell protocol surfaces
+or concrete module facades/services directly.
 
 ## Testing and Verification
 

@@ -160,8 +160,8 @@ def test_api_modules_do_not_import_other_route_modules_for_helpers():
             ):
                 violations.append(f"{path}:{node.lineno}: {node.module}")
 
-    assert not violations, "API route modules import other route modules:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "API route modules import other route modules:\n" + "\n".join(violations)
     )
 
 
@@ -184,10 +184,12 @@ def test_api_bindings_do_not_expose_concrete_store_or_service_names():
             if isinstance(node, ast.FunctionDef) and node.name.startswith("bind_"):
                 for arg in (*node.args.args, *node.args.kwonlyargs):
                     if arg.arg in forbidden_names:
-                        violations.append(f"{path}:{node.lineno}: {node.name}.{arg.arg}")
+                        violations.append(
+                            f"{path}:{node.lineno}: {node.name}.{arg.arg}"
+                        )
 
-    assert not violations, "API bindings expose concrete dependency names:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "API bindings expose concrete dependency names:\n" + "\n".join(violations)
     )
 
 
@@ -208,7 +210,9 @@ def test_api_bindings_do_not_use_any_typed_dependency_seams():
             if isinstance(node, ast.FunctionDef) and node.name.startswith("bind_"):
                 for arg in (*node.args.args, *node.args.kwonlyargs):
                     if _annotation_has_broad_shape(arg.annotation):
-                        violations.append(f"{path}:{node.lineno}: {node.name}.{arg.arg}")
+                        violations.append(
+                            f"{path}:{node.lineno}: {node.name}.{arg.arg}"
+                        )
             if isinstance(node, ast.FunctionDef) and node.name.startswith("get_"):
                 if _annotation_has_broad_shape(node.returns):
                     violations.append(f"{path}:{node.lineno}: {node.name}.return")
@@ -219,14 +223,20 @@ def test_api_bindings_do_not_use_any_typed_dependency_seams():
                         arg_names = [item.arg for item in node.args.args]
                         if arg.arg in arg_names:
                             index = arg_names.index(arg.arg)
-                            default_index = index - (len(arg_names) - len(node.args.defaults))
+                            default_index = index - (
+                                len(arg_names) - len(node.args.defaults)
+                            )
                             if default_index >= 0:
                                 default = node.args.defaults[default_index]
-                        if isinstance(default, ast.Call) and ast.unparse(default.func).endswith("Depends"):
-                            violations.append(f"{path}:{node.lineno}: {node.name}.{arg.arg}")
+                        if isinstance(default, ast.Call) and ast.unparse(
+                            default.func
+                        ).endswith("Depends"):
+                            violations.append(
+                                f"{path}:{node.lineno}: {node.name}.{arg.arg}"
+                            )
 
-    assert not violations, "API bindings still use Any for dependency seams:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "API bindings still use Any for dependency seams:\n" + "\n".join(violations)
     )
 
 
@@ -252,7 +262,9 @@ def test_phase9_route_inventory_matches_live_app_routes():
     from main import app
 
     docs_paths = {"/docs", "/docs/oauth2-redirect", "/openapi.json", "/redoc"}
-    recorded_routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    recorded_routes = json.loads(
+        Path("tests/fixtures/phase9_api_routes.json").read_text()
+    )
     openapi = app.openapi()
     recorded = {
         (
@@ -268,7 +280,9 @@ def test_phase9_route_inventory_matches_live_app_routes():
         if not isinstance(route, APIRoute) or route.path in docs_paths:
             continue
         methods = tuple(
-            sorted(method for method in route.methods if method not in {"HEAD", "OPTIONS"})
+            sorted(
+                method for method in route.methods if method not in {"HEAD", "OPTIONS"}
+            )
         )
         response_model = (
             getattr(route.response_model, "__name__", str(route.response_model))
@@ -337,8 +351,9 @@ def test_route_inventory_auth_dependencies_are_only_auth_dependencies():
         if dependency not in auth_dependency_names
     ]
 
-    assert not violations, "Route inventory auth_dependencies include non-auth dependencies:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Route inventory auth_dependencies include non-auth dependencies:\n"
+        + "\n".join(violations)
     )
 
 
@@ -355,12 +370,15 @@ def test_agent_viewset_mutations_require_clerk_auth():
             or not mutation_methods.intersection(route.methods)
         ):
             continue
-        if all(dependency.call is not get_current_user for dependency in route.dependant.dependencies):
+        if all(
+            dependency.call is not get_current_user
+            for dependency in route.dependant.dependencies
+        ):
             methods = ",".join(sorted(mutation_methods.intersection(route.methods)))
             violations.append(f"{methods} {route.path} {route.name}")
 
-    assert not violations, "Agent ViewSet mutation routes lack Clerk auth:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Agent ViewSet mutation routes lack Clerk auth:\n" + "\n".join(violations)
     )
 
 
@@ -370,17 +388,18 @@ def test_agent_viewset_read_routes_use_optional_user_visibility_dependency():
 
     violations = []
     for route in app.routes:
-        if (
-            getattr(route, "path", "") not in {"/api/v1/agents", "/api/v1/agents/{item_id}"}
-            or "GET" not in getattr(route, "methods", set())
-        ):
+        if getattr(route, "path", "") not in {
+            "/api/v1/agents",
+            "/api/v1/agents/{item_id}",
+        } or "GET" not in getattr(route, "methods", set()):
             continue
         dependency_calls = {dep.call for dep in route.dependant.dependencies}
         if get_optional_user not in dependency_calls:
             violations.append(route.path)
 
-    assert not violations, "Agent ViewSet read routes lack optional-user visibility dependency:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Agent ViewSet read routes lack optional-user visibility dependency:\n"
+        + "\n".join(violations)
     )
 
 
@@ -424,7 +443,11 @@ def test_live_routes_do_not_duplicate_clerk_auth_dependency():
         ]
         if len(auth_dependencies) > 1:
             methods = ",".join(
-                sorted(method for method in route.methods if method not in {"HEAD", "OPTIONS"})
+                sorted(
+                    method
+                    for method in route.methods
+                    if method not in {"HEAD", "OPTIONS"}
+                )
             )
             violations.append(f"{methods} {route.path} {route.name}")
 
@@ -436,7 +459,9 @@ def test_live_routes_do_not_duplicate_clerk_auth_dependency():
 def test_streaming_routes_record_sse_media_type_and_headers():
     from main import app
 
-    recorded_routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    recorded_routes = json.loads(
+        Path("tests/fixtures/phase9_api_routes.json").read_text()
+    )
     route_by_name = {route["name"]: route for route in recorded_routes}
     expected = {
         "gateway_stream": {
@@ -504,8 +529,9 @@ def test_phase9_route_inventory_does_not_use_platform_implementation_owners():
         if route["owning_protocol"].startswith("platform_module.")
     ]
 
-    assert not violations, "Routes must use common protocols, not platform implementations:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Routes must use common protocols, not platform implementations:\n"
+        + "\n".join(violations)
     )
 
 
@@ -522,8 +548,8 @@ def test_phase9_route_inventory_does_not_use_app_shell_bound_protocols():
             if protocol_path.startswith("app_shell.bound."):
                 violations.append(f"{route['path']}: {protocol_path}")
 
-    assert not violations, "Routes must not use app_shell.bound protocol shims:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Routes must not use app_shell.bound protocol shims:\n" + "\n".join(violations)
     )
 
 
@@ -561,8 +587,9 @@ def test_phase9_route_inventory_supporting_protocols_are_protocol_symbols():
             if not getattr(symbol, "_is_protocol", False):
                 violations.append(f"{route['path']}: {protocol_path}")
 
-    assert not violations, "Supporting route protocols must resolve to Protocols:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Supporting route protocols must resolve to Protocols:\n"
+        + "\n".join(violations)
     )
 
 
@@ -575,8 +602,9 @@ def test_api_key_management_routes_are_owned_by_store_protocol():
         and route["owning_protocol"] != "common.protocols.APIKeyStore"
     ]
 
-    assert not violations, "API-key management routes must use APIKeyStore owner:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "API-key management routes must use APIKeyStore owner:\n"
+        + "\n".join(violations)
     )
 
 
@@ -607,7 +635,9 @@ def test_agent_viewset_mutations_record_vector_side_effect_protocols():
         mutation_methods = set(route["methods"]) & set(expected_by_method)
         if not mutation_methods:
             continue
-        expected = set().union(*(expected_by_method[method] for method in mutation_methods))
+        expected = set().union(
+            *(expected_by_method[method] for method in mutation_methods)
+        )
         supporting = set(route.get("supporting_protocols") or [])
         if supporting != expected:
             violations.append(
@@ -615,8 +645,9 @@ def test_agent_viewset_mutations_record_vector_side_effect_protocols():
                 f"supporting={sorted(supporting)} expected={sorted(expected)}"
             )
 
-    assert not violations, "Agent mutation route inventory omits side-effect protocols:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Agent mutation route inventory omits side-effect protocols:\n"
+        + "\n".join(violations)
     )
 
 
@@ -679,8 +710,9 @@ def test_room_center_route_inventory_records_live_protocol_owners():
                 f"expected={sorted(expectation['supporting'])}"
             )
 
-    assert not violations, "Room-center route inventory mismatches live protocols:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Room-center route inventory mismatches live protocols:\n"
+        + "\n".join(violations)
     )
 
 
@@ -712,13 +744,16 @@ def test_room_center_protocol_inventory_matches_handler_calls():
     for handler_name, (owner, method_names) in expectations.items():
         source = inspect.getsource(getattr(room_center, handler_name))
         if by_name[handler_name]["owning_protocol"] != owner:
-            violations.append(f"{handler_name}: {by_name[handler_name]['owning_protocol']}")
+            violations.append(
+                f"{handler_name}: {by_name[handler_name]['owning_protocol']}"
+            )
         for call_marker in method_names:
             if call_marker not in source:
                 violations.append(f"{handler_name}: missing call {call_marker}")
 
-    assert not violations, "Room-center protocol inventory does not match handlers:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Room-center protocol inventory does not match handlers:\n"
+        + "\n".join(violations)
     )
 
 
@@ -730,10 +765,10 @@ def test_room_active_runs_inventory_records_execution_support():
         if route["module"] == "api_gateway.routes.room_routes"
         and route["name"] == "inquiry_active_runs"
     )
-    main_source = Path("main.py").read_text()
+    container_source = Path("container.py").read_text()
     room_runtime_source = Path("app_shell/room_runtime.py").read_text()
 
-    assert "execution_facade.get_runs_for_room" in main_source
+    assert "execution_facade.get_runs_for_room" in container_source
     assert "_read_active_runs_for_room" in room_runtime_source
     assert "common.protocols.ExecutionEngine" in set(
         active_runs_route.get("supporting_protocols") or []
@@ -745,10 +780,10 @@ def test_agent_viewset_routes_inject_repository_protocol_not_raw_database():
 
     violations: list[str] = []
     for route in app.routes:
-        if (
-            not isinstance(route, APIRoute)
-            or route.path not in {"/api/v1/agents", "/api/v1/agents/{item_id}"}
-        ):
+        if not isinstance(route, APIRoute) or route.path not in {
+            "/api/v1/agents",
+            "/api/v1/agents/{item_id}",
+        }:
             continue
         dependencies = sorted(
             getattr(dependency.call, "__name__", repr(dependency.call))
@@ -761,15 +796,17 @@ def test_agent_viewset_routes_inject_repository_protocol_not_raw_database():
                 f"{route.path} {route.name}: missing repository protocol dependency"
             )
 
-    assert not violations, "Agent viewset routes bypass repository protocol:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Agent viewset routes bypass repository protocol:\n" + "\n".join(violations)
     )
 
 
 def test_viewset_route_adapter_does_not_manage_repository_construction_or_sessions():
-    source = Path("api/viewset.py").read_text() + "\n" + Path(
-        "api/agent_viewset.py"
-    ).read_text()
+    source = (
+        Path("api/viewset.py").read_text()
+        + "\n"
+        + Path("api/agent_viewset.py").read_text()
+    )
     forbidden = (
         "Depends(get_viewset_db)",
         "db=Depends(",
@@ -777,8 +814,9 @@ def test_viewset_route_adapter_does_not_manage_repository_construction_or_sessio
     )
     violations = [value for value in forbidden if value in source]
 
-    assert not violations, "ViewSet route adapters still manage datastore details:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "ViewSet route adapters still manage datastore details:\n"
+        + "\n".join(violations)
     )
 
 
@@ -790,8 +828,8 @@ def test_legacy_410_routes_are_not_bound_to_legacy_execution_centers_at_startup(
     )
     violations = [value for value in forbidden if value in source]
 
-    assert not violations, "Legacy 410 routes still bind execution centers:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Legacy 410 routes still bind execution centers:\n" + "\n".join(violations)
     )
 
 
@@ -894,15 +932,16 @@ def test_route_owner_protocols_match_handler_calls():
             for base in protocol.__mro__
             for name, value in base.__dict__.items()
             if callable(value)
-            and (not name.startswith("_") or name in {"__call__", "_mask_sensitive_information"})
+            and (
+                not name.startswith("_")
+                or name in {"__call__", "_mask_sensitive_information"}
+            )
         }
         absent = sorted(expected_methods - protocol_methods)
         if absent:
             missing.append(f"{protocol.__name__}: {absent}")
 
-    assert not missing, "Route owner protocol methods missing:\n" + "\n".join(
-        missing
-    )
+    assert not missing, "Route owner protocol methods missing:\n" + "\n".join(missing)
 
 
 def test_agent_center_route_protocol_excludes_legacy_internal_methods():
@@ -1100,8 +1139,8 @@ def test_agent_route_inventory_records_live_protocol_owners():
         if missing_supporting:
             violations.append(f"{name}: missing {sorted(missing_supporting)}")
 
-    assert not violations, "Agent route inventory mismatches live protocols:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Agent route inventory mismatches live protocols:\n" + "\n".join(violations)
     )
 
 
@@ -1121,13 +1160,13 @@ def test_hitl_route_inventory_records_room_ownership_support():
     violations = [
         route["name"]
         for route in routes
-            if route["module"] == "api_gateway.routes.hitl_routes"
+        if route["module"] == "api_gateway.routes.hitl_routes"
         and "common.protocols.RoomOwnershipReader"
         not in set(route.get("supporting_protocols") or [])
     ]
 
-    assert not violations, "HITL routes omit RoomOwnershipReader support:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "HITL routes omit RoomOwnershipReader support:\n" + "\n".join(violations)
     )
 
 
@@ -1147,7 +1186,8 @@ def test_gateway_and_discovery_routes_record_rate_limit_support():
     violations = [
         f"{route['module']}.{route['name']}"
         for route in routes
-        if route["module"] in {
+        if route["module"]
+        in {
             "api_gateway.routes.platform_gateway_routes",
             "api_gateway.routes.discovery_routes",
         }
@@ -1155,8 +1195,8 @@ def test_gateway_and_discovery_routes_record_rate_limit_support():
         not in set(route.get("supporting_protocols") or [])
     ]
 
-    assert not violations, "Gateway/discovery routes omit rate limiter support:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Gateway/discovery routes omit rate limiter support:\n" + "\n".join(violations)
     )
 
 
@@ -1244,8 +1284,8 @@ def test_route_inventory_protocols_do_not_expose_broad_or_wildcard_shapes():
                     if annotation_is_broad(annotation):
                         violations.append(f"{owner}.{name}.{parameter.name}")
 
-    assert not violations, "Route inventory protocols expose broad shapes:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Route inventory protocols expose broad shapes:\n" + "\n".join(violations)
     )
 
 
@@ -1315,8 +1355,9 @@ def test_relay_routes_are_owned_by_route_facing_protocol():
         and route["owning_protocol"] != "common.protocols.HubRelayManagement"
     ]
 
-    assert not violations, "Relay routes must use the route-facing HubRelayManagement protocol:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Relay routes must use the route-facing HubRelayManagement protocol:\n"
+        + "\n".join(violations)
     )
 
 
@@ -1401,7 +1442,8 @@ def test_route_protocol_surfaces_are_specific():
                 continue
             params = inspect.signature(value).parameters
             assert not any(
-                parameter.kind in {
+                parameter.kind
+                in {
                     inspect.Parameter.VAR_POSITIONAL,
                     inspect.Parameter.VAR_KEYWORD,
                 }
@@ -1440,12 +1482,10 @@ def test_route_owner_protocols_do_not_expose_any_annotations():
                 violations.append(f"{protocol.__name__}.{name} return")
             for parameter in signature.parameters.values():
                 if parameter.annotation in {Any, object}:
-                    violations.append(
-                        f"{protocol.__name__}.{name}.{parameter.name}"
-                    )
+                    violations.append(f"{protocol.__name__}.{name}.{parameter.name}")
 
-    assert not violations, "Route owner protocols expose broad annotations:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Route owner protocols expose broad annotations:\n" + "\n".join(violations)
     )
 
 
@@ -1481,16 +1521,12 @@ def test_route_protocols_do_not_expose_broad_annotations():
                 if parameter.name == "self":
                     continue
                 if parameter.annotation is inspect.Signature.empty:
-                    violations.append(
-                        f"{protocol.__name__}.{name}.{parameter.name}"
-                    )
+                    violations.append(f"{protocol.__name__}.{name}.{parameter.name}")
                 elif _annotation_contains_broad_object(parameter.annotation):
-                    violations.append(
-                        f"{protocol.__name__}.{name}.{parameter.name}"
-                    )
+                    violations.append(f"{protocol.__name__}.{name}.{parameter.name}")
 
-    assert not violations, "App-shell route protocols expose broad shapes:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "App-shell route protocols expose broad shapes:\n" + "\n".join(violations)
     )
 
 
@@ -1531,17 +1567,15 @@ def test_platform_route_protocols_do_not_expose_any_or_wildcard_params():
                 }:
                     violations.append(f"{protocol.__name__}.{name}.{parameter.name}")
                 if parameter.annotation is Any:
-                    violations.append(
-                        f"{protocol.__name__}.{name}.{parameter.name}"
-                    )
+                    violations.append(f"{protocol.__name__}.{name}.{parameter.name}")
                 if protocol in {GatewayDiscoveryProvider, GatewayService}:
                     if _annotation_contains_broad_object(parameter.annotation):
                         violations.append(
                             f"{protocol.__name__}.{name}.{parameter.name}"
                         )
 
-    assert not violations, "Platform route protocols expose broad shapes:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Platform route protocols expose broad shapes:\n" + "\n".join(violations)
     )
 
 
