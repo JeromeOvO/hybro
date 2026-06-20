@@ -11,7 +11,6 @@ from collections.abc import AsyncGenerator, Callable
 from types import SimpleNamespace
 from typing import Any
 
-from app_shell.redis_runtime import AppShellLeaderElection, AppShellRelayStreamService
 from common.dto import (
     HubCancelCommand,
     HubDispatchCommand,
@@ -188,10 +187,10 @@ class RelayService:
         self._response_handler = response_handler
         self._bind_internal_response_router()
 
-    def set_stream_service(self, streams: AppShellRelayStreamService) -> None:
+    def set_stream_service(self, streams: Any) -> None:
         self._facade.bind_streams(streams)
 
-    def set_leader_election(self, leader: AppShellLeaderElection | None) -> None:
+    def set_leader_election(self, leader: Any | None) -> None:
         self._facade.bind_leader_elector(leader)
 
     def bind_agent_registry_writer(self, writer) -> None:

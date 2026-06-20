@@ -180,6 +180,16 @@ def test_legacy_relay_does_not_import_delivery_runtime_concrete() -> None:
     assert "self._sse" not in relay_text
 
 
+def test_legacy_relay_does_not_import_redis_runtime_concretes() -> None:
+    relay = ROOT / "app_shell/relay_service.py"
+    relay_imports = _imports(relay)
+    relay_text = relay.read_text()
+
+    assert "app_shell.redis_runtime" not in relay_imports
+    assert "AppShellRelayStreamService" not in relay_text
+    assert "AppShellLeaderElection" not in relay_text
+
+
 def test_app_shell_routes_internal_hub_events_through_hub_router() -> None:
     main = (ROOT / "main.py").read_text()
     container = (ROOT / "container.py").read_text()
