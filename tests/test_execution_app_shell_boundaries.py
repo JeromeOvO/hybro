@@ -125,8 +125,8 @@ def test_execution_shell_ports_use_named_method_contracts() -> None:
         ports.HITLReaderPort: ["get_pending_hitl_requests_for_message"],
     }
 
-    if hasattr(ports, "RoomCoordinatorPort"):
-        assert ports.RoomCoordinatorPort is ports.CoordinatorSynthesisPort
+    assert ports.RoomCoordinatorPort is ports.CoordinatorSynthesisPort
+    assert ports.SSEDeliveryPort is ports.ExecutionDeliveryPort
 
     variadic_methods: list[str] = []
     for port, method_names in port_methods.items():
@@ -172,6 +172,9 @@ def test_execution_focused_port_signatures_match_plan() -> None:
         ),
         (ports.A2ATransportPort, "cancel_remote_task"): (
             "(self, agent_card: 'AgentCard', remote_task_id: 'str') -> 'None'"
+        ),
+        (ports.A2ATransportPort, "has_push_notification_capability"): (
+            "(self, agent_card: 'AgentCard') -> 'bool'"
         ),
         (ports.RemoteTaskReaderPort, "get_task_from_agent"): (
             "(self, agent_card: 'AgentCard', task_id: 'str', *, "
