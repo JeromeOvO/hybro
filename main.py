@@ -695,6 +695,80 @@ async def lifespan(app: FastAPI):
                 ),
                 add_room_agent_message=message_store.add_room_agent_message,
             )
+            room_message_center_store = SimpleNamespace(
+                accumulate_artifact_on_message=(
+                    message_store.accumulate_artifact_on_message
+                ),
+                add_room_agent_message=message_store.add_room_agent_message,
+                cancel_agent_messages_by_ids=(
+                    message_store.cancel_agent_messages_by_ids
+                ),
+                cancel_descendants=message_store.cancel_descendants,
+                claim_or_reclaim_user_message=(
+                    message_store.claim_or_reclaim_user_message
+                ),
+                claim_user_message_for_processing=(
+                    message_store.claim_user_message_for_processing
+                ),
+                delete_room_agent_message_by_message_id=(
+                    message_store.delete_room_agent_message_by_message_id
+                ),
+                enable_task_tracking_on_message=(
+                    task_store.enable_task_tracking_on_message
+                ),
+                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
+                get_agent_group_by_id=agent_room_store.get_agent_group_by_id,
+                get_agent_name_by_agent_id=agent_room_store.get_agent_name_by_agent_id,
+                get_and_clear_continuation_on_message=(
+                    task_store.get_and_clear_continuation_on_message
+                ),
+                get_and_clear_continuation_on_user_message=(
+                    task_store.get_and_clear_continuation_on_user_message
+                ),
+                get_pending_continuation_on_message=(
+                    task_store.get_pending_continuation_on_message
+                ),
+                get_pending_hitl_requests_for_message=(
+                    hitl_store.get_pending_hitl_requests_for_message
+                ),
+                get_room_agent_message_by_message_id=(
+                    message_store.get_room_agent_message_by_message_id
+                ),
+                get_room_agent_messages_by_related_message_id=(
+                    message_store.get_room_agent_messages_by_related_message_id
+                ),
+                get_room_by_room_id=agent_room_store.get_room_by_room_id,
+                get_room_memory_by_room_id=memory_store.get_room_memory_by_room_id,
+                get_room_user_message_by_message_id=(
+                    message_store.get_room_user_message_by_message_id
+                ),
+                refresh_processing_claim=message_store.refresh_processing_claim,
+                resolve_client_request_id_for_agent_message=(
+                    task_store.resolve_client_request_id_for_agent_message
+                ),
+                resolve_client_request_id_for_message_id=(
+                    task_store.resolve_client_request_id_for_message_id
+                ),
+                save_continuation_on_message=task_store.save_continuation_on_message,
+                save_continuation_on_user_message=(
+                    task_store.save_continuation_on_user_message
+                ),
+                turn_exists=message_store.turn_exists,
+                unclaim_user_message=message_store.unclaim_user_message,
+                update_room_agent_message_by_message_id=(
+                    message_store.update_room_agent_message_by_message_id
+                ),
+                update_room_agent_message_with_new_message_content_by_message_id=(
+                    message_store.update_room_agent_message_with_new_message_content_by_message_id
+                ),
+                update_room_by_room_id=agent_room_store.update_room_by_room_id,
+                update_room_user_message_by_message_id=(
+                    message_store.update_room_user_message_by_message_id
+                ),
+                update_task_on_message=task_store.update_task_on_message,
+                update_task_state_on_message=message_store.update_task_state_on_message,
+                upsert_room_agent_message=message_store.upsert_room_agent_message,
+            )
 
             membership_source.bind_store(agent_room_store)
             debate_service.bind_store(debate_message_store)
@@ -777,7 +851,7 @@ async def lifespan(app: FastAPI):
             _context_memory_deps = create_context_memory_deps(context_memory_facade)
             room_message_center_impl = create_room_message_center(
                 room_services=room_services,
-                store=app_shell_store,
+                store=room_message_center_store,
                 sse_manager=sse_manager,
                 room_coordinator_service=room_coordinator_service,
                 summary_service=summary_llm_service,
