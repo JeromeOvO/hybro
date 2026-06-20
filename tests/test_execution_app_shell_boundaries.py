@@ -147,6 +147,73 @@ def test_execution_shell_ports_use_named_method_contracts() -> None:
     )
 
 
+def test_execution_focused_port_signatures_match_plan() -> None:
+    expected_signatures = {
+        (ports.A2ATransportPort, "has_streaming_capability"): (
+            "(self, *, agent_card: 'AgentCard') -> 'bool'"
+        ),
+        (ports.A2ATransportPort, "send_message_streaming"): (
+            "(self, agent_card: 'AgentCard', message: 'Any', *, "
+            "agent_id: 'str | None' = None) -> 'AsyncIterator[Any]'"
+        ),
+        (ports.A2ATransportPort, "send_message_sync"): (
+            "(self, *, agent_card: 'AgentCard', message: 'Any', "
+            "agent_id: 'str | None' = None) -> 'Any'"
+        ),
+        (ports.A2ATransportPort, "send_message_to_tracked_agent"): (
+            "(self, *, agent_card: 'AgentCard', message: 'Any', "
+            "message_id: 'str', webhook_token: 'str', context_id: 'str', "
+            "agent_id: 'str | None' = None) -> 'dict[str, Any]'"
+        ),
+        (ports.A2ATransportPort, "create_task_for_tracking"): (
+            "(self, current_message: 'RoomAgentMessage', agent_card: 'AgentCard', "
+            "prepared_message: 'Any', *, step_number: 'int | None' = None, "
+            "total_steps: 'int | None' = None) -> 'dict[str, Any]'"
+        ),
+        (ports.A2ATransportPort, "cancel_remote_task"): (
+            "(self, agent_card: 'AgentCard', remote_task_id: 'str') -> 'None'"
+        ),
+        (ports.RemoteTaskReaderPort, "get_task_from_agent"): (
+            "(self, agent_card: 'AgentCard', task_id: 'str', *, "
+            "agent_id: 'str | None' = None) -> 'Any'"
+        ),
+        (ports.A2ATaskTrackingStorePort, "check_task_limits"): (
+            "(self, user_id: 'str', room_id: 'str', "
+            "non_terminal_state_values: 'list[str]') -> 'None'"
+        ),
+        (ports.RoomMemoryPort, "add_synthesis_to_history"): (
+            "(self, room_id: 'str', user_message_id: 'str', "
+            "synthesis_text: 'str') -> 'str | None'"
+        ),
+        (ports.RoomMemoryPort, "update_room_summary"): (
+            "(self, room_id: 'str') -> 'None'"
+        ),
+        (ports.RoomRuntimePort, "inquiry_agent_messages_by_related_message_id"): (
+            "(self, related_message_id: 'str') -> 'Any'"
+        ),
+        (ports.RoomMessageWriter, "accumulate_artifact_on_message"): (
+            "(self, message_id: 'str', artifact: 'dict[str, Any]', *, "
+            "append: 'bool' = False) -> 'bool'"
+        ),
+        (ports.ExecutionDeliveryPort, "send_artifact_update"): (
+            "(self, *, room_id: 'str', message_id: 'str', agent_id: 'str', "
+            "artifact: 'dict[str, Any]', append: 'bool' = False, "
+            "last_chunk: 'bool' = False, "
+            "client_request_id: 'str | None' = None) -> 'None'"
+        ),
+    }
+
+    mismatches = []
+    for (port, method_name), expected in expected_signatures.items():
+        actual = str(inspect.signature(getattr(port, method_name)))
+        if actual != expected:
+            mismatches.append(f"{port.__name__}.{method_name}: {actual} != {expected}")
+
+    assert not mismatches, "Port signatures must match the plan:\n" + "\n".join(
+        mismatches
+    )
+
+
 def _parameter_names(obj) -> set[str]:
     return set(inspect.signature(obj.__init__).parameters)
 

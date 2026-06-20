@@ -187,30 +187,32 @@ class A2AServicePort(Protocol):
 
 
 class A2ATransportPort(Protocol):
-    def has_streaming_capability(self, agent_card: AgentCard) -> bool: ...
+    def has_streaming_capability(self, *, agent_card: AgentCard) -> bool: ...
 
     def send_message_streaming(
         self,
         agent_card: AgentCard,
         message: Any,
+        *,
         agent_id: str | None = None,
     ) -> AsyncIterator[Any]: ...
 
     async def send_message_sync(
         self,
+        *,
         agent_card: AgentCard,
         message: Any,
         agent_id: str | None = None,
-    ) -> dict[str, Any] | None: ...
+    ) -> Any: ...
 
     async def send_message_to_tracked_agent(
         self,
+        *,
         agent_card: AgentCard,
         message: Any,
         message_id: str,
         webhook_token: str,
         context_id: str,
-        room_id: str | None = None,
         agent_id: str | None = None,
     ) -> dict[str, Any]: ...
 
@@ -218,7 +220,7 @@ class A2ATransportPort(Protocol):
         self,
         current_message: RoomAgentMessage,
         agent_card: AgentCard,
-        message: Any,
+        prepared_message: Any,
         *,
         step_number: int | None = None,
         total_steps: int | None = None,
@@ -227,10 +229,8 @@ class A2ATransportPort(Protocol):
     async def cancel_remote_task(
         self,
         agent_card: AgentCard,
-        task_id: str,
-        *,
-        timeout: float = 5.0,
-    ) -> bool: ...
+        remote_task_id: str,
+    ) -> None: ...
 
     def has_push_notification_capability(self, agent_card: AgentCard) -> bool: ...
 
@@ -238,9 +238,11 @@ class A2ATransportPort(Protocol):
 class RemoteTaskReaderPort(Protocol):
     async def get_task_from_agent(
         self,
-        agent_card: AgentCard | dict[str, Any],
+        agent_card: AgentCard,
         task_id: str,
-    ) -> Any | None: ...
+        *,
+        agent_id: str | None = None,
+    ) -> Any: ...
 
 
 class AgentHealthPort(Protocol):
@@ -277,7 +279,7 @@ class A2ATaskTrackingStorePort(Protocol):
         self,
         user_id: str,
         room_id: str,
-        non_terminal_states: list[str],
+        non_terminal_state_values: list[str],
     ) -> None: ...
 
     def generate_webhook_token(self) -> str: ...
@@ -378,16 +380,14 @@ class RoomMemoryPort(Protocol):
     async def add_synthesis_to_history(
         self,
         room_id: str,
+        user_message_id: str,
         synthesis_text: str,
-        trajectory: Any | None = None,
     ) -> str | None: ...
 
     async def update_room_summary(
         self,
         room_id: str,
-        synthesis_text: str,
-        synthesis_turn_id: str | None = None,
-    ) -> bool: ...
+    ) -> None: ...
 
 
 class RoomRuntimePort(Protocol):
@@ -418,8 +418,8 @@ class RoomRuntimePort(Protocol):
     ) -> RoomCenterAgentMessageResponse: ...
 
     async def inquiry_agent_messages_by_related_message_id(
-        self, request: RoomCenterAgentMessageRequest
-    ) -> RoomCenterAgentMessageResponse: ...
+        self, related_message_id: str
+    ) -> Any: ...
 
 
 class RoomMessageReader(Protocol):
@@ -516,6 +516,7 @@ class RoomMessageWriter(Protocol):
         self,
         message_id: str,
         artifact: dict[str, Any],
+        *,
         append: bool = False,
     ) -> bool: ...
 
@@ -696,7 +697,7 @@ class ExecutionDeliveryPort(Protocol):
         room_id: str,
         message_id: str,
         agent_id: str,
-        artifact: Any,
+        artifact: dict[str, Any],
         append: bool = False,
         last_chunk: bool = False,
         client_request_id: str | None = None,
