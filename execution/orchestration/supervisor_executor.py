@@ -54,13 +54,10 @@ if TYPE_CHECKING:
         RateLimitPort,
         RoomContinuationStore,
         RoomMemoryPort,
-        RoomMemoryReader,
         RoomMessageReader,
         RoomMessageWriter,
-        RoomReader,
         RoomRuntimePort,
         RoomTaskStateStore,
-        RoomWriter,
     )
     from execution.state.task_state_manager import TaskStateManager
 
@@ -90,10 +87,6 @@ class SupervisorExecutor:
         message_writer: RoomMessageWriter,
         task_state_store: RoomTaskStateStore,
         continuation_store: RoomContinuationStore,
-        agent_lookup: RoomReader,
-        room_reader: RoomReader,
-        room_writer: RoomWriter,
-        memory_reader: RoomMemoryReader,
         room_memory: RoomMemoryPort,
         rate_limit_service: RateLimitPort,
         agent_dispatcher: AgentDispatcher,
@@ -110,10 +103,6 @@ class SupervisorExecutor:
         self.message_writer = message_writer
         self.task_state_store = task_state_store
         self.continuation_store = continuation_store
-        self.agent_lookup = agent_lookup
-        self.room_reader = room_reader
-        self.room_writer = room_writer
-        self.memory_reader = memory_reader
         self.room_memory = room_memory
         self.rate_limit_service = rate_limit_service
         self.agent_dispatcher = agent_dispatcher
