@@ -2,6 +2,8 @@ import ast
 import json
 from pathlib import Path
 
+import pytest
+
 APP_SHELL_TARGETS = {
     "app_shell/room_runtime.py",
     "app_shell/a2a_runtime.py",
@@ -16,6 +18,71 @@ FORBIDDEN_APP_SHELL_IMPORT_PREFIXES = (
     "botocore",
     "common.config.settings",
     "database.mongodb",
+)
+
+FORBIDDEN_MAIN_WIRING_IMPORT_PREFIXES = (
+    "a2a_adapter",
+    "agent",
+    "app_shell.a2a_runtime",
+    "app_shell.agent_capability_issue_service",
+    "app_shell.agent_liveness_service",
+    "app_shell.agent_matcher",
+    "app_shell.agent_resolver_service",
+    "app_shell.agent_runtime",
+    "app_shell.agent_selection_service",
+    "app_shell.agent_service",
+    "app_shell.bedrock_service",
+    "app_shell.compaction_service",
+    "app_shell.context_assembly_service",
+    "app_shell.context_memory_runtime",
+    "app_shell.debate_service",
+    "app_shell.delivery_runtime",
+    "app_shell.execution_runtime",
+    "app_shell.gemini_service",
+    "app_shell.health_check",
+    "app_shell.hitl_service",
+    "app_shell.inspection_runtime",
+    "app_shell.memory_search_service",
+    "app_shell.memory_service",
+    "app_shell.notification_service",
+    "app_shell.openai_service",
+    "app_shell.redis_runtime",
+    "app_shell.relay_service",
+    "app_shell.relay_store",
+    "app_shell.repository_store",
+    "app_shell.room_coordinator_service",
+    "app_shell.room_lock",
+    "app_shell.room_membership_source",
+    "app_shell.room_runtime",
+    "app_shell.s3_service",
+    "app_shell.task_service",
+    "app_shell.viewset",
+    "context_memory.config",
+    "delivery",
+    "execution",
+    "hub_runtime_bridge",
+    "llm_gateway",
+    "platform_module.adapters",
+    "platform_module.rate_limit",
+)
+
+REQUIRED_MAIN_RUNTIME_ENTRYPOINTS = (
+    "create_application_runtime",
+    "startup_runtime",
+    "shutdown_runtime",
+    "validate_runtime_bindings",
+)
+
+FORBIDDEN_MAIN_WIRING_SNIPPETS = (
+    "execution_room_message_center.bind(",
+    "create_room_message_center(",
+    "create_execution_facade(",
+    "create_platform_facade(",
+    "create_delivery_facade(",
+    "gateway.bind_gateway_dependencies(",
+    "discovery.bind_discovery_dependencies(",
+    "bind_api_gateway_deps(",
+    "init_relay_service(",
 )
 
 EXPECTED_APP_SHELL_BASELINE = {
@@ -388,3 +455,68 @@ def test_context_memory_runtime_wiring_avoids_app_shell_singletons():
     assert not violations, "App-shell context singleton imports remain:\n" + "\n".join(
         violations
     )
+
+
+def test_main_delegates_concrete_startup_wiring_to_container_runtime():
+    main_source = Path("main.py").read_text()
+    main_imports = _import_modules(Path("main.py"))
+    violations: list[str] = []
+
+    for lineno, module in main_imports:
+        for prefix in FORBIDDEN_MAIN_WIRING_IMPORT_PREFIXES:
+            if module == prefix or module.startswith(f"{prefix}."):
+                violations.append(f"main.py:{lineno}: {module}")
+                break
+
+    for snippet in FORBIDDEN_MAIN_WIRING_SNIPPETS:
+        if snippet in main_source:
+            violations.append(f"main.py contains {snippet}")
+
+    for entrypoint in REQUIRED_MAIN_RUNTIME_ENTRYPOINTS:
+        if entrypoint not in main_source:
+            violations.append(f"main.py missing {entrypoint}")
+
+    assert not violations, "main.py still owns concrete startup wiring:\n" + "\n".join(
+        violations
+    )
+
+
+@pytest.mark.asyncio
+async def test_main_lifespan_shuts_down_runtime_when_validation_fails(monkeypatch):
+    import main
+
+    app = object()
+    runtime = object()
+    calls: list[tuple] = []
+
+    def fake_create_application_runtime(app_settings):
+        calls.append(("create", app_settings))
+        return runtime
+
+    async def fake_startup_runtime(startup_app, startup_runtime):
+        calls.append(("startup", startup_app, startup_runtime))
+
+    def fake_validate_runtime_bindings(validate_app, validate_runtime):
+        calls.append(("validate", validate_app, validate_runtime))
+        raise RuntimeError("validation failed")
+
+    async def fake_shutdown_runtime(shutdown_app, shutdown_runtime):
+        calls.append(("shutdown", shutdown_app, shutdown_runtime))
+
+    monkeypatch.setattr(
+        main, "create_application_runtime", fake_create_application_runtime
+    )
+    monkeypatch.setattr(main, "startup_runtime", fake_startup_runtime)
+    monkeypatch.setattr(main, "validate_runtime_bindings", fake_validate_runtime_bindings)
+    monkeypatch.setattr(main, "shutdown_runtime", fake_shutdown_runtime)
+
+    with pytest.raises(RuntimeError, match="validation failed"):
+        async with main.lifespan(app):
+            calls.append(("yielded",))
+
+    assert calls == [
+        ("create", main.settings),
+        ("startup", app, runtime),
+        ("validate", app, runtime),
+        ("shutdown", app, runtime),
+    ]

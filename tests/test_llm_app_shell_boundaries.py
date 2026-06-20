@@ -132,21 +132,25 @@ def test_provider_hint_is_not_public_protocol_or_service_api():
                 )
 
 
-def test_main_binds_focused_llm_services_to_production_consumers():
-    source = Path("main.py").read_text()
+def test_container_binds_focused_llm_services_to_production_consumers():
+    source = Path("container.py").read_text()
+    main_source = Path("main.py").read_text()
     expected_snippets = [
         "agent_resolver_service.bind_agent_selection_service(",
         "room_runtime.bind_message_parser_service(",
-        "room_runtime.bind_debate_rounds(settings.debate_rounds)",
+        "room_runtime.bind_debate_rounds(runtime.settings.debate_rounds)",
         "context_memory_facade = create_context_memory_facade(",
         "llm_provider=llm_provider,",
+        "memory_search_service.bind_embedding_service(",
         "room_coordinator_service.bind_summary_service(",
         "chat_memory_service.bind_room_memory_llm_service(",
         "room_memory_service.bind_turn_notes_llm_provider(llm_provider)",
         "openai_service.bind_debate_service(",
     ]
     missing = [snippet for snippet in expected_snippets if snippet not in source]
-    assert not missing, f"main.py missing focused LLM bindings: {missing}"
+    leaked = [snippet for snippet in expected_snippets if snippet in main_source]
+    assert not missing, f"container.py missing focused LLM bindings: {missing}"
+    assert not leaked, f"main.py still owns focused LLM bindings: {leaked}"
 
 
 def test_focused_llm_consumers_do_not_import_openai_compatibility_adapter():
