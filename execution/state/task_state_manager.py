@@ -71,10 +71,10 @@ class TaskStateManager:
 
     def __init__(
         self,
-        room_services: RoomRuntimePort,
+        room_runtime: RoomRuntimePort,
         notification_service: NotificationServicePort,
     ) -> None:
-        self.room_runtime = room_services
+        self.room_runtime = room_runtime
         self.notification_service = notification_service
 
     # ------------------------------------------------------------------
