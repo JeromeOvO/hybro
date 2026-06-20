@@ -25,7 +25,7 @@ from models.room import RoomAgentMessage
 
 if TYPE_CHECKING:
     from execution.dispatch.transports.base import AgentTransport
-    from execution.ports import RoomRuntimePort, SSEDeliveryPort
+    from execution.ports import ExecutionDeliveryPort, RoomRuntimePort
     from models.agent import Agent
 
 
@@ -59,8 +59,8 @@ class AgentMessageProcessor:
     def __init__(
         self,
         *,
-        sse_manager: SSEDeliveryPort,
-        room_services: RoomRuntimePort,
+        delivery: ExecutionDeliveryPort,
+        room_runtime: RoomRuntimePort,
         room_memory_reader: RoomMemoryReader,
         task_tracker: TaskTrackerPort,
         transports: dict[str, AgentTransport],
@@ -70,8 +70,8 @@ class AgentMessageProcessor:
         cloud_health_cache_ttl: float = 30.0,
         cloud_health_check_timeout: float = 5.0,
     ) -> None:
-        self.sse_manager = sse_manager
-        self.room_runtime = room_services
+        self.delivery = delivery
+        self.room_runtime = room_runtime
         self._room_memory_reader = room_memory_reader
         self._task_tracker = task_tracker
         self.transports = dict(transports)
@@ -146,7 +146,7 @@ class AgentMessageProcessor:
                     relay_service=relay_service,
                     task_tracker=self._task_tracker,
                     call_counter=getattr(relay_service, "agent_call_counter", None),
-                    sse_manager=self.sse_manager,
+                    delivery=self.delivery,
                     ownership_store=getattr(relay_service, "task_ownership_store", None),
                     ownership_lease_maintainer=getattr(
                         relay_service,

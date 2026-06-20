@@ -54,7 +54,7 @@ if TYPE_CHECKING:
             self, room_agent_message
         ) -> str | None: ...
 
-    from execution.ports import NotificationServicePort, SSEDeliveryPort
+    from execution.ports import ExecutionDeliveryPort, NotificationServicePort
 
 logger = get_logger(__name__)
 
@@ -62,7 +62,7 @@ ProcessingStatusEmitter = Callable[..., Awaitable[dict[str, Any] | None]]
 _processing_status_emitter: ProcessingStatusEmitter | None = None
 _notification_store: TaskNotificationStore | None = None
 _notification_service = None
-_sse_manager = None
+_delivery = None
 
 
 def bind_notification_store(notification_store: TaskNotificationStore) -> None:
@@ -82,10 +82,10 @@ def bind_processing_status_emitter(
 def bind_task_notification_runtime(
     *,
     notification_service,
-    sse_manager,
+    delivery,
 ) -> None:
     globals()["_notification_service"] = notification_service
-    globals()["_sse_manager"] = sse_manager
+    globals()["_delivery"] = delivery
 
 
 class TaskNotificationAdapter:
@@ -142,7 +142,7 @@ def _map_task_state_to_processing_status(state: TaskState) -> SSEProcessingStatu
 async def _notify_task_update_impl(
     notification_store: TaskNotificationStore,
     notification_svc: NotificationServicePort,
-    sse: SSEDeliveryPort,
+    delivery: ExecutionDeliveryPort,
     *,
     message_id: str,
     state: TaskState,
@@ -328,7 +328,7 @@ async def _notify_task_update_impl(
     # --- Write-side: artifact backfill + message_text backfill ------------
     # Only write back to DB when a backfill actually modifies the message.
     # An unconditional full-document write here can overwrite real task data
-    # (artifacts, id, context_id) saved by a2a_service's partial $set if
+    # (artifacts, id, context_id) saved by A2A transport partial $set if
     # the Pydantic round-trip (deserialize from DB → model_dump → $set)
     # loses fields from the a2a Task schema.
     needs_write = False
@@ -528,12 +528,12 @@ async def notify_task_update(
     """
     if _notification_store is None:
         raise RuntimeError("Task notification store dependency has not been bound")
-    if _notification_service is None or _sse_manager is None:
+    if _notification_service is None or _delivery is None:
         raise RuntimeError("Task notification runtime dependencies have not been bound")
     return await _notify_task_update_impl(
         _notification_store,
         _notification_service,
-        _sse_manager,
+        _delivery,
         message_id=message_id,
         state=state,
         room_id=room_id,

@@ -40,7 +40,7 @@ def _make_handler(*, db=None, sse=None, rmc=None):
         client_request_resolver=db,
         room_reader=db,
         hitl_reader=db,
-        sse_manager=sse,
+        delivery=sse,
         room_message_center=rmc,
     )
 
@@ -113,7 +113,7 @@ class TestMultiEventSequenceWithPersist:
                 await h.handle(event)
 
         # Three artifact_update events -> three send_artifact_update calls
-        assert h._sse.send_artifact_update.await_count == 3
+        assert h._delivery.send_artifact_update.await_count == 3
 
         # All three artifact_update events with artifacts trigger DB accumulation
         assert h._message_writer.accumulate_artifact_on_message.await_count == 3
@@ -125,7 +125,7 @@ class TestMultiEventSequenceWithPersist:
         )
 
         # send_agent_response removed — _notify() delivers parts via task_update
-        h._sse.send_agent_response.assert_not_awaited()
+        h._delivery.send_agent_response.assert_not_awaited()
 
         # Terminal response resumes orchestration
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
@@ -154,8 +154,8 @@ class TestMultiEventSequenceSkipPersist:
 
         # SSE emissions are identical regardless of skip_persist
         # Three artifact_update events (send_agent_response removed)
-        assert h._sse.send_artifact_update.await_count == 3
-        h._sse.send_agent_response.assert_not_awaited()
+        assert h._delivery.send_artifact_update.await_count == 3
+        h._delivery.send_agent_response.assert_not_awaited()
 
         # DB writes are skipped
         h._task_writer.update_task_state_on_message.assert_not_awaited()
@@ -186,10 +186,10 @@ class TestSSEParity:
                     await h.handle(event)
 
             results[skip] = {
-                "artifact_count": h._sse.send_artifact_update.await_count,
-                "artifact_calls": h._sse.send_artifact_update.call_args_list,
-                "response_count": h._sse.send_agent_response.await_count,
-                "response_calls": h._sse.send_agent_response.call_args_list,
+                "artifact_count": h._delivery.send_artifact_update.await_count,
+                "artifact_calls": h._delivery.send_artifact_update.call_args_list,
+                "response_count": h._delivery.send_agent_response.await_count,
+                "response_calls": h._delivery.send_agent_response.call_args_list,
             }
 
         assert results[True]["artifact_count"] == results[False]["artifact_count"]

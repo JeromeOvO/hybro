@@ -229,9 +229,9 @@ def _make_processor(**overrides):
     proc = object.__new__(DirectTransport)
     proc.response_handler = overrides.get("response_handler", MagicMock())
     proc.tsm = overrides.get("tsm", MagicMock())
-    proc.sse_manager = overrides.get("sse_manager", MagicMock())
-    proc.a2a_service = overrides.get("a2a_service", MagicMock())
-    proc.task_service = overrides.get("task_service", MagicMock())
+    proc.delivery = overrides.get("delivery", MagicMock())
+    proc.a2a_transport = overrides.get("a2a_transport", MagicMock())
+    proc.remote_task_reader = overrides.get("remote_task_reader", MagicMock())
     db = overrides.get("database_service", MagicMock())
     proc._message_reader = db
     proc._artifact_store = db
@@ -295,7 +295,7 @@ class TestHandleSyncResponseSuccess:
         )
 
         # Agent returns a message-type response dict
-        proc.a2a_service.send_message_to_tracked_agent = AsyncMock(
+        proc.a2a_transport.send_message_to_tracked_agent = AsyncMock(
             return_value={"type": "message", "content": "Hello from agent"}
         )
         proc.tsm.transition_task = AsyncMock()
@@ -347,14 +347,14 @@ class TestHandleSyncResponseWithPolling:
         proc._setup_tracking_context = AsyncMock(return_value=(task_info, ctx_mock))
 
         # Agent returns a task-type response in working state
-        proc.a2a_service.send_message_to_tracked_agent = AsyncMock(
+        proc.a2a_transport.send_message_to_tracked_agent = AsyncMock(
             return_value={
                 "type": "task",
                 "task_id": "remote-task-42",
                 "status": TaskState.working,
             }
         )
-        proc.a2a_service.has_push_notification_capability = MagicMock(return_value=False)
+        proc.a2a_transport.has_push_notification_capability = MagicMock(return_value=False)
         proc.tsm.transition_task = AsyncMock()
         proc.tsm.persist_message = AsyncMock(return_value=True)
         proc.tsm.notify_task = AsyncMock()
@@ -510,7 +510,7 @@ class TestMessageChunkEmitsArtifactUpdate:
     @pytest.mark.asyncio
     async def test_message_chunk_emits_artifact_update(self, monkeypatch):
         proc = _make_processor()
-        proc.sse_manager.send_artifact_update = AsyncMock()
+        proc.delivery.send_artifact_update = AsyncMock()
         proc.tsm.persist_message = AsyncMock(return_value=True)
 
         current_message = _make_room_agent_message()
@@ -545,19 +545,20 @@ class TestMessageChunkEmitsArtifactUpdate:
 
         monkeypatch.undo()
 
-        proc.sse_manager.send_artifact_update.assert_awaited_once()
-        call_args = proc.sse_manager.send_artifact_update.call_args
-        assert call_args[0][0] == "room-1"  # room_id
-        artifact = call_args[0][3]  # artifact_dict
-        assert artifact["artifact_id"] == "msg-1-stream"
-        assert artifact["parts"] == [{"kind": "text", "text": "Hello"}]
-        assert call_args[1]["append"] is True or call_args[0][4] is True
+        proc.delivery.send_artifact_update.assert_awaited_once()
+        call_kwargs = proc.delivery.send_artifact_update.call_args.kwargs
+        assert call_kwargs["room_id"] == "room-1"
+        assert call_kwargs["message_id"] == "msg-1"
+        assert call_kwargs["agent_id"] == "agent-1"
+        assert call_kwargs["artifact"]["artifact_id"] == "msg-1-stream"
+        assert call_kwargs["artifact"]["parts"] == [{"kind": "text", "text": "Hello"}]
+        assert call_kwargs["append"] is True
 
     @pytest.mark.asyncio
     async def test_message_chunk_skips_empty_content(self, monkeypatch):
         """Empty text content should not emit any SSE event."""
         proc = _make_processor()
-        proc.sse_manager.send_artifact_update = AsyncMock()
+        proc.delivery.send_artifact_update = AsyncMock()
         proc.tsm.persist_message = AsyncMock(return_value=True)
 
         current_message = _make_room_agent_message()
@@ -590,19 +591,19 @@ class TestMessageChunkEmitsArtifactUpdate:
 
         monkeypatch.undo()
 
-        proc.sse_manager.send_artifact_update.assert_not_awaited()
+        proc.delivery.send_artifact_update.assert_not_awaited()
 
 
 class TestArtifactUpdateRoutedThroughHandler:
     """_handle_stream_artifact_update routes through response_handler.handle
-    instead of using tsm.persist_message + sse_manager.send_artifact_update."""
+    instead of using tsm.persist_message + delivery.send_artifact_update."""
 
     @pytest.mark.asyncio
     async def test_artifact_chunk_routes_through_handler(self):
         proc = _make_processor()
         proc.response_handler.handle = AsyncMock()
         proc.tsm.persist_message = AsyncMock(return_value=True)
-        proc.sse_manager.send_artifact_update = AsyncMock()
+        proc.delivery.send_artifact_update = AsyncMock()
 
         current_message = _make_room_agent_message()
         agent_card = MagicMock(spec_set=["name"])
@@ -634,7 +635,7 @@ class TestArtifactUpdateRoutedThroughHandler:
 
         await proc._handle_stream_artifact_update(result, ctx, streaming_state)
 
-        # Handler receives the event, NOT direct sse_manager or persist_message
+        # Handler receives the event, NOT direct delivery or persist_message
         proc.response_handler.handle.assert_awaited_once()
         event = proc.response_handler.handle.call_args[0][0]
         assert event.kind == "artifact_update"
@@ -645,7 +646,7 @@ class TestArtifactUpdateRoutedThroughHandler:
 
         # Old paths should NOT be called
         proc.tsm.persist_message.assert_not_awaited()
-        proc.sse_manager.send_artifact_update.assert_not_awaited()
+        proc.delivery.send_artifact_update.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_artifact_chunk_no_sse_uses_atomic_persist(self):
@@ -701,7 +702,7 @@ class TestFinalizeStreamingEmitsLastChunk:
     @pytest.mark.asyncio
     async def test_finalize_emits_last_chunk(self):
         proc = _make_processor()
-        proc.sse_manager.send_artifact_update = AsyncMock()
+        proc.delivery.send_artifact_update = AsyncMock()
         proc.tsm.transition_task = AsyncMock()
         proc.tsm.persist_message = AsyncMock(return_value=True)
         proc.response_handler.handle = AsyncMock()
@@ -729,12 +730,12 @@ class TestFinalizeStreamingEmitsLastChunk:
 
         assert status == ProcessingStatus.SUCCESS
         # First call should be the last_chunk artifact_update
-        first_call = proc.sse_manager.send_artifact_update.call_args_list[0]
-        assert first_call[0][0] == "room-1"
-        artifact = first_call[0][3]
-        assert artifact["artifact_id"] == "msg-1-stream"
-        assert artifact["parts"] == []
-        assert first_call[1]["last_chunk"] is True or first_call[0][5] is True
+        first_call_kwargs = proc.delivery.send_artifact_update.call_args_list[0].kwargs
+        assert first_call_kwargs["room_id"] == "room-1"
+        assert first_call_kwargs["message_id"] == "msg-1"
+        assert first_call_kwargs["artifact"]["artifact_id"] == "msg-1-stream"
+        assert first_call_kwargs["artifact"]["parts"] == []
+        assert first_call_kwargs["last_chunk"] is True
 
 
 # =============================================================================
@@ -744,7 +745,7 @@ class TestFinalizeStreamingEmitsLastChunk:
 
 class TestProcessSyncResponsePersistGating:
     """Tracked path skips full-document persist to avoid overwriting
-    the real task saved by a2a_service's partial $set."""
+    the real task saved by A2A transport partial $set."""
 
     def _make_ctx(self, current_message, agent_card, task_info):
         return ProcessingContext(
@@ -831,7 +832,7 @@ class TestProcessSyncResponsePersistGating:
         """When task_info is None (degraded/fallback path), persist=True."""
         proc = _make_processor()
         proc.tsm.transition_task = AsyncMock()
-        proc.sse_manager.send_task_update = AsyncMock()
+        proc.delivery.send_task_update = AsyncMock()
         proc.response_handler.handle = AsyncMock()
 
         current_message = _make_room_agent_message()
@@ -985,7 +986,7 @@ class TestHandleSyncResponseInteractive:
                 ),
             )
         )
-        proc.a2a_service.send_message_to_tracked_agent = AsyncMock(
+        proc.a2a_transport.send_message_to_tracked_agent = AsyncMock(
             return_value={
                 "type": "task",
                 "status": "input-required",
@@ -1037,7 +1038,7 @@ class TestHandleSyncResponseInteractive:
                 ),
             )
         )
-        proc.a2a_service.send_message_to_tracked_agent = AsyncMock(
+        proc.a2a_transport.send_message_to_tracked_agent = AsyncMock(
             return_value={
                 "type": "task",
                 "status": "input-required",
@@ -1088,7 +1089,7 @@ class TestHandleSyncResponseInteractive:
                 ),
             )
         )
-        proc.a2a_service.send_message_to_tracked_agent = AsyncMock(
+        proc.a2a_transport.send_message_to_tracked_agent = AsyncMock(
             return_value={
                 "type": "task",
                 "status": "input-required",
@@ -1137,7 +1138,7 @@ class TestHandleSyncResponseInteractive:
                 ),
             )
         )
-        proc.a2a_service.send_message_to_tracked_agent = AsyncMock(
+        proc.a2a_transport.send_message_to_tracked_agent = AsyncMock(
             return_value={
                 "type": "task",
                 "requires_auth": True,
@@ -1180,7 +1181,7 @@ class TestDispatchInteractive:
             parts=[TextPart(kind="text", text="Please provide your OAuth token.")],
         )
 
-        proc.a2a_service.has_streaming_capability = MagicMock(return_value=False)
+        proc.a2a_transport.has_streaming_capability = MagicMock(return_value=False)
         proc.handle_sync_response = AsyncMock(
             return_value=(True, None, message.message_id, "agent-task-auth")
         )
@@ -1211,7 +1212,7 @@ class TestDispatchInteractive:
         task.status.state = CommonTaskState.AUTH_REQUIRED
         task.status.message = None
 
-        proc.a2a_service.has_streaming_capability = MagicMock(return_value=False)
+        proc.a2a_transport.has_streaming_capability = MagicMock(return_value=False)
         proc.handle_sync_response = AsyncMock(
             return_value=(True, None, message.message_id, "agent-task-auth")
         )
@@ -1256,8 +1257,8 @@ class TestDispatchInteractive:
                 ),
             )
         )
-        proc.a2a_service.has_streaming_capability = MagicMock(return_value=False)
-        proc.a2a_service.send_message_to_tracked_agent = AsyncMock(
+        proc.a2a_transport.has_streaming_capability = MagicMock(return_value=False)
+        proc.a2a_transport.send_message_to_tracked_agent = AsyncMock(
             return_value={
                 "type": "task",
                 "requires_auth": True,

@@ -171,7 +171,7 @@ class RoomMessageCenter:
             client_request_resolver=self._store,
             room_reader=self._store,
             hitl_reader=self._store,
-            sse_manager=self.sse_manager,
+            delivery=self.sse_manager,
             room_message_center=self,
             hitl_coordinator=hitl_coordinator,
             notification_service=notification_service,
@@ -182,9 +182,9 @@ class RoomMessageCenter:
         self.direct_transport = DirectTransport(
             response_handler=self.agent_response_handler,
             tsm=self.tsm,
-            a2a_service=a2a_service,
-            task_service=task_service,
-            sse_manager=self.sse_manager,
+            a2a_transport=a2a_service,
+            remote_task_reader=task_service,
+            delivery=self.sse_manager,
             message_reader=self._store,
             artifact_store=self._store,
             task_updater=self._store,
@@ -196,8 +196,8 @@ class RoomMessageCenter:
         # init_relay_service().  AgentMessageProcessor resolves the singleton
         # lazily on first use and builds the outbound transport in Execution.
         self.agent_message_processor = AgentMessageProcessor(
-            sse_manager=self.sse_manager,
-            room_services=self.room_runtime,
+            delivery=self.sse_manager,
+            room_runtime=self.room_runtime,
             room_memory_reader=self._store,
             task_tracker=self._store,
             transports={"direct": self.direct_transport},

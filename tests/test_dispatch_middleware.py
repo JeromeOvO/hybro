@@ -245,8 +245,8 @@ class TestAMPRelayDispatch:
         relay_svc.ownership_lease_maintainer = MagicMock()
 
         amp = AgentMessageProcessor(
-            sse_manager=MagicMock(),
-            room_services=MagicMock(),
+            delivery=MagicMock(),
+            room_runtime=MagicMock(),
             room_memory_reader=MagicMock(),
             task_tracker=MagicMock(),
             transports={"direct": direct_transport},
@@ -286,8 +286,8 @@ class TestAMPRelayDispatch:
         )
 
         amp = AgentMessageProcessor(
-            sse_manager=MagicMock(),
-            room_services=room_runtime,
+            delivery=MagicMock(),
+            room_runtime=room_runtime,
             room_memory_reader=db_service,
             task_tracker=MagicMock(),
             transports={"direct": MagicMock(), "relay": relay_transport_mock},
@@ -331,8 +331,8 @@ class TestAMPRelayDispatch:
         )
 
         amp = AgentMessageProcessor(
-            sse_manager=MagicMock(),
-            room_services=room_runtime,
+            delivery=MagicMock(),
+            room_runtime=room_runtime,
             room_memory_reader=db_service,
             task_tracker=MagicMock(),
             transports={"direct": dt},

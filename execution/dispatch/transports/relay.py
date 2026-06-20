@@ -15,7 +15,7 @@ from models.processing import ProcessingResult, ProcessingStatus
 if TYPE_CHECKING:
     from execution.dispatch.dispatch_middleware import DispatchContext
     from execution.dispatch.response_handler import AgentResponseHandler
-    from execution.ports import SSEDeliveryPort
+    from execution.ports import ExecutionDeliveryPort
     from models.room import RoomAgentMessage
 
 logger = get_logger(__name__)
@@ -46,7 +46,7 @@ class RelayTransport(AgentTransport):
         response_handler: AgentResponseHandler,
         relay_service: Any,
         task_tracker: RelayTaskTracker,
-        sse_manager: SSEDeliveryPort,
+        delivery: ExecutionDeliveryPort,
         call_counter: RelayAgentCallCounter | None = None,
         ownership_store: Any | None = None,
         ownership_lease_maintainer: Any | None = None,
@@ -55,7 +55,7 @@ class RelayTransport(AgentTransport):
         super().__init__(response_handler)
         self.relay_service = relay_service
         self._task_tracker = task_tracker
-        self._sse = sse_manager
+        self._delivery = delivery
         self._call_counter = call_counter
         self._ownership_store = ownership_store
         self._ownership_lease_maintainer = ownership_lease_maintainer
@@ -154,7 +154,7 @@ class RelayTransport(AgentTransport):
                 )
 
         if not delivered and not ctx.metadata.get("queued_for_offline", False):
-            await self._sse.send_error(
+            await self._delivery.send_error(
                 ctx.room_id,
                 "Hub agent is offline; message queued for later delivery",
                 message_id=message.message_id,
