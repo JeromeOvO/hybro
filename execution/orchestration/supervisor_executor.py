@@ -49,11 +49,18 @@ if TYPE_CHECKING:
     from execution.dispatch.agent_message_processor import AgentMessageProcessor
     from execution.orchestration.room_supervisor_service import RoomSupervisorService
     from execution.ports import (
+        ExecutionDeliveryPort,
+        HITLCoordinator,
         RateLimitPort,
-        RoomCoordinatorPort,
+        RoomContinuationStore,
         RoomMemoryPort,
+        RoomMemoryReader,
+        RoomMessageReader,
+        RoomMessageWriter,
+        RoomReader,
         RoomRuntimePort,
-        SSEDeliveryPort,
+        RoomTaskStateStore,
+        RoomWriter,
     )
     from execution.state.task_state_manager import TaskStateManager
 
@@ -76,29 +83,41 @@ class SupervisorExecutor:
         self,
         *,
         supervisor_service: RoomSupervisorService,
-        room_services: RoomRuntimePort,
+        room_runtime: RoomRuntimePort,
         tsm: TaskStateManager,
-        sse_manager: SSEDeliveryPort,
-        store,
-        room_memory_service: RoomMemoryPort,
+        delivery: ExecutionDeliveryPort,
+        message_reader: RoomMessageReader,
+        message_writer: RoomMessageWriter,
+        task_state_store: RoomTaskStateStore,
+        continuation_store: RoomContinuationStore,
+        agent_lookup: RoomReader,
+        room_reader: RoomReader,
+        room_writer: RoomWriter,
+        memory_reader: RoomMemoryReader,
+        room_memory: RoomMemoryPort,
         rate_limit_service: RateLimitPort,
         agent_dispatcher: AgentDispatcher,
         agent_message_processor: AgentMessageProcessor,
-        room_coordinator_service: RoomCoordinatorPort,
         slot_lifecycle=None,
-        hitl_coordinator=None,
+        hitl_coordinator: HITLCoordinator | None = None,
         debate_rounds: int = 2,
     ) -> None:
         self.supervisor_service = supervisor_service
-        self.room_runtime = room_services
+        self.room_runtime = room_runtime
         self.tsm = tsm
-        self.sse_manager = sse_manager
-        self._store = store
-        self.room_memory_service = room_memory_service
+        self.delivery = delivery
+        self.message_reader = message_reader
+        self.message_writer = message_writer
+        self.task_state_store = task_state_store
+        self.continuation_store = continuation_store
+        self.agent_lookup = agent_lookup
+        self.room_reader = room_reader
+        self.room_writer = room_writer
+        self.memory_reader = memory_reader
+        self.room_memory = room_memory
         self.rate_limit_service = rate_limit_service
         self.agent_dispatcher = agent_dispatcher
         self.agent_message_processor = agent_message_processor
-        self.room_coordinator_service = room_coordinator_service
         self._slot_lifecycle = slot_lifecycle
         self.hitl_coordinator = hitl_coordinator
         self.debate_rounds = debate_rounds
@@ -164,7 +183,7 @@ class SupervisorExecutor:
             summary_message_id = f"sys-{user_message_id}"
 
         return await stream_summary_to_sse(
-            self.sse_manager,
+            self.delivery,
             room_id=room_id,
             message_id=summary_message_id,
             agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
@@ -220,9 +239,9 @@ class SupervisorExecutor:
                     client_request_id=client_req_id,
                 )
                 sys_msg.message_id = sys_message_id
-                await self._store.add_room_agent_message(sys_msg)
+                await self.message_writer.add_room_agent_message(sys_msg)
 
-                await self.sse_manager.send_task_submitted(
+                await self.delivery.send_task_submitted(
                     room_id=room_id,
                     message_id=sys_message_id,
                     task_id=sys_message_id,
@@ -788,7 +807,7 @@ class SupervisorExecutor:
                             and result.success
                             and result.response_text
                         ):
-                            await self.room_memory_service.add_agent_response_to_memory(
+                            await self.room_memory.add_agent_response_to_memory(
                                 room_id=room_id,
                                 agent_id=result.agent_id,
                                 agent_name=result.agent_name,
@@ -981,7 +1000,7 @@ class SupervisorExecutor:
                         )
 
                     client_req_id = (
-                        await self._store.resolve_client_request_id_for_message_id(
+                        await self.task_state_store.resolve_client_request_id_for_message_id(
                             user_message_id
                         )
                     )
@@ -1005,7 +1024,7 @@ class SupervisorExecutor:
                             )
                         try:
                             if trajectory.system_agent_message_id:
-                                await self.sse_manager.send_task_update(
+                                await self.delivery.send_task_update(
                                     room_id=room_id,
                                     message_id=trajectory.system_agent_message_id,
                                     status="working",
@@ -1041,17 +1060,17 @@ class SupervisorExecutor:
                     if trajectory.system_agent_message_id:
                         try:
                             db_msg = (
-                                await self._store.get_room_agent_message_by_message_id(
+                                await self.message_reader.get_room_agent_message_by_message_id(
                                     trajectory.system_agent_message_id
                                 )
                             )
                             if db_msg and db_msg.message_content:
                                 db_msg.message_content.message_text = synthesis
-                                await self._store.update_room_agent_message_with_new_message_content_by_message_id(
+                                await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
                                     db_msg.message_id, db_msg.message_content
                                 )
 
-                            await self.sse_manager.send_agent_response(
+                            await self.delivery.send_agent_response(
                                 room_id=room_id,
                                 message_id=trajectory.system_agent_message_id,
                                 agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
@@ -1131,7 +1150,7 @@ class SupervisorExecutor:
                         for mid in message_ids:
                             try:
                                 await (
-                                    self._store.delete_room_agent_message_by_message_id(
+                                    self.message_writer.delete_room_agent_message_by_message_id(
                                         mid
                                     )
                                 )
@@ -1157,11 +1176,11 @@ class SupervisorExecutor:
                             user_id=request_user_id,
                             step_number=step_number + 1,
                             task_content=q.prompt,
-                            client_request_id=await self._store.resolve_client_request_id_for_message_id(
+                            client_request_id=await self.task_state_store.resolve_client_request_id_for_message_id(
                                 user_message_id
                             ),
                         )
-                        await self._store.add_room_agent_message(hitl_agent_message)
+                        await self.message_writer.add_room_agent_message(hitl_agent_message)
                         created_messages.append(hitl_agent_message.message_id)
 
                         request = await self.hitl_coordinator.request_input(
@@ -1291,7 +1310,7 @@ class SupervisorExecutor:
                     SupervisorRunResult(status=RunStatus.FAILED, trajectory=trajectory),
                 )
             budget_client_req_id = (
-                await self._store.resolve_client_request_id_for_message_id(
+                await self.task_state_store.resolve_client_request_id_for_message_id(
                     user_message_id
                 )
             )
@@ -1315,7 +1334,7 @@ class SupervisorExecutor:
                     )
                 try:
                     summary_message_id = f"summary-{user_message_id}"
-                    await self.sse_manager.send_task_submitted(
+                    await self.delivery.send_task_submitted(
                         room_id=room_id,
                         message_id=summary_message_id,
                         task_id=summary_message_id,
@@ -1483,11 +1502,11 @@ class SupervisorExecutor:
                     step_number=step_number,
                     total_steps=None,
                     task_content=target.task,
-                    client_request_id=await self._store.resolve_client_request_id_for_message_id(
+                    client_request_id=await self.task_state_store.resolve_client_request_id_for_message_id(
                         user_message_id
                     ),
                 )
-                await self._store.add_room_agent_message(message)
+                await self.message_writer.add_room_agent_message(message)
 
                 # --- Emit slot_opened (Phase 1b) ---
                 if getattr(self, "_slot_lifecycle", None) and message.turn_id:
@@ -1812,14 +1831,14 @@ class SupervisorExecutor:
                     if result.status == RunStatus.COMPLETED
                     else result.status.value
                 )
-                await self.sse_manager.send_task_update(
+                await self.delivery.send_task_update(
                     room_id=room_id,
                     message_id=trajectory.system_agent_message_id,
                     status=task_status,
                 )
 
                 # Update DB record
-                db_msg = await self._store.get_room_agent_message_by_message_id(
+                db_msg = await self.message_reader.get_room_agent_message_by_message_id(
                     trajectory.system_agent_message_id
                 )
                 if (
@@ -1832,7 +1851,7 @@ class SupervisorExecutor:
                     db_msg.message_content.message_task.status.state = TaskState(
                         task_status
                     )
-                    await self._store.update_room_agent_message_with_new_message_content_by_message_id(
+                    await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
                         db_msg.message_id, db_msg.message_content
                     )
             except Exception:
@@ -1865,7 +1884,7 @@ class SupervisorExecutor:
         try:
             user_message = cached_user_message
             if user_message is None:
-                user_message = await self._store.get_room_user_message_by_message_id(
+                user_message = await self.message_reader.get_room_user_message_by_message_id(
                     user_message_id
                 )
             if user_message:
@@ -1874,7 +1893,7 @@ class SupervisorExecutor:
                 user_message.extend_info["supervisor_trajectory"] = (
                     trajectory.model_dump(mode="json")
                 )
-                await self._store.update_room_user_message_by_message_id(
+                await self.message_writer.update_room_user_message_by_message_id(
                     user_message_id, user_message
                 )
             return user_message
@@ -1912,7 +1931,7 @@ class SupervisorExecutor:
             msg_id = pr.agent_message_id or pr.paused_message_id
             if not msg_id:
                 continue
-            msg = await self._store.get_room_agent_message_by_message_id(msg_id)
+            msg = await self.message_reader.get_room_agent_message_by_message_id(msg_id)
             if not msg:
                 continue
             if msg.last_notified_state not in _TERMINAL:
@@ -1955,7 +1974,7 @@ class SupervisorExecutor:
                 break
 
             if is_success and response_text:
-                await self.room_memory_service.add_agent_response_to_memory(
+                await self.room_memory.add_agent_response_to_memory(
                     room_id=room_id,
                     agent_id=pr.agent_id,
                     agent_name=pr.agent_name or "Agent",
@@ -2033,7 +2052,7 @@ class SupervisorExecutor:
                         pr.agent_id,
                     )
                     continue
-                success = await self._store.save_continuation_on_message(
+                success = await self.continuation_store.save_continuation_on_message(
                     pr.paused_message_id, interrupted_state
                 )
                 if success:
@@ -2061,7 +2080,7 @@ class SupervisorExecutor:
             if not message_id:
                 logger.error("SupervisorExecutor: HITL_AGENT save missing message_id")
                 return False
-            success = await self._store.save_continuation_on_message(
+            success = await self.continuation_store.save_continuation_on_message(
                 message_id, interrupted_state
             )
             if success:
@@ -2090,7 +2109,7 @@ class SupervisorExecutor:
                     "SupervisorExecutor: HITL_SUPERVISOR save missing message_id"
                 )
                 return False
-            success = await self._store.save_continuation_on_user_message(
+            success = await self.continuation_store.save_continuation_on_user_message(
                 message_id, interrupted_state
             )
             if success:

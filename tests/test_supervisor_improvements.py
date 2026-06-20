@@ -139,16 +139,22 @@ class TestQualityEvaluationPrompt:
 def _make_executor() -> SupervisorExecutor:
     """Create a SupervisorExecutor with all dependencies mocked."""
     se = object.__new__(SupervisorExecutor)
-    se._store = AsyncMock()
-    se.sse_manager = AsyncMock()
+    se.message_reader = AsyncMock()
+    se.message_writer = AsyncMock()
+    se.task_state_store = AsyncMock()
+    se.continuation_store = AsyncMock()
+    se.agent_lookup = AsyncMock()
+    se.room_reader = AsyncMock()
+    se.room_writer = AsyncMock()
+    se.memory_reader = AsyncMock()
+    se.delivery = AsyncMock()
     se.room_runtime = MagicMock()
     se.supervisor_service = AsyncMock()
     se.tsm = MagicMock()
     se.agent_dispatcher = MagicMock()
     se.agent_message_processor = MagicMock()
-    se.room_memory_service = AsyncMock()
+    se.room_memory = AsyncMock()
     se.rate_limit_service = MagicMock()
-    se.room_coordinator_service = MagicMock()
     se.MAX_STEPS = 8
     se._emitted_status_details = []
 
@@ -301,7 +307,7 @@ class TestSupervisorSSEStageNotifications:
             ),
         ])
         se._checkpoint_trajectory = AsyncMock(return_value=None)
-        se._store.resolve_client_request_id_for_message_id = AsyncMock(
+        se.task_state_store.resolve_client_request_id_for_message_id = AsyncMock(
             return_value=None
         )
 
