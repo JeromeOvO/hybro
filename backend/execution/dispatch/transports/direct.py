@@ -108,6 +108,7 @@ class DirectTransport(AgentTransport):
         message_reader: "DirectMessageReader",
         artifact_store: "DirectArtifactStore",
         task_updater: "DirectTaskUpdatePort",
+        object_storage=None,
         s3_service=None,
         capability_issue_service=None,
     ) -> None:
@@ -119,14 +120,25 @@ class DirectTransport(AgentTransport):
         self._message_reader = message_reader
         self._artifact_store = artifact_store
         self._task_updater = task_updater
-        self._s3_service = s3_service
+        storage_service = object_storage if object_storage is not None else s3_service
+        self._object_storage = storage_service
+        self._s3_service = storage_service
         self.capability_issue_service = capability_issue_service
 
     @property
+    def object_storage(self):
+        service = getattr(self, "_object_storage", None)
+        if service is None:
+            service = getattr(self, "_s3_service", None)
+        if service is None:
+            raise RuntimeError(
+                "Direct transport object-storage dependency has not been bound"
+            )
+        return service
+
+    @property
     def s3_service(self):
-        if self._s3_service is None:
-            raise RuntimeError("Direct transport S3 dependency has not been bound")
-        return self._s3_service
+        return self.object_storage
 
     # ------------------------------------------------------------------
     # Terminal event emission
@@ -354,11 +366,7 @@ class DirectTransport(AgentTransport):
         is a single-element list ``[count]`` shared across calls for the same
         message so the per-message cap is enforced.
         """
-        from a2a_adapter import artifact_storage as a2a_artifact_storage
-        from common.utils.a2a_helpers import (
-            bind_a2a_artifact_storage,
-            convert_pydantic_artifacts_to_s3,
-        )
+        from common.utils.a2a_helpers import convert_pydantic_artifacts_to_s3
 
         if not artifact.parts:
             return
@@ -366,10 +374,6 @@ class DirectTransport(AgentTransport):
         if conversion_counter is None:
             conversion_counter = [0]
 
-        a2a_artifact_storage.bind_a2a_storage_dependencies(
-            storage_service=self.s3_service,
-        )
-        bind_a2a_artifact_storage(a2a_artifact_storage)
         new_total = await convert_pydantic_artifacts_to_s3(
             [artifact], room_id, message_id,
             converted_so_far=conversion_counter[0],
@@ -389,16 +393,8 @@ class DirectTransport(AgentTransport):
         Delegates to the shared helper in a2a_helpers.  Returns the updated
         running total so callers can keep the per-message cap accurate.
         """
-        from a2a_adapter import artifact_storage as a2a_artifact_storage
-        from common.utils.a2a_helpers import (
-            bind_a2a_artifact_storage,
-            convert_inline_bytes_to_s3,
-        )
+        from common.utils.a2a_helpers import convert_inline_bytes_to_s3
 
-        a2a_artifact_storage.bind_a2a_storage_dependencies(
-            storage_service=self.s3_service,
-        )
-        bind_a2a_artifact_storage(a2a_artifact_storage)
         return await convert_inline_bytes_to_s3(
             non_text_parts, room_id, message_id,
             converted_so_far=converted_so_far,

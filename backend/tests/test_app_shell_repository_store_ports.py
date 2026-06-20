@@ -1,6 +1,8 @@
+import ast
 import inspect
 import subprocess
 import sys
+from pathlib import Path
 from typing import get_type_hints
 
 from common.protocols import (
@@ -193,3 +195,223 @@ def test_app_shell_repository_store_part_properties_do_not_recreate_missing_part
         except AttributeError:
             continue
         raise AssertionError(f"{attribute} should expose missing store wiring")
+
+
+def _dotted_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _dotted_name(node.value)
+        if parent:
+            return f"{parent}.{node.attr}"
+    return None
+
+
+def _references_name(node: ast.AST, name: str) -> bool:
+    return any(isinstance(child, ast.Name) and child.id == name for child in ast.walk(node))
+
+
+def test_container_binds_focused_runtime_store_parts_before_aggregate_shims():
+    tree = ast.parse(Path("container.py").read_text())
+    expected_assignments = {
+        "agent_room_store": "agent_room",
+        "message_store": "messages",
+        "task_store": "tasks",
+        "hitl_store": "hitl",
+        "memory_store": "memory",
+    }
+
+    assignments: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if (
+            isinstance(node.value, ast.Attribute)
+            and isinstance(node.value.value, ast.Name)
+            and node.value.value.id == "app_shell_store"
+        ):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    assignments[target.id] = node.value.attr
+
+    assert expected_assignments.items() <= assignments.items()
+
+
+def test_main_keeps_broad_repository_store_only_for_documented_compatibility_points():
+    tree = ast.parse(Path("main.py").read_text())
+    allowed_broad_calls: set[str] = set()
+    broad_calls: list[str] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        call_name = _dotted_name(node.func) or "<unknown>"
+        call_refs_broad_store = any(
+            _references_name(arg, "app_shell_store") for arg in node.args
+        ) or any(
+            keyword.value is not None
+            and _references_name(keyword.value, "app_shell_store")
+            for keyword in node.keywords
+        )
+        if call_refs_broad_store and call_name not in allowed_broad_calls:
+            broad_calls.append(f"{call_name}:{node.lineno}")
+
+    assert broad_calls == []
+
+
+def _simple_namespace_keywords(tree: ast.AST, assignment_name: str) -> set[str]:
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == assignment_name
+            for target in node.targets
+        ):
+            continue
+        if not isinstance(node.value, ast.Call):
+            continue
+        if _dotted_name(node.value.func) != "SimpleNamespace":
+            continue
+        return {keyword.arg for keyword in node.value.keywords if keyword.arg}
+    return set()
+
+
+def test_container_binds_debate_and_coordinator_to_focused_message_adapters():
+    tree = ast.parse(Path("container.py").read_text())
+    bound_adapters: dict[str, str] = {}
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        call_name = _dotted_name(node.func)
+        if call_name not in {
+            "debate_service.bind_store",
+            "room_coordinator_service.bind_store",
+        }:
+            continue
+        assert len(node.args) == 1
+        assert isinstance(node.args[0], ast.Name)
+        bound_adapters[call_name] = node.args[0].id
+
+    assert bound_adapters == {
+        "debate_service.bind_store": "debate_message_store",
+        "room_coordinator_service.bind_store": "room_coordinator_message_store",
+    }
+    assert _simple_namespace_keywords(tree, "debate_message_store") == {
+        "get_agent_name_by_agent_id",
+        "get_room_agent_message_by_message_id",
+        "update_room_agent_message_with_new_message_content_by_message_id",
+    }
+    assert _simple_namespace_keywords(tree, "room_coordinator_message_store") == {
+        "add_room_agent_message",
+        "get_agent_name_by_agent_id",
+        "get_room_agent_messages_by_related_message_id",
+        "get_room_by_room_id",
+        "get_room_user_message_by_message_id",
+    }
+
+
+def test_container_binds_room_runtime_to_focused_room_store_adapter():
+    tree = ast.parse(Path("container.py").read_text())
+    bound_store_name = None
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if _dotted_name(node.func) != "room_runtime.bind_store":
+            continue
+        assert len(node.args) == 1
+        assert isinstance(node.args[0], ast.Name)
+        bound_store_name = node.args[0].id
+
+    assert bound_store_name == "room_runtime_store"
+    assert _simple_namespace_keywords(tree, "room_runtime_store") == {
+        "add_room_agent_message",
+        "get_agent_by_agent_id",
+        "get_agent_group_by_id",
+        "get_agents_with_conditions",
+        "get_all_active_agents",
+        "get_room_by_room_id",
+        "get_room_memory_by_room_id",
+        "get_room_user_message_by_message_id",
+        "update_room_by_room_id",
+        "update_room_user_message_by_message_id",
+    }
+
+
+def test_container_binds_relay_to_focused_runtime_store_adapter():
+    tree = ast.parse(Path("container.py").read_text())
+    bound_store_name = None
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if _dotted_name(node.func) != "init_relay_service":
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "db":
+                assert isinstance(keyword.value, ast.Name)
+                bound_store_name = keyword.value.id
+
+    assert bound_store_name == "relay_runtime_store"
+    assert _simple_namespace_keywords(tree, "relay_runtime_store") == {
+        "get_agent_by_agent_id",
+        "get_room_agent_message_by_message_id",
+        "get_room_by_room_id",
+        "get_room_user_message_by_message_id",
+        "increment_agent_call_count",
+        "is_message_cancelled",
+    }
+
+
+def test_container_binds_room_message_center_to_focused_execution_store_adapter():
+    tree = ast.parse(Path("container.py").read_text())
+    bound_store_name = None
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if _dotted_name(node.func) != "create_room_message_center":
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "store":
+                assert isinstance(keyword.value, ast.Name)
+                bound_store_name = keyword.value.id
+
+    assert bound_store_name == "room_message_center_store"
+    assert _simple_namespace_keywords(tree, "room_message_center_store") == {
+        "accumulate_artifact_on_message",
+        "add_room_agent_message",
+        "cancel_agent_messages_by_ids",
+        "cancel_descendants",
+        "claim_or_reclaim_user_message",
+        "claim_user_message_for_processing",
+        "delete_room_agent_message_by_message_id",
+        "enable_task_tracking_on_message",
+        "get_agent_by_agent_id",
+        "get_agent_group_by_id",
+        "get_agent_name_by_agent_id",
+        "get_and_clear_continuation_on_message",
+        "get_and_clear_continuation_on_user_message",
+        "get_pending_continuation_on_message",
+        "get_pending_hitl_requests_for_message",
+        "get_room_agent_message_by_message_id",
+        "get_room_agent_messages_by_related_message_id",
+        "get_room_by_room_id",
+        "get_room_memory_by_room_id",
+        "get_room_user_message_by_message_id",
+        "refresh_processing_claim",
+        "resolve_client_request_id_for_agent_message",
+        "resolve_client_request_id_for_message_id",
+        "save_continuation_on_message",
+        "save_continuation_on_user_message",
+        "turn_exists",
+        "unclaim_user_message",
+        "update_room_agent_message_by_message_id",
+        "update_room_agent_message_with_new_message_content_by_message_id",
+        "update_room_by_room_id",
+        "update_room_user_message_by_message_id",
+        "update_task_on_message",
+        "update_task_state_on_message",
+        "upsert_room_agent_message",
+    }

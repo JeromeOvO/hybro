@@ -73,7 +73,7 @@ def test_execution_processing_status_call_sites_use_event_helper():
 
 
 def test_webhook_response_handler_binds_hitl_and_processing_status_deps():
-    tree = ast.parse((ROOT / "main.py").read_text(), filename="main.py")
+    tree = ast.parse((ROOT / "container.py").read_text(), filename="container.py")
     factory = next(
         node
         for node in ast.walk(tree)

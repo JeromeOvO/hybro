@@ -116,15 +116,15 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 |---|--------|---------------|----------------|
 | 1 | **Common** | Protocols, DTOs, auth, config, utils, errors | `common/`, `models/` |
 | 2 | **DAL** | Unified data access clients (split by concern) | `dal/`, `database/` (legacy migrations only) |
-| 3 | **A2A Protocol Adapter** | Anti-corruption for a2a-sdk, internal model ↔ A2A types | `app_shell/a2a_runtime.py`, `common/client/` |
+| 3 | **A2A Protocol Adapter** | Anti-corruption for a2a-sdk, internal model ↔ A2A types | `a2a_adapter/`, with `app_shell/a2a_runtime.py` as compatibility shim |
 | 4 | **LLM Gateway** | Unified LLM invocation, provider routing, capability registry | `app_shell/openai_service.py`, `app_shell/gemini_service.py`, `app_shell/bedrock_service.py` |
 | 5 | **Agent** | Agent lifecycle, health, matching, discovery | `app_shell/agent_*.py`, `api/agent.py`, `api/discovery.py` |
-| 6 | **Room** | Room CRUD, membership, raw message persistence, message graph | `app_shell/room_runtime.py` |
-| 7 | **Context & Memory** | Context assembly, compaction, search, user memory, ~~chat contexts~~ (legacy; source removed in Phase 0d/8) | `app_shell/memory_*.py`, `app_shell/compaction_service.py`, `app_shell/context_assembly_service.py` |
+| 6 | **Room** | Room CRUD, membership, raw message persistence, message graph | `room/`, with `app_shell/room_runtime.py` as compatibility shim |
+| 7 | **Context & Memory** | Context assembly, compaction, search, user memory, ~~chat contexts~~ (legacy; source removed in Phase 0d/8) | `context_memory/`, with app-shell memory/context shims for compatibility |
 | 8 | **Execution** | Run lifecycle, supervisor, debate, HITL, dispatch (NOT workflow) | `execution/`, `app_shell/hitl_service.py` |
 | 9 | **Delivery** | SSE connections, event broker, dedup, domain→frontend event translation | `app_shell/delivery_runtime.py`, `delivery/` |
 | 10 | **Platform** | Gateway API, rate limiting, file storage | `platform_module/`, `api/gateway.py`, `api/discovery.py`, `api/files.py` |
-| 11 | **HubRuntimeBridge** | Hub connection, relay, liveness, offline queue, agent sync | `hub_runtime_bridge/`, `api/relay.py`, `api/hub.py` |
+| 11 | **HubRuntimeBridge** | Hub connection, relay, liveness, offline queue, agent sync | `hub_runtime_bridge/`, `api/relay.py`, `api/hub.py`, `app_shell/relay_service.py` shim |
 | 12 | **Jobs** | Background tasks with leader election | `jobs/`, app-shell Redis runtime |
 
 > **NOTE (Workflow decommission)**: The legacy `base_tasks` / `meta_tasks` / `task_sessions` data model
@@ -165,7 +165,7 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 > must use string/domain-state ports, and the allowlist should shrink as A2A
 > protocol adapters are introduced.
 
-> **P3 app-shell thinning status (2026-06-17):** `app_shell` focus files are
+> **P3 app-shell thinning final state (2026-06-18):** `app_shell` focus files are
 > fail-fast compatibility shims over module-owned facades, adapters, and focused
 > runtime ports. A2A SDK calls and response coercion live in `a2a_adapter`;
 > room CRUD/message behavior lives in Room; orchestration scheduling lives in
@@ -175,7 +175,11 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 > HubRuntimeBridge; A2A task-tracking placeholder creation, tracked-send push
 > configuration, failure persistence, terminal response persistence, and HITL
 > reply task persistence live in Execution; object-storage behavior lives in
-> Platform/DAL.
+> Platform/DAL. Startup splits the legacy `AppShellRepositoryStore` composite
+> into focused runtime-store adapters before binding Room runtime, Execution
+> `RoomMessageCenter`, Relay, debate, and coordinator compatibility services.
+> The cleanup gates now ratchet both exact forbidden imports and the explicit
+> public app-shell shim method surface.
 
 ### 3.4 Cross-Module Communication Rules
 
@@ -1329,8 +1333,21 @@ class ObjectStorageDAL(Protocol):
     """S3-compatible object storage."""
 
     async def put(self, key: str, data: bytes, content_type: str = "") -> str: ...
-    async def get_presigned_url(self, key: str, ttl: int = 3600) -> str: ...
+    async def put_file(
+        self,
+        key: str,
+        file_data: Any,
+        content_type: str = "",
+        content_length: int | None = None,
+    ) -> str: ...
+    async def get_text(self, key: str) -> str | None: ...
+    async def get_presigned_url(
+        self, key: str, ttl: int = 3600, filename: str | None = None
+    ) -> str: ...
     async def delete(self, key: str) -> bool: ...
+    async def delete_prefix(self, prefix: str) -> int: ...
+    def get_public_url(self, key: str) -> str: ...
+    async def head(self, key: str) -> dict | None: ...
 
 
 @runtime_checkable
@@ -2135,6 +2152,33 @@ Motor/DAL scripts and must not restore `database/mongodb.py`,
 - `llm_gateway/` with OpenAI/Gemini/Bedrock providers + ModelRegistry + retry/fallback
 - Verify: no business module imports `a2a`, `openai`, `google.genai`, `aioboto3`
 
+**Implemented object-storage platform adapter note (2026-06-19):**
+`platform_module.PlatformObjectStorage` provides the legacy-compatible upload,
+presigned URL, metadata, public URL, text download, and prefix cleanup surface
+over `ObjectStorageDAL` operations: `put`, `put_file`, `get_text`,
+`get_presigned_url`, `delete`, `delete_prefix`, `get_public_url`, and `head`.
+`platform_module.PlatformAgentAvatarManager` owns agent avatar upload/public URL
+persistence through that adapter. Platform file/content/avatar services now use
+DAL-shaped object storage dependencies; SDK ownership stays in `dal/s3/`.
+Production startup passes `PlatformObjectStorage` directly into runtime
+consumers that still need the legacy upload/presign methods through
+object-storage-named injection points, while `app_shell/s3_service.py` is
+retained only as an SDK-free compatibility shim for tests and legacy import
+paths until the final S3 service removal phase.
+The startup wiring also configures `a2a_adapter.artifact_storage` once with the
+platform object-storage adapter, bucket name, and file-size limit. Execution
+transports must call the shared A2A helper without rebinding artifact storage so
+those startup settings remain intact during inline artifact conversion.
+Tracked terminal A2A message/task responses also keep artifact conversion
+best-effort: object-storage conversion failures are logged, but
+`update_task_on_message()` still persists the terminal task state.
+Boundary gates scan static and dynamic production imports, including `main.py`
+and `app_shell/`, so new `app_shell.s3_service` dependencies fail outside the
+shim file itself. AWS SDK imports are confined to `dal/s3/`, with a single
+documented temporary exception for `llm_gateway/providers/bedrock_provider.py`
+importing `aioboto3` until Bedrock SDK access is moved behind a dedicated
+provider transport.
+
 **Implemented LLM migration note (2026-06-05):** `LLMGatewayImpl` now owns
 logical model routing, retry/timeout behavior, structured JSON-object mode, and
 streaming. Provider adapters own SDK translation only. Legacy
@@ -2282,12 +2326,12 @@ class AgentService:
 | Agent health checking | `app_shell/agent_health_service.py` | Agent + Jobs | `service/agent_health.py` |
 | Agent matching (vector) | `app_shell/agent_selection_service.py` | Agent | `service/agent_matching.py` |
 | Agent groups | `api/agent_group.py` | Agent | `repository/agent_group_repo.py` |
-| Agent card fetching | `app_shell/a2a_runtime.py` | A2A Adapter | `card_resolver.py` |
+| Agent card fetching | `a2a_adapter/` via `app_shell/a2a_runtime.py` shim | A2A Adapter | `card_resolver.py` / `client_facade.py` |
 | Agent inspection | `app_shell/inspection_runtime.py` | Agent | `service/agent_crud.py` |
 | Discovery API (no visibility filter) | `api/discovery.py` | Agent | `facade.match_agents(respect_visibility=False)` |
 | Listings (owner-scoped, masked) | `app_shell/agent_service.py` | Agent | `facade.match_agents(respect_visibility=True)` |
 | is_directly_callable (hub 502) | implicit in gateway_service | Agent | `facade.is_directly_callable()` |
-| Hub agent enrichment (is_hub_online) | mongodb._enrich_hub_fields | Agent + HubRuntimeBridge | Agent calls `HubLivenessReader` |
+| Hub agent enrichment (is_hub_online) | Agent facade + `HubLivenessReader` | Agent + HubRuntimeBridge | Agent calls `HubLivenessReader` |
 | **Room & messages** | | | |
 | Room CRUD | `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `room/repository/` |
 | Room membership (3 seed modes) | `app_shell/room_runtime.py` shim | Room | `room/facade.py` compatibility methods |
@@ -2326,6 +2370,8 @@ class AgentService:
 | Rate limiting | `platform_module/rate_limit.py` | Platform | `rate_limit/rate_limiter.py` |
 | File uploads | `platform_module/` | Platform | `files/upload_service.py` |
 | Content storage | `platform_module/` | Platform | `files/content_storage.py` |
+| Agent avatar uploads | `platform_module/agent_avatar.py` | Platform over DAL | `api/agent.py` avatar route |
+| Object storage compatibility | `platform_module/object_storage.py` | Platform over DAL | `object_storage.py` |
 | **HubRuntimeBridge** | | | |
 | Hub relay | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_relay.py` |
 | Hub liveness | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_liveness.py` |
@@ -2353,7 +2399,7 @@ class AgentService:
 | Redis Pub/Sub | `delivery/` | DAL | `redis/pubsub.py` |
 | Redis Streams | `app_shell/redis_runtime.py` | DAL | `redis/streams.py` |
 | Pinecone | `database/pinecone_db.py` | DAL | `pinecone/client.py` |
-| S3 | `app_shell/s3_service.py` | DAL | `s3/client.py` |
+| S3 SDK calls | `app_shell/s3_service.py` shim | DAL | `s3/client.py` |
 | Leader election | `app_shell/redis_runtime.py` | DAL | `redis/leader.py` |
 | **Jobs** | | | |
 | Health check | `jobs/agent_health_service.py` | Jobs | `agent_health_job.py` |

@@ -295,10 +295,11 @@ class A2ATaskTrackingService:
             artifact_id=str(uuid4()),
         )
         if completed_task.artifacts:
-            await convert_pydantic_artifacts_to_s3(
+            await _best_effort_convert_pydantic_artifacts_to_s3(
                 completed_task.artifacts,
                 room_id=room_id or message_id,
                 message_id=message_id,
+                context="message",
             )
 
         message_text = _extract_text_from_message(message)
@@ -362,10 +363,11 @@ class A2ATaskTrackingService:
     ) -> dict[str, Any]:
         state = task.status.state
         if task.artifacts:
-            await convert_pydantic_artifacts_to_s3(
+            await _best_effort_convert_pydantic_artifacts_to_s3(
                 task.artifacts,
                 room_id=room_id or message_id,
                 message_id=message_id,
+                context="terminal_task",
             )
 
         task_text = _extract_text_from_task(task)
@@ -418,6 +420,29 @@ class A2ATaskTrackingService:
         await self._task_store.update_task_on_message(
             message_id,
             failed_task.model_dump(mode="json"),
+        )
+
+
+async def _best_effort_convert_pydantic_artifacts_to_s3(
+    artifacts: list,
+    *,
+    room_id: str,
+    message_id: str,
+    context: str,
+) -> None:
+    try:
+        await convert_pydantic_artifacts_to_s3(
+            artifacts,
+            room_id=room_id,
+            message_id=message_id,
+        )
+    except Exception:
+        logger.warning(
+            "A2A artifact conversion failed for %s response on message %s; "
+            "continuing with task persistence",
+            context,
+            message_id,
+            exc_info=True,
         )
 
 

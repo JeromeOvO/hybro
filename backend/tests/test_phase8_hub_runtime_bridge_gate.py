@@ -170,6 +170,38 @@ def test_legacy_relay_is_shim_and_stream_runtime_moved_to_app_shell() -> None:
     assert issubclass(AppShellRelayStreamService, RelayStreamService)
 
 
+def test_legacy_relay_does_not_import_delivery_runtime_concrete() -> None:
+    relay = ROOT / "app_shell/relay_service.py"
+    relay_imports = _imports(relay)
+    relay_text = relay.read_text()
+
+    assert "app_shell.delivery_runtime" not in relay_imports
+    assert "SSEManager" not in relay_text
+    assert "self._sse" not in relay_text
+
+
+def test_legacy_relay_does_not_import_redis_runtime_concretes() -> None:
+    relay = ROOT / "app_shell/relay_service.py"
+    relay_imports = _imports(relay)
+    relay_text = relay.read_text()
+
+    assert "app_shell.redis_runtime" not in relay_imports
+    assert "AppShellRelayStreamService" not in relay_text
+    assert "AppShellLeaderElection" not in relay_text
+
+
+def test_legacy_relay_has_single_transport_state() -> None:
+    relay = ROOT / "app_shell/relay_service.py"
+    tree = ast.parse(relay.read_text(), filename=str(relay))
+
+    private_transport_refs = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and node.attr == "_relay_transport"
+    ]
+    assert private_transport_refs == []
+
+
 def test_app_shell_routes_internal_hub_events_through_hub_router() -> None:
     main = (ROOT / "main.py").read_text()
     container = (ROOT / "container.py").read_text()
@@ -177,9 +209,11 @@ def test_app_shell_routes_internal_hub_events_through_hub_router() -> None:
     assert "class HubDeps" in container
     assert "def create_hub_facade" in container
     assert "def create_hub_deps" in container
-    assert "_execution_deps.hub_agent_response_sink.handle_hub_agent_response" not in main
-    assert "internal_response_dispatcher" in main
-    assert "router.dispatch_hub_internal_response" in main
+    assert (
+        "_execution_deps.hub_agent_response_sink.handle_hub_agent_response" not in main
+    )
+    assert "internal_response_dispatcher" in container
+    assert "router.dispatch_hub_internal_response" in container
 
 
 def test_relay_and_hub_route_inventory_matches_fixture() -> None:
@@ -193,9 +227,7 @@ def test_relay_and_hub_route_inventory_matches_fixture() -> None:
         }
         for route in [*relay_router.routes, *hub_router.routes]
     ]
-    expected = json.loads(
-        (ROOT / "tests/fixtures/phase8_hub_routes.json").read_text()
-    )
+    expected = json.loads((ROOT / "tests/fixtures/phase8_hub_routes.json").read_text())
 
     assert sorted(actual, key=lambda item: (item["path"], item["methods"])) == sorted(
         expected, key=lambda item: (item["path"], item["methods"])

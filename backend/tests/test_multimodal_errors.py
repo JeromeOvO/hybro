@@ -1,62 +1,146 @@
 import base64
-import io
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from botocore.exceptions import ClientError
 
 from app_shell.s3_service import S3Service
 
 
-class TestS3ServiceErrors:
-    async def test_upload_client_error_raises(self):
-        svc = S3Service()
-        error = ClientError({"Error": {"Code": "NoSuchBucket", "Message": "Not found"}}, "PutObject")
-        with patch.object(svc, "_session") as mock_session:
-            mock_client = AsyncMock()
-            mock_client.upload_fileobj = AsyncMock(side_effect=error)
-            ctx = AsyncMock()
-            ctx.__aenter__ = AsyncMock(return_value=mock_client)
-            ctx.__aexit__ = AsyncMock(return_value=False)
-            mock_session.client.return_value = ctx
-            with pytest.raises(ClientError):
-                await svc.upload_file(
-                    file_data=io.BytesIO(b"data"),
-                    s3_key="test/key",
-                    content_type="text/plain",
-                    content_length=4,
-                )
+def _bind_test_a2a_artifact_storage(monkeypatch, storage) -> None:
+    from a2a_adapter import artifact_storage as a2a_artifact_storage
+    from common.utils import a2a_helpers
 
-    async def test_presigned_url_client_error_raises(self):
-        svc = S3Service()
-        error = ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "GetObject")
-        with patch.object(svc, "_session") as mock_session:
-            mock_client = AsyncMock()
-            mock_client.generate_presigned_url = AsyncMock(side_effect=error)
-            ctx = AsyncMock()
-            ctx.__aenter__ = AsyncMock(return_value=mock_client)
-            ctx.__aexit__ = AsyncMock(return_value=False)
-            mock_session.client.return_value = ctx
-            svc._url_cache.clear()
-            with pytest.raises(ClientError):
-                await svc.generate_presigned_url("test/key")
+    a2a_artifact_storage.bind_a2a_storage_dependencies(storage_service=storage)
+    monkeypatch.setattr(a2a_helpers, "a2a_artifact_storage", a2a_artifact_storage)
 
-    async def test_download_text_returns_none_on_missing(self):
+
+class FakeObjectStoragePort:
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    async def upload_file(
+        self,
+        file_data,
+        s3_key: str,
+        content_type: str,
+        content_length: int | None = None,
+    ) -> str:
+        self.calls.append(("upload_file", file_data, s3_key, content_type, content_length))
+        return s3_key
+
+    async def generate_presigned_url(
+        self,
+        s3_key: str,
+        *,
+        filename: str | None = None,
+        expires_in: int | None = None,
+    ) -> str:
+        self.calls.append(("generate_presigned_url", s3_key, filename, expires_in))
+        return f"https://files.example/{s3_key}?name={filename or ''}"
+
+    async def batch_presigned_urls(
+        self,
+        s3_keys: list[str],
+        *,
+        filenames: dict[str, str] | None = None,
+        expires_in: int | None = None,
+    ) -> dict[str, str]:
+        self.calls.append(("batch_presigned_urls", s3_keys, filenames, expires_in))
+        return {key: f"https://files.example/{key}" for key in s3_keys}
+
+    async def delete_file(self, s3_key: str) -> bool:
+        self.calls.append(("delete_file", s3_key))
+        return True
+
+    async def head_file(self, s3_key: str) -> dict | None:
+        self.calls.append(("head_file", s3_key))
+        return {"content_type": "text/plain"}
+
+    async def delete_prefix(self, prefix: str) -> int:
+        self.calls.append(("delete_prefix", prefix))
+        return 3
+
+    def get_public_url(self, s3_key: str) -> str:
+        self.calls.append(("get_public_url", s3_key))
+        return f"https://public.example/{s3_key}"
+
+    async def download_text(self, s3_key: str) -> str | None:
+        self.calls.append(("download_text", s3_key))
+        return f"text:{s3_key}"
+
+
+class TestS3ServiceShim:
+    async def test_unbound_s3_service_fails_fast(self):
         svc = S3Service()
-        error = ClientError({"Error": {"Code": "NoSuchKey", "Message": "not found"}}, "GetObject")
-        with patch.object(svc, "_session") as mock_session:
-            mock_client = AsyncMock()
-            mock_client.get_object = AsyncMock(side_effect=error)
-            ctx = AsyncMock()
-            ctx.__aenter__ = AsyncMock(return_value=mock_client)
-            ctx.__aexit__ = AsyncMock(return_value=False)
-            mock_session.client.return_value = ctx
-            result = await svc.download_text("missing/key")
-        assert result is None
+
+        with pytest.raises(RuntimeError, match="S3Service.bind_object_storage"):
+            await svc.generate_presigned_url("test/key")
+        with pytest.raises(RuntimeError, match="S3Service.bind_object_storage"):
+            svc.get_public_url("test/key")
+
+    async def test_s3_service_delegates_to_bound_object_storage(self):
+        delegate = FakeObjectStoragePort()
+        svc = S3Service(delegate)
+
+        assert (
+            await svc.upload_file(b"data", "objects/a.txt", "text/plain", 4)
+            == "objects/a.txt"
+        )
+        assert (
+            await svc.generate_presigned_url(
+                "objects/a.txt",
+                filename="a.txt",
+                expires_in=30,
+            )
+            == "https://files.example/objects/a.txt?name=a.txt"
+        )
+        assert await svc.batch_presigned_urls(
+            ["objects/a.txt"],
+            filenames={"objects/a.txt": "a.txt"},
+            expires_in=30,
+        ) == {"objects/a.txt": "https://files.example/objects/a.txt"}
+        assert await svc.delete_file("objects/a.txt") is True
+        assert await svc.head_file("objects/a.txt") == {"content_type": "text/plain"}
+        assert await svc.delete_prefix("objects/") == 3
+        assert svc.get_public_url("objects/a.txt") == (
+            "https://public.example/objects/a.txt"
+        )
+        assert await svc.download_text("objects/a.txt") == "text:objects/a.txt"
+        assert await svc.get_text("objects/a.txt") == "text:objects/a.txt"
+
+        assert delegate.calls == [
+            ("upload_file", b"data", "objects/a.txt", "text/plain", 4),
+            ("generate_presigned_url", "objects/a.txt", "a.txt", 30),
+            (
+                "batch_presigned_urls",
+                ["objects/a.txt"],
+                {"objects/a.txt": "a.txt"},
+                30,
+            ),
+            ("delete_file", "objects/a.txt"),
+            ("head_file", "objects/a.txt"),
+            ("delete_prefix", "objects/"),
+            ("get_public_url", "objects/a.txt"),
+            ("download_text", "objects/a.txt"),
+            ("download_text", "objects/a.txt"),
+        ]
+
+    async def test_s3_service_can_bind_delegate_after_construction(self):
+        delegate = FakeObjectStoragePort()
+        svc = S3Service()
+
+        svc.bind_object_storage(delegate)
+
+        assert await svc.generate_presigned_url("objects/a.txt") == (
+            "https://files.example/objects/a.txt?name="
+        )
+        assert delegate.calls == [
+            ("generate_presigned_url", "objects/a.txt", None, None)
+        ]
 
 
 class TestInlineBase64ConversionErrors:
-    async def test_s3_upload_failure_logs_error(self):
+    async def test_s3_upload_failure_logs_error(self, monkeypatch):
         from execution.dispatch.transports.direct import DirectTransport
 
         db = MagicMock()
@@ -72,6 +156,7 @@ class TestInlineBase64ConversionErrors:
         )
         processor._s3_service = AsyncMock()
         processor._s3_service.upload_file = AsyncMock(side_effect=Exception("S3 down"))
+        _bind_test_a2a_artifact_storage(monkeypatch, processor.object_storage)
 
         artifact = MagicMock()
         file_content = MagicMock()
@@ -95,7 +180,7 @@ class TestSharedInlineConversionCap:
     started its own counter from 0, so combining both paths could exceed
     MAX_INLINE_CONVERSIONS_PER_MESSAGE."""
 
-    async def test_total_conversions_respect_cap_across_both_paths(self):
+    async def test_total_conversions_respect_cap_across_both_paths(self, monkeypatch):
         from execution.dispatch.transports.direct import (
             DirectTransport,
             MessageStreamingState,
@@ -125,6 +210,7 @@ class TestSharedInlineConversionCap:
             task_updater=db,
             s3_service=mock_s3,
         )
+        _bind_test_a2a_artifact_storage(monkeypatch, processor.object_storage)
 
         cap = MAX_INLINE_CONVERSIONS_PER_MESSAGE
         raw_b64 = base64.b64encode(b"pixel data").decode()
@@ -140,11 +226,10 @@ class TestSharedInlineConversionCap:
             artifact = A2AArtifact(artifact_id=f"art-{idx}", parts=[Part(root=fp)])
 
             shared_counter = [streaming_state.inline_conversion_count]
-            with patch("app_shell.s3_service.s3_service", mock_s3):
-                await processor._convert_inline_bytes_to_s3(
-                    artifact, "room1", "msg1",
-                    conversion_counter=shared_counter,
-                )
+            await processor._convert_inline_bytes_to_s3(
+                artifact, "room1", "msg1",
+                conversion_counter=shared_counter,
+            )
             streaming_state.inline_conversion_count = shared_counter[0]
 
         assert streaming_state.inline_conversion_count == cap - 2
@@ -156,14 +241,11 @@ class TestSharedInlineConversionCap:
             for _ in range(5)
         ]
 
-        with patch(
-            "app_shell.s3_service.s3_service", mock_s3
-        ):
-            new_total = await processor._convert_streaming_parts_to_s3(
-                non_text_parts, "room1", "msg1",
-                converted_so_far=streaming_state.inline_conversion_count,
-            )
-            streaming_state.inline_conversion_count = new_total
+        new_total = await processor._convert_streaming_parts_to_s3(
+            non_text_parts, "room1", "msg1",
+            converted_so_far=streaming_state.inline_conversion_count,
+        )
+        streaming_state.inline_conversion_count = new_total
 
         total_uploads = len(upload_calls)
         assert total_uploads == cap, (

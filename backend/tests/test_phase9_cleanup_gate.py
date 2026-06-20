@@ -205,7 +205,9 @@ def _import_violations() -> list[str]:
             if isinstance(node, ast.Import):
                 names = [(alias.name, alias.name) for alias in node.names]
             elif isinstance(node, ast.ImportFrom) and node.module is not None:
-                names = [(f"{node.module}.{alias.name}", node.module) for alias in node.names]
+                names = [
+                    (f"{node.module}.{alias.name}", node.module) for alias in node.names
+                ]
             else:
                 continue
             for imported_name, module in names:
@@ -234,7 +236,10 @@ def _sdk_import_violations() -> list[str]:
                 if isinstance(node, ast.Import):
                     names = [(alias.name, alias.name) for alias in node.names]
                 elif isinstance(node, ast.ImportFrom) and node.module is not None:
-                    names = [(f"{node.module}.{alias.name}", node.module) for alias in node.names]
+                    names = [
+                        (f"{node.module}.{alias.name}", node.module)
+                        for alias in node.names
+                    ]
                 else:
                     continue
                 for imported_name, module in names:
@@ -285,7 +290,9 @@ def _common_import_violations() -> list[str]:
             if isinstance(node, ast.Import):
                 names = [(alias.name, alias.name) for alias in node.names]
             elif isinstance(node, ast.ImportFrom) and node.module is not None:
-                names = [(f"{node.module}.{alias.name}", node.module) for alias in node.names]
+                names = [
+                    (f"{node.module}.{alias.name}", node.module) for alias in node.names
+                ]
             else:
                 continue
             for imported_name, module in names:
@@ -315,7 +322,9 @@ def _legacy_service_shim_violations() -> list[str]:
             if isinstance(node, ast.Import):
                 names = [(alias.name, alias.name) for alias in node.names]
             elif isinstance(node, ast.ImportFrom) and node.module is not None:
-                names = [(f"{node.module}.{alias.name}", node.module) for alias in node.names]
+                names = [
+                    (f"{node.module}.{alias.name}", node.module) for alias in node.names
+                ]
             else:
                 continue
             for imported_name, module in names:
@@ -380,8 +389,7 @@ def _imports_package(path: Path, package: str) -> bool:
         else:
             continue
         if any(
-            module == package or module.startswith(f"{package}.")
-            for module in modules
+            module == package or module.startswith(f"{package}.") for module in modules
         ):
             return True
     return False
@@ -479,20 +487,33 @@ def test_repo_local_config_callers_use_common_config_settings():
     )
 
 
-def test_main_legacy_startup_import_inventory_is_preserved():
-    modules = _import_modules(Path("main.py"))
-    actual = {
+def test_main_delegates_legacy_startup_import_inventory_to_container():
+    main_modules = _import_modules(Path("main.py"))
+    container_modules = _import_modules(Path("container.py"))
+
+    main_actual = {
         package: sorted(
             {
                 module
-                for module in modules
+                for module in main_modules
+                if module == package or module.startswith(f"{package}.")
+            }
+        )
+        for package in EXPECTED_MAIN_LEGACY_IMPORTS
+    }
+    container_actual = {
+        package: sorted(
+            {
+                module
+                for module in container_modules
                 if module == package or module.startswith(f"{package}.")
             }
         )
         for package in EXPECTED_MAIN_LEGACY_IMPORTS
     }
 
-    assert actual == EXPECTED_MAIN_LEGACY_IMPORTS
+    assert main_actual == {package: [] for package in EXPECTED_MAIN_LEGACY_IMPORTS}
+    assert container_actual == EXPECTED_MAIN_LEGACY_IMPORTS
 
 
 def test_response_handler_has_no_services_imports_including_type_checking():
@@ -512,10 +533,14 @@ def test_response_handler_has_no_services_imports_including_type_checking():
 
 def test_operational_scripts_have_been_removed():
     manifest = _manifest()
-    remaining_paths = sorted(path for path in REMOVED_OPERATIONAL_SCRIPTS if Path(path).exists())
+    remaining_paths = sorted(
+        path for path in REMOVED_OPERATIONAL_SCRIPTS if Path(path).exists()
+    )
 
     assert "operational_script_" + "blockers" not in manifest
-    assert not remaining_paths, "Operational scripts still exist:\n" + "\n".join(remaining_paths)
+    assert not remaining_paths, "Operational scripts still exist:\n" + "\n".join(
+        remaining_paths
+    )
 
 
 def _imported_names_including_type_checking(path: Path) -> set[str]:
@@ -525,9 +550,7 @@ def _imported_names_including_type_checking(path: Path) -> set[str]:
         if isinstance(node, ast.Import):
             imported_names.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            imported_names.update(
-                f"{node.module}.{alias.name}" for alias in node.names
-            )
+            imported_names.update(f"{node.module}.{alias.name}" for alias in node.names)
     return imported_names
 
 
@@ -543,7 +566,9 @@ def test_app_shell_runtime_blockers_match_main_inventory():
 
     for package in LEGACY_PACKAGES:
         if package in blocker_by_package:
-            violations.append(f"{package}: app-shell runtime blocker remains after package deletion")
+            violations.append(
+                f"{package}: app-shell runtime blocker remains after package deletion"
+            )
 
     assert not violations, "App-shell runtime blockers are incomplete:\n" + "\n".join(
         violations
@@ -601,8 +626,7 @@ def test_legacy_import_boundary_blockers_are_exact_current_files():
             continue
         modules = _import_modules_including_type_checking(path)
         if not any(
-            module == prefix or module.startswith(f"{prefix}.")
-            for module in modules
+            module == prefix or module.startswith(f"{prefix}.") for module in modules
         ):
             bad.append(f"{path}: missing live import for {prefix}")
 
@@ -612,7 +636,15 @@ def test_legacy_import_boundary_blockers_are_exact_current_files():
 def test_a2a_sdk_imports_are_confined_or_manifest_blocked():
     violations = _sdk_import_violations()
 
-    assert not violations, "Undocumented A2A SDK imports remain:\n" + "\n".join(violations)
+    assert not violations, "Undocumented A2A SDK imports remain:\n" + "\n".join(
+        violations
+    )
+
+
+def test_phase9_sdk_confinement_gate_is_a2a_only_by_design():
+    """AWS SDK confinement is enforced by test_dal_database_convergence_gate."""
+
+    assert FORBIDDEN_SDK_IMPORT_PREFIXES == ("a2a",)
 
 
 def test_phase9_import_smoke_modules_are_importable():
@@ -623,7 +655,9 @@ def test_phase9_import_smoke_modules_are_importable():
         except ModuleNotFoundError as exc:
             missing.append(f"{module_name}: {exc}")
 
-    assert not missing, "Phase 9 import smoke modules are missing:\n" + "\n".join(missing)
+    assert not missing, "Phase 9 import smoke modules are missing:\n" + "\n".join(
+        missing
+    )
 
 
 def test_no_numbered_duplicate_python_artifacts_are_shipped():
@@ -655,7 +689,9 @@ def test_container_does_not_define_platform_adapter_classes_inline():
     )
 
     assert RateLimitCollectionAdapter.__module__.startswith("platform_module.adapters.")
-    assert MongoFileMetadataRepository.__module__.startswith("platform_module.adapters.")
+    assert MongoFileMetadataRepository.__module__.startswith(
+        "platform_module.adapters."
+    )
 
 
 def test_a2a_sdk_blockers_are_exact_current_files():
@@ -864,8 +900,8 @@ def test_execution_direct_transport_has_no_sdk_confinement_blocker():
 def test_retained_legacy_service_shims_do_not_keep_concrete_implementations():
     violations = _legacy_service_shim_violations()
 
-    assert not violations, "Legacy service shims keep concrete implementations:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Legacy service shims keep concrete implementations:\n" + "\n".join(violations)
     )
 
 
@@ -914,15 +950,21 @@ def test_removed_legacy_packages_are_recorded_in_cleanup_manifest():
             violations.append(f"{package}: status must be removed")
         if entry.get("py_files") != _package_python_file_count(package):
             violations.append(f"{package}: py_files does not match current package")
-        if entry.get("runtime_import_files") != _runtime_import_files_for_package(package):
-            violations.append(f"{package}: runtime_import_files does not match current imports")
+        if entry.get("runtime_import_files") != _runtime_import_files_for_package(
+            package
+        ):
+            violations.append(
+                f"{package}: runtime_import_files does not match current imports"
+            )
         if entry.get("test_import_files") != _test_import_files_for_package(package):
-            violations.append(f"{package}: test_import_files does not match current imports")
+            violations.append(
+                f"{package}: test_import_files does not match current imports"
+            )
         if package not in safe_to_delete:
             violations.append(f"{package}: missing safe_to_delete entry")
 
-    assert not violations, "Removed legacy packages lack cleanup evidence:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Removed legacy packages lack cleanup evidence:\n" + "\n".join(violations)
     )
 
 
@@ -946,8 +988,8 @@ def test_task_runtime_no_longer_exposes_legacy_task_center_crud():
     }
     present = sorted(token for token in forbidden_tokens if token in source)
 
-    assert not present, "Task runtime still exposes legacy TaskCenter CRUD: " + ", ".join(
-        present
+    assert not present, (
+        "Task runtime still exposes legacy TaskCenter CRUD: " + ", ".join(present)
     )
 
 
@@ -959,7 +1001,11 @@ def test_old_implementation_packages_are_not_shipped_without_blocker():
         for entry in blockers
         if isinstance(entry.get("path"), str) and "/" not in entry["path"]
     }
-    packages = set(tomllib.loads(Path("pyproject.toml").read_text())["tool"]["setuptools"]["packages"])
+    packages = set(
+        tomllib.loads(Path("pyproject.toml").read_text())["tool"]["setuptools"][
+            "packages"
+        ]
+    )
     shipped_legacy = sorted(packages & LEGACY_PACKAGES)
     unblocked_legacy = [
         package for package in shipped_legacy if package not in blocked_packages
@@ -973,7 +1019,11 @@ def test_old_implementation_packages_are_not_shipped_without_blocker():
 
 def test_shipped_legacy_packages_have_package_removal_checklist_entries():
     manifest = _manifest()
-    packages = set(tomllib.loads(Path("pyproject.toml").read_text())["tool"]["setuptools"]["packages"])
+    packages = set(
+        tomllib.loads(Path("pyproject.toml").read_text())["tool"]["setuptools"][
+            "packages"
+        ]
+    )
     shipped_legacy = sorted(packages & LEGACY_PACKAGES)
     checklist = manifest.get("package_removal_checklist") or []
     checklist_by_package = {
@@ -992,17 +1042,23 @@ def test_shipped_legacy_packages_have_package_removal_checklist_entries():
             violations.append(f"{package}: status must remain blocked while shipped")
         if entry.get("py_files") != _package_python_file_count(package):
             violations.append(f"{package}: py_files does not match current package")
-        if entry.get("runtime_import_files") != _runtime_import_files_for_package(package):
-            violations.append(f"{package}: runtime_import_files does not match current imports")
+        if entry.get("runtime_import_files") != _runtime_import_files_for_package(
+            package
+        ):
+            violations.append(
+                f"{package}: runtime_import_files does not match current imports"
+            )
         if entry.get("test_import_files") != _test_import_files_for_package(package):
-            violations.append(f"{package}: test_import_files does not match current imports")
+            violations.append(
+                f"{package}: test_import_files does not match current imports"
+            )
         if not entry.get("required_before_remove"):
             violations.append(f"{package}: missing required_before_remove")
         if not (entry.get("runtime_blockers") or entry.get("test_blockers")):
             violations.append(f"{package}: missing runtime_blockers or test_blockers")
 
-    assert not violations, "Shipped legacy packages lack removal evidence:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Shipped legacy packages lack removal evidence:\n" + "\n".join(violations)
     )
 
 
@@ -1028,7 +1084,9 @@ def test_legacy_package_blocker_counts_match_package_removal_checklist():
         runtime_count = len(entry.get("runtime_import_files") or [])
         test_count = len(entry.get("test_import_files") or [])
         if f"{runtime_count} runtime files" not in blockers_text:
-            violations.append(f"{package}: missing {runtime_count} runtime files blocker")
+            violations.append(
+                f"{package}: missing {runtime_count} runtime files blocker"
+            )
         if f"{test_count} test files" not in blockers_text:
             violations.append(f"{package}: missing {test_count} test files blocker")
 
@@ -1039,7 +1097,11 @@ def test_legacy_package_blocker_counts_match_package_removal_checklist():
 
 def test_package_removal_runtime_scan_includes_shipped_legacy_roots():
     roots = set(PACKAGE_REMOVAL_RUNTIME_ROOTS)
-    packages = set(tomllib.loads(Path("pyproject.toml").read_text())["tool"]["setuptools"]["packages"])
+    packages = set(
+        tomllib.loads(Path("pyproject.toml").read_text())["tool"]["setuptools"][
+            "packages"
+        ]
+    )
     shipped_legacy = packages & LEGACY_PACKAGES
 
     assert shipped_legacy.issubset(roots)
@@ -1088,7 +1150,9 @@ def test_query_similar_agents_with_scores_has_no_runtime_callers():
 
 
 def test_dal_database_convergence_manifest_exists_and_has_no_unknown_sections():
-    manifest = json.loads(Path("tests/fixtures/dal_database_convergence_manifest.json").read_text())
+    manifest = json.loads(
+        Path("tests/fixtures/dal_database_convergence_manifest.json").read_text()
+    )
     assert set(manifest) == {
         "exclude_dirs",
         "exclude_files",

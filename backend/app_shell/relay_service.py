@@ -11,8 +11,6 @@ from collections.abc import AsyncGenerator, Callable
 from types import SimpleNamespace
 from typing import Any
 
-from app_shell.delivery_runtime import SSEManager
-from app_shell.redis_runtime import AppShellLeaderElection, AppShellRelayStreamService
 from common.dto import (
     HubCancelCommand,
     HubDispatchCommand,
@@ -93,7 +91,7 @@ class RelayService:
         mongo: Any,
         db: Any | None = None,
         legacy_store: Any | None = None,
-        sse_manager: SSEManager,
+        sse_manager: Any,
         event_publisher: Any | None = None,
         worker_id: str | None = None,
         response_converter: Callable[[Any], Any] | None = None,
@@ -111,10 +109,8 @@ class RelayService:
         self._db = db if db is not None else legacy_store
         if self._db is None:
             raise ValueError("RelayService requires a mongo-compatible db/service")
-        self._sse = sse_manager
         self._agent_registry_writer = None
         self._publish_handler: Any | None = None
-        self._relay_transport: Any | None = None
         self._response_handler: Any | None = None
         self._internal_response_dispatcher: Any | None = None
         self._response_converter = response_converter or _default_hub_response_converter
@@ -179,7 +175,6 @@ class RelayService:
 
     def set_relay_transport(self, transport: Any) -> None:
         self._publish_handler = transport
-        self._relay_transport = transport
         response_handler = getattr(transport, "response_handler", None)
         if response_handler is not None:
             self.bind_response_handler(response_handler)
@@ -190,10 +185,10 @@ class RelayService:
         self._response_handler = response_handler
         self._bind_internal_response_router()
 
-    def set_stream_service(self, streams: AppShellRelayStreamService) -> None:
+    def set_stream_service(self, streams: Any) -> None:
         self._facade.bind_streams(streams)
 
-    def set_leader_election(self, leader: AppShellLeaderElection | None) -> None:
+    def set_leader_election(self, leader: Any | None) -> None:
         self._facade.bind_leader_elector(leader)
 
     def bind_agent_registry_writer(self, writer) -> None:
@@ -357,7 +352,7 @@ def init_relay_service(
     mongo: Any,
     db: Any | None = None,
     legacy_store: Any | None = None,
-    sse_manager: SSEManager,
+    sse_manager: Any,
     room_message_center: object,
     hitl_coordinator: object | None = None,
     event_publisher: Any | None = None,

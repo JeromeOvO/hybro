@@ -294,6 +294,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
             "hitl_coordinator",
             "task_notifications",
             "context_memory_runtime",
+            "object_storage",
         ]
     }
     runtime = create_room_message_center(**deps, debate_rounds=5)
@@ -335,6 +336,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.agent_response_handler.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.task_notifications is deps["task_notifications"]
     assert runtime.context_memory_runtime is deps["context_memory_runtime"]
+    assert runtime.direct_transport.object_storage is deps["object_storage"]
 
 
 def test_room_message_center_factory_owns_default_dependency_wiring():
