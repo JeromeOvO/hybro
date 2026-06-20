@@ -240,7 +240,6 @@ def test_main_binds_focused_runtime_store_parts_before_aggregate_shims():
 def test_main_keeps_broad_repository_store_only_for_documented_compatibility_points():
     tree = ast.parse(Path("main.py").read_text())
     allowed_broad_calls = {
-        "room_runtime.bind_store",
         "init_relay_service",
     }
     broad_calls: list[str] = []
@@ -311,6 +310,34 @@ def test_main_binds_debate_and_coordinator_to_focused_message_adapters():
         "get_room_agent_messages_by_related_message_id",
         "get_room_by_room_id",
         "get_room_user_message_by_message_id",
+    }
+
+
+def test_main_binds_room_runtime_to_focused_room_store_adapter():
+    tree = ast.parse(Path("main.py").read_text())
+    bound_store_name = None
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if _dotted_name(node.func) != "room_runtime.bind_store":
+            continue
+        assert len(node.args) == 1
+        assert isinstance(node.args[0], ast.Name)
+        bound_store_name = node.args[0].id
+
+    assert bound_store_name == "room_runtime_store"
+    assert _simple_namespace_keywords(tree, "room_runtime_store") == {
+        "add_room_agent_message",
+        "get_agent_by_agent_id",
+        "get_agent_group_by_id",
+        "get_agents_with_conditions",
+        "get_all_active_agents",
+        "get_room_by_room_id",
+        "get_room_memory_by_room_id",
+        "get_room_user_message_by_message_id",
+        "update_room_by_room_id",
+        "update_room_user_message_by_message_id",
     }
 
 

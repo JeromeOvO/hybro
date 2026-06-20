@@ -526,11 +526,11 @@ Examples:
   store parts in `app_shell.repository_parts`. Startup splits the composite into
   focused agent/room, message, task lifecycle, HITL, and memory ports before
   binding production consumers; only documented compatibility shims still receive
-  the composite. Debate and room-coordinator compatibility services receive
-  focused startup adapters that expose only the message and agent/room lookup
-  methods they call. Execution `RoomMessageCenter` receives a focused startup
-  adapter composed from those runtime-store parts rather than the app-shell
-  composite.
+  the composite. Room runtime, debate, and room-coordinator compatibility
+  services receive focused startup adapters that expose only the message,
+  memory, and agent/room lookup methods they call. Execution `RoomMessageCenter`
+  receives a focused startup adapter composed from those runtime-store parts
+  rather than the app-shell composite.
 - `app_shell.relay_service`: relay route surface over
   `hub_runtime_bridge`. Hub-owned liveness, stream binding, agent sync,
   legacy push delivery, offline queues, offline failure persistence, heartbeat

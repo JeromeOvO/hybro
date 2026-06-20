@@ -695,6 +695,24 @@ async def lifespan(app: FastAPI):
                 ),
                 add_room_agent_message=message_store.add_room_agent_message,
             )
+            room_runtime_store = SimpleNamespace(
+                add_room_agent_message=message_store.add_room_agent_message,
+                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
+                get_agent_group_by_id=agent_room_store.get_agent_group_by_id,
+                get_agents_with_conditions=(
+                    agent_room_store.get_agents_with_conditions
+                ),
+                get_all_active_agents=agent_room_store.get_all_active_agents,
+                get_room_by_room_id=agent_room_store.get_room_by_room_id,
+                get_room_memory_by_room_id=memory_store.get_room_memory_by_room_id,
+                get_room_user_message_by_message_id=(
+                    message_store.get_room_user_message_by_message_id
+                ),
+                update_room_by_room_id=agent_room_store.update_room_by_room_id,
+                update_room_user_message_by_message_id=(
+                    message_store.update_room_user_message_by_message_id
+                ),
+            )
             room_message_center_store = SimpleNamespace(
                 accumulate_artifact_on_message=(
                     message_store.accumulate_artifact_on_message
@@ -833,7 +851,7 @@ async def lifespan(app: FastAPI):
             a2a_tasks.bind_a2a_task_dependencies(a2a_task_status_reader)
             agent_group.bind_agent_group_dependencies(agent_room_store)
             sse.bind_sse_dependencies(sse_state_reader, sse_manager)
-            room_runtime.bind_store(app_shell_store)
+            room_runtime.bind_store(room_runtime_store)
             room_runtime.bind_facade(_room_facade)
             room_runtime.bind_object_storage(platform_object_storage)
             room_center.room_center.bind_facade(_room_facade)
