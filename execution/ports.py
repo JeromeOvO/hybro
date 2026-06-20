@@ -123,13 +123,6 @@ class HITLPersistencePort(Protocol):
 
 
 class HITLContinuationPort(Protocol):
-    async def reply_to_agent_task(
-        self,
-        *,
-        request: Any,
-        user_input: str,
-    ) -> dict[str, Any]: ...
-
     async def resume_queue_from_continuation(
         self,
         continuation_message_id: str,
@@ -137,6 +130,17 @@ class HITLContinuationPort(Protocol):
         task_result_text: str | None = None,
         failed: bool = False,
     ) -> bool: ...
+
+
+class HITLAgentReplyPort(Protocol):
+    async def reply_to_task(
+        self,
+        *,
+        message_id: str,
+        task_id: str,
+        context_id: str,
+        user_input: str,
+    ) -> dict[str, Any]: ...
 
 
 class HITLTaskNotificationPort(Protocol):

@@ -4,11 +4,11 @@ from typing import Any
 
 
 class HITLPersistenceAdapter:
-    def __init__(self, store) -> None:
-        self._store = store
+    def __init__(self, persistence) -> None:
+        self._persistence = persistence
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._store, name)
+        return getattr(self._persistence, name)
 
 
 class HITLDeliveryAdapter:
@@ -20,13 +20,22 @@ class HITLDeliveryAdapter:
 
 
 class A2AHITLContinuationAdapter:
-    def __init__(self, a2a_service, room_message_center_provider) -> None:
-        self._a2a_service = a2a_service
+    def __init__(self, agent_reply_transport, room_message_center_provider) -> None:
+        self._agent_reply_transport = agent_reply_transport
         self._room_message_center_provider = room_message_center_provider
 
-    async def reply_to_agent_task(self, *, request: Any, user_input: str) -> dict[str, Any]:
-        return await self._a2a_service.reply_to_agent_task(
-            request=request,
+    async def reply_to_task(
+        self,
+        *,
+        message_id: str,
+        task_id: str,
+        context_id: str,
+        user_input: str,
+    ) -> dict[str, Any]:
+        return await self._agent_reply_transport.reply_to_task(
+            message_id=message_id,
+            task_id=task_id,
+            context_id=context_id,
             user_input=user_input,
         )
 

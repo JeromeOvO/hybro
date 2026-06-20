@@ -267,14 +267,13 @@ def test_execution_scaffold_adapters_are_available():
     assert isinstance(room_message_center, BoundRoomMessageCenterProxy)
 
 
-def test_hitl_factory_does_not_accept_legacy_database_aliases():
+def test_hitl_factory_rejects_legacy_runtime_aliases():
     from execution.hitl.factory import create_hitl_service
 
-    db = object()
-    with pytest.raises(TypeError, match="database_service"):
-        create_hitl_service(database_service=db)
-    with pytest.raises(TypeError, match="db_service"):
-        create_hitl_service(db_service=db)
+    legacy = object()
+    for name in ["store", "database_service", "db_service", "a2a" + "_" + "service"]:
+        with pytest.raises(TypeError, match=name):
+            create_hitl_service(**{name: legacy})
 
 
 def _make_room_message_center_port_deps():

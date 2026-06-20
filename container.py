@@ -901,9 +901,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             bind_hitl_service(
                 create_hitl_service(
-                    store=hitl_runtime_store,
+                    persistence=hitl_runtime_store,
                     delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
-                    a2a_service=a2a_service,
+                    agent_reply=A2AHITLContinuationAdapter(
+                        a2a_service,
+                        lambda: execution_room_message_center,
+                    ),
                     continuation=A2AHITLContinuationAdapter(
                         a2a_service,
                         lambda: execution_room_message_center,
@@ -1022,7 +1025,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 cancellation_store=MongoCancellationStoreAdapter(task_store),
                 hitl_message_cancellation=HITLMessageCancellationAdapter(hitl_service),
                 agent_task_cleanup=AgentTaskCleanupAdapter(
-                    store=message_store,
+                    message_task_store=message_store,
                     get_agent_card_from_url=a2a_service.get_agent_card_from_url,
                     cancel_remote_task=a2a_service.cancel_remote_task,
                     notify_task_update=notify_task_update_with_string_state,
