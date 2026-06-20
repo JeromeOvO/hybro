@@ -240,8 +240,6 @@ def test_main_binds_focused_runtime_store_parts_before_aggregate_shims():
 def test_main_keeps_broad_repository_store_only_for_documented_compatibility_points():
     tree = ast.parse(Path("main.py").read_text())
     allowed_broad_calls = {
-        "debate_service.bind_store",
-        "room_coordinator_service.bind_store",
         "room_runtime.bind_store",
         "create_room_message_center",
         "init_relay_service",
@@ -263,3 +261,55 @@ def test_main_keeps_broad_repository_store_only_for_documented_compatibility_poi
             broad_calls.append(f"{call_name}:{node.lineno}")
 
     assert broad_calls == []
+
+
+def _simple_namespace_keywords(tree: ast.AST, assignment_name: str) -> set[str]:
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == assignment_name
+            for target in node.targets
+        ):
+            continue
+        if not isinstance(node.value, ast.Call):
+            continue
+        if _dotted_name(node.value.func) != "SimpleNamespace":
+            continue
+        return {keyword.arg for keyword in node.value.keywords if keyword.arg}
+    return set()
+
+
+def test_main_binds_debate_and_coordinator_to_focused_message_adapters():
+    tree = ast.parse(Path("main.py").read_text())
+    bound_adapters: dict[str, str] = {}
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        call_name = _dotted_name(node.func)
+        if call_name not in {
+            "debate_service.bind_store",
+            "room_coordinator_service.bind_store",
+        }:
+            continue
+        assert len(node.args) == 1
+        assert isinstance(node.args[0], ast.Name)
+        bound_adapters[call_name] = node.args[0].id
+
+    assert bound_adapters == {
+        "debate_service.bind_store": "debate_message_store",
+        "room_coordinator_service.bind_store": "room_coordinator_message_store",
+    }
+    assert _simple_namespace_keywords(tree, "debate_message_store") == {
+        "get_agent_name_by_agent_id",
+        "get_room_agent_message_by_message_id",
+        "update_room_agent_message_with_new_message_content_by_message_id",
+    }
+    assert _simple_namespace_keywords(tree, "room_coordinator_message_store") == {
+        "add_room_agent_message",
+        "get_agent_name_by_agent_id",
+        "get_room_agent_messages_by_related_message_id",
+        "get_room_by_room_id",
+        "get_room_user_message_by_message_id",
+    }
