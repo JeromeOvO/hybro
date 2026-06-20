@@ -315,7 +315,11 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     from execution.orchestration.factory import create_room_message_center
 
     deps = _make_room_message_center_port_deps()
-    runtime = create_room_message_center(**deps, debate_rounds=5)
+    runtime = create_room_message_center(
+        **deps,
+        debate_rounds=5,
+        orphan_threshold_minutes=9,
+    )
 
     assert runtime.room_runtime is deps["room_runtime"]
     assert runtime.message_reader is deps["message_reader"]
@@ -337,6 +341,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.agent_dispatcher._agent_lookup is deps["agent_lookup"]
     assert runtime.agent_dispatcher._agent_group_reader is deps["agent_group_reader"]
     assert runtime.debate_rounds == 5
+    assert runtime.orphan_threshold_minutes == 9
     assert runtime.supervisor_executor.debate_rounds == 5
     assert runtime.agent_dispatcher.agent_resolver is deps["agent_resolver_service"]
     assert runtime.agent_response_handler._message_writer is deps["message_writer"]

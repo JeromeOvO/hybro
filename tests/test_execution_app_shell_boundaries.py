@@ -69,6 +69,20 @@ def _parameter_names(obj) -> set[str]:
     return set(inspect.signature(obj.__init__).parameters)
 
 
+FORBIDDEN_CONSTRUCTOR_PARAMETER_NAMES = {
+    "a2a_service",
+    "coordinator",
+    "database_service",
+    "db_service",
+    "room_coordinator_service",
+    "room_memory_service",
+    "room_services",
+    "sse_manager",
+    "store",
+    "task_store",
+}
+
+
 def test_execution_runtime_constructors_do_not_use_shell_dependency_names() -> None:
     from execution.cancellation import AgentTaskCleanupAdapter, CancellationStateC3Adapter
     from execution.hitl.adapters import A2AHITLContinuationAdapter, HITLPersistenceAdapter
@@ -134,7 +148,39 @@ def test_execution_runtime_constructors_do_not_use_shell_dependency_names() -> N
         for name in found:
             violations.append(f"{cls.__name__}.__init__ parameter {name!r}")
 
-    assert not violations, "Execution constructors must use execution port names:\n" + "\n".join(violations)
+    for path in sorted((ROOT / "execution").rglob("*.py")):
+        rel_path = path.relative_to(ROOT)
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            for body_node in node.body:
+                if not (
+                    isinstance(body_node, ast.FunctionDef)
+                    and body_node.name == "__init__"
+                ):
+                    continue
+                parameters = [
+                    *body_node.args.posonlyargs,
+                    *body_node.args.args,
+                    *body_node.args.kwonlyargs,
+                ]
+                found = sorted(
+                    parameter.arg
+                    for parameter in parameters
+                    if parameter.arg != "self"
+                    and parameter.arg in FORBIDDEN_CONSTRUCTOR_PARAMETER_NAMES
+                )
+                for name in found:
+                    violations.append(
+                        f"{rel_path}:{body_node.lineno}: "
+                        f"{node.name}.__init__ parameter {name!r}"
+                    )
+
+    assert not violations, (
+        "Execution constructors must use execution port names:\n"
+        + "\n".join(violations)
+    )
 
 
 def test_execution_modules_do_not_store_legacy_runtime_fields() -> None:
