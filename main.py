@@ -675,10 +675,30 @@ async def lifespan(app: FastAPI):
                     task_store.claim_stuck_supervisor_trajectory
                 ),
             )
+            debate_message_store = SimpleNamespace(
+                get_room_agent_message_by_message_id=(
+                    message_store.get_room_agent_message_by_message_id
+                ),
+                get_agent_name_by_agent_id=agent_room_store.get_agent_name_by_agent_id,
+                update_room_agent_message_with_new_message_content_by_message_id=(
+                    message_store.update_room_agent_message_with_new_message_content_by_message_id
+                ),
+            )
+            room_coordinator_message_store = SimpleNamespace(
+                get_room_by_room_id=agent_room_store.get_room_by_room_id,
+                get_agent_name_by_agent_id=agent_room_store.get_agent_name_by_agent_id,
+                get_room_user_message_by_message_id=(
+                    message_store.get_room_user_message_by_message_id
+                ),
+                get_room_agent_messages_by_related_message_id=(
+                    message_store.get_room_agent_messages_by_related_message_id
+                ),
+                add_room_agent_message=message_store.add_room_agent_message,
+            )
 
             membership_source.bind_store(agent_room_store)
-            debate_service.bind_store(app_shell_store)
-            room_coordinator_service.bind_store(app_shell_store)
+            debate_service.bind_store(debate_message_store)
+            room_coordinator_service.bind_store(room_coordinator_message_store)
             chat_memory_service.bind_store(memory_store)
             room_memory_service.bind_store(memory_store)
             bind_notification_store(task_notification_store)
