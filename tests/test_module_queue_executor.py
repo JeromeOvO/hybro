@@ -10,7 +10,7 @@ Tests cover:
 import inspect
 from collections import deque
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from a2a.types import TaskState
@@ -43,6 +43,12 @@ def test_resume_from_continuation_before_terminal_failure_is_typed():
     assert annotation == "Callable[[str, str], Awaitable[None]] | None"
 
 
+def test_constructor_memory_reader_is_typed_as_room_memory_reader():
+    annotation = inspect.signature(QueueExecutor).parameters["memory_reader"].annotation
+
+    assert annotation == "RoomMemoryReader"
+
+
 # =============================================================================
 # _check_rate_limit Tests
 # =============================================================================
@@ -60,10 +66,19 @@ def _make_queue_executor():
     qe.agent_lookup = MagicMock()
     qe.room_reader = MagicMock()
     qe.memory_reader = MagicMock()
+    qe.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=None
+    )
     qe.message_reader.get_room_user_message_by_message_id = AsyncMock(return_value=None)
+    qe.message_writer.add_room_agent_message = AsyncMock()
+    qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id = (
+        AsyncMock()
+    )
     qe.task_state_store.resolve_client_request_id_for_message_id = AsyncMock(
         return_value=None
     )
+    qe.delivery.send_task_submitted = AsyncMock()
+    qe.delivery.send_task_update = AsyncMock()
     qe.room_runtime = MagicMock()
     qe.room_memory = AsyncMock()
     qe.agent_dispatcher = MagicMock()
@@ -208,6 +223,106 @@ class TestProcessQueue:
 
         assert result.result == QueueResult.COMPLETED
         assert qe._process_single_message.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_process_queue_submits_system_hybro_task_through_focused_ports(self):
+        qe = _make_queue_executor()
+        qe.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+            side_effect=[None, None]
+        )
+        sys_msg = SimpleNamespace(message_id=None)
+        qe.room_runtime.create_agent_message.return_value = sys_msg
+
+        msg = MagicMock(
+            message_id="msg-1",
+            step_number=1,
+            total_steps=1,
+            extend_info=None,
+            agent_id="a1",
+            user_id="u1",
+        )
+        queue = deque([msg])
+
+        agent = MagicMock()
+        agent.agent_id = "a1"
+        agent.agent_card = MagicMock()
+        agent.agent_card.name = "TestAgent"
+
+        qe._resolve_agent_for_message = AsyncMock(return_value=agent)
+        qe._process_single_message = AsyncMock(
+            return_value=ProcessingResult(ProcessingStatus.SUCCESS)
+        )
+        qe._queue_next_messages = AsyncMock()
+
+        result = await qe.process_queue(queue, "room-1", "umsg-1")
+
+        assert result.result == QueueResult.COMPLETED
+        assert (
+            qe.message_reader.get_room_agent_message_by_message_id.await_args_list[0]
+            == call("sys-umsg-1")
+        )
+        qe.message_writer.add_room_agent_message.assert_awaited_once_with(sys_msg)
+        qe.delivery.send_task_submitted.assert_awaited_once()
+        assert (
+            qe.delivery.send_task_submitted.await_args.kwargs["message_id"]
+            == "sys-umsg-1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_process_queue_updates_system_hybro_task_through_focused_ports(self):
+        qe = _make_queue_executor()
+        system_content = SimpleNamespace(
+            message_task=SimpleNamespace(status=SimpleNamespace(state=None))
+        )
+        system_msg = SimpleNamespace(
+            message_id="sys-umsg-1",
+            message_content=system_content,
+        )
+        qe.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+            side_effect=[system_msg, system_msg]
+        )
+
+        msg = MagicMock(
+            message_id="msg-1",
+            step_number=1,
+            total_steps=1,
+            extend_info=None,
+            agent_id="a1",
+            user_id="u1",
+        )
+        queue = deque([msg])
+
+        agent = MagicMock()
+        agent.agent_id = "a1"
+        agent.agent_card = MagicMock()
+        agent.agent_card.name = "TestAgent"
+
+        qe._resolve_agent_for_message = AsyncMock(return_value=agent)
+        qe._process_single_message = AsyncMock(
+            return_value=ProcessingResult(ProcessingStatus.SUCCESS)
+        )
+        qe._queue_next_messages = AsyncMock()
+
+        result = await qe.process_queue(queue, "room-1", "umsg-1")
+
+        assert result.result == QueueResult.COMPLETED
+        qe.delivery.send_task_update.assert_awaited_once_with(
+            room_id="room-1",
+            message_id="sys-umsg-1",
+            status="completed",
+        )
+        assert qe.message_reader.get_room_agent_message_by_message_id.await_args_list == [
+            call("sys-umsg-1"),
+            call("sys-umsg-1"),
+        ]
+        update_content = (
+            qe.message_writer
+            .update_room_agent_message_with_new_message_content_by_message_id
+        )
+        update_content.assert_awaited_once_with(
+            "sys-umsg-1",
+            system_content,
+        )
 
     @pytest.mark.asyncio
     async def test_process_queue_cancels_on_cancellation_token(self):
