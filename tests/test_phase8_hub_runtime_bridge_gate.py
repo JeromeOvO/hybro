@@ -170,6 +170,16 @@ def test_legacy_relay_is_shim_and_stream_runtime_moved_to_app_shell() -> None:
     assert issubclass(AppShellRelayStreamService, RelayStreamService)
 
 
+def test_legacy_relay_does_not_import_delivery_runtime_concrete() -> None:
+    relay = ROOT / "app_shell/relay_service.py"
+    relay_imports = _imports(relay)
+    relay_text = relay.read_text()
+
+    assert "app_shell.delivery_runtime" not in relay_imports
+    assert "SSEManager" not in relay_text
+    assert "self._sse" not in relay_text
+
+
 def test_app_shell_routes_internal_hub_events_through_hub_router() -> None:
     main = (ROOT / "main.py").read_text()
     container = (ROOT / "container.py").read_text()

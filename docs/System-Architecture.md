@@ -380,7 +380,9 @@ compatibility adapter for legacy route imports and APIKey/request adaptation; it
 delegates Hub behavior through facade public methods. Its runtime binding uses
 `AppShellRelayHubStore`, `HubMongoRepository`, `AgentRepository`, and an
 injected relay offline-failure port instead of the broad legacy Mongo/database
-singletons.
+singletons. The relay shim keeps the historical `sse_manager` constructor
+parameter for startup compatibility only; relay behavior no longer imports or
+stores the concrete app-shell Delivery runtime.
 
 Hub relay responsibilities:
 
