@@ -391,6 +391,9 @@ def test_room_message_center_factory_owns_default_dependency_wiring():
     from execution.orchestration.factory import create_room_message_center
     from execution.orchestration.room_message_center import RoomMessageCenter
 
+    factory_source = inspect.getsource(create_room_message_center)
+    assert "globals()" not in factory_source
+    assert "_defaults" not in factory_source
     assert "globals()" not in inspect.getsource(RoomMessageCenter.__init__)
 
     deps = _make_room_message_center_port_deps()

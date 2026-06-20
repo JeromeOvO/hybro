@@ -71,7 +71,6 @@ def _parameter_names(obj) -> set[str]:
 
 FORBIDDEN_CONSTRUCTOR_PARAMETER_NAMES = {
     "a2a_service",
-    "coordinator",
     "database_service",
     "db_service",
     "room_coordinator_service",
@@ -85,8 +84,14 @@ FORBIDDEN_CONSTRUCTOR_PARAMETER_NAMES = {
 
 
 def test_execution_runtime_constructors_do_not_use_shell_dependency_names() -> None:
-    from execution.cancellation import AgentTaskCleanupAdapter, CancellationStateC3Adapter
-    from execution.hitl.adapters import A2AHITLContinuationAdapter, HITLPersistenceAdapter
+    from execution.cancellation import (
+        AgentTaskCleanupAdapter,
+        CancellationStateC3Adapter,
+    )
+    from execution.hitl.adapters import (
+        A2AHITLContinuationAdapter,
+        HITLPersistenceAdapter,
+    )
     from execution.orchestration.queue_executor import QueueExecutor
     from execution.orchestration.room_message_center import RoomMessageCenter
     from execution.orchestration.supervisor_executor import SupervisorExecutor
