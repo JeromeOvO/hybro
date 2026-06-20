@@ -79,6 +79,7 @@ FORBIDDEN_CONSTRUCTOR_PARAMETER_NAMES = {
     "room_services",
     "sse_manager",
     "store",
+    "task_service",
     "task_store",
 }
 
@@ -121,6 +122,7 @@ def test_execution_runtime_constructors_do_not_use_shell_dependency_names() -> N
             "room_memory_service",
             "database_service",
             "db_service",
+            "task_service",
         },
         QueueExecutor: {
             "room_services",
@@ -212,6 +214,7 @@ def test_execution_modules_do_not_store_legacy_runtime_fields() -> None:
         "db_service",
         "sse_manager",
         "a2a_service",
+        "task_service",
         "room_services",
         "room_memory_service",
         "room_coordinator_service",
