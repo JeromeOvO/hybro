@@ -28,23 +28,105 @@ def test_execution_modules_do_not_import_app_shell() -> None:
 
 def test_execution_shell_ports_use_named_method_contracts() -> None:
     port_methods = {
-        ports.DebateServicePort: ["inject_short_debate_for_agent_message"],
-        ports.NotificationServicePort: ["send_task_update"],
-        ports.RateLimitPort: ["check_rate_limit", "record_request"],
-        ports.RoomMemoryPort: ["add_agent_response_to_memory"],
-        ports.RoomRuntimePort: [
-            "create_agent_message",
-            "process_agent_message",
-            "update_agent_message_by_message_id",
+        ports.A2ATransportPort: [
+            "has_streaming_capability",
+            "send_message_streaming",
+            "send_message_sync",
+            "send_message_to_tracked_agent",
+            "create_task_for_tracking",
+            "cancel_remote_task",
+            "has_push_notification_capability",
         ],
-        ports.SSEDeliveryPort: [
+        ports.DebateServicePort: ["inject_short_debate_for_agent_message"],
+        ports.CoordinatorSynthesisPort: ["emit_synthesis_message"],
+        ports.A2ATaskTrackingStorePort: [
+            "check_task_limits",
+            "generate_webhook_token",
+            "hash_webhook_token",
+            "enable_task_tracking_on_message",
+            "get_room_agent_message_by_message_id",
+            "update_webhook_token_hash_on_message",
+            "get_agent_by_agent_id",
+            "update_task_on_message",
+        ],
+        ports.ExecutionDeliveryPort: [
             "send_task_submitted",
             "send_task_update",
             "send_rate_limit_error",
             "send_agent_response",
+            "send_artifact_update",
             "send_error",
+            "clear_cancellation",
+            "get_token",
+            "create_token",
+            "remove_token",
         ],
+        ports.NotificationServicePort: ["send_task_update"],
+        ports.RateLimitPort: ["check_rate_limit", "record_request"],
+        ports.RemoteTaskReaderPort: ["get_task_from_agent"],
+        ports.RoomMemoryPort: [
+            "add_agent_response_to_memory",
+            "add_synthesis_to_history",
+            "update_room_summary",
+        ],
+        ports.RoomRuntimePort: [
+            "create_agent_message",
+            "process_agent_message",
+            "update_agent_message_by_message_id",
+            "inquiry_agent_messages_by_related_message_id",
+        ],
+        ports.RoomMessageReader: [
+            "get_room_user_message_by_message_id",
+            "get_room_agent_message_by_message_id",
+            "get_room_agent_messages_by_related_message_id",
+            "get_quoted_snippet_by_id",
+        ],
+        ports.RoomMessageWriter: [
+            "add_room_agent_message",
+            "update_room_user_message_by_message_id",
+            "update_room_agent_message_by_message_id",
+            "update_room_agent_message_with_new_message_content_by_message_id",
+            "upsert_room_agent_message",
+            "delete_room_agent_message_by_message_id",
+            "cancel_agent_messages_by_ids",
+            "cancel_descendants",
+            "claim_user_message_for_processing",
+            "claim_or_reclaim_user_message",
+            "refresh_processing_claim",
+            "unclaim_user_message",
+            "turn_exists",
+            "accumulate_artifact_on_message",
+            "update_last_notified_state",
+            "reset_last_notified_state",
+            "update_task_state_on_message",
+        ],
+        ports.RoomTaskStateStore: [
+            "resolve_client_request_id_for_message_id",
+            "resolve_client_request_id_for_agent_message",
+            "enable_task_tracking_on_message",
+            "update_task_on_message",
+            "is_message_cancelled",
+        ],
+        ports.RoomContinuationStore: [
+            "get_pending_continuation_on_message",
+            "get_and_clear_continuation_on_message",
+            "get_and_clear_continuation_on_user_message",
+            "save_continuation_on_message",
+            "save_continuation_on_user_message",
+        ],
+        ports.RoomReader: [
+            "get_room_by_room_id",
+            "get_agent_by_agent_id",
+            "get_agent_name_by_agent_id",
+            "get_agent_group_by_id",
+        ],
+        ports.RoomWriter: ["update_room_by_room_id"],
+        ports.RoomMemoryReader: ["get_room_memory_by_room_id"],
+        ports.HITLReaderPort: ["get_pending_hitl_requests_for_message"],
     }
+
+    if hasattr(ports, "RoomCoordinatorPort"):
+        assert ports.RoomCoordinatorPort is ports.CoordinatorSynthesisPort
 
     variadic_methods: list[str] = []
     for port, method_names in port_methods.items():
