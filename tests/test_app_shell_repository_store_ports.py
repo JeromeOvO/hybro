@@ -239,11 +239,7 @@ def test_main_binds_focused_runtime_store_parts_before_aggregate_shims():
 
 def test_main_keeps_broad_repository_store_only_for_documented_compatibility_points():
     tree = ast.parse(Path("main.py").read_text())
-    allowed_broad_calls = {
-        "room_runtime.bind_store",
-        "create_room_message_center",
-        "init_relay_service",
-    }
+    allowed_broad_calls: set[str] = set()
     broad_calls: list[str] = []
 
     for node in ast.walk(tree):
@@ -312,4 +308,110 @@ def test_main_binds_debate_and_coordinator_to_focused_message_adapters():
         "get_room_agent_messages_by_related_message_id",
         "get_room_by_room_id",
         "get_room_user_message_by_message_id",
+    }
+
+
+def test_main_binds_room_runtime_to_focused_room_store_adapter():
+    tree = ast.parse(Path("main.py").read_text())
+    bound_store_name = None
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if _dotted_name(node.func) != "room_runtime.bind_store":
+            continue
+        assert len(node.args) == 1
+        assert isinstance(node.args[0], ast.Name)
+        bound_store_name = node.args[0].id
+
+    assert bound_store_name == "room_runtime_store"
+    assert _simple_namespace_keywords(tree, "room_runtime_store") == {
+        "add_room_agent_message",
+        "get_agent_by_agent_id",
+        "get_agent_group_by_id",
+        "get_agents_with_conditions",
+        "get_all_active_agents",
+        "get_room_by_room_id",
+        "get_room_memory_by_room_id",
+        "get_room_user_message_by_message_id",
+        "update_room_by_room_id",
+        "update_room_user_message_by_message_id",
+    }
+
+
+def test_main_binds_relay_to_focused_runtime_store_adapter():
+    tree = ast.parse(Path("main.py").read_text())
+    bound_store_name = None
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if _dotted_name(node.func) != "init_relay_service":
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "db":
+                assert isinstance(keyword.value, ast.Name)
+                bound_store_name = keyword.value.id
+
+    assert bound_store_name == "relay_runtime_store"
+    assert _simple_namespace_keywords(tree, "relay_runtime_store") == {
+        "get_agent_by_agent_id",
+        "get_room_agent_message_by_message_id",
+        "get_room_by_room_id",
+        "get_room_user_message_by_message_id",
+        "increment_agent_call_count",
+        "is_message_cancelled",
+    }
+
+
+def test_main_binds_room_message_center_to_focused_execution_store_adapter():
+    tree = ast.parse(Path("main.py").read_text())
+    bound_store_name = None
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if _dotted_name(node.func) != "create_room_message_center":
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "store":
+                assert isinstance(keyword.value, ast.Name)
+                bound_store_name = keyword.value.id
+
+    assert bound_store_name == "room_message_center_store"
+    assert _simple_namespace_keywords(tree, "room_message_center_store") == {
+        "accumulate_artifact_on_message",
+        "add_room_agent_message",
+        "cancel_agent_messages_by_ids",
+        "cancel_descendants",
+        "claim_or_reclaim_user_message",
+        "claim_user_message_for_processing",
+        "delete_room_agent_message_by_message_id",
+        "enable_task_tracking_on_message",
+        "get_agent_by_agent_id",
+        "get_agent_group_by_id",
+        "get_agent_name_by_agent_id",
+        "get_and_clear_continuation_on_message",
+        "get_and_clear_continuation_on_user_message",
+        "get_pending_continuation_on_message",
+        "get_pending_hitl_requests_for_message",
+        "get_room_agent_message_by_message_id",
+        "get_room_agent_messages_by_related_message_id",
+        "get_room_by_room_id",
+        "get_room_memory_by_room_id",
+        "get_room_user_message_by_message_id",
+        "refresh_processing_claim",
+        "resolve_client_request_id_for_agent_message",
+        "resolve_client_request_id_for_message_id",
+        "save_continuation_on_message",
+        "save_continuation_on_user_message",
+        "turn_exists",
+        "unclaim_user_message",
+        "update_room_agent_message_by_message_id",
+        "update_room_agent_message_with_new_message_content_by_message_id",
+        "update_room_by_room_id",
+        "update_room_user_message_by_message_id",
+        "update_task_on_message",
+        "update_task_state_on_message",
+        "upsert_room_agent_message",
     }
