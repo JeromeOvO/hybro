@@ -141,7 +141,6 @@ def test_container_binds_focused_llm_services_to_production_consumers():
         "room_runtime.bind_debate_rounds(runtime.settings.debate_rounds)",
         "context_memory_facade = create_context_memory_facade(",
         "llm_provider=llm_provider,",
-        "memory_search_service.bind_embedding_service(",
         "room_coordinator_service.bind_summary_service(",
         "chat_memory_service.bind_room_memory_llm_service(",
         "room_memory_service.bind_turn_notes_llm_provider(llm_provider)",

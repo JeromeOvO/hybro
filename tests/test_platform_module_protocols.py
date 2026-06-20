@@ -348,8 +348,8 @@ def test_container_injects_discovery_query_expander_into_platform_deps():
     assert "discovery_query_expander=discovery_llm_service" not in main_source
 
 
-def test_main_passes_platform_object_storage_directly_to_runtime_consumers():
-    source = Path("main.py").read_text()
+def test_container_passes_platform_object_storage_directly_to_runtime_consumers():
+    source = Path("container.py").read_text()
 
     assert "PlatformObjectStorage" in source
     assert "platform_object_storage = PlatformObjectStorage(" in source
@@ -370,8 +370,8 @@ def test_main_passes_platform_object_storage_directly_to_runtime_consumers():
     assert "object_storage=object_storage" in source
 
 
-def test_main_uses_platform_agent_avatar_manager_for_avatar_uploads():
-    source = Path("main.py").read_text()
+def test_container_uses_platform_agent_avatar_manager_for_avatar_uploads():
+    source = Path("container.py").read_text()
 
     assert "class AppShellAgentAvatarManager" not in source
     assert "PlatformAgentAvatarManager" in source
@@ -379,8 +379,8 @@ def test_main_uses_platform_agent_avatar_manager_for_avatar_uploads():
     assert "agent_card.iconUrl" not in source
 
 
-def test_main_constructs_object_storage_once_for_platform_wiring():
-    source = Path("main.py").read_text()
+def test_container_constructs_object_storage_once_for_platform_wiring():
+    source = Path("container.py").read_text()
 
     object_storage_pos = source.index("object_storage = create_object_storage_dal()")
     platform_storage_pos = source.index(
