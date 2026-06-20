@@ -186,11 +186,12 @@ def test_execution_focused_port_signatures_match_plan() -> None:
             "non_terminal_state_values: 'list[str]') -> 'None'"
         ),
         (ports.RoomMemoryPort, "add_synthesis_to_history"): (
-            "(self, room_id: 'str', user_message_id: 'str', "
-            "synthesis_text: 'str') -> 'str | None'"
+            "(self, room_id: 'str', synthesis_text: 'str', "
+            "trajectory: 'Any | None' = None) -> 'str | None'"
         ),
         (ports.RoomMemoryPort, "update_room_summary"): (
-            "(self, room_id: 'str') -> 'None'"
+            "(self, room_id: 'str', synthesis_text: 'str', "
+            "synthesis_turn_id: 'str | None' = None) -> 'bool'"
         ),
         (ports.RoomRuntimePort, "inquiry_agent_messages_by_related_message_id"): (
             "(self, related_message_id: 'str') -> 'Any'"

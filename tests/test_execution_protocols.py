@@ -349,9 +349,18 @@ def test_room_message_center_factory_propagates_overrides_to_children():
         runtime.agent_response_handler._continuation_store
         is deps["continuation_store"]
     )
+    client_request_resolver = runtime.agent_response_handler._client_request_resolver
     assert (
-        runtime.agent_response_handler._client_request_resolver
-        is deps["task_state_store"]
+        client_request_resolver.resolve_client_request_id_for_message_id
+        is deps["task_state_store"].resolve_client_request_id_for_message_id
+    )
+    assert (
+        client_request_resolver.resolve_client_request_id_for_agent_message
+        is deps["task_state_store"].resolve_client_request_id_for_agent_message
+    )
+    assert (
+        client_request_resolver.get_room_agent_message_by_message_id
+        is deps["message_reader"].get_room_agent_message_by_message_id
     )
     assert runtime.agent_response_handler._room_reader is deps["room_reader"]
     assert runtime.agent_response_handler._hitl_reader is deps["hitl_reader"]
@@ -414,19 +423,103 @@ def test_room_message_center_factory_owns_default_dependency_wiring():
     assert runtime.context_memory_runtime is deps["context_memory_runtime"]
 
 
-def test_container_bridges_dispatch_delivery_names():
+def test_container_wires_execution_with_focused_port_names():
     source = (ROOT / "container.py").read_text()
+    tree = ast.parse(source)
 
-    assert "bind_task_notification_runtime(\n" in source
-    assert "notification_service=notification_service,\n                delivery=sse_manager" in source
+    def call_name(node: ast.Call) -> str | None:
+        if isinstance(node.func, ast.Name):
+            return node.func.id
+        if isinstance(node.func, ast.Attribute):
+            return node.func.attr
+        return None
 
-    webhook_factory = source.split("def create_webhook_transport():", 1)[1].split(
-        "execution_facade = create_execution_facade(",
-        1,
-    )[0]
-    assert "AgentResponseHandler(" in webhook_factory
-    assert "delivery=sse_manager" in webhook_factory
-    assert "sse_manager=sse_manager" not in webhook_factory
+    def calls_named(name: str) -> list[ast.Call]:
+        return [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and call_name(node) == name
+        ]
+
+    def keyword_names(call: ast.Call) -> set[str]:
+        return {kw.arg for kw in call.keywords if kw.arg is not None}
+
+    def keyword_value(call: ast.Call, name: str) -> ast.expr:
+        for kw in call.keywords:
+            if kw.arg == name:
+                return kw.value
+        raise AssertionError(f"keyword {name!r} not found")
+
+    room_center_calls = calls_named("create_room_message_center")
+    assert len(room_center_calls) == 1
+    room_center_call = room_center_calls[0]
+    room_center_keywords = keyword_names(room_center_call)
+    focused_keywords = {
+        "room_runtime",
+        "message_reader",
+        "message_writer",
+        "task_state_store",
+        "continuation_store",
+        "agent_lookup",
+        "agent_group_reader",
+        "room_reader",
+        "room_writer",
+        "memory_reader",
+        "memory_writer",
+        "hitl_reader",
+        "delivery",
+        "coordinator",
+        "a2a_transport",
+        "remote_task_reader",
+        "room_memory",
+    }
+    legacy_keywords = {
+        "store",
+        "sse_manager",
+        "room_services",
+        "room_coordinator_service",
+        "a2a_service",
+        "task_service",
+        "room_memory_service",
+    }
+    assert focused_keywords <= room_center_keywords
+    assert room_center_keywords.isdisjoint(legacy_keywords)
+    coordinator_value = keyword_value(room_center_call, "coordinator")
+    assert isinstance(coordinator_value, ast.Name)
+    assert coordinator_value.id == "execution_coordinator"
+
+    assert "get_quoted_snippet_by_id" in source
+    assert "_room_deps.room_quote_repository.get_by_id" in source
+    assert "QuotedSnippet.model_validate" in source
+
+    hitl_call = calls_named("create_hitl_service")[0]
+    hitl_keywords = keyword_names(hitl_call)
+    assert {
+        "persistence",
+        "delivery",
+        "agent_reply",
+        "continuation",
+        "task_notifications",
+    } <= hitl_keywords
+    assert hitl_keywords.isdisjoint({"store", "a2a_service"})
+
+    task_notification_call = calls_named("bind_task_notification_runtime")[0]
+    task_notification_keywords = keyword_names(task_notification_call)
+    assert "delivery" in task_notification_keywords
+    assert "sse_manager" not in task_notification_keywords
+
+    cleanup_call = calls_named("AgentTaskCleanupAdapter")[0]
+    cleanup_keywords = keyword_names(cleanup_call)
+    assert "message_task_store" in cleanup_keywords
+    assert "store" not in cleanup_keywords
+
+    webhook_handler_call = calls_named("AgentResponseHandler")[0]
+    webhook_keywords = keyword_names(webhook_handler_call)
+    assert "delivery" in webhook_keywords
+    assert "sse_manager" not in webhook_keywords
+    delivery_value = keyword_value(webhook_handler_call, "delivery")
+    assert isinstance(delivery_value, ast.Name)
+    assert delivery_value.id == "sse_manager"
 
 
 def test_room_message_center_constructor_requires_explicit_dependencies():

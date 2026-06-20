@@ -495,6 +495,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from execution.run_lifecycle import RunLifecycleAdapter
             from execution.run_lifecycle_service import bind_run_lifecycle_service
             from execution.run_queries import RunQueryAdapter
+            from models.quote import QuotedSnippet
 
             _execution_repos = create_execution_repositories(mongo=mongo_dal)
             run_command_handler = RunCommandHandler(
@@ -801,7 +802,27 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 increment_agent_call_count=agent_room_store.increment_agent_call_count,
                 is_message_cancelled=task_store.is_message_cancelled,
             )
-            room_message_center_store = SimpleNamespace(
+            async def get_quoted_snippet_by_id(quote_id: str):
+                quote_doc = await _room_deps.room_quote_repository.get_by_id(quote_id)
+                return (
+                    QuotedSnippet.model_validate(quote_doc)
+                    if quote_doc is not None
+                    else None
+                )
+
+            execution_message_reader = SimpleNamespace(
+                get_quoted_snippet_by_id=get_quoted_snippet_by_id,
+                get_room_agent_message_by_message_id=(
+                    message_store.get_room_agent_message_by_message_id
+                ),
+                get_room_agent_messages_by_related_message_id=(
+                    message_store.get_room_agent_messages_by_related_message_id
+                ),
+                get_room_user_message_by_message_id=(
+                    message_store.get_room_user_message_by_message_id
+                ),
+            )
+            execution_message_writer = SimpleNamespace(
                 accumulate_artifact_on_message=(
                     message_store.accumulate_artifact_on_message
                 ),
@@ -819,12 +840,37 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 delete_room_agent_message_by_message_id=(
                     message_store.delete_room_agent_message_by_message_id
                 ),
+                refresh_processing_claim=message_store.refresh_processing_claim,
+                reset_last_notified_state=message_store.reset_last_notified_state,
+                turn_exists=message_store.turn_exists,
+                unclaim_user_message=message_store.unclaim_user_message,
+                update_last_notified_state=message_store.update_last_notified_state,
+                update_room_agent_message_by_message_id=(
+                    message_store.update_room_agent_message_by_message_id
+                ),
+                update_room_agent_message_with_new_message_content_by_message_id=(
+                    message_store.update_room_agent_message_with_new_message_content_by_message_id
+                ),
+                update_room_user_message_by_message_id=(
+                    message_store.update_room_user_message_by_message_id
+                ),
+                update_task_state_on_message=message_store.update_task_state_on_message,
+                upsert_room_agent_message=message_store.upsert_room_agent_message,
+            )
+            execution_task_state_store = SimpleNamespace(
                 enable_task_tracking_on_message=(
                     task_store.enable_task_tracking_on_message
                 ),
-                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
-                get_agent_group_by_id=agent_room_store.get_agent_group_by_id,
-                get_agent_name_by_agent_id=agent_room_store.get_agent_name_by_agent_id,
+                is_message_cancelled=task_store.is_message_cancelled,
+                resolve_client_request_id_for_agent_message=(
+                    task_store.resolve_client_request_id_for_agent_message
+                ),
+                resolve_client_request_id_for_message_id=(
+                    task_store.resolve_client_request_id_for_message_id
+                ),
+                update_task_on_message=task_store.update_task_on_message,
+            )
+            execution_continuation_store = SimpleNamespace(
                 get_and_clear_continuation_on_message=(
                     task_store.get_and_clear_continuation_on_message
                 ),
@@ -834,46 +880,37 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 get_pending_continuation_on_message=(
                     task_store.get_pending_continuation_on_message
                 ),
-                get_pending_hitl_requests_for_message=(
-                    hitl_store.get_pending_hitl_requests_for_message
-                ),
-                get_room_agent_message_by_message_id=(
-                    message_store.get_room_agent_message_by_message_id
-                ),
-                get_room_agent_messages_by_related_message_id=(
-                    message_store.get_room_agent_messages_by_related_message_id
-                ),
-                get_room_by_room_id=agent_room_store.get_room_by_room_id,
-                get_room_memory_by_room_id=memory_store.get_room_memory_by_room_id,
-                get_room_user_message_by_message_id=(
-                    message_store.get_room_user_message_by_message_id
-                ),
-                refresh_processing_claim=message_store.refresh_processing_claim,
-                resolve_client_request_id_for_agent_message=(
-                    task_store.resolve_client_request_id_for_agent_message
-                ),
-                resolve_client_request_id_for_message_id=(
-                    task_store.resolve_client_request_id_for_message_id
-                ),
                 save_continuation_on_message=task_store.save_continuation_on_message,
                 save_continuation_on_user_message=(
                     task_store.save_continuation_on_user_message
                 ),
-                turn_exists=message_store.turn_exists,
-                unclaim_user_message=message_store.unclaim_user_message,
-                update_room_agent_message_by_message_id=(
-                    message_store.update_room_agent_message_by_message_id
-                ),
-                update_room_agent_message_with_new_message_content_by_message_id=(
-                    message_store.update_room_agent_message_with_new_message_content_by_message_id
-                ),
+            )
+            execution_agent_lookup = SimpleNamespace(
+                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
+            )
+            execution_agent_group_reader = SimpleNamespace(
+                get_agent_group_by_id=agent_room_store.get_agent_group_by_id,
+            )
+            execution_room_reader = SimpleNamespace(
+                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
+                get_agent_group_by_id=agent_room_store.get_agent_group_by_id,
+                get_agent_name_by_agent_id=agent_room_store.get_agent_name_by_agent_id,
+                get_room_by_room_id=agent_room_store.get_room_by_room_id,
+            )
+            execution_room_writer = SimpleNamespace(
                 update_room_by_room_id=agent_room_store.update_room_by_room_id,
-                update_room_user_message_by_message_id=(
-                    message_store.update_room_user_message_by_message_id
+            )
+            execution_memory_reader = SimpleNamespace(
+                get_room_memory_by_room_id=memory_store.get_room_memory_by_room_id,
+            )
+            execution_memory_writer = SimpleNamespace()
+            execution_hitl_reader = SimpleNamespace(
+                get_pending_hitl_requests_for_message=(
+                    hitl_store.get_pending_hitl_requests_for_message
                 ),
-                update_task_on_message=task_store.update_task_on_message,
-                update_task_state_on_message=message_store.update_task_state_on_message,
-                upsert_room_agent_message=message_store.upsert_room_agent_message,
+            )
+            execution_coordinator = SimpleNamespace(
+                emit_synthesis_message=room_coordinator_service.emit_synthesis_message,
             )
 
             membership_source.bind_store(agent_room_store)
@@ -959,16 +996,26 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             _context_memory_deps = create_context_memory_deps(context_memory_facade)
             room_message_center_impl = create_room_message_center(
-                room_services=room_services,
-                store=room_message_center_store,
-                sse_manager=sse_manager,
-                room_coordinator_service=room_coordinator_service,
+                room_runtime=room_services,
+                message_reader=execution_message_reader,
+                message_writer=execution_message_writer,
+                task_state_store=execution_task_state_store,
+                continuation_store=execution_continuation_store,
+                agent_lookup=execution_agent_lookup,
+                agent_group_reader=execution_agent_group_reader,
+                room_reader=execution_room_reader,
+                room_writer=execution_room_writer,
+                memory_reader=execution_memory_reader,
+                memory_writer=execution_memory_writer,
+                hitl_reader=execution_hitl_reader,
+                delivery=sse_manager,
+                coordinator=execution_coordinator,
                 summary_service=summary_llm_service,
                 notification_service=notification_service,
                 agent_resolver_service=agent_resolver_service,
-                a2a_service=a2a_service,
-                task_service=task_service,
-                room_memory_service=room_memory_service,
+                a2a_transport=a2a_service,
+                remote_task_reader=task_service,
+                room_memory=room_memory_service,
                 debate_service=debate_service,
                 rate_limit_service=agent_rate_limiter,
                 room_supervisor_service=room_supervisor_service,

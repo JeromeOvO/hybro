@@ -390,14 +390,16 @@ class RoomMemoryPort(Protocol):
     async def add_synthesis_to_history(
         self,
         room_id: str,
-        user_message_id: str,
         synthesis_text: str,
+        trajectory: Any | None = None,
     ) -> str | None: ...
 
     async def update_room_summary(
         self,
         room_id: str,
-    ) -> None: ...
+        synthesis_text: str,
+        synthesis_turn_id: str | None = None,
+    ) -> bool: ...
 
 
 class RoomRuntimePort(Protocol):

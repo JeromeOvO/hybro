@@ -4,6 +4,7 @@ import asyncio
 import time
 from collections import deque
 from datetime import timedelta
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -204,11 +205,22 @@ class RoomMessageCenter:
         storage_service = object_storage if object_storage is not None else s3_service
 
         # Shared result handler used by all transports
+        client_request_resolver = SimpleNamespace(
+            resolve_client_request_id_for_message_id=(
+                self.task_state_store.resolve_client_request_id_for_message_id
+            ),
+            resolve_client_request_id_for_agent_message=(
+                self.task_state_store.resolve_client_request_id_for_agent_message
+            ),
+            get_room_agent_message_by_message_id=(
+                self.message_reader.get_room_agent_message_by_message_id
+            ),
+        )
         self.agent_response_handler = AgentResponseHandler(
             message_writer=self.message_writer,
             task_writer=self.message_writer,
             continuation_store=self.continuation_store,
-            client_request_resolver=self.task_state_store,
+            client_request_resolver=client_request_resolver,
             room_reader=self.room_reader,
             hitl_reader=self.hitl_reader,
             delivery=self.delivery,
