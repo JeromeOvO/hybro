@@ -382,7 +382,9 @@ delegates Hub behavior through facade public methods. Its runtime binding uses
 injected relay offline-failure port instead of the broad legacy Mongo/database
 singletons. The relay shim keeps the historical `sse_manager` constructor
 parameter for startup compatibility only; relay behavior no longer imports or
-stores the concrete app-shell Delivery runtime.
+stores the concrete app-shell Delivery runtime, and stream/leader bindings are
+protocol-style pass-throughs rather than app-shell Redis runtime concrete
+dependencies.
 
 Hub relay responsibilities:
 
