@@ -713,6 +713,18 @@ async def lifespan(app: FastAPI):
                     message_store.update_room_user_message_by_message_id
                 ),
             )
+            relay_runtime_store = SimpleNamespace(
+                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
+                get_room_agent_message_by_message_id=(
+                    message_store.get_room_agent_message_by_message_id
+                ),
+                get_room_by_room_id=agent_room_store.get_room_by_room_id,
+                get_room_user_message_by_message_id=(
+                    message_store.get_room_user_message_by_message_id
+                ),
+                increment_agent_call_count=agent_room_store.increment_agent_call_count,
+                is_message_cancelled=task_store.is_message_cancelled,
+            )
             room_message_center_store = SimpleNamespace(
                 accumulate_artifact_on_message=(
                     message_store.accumulate_artifact_on_message
@@ -1253,7 +1265,7 @@ async def lifespan(app: FastAPI):
         )
         _relay_svc = init_relay_service(
             mongo=relay_hub_store,
-            db=app_shell_store,
+            db=relay_runtime_store,
             sse_manager=sse_manager,
             room_message_center=_rmc,
             hitl_coordinator=hitl_service,
