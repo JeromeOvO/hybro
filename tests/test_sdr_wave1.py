@@ -3,11 +3,12 @@ Tests for SDR Wave 1 fixes: idempotency guard (2.5), semaphore (2.13), CORS (2.1
 """
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from common.utils.time import utcnow
 from models.request import OrchestrationRequest
 
 # =============================================================================
@@ -95,9 +96,11 @@ class TestIdempotencyGuardInRoomMessageCenter:
         from execution.orchestration.room_message_center import RoomMessageCenter
 
         rmc = object.__new__(RoomMessageCenter)
-        rmc._store = MagicMock()
-        rmc._store.claim_user_message_for_processing = AsyncMock(return_value=False)
-        rmc.sse_manager = MagicMock()
+        rmc.message_writer = MagicMock()
+        rmc.message_writer.claim_user_message_for_processing = AsyncMock(
+            return_value=False
+        )
+        rmc.delivery = MagicMock()
 
         request = OrchestrationRequest(
             room_id="room-1",
@@ -116,9 +119,11 @@ class TestIdempotencyGuardInRoomMessageCenter:
         from execution.orchestration.room_message_center import RoomMessageCenter
 
         rmc = object.__new__(RoomMessageCenter)
-        rmc._store = MagicMock()
-        rmc._store.claim_or_reclaim_user_message = AsyncMock(return_value=False)
-        rmc.sse_manager = MagicMock()
+        rmc.message_writer = MagicMock()
+        rmc.message_writer.claim_or_reclaim_user_message = AsyncMock(
+            return_value=False
+        )
+        rmc.delivery = MagicMock()
 
         request = OrchestrationRequest(
             room_id="room-1",
@@ -130,18 +135,20 @@ class TestIdempotencyGuardInRoomMessageCenter:
         result = await rmc.process_room_user_message(request)
         assert result.success is False
         assert result.status_code == 409
-        rmc._store.claim_or_reclaim_user_message.assert_called_once()
+        rmc.message_writer.claim_or_reclaim_user_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_recovery_threshold_uses_orphan_threshold(self):
         """Recovery reclaim threshold must use orphan_threshold_minutes, not processing_status_expiry_minutes."""
-        from common.utils.time import utcnow as real_utcnow
         from execution.orchestration.room_message_center import RoomMessageCenter
 
         rmc = object.__new__(RoomMessageCenter)
-        rmc._store = MagicMock()
-        rmc._store.claim_or_reclaim_user_message = AsyncMock(return_value=False)
-        rmc.sse_manager = MagicMock()
+        rmc.message_writer = MagicMock()
+        rmc.message_writer.claim_or_reclaim_user_message = AsyncMock(
+            return_value=False
+        )
+        rmc.delivery = MagicMock()
+        rmc.orphan_threshold_minutes = 2
 
         request = OrchestrationRequest(
             room_id="room-1",
@@ -150,18 +157,14 @@ class TestIdempotencyGuardInRoomMessageCenter:
             is_recovery=True,
         )
 
-        with patch("execution.orchestration.room_message_center.settings") as mock_settings:
-            mock_settings.orphan_threshold_minutes = 2
-            mock_settings.processing_status_expiry_minutes = 30
-            await rmc.process_room_user_message(request)
+        before = utcnow()
+        await rmc.process_room_user_message(request)
+        after = utcnow()
 
-        call_args = rmc._store.claim_or_reclaim_user_message.call_args
+        call_args = rmc.message_writer.claim_or_reclaim_user_message.call_args
         threshold_arg = call_args[0][1]
-        now = real_utcnow()
-        # The threshold should be ~2 minutes ago (orphan), not ~30 minutes ago
-        delta = now - threshold_arg
-        assert delta.total_seconds() < 300, (
-            f"Threshold is {delta.total_seconds():.0f}s ago, expected ~120s (orphan_threshold_minutes=2)"
+        assert before - timedelta(minutes=2) <= threshold_arg <= after - timedelta(
+            minutes=2
         )
 
 

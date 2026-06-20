@@ -344,12 +344,15 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.supervisor_executor.debate_rounds == 5
     assert runtime.agent_dispatcher.agent_resolver is deps["agent_resolver_service"]
     assert runtime.agent_response_handler._message_writer is deps["message_writer"]
-    assert runtime.agent_response_handler._task_writer is deps["task_state_store"]
+    assert runtime.agent_response_handler._task_writer is deps["message_writer"]
     assert (
         runtime.agent_response_handler._continuation_store
         is deps["continuation_store"]
     )
-    assert runtime.agent_response_handler._client_request_resolver is deps["message_reader"]
+    assert (
+        runtime.agent_response_handler._client_request_resolver
+        is deps["task_state_store"]
+    )
     assert runtime.agent_response_handler._room_reader is deps["room_reader"]
     assert runtime.agent_response_handler._hitl_reader is deps["hitl_reader"]
     assert runtime.agent_response_handler._delivery is deps["delivery"]
@@ -374,7 +377,6 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.supervisor_executor.message_writer is deps["message_writer"]
     assert runtime.supervisor_executor.delivery is deps["delivery"]
     assert runtime.supervisor_executor.room_runtime is deps["room_runtime"]
-    assert runtime.supervisor_executor.coordinator is deps["coordinator"]
     assert runtime.supervisor_executor.room_memory is deps["room_memory"]
     assert runtime.supervisor_executor.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.agent_response_handler.hitl_coordinator is deps["hitl_coordinator"]
@@ -392,7 +394,14 @@ def test_room_message_center_factory_owns_default_dependency_wiring():
 
     factory_source = inspect.getsource(create_room_message_center)
     assert "globals()" not in factory_source
-    assert "_defaults" not in factory_source
+    assert "database_service" not in factory_source
+    assert "db_service" not in factory_source
+    assert "sse_manager" not in factory_source
+    assert "room_services" not in factory_source
+    assert "a2a_service" not in factory_source
+    assert "room_memory_service" not in factory_source
+    assert "room_coordinator_service" not in factory_source
+    assert "task_service" not in factory_source
     assert "globals()" not in inspect.getsource(RoomMessageCenter.__init__)
 
     deps = _make_room_message_center_port_deps()
@@ -425,6 +434,18 @@ def test_room_message_center_constructor_requires_explicit_dependencies():
 
     with pytest.raises(TypeError):
         RoomMessageCenter()
+
+    params = inspect.signature(RoomMessageCenter.__init__).parameters
+    legacy_names = {
+        "store",
+        "sse_manager",
+        "room_services",
+        "a2a_service",
+        "task_service",
+        "room_memory_service",
+        "room_coordinator_service",
+    }
+    assert legacy_names.isdisjoint(params)
 
 
 def test_room_message_center_uses_common_room_lock_protocol():

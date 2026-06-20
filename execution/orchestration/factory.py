@@ -15,17 +15,28 @@ def create_room_message_center(
     debate_rounds: int,
     **kwargs: Any,
 ) -> RoomMessageCenter:
+    default_store = _defaults.default_store
     deps: dict[str, Any] = {
-        "room_services": _defaults.room_services,
-        "store": _defaults.default_store,
-        "sse_manager": _defaults.sse_manager,
-        "room_coordinator_service": _defaults.room_coordinator_service,
+        "room_runtime": _defaults.room_runtime,
+        "message_reader": default_store,
+        "message_writer": default_store,
+        "task_state_store": default_store,
+        "continuation_store": default_store,
+        "agent_lookup": default_store,
+        "agent_group_reader": default_store,
+        "room_reader": default_store,
+        "room_writer": default_store,
+        "memory_reader": default_store,
+        "memory_writer": default_store,
+        "hitl_reader": default_store,
+        "delivery": _defaults.delivery,
+        "coordinator": _defaults.coordinator,
         "summary_service": _defaults.summary_service,
         "notification_service": _defaults.notification_service,
         "agent_resolver_service": _defaults.agent_resolver_service,
-        "a2a_service": _defaults.a2a_service,
-        "task_service": _defaults.task_service,
-        "room_memory_service": _defaults.room_memory_service,
+        "a2a_transport": _defaults.a2a_transport,
+        "remote_task_reader": _defaults.remote_task_reader,
+        "room_memory": _defaults.room_memory,
         "debate_service": _defaults.debate_service,
         "rate_limit_service": _defaults.rate_limit_service,
         "room_supervisor_service": _defaults.room_supervisor_service,
@@ -44,11 +55,6 @@ def create_room_message_center(
         "cloud_health_cache_ttl": 30.0,
         "cloud_health_check_timeout": 5.0,
     }
-    # Map legacy parameter names for backwards compatibility
-    legacy_db_keys = ["database" + "_service", "db" + "_service"]
-    for key in legacy_db_keys:
-        if key in kwargs:
-            kwargs["store"] = kwargs.pop(key)
     if "s3_service" in kwargs and "object_storage" not in kwargs:
         kwargs["object_storage"] = kwargs.pop("s3_service")
     deps.update(kwargs)
