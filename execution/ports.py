@@ -236,6 +236,12 @@ class A2ATransportPort(Protocol):
 
 
 class RemoteTaskReaderPort(Protocol):
+    """Read remote task state.
+
+    ``agent_id`` is accepted by execution-facing adapters for correlation and
+    can be ignored by runtimes already bound to one remote agent.
+    """
+
     async def get_task_from_agent(
         self,
         agent_card: AgentCard,
@@ -422,7 +428,14 @@ class RoomRuntimePort(Protocol):
     ) -> Any: ...
 
 
-class RoomMessageReader(Protocol):
+class QuotedSnippetReaderPort(Protocol):
+    async def get_quoted_snippet_by_id(
+        self,
+        quote_id: str,
+    ) -> QuotedSnippet | None: ...
+
+
+class RoomMessageReader(QuotedSnippetReaderPort, Protocol):
     async def get_room_user_message_by_message_id(
         self, message_id: str
     ) -> RoomUserMessage | None: ...
@@ -434,11 +447,6 @@ class RoomMessageReader(Protocol):
     async def get_room_agent_messages_by_related_message_id(
         self, related_message_id: str
     ) -> list[RoomAgentMessage]: ...
-
-    async def get_quoted_snippet_by_id(
-        self,
-        quote_id: str,
-    ) -> QuotedSnippet | None: ...
 
 
 class RoomMessageWriter(Protocol):

@@ -63,6 +63,7 @@ def test_execution_shell_ports_use_named_method_contracts() -> None:
         ],
         ports.NotificationServicePort: ["send_task_update"],
         ports.RateLimitPort: ["check_rate_limit", "record_request"],
+        ports.QuotedSnippetReaderPort: ["get_quoted_snippet_by_id"],
         ports.RemoteTaskReaderPort: ["get_task_from_agent"],
         ports.RoomMemoryPort: [
             "add_agent_response_to_memory",
