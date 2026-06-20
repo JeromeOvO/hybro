@@ -253,11 +253,16 @@ def test_execution_scaffold_adapters_are_available():
     assert TaskNotificationAdapter.__name__ == "TaskNotificationAdapter"
     assert BoundRoomMessageCenterProxy.__name__ == "BoundRoomMessageCenterProxy"
     assert RoomLockManager.__name__ == "RoomLockManager"
-    db = object()
-    hitl = create_hitl_service(store=db)
-    assert hitl._store is db
-    runtime = create_room_message_center(database_service=db, debate_rounds=7)
-    assert runtime._store is db
+    hitl_persistence = object()
+    hitl = create_hitl_service(persistence=hitl_persistence)
+    assert hitl._persistence is hitl_persistence
+
+    deps = _make_room_message_center_port_deps()
+    runtime = create_room_message_center(**deps, debate_rounds=7)
+    assert runtime.message_reader is deps["message_reader"]
+    assert runtime.message_writer is deps["message_writer"]
+    assert runtime.task_state_store is deps["task_state_store"]
+    assert runtime.continuation_store is deps["continuation_store"]
     assert runtime.debate_rounds == 7
     assert isinstance(room_message_center, BoundRoomMessageCenterProxy)
 
@@ -272,68 +277,104 @@ def test_hitl_factory_does_not_accept_legacy_database_aliases():
         create_hitl_service(db_service=db)
 
 
+def _make_room_message_center_port_deps():
+    from unittest.mock import MagicMock
+
+    return {
+        "room_runtime": MagicMock(),
+        "message_reader": MagicMock(),
+        "message_writer": MagicMock(),
+        "task_state_store": MagicMock(),
+        "continuation_store": MagicMock(),
+        "agent_lookup": MagicMock(),
+        "agent_group_reader": MagicMock(),
+        "room_reader": MagicMock(),
+        "room_writer": MagicMock(),
+        "memory_reader": MagicMock(),
+        "memory_writer": MagicMock(),
+        "hitl_reader": MagicMock(),
+        "delivery": MagicMock(),
+        "coordinator": MagicMock(),
+        "summary_service": MagicMock(),
+        "notification_service": MagicMock(),
+        "agent_resolver_service": MagicMock(),
+        "a2a_transport": MagicMock(),
+        "remote_task_reader": MagicMock(),
+        "room_memory": MagicMock(),
+        "debate_service": MagicMock(),
+        "rate_limit_service": MagicMock(),
+        "room_supervisor_service": MagicMock(),
+        "context_memory_runtime": MagicMock(),
+        "hitl_coordinator": MagicMock(),
+        "task_notifications": MagicMock(),
+        "object_storage": MagicMock(),
+    }
+
+
 def test_room_message_center_factory_propagates_overrides_to_children():
     from execution.orchestration.factory import create_room_message_center
 
-    deps = {
-        name: object()
-        for name in [
-            "database_service",
-            "sse_manager",
-            "room_services",
-            "notification_service",
-            "a2a_service",
-            "task_service",
-            "agent_resolver_service",
-            "room_memory_service",
-            "debate_service",
-            "rate_limit_service",
-            "room_supervisor_service",
-            "room_coordinator_service",
-            "summary_service",
-            "hitl_coordinator",
-            "task_notifications",
-            "context_memory_runtime",
-            "object_storage",
-        ]
-    }
+    deps = _make_room_message_center_port_deps()
     runtime = create_room_message_center(**deps, debate_rounds=5)
 
-    assert runtime._store is deps["database_service"]
-    assert runtime.sse_manager is deps["sse_manager"]
-    assert runtime.room_runtime is deps["room_services"]
+    assert runtime.room_runtime is deps["room_runtime"]
+    assert runtime.message_reader is deps["message_reader"]
+    assert runtime.message_writer is deps["message_writer"]
+    assert runtime.task_state_store is deps["task_state_store"]
+    assert runtime.continuation_store is deps["continuation_store"]
+    assert runtime.room_reader is deps["room_reader"]
+    assert runtime.room_writer is deps["room_writer"]
+    assert runtime.memory_reader is deps["memory_reader"]
+    assert runtime.memory_writer is deps["memory_writer"]
+    assert runtime.hitl_reader is deps["hitl_reader"]
+    assert runtime.delivery is deps["delivery"]
+    assert runtime.coordinator is deps["coordinator"]
     assert runtime.summary_service is deps["summary_service"]
-    assert runtime.tsm.room_runtime is deps["room_services"]
+    assert runtime.room_memory is deps["room_memory"]
+    assert runtime.tsm.room_runtime is deps["room_runtime"]
     assert runtime.tsm.notification_service is deps["notification_service"]
-    assert runtime.agent_dispatcher._message_writer is deps["database_service"]
-    assert runtime.agent_dispatcher._agent_lookup is deps["database_service"]
-    assert runtime.agent_dispatcher._agent_group_reader is deps["database_service"]
+    assert runtime.agent_dispatcher._message_writer is deps["message_writer"]
+    assert runtime.agent_dispatcher._agent_lookup is deps["agent_lookup"]
+    assert runtime.agent_dispatcher._agent_group_reader is deps["agent_group_reader"]
     assert runtime.debate_rounds == 5
     assert runtime.supervisor_executor.debate_rounds == 5
     assert runtime.agent_dispatcher.agent_resolver is deps["agent_resolver_service"]
-    assert runtime.agent_response_handler._message_writer is deps["database_service"]
-    assert runtime.agent_response_handler._task_writer is deps["database_service"]
-    assert runtime.agent_response_handler._sse is deps["sse_manager"]
-    assert runtime.direct_transport._message_reader is deps["database_service"]
-    assert runtime.direct_transport._artifact_store is deps["database_service"]
-    assert runtime.direct_transport._task_updater is deps["database_service"]
-    assert runtime.direct_transport.sse_manager is deps["sse_manager"]
-    assert runtime.direct_transport.a2a_service is deps["a2a_service"]
-    assert runtime.direct_transport.task_service is deps["task_service"]
+    assert runtime.agent_response_handler._message_writer is deps["message_writer"]
+    assert runtime.agent_response_handler._task_writer is deps["task_state_store"]
     assert (
-        runtime.agent_message_processor._room_memory_reader is deps["database_service"]
+        runtime.agent_response_handler._continuation_store
+        is deps["continuation_store"]
     )
-    assert runtime.agent_message_processor._task_tracker is deps["database_service"]
-    assert runtime.agent_message_processor.sse_manager is deps["sse_manager"]
-    assert runtime.queue_executor._store is deps["database_service"]
-    assert runtime.queue_executor.sse_manager is deps["sse_manager"]
-    assert runtime.queue_executor.room_runtime is deps["room_services"]
+    assert runtime.agent_response_handler._client_request_resolver is deps["message_reader"]
+    assert runtime.agent_response_handler._room_reader is deps["room_reader"]
+    assert runtime.agent_response_handler._hitl_reader is deps["hitl_reader"]
+    assert runtime.agent_response_handler._sse is deps["delivery"]
+    assert runtime.direct_transport._message_reader is deps["message_reader"]
+    assert runtime.direct_transport._artifact_store is deps["message_writer"]
+    assert runtime.direct_transport._task_updater is deps["task_state_store"]
+    assert runtime.direct_transport.sse_manager is deps["delivery"]
+    assert runtime.direct_transport.a2a_service is deps["a2a_transport"]
+    assert runtime.direct_transport.task_service is deps["remote_task_reader"]
+    assert runtime.agent_message_processor._room_memory_reader is deps["memory_reader"]
+    assert runtime.agent_message_processor._task_tracker is deps["task_state_store"]
+    assert runtime.agent_message_processor.sse_manager is deps["delivery"]
+    assert runtime.queue_executor.task_state_store is deps["task_state_store"]
+    assert runtime.queue_executor.message_reader is deps["message_reader"]
+    assert runtime.queue_executor.message_writer is deps["message_writer"]
+    assert runtime.queue_executor.delivery is deps["delivery"]
+    assert runtime.queue_executor.room_runtime is deps["room_runtime"]
+    assert runtime.queue_executor.room_memory is deps["room_memory"]
     assert runtime.queue_executor.hitl_coordinator is deps["hitl_coordinator"]
-    assert runtime.supervisor_executor._store is deps["database_service"]
-    assert runtime.supervisor_executor.sse_manager is deps["sse_manager"]
-    assert runtime.supervisor_executor.room_runtime is deps["room_services"]
+    assert runtime.supervisor_executor.task_state_store is deps["task_state_store"]
+    assert runtime.supervisor_executor.message_reader is deps["message_reader"]
+    assert runtime.supervisor_executor.message_writer is deps["message_writer"]
+    assert runtime.supervisor_executor.delivery is deps["delivery"]
+    assert runtime.supervisor_executor.room_runtime is deps["room_runtime"]
+    assert runtime.supervisor_executor.coordinator is deps["coordinator"]
+    assert runtime.supervisor_executor.room_memory is deps["room_memory"]
     assert runtime.supervisor_executor.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.agent_response_handler.hitl_coordinator is deps["hitl_coordinator"]
+    assert runtime.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.task_notifications is deps["task_notifications"]
     assert runtime.context_memory_runtime is deps["context_memory_runtime"]
     assert runtime.direct_transport.object_storage is deps["object_storage"]
@@ -341,34 +382,18 @@ def test_room_message_center_factory_propagates_overrides_to_children():
 
 def test_room_message_center_factory_owns_default_dependency_wiring():
     import inspect
-    from unittest.mock import MagicMock
 
     from execution.orchestration.factory import create_room_message_center
     from execution.orchestration.room_message_center import RoomMessageCenter
 
     assert "globals()" not in inspect.getsource(RoomMessageCenter.__init__)
 
-    deps = {
-        "room_services": MagicMock(),
-        "database_service": MagicMock(),
-        "sse_manager": MagicMock(),
-        "room_coordinator_service": MagicMock(),
-        "summary_service": MagicMock(),
-        "notification_service": MagicMock(),
-        "agent_resolver_service": MagicMock(),
-        "a2a_service": MagicMock(),
-        "task_service": MagicMock(),
-        "room_memory_service": MagicMock(),
-        "debate_service": MagicMock(),
-        "rate_limit_service": MagicMock(),
-        "room_supervisor_service": MagicMock(),
-        "context_memory_runtime": MagicMock(),
-    }
+    deps = _make_room_message_center_port_deps()
     runtime = create_room_message_center(**deps, debate_rounds=6)
 
-    assert runtime._store is deps["database_service"]
-    assert runtime.sse_manager is deps["sse_manager"]
-    assert runtime.room_runtime is deps["room_services"]
+    assert runtime.message_reader is deps["message_reader"]
+    assert runtime.delivery is deps["delivery"]
+    assert runtime.room_runtime is deps["room_runtime"]
     assert runtime.debate_rounds == 6
     assert runtime.context_memory_runtime is deps["context_memory_runtime"]
 
