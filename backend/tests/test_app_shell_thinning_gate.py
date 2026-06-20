@@ -356,14 +356,14 @@ def _public_business_methods(path: Path) -> list[str]:
     tree = ast.parse(path.read_text(), filename=str(path))
     methods: list[str] = []
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             if not node.name.startswith("_"):
                 methods.append(node.name)
             continue
         if not isinstance(node, ast.ClassDef) or node.name.startswith("_"):
             continue
         for item in node.body:
-            if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef):
                 continue
             if item.name.startswith("_") or _is_property_like(item):
                 continue

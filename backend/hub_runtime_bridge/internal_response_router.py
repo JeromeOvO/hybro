@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
 import logging
+from typing import Any
+
 from common.config.settings import settings
 
 logger = logging.getLogger(__name__)
