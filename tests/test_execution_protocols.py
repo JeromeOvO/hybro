@@ -406,6 +406,21 @@ def test_room_message_center_factory_owns_default_dependency_wiring():
     assert runtime.context_memory_runtime is deps["context_memory_runtime"]
 
 
+def test_container_bridges_dispatch_delivery_names():
+    source = (ROOT / "container.py").read_text()
+
+    assert "bind_task_notification_runtime(\n" in source
+    assert "notification_service=notification_service,\n                delivery=sse_manager" in source
+
+    webhook_factory = source.split("def create_webhook_transport():", 1)[1].split(
+        "execution_facade = create_execution_facade(",
+        1,
+    )[0]
+    assert "AgentResponseHandler(" in webhook_factory
+    assert "delivery=sse_manager" in webhook_factory
+    assert "sse_manager=sse_manager" not in webhook_factory
+
+
 def test_room_message_center_constructor_requires_explicit_dependencies():
     from execution.orchestration.room_message_center import RoomMessageCenter
 

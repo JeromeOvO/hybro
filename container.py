@@ -884,7 +884,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             bind_notification_store(task_notification_store)
             bind_task_notification_runtime(
                 notification_service=notification_service,
-                sse_manager=sse_manager,
+                delivery=sse_manager,
             )
             a2a_service.bind_runtime_config(
                 A2ARuntimeConfig(webhook_base_url=runtime.settings.webhook_base_url)
@@ -997,7 +997,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     client_request_resolver=response_client_request_resolver,
                     room_reader=agent_room_store,
                     hitl_reader=hitl_store,
-                    sse_manager=sse_manager,
+                    delivery=sse_manager,
                     room_message_center=execution_room_message_center,
                     hitl_coordinator=hitl_service,
                     notification_service=notification_service,
