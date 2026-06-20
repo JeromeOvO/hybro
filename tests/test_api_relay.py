@@ -917,7 +917,7 @@ class TestRelayServicePublish:
 
         await svc.process_publish("hub-001", request, key)
 
-        handler = svc._relay_transport.response_handler
+        handler = svc.relay_transport.response_handler
         handler.handle.assert_awaited_once()
         event = handler.handle.call_args[0][0]
         assert event.kind == "response"

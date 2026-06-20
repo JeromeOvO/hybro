@@ -111,7 +111,6 @@ class RelayService:
             raise ValueError("RelayService requires a mongo-compatible db/service")
         self._agent_registry_writer = None
         self._publish_handler: Any | None = None
-        self._relay_transport: Any | None = None
         self._response_handler: Any | None = None
         self._internal_response_dispatcher: Any | None = None
         self._response_converter = response_converter or _default_hub_response_converter
@@ -176,7 +175,6 @@ class RelayService:
 
     def set_relay_transport(self, transport: Any) -> None:
         self._publish_handler = transport
-        self._relay_transport = transport
         response_handler = getattr(transport, "response_handler", None)
         if response_handler is not None:
             self.bind_response_handler(response_handler)

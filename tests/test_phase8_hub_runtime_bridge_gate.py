@@ -190,6 +190,18 @@ def test_legacy_relay_does_not_import_redis_runtime_concretes() -> None:
     assert "AppShellLeaderElection" not in relay_text
 
 
+def test_legacy_relay_has_single_transport_state() -> None:
+    relay = ROOT / "app_shell/relay_service.py"
+    tree = ast.parse(relay.read_text(), filename=str(relay))
+
+    private_transport_refs = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and node.attr == "_relay_transport"
+    ]
+    assert private_transport_refs == []
+
+
 def test_app_shell_routes_internal_hub_events_through_hub_router() -> None:
     main = (ROOT / "main.py").read_text()
     container = (ROOT / "container.py").read_text()
