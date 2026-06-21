@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Protocol
 
+from common.a2a_constants import SSEProcessingStatus
 from common.dto import (
     ExecutionAck,
     ExecutionRequest,
@@ -17,7 +18,7 @@ from common.observability import traced_create_task
 from common.protocols import EventPublisher
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
-from execution.events import emit_processing_status
+from execution.events import emit_processing_status, emit_room_processing_status
 from execution.hitl.translators import (
     hitl_cancel_none_to_success,
     hitl_response_dict_to_common,
@@ -367,7 +368,128 @@ class ExecutionFacade:
         self._inflight: set[asyncio.Task] = set()
         self._inflight_metadata: dict[asyncio.Task, dict[str, str | None]] = {}
 
+    async def _reject_if_hitl_pending(
+        self,
+        request: ExecutionRequest,
+    ) -> ExecutionAck | None:
+        try:
+            pending_requests = await self._hitl_service.get_pending_requests(
+                request.room_id
+            )
+        except Exception:
+            logger.warning("pending HITL lookup failed before execute", exc_info=True)
+            return None
+        if not pending_requests:
+            return None
+        return ExecutionAck(
+            room_id=request.room_id,
+            success=False,
+            error="Room is waiting for your input before it can process another message.",
+            status_code=409,
+            should_start_orchestration=False,
+        )
+
+    async def _reject_if_room_has_active_run(
+        self,
+        request: ExecutionRequest,
+    ) -> ExecutionAck | None:
+        try:
+            active_runs = await self._run_reader.get_runs_for_room(request.room_id)
+        except Exception:
+            logger.warning("active room run lookup failed before execute", exc_info=True)
+            return None
+        if not active_runs:
+            return None
+        return ExecutionAck(
+            room_id=request.room_id,
+            success=False,
+            error="Room is already processing another message.",
+            status_code=409,
+            should_start_orchestration=False,
+        )
+
+    async def _emit_room_preflight_processing_status(
+        self,
+        request: ExecutionRequest,
+        ack: ExecutionAck,
+    ) -> None:
+        if not ack.message_id:
+            return
+        lifecycle_message_id = ack.dispatch_root_message_id or ack.message_id
+        await emit_room_processing_status(
+            room_id=ack.room_id or request.room_id,
+            status=SSEProcessingStatus.PROCESSING,
+            message_id=ack.message_id,
+            lifecycle_message_id=lifecycle_message_id,
+            run_lifecycle=self._run_lifecycle,
+            event_publisher=self._event_publisher,
+            run_event_enabled=self._run_event_enabled,
+            client_request_id_resolver=self._client_request_id_resolver,
+            client_request_id=request.client_request_id,
+        )
+
+    def _terminal_preflight_status(
+        self,
+        ack: ExecutionAck,
+    ) -> SSEProcessingStatus | None:
+        if ack.should_start_orchestration:
+            return None
+        status_by_outcome = {
+            "completed": SSEProcessingStatus.COMPLETED,
+            "canceled": SSEProcessingStatus.CANCELED,
+            "failed": SSEProcessingStatus.FAILED,
+        }
+        if ack.preflight_outcome in status_by_outcome:
+            return status_by_outcome[ack.preflight_outcome]
+        if ack.message_id and not ack.success:
+            return SSEProcessingStatus.FAILED
+        return None
+
+    async def _emit_room_preflight_terminal_status(
+        self,
+        request: ExecutionRequest,
+        ack: ExecutionAck,
+    ) -> None:
+        status = self._terminal_preflight_status(ack)
+        if status is None or not ack.message_id:
+            return
+        lifecycle_message_id = ack.dispatch_root_message_id or ack.message_id
+        await emit_room_processing_status(
+            room_id=ack.room_id or request.room_id,
+            status=status,
+            message_id=ack.message_id,
+            lifecycle_message_id=lifecycle_message_id,
+            run_lifecycle=self._run_lifecycle,
+            event_publisher=self._event_publisher,
+            run_event_enabled=self._run_event_enabled,
+            client_request_id_resolver=self._client_request_id_resolver,
+            client_request_id=request.client_request_id,
+            details=ack.preflight_details or ack.error,
+        )
+
+    async def _emit_room_preflight_statuses(
+        self,
+        request: ExecutionRequest,
+        ack: ExecutionAck,
+    ) -> None:
+        try:
+            await self._emit_room_preflight_processing_status(request, ack)
+            await self._emit_room_preflight_terminal_status(request, ack)
+        except Exception:
+            logger.warning(
+                "room preflight status emission failed after persistence",
+                exc_info=True,
+            )
+
     async def execute(self, request: ExecutionRequest) -> ExecutionAck:
+        hitl_rejection = await self._reject_if_hitl_pending(request)
+        if hitl_rejection is not None:
+            return hitl_rejection
+
+        active_run_rejection = await self._reject_if_room_has_active_run(request)
+        if active_run_rejection is not None:
+            return active_run_rejection
+
         room_request = RoomCenterUserMessageRequest(
             room_id=request.room_id,
             user_id=request.sender_id,
@@ -382,7 +504,9 @@ class ExecutionFacade:
             request.target_group,
             request.mentioned_agent_ids,
         )
-        return room_response_to_execution_ack(response)
+        ack = room_response_to_execution_ack(response)
+        await self._emit_room_preflight_statuses(request, ack)
+        return ack
 
     async def start_orchestration(
         self,

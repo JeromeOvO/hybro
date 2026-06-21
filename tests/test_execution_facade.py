@@ -351,6 +351,89 @@ async def test_execute_emits_processing_for_ready_room_preflight():
 
 
 @pytest.mark.asyncio
+async def test_execute_does_not_emit_completed_for_success_without_preflight_outcome():
+    facade, deps = _make_facade()
+    deps["room_center"].send_message_to_room.return_value = RoomCenterUserMessageResponse(
+        room_id="room-1",
+        message_id="msg-1",
+        success=True,
+        status_code=200,
+    )
+
+    ack = await facade.execute(
+        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+    )
+
+    assert ack.success is True
+    assert ack.should_start_orchestration is False
+    deps["run_lifecycle"].record_processing_status.assert_awaited_once_with(
+        "room-1",
+        "processing",
+        "msg-1",
+        client_request_id="cr-1",
+        details=None,
+        error_message=None,
+    )
+    event = deps["event_publisher"].emit.await_args.args[0]
+    assert event.status == "processing"
+
+
+@pytest.mark.asyncio
+async def test_execute_emits_completed_for_completed_room_preflight():
+    facade, deps = _make_facade()
+    deps["room_center"].send_message_to_room.return_value = _room_response_with_preflight(
+        room_id="room-1",
+        message_id="msg-1",
+        success=True,
+        status_code=200,
+        preflight_outcome="completed",
+    )
+
+    ack = await facade.execute(
+        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+    )
+
+    assert ack.success is True
+    assert ack.should_start_orchestration is False
+    assert [
+        await_call.args[1]
+        for await_call in deps["run_lifecycle"].record_processing_status.await_args_list
+    ] == [
+        "processing",
+        "completed",
+    ]
+    assert [
+        await_call.args[0].status
+        for await_call in deps["event_publisher"].emit.await_args_list
+    ] == [
+        "processing",
+        "completed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_returns_ack_when_post_persist_status_emit_fails():
+    facade, deps = _make_facade()
+    deps["room_center"].send_message_to_room.return_value = _room_response_with_preflight(
+        room_id="room-1",
+        message_id="msg-1",
+        dispatch_root_message_id="msg-1",
+        success=True,
+        preflight_outcome="ready",
+    )
+    deps["run_lifecycle"].record_processing_status.side_effect = RuntimeError("sse down")
+
+    ack = await facade.execute(
+        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+    )
+
+    assert ack.message_id == "msg-1"
+    assert ack.success is True
+    assert ack.should_start_orchestration is True
+    deps["room_center"].send_message_to_room.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_execute_emits_processing_then_failed_for_persisted_preflight_failure():
     facade, deps = _make_facade()
     deps["room_center"].send_message_to_room.return_value = _room_response_with_preflight(
