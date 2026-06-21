@@ -173,6 +173,8 @@ async def test_publish_message_committed_emits_agent_event_with_agent_id():
         message_id="agent-msg-1",
         message_type="agent",
         agent_id="agent-1",
+        agent_name="Agent One",
+        was_successful=True,
     )
 
     event = publisher.internal_events[0]
@@ -181,6 +183,8 @@ async def test_publish_message_committed_emits_agent_event_with_agent_id():
     assert event.message_id == "agent-msg-1"
     assert event.message_type == "agent"
     assert event.agent_id == "agent-1"
+    assert event.agent_name == "Agent One"
+    assert event.was_successful is True
 
 
 @pytest.mark.asyncio

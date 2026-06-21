@@ -17,6 +17,8 @@ async def publish_message_committed(
     message_type: MessageCommitType,
     agent_id: str | None = None,
     room_agent_set: dict[str, str] | None = None,
+    agent_name: str | None = None,
+    was_successful: bool | None = None,
     wait_for_local_handlers: bool = False,
 ) -> None:
     event = MessageCommitted(
@@ -27,6 +29,8 @@ async def publish_message_committed(
         message_type=message_type,
         agent_id=agent_id,
         room_agent_set=room_agent_set,
+        agent_name=agent_name,
+        was_successful=was_successful,
     )
     if wait_for_local_handlers:
         await event_publisher.emit_internal(
