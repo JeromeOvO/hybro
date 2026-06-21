@@ -1041,6 +1041,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             sse.bind_sse_dependencies(sse_state_reader, sse_manager)
             room_runtime.bind_store(room_runtime_store)
             room_runtime.bind_facade(_room_facade)
+            room_runtime.bind_message_event_publisher(_delivery_deps.event_publisher)
             room_runtime.bind_object_storage(platform_object_storage)
             room_center.room_center.bind_facade(_room_facade)
             hitl.bind_room_ownership_reader(_room_facade)
