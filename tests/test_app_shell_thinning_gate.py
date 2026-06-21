@@ -86,7 +86,7 @@ FORBIDDEN_MAIN_WIRING_SNIPPETS = (
 )
 
 EXPECTED_APP_SHELL_BASELINE = {
-    "app_shell/room_runtime.py": {"lines": 3819, "public_business_methods": 52},
+    "app_shell/room_runtime.py": {"lines": 3678, "public_business_methods": 49},
     "app_shell/a2a_runtime.py": {"lines": 613, "public_business_methods": 16},
     "app_shell/relay_service.py": {"lines": 403, "public_business_methods": 27},
     "app_shell/context_assembly_service.py": {
@@ -104,9 +104,6 @@ EXPECTED_APP_SHELL_PUBLIC_METHODS = {
         "RoomServices.bind_context_memory",
         "RoomServices.bind_message_parser_service",
         "RoomServices.bind_debate_rounds",
-        "RoomServices.bind_active_run_reader",
-        "RoomServices.bind_hitl_pending_checker",
-        "RoomServices.bind_execution_event_deps",
         "RoomServices.bind_attachment_metadata_reader",
         "RoomServices.bind_attachment_cleanup",
         "RoomServices.bind_quote_writer",
