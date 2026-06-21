@@ -668,7 +668,10 @@ def test_room_center_route_inventory_records_live_protocol_owners():
         },
         "inquiry_room_setting": {
             "owner": "room.protocols.RoomCenterCompatibility",
-            "supporting": {"common.protocols.RoomRouteReader"},
+            "supporting": {
+                "common.protocols.ExecutionEngine",
+                "common.protocols.RoomRouteReader",
+            },
         },
         "inquiry_room_messages": {
             "owner": "room.protocols.RoomCenterCompatibility",
@@ -758,18 +761,29 @@ def test_room_center_protocol_inventory_matches_handler_calls():
 
 
 def test_room_active_runs_inventory_records_execution_support():
+    from api import room_center
+
     routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    room_setting_route = next(
+        route
+        for route in routes
+        if route["module"] == "api_gateway.routes.room_routes"
+        and route["name"] == "inquiry_room_setting"
+    )
     active_runs_route = next(
         route
         for route in routes
         if route["module"] == "api_gateway.routes.room_routes"
         and route["name"] == "inquiry_active_runs"
     )
-    container_source = Path("container.py").read_text()
+    route_source = inspect.getsource(room_center)
     room_runtime_source = Path("app_shell/room_runtime.py").read_text()
 
-    assert "execution_facade.get_runs_for_room" in container_source
-    assert "_read_active_runs_for_room" in room_runtime_source
+    assert "_require_execution_engine().get_runs_for_room" in route_source
+    assert "_read_active_runs_for_room" not in room_runtime_source
+    assert "common.protocols.ExecutionEngine" in set(
+        room_setting_route.get("supporting_protocols") or []
+    )
     assert "common.protocols.ExecutionEngine" in set(
         active_runs_route.get("supporting_protocols") or []
     )
