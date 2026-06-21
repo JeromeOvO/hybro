@@ -160,6 +160,14 @@ def test_execution_event_manifest_covers_status_helpers_and_hub_ingress():
             "execution/orchestration/supervisor_executor.py",
             "SupervisorExecutor._emit_processing_status",
         ),
+        (
+            "execution/facade.py",
+            "ExecutionFacade._emit_room_preflight_processing_status",
+        ),
+        (
+            "execution/facade.py",
+            "ExecutionFacade._emit_room_preflight_terminal_status",
+        ),
         ("execution/facade.py", "hub_agent_response_internal_to_agent_event"),
     }
     actual = {(entry["path"], entry["function"]) for entry in manifest}

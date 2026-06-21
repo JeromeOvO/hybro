@@ -1290,6 +1290,7 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
+      "common.protocols.ExecutionEngine",
       "common.protocols.RoomRouteReader"
     ]
   },

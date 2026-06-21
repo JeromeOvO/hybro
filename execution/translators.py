@@ -24,6 +24,8 @@ def room_response_to_execution_ack(
             if response.scope_resolution_error
             else None
         ),
+        preflight_outcome=response.preflight_outcome,
+        preflight_details=response.preflight_details,
         success=response.success,
         error=response.error,
         status_code=response.status_code,

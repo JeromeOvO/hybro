@@ -24,10 +24,7 @@ OBSOLETE_CALL_IDS = {
     "api.sse.cancel_message.canceled",
 }
 DELETED_PACKAGE_PATH_PREFIXES = ("config/", "infrastructure/", "modules/", "services/")
-ROOM_RUNTIME_STATUS_EMITTERS = {
-    "_emit_processing_status_event",
-    "_send_processing_status",
-}
+EXECUTION_STATUS_HELPERS = {"emit_room_processing_status"}
 
 
 def _unparse(node: ast.AST | None) -> str | None:
@@ -199,9 +196,12 @@ def _discover_calls() -> list[ProcessingStatusCall]:
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
-            if not isinstance(node.func, ast.Attribute):
+            if isinstance(node.func, ast.Name):
+                call_name = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                call_name = node.func.attr
+            else:
                 continue
-            call_name = node.func.attr
             if call_name == "send_processing_status":
                 room_id_expression = _unparse(_arg_or_kw(node, 0, "room_id"))
                 status_expression = _unparse(_arg_or_kw(node, 1, "status"))
@@ -210,7 +210,11 @@ def _discover_calls() -> list[ProcessingStatusCall]:
                     _keyword(node, "client_request_id")
                 )
                 details_expression = _unparse(_keyword(node, "details"))
-                delivery_expression = _unparse(node.func.value)
+                delivery_expression = (
+                    _unparse(node.func.value)
+                    if isinstance(node.func, ast.Attribute)
+                    else None
+                )
                 emitter_kind = "direct_transport"
                 if (
                     rel_path == "app_shell/room_runtime.py"
@@ -220,31 +224,17 @@ def _discover_calls() -> list[ProcessingStatusCall]:
                     status_expression = "status"
                     client_request_id_expression = "client_request_id"
                     details_expression = "details"
-            elif (
-                rel_path == "app_shell/room_runtime.py"
-                and call_name in ROOM_RUNTIME_STATUS_EMITTERS
-            ):
+            elif rel_path.startswith("execution/") and call_name in EXECUTION_STATUS_HELPERS:
                 room_id_expression = _unparse(_arg_or_kw(node, 0, "room_id"))
-                if call_name == "_send_processing_status":
-                    status_expression = "SSEProcessingStatus.PROCESSING"
-                    sse_message_id_expression = _unparse(
-                        _arg_or_kw(node, 1, "message_id")
-                    )
-                    client_request_id_expression = _unparse(
-                        _arg_or_kw(node, 2, "client_request_id")
-                    )
-                    details_expression = None
-                    delivery_expression = "self._processing_status_emitter"
-                else:
-                    status_expression = _unparse(_arg_or_kw(node, 1, "status"))
-                    sse_message_id_expression = _unparse(
-                        _arg_or_kw(node, 2, "message_id")
-                    )
-                    client_request_id_expression = _unparse(
-                        _keyword(node, "client_request_id")
-                    )
-                    details_expression = _unparse(_keyword(node, "details"))
-                    delivery_expression = "self._processing_status_emitter"
+                status_expression = _unparse(_arg_or_kw(node, 1, "status"))
+                sse_message_id_expression = _unparse(
+                    _arg_or_kw(node, 2, "message_id")
+                )
+                client_request_id_expression = _unparse(
+                    _keyword(node, "client_request_id")
+                )
+                details_expression = _unparse(_keyword(node, "details"))
+                delivery_expression = _unparse(_keyword(node, "event_publisher"))
                 emitter_kind = call_name
             else:
                 continue
@@ -291,11 +281,19 @@ def _assert_lifecycle_helper_matches(
     item: ProcessingStatusCall,
     entry: dict[str, Any],
 ) -> None:
-    if item.emitter_kind in ROOM_RUNTIME_STATUS_EMITTERS:
+    if item.emitter_kind in EXECUTION_STATUS_HELPERS:
         record_lifecycle = _keyword(item.call, "record_lifecycle")
         assert record_lifecycle is None or _expr_equal(
             _unparse(record_lifecycle), "True"
         ), f"{entry['call_id']} disables lifecycle recording"
+        assert _expr_equal(
+            _unparse(_keyword(item.call, "lifecycle_message_id")),
+            entry["lifecycle_message_id_expression"],
+        )
+        assert _expr_equal(
+            _unparse(_keyword(item.call, "event_publisher")),
+            entry["delivery_expression"],
+        )
         return
 
     helper = _find_prior_awaited_helper(item, "record_and_maybe_emit_run_event")
@@ -343,13 +341,6 @@ def _assert_lifecycle_helper_matches(
 
 
 def _assert_no_prior_lifecycle_work(item: ProcessingStatusCall, call_id: str) -> None:
-    if item.emitter_kind in ROOM_RUNTIME_STATUS_EMITTERS:
-        record_lifecycle = _keyword(item.call, "record_lifecycle")
-        assert record_lifecycle is not None and _expr_equal(
-            _unparse(record_lifecycle), "False"
-        ), f"{call_id} transport-only helper call must pass record_lifecycle=False"
-        return
-
     helper = _find_prior_awaited_helper(item, "record_and_maybe_emit_run_event")
     run_event_emit = _find_prior_awaited_helper(item, "emit_run_event_payload")
     assert helper is None, f"{call_id} is transport-only but has lifecycle helper"

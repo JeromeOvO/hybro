@@ -108,16 +108,16 @@ def _bind_test_processing_emitter(
 
 
 @pytest.mark.asyncio
-async def test_golden_send_message_processing_status_order(monkeypatch):
-    import app_shell.room_runtime as room_services
+async def test_golden_execution_preflight_processing_status_order(monkeypatch):
     from common.a2a_constants import SSEProcessingStatus
-    from execution.events import emit_processing_status
+    from common.dto import ExecutionAck, ExecutionRequest
+    from execution.facade import ExecutionFacade
 
     manager = make_bound_manager()
     conn = await manager.add_connection("room-1")
     payload = {
         "event_id": "evt-1",
-        "run_id": "msg-1",
+        "run_id": "root-msg-1",
         "seq": 2,
         "type": "RUN_STARTED",
         "payload": {},
@@ -130,15 +130,23 @@ async def test_golden_send_message_processing_status_order(monkeypatch):
 
     monkeypatch.setattr(settings, "feature_run_event_sse", True)
 
-    svc = object.__new__(room_services.RoomServices)
-    svc._processing_status_emitter = lambda **kwargs: emit_processing_status(
-        **kwargs,
-        run_lifecycle=run_lifecycle,
-        event_publisher=manager._facade.event_publisher,
-        run_event_enabled=lambda: True,
-        client_request_id_resolver=resolver,
+    facade = object.__new__(ExecutionFacade)
+    facade._run_lifecycle = run_lifecycle
+    facade._event_publisher = manager._facade.event_publisher
+    facade._run_event_enabled = lambda: True
+    facade._client_request_id_resolver = resolver
+    request = ExecutionRequest(
+        room_id="room-1",
+        sender_id="user-1",
+        client_request_id="cr-1",
     )
-    await svc._send_processing_status("room-1", "msg-1", "cr-1")
+    ack = ExecutionAck(
+        room_id="room-1",
+        message_id="msg-1",
+        dispatch_root_message_id="root-msg-1",
+    )
+
+    await facade._emit_room_preflight_processing_status(request, ack)
 
     first_type, first_data = await _next_sse_type(conn)
     second_type, second_data = await _next_sse_type(conn)
@@ -147,9 +155,11 @@ async def test_golden_send_message_processing_status_order(monkeypatch):
     assert first_type == "run_event"
     assert first_data["event_id"] == "evt-1"
     assert first_data["correlation_id"] == "cr-1"
+    assert first_data["run_id"] == "root-msg-1"
     assert second_type == "processing_status"
     assert second_data["status"] == SSEProcessingStatus.PROCESSING
     assert second_data["message_id"] == "msg-1"
+    assert second_data["related_message_id"] == "root-msg-1"
     assert second_data["client_request_id"] == "cr-1"
 
 
