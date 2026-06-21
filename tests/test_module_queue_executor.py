@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import pytest
 from a2a.types import TaskState
 
+from common.dto import MessageCommitted
 from common.utils.cancellation import CancellationToken
 from execution.orchestration.queue_executor import (
     QueueExecutor,
@@ -22,6 +23,15 @@ from execution.orchestration.queue_executor import (
     QueueResult,
 )
 from models.processing import ProcessingResult, ProcessingStatus
+
+
+class RecordingEventPublisher:
+    def __init__(self):
+        self.internal_events = []
+
+    async def emit_internal(self, event, *, wait_for_local_handlers: bool = False):
+        self.internal_events.append(event)
+
 
 # =============================================================================
 # QueueResult Tests
@@ -47,6 +57,30 @@ def test_constructor_memory_reader_is_typed_as_room_memory_reader():
     annotation = inspect.signature(QueueExecutor).parameters["memory_reader"].annotation
 
     assert annotation == "RoomMemoryReader"
+
+
+def test_constructor_requires_event_publisher():
+    deps = {
+        "tsm": MagicMock(),
+        "delivery": MagicMock(),
+        "room_runtime": MagicMock(),
+        "event_publisher": None,
+        "message_reader": MagicMock(),
+        "message_writer": MagicMock(),
+        "task_state_store": MagicMock(),
+        "continuation_store": MagicMock(),
+        "agent_lookup": MagicMock(),
+        "room_reader": MagicMock(),
+        "memory_reader": MagicMock(),
+        "debate_service": MagicMock(),
+        "rate_limit_service": MagicMock(),
+        "agent_dispatcher": MagicMock(),
+        "agent_message_processor": MagicMock(),
+        "response_handler": MagicMock(),
+    }
+
+    with pytest.raises(RuntimeError, match="event_publisher"):
+        QueueExecutor(**deps)
 
 
 # =============================================================================
@@ -80,7 +114,7 @@ def _make_queue_executor():
     qe.delivery.send_task_submitted = AsyncMock()
     qe.delivery.send_task_update = AsyncMock()
     qe.room_runtime = MagicMock()
-    qe.room_memory = AsyncMock()
+    qe.event_publisher = RecordingEventPublisher()
     qe.agent_dispatcher = MagicMock()
     qe._agent_message_processor = MagicMock()
     qe.response_handler = MagicMock()
@@ -194,7 +228,6 @@ class TestProcessQueue:
     async def test_process_queue_completes_all_messages(self):
         """Two-item queue where both succeed -> QueueResult.COMPLETED."""
         qe = _make_queue_executor()
-        qe.room_memory = AsyncMock()
 
         msg1 = MagicMock(
             message_id="msg-1", step_number=1, total_steps=2,
@@ -525,7 +558,6 @@ class TestProcessQueue:
     async def test_resume_from_continuation_restores_queue(self):
         """Saved continuation data is loaded, queue rebuilt, and process_queue invoked."""
         qe = _make_queue_executor()
-        qe.room_memory = AsyncMock()
 
         continuation = {
             "remaining_queue": [
@@ -564,14 +596,15 @@ class TestProcessQueue:
         assert result.room_id == "room-1"
         assert result.user_message_id == "umsg-1"
         qe.process_queue.assert_called_once()
-        qe.room_memory.add_agent_response_to_memory.assert_called_once_with(
-            room_id="room-1",
-            agent_id="a1",
-            agent_name="TestAgent",
-            response_text="task done",
-            was_successful=True,
-            message_id="paused-msg",
-        )
+        assert len(qe.event_publisher.internal_events) == 1
+        event = qe.event_publisher.internal_events[0]
+        assert isinstance(event, MessageCommitted)
+        assert event.room_id == "room-1"
+        assert event.message_id == "paused-msg"
+        assert event.message_type == "agent"
+        assert event.agent_id == "a1"
+        assert event.agent_name == "TestAgent"
+        assert event.was_successful is True
 
 
 @pytest.mark.asyncio

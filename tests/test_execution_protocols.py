@@ -293,6 +293,7 @@ def _make_room_message_center_port_deps():
         "memory_writer": MagicMock(),
         "hitl_reader": MagicMock(),
         "delivery": MagicMock(),
+        "event_publisher": MagicMock(),
         "coordinator": MagicMock(),
         "summary_service": MagicMock(),
         "notification_service": MagicMock(),
@@ -331,6 +332,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.memory_writer is deps["memory_writer"]
     assert runtime.hitl_reader is deps["hitl_reader"]
     assert runtime.delivery is deps["delivery"]
+    assert runtime.event_publisher is deps["event_publisher"]
     assert runtime.coordinator is deps["coordinator"]
     assert runtime.summary_service is deps["summary_service"]
     assert runtime.room_memory is deps["room_memory"]
@@ -379,20 +381,30 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.queue_executor.message_writer is deps["message_writer"]
     assert runtime.queue_executor.delivery is deps["delivery"]
     assert runtime.queue_executor.room_runtime is deps["room_runtime"]
-    assert runtime.queue_executor.room_memory is deps["room_memory"]
+    assert runtime.queue_executor.event_publisher is deps["event_publisher"]
     assert runtime.queue_executor.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.supervisor_executor.task_state_store is deps["task_state_store"]
     assert runtime.supervisor_executor.message_reader is deps["message_reader"]
     assert runtime.supervisor_executor.message_writer is deps["message_writer"]
     assert runtime.supervisor_executor.delivery is deps["delivery"]
     assert runtime.supervisor_executor.room_runtime is deps["room_runtime"]
-    assert runtime.supervisor_executor.room_memory is deps["room_memory"]
+    assert runtime.supervisor_executor.event_publisher is deps["event_publisher"]
     assert runtime.supervisor_executor.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.agent_response_handler.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.task_notifications is deps["task_notifications"]
     assert runtime.context_memory_runtime is deps["context_memory_runtime"]
     assert runtime.direct_transport.object_storage is deps["object_storage"]
+
+
+def test_room_message_center_factory_requires_event_publisher():
+    from execution.orchestration.factory import create_room_message_center
+
+    deps = _make_room_message_center_port_deps()
+    deps.pop("event_publisher")
+
+    with pytest.raises(RuntimeError, match="event_publisher"):
+        create_room_message_center(**deps, debate_rounds=5)
 
 
 def test_room_message_center_factory_owns_default_dependency_wiring():
@@ -468,6 +480,7 @@ def test_container_wires_execution_with_focused_port_names():
         "memory_writer",
         "hitl_reader",
         "delivery",
+        "event_publisher",
         "coordinator",
         "a2a_transport",
         "remote_task_reader",
@@ -490,11 +503,17 @@ def test_container_wires_execution_with_focused_port_names():
         "a2a_transport": "execution_a2a_transport",
         "remote_task_reader": "execution_remote_task_reader",
         "room_memory": "execution_room_memory",
+        "event_publisher": "_delivery_deps.event_publisher",
     }
     for keyword, expected_name in expected_room_center_adapter_names.items():
         value = keyword_value(room_center_call, keyword)
-        assert isinstance(value, ast.Name)
-        assert value.id == expected_name
+        if "." in expected_name:
+            assert isinstance(value, ast.Attribute)
+            assert isinstance(value.value, ast.Name)
+            assert f"{value.value.id}.{value.attr}" == expected_name
+        else:
+            assert isinstance(value, ast.Name)
+            assert value.id == expected_name
     coordinator_value = keyword_value(room_center_call, "coordinator")
     assert isinstance(coordinator_value, ast.Name)
     assert coordinator_value.id == "execution_coordinator"
@@ -571,6 +590,16 @@ def test_room_message_center_constructor_requires_explicit_dependencies():
         "room_coordinator_service",
     }
     assert legacy_names.isdisjoint(params)
+
+
+def test_room_message_center_constructor_requires_event_publisher():
+    from execution.orchestration.room_message_center import RoomMessageCenter
+
+    deps = _make_room_message_center_port_deps()
+    deps["event_publisher"] = None
+
+    with pytest.raises(RuntimeError, match="event_publisher"):
+        RoomMessageCenter(**deps, debate_rounds=5)
 
 
 def test_room_message_center_uses_common_room_lock_protocol():

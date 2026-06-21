@@ -966,9 +966,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 get_task_from_agent=task_service.get_task_from_agent,
             )
             execution_room_memory = SimpleNamespace(
-                add_agent_response_to_memory=(
-                    room_memory_service.add_agent_response_to_memory
-                ),
                 add_synthesis_to_history=room_memory_service.add_synthesis_to_history,
                 update_room_summary=room_memory_service.update_room_summary,
             )
@@ -1070,6 +1067,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 memory_writer=execution_memory_writer,
                 hitl_reader=execution_hitl_reader,
                 delivery=execution_delivery,
+                event_publisher=_delivery_deps.event_publisher,
                 coordinator=execution_coordinator,
                 summary_service=summary_llm_service,
                 notification_service=notification_service,

@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from common.dto import MessageCommitted
 from common.utils.time import utcnow
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from models.supervisor import (
@@ -30,6 +31,14 @@ from models.supervisor import (
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+class RecordingEventPublisher:
+    def __init__(self):
+        self.internal_events = []
+
+    async def emit_internal(self, event, *, wait_for_local_handlers: bool = False):
+        self.internal_events.append(event)
+
 
 def _make_agent_profile(agent_id: str, name: str, healthy: bool = True) -> AgentProfile:
     return AgentProfile(
@@ -53,11 +62,30 @@ def _make_supervisor_executor() -> SupervisorExecutor:
     se.tsm = MagicMock()
     se.agent_dispatcher = MagicMock()
     se.agent_message_processor = MagicMock()
-    se.room_memory = AsyncMock()
-    se.room_memory.add_agent_response_to_memory = AsyncMock()
+    se.event_publisher = RecordingEventPublisher()
     se.rate_limit_service = MagicMock()
     se.debate_rounds = 1
     return se
+
+
+def test_constructor_requires_event_publisher():
+    deps = {
+        "supervisor_service": MagicMock(),
+        "room_runtime": MagicMock(),
+        "tsm": MagicMock(),
+        "delivery": MagicMock(),
+        "message_reader": MagicMock(),
+        "message_writer": MagicMock(),
+        "task_state_store": MagicMock(),
+        "continuation_store": MagicMock(),
+        "event_publisher": None,
+        "rate_limit_service": MagicMock(),
+        "agent_dispatcher": MagicMock(),
+        "agent_message_processor": MagicMock(),
+    }
+
+    with pytest.raises(RuntimeError, match="event_publisher"):
+        SupervisorExecutor(**deps)
 
 
 def _make_delegate_entry(
@@ -416,10 +444,19 @@ class TestSequentialDebateDispatch:
         assert len(dispatch_calls) == 2
         assert dispatch_calls[0] == ["a1"]
         assert dispatch_calls[1] == ["a2"]
-        assert [
-            call.kwargs["message_id"]
-            for call in se.room_memory.add_agent_response_to_memory.await_args_list
-        ] == ["agent-msg-a1", "agent-msg-a2"]
+        committed_events = [
+            event
+            for event in se.event_publisher.internal_events
+            if isinstance(event, MessageCommitted)
+        ]
+        assert [event.message_id for event in committed_events] == [
+            "agent-msg-a1",
+            "agent-msg-a2",
+        ]
+        assert [event.message_type for event in committed_events] == ["agent", "agent"]
+        assert [event.agent_id for event in committed_events] == ["a1", "a2"]
+        assert [event.agent_name for event in committed_events] == ["Alpha", "Beta"]
+        assert [event.was_successful for event in committed_events] == [True, True]
 
     @pytest.mark.asyncio
     async def test_done_after_all_agents(self, se):
