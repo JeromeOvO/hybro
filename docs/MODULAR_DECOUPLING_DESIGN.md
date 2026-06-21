@@ -200,15 +200,15 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 | Agent → HubRuntimeBridge | `HubLivenessReader` Protocol | Sync call | For agent hydration: `is_hub_online` |
 | Agent ↔ Room | NO direct dependency | — | |
 
-> **Phase 7b deviation:** The Phase 7b execution plan temporarily binds a small
-> set of Execution-owned compatibility callables into legacy `RoomServices`:
-> pending-HITL checking, embedded active-run reading for
-> `/roomCenter/inquiryRoomSetting`, and sendMessage lifecycle/status emission.
-> This is a bridge while sendMessage persistence and room-setting assembly still
-> live in RoomServices. It is not a target communication direction. Follow-up
-> owner: Execution/Room boundary cleanup must move those gates/emits behind
-> `ExecutionFacade` or a Room-owned protocol so the long-term dependency returns
-> to Execution -> Room only.
+> **Phase 7b reverse-binding cleanup resolved (2026-06-21):** The temporary
+> Execution-owned compatibility callables are no longer injected into legacy
+> `RoomServices`. Pending-HITL checks, active-run gating, active-run route
+> assembly, and sendMessage lifecycle/status emission now live behind
+> `ExecutionFacade` or API-layer Execution ports. Room services may still perform
+> room persistence and legacy route compatibility, but the dependency direction is
+> `API / app shell -> ExecutionFacade -> Room port/services`; RoomServices does
+> not call back into Execution-owned processing status, active-run reader, or
+> recovery scheduler callables.
 
 ---
 
