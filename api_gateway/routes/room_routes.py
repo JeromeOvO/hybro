@@ -9,6 +9,7 @@ from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
 from common.dto import ExecutionRequest, RunInfo
 from common.protocols import ExecutionEngine, RoomRouteReader
+from common.utils.logger import get_logger
 from models.file_upload import MAX_ATTACHMENT_REFS_PER_REQUEST
 from models.request import (
     RoomCenterRoomMessageRequest,
@@ -16,6 +17,7 @@ from models.request import (
 )
 from models.response import (
     ActiveRunRef,
+    RoomCenterActiveRunsResponse,
     RoomCenterUserMessageResponse,
 )
 from room.protocols import RoomCenterCompatibility
@@ -25,6 +27,7 @@ room_center: RoomCenterCompatibility | None = None
 room_store: RoomRouteReader | None = None
 agent_selection_service: AgentSuggestionService | None = None
 execution_engine: ExecutionEngine | None = None
+logger = get_logger(__name__)
 
 
 def bind_room_dependencies(
@@ -88,6 +91,15 @@ def _run_info_to_active_run_ref(run: RunInfo) -> ActiveRunRef:
         seq=run.seq,
         updated_at=run.updated_at,
     )
+
+
+async def _active_run_refs_for_room(room_id: str) -> list[ActiveRunRef]:
+    try:
+        runs = await _require_execution_engine().get_runs_for_room(room_id)
+    except Exception:
+        logger.warning("active-run lookup failed for room_id=%s", room_id, exc_info=True)
+        return []
+    return [_run_info_to_active_run_ref(run) for run in runs]
 
 
 def _extract_attachments(request_data: dict, message: dict | None):
@@ -191,9 +203,13 @@ async def inquiry_room_setting(
     # Verify user owns the room
     await verify_room_ownership(room_id, user)
 
-    room_center_request = RoomCenterRoomSettingRequest(room_id=room_id, requesting_user_id=user.user_id)
+    room_center_request = RoomCenterRoomSettingRequest(
+        room_id=room_id, requesting_user_id=user.user_id
+    )
     center = _resolve_dependency(center, get_room_center)
     room_center_response = await center.inquiry_room_setting(room_center_request)
+    if room_center_response.success and room_id:
+        room_center_response.active_runs = await _active_run_refs_for_room(room_id)
     return room_center_response
 
 
@@ -215,9 +231,35 @@ async def inquiry_active_runs(
         requesting_user_id=user.user_id,
         trigger_message_id=trigger_message_id,
     )
-    center = _resolve_dependency(center, get_room_center)
-    room_center_response = await center.inquiry_active_runs(room_center_request)
-    return room_center_response
+    active_runs = await _active_run_refs_for_room(room_id)
+
+    turn_completion_kind = None
+    trigger_is_active = any(
+        run.trigger_message_id == trigger_message_id for run in active_runs
+    )
+    if trigger_message_id and not trigger_is_active:
+        center = _resolve_dependency(center, get_room_center)
+        try:
+            room_side_response = await center.inquiry_active_runs(room_center_request)
+        except Exception:
+            logger.warning(
+                "turn-completion lookup failed for room_id=%s trigger_message_id=%s",
+                room_id,
+                trigger_message_id,
+                exc_info=True,
+            )
+        else:
+            if room_side_response.success:
+                turn_completion_kind = room_side_response.turn_completion_kind
+
+    return RoomCenterActiveRunsResponse(
+        room_id=room_id,
+        active_runs=active_runs,
+        turn_completion_kind=turn_completion_kind,
+        success=True,
+        error=None,
+        status_code=200,
+    )
 
 
 @router.post("/roomCenter/inquiryRoomsByRoomOwnerId")
