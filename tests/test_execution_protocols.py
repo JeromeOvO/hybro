@@ -484,6 +484,17 @@ def test_container_wires_execution_with_focused_port_names():
     }
     assert focused_keywords <= room_center_keywords
     assert room_center_keywords.isdisjoint(legacy_keywords)
+    expected_room_center_adapter_names = {
+        "room_runtime": "execution_room_runtime",
+        "delivery": "execution_delivery",
+        "a2a_transport": "execution_a2a_transport",
+        "remote_task_reader": "execution_remote_task_reader",
+        "room_memory": "execution_room_memory",
+    }
+    for keyword, expected_name in expected_room_center_adapter_names.items():
+        value = keyword_value(room_center_call, keyword)
+        assert isinstance(value, ast.Name)
+        assert value.id == expected_name
     coordinator_value = keyword_value(room_center_call, "coordinator")
     assert isinstance(coordinator_value, ast.Name)
     assert coordinator_value.id == "execution_coordinator"
@@ -491,6 +502,24 @@ def test_container_wires_execution_with_focused_port_names():
     assert "get_quoted_snippet_by_id" in source
     assert "_room_deps.room_quote_repository.get_by_id" in source
     assert "QuotedSnippet.model_validate" in source
+    assert "execution_inquiry_agent_messages_by_related_message_id" in source
+    assert (
+        "RoomCenterAgentMessageRequest(related_message_id=related_message_id)"
+        in source
+    )
+
+    rmc_source = (
+        ROOT / "execution" / "orchestration" / "room_message_center.py"
+    ).read_text()
+    assert (
+        "RoomCenterAgentMessageRequest(related_message_id=room_user_message_id)"
+        not in rmc_source
+    )
+    assert (
+        "inquiry_agent_messages_by_related_message_id(\n"
+        "                room_user_message_id\n"
+        in rmc_source
+    )
 
     hitl_call = calls_named("create_hitl_service")[0]
     hitl_keywords = keyword_names(hitl_call)
@@ -507,6 +536,9 @@ def test_container_wires_execution_with_focused_port_names():
     task_notification_keywords = keyword_names(task_notification_call)
     assert "delivery" in task_notification_keywords
     assert "sse_manager" not in task_notification_keywords
+    task_notification_delivery = keyword_value(task_notification_call, "delivery")
+    assert isinstance(task_notification_delivery, ast.Name)
+    assert task_notification_delivery.id == "execution_delivery"
 
     cleanup_call = calls_named("AgentTaskCleanupAdapter")[0]
     cleanup_keywords = keyword_names(cleanup_call)
@@ -519,7 +551,7 @@ def test_container_wires_execution_with_focused_port_names():
     assert "sse_manager" not in webhook_keywords
     delivery_value = keyword_value(webhook_handler_call, "delivery")
     assert isinstance(delivery_value, ast.Name)
-    assert delivery_value.id == "sse_manager"
+    assert delivery_value.id == "execution_delivery"
 
 
 def test_room_message_center_constructor_requires_explicit_dependencies():

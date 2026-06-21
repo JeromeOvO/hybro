@@ -43,7 +43,7 @@ from execution.ports import (
 )
 from execution.state.task_state_manager import TaskStateManager
 from llm_gateway.errors import LLMServiceNotBoundError
-from models.request import OrchestrationRequest, RoomCenterAgentMessageRequest
+from models.request import OrchestrationRequest
 from models.response import OrchestrationResponse
 from models.room import CoordinatorAgentId, RoomAgentMessage
 from models.supervisor import (
@@ -882,7 +882,7 @@ class RoomMessageCenter:
         # query is only reached for non-supervisor messages.
         query_response = (
             await self.room_runtime.inquiry_agent_messages_by_related_message_id(
-                RoomCenterAgentMessageRequest(related_message_id=room_user_message_id)
+                room_user_message_id
             )
         )
         if not query_response.success:
