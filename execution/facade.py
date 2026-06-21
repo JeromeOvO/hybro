@@ -95,6 +95,15 @@ class RoomCenterPort(Protocol):
         mentioned_agent_ids: Any = None,
     ) -> Any: ...
 
+    async def persist_message_to_room(
+        self,
+        request: RoomCenterUserMessageRequest,
+        target_group: Any = None,
+        mentioned_agent_ids: Any = None,
+    ) -> tuple[Any, Any | None]: ...
+
+    async def run_message_preflight_to_room(self, context: Any) -> Any: ...
+
 
 class RoomMessageCenterPort(Protocol):
     async def process_room_user_message(
@@ -499,13 +508,32 @@ class ExecutionFacade:
             inline_file_ids=request.inline_file_ids,
             client_request_id=request.client_request_id,
         )
-        response = await self._room_center.send_message_to_room(
+        persisted_response, preflight_context = await self._room_center.persist_message_to_room(
             room_request,
             request.target_group,
             request.mentioned_agent_ids,
         )
+        persisted_ack = room_response_to_execution_ack(persisted_response)
+        try:
+            await self._emit_room_preflight_processing_status(request, persisted_ack)
+        except Exception:
+            logger.warning(
+                "room preflight processing status emission failed after persistence",
+                exc_info=True,
+            )
+        if preflight_context is None:
+            return persisted_ack
+        response = await self._room_center.run_message_preflight_to_room(
+            preflight_context
+        )
         ack = room_response_to_execution_ack(response)
-        await self._emit_room_preflight_statuses(request, ack)
+        try:
+            await self._emit_room_preflight_terminal_status(request, ack)
+        except Exception:
+            logger.warning(
+                "room preflight terminal status emission failed after preflight",
+                exc_info=True,
+            )
         return ack
 
     async def start_orchestration(

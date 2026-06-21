@@ -32,6 +32,18 @@ class RecordingTaskFactory:
 
 def _make_facade(**overrides):
     room_center = SimpleNamespace(send_message_to_room=AsyncMock())
+
+    async def persist_message_to_room(*args, **kwargs):
+        response = await room_center.send_message_to_room(*args, **kwargs)
+        return response, response if response.message_id else None
+
+    async def run_message_preflight_to_room(context):
+        return context
+
+    room_center.persist_message_to_room = AsyncMock(side_effect=persist_message_to_room)
+    room_center.run_message_preflight_to_room = AsyncMock(
+        side_effect=run_message_preflight_to_room
+    )
     room_message_center = SimpleNamespace(process_room_user_message=AsyncMock())
     hitl_service = SimpleNamespace(
         request_input=AsyncMock(),
@@ -348,6 +360,62 @@ async def test_execute_emits_processing_for_ready_room_preflight():
         client_request_id="cr-1",
         details=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_emits_processing_before_room_preflight_continuation():
+    preflight_context = object()
+    room_center = SimpleNamespace(
+        send_message_to_room=AsyncMock(
+            side_effect=AssertionError("legacy single-step room path should not be used")
+        ),
+        persist_message_to_room=AsyncMock(
+            return_value=(
+                RoomCenterUserMessageResponse(
+                    room_id="room-1",
+                    message_id="msg-1",
+                    dispatch_root_message_id="msg-1",
+                    success=True,
+                ),
+                preflight_context,
+            )
+        ),
+        run_message_preflight_to_room=AsyncMock(),
+    )
+    facade, deps = _make_facade(room_center=room_center)
+    order: list[str] = []
+
+    async def record_status(_room_id, status, _message_id, **_kwargs):
+        order.append(f"record:{status}")
+
+    async def emit_event(event):
+        order.append(f"emit:{event.status}")
+
+    async def continue_preflight(context):
+        assert context is preflight_context
+        order.append("room_preflight")
+        return _room_response_with_preflight(
+            room_id="room-1",
+            message_id="msg-1",
+            dispatch_root_message_id="msg-1",
+            success=True,
+            preflight_outcome="ready",
+        )
+
+    deps["run_lifecycle"].record_processing_status.side_effect = record_status
+    deps["event_publisher"].emit.side_effect = emit_event
+    room_center.run_message_preflight_to_room.side_effect = continue_preflight
+
+    ack = await facade.execute(
+        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+    )
+
+    assert ack.success is True
+    assert ack.should_start_orchestration is True
+    assert order == ["record:processing", "emit:processing", "room_preflight"]
+    room_center.persist_message_to_room.assert_awaited_once()
+    room_center.run_message_preflight_to_room.assert_awaited_once_with(preflight_context)
+    room_center.send_message_to_room.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 import re
 import uuid
+from dataclasses import dataclass
 from uuid import uuid4
 
 from app_shell.a2a_runtime import a2a_service
@@ -87,6 +88,22 @@ from room.attachments import (
 )
 
 logger = get_logger(__name__)
+
+
+@dataclass(slots=True)
+class RoomMessagePreflightContext:
+    request: RoomCenterUserMessageRequest
+    target_group: str
+    mentioned_agent_ids: list[str] | None
+    user_message: RoomUserMessage
+    client_request_id: str | None
+    room: Room
+    is_debate_mode: bool
+    use_supervisor: bool
+    message_text: str
+    pre_resolved_mentions: list[dict] | None
+    pre_resolved_scope: tuple[dict, bool, list] | None
+    token: CancellationToken
 
 
 def _agent_to_routing_candidate(agent) -> AgentRoutingCandidate:
@@ -1910,10 +1927,25 @@ class RoomServices:
         mentioned_agent_ids: list[str] | None = None,
     ) -> RoomCenterUserMessageResponse:
         """Add and parse user message to room and return execution preflight metadata."""
+        persisted_response, preflight_context = await self.persist_message_to_room(
+            request,
+            target_group,
+            mentioned_agent_ids,
+        )
+        if preflight_context is None:
+            return persisted_response
+        return await self.run_message_preflight_to_room(preflight_context)
 
+    async def persist_message_to_room(
+        self,
+        request: RoomCenterUserMessageRequest,
+        target_group: str = "room_team",
+        mentioned_agent_ids: list[str] | None = None,
+    ) -> tuple[RoomCenterUserMessageResponse, RoomMessagePreflightContext | None]:
+        """Validate, scope-check, and persist the user message before heavy preflight."""
         validation_response = self._validate_send_message_request(request)
         if validation_response:
-            return validation_response
+            return validation_response, None
 
         user_message = request.message
         client_request_id = (
@@ -1928,15 +1960,18 @@ class RoomServices:
         # Resolve attachments from both sources before persistence
         att_err = await self._resolve_and_apply_attachments(request, user_message)
         if att_err is not None:
-            return att_err
+            return att_err, None
 
         # ── Pre-persist scope validation ──────────────────────────────────
         # Fetch room early: needed for scope resolution and downstream flags.
         room = await self._store.get_room_by_room_id(request.room_id)
         if not room:
-            return RoomCenterUserMessageResponse(
-                message_id=None, message=None, success=False,
-                error="Room not found", status_code=404,
+            return (
+                RoomCenterUserMessageResponse(
+                    message_id=None, message=None, success=False,
+                    error="Room not found", status_code=404,
+                ),
+                None,
             )
 
         is_debate_mode = (
@@ -1961,7 +1996,7 @@ class RoomServices:
                 mentioned_agent_ids, sender_user_id=request.user_id,
             )
             if isinstance(mention_result, RoomCenterUserMessageResponse):
-                return mention_result
+                return mention_result, None
             pre_resolved_mentions = mention_result
         elif target_group != "all_agents":
             scope_result = await self._resolve_explicit_target_scope(
@@ -1969,13 +2004,13 @@ class RoomServices:
                 sender_user_id=request.user_id,
             )
             if isinstance(scope_result, RoomCenterUserMessageResponse):
-                return scope_result
+                return scope_result, None
             pre_resolved_scope = scope_result
 
         # ── Persist ───────────────────────────────────────────────────────
         qerr = await self._materialize_room_quote(room, request, user_message)
         if isinstance(qerr, RoomCenterUserMessageResponse):
-            return qerr
+            return qerr, None
 
         if not await self._persist_user_message(user_message):
             if getattr(user_message, "quote_id", None):
@@ -1990,12 +2025,15 @@ class RoomServices:
                         request.room_id,
                         exc_info=True,
                     )
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="Failed to add message",
-                status_code=500,
+            return (
+                RoomCenterUserMessageResponse(
+                    message_id=None,
+                    message=None,
+                    success=False,
+                    error="Failed to add message",
+                    status_code=500,
+                ),
+                None,
             )
 
         # Create a CancellationToken early in the pipeline so the parse step
@@ -2003,6 +2041,48 @@ class RoomServices:
         # via the token.  If the user already hit cancel before we got here,
         # the token is pre-signalled.
         token = self.sse_manager.create_token(user_message.message_id)
+
+        return (
+            RoomCenterUserMessageResponse(
+                room_id=request.room_id,
+                message_id=user_message.message_id,
+                dispatch_root_message_id=user_message.message_id,
+                message=None,
+                success=True,
+                error=None,
+                status_code=200,
+            ),
+            RoomMessagePreflightContext(
+                request=request,
+                target_group=target_group,
+                mentioned_agent_ids=mentioned_agent_ids,
+                user_message=user_message,
+                client_request_id=client_request_id,
+                room=room,
+                is_debate_mode=is_debate_mode,
+                use_supervisor=use_supervisor,
+                message_text=message_text,
+                pre_resolved_mentions=pre_resolved_mentions,
+                pre_resolved_scope=pre_resolved_scope,
+                token=token,
+            ),
+        )
+
+    async def run_message_preflight_to_room(
+        self,
+        context: RoomMessagePreflightContext,
+    ) -> RoomCenterUserMessageResponse:
+        request = context.request
+        target_group = context.target_group
+        user_message = context.user_message
+        client_request_id = context.client_request_id
+        room = context.room
+        is_debate_mode = context.is_debate_mode
+        use_supervisor = context.use_supervisor
+        message_text = context.message_text
+        pre_resolved_mentions = context.pre_resolved_mentions
+        pre_resolved_scope = context.pre_resolved_scope
+        token = context.token
 
         memory_response = await self._initialize_room_memory(request, user_message)
         if memory_response:
@@ -3663,6 +3743,21 @@ class AppShellRoomCenter:
     ) -> RoomCenterUserMessageResponse:
         return await self._require_room_services().send_message_to_room(
             request, target_group, mentioned_agent_ids
+        )
+
+    async def persist_message_to_room(
+        self,
+        request: RoomCenterUserMessageRequest,
+        target_group: str = "room_team",
+        mentioned_agent_ids: list[str] | None = None,
+    ):
+        return await self._require_room_services().persist_message_to_room(
+            request, target_group, mentioned_agent_ids
+        )
+
+    async def run_message_preflight_to_room(self, context):
+        return await self._require_room_services().run_message_preflight_to_room(
+            context
         )
 
 
