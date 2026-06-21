@@ -1144,20 +1144,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             _execution_deps = create_execution_deps(execution_facade)
 
-            async def read_room_active_runs(room_id: str):
-                runs = await execution_facade.get_runs_for_room(room_id)
-                return [
-                    {
-                        "run_id": run.run_id,
-                        "state": str(getattr(run.state, "value", run.state)),
-                        "trigger_message_id": run.trigger_message_id,
-                        "agent_id": run.agent_id,
-                        "seq": run.seq,
-                        "updated_at": run.updated_at,
-                    }
-                    for run in runs
-                ]
-
             async def emit_room_processing_status(**kwargs):
                 return await emit_execution_room_processing_status(
                     **kwargs,
@@ -1169,11 +1155,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
             webhooks.bind_webhook_dependencies(create_webhook_transport())
             bind_task_processing_status_emitter(emit_room_processing_status)
-            room_runtime.bind_hitl_pending_checker(hitl_service.get_pending_requests)
-            room_runtime.bind_active_run_reader(read_room_active_runs)
-            room_runtime.bind_execution_event_deps(
-                processing_status_emitter=emit_room_processing_status,
-            )
             execution_room_message_center.bind_execution_event_deps(
                 emit_room_processing_status
             )

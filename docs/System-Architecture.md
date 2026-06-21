@@ -601,16 +601,24 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - schedules `ExecutionFacade.start_orchestration` as a FastAPI background
      task if orchestration should start.
 
-4. `ExecutionFacade.execute` delegates to `AppShellRoomCenter.send_message_to_room`,
-   which reaches `app_shell.room_runtime.RoomServices.send_message_to_room`.
+4. `ExecutionFacade.execute` owns execution preflight:
+   - checks pending HITL requests before persistence,
+   - checks active runs before persistence,
+   - delegates room persistence to `AppShellRoomCenter.persist_message_to_room`,
+     which reaches `app_shell.room_runtime.RoomServices.persist_message_to_room`,
+   - emits preflight `processing` status immediately after the user message is
+     persisted so the frontend has a cancellable `message_id`,
+   - continues room-side preflight through
+     `AppShellRoomCenter.run_message_preflight_to_room`,
+   - emits terminal preflight status when a persisted room response completes
+     before orchestration starts.
 
 5. `RoomServices.send_message_to_room`:
    - validates the request and message size,
-   - blocks new messages if HITL input is pending,
    - resolves and validates attachments,
    - loads the room and target scope,
    - persists the user message,
-   - delegates initial `processing` status to Execution-owned processing-status
+   - returns preflight outcome metadata for Execution-owned processing-status
      emission,
    - creates a cancellation token,
    - initializes context memory if needed,

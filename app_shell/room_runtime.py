@@ -1,7 +1,6 @@
 import re
 import uuid
-from collections.abc import Awaitable, Callable
-from typing import Any
+from dataclasses import dataclass
 from uuid import uuid4
 
 from app_shell.a2a_runtime import a2a_service
@@ -11,7 +10,6 @@ from app_shell.delivery_runtime import sse_manager
 from app_shell.memory_service import room_memory_service
 from app_shell.runtime_store import UNBOUND_RUNTIME_STORE
 from app_shell.task_service import task_service
-from common.a2a_constants import SSEProcessingStatus
 from common.dto import (
     AgentRoutingCandidate,
     CreateRoomRequest,
@@ -20,7 +18,6 @@ from common.dto import (
     ParsedUserMessageRequest,
     RoomInfo,
 )
-from common.protocols import RoomActiveRunReader
 from common.protocols.context_memory_protocols import ContextMemoryRuntime
 from common.types import (
     Message,
@@ -93,6 +90,22 @@ from room.attachments import (
 logger = get_logger(__name__)
 
 
+@dataclass(slots=True)
+class RoomMessagePreflightContext:
+    request: RoomCenterUserMessageRequest
+    target_group: str
+    mentioned_agent_ids: list[str] | None
+    user_message: RoomUserMessage
+    client_request_id: str | None
+    room: Room
+    is_debate_mode: bool
+    use_supervisor: bool
+    message_text: str
+    pre_resolved_mentions: list[dict] | None
+    pre_resolved_scope: tuple[dict, bool, list] | None
+    token: CancellationToken
+
+
 def _agent_to_routing_candidate(agent) -> AgentRoutingCandidate:
     card = agent.agent_card
     capabilities = card.capabilities if isinstance(card.capabilities, dict) else {}
@@ -132,9 +145,6 @@ class RoomServices:
         self._bound = False
         self._context_memory_manager = None
         self._context_memory_runtime: ContextMemoryRuntime | None = None
-        self._active_run_reader: RoomActiveRunReader | None = None
-        self._hitl_pending_checker: Callable[[str], Awaitable[list[Any]]] | None = None
-        self._processing_status_emitter: Callable[..., Awaitable[dict[str, Any] | None]] | None = None
         self._attachment_metadata_reader = None
         self._attachment_cleanup = None
         self._quote_writer = None
@@ -182,25 +192,6 @@ class RoomServices:
 
     def bind_debate_rounds(self, debate_rounds: int) -> None:
         self.debate_rounds = debate_rounds
-
-    def bind_active_run_reader(
-        self,
-        reader: RoomActiveRunReader,
-    ) -> None:
-        self._active_run_reader = reader
-
-    def bind_hitl_pending_checker(
-        self,
-        checker: Callable[[str], Awaitable[list[Any]]],
-    ) -> None:
-        self._hitl_pending_checker = checker
-
-    def bind_execution_event_deps(
-        self,
-        *,
-        processing_status_emitter: Callable[..., Awaitable[dict[str, Any] | None]],
-    ) -> None:
-        self._processing_status_emitter = processing_status_emitter
 
     def bind_attachment_metadata_reader(self, reader) -> None:
         self._attachment_metadata_reader = reader
@@ -300,23 +291,6 @@ class RoomServices:
             include_system_instruction=True,
         )
         return self._assembled_context_text(assembled)
-
-    async def _read_active_runs_for_room(self, room_id: str) -> list[dict[str, Any]]:
-        reader = getattr(self, "_active_run_reader", None)
-        if reader is None:
-            raise RuntimeError(
-                "RoomServices.bind_active_run_reader() not called - startup incomplete"
-            )
-        try:
-            return await reader(room_id)
-        except Exception as e:
-            logger.warning(
-                "RoomServices: active-run reader failed for room %s: %s",
-                room_id,
-                e,
-                exc_info=True,
-            )
-            return []
 
     @staticmethod
     def _legacy_room_from_info(info: RoomInfo) -> Room:
@@ -687,10 +661,7 @@ class RoomServices:
                 error="Room not found",
                 status_code=404,
             )
-        return self._room_setting_response_from_info(
-            info,
-            active_runs=await self._read_active_runs_for_room(room_id),
-        )
+        return self._room_setting_response_from_info(info)
 
     async def inquiry_active_runs(
         self, request: RoomCenterRoomSettingRequest
@@ -717,7 +688,7 @@ class RoomServices:
                 status_code=404,
             )
 
-        active_runs = await self._read_active_runs_for_room(info.room_id)
+        active_runs: list[dict] = []
 
         turn_completion_kind: str | None = None
         trigger_msg_id = request.trigger_message_id
@@ -1955,31 +1926,26 @@ class RoomServices:
         target_group: str = "room_team",
         mentioned_agent_ids: list[str] | None = None,
     ) -> RoomCenterUserMessageResponse:
-        """Add and parse user message to room and send processing status to client."""
+        """Add and parse user message to room and return execution preflight metadata."""
+        persisted_response, preflight_context = await self.persist_message_to_room(
+            request,
+            target_group,
+            mentioned_agent_ids,
+        )
+        if preflight_context is None:
+            return persisted_response
+        return await self.run_message_preflight_to_room(preflight_context)
 
+    async def persist_message_to_room(
+        self,
+        request: RoomCenterUserMessageRequest,
+        target_group: str = "room_team",
+        mentioned_agent_ids: list[str] | None = None,
+    ) -> tuple[RoomCenterUserMessageResponse, RoomMessagePreflightContext | None]:
+        """Validate, scope-check, and persist the user message before heavy preflight."""
         validation_response = self._validate_send_message_request(request)
         if validation_response:
-            return validation_response
-
-        # Block new messages while an HITL request is pending (Risk 2 mitigation).
-        # Check BEFORE persisting the message or creating a token so we don't
-        # leave orphaned DB records on rejection.
-        try:
-            pending_checker = getattr(self, "_hitl_pending_checker", None)
-            if pending_checker is not None and await pending_checker(request.room_id):
-                return RoomCenterUserMessageResponse(
-                    message_id=None,
-                    message=None,
-                    success=False,
-                    error="An agent is waiting for your input. "
-                          "Please reply to the pending request before sending a new message.",
-                    status_code=409,
-                )
-        except Exception as e:
-            logger.warning(
-                "HITL pending check failed for room %s: %s — proceeding with message",
-                request.room_id, e,
-            )
+            return validation_response, None
 
         user_message = request.message
         client_request_id = (
@@ -1994,15 +1960,18 @@ class RoomServices:
         # Resolve attachments from both sources before persistence
         att_err = await self._resolve_and_apply_attachments(request, user_message)
         if att_err is not None:
-            return att_err
+            return att_err, None
 
         # ── Pre-persist scope validation ──────────────────────────────────
         # Fetch room early: needed for scope resolution and downstream flags.
         room = await self._store.get_room_by_room_id(request.room_id)
         if not room:
-            return RoomCenterUserMessageResponse(
-                message_id=None, message=None, success=False,
-                error="Room not found", status_code=404,
+            return (
+                RoomCenterUserMessageResponse(
+                    message_id=None, message=None, success=False,
+                    error="Room not found", status_code=404,
+                ),
+                None,
             )
 
         is_debate_mode = (
@@ -2027,7 +1996,7 @@ class RoomServices:
                 mentioned_agent_ids, sender_user_id=request.user_id,
             )
             if isinstance(mention_result, RoomCenterUserMessageResponse):
-                return mention_result
+                return mention_result, None
             pre_resolved_mentions = mention_result
         elif target_group != "all_agents":
             scope_result = await self._resolve_explicit_target_scope(
@@ -2035,13 +2004,13 @@ class RoomServices:
                 sender_user_id=request.user_id,
             )
             if isinstance(scope_result, RoomCenterUserMessageResponse):
-                return scope_result
+                return scope_result, None
             pre_resolved_scope = scope_result
 
         # ── Persist ───────────────────────────────────────────────────────
         qerr = await self._materialize_room_quote(room, request, user_message)
         if isinstance(qerr, RoomCenterUserMessageResponse):
-            return qerr
+            return qerr, None
 
         if not await self._persist_user_message(user_message):
             if getattr(user_message, "quote_id", None):
@@ -2056,19 +2025,16 @@ class RoomServices:
                         request.room_id,
                         exc_info=True,
                     )
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="Failed to add message",
-                status_code=500,
+            return (
+                RoomCenterUserMessageResponse(
+                    message_id=None,
+                    message=None,
+                    success=False,
+                    error="Failed to add message",
+                    status_code=500,
+                ),
+                None,
             )
-
-        await self._send_processing_status(
-            request.room_id,
-            user_message.message_id,
-            client_request_id,
-        )
 
         # Create a CancellationToken early in the pipeline so the parse step
         # (and later the queue step in RoomMessageCenter) can detect cancels
@@ -2076,15 +2042,50 @@ class RoomServices:
         # the token is pre-signalled.
         token = self.sse_manager.create_token(user_message.message_id)
 
+        return (
+            RoomCenterUserMessageResponse(
+                room_id=request.room_id,
+                message_id=user_message.message_id,
+                dispatch_root_message_id=user_message.message_id,
+                message=None,
+                success=True,
+                error=None,
+                status_code=200,
+            ),
+            RoomMessagePreflightContext(
+                request=request,
+                target_group=target_group,
+                mentioned_agent_ids=mentioned_agent_ids,
+                user_message=user_message,
+                client_request_id=client_request_id,
+                room=room,
+                is_debate_mode=is_debate_mode,
+                use_supervisor=use_supervisor,
+                message_text=message_text,
+                pre_resolved_mentions=pre_resolved_mentions,
+                pre_resolved_scope=pre_resolved_scope,
+                token=token,
+            ),
+        )
+
+    async def run_message_preflight_to_room(
+        self,
+        context: RoomMessagePreflightContext,
+    ) -> RoomCenterUserMessageResponse:
+        request = context.request
+        target_group = context.target_group
+        user_message = context.user_message
+        client_request_id = context.client_request_id
+        room = context.room
+        is_debate_mode = context.is_debate_mode
+        use_supervisor = context.use_supervisor
+        message_text = context.message_text
+        pre_resolved_mentions = context.pre_resolved_mentions
+        pre_resolved_scope = context.pre_resolved_scope
+        token = context.token
+
         memory_response = await self._initialize_room_memory(request, user_message)
         if memory_response:
-            await self._emit_processing_status_event(
-                request.room_id,
-                SSEProcessingStatus.FAILED,
-                user_message.message_id,
-                client_request_id=client_request_id,
-                details="Failed to initialize room memory",
-            )
             return memory_response
 
         # ── Dispatch using pre-resolved scope ─────────────────────────────
@@ -2166,15 +2167,9 @@ class RoomServices:
                 # so the frontend knows the user message exists in the DB
                 # and doesn't rollback optimistic state.
                 selection_result.message_id = user_message.message_id
-                # Processing status was set before selection; this early return
-                # must emit terminal processing_status (runs + SSE) so the client
-                # clears processing placeholders.
-                await self._emit_processing_status_event(
-                    request.room_id,
-                    SSEProcessingStatus.FAILED,
-                    user_message.message_id,
-                    client_request_id=client_request_id,
-                    details=selection_result.error or "Agent selection failed",
+                selection_result.preflight_outcome = "failed"
+                selection_result.preflight_details = (
+                    selection_result.error or "Agent selection failed"
                 )
                 return selection_result
             selected_agent_set, auto_assign, agents = selection_result
@@ -2280,27 +2275,16 @@ class RoomServices:
             )
 
         if not parse_result.success:
-            if parse_result.canceled:
-                await self._emit_processing_status_event(
-                    request.room_id,
-                    SSEProcessingStatus.CANCELED,
-                    user_message.message_id,
-                    client_request_id=client_request_id,
-                )
-            else:
-                await self._emit_processing_status_event(
-                    request.room_id,
-                    SSEProcessingStatus.FAILED,
-                    user_message.message_id,
-                    client_request_id=client_request_id,
-                    details="Failed to parse user message",
-                )
             return RoomCenterUserMessageResponse(
                 message_id=user_message.message_id,
                 message=user_message,
                 success=parse_result.canceled,
                 error="Failed to parse user message" if not parse_result.canceled else None,
                 status_code=200 if parse_result.canceled else 500,
+                preflight_outcome="canceled" if parse_result.canceled else "failed",
+                preflight_details=None
+                if parse_result.canceled
+                else "Failed to parse user message",
             )
 
         return RoomCenterUserMessageResponse(
@@ -2310,6 +2294,7 @@ class RoomServices:
             success=True,
             error=None,
             status_code=200,
+            preflight_outcome="ready",
         )
 
     def _check_message_text_length(
@@ -2376,51 +2361,6 @@ class RoomServices:
         """Persist user message to the database."""
         return await self._require_facade().persist_user_message(user_message)
 
-    async def _send_processing_status(self, room_id: str, message_id: str, client_request_id: str | None = None) -> None:
-        """Notify client that processing has started.
-
-        Args:
-            room_id: The room ID.
-            message_id: The persisted user message ID.
-            client_request_id: Pass-through correlation ID from the frontend request.
-        """
-        logger.info(
-            "RoomServices: Sending processing status to room %s for message %s",
-            room_id,
-            message_id,
-        )
-        await self._emit_processing_status_event(
-            room_id,
-            SSEProcessingStatus.PROCESSING,
-            message_id,
-            client_request_id=client_request_id,
-        )
-
-    async def _emit_processing_status_event(
-        self,
-        room_id: str,
-        status: SSEProcessingStatus | str,
-        message_id: str,
-        *,
-        client_request_id: str | None = None,
-        details: str | dict | None = None,
-        record_lifecycle: bool = True,
-    ) -> None:
-        emitter = getattr(self, "_processing_status_emitter", None)
-        if emitter is not None:
-            await emitter(
-                room_id=room_id,
-                status=status,
-                message_id=message_id,
-                lifecycle_message_id=message_id,
-                record_lifecycle=record_lifecycle,
-                client_request_id=client_request_id,
-                details=details,
-            )
-            return
-
-        raise RuntimeError("Room runtime execution event dependencies not bound")
-
     async def _initialize_room_memory(
         self, request: RoomCenterUserMessageRequest, user_message: RoomUserMessage
     ) -> RoomCenterUserMessageResponse | None:
@@ -2448,6 +2388,8 @@ class RoomServices:
                 success=False,
                 error="Failed to initialize or update room memory",
                 status_code=500,
+                preflight_outcome="failed",
+                preflight_details="Failed to initialize room memory",
             )
         return None
 
@@ -2752,14 +2694,9 @@ class RoomServices:
                 success=False,
                 error="Failed to add fallback agent message",
                 status_code=500,
+                preflight_outcome="failed",
+                preflight_details="Failed to add fallback agent message",
             )
-
-        await self._emit_processing_status_event(
-            request.room_id,
-            SSEProcessingStatus.COMPLETED,
-            user_message.message_id,
-            client_request_id=user_message.client_request_id,
-        )
 
         return RoomCenterUserMessageResponse(
             message_id=user_message.message_id,
@@ -2767,6 +2704,7 @@ class RoomServices:
             success=True,
             error=None,
             status_code=200,
+            preflight_outcome="completed",
         )
 
     async def parse_user_message_with_mentions(
@@ -2869,6 +2807,7 @@ class RoomServices:
             success=True,
             error=None,
             status_code=200,
+            preflight_outcome="ready",
         )
 
     async def _build_room_awareness(
@@ -3804,6 +3743,21 @@ class AppShellRoomCenter:
     ) -> RoomCenterUserMessageResponse:
         return await self._require_room_services().send_message_to_room(
             request, target_group, mentioned_agent_ids
+        )
+
+    async def persist_message_to_room(
+        self,
+        request: RoomCenterUserMessageRequest,
+        target_group: str = "room_team",
+        mentioned_agent_ids: list[str] | None = None,
+    ):
+        return await self._require_room_services().persist_message_to_room(
+            request, target_group, mentioned_agent_ids
+        )
+
+    async def run_message_preflight_to_room(self, context):
+        return await self._require_room_services().run_message_preflight_to_room(
+            context
         )
 
 

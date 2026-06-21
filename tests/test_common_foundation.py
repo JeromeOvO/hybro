@@ -927,7 +927,6 @@ def test_protocol_methods_match_design_doc():
             "cancel_hitl",
         },
         protocols.HubAgentResponseSink: {"handle_hub_agent_response"},
-        protocols.RoomActiveRunReader: {"__call__"},
         protocols.A2ATaskStatusReader: {
             "get_room_agent_message_by_message_id",
             "get_task_messages_for_room",
@@ -1369,6 +1368,8 @@ def test_protocol_methods_match_design_doc():
 
     for protocol, methods in expected_methods.items():
         _assert_methods(protocol, methods)
+
+    assert not hasattr(protocols, "RoomActiveRunReader")
 
     protocol_exports = {
         getattr(protocols, name)
