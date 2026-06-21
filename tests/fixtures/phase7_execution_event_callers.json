@@ -46,6 +46,24 @@
   },
   {
     "path": "execution/facade.py",
+    "function": "ExecutionFacade._emit_room_preflight_processing_status",
+    "role": "room preflight processing helper",
+    "status_source": "preflight processing state",
+    "lifecycle_id_source": "ack.dispatch_root_message_id lifecycle root or ack.message_id",
+    "frontend_transport": "delegates to central helper",
+    "lifecycle_required_for_frontend_emit": true
+  },
+  {
+    "path": "execution/facade.py",
+    "function": "ExecutionFacade._emit_room_preflight_terminal_status",
+    "role": "room preflight terminal helper",
+    "status_source": "preflight terminal outcome",
+    "lifecycle_id_source": "ack.dispatch_root_message_id lifecycle root or ack.message_id",
+    "frontend_transport": "delegates to central helper",
+    "lifecycle_required_for_frontend_emit": true
+  },
+  {
+    "path": "execution/facade.py",
     "function": "hub_agent_response_internal_to_agent_event",
     "role": "hub processing_status ingress validation",
     "status_source": "Hub payload state",
