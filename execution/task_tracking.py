@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from a2a_adapter.translators import facade_result_to_model, message_to_completed_task
@@ -26,10 +26,13 @@ RecordCall = Callable[[str | None], Awaitable[None]]
 SendMessageCall = Callable[..., Awaitable[dict[str, Any]]]
 SendHitlReplyCall = Callable[..., Awaitable[dict[str, Any]]]
 
+if TYPE_CHECKING:
+    from execution.ports import A2ATaskTrackingStorePort
+
 
 class A2ATaskTrackingService:
-    def __init__(self, task_store: Any) -> None:
-        self._task_store = task_store
+    def __init__(self, tracking_store: A2ATaskTrackingStorePort) -> None:
+        self._tracking_store = tracking_store
 
     async def create_task_for_tracking(
         self,
@@ -46,7 +49,7 @@ class A2ATaskTrackingService:
 
         non_terminal_state_values = [state.value for state in NON_TERMINAL_STATES]
         try:
-            await self._task_store.check_task_limits(
+            await self._tracking_store.check_task_limits(
                 user_id,
                 room_id,
                 non_terminal_state_values,
@@ -57,8 +60,8 @@ class A2ATaskTrackingService:
         if not message_id:
             raise A2AServiceError("message_id is required for task tracking")
 
-        webhook_token = self._task_store.generate_webhook_token()
-        webhook_token_hash = self._task_store.hash_webhook_token(webhook_token)
+        webhook_token = self._tracking_store.generate_webhook_token()
+        webhook_token_hash = self._tracking_store.hash_webhook_token(webhook_token)
         context_id = message.context_id or str(uuid4())
         placeholder_task = Task(
             id=f"pending-{context_id}",
@@ -67,7 +70,7 @@ class A2ATaskTrackingService:
         )
         now = utcnow()
 
-        update_success = await self._task_store.enable_task_tracking_on_message(
+        update_success = await self._tracking_store.enable_task_tracking_on_message(
             message_id=message_id,
             webhook_token_hash=webhook_token_hash,
             agent_url=agent_card.url,
@@ -194,7 +197,7 @@ class A2ATaskTrackingService:
         default_request_timeout: float,
         send_hitl_reply: SendHitlReplyCall,
     ) -> dict[str, Any]:
-        msg = await self._task_store.get_room_agent_message_by_message_id(message_id)
+        msg = await self._tracking_store.get_room_agent_message_by_message_id(message_id)
         if not msg:
             raise ValueError(f"Agent message {message_id} not found")
 
@@ -202,9 +205,9 @@ class A2ATaskTrackingService:
         if not agent_url:
             raise ValueError(f"Agent message {message_id} has no agent_url")
 
-        webhook_token = self._task_store.generate_webhook_token()
-        webhook_token_hash = self._task_store.hash_webhook_token(webhook_token)
-        token_updated = await self._task_store.update_webhook_token_hash_on_message(
+        webhook_token = self._tracking_store.generate_webhook_token()
+        webhook_token_hash = self._tracking_store.hash_webhook_token(webhook_token)
+        token_updated = await self._tracking_store.update_webhook_token_hash_on_message(
             message_id,
             webhook_token_hash,
         )
@@ -216,7 +219,7 @@ class A2ATaskTrackingService:
 
         agent_card = None
         if webhook_base_url and msg.agent_id:
-            agent_record = await self._task_store.get_agent_by_agent_id(msg.agent_id)
+            agent_record = await self._tracking_store.get_agent_by_agent_id(msg.agent_id)
             agent_card = getattr(agent_record, "agent_card", None)
             if agent_card is None:
                 logger.warning(
@@ -254,7 +257,7 @@ class A2ATaskTrackingService:
         response_text = _extract_reply_response_text(task_result)
 
         if task_obj:
-            await self._task_store.update_task_on_message(
+            await self._tracking_store.update_task_on_message(
                 message_id,
                 task_obj.model_dump(mode="json"),
                 message_text=response_text,
@@ -303,7 +306,7 @@ class A2ATaskTrackingService:
             )
 
         message_text = _extract_text_from_message(message)
-        persisted = await self._task_store.update_task_on_message(
+        persisted = await self._tracking_store.update_task_on_message(
             message_id,
             completed_task.model_dump(mode="json"),
             message_text=message_text or None,
@@ -371,7 +374,7 @@ class A2ATaskTrackingService:
             )
 
         task_text = _extract_text_from_task(task)
-        persisted = await self._task_store.update_task_on_message(
+        persisted = await self._tracking_store.update_task_on_message(
             message_id,
             task.model_dump(mode="json"),
             message_text=task_text or None,
@@ -417,7 +420,7 @@ class A2ATaskTrackingService:
                 ),
             ),
         )
-        await self._task_store.update_task_on_message(
+        await self._tracking_store.update_task_on_message(
             message_id,
             failed_task.model_dump(mode="json"),
         )

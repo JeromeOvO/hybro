@@ -8,10 +8,19 @@ from typing import Any, Protocol
 from common.dto import HITLRequestEvent, HITLResolvedEvent, RunInfo
 from common.types import AgentCard
 from common.utils.cancellation import CancellationToken
+from models.agent import Agent
+from models.agent_group import AgentGroup
 from models.memory import RoomMemory
+from models.quote import QuotedSnippet
 from models.request import RoomCenterAgentMessageRequest
 from models.response import RoomCenterAgentMessageResponse, RoomCenterMemoryResponse
-from models.room import RoomAgentMessage
+from models.room import (
+    CoordinatorAgentId,
+    MessageContent,
+    Room,
+    RoomAgentMessage,
+    RoomUserMessage,
+)
 
 ProcessingStatusLike = str | Enum
 
@@ -27,6 +36,7 @@ class TaskFactory(Protocol):
 
 RunEventEnabled = Callable[[], bool]
 RunDualWriteEnabled = Callable[[], bool]
+ProcessingStatusEmitter = Callable[..., Awaitable[dict[str, Any] | None]]
 
 
 class HITLCoordinator(Protocol):
@@ -113,13 +123,6 @@ class HITLPersistencePort(Protocol):
 
 
 class HITLContinuationPort(Protocol):
-    async def reply_to_agent_task(
-        self,
-        *,
-        request: Any,
-        user_input: str,
-    ) -> dict[str, Any]: ...
-
     async def resume_queue_from_continuation(
         self,
         continuation_message_id: str,
@@ -127,6 +130,17 @@ class HITLContinuationPort(Protocol):
         task_result_text: str | None = None,
         failed: bool = False,
     ) -> bool: ...
+
+
+class HITLAgentReplyPort(Protocol):
+    async def reply_to_task(
+        self,
+        *,
+        message_id: str,
+        task_id: str,
+        context_id: str,
+        user_input: str,
+    ) -> dict[str, Any]: ...
 
 
 class HITLTaskNotificationPort(Protocol):
@@ -176,6 +190,71 @@ class A2AServicePort(Protocol):
     """
 
 
+class A2ATransportPort(Protocol):
+    def has_streaming_capability(self, *, agent_card: AgentCard) -> bool: ...
+
+    def send_message_streaming(
+        self,
+        agent_card: AgentCard,
+        message: Any,
+        *,
+        agent_id: str | None = None,
+    ) -> AsyncIterator[Any]: ...
+
+    async def send_message_sync(
+        self,
+        *,
+        agent_card: AgentCard,
+        message: Any,
+        agent_id: str | None = None,
+    ) -> Any: ...
+
+    async def send_message_to_tracked_agent(
+        self,
+        *,
+        agent_card: AgentCard,
+        message: Any,
+        message_id: str,
+        webhook_token: str,
+        context_id: str,
+        agent_id: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def create_task_for_tracking(
+        self,
+        current_message: RoomAgentMessage,
+        agent_card: AgentCard,
+        prepared_message: Any,
+        *,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def cancel_remote_task(
+        self,
+        agent_card: AgentCard,
+        remote_task_id: str,
+    ) -> None: ...
+
+    def has_push_notification_capability(self, agent_card: AgentCard) -> bool: ...
+
+
+class RemoteTaskReaderPort(Protocol):
+    """Read remote task state.
+
+    ``agent_id`` is accepted by execution-facing adapters for correlation and
+    can be ignored by runtimes already bound to one remote agent.
+    """
+
+    async def get_task_from_agent(
+        self,
+        agent_card: AgentCard,
+        task_id: str,
+        *,
+        agent_id: str | None = None,
+    ) -> Any: ...
+
+
 class AgentHealthPort(Protocol):
     async def check_agent_health(self, agent: Any, *, timeout: float) -> tuple[bool, Any]: ...
 
@@ -192,6 +271,59 @@ class DebateServicePort(Protocol):
     async def inject_short_debate_for_agent_message(
         self, agent_message: RoomAgentMessage
     ) -> RoomAgentMessage | None: ...
+
+
+class CoordinatorSynthesisPort(Protocol):
+    async def emit_synthesis_message(
+        self,
+        room_id: str,
+        room_user_message_id: str,
+        synthesis_text: str,
+        coordinator_agent_id: str = CoordinatorAgentId.SYSTEM_HYBRO,
+        message_id: str | None = None,
+    ) -> None: ...
+
+
+class A2ATaskTrackingStorePort(Protocol):
+    async def check_task_limits(
+        self,
+        user_id: str,
+        room_id: str,
+        non_terminal_state_values: list[str],
+    ) -> None: ...
+
+    def generate_webhook_token(self) -> str: ...
+    def hash_webhook_token(self, token: str) -> str: ...
+
+    async def enable_task_tracking_on_message(
+        self,
+        *,
+        message_id: str,
+        webhook_token_hash: str,
+        agent_url: str,
+        task_created_at: Any,
+        task_updated_at: Any,
+        task_data: dict[str, Any],
+    ) -> bool: ...
+
+    async def get_room_agent_message_by_message_id(
+        self, message_id: str
+    ) -> RoomAgentMessage | None: ...
+
+    async def update_webhook_token_hash_on_message(
+        self,
+        message_id: str,
+        webhook_token_hash: str,
+    ) -> bool: ...
+
+    async def get_agent_by_agent_id(self, agent_id: str) -> Agent | None: ...
+
+    async def update_task_on_message(
+        self,
+        message_id: str,
+        task_data: dict[str, Any],
+        message_text: str | None = None,
+    ) -> bool: ...
 
 
 class NotificationServicePort(Protocol):
@@ -241,14 +373,7 @@ class RateLimitPort(Protocol):
     async def record_request(self, agent_id: str, user_id: str) -> None: ...
 
 
-class RoomCoordinatorPort(Protocol):
-    """Reserved for direct execution calls into the shell-owned room coordinator.
-
-    Supervisor wiring still carries the coordinator dependency for compatibility,
-    but direct orchestration behavior is expressed through narrower execution
-    ports. Add methods here only when SupervisorExecutor calls the coordinator
-    itself.
-    """
+RoomCoordinatorPort = CoordinatorSynthesisPort
 
 
 class RoomMemoryPort(Protocol):
@@ -261,6 +386,20 @@ class RoomMemoryPort(Protocol):
         was_successful: bool = True,
         message_id: str | None = None,
     ) -> RoomCenterMemoryResponse: ...
+
+    async def add_synthesis_to_history(
+        self,
+        room_id: str,
+        synthesis_text: str,
+        trajectory: Any | None = None,
+    ) -> str | None: ...
+
+    async def update_room_summary(
+        self,
+        room_id: str,
+        synthesis_text: str,
+        synthesis_turn_id: str | None = None,
+    ) -> bool: ...
 
 
 class RoomRuntimePort(Protocol):
@@ -290,8 +429,221 @@ class RoomRuntimePort(Protocol):
         self, request: RoomCenterAgentMessageRequest
     ) -> RoomCenterAgentMessageResponse: ...
 
+    async def inquiry_agent_messages_by_related_message_id(
+        self, related_message_id: str
+    ) -> Any: ...
 
-class SSEDeliveryPort(Protocol):
+
+class QuotedSnippetReaderPort(Protocol):
+    async def get_quoted_snippet_by_id(
+        self,
+        quote_id: str,
+    ) -> QuotedSnippet | None: ...
+
+
+class RoomMessageReader(QuotedSnippetReaderPort, Protocol):
+    async def get_room_user_message_by_message_id(
+        self, message_id: str
+    ) -> RoomUserMessage | None: ...
+
+    async def get_room_agent_message_by_message_id(
+        self, message_id: str
+    ) -> RoomAgentMessage | None: ...
+
+    async def get_room_agent_messages_by_related_message_id(
+        self, related_message_id: str
+    ) -> list[RoomAgentMessage]: ...
+
+
+class RoomMessageWriter(Protocol):
+    async def add_room_agent_message(
+        self,
+        room_agent_message: RoomAgentMessage,
+    ) -> bool: ...
+
+    async def update_room_user_message_by_message_id(
+        self,
+        message_id: str,
+        room_user_message: RoomUserMessage,
+    ) -> bool: ...
+
+    async def update_room_agent_message_by_message_id(
+        self,
+        message_id: str,
+        room_agent_message: RoomAgentMessage,
+    ) -> bool: ...
+
+    async def update_room_agent_message_with_new_message_content_by_message_id(
+        self,
+        message_id: str,
+        message_content: MessageContent,
+    ) -> bool: ...
+
+    async def upsert_room_agent_message(
+        self,
+        room_agent_message: RoomAgentMessage,
+    ) -> None: ...
+
+    async def delete_room_agent_message_by_message_id(
+        self,
+        message_id: str,
+    ) -> bool: ...
+
+    async def cancel_agent_messages_by_ids(
+        self,
+        message_ids: list[str],
+    ) -> int: ...
+
+    async def cancel_descendants(
+        self,
+        message_id: str,
+    ) -> int: ...
+
+    async def claim_user_message_for_processing(
+        self,
+        message_id: str,
+    ) -> bool: ...
+
+    async def claim_or_reclaim_user_message(
+        self,
+        message_id: str,
+        stale_threshold: Any,
+    ) -> bool: ...
+
+    async def refresh_processing_claim(
+        self,
+        message_id: str,
+    ) -> bool: ...
+
+    async def unclaim_user_message(
+        self,
+        message_id: str,
+    ) -> bool: ...
+
+    async def turn_exists(
+        self,
+        room_id: str,
+        turn_id: str,
+    ) -> bool: ...
+
+    async def accumulate_artifact_on_message(
+        self,
+        message_id: str,
+        artifact: dict[str, Any],
+        *,
+        append: bool = False,
+    ) -> bool: ...
+
+    async def update_last_notified_state(
+        self,
+        message_id: str,
+        state: str,
+    ) -> bool: ...
+
+    async def reset_last_notified_state(
+        self,
+        message_id: str,
+    ) -> bool: ...
+
+    async def update_task_state_on_message(
+        self,
+        message_id: str,
+        state: str,
+        *,
+        message_text: str | None = None,
+        artifacts: list[dict[str, Any]] | None = None,
+        task_id: str | None = None,
+        context_id: str | None = None,
+    ) -> tuple[bool, str | None]: ...
+
+
+class RoomTaskStateStore(Protocol):
+    async def resolve_client_request_id_for_message_id(
+        self,
+        message_id: str,
+    ) -> str | None: ...
+
+    async def resolve_client_request_id_for_agent_message(
+        self,
+        room_agent_message: RoomAgentMessage,
+    ) -> str | None: ...
+
+    async def enable_task_tracking_on_message(
+        self,
+        *,
+        message_id: str,
+        webhook_token_hash: str,
+        agent_url: str,
+        task_created_at: Any,
+        task_updated_at: Any,
+        task_data: dict[str, Any],
+    ) -> bool: ...
+
+    async def update_task_on_message(
+        self,
+        message_id: str,
+        task_data: dict[str, Any],
+        message_text: str | None = None,
+    ) -> bool: ...
+
+    async def is_message_cancelled(
+        self,
+        message_id: str,
+    ) -> bool: ...
+
+
+class RoomContinuationStore(Protocol):
+    async def get_pending_continuation_on_message(
+        self,
+        message_id: str,
+    ) -> dict[str, Any] | None: ...
+
+    async def get_and_clear_continuation_on_message(
+        self,
+        message_id: str,
+    ) -> dict[str, Any] | None: ...
+
+    async def get_and_clear_continuation_on_user_message(
+        self,
+        message_id: str,
+    ) -> dict[str, Any] | None: ...
+
+    async def save_continuation_on_message(
+        self,
+        message_id: str,
+        continuation_data: dict[str, Any],
+    ) -> bool: ...
+
+    async def save_continuation_on_user_message(
+        self,
+        message_id: str,
+        continuation_data: dict[str, Any],
+    ) -> bool: ...
+
+
+class RoomReader(Protocol):
+    async def get_room_by_room_id(self, room_id: str) -> Room | None: ...
+    async def get_agent_by_agent_id(self, agent_id: str) -> Agent | None: ...
+    async def get_agent_name_by_agent_id(self, agent_id: str) -> str | None: ...
+    async def get_agent_group_by_id(self, group_id: str) -> AgentGroup | None: ...
+
+
+class RoomWriter(Protocol):
+    async def update_room_by_room_id(self, room_id: str, room: Room) -> bool: ...
+
+
+class RoomMemoryReader(Protocol):
+    async def get_room_memory_by_room_id(self, room_id: str) -> RoomMemory | None: ...
+
+
+class HITLReaderPort(Protocol):
+    async def get_pending_hitl_requests_for_message(
+        self,
+        message_id: str,
+    ) -> list[dict[str, Any]]: ...
+
+
+class ExecutionDeliveryPort(Protocol):
     async def send_task_submitted(
         self,
         room_id: str,
@@ -353,6 +705,18 @@ class SSEDeliveryPort(Protocol):
         client_request_id: str | None = None,
     ) -> None: ...
 
+    async def send_artifact_update(
+        self,
+        *,
+        room_id: str,
+        message_id: str,
+        agent_id: str,
+        artifact: dict[str, Any],
+        append: bool = False,
+        last_chunk: bool = False,
+        client_request_id: str | None = None,
+    ) -> None: ...
+
     async def send_error(
         self,
         room_id: str,
@@ -363,6 +727,10 @@ class SSEDeliveryPort(Protocol):
     def clear_cancellation(self, message_id: str) -> None: ...
     def get_token(self, message_id: str) -> CancellationToken | None: ...
     def create_token(self, message_id: str) -> CancellationToken: ...
+    def remove_token(self, message_id: str) -> None: ...
+
+
+SSEDeliveryPort = ExecutionDeliveryPort
 
 
 class RunReadPort(Protocol):

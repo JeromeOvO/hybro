@@ -126,7 +126,7 @@ def _make_relay_service(
         relay_service=svc,
         task_tracker=db_service,
         call_counter=db_service,
-        sse_manager=sse_manager,
+        delivery=sse_manager,
     )
     svc.set_relay_transport(relay_transport)
 

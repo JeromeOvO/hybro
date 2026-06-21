@@ -716,12 +716,13 @@ class TestCompactionTrigger:
         from execution.orchestration.room_message_center import RoomMessageCenter
 
         rmc = RoomMessageCenter.__new__(RoomMessageCenter)
-        rmc.database_service = AsyncMock()
-        rmc._store = rmc.database_service
-        rmc.sse_manager = AsyncMock()
-        rmc.sse_manager.remove_token = MagicMock()
-        rmc.sse_manager.clear_cancellation = MagicMock()
-        rmc.room_coordinator_service = AsyncMock()
+        rmc.message_reader = AsyncMock()
+        rmc.message_writer = AsyncMock()
+        rmc.room_reader = AsyncMock()
+        rmc.delivery = AsyncMock()
+        rmc.delivery.remove_token = MagicMock()
+        rmc.delivery.clear_cancellation = MagicMock()
+        rmc.coordinator = AsyncMock()
         rmc._processing_status_emitter = _noop_processing_status_emitter
 
         rmc._trigger_compaction_safe = AsyncMock()
@@ -740,18 +741,18 @@ class TestCompactionTrigger:
         user_message = MagicMock()
         user_message.extend_info = {}
 
-        rmc.database_service.get_room_user_message_by_message_id.return_value = (
+        rmc.message_reader.get_room_user_message_by_message_id.return_value = (
             user_message
         )
-        rmc.database_service.update_room_user_message_by_message_id.return_value = True
-        rmc.database_service.get_room_by_room_id.return_value = None
-        rmc.database_service.cancel_descendants.return_value = None
-        rmc.database_service.cancel_agent_messages_by_ids.return_value = None
+        rmc.message_writer.update_room_user_message_by_message_id.return_value = True
+        rmc.room_reader.get_room_by_room_id.return_value = None
+        rmc.message_writer.cancel_descendants.return_value = None
+        rmc.message_writer.cancel_agent_messages_by_ids.return_value = None
 
 
         mock_memory_service = AsyncMock()
         mock_memory_service.add_synthesis_to_history.return_value = "turn_synth_123"
-        rmc.room_memory_service = mock_memory_service
+        rmc.room_memory = mock_memory_service
 
         await rmc._handle_supervisor_run_result(
             result=result,
@@ -1119,22 +1120,22 @@ class TestHandleV2RunResultUnifiedSummary:
         """Build a RoomMessageCenter with key collaborators mocked."""
         with (
             patch("execution.orchestration.room_message_center.default_store") as mock_db,
-            patch("execution.orchestration.room_message_center.sse_manager") as mock_sse,
-            patch("execution.orchestration.room_message_center.room_coordinator_service"),
-            patch("execution.orchestration.room_message_center.room_services"),
+            patch("execution.orchestration.room_message_center.delivery") as mock_delivery,
+            patch("execution.orchestration.room_message_center.coordinator"),
+            patch("execution.orchestration.room_message_center.room_runtime"),
             patch("execution.orchestration.room_message_center.notification_service"),
-            patch("execution.orchestration.room_message_center.a2a_service"),
-            patch("execution.orchestration.room_message_center.task_service"),
+            patch("execution.orchestration.room_message_center.a2a_transport"),
+            patch("execution.orchestration.room_message_center.remote_task_reader"),
             patch("execution.orchestration.room_message_center.agent_resolver_service"),
-            patch("execution.orchestration.room_message_center.room_memory_service"),
+            patch("execution.orchestration.room_message_center.room_memory"),
             patch("execution.orchestration.room_message_center.room_supervisor_service"),
             patch("execution.orchestration.room_message_center.rate_limit_service"),
             patch("execution.orchestration.room_message_center.debate_service"),
         ):
             mock_db.get_room_user_message_by_message_id = AsyncMock(return_value=None)
             mock_db.update_room_user_message_by_message_id = AsyncMock()
-            mock_sse.send_processing_status = AsyncMock()
-            mock_sse.remove_token = MagicMock()
+            mock_delivery.send_processing_status = AsyncMock()
+            mock_delivery.remove_token = MagicMock()
 
             from execution.orchestration.factory import create_room_message_center
 

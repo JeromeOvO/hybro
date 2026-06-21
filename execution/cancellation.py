@@ -8,14 +8,14 @@ logger = get_logger(__name__)
 
 
 class CancellationStateC3Adapter:
-    def __init__(self, sse_manager) -> None:
-        self._sse_manager = sse_manager
+    def __init__(self, delivery) -> None:
+        self._delivery = delivery
 
     async def cancel_message_and_broadcast(self, message_id: str) -> None:
-        await self._sse_manager.cancel_message_and_broadcast(message_id)
+        await self._delivery.cancel_message_and_broadcast(message_id)
 
     def clear_cancellation(self, message_id: str) -> None:
-        self._sse_manager.clear_cancellation(message_id)
+        self._delivery.clear_cancellation(message_id)
 
 
 class MongoCancellationStoreAdapter:
@@ -42,12 +42,12 @@ class AgentTaskCleanupAdapter:
     def __init__(
         self,
         *,
-        store,
+        message_task_store,
         get_agent_card_from_url,
         cancel_remote_task,
         notify_task_update: Callable[..., Awaitable[bool]],
     ) -> None:
-        self._db = store
+        self._message_task_store = message_task_store
         self._get_agent_card_from_url = get_agent_card_from_url
         self._cancel_remote_task = cancel_remote_task
         self._notify_task_update = notify_task_update
@@ -58,13 +58,15 @@ class AgentTaskCleanupAdapter:
         room_id: str,
         message_id: str,
     ) -> None:
-        agent_msgs = await self._db.get_room_agent_messages_by_related_message_id(
-            message_id
+        agent_msgs = (
+            await self._message_task_store.get_room_agent_messages_by_related_message_id(
+                message_id
+            )
         )
         for agent_msg in agent_msgs:
             if not getattr(agent_msg, "has_task_tracking", False):
                 continue
-            await self._db.update_task_state_on_message(
+            await self._message_task_store.update_task_state_on_message(
                 agent_msg.message_id,
                 "canceled",
                 message_text="Task was canceled",

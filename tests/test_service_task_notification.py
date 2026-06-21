@@ -103,11 +103,11 @@ def _setup_notif_mock(notif):
 
 
 def _setup_sse_mock(sse):
-    """Ensure sse_manager methods are AsyncMock."""
+    """Ensure delivery methods are AsyncMock."""
     sse.send_processing_status = AsyncMock()
     from execution.dispatch import task_notifications
 
-    task_notifications._sse_manager = sse
+    task_notifications._delivery = sse
 
 
 CALL_KWARGS = dict(

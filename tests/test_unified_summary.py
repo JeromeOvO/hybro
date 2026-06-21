@@ -15,10 +15,11 @@ def rmc():
     from execution.orchestration.room_message_center import RoomMessageCenter
 
     center = RoomMessageCenter.__new__(RoomMessageCenter)
-    center.sse_manager = AsyncMock()
-    center.database_service = AsyncMock()
-    center._store = center.database_service
-    center.room_coordinator_service = AsyncMock()
+    center.delivery = AsyncMock()
+    center.message_reader = AsyncMock()
+    center.message_writer = AsyncMock()
+    center.room_reader = AsyncMock()
+    center.coordinator = AsyncMock()
     center.room_runtime = AsyncMock()
     center.summary_service = AsyncMock()
     return center
@@ -54,8 +55,8 @@ class TestEmitUnifiedSummary:
     @pytest.mark.asyncio
     async def test_supervisor_synthesis_used_directly(self, rmc):
         """When synthesis_text is provided with 2+ trajectory responses, it's used as-is."""
-        rmc.database_service.upsert_room_agent_message = AsyncMock(return_value=True)
-        rmc.database_service.get_room_user_message_by_message_id = AsyncMock(return_value=None)
+        rmc.message_writer.upsert_room_agent_message = AsyncMock(return_value=True)
+        rmc.message_reader.get_room_user_message_by_message_id = AsyncMock(return_value=None)
 
         await rmc._emit_unified_summary(
             room_id="room-1",
@@ -70,13 +71,13 @@ class TestEmitUnifiedSummary:
         # OpenAI should NOT be called
         rmc.summary_service.summarize_agent_responses.assert_not_awaited()
         # DB upsert should be called with deterministic message_id
-        rmc.database_service.upsert_room_agent_message.assert_awaited_once()
-        saved_msg = rmc.database_service.upsert_room_agent_message.call_args[0][0]
+        rmc.message_writer.upsert_room_agent_message.assert_awaited_once()
+        saved_msg = rmc.message_writer.upsert_room_agent_message.call_args[0][0]
         assert saved_msg.message_id == "summary-msg-1"
         assert saved_msg.agent_id == CoordinatorAgentId.SYSTEM_HYBRO
         assert saved_msg.extend_info["summary_origin"] == "supervisor"
         # SSE agent_response should be sent
-        rmc.sse_manager.send_agent_response.assert_awaited_once()
+        rmc.delivery.send_agent_response.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_supervisor_synthesis_single_agent_skipped(self, rmc):
@@ -95,10 +96,10 @@ class TestEmitUnifiedSummary:
         )
 
         # No SSE events should be emitted
-        rmc.sse_manager.send_task_submitted.assert_not_awaited()
-        rmc.sse_manager.send_agent_response.assert_not_awaited()
+        rmc.delivery.send_task_submitted.assert_not_awaited()
+        rmc.delivery.send_agent_response.assert_not_awaited()
         # No DB write
-        rmc.database_service.upsert_room_agent_message.assert_not_awaited()
+        rmc.message_writer.upsert_room_agent_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_supervisor_synthesis_zero_agents_skipped(self, rmc):
@@ -110,15 +111,15 @@ class TestEmitUnifiedSummary:
             trajectory_responses=[],
         )
 
-        rmc.sse_manager.send_task_submitted.assert_not_awaited()
-        rmc.sse_manager.send_agent_response.assert_not_awaited()
-        rmc.database_service.upsert_room_agent_message.assert_not_awaited()
+        rmc.delivery.send_task_submitted.assert_not_awaited()
+        rmc.delivery.send_agent_response.assert_not_awaited()
+        rmc.message_writer.upsert_room_agent_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_openai_fallback_with_trajectory(self, rmc):
         """When no synthesis_text, streams OpenAI summary via artifact_update."""
-        rmc.database_service.upsert_room_agent_message = AsyncMock(return_value=True)
-        rmc.database_service.get_room_user_message_by_message_id = AsyncMock(return_value=None)
+        rmc.message_writer.upsert_room_agent_message = AsyncMock(return_value=True)
+        rmc.message_reader.get_room_user_message_by_message_id = AsyncMock(return_value=None)
 
         seen_agent_responses = []
 
@@ -138,11 +139,11 @@ class TestEmitUnifiedSummary:
             is_debate=True,
         )
 
-        rmc.sse_manager.send_artifact_update.assert_awaited()
+        rmc.delivery.send_artifact_update.assert_awaited()
         assert all(isinstance(item, RoomMessageSummary) for item in seen_agent_responses)
         assert seen_agent_responses[0].agent_name == "A"
-        assert rmc.sse_manager.send_artifact_update.await_count >= 2
-        saved_msg = rmc.database_service.upsert_room_agent_message.call_args[0][0]
+        assert rmc.delivery.send_artifact_update.await_count >= 2
+        saved_msg = rmc.message_writer.upsert_room_agent_message.call_args[0][0]
         assert saved_msg.extend_info["summary_origin"] == "coordinator"
         assert saved_msg.extend_info["summary_type"] == "debate"
 
@@ -171,10 +172,10 @@ class TestEmitUnifiedSummary:
             ],
         )
 
-        rmc.database_service.upsert_room_agent_message.assert_not_awaited()
-        rmc.sse_manager.send_task_submitted.assert_not_awaited()
-        rmc.sse_manager.send_task_update.assert_not_awaited()
-        rmc.sse_manager.send_agent_response.assert_not_awaited()
+        rmc.message_writer.upsert_room_agent_message.assert_not_awaited()
+        rmc.delivery.send_task_submitted.assert_not_awaited()
+        rmc.delivery.send_task_update.assert_not_awaited()
+        rmc.delivery.send_agent_response.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_empty_trajectory_skips_silently(self, rmc):
@@ -185,18 +186,16 @@ class TestEmitUnifiedSummary:
             trajectory_responses=[],
         )
 
-        rmc.database_service.upsert_room_agent_message.assert_not_awaited()
-        rmc.sse_manager.send_task_submitted.assert_not_awaited()
-        rmc.sse_manager.send_task_update.assert_not_awaited()
+        rmc.message_writer.upsert_room_agent_message.assert_not_awaited()
+        rmc.delivery.send_task_submitted.assert_not_awaited()
+        rmc.delivery.send_task_update.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_single_agent_from_db_skips_silently(self, rmc):
         """When DB returns only 1 agent message, no summary bubble appears."""
         single_msg = _make_agent_message("agent-1", "Hello from agent")
-        rmc.room_coordinator_service._collect_agent_messages_for_user_message = (
-            AsyncMock(return_value=[single_msg])
-        )
-        rmc.database_service.get_agent_name_by_agent_id = AsyncMock(
+        rmc._load_agent_messages_for_user_message = AsyncMock(return_value=[single_msg])
+        rmc.room_reader.get_agent_name_by_agent_id = AsyncMock(
             return_value="Agent One"
         )
 
@@ -206,30 +205,28 @@ class TestEmitUnifiedSummary:
         )
 
         # No SSE events should be emitted
-        rmc.sse_manager.send_task_submitted.assert_not_awaited()
-        rmc.sse_manager.send_task_update.assert_not_awaited()
-        rmc.sse_manager.send_agent_response.assert_not_awaited()
+        rmc.delivery.send_task_submitted.assert_not_awaited()
+        rmc.delivery.send_task_update.assert_not_awaited()
+        rmc.delivery.send_agent_response.assert_not_awaited()
         # No DB write
-        rmc.database_service.upsert_room_agent_message.assert_not_awaited()
+        rmc.message_writer.upsert_room_agent_message.assert_not_awaited()
         # OpenAI should NOT be called
         rmc.summary_service.summarize_agent_responses.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_zero_agents_from_db_skips_silently(self, rmc):
         """When DB returns no agent messages, no summary bubble appears."""
-        rmc.room_coordinator_service._collect_agent_messages_for_user_message = (
-            AsyncMock(return_value=[])
-        )
+        rmc._load_agent_messages_for_user_message = AsyncMock(return_value=[])
 
         await rmc._emit_unified_summary(
             room_id="room-1",
             user_message_id="msg-1",
         )
 
-        rmc.sse_manager.send_task_submitted.assert_not_awaited()
-        rmc.sse_manager.send_task_update.assert_not_awaited()
-        rmc.sse_manager.send_agent_response.assert_not_awaited()
-        rmc.database_service.upsert_room_agent_message.assert_not_awaited()
+        rmc.delivery.send_task_submitted.assert_not_awaited()
+        rmc.delivery.send_task_update.assert_not_awaited()
+        rmc.delivery.send_agent_response.assert_not_awaited()
+        rmc.message_writer.upsert_room_agent_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_two_agents_from_db_emits_summary(self, rmc):
@@ -238,18 +235,16 @@ class TestEmitUnifiedSummary:
             _make_agent_message("agent-1", "Response from A"),
             _make_agent_message("agent-2", "Response from B"),
         ]
-        rmc.room_coordinator_service._collect_agent_messages_for_user_message = (
-            AsyncMock(return_value=msgs)
-        )
-        rmc.database_service.get_agent_name_by_agent_id = AsyncMock(
+        rmc._load_agent_messages_for_user_message = AsyncMock(return_value=msgs)
+        rmc.room_reader.get_agent_name_by_agent_id = AsyncMock(
             side_effect=["Agent A", "Agent B"]
         )
         async def mock_stream(agent_responses, mode="non_debate", user_question=None):
             yield "Combined summary."
 
         rmc.summary_service.summarize_agent_responses_stream = mock_stream
-        rmc.database_service.upsert_room_agent_message = AsyncMock(return_value=True)
-        rmc.database_service.get_room_user_message_by_message_id = AsyncMock(
+        rmc.message_writer.upsert_room_agent_message = AsyncMock(return_value=True)
+        rmc.message_reader.get_room_user_message_by_message_id = AsyncMock(
             return_value=None
         )
 
@@ -258,13 +253,13 @@ class TestEmitUnifiedSummary:
             user_message_id="msg-1",
         )
 
-        rmc.sse_manager.send_artifact_update.assert_awaited()
+        rmc.delivery.send_artifact_update.assert_awaited()
         # Placeholder SSE emitted
-        rmc.sse_manager.send_task_submitted.assert_awaited_once()
+        rmc.delivery.send_task_submitted.assert_awaited_once()
         # Summary persisted
-        rmc.database_service.upsert_room_agent_message.assert_awaited_once()
+        rmc.message_writer.upsert_room_agent_message.assert_awaited_once()
         # Final SSE emitted
-        rmc.sse_manager.send_agent_response.assert_awaited_once()
+        rmc.delivery.send_agent_response.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_openai_returns_empty_emits_failed(self, rmc):
@@ -281,17 +276,17 @@ class TestEmitUnifiedSummary:
             ],
         )
 
-        rmc.sse_manager.send_task_submitted.assert_awaited_once()
-        rmc.sse_manager.send_task_update.assert_awaited_once()
-        update_kwargs = rmc.sse_manager.send_task_update.call_args
+        rmc.delivery.send_task_submitted.assert_awaited_once()
+        rmc.delivery.send_task_update.assert_awaited_once()
+        update_kwargs = rmc.delivery.send_task_update.call_args
         assert update_kwargs[0][2] == "failed"
-        rmc.database_service.upsert_room_agent_message.assert_not_awaited()
+        rmc.message_writer.upsert_room_agent_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_deterministic_message_id(self, rmc):
         """message_id is always summary-{user_message_id}."""
-        rmc.database_service.upsert_room_agent_message = AsyncMock(return_value=True)
-        rmc.database_service.get_room_user_message_by_message_id = AsyncMock(return_value=None)
+        rmc.message_writer.upsert_room_agent_message = AsyncMock(return_value=True)
+        rmc.message_reader.get_room_user_message_by_message_id = AsyncMock(return_value=None)
 
         await rmc._emit_unified_summary(
             room_id="room-1",
@@ -303,17 +298,17 @@ class TestEmitUnifiedSummary:
             ],
         )
 
-        rmc.sse_manager.send_task_submitted.assert_awaited_once()
-        call_kwargs = rmc.sse_manager.send_task_submitted.call_args[1]
+        rmc.delivery.send_task_submitted.assert_awaited_once()
+        call_kwargs = rmc.delivery.send_task_submitted.call_args[1]
         assert call_kwargs["message_id"] == "summary-msg-abc-123"
 
     @pytest.mark.asyncio
     async def test_failure_cleans_up_placeholder(self, rmc):
         """On exception, task_update(status=failed) is sent to dismiss spinner."""
-        rmc.database_service.upsert_room_agent_message = AsyncMock(
+        rmc.message_writer.upsert_room_agent_message = AsyncMock(
             side_effect=Exception("DB down")
         )
-        rmc.database_service.get_room_user_message_by_message_id = AsyncMock(return_value=None)
+        rmc.message_reader.get_room_user_message_by_message_id = AsyncMock(return_value=None)
 
         await rmc._emit_unified_summary(
             room_id="room-1",
@@ -326,6 +321,6 @@ class TestEmitUnifiedSummary:
         )
 
         # Should attempt cleanup
-        rmc.sse_manager.send_task_update.assert_awaited()
-        cleanup_kwargs = rmc.sse_manager.send_task_update.call_args[1]
+        rmc.delivery.send_task_update.assert_awaited()
+        cleanup_kwargs = rmc.delivery.send_task_update.call_args[1]
         assert cleanup_kwargs["status"] == "failed"
