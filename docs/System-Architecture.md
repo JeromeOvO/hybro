@@ -2,7 +2,7 @@
 
 This document describes the current architecture and core workflows of the
 `multi-agents-backend` codebase. It is based on the repository state as of
-2026-06-14 and focuses on the code that is currently present, not on older
+2026-06-21 and focuses on the code that is currently present, not on older
 design documents that may have existed previously.
 
 ## High-Level Shape
@@ -321,18 +321,19 @@ The facade uses:
 `container.py` creates the facade before execution orchestration, registers
 `ContextMemoryEventHandler` with Delivery's internal `message_committed` event,
 and exposes the facade through `ContextMemoryDeps.context_memory_runtime` for
-supervisor and agent context assembly. User and agent message flows publish
-`MessageCommitted` only after the message write succeeds; user-message commits
-wait for local handler completion before preflight continues. Delivery
-dead-letters handler failures rather than propagating them to the message
-writer, so this wait establishes local ordering but does not guarantee
-projection success. User commit events carry `room_agent_set` so event
-projection can clean raw `<@id|name>` mentions with canonical room agent names
-before appending attachment descriptions. Agent commit events carry
-`agent_name` and `was_successful` metadata so event projection preserves the
-old direct-memory turn shape. ContextMemory reloads the persisted message by
-`message_id`, projects it idempotently, and runs compaction after a successful
-projection or duplicate turn hit.
+supervisor and agent context assembly. Frontdoor user-message persistence and
+execution response paths publish `MessageCommitted` only after the message write
+succeeds; user-message commits wait for local handler completion before
+preflight continues. Delivery records handler failures in a bounded in-memory
+dead-letter buffer and sends a best-effort Redis dead-letter notification rather
+than propagating failures to the message writer, so this wait establishes local
+ordering but does not guarantee projection success. User commit events carry
+`room_agent_set` so event projection can clean raw `<@id|name>` mentions with
+canonical room agent names before appending attachment descriptions. Agent
+commit events carry `agent_name` and `was_successful` metadata so event
+projection preserves the old direct-memory turn shape. ContextMemory reloads
+the persisted message by `message_id`, projects it idempotently, and runs
+compaction after a successful projection or duplicate turn hit.
 `app_shell.context_assembly_service` and `app_shell.memory_search_service`
 remain compatibility shims for tests and legacy callers; production
 `RoomServices` and `RoomMessageCenter` use injected protocols and
@@ -844,13 +845,14 @@ persistence, and stale processing iteration.
 Room memory is updated and used across turns.
 
 1. User and agent messages are persisted in MongoDB.
-2. The successful writer publishes `MessageCommitted(room_id, message_id,
-   message_type, agent_id?, room_agent_set?, agent_name?, was_successful?)`
-   through Delivery's internal event publisher.
+2. Frontdoor user-message persistence and execution response paths publish
+   `MessageCommitted(room_id, message_id, message_type, agent_id?,
+   room_agent_set?, agent_name?, was_successful?)` through Delivery's internal
+   event publisher.
    User commits request `wait_for_local_handlers=True`; agent commits keep the
    default asynchronous local-handler behavior. Waiting means the local handler
-   task has completed; handler failures are still captured by Delivery dead
-   letters.
+   task has completed; handler failures are captured in Delivery's bounded
+   in-memory dead-letter buffer with best-effort Redis notification.
 3. `ContextMemoryEventHandler` consumes `message_committed`, reloads the
    persisted message through `RoomHistoryReader`, and calls
    `project_message_for_event`.
