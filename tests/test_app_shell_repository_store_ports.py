@@ -40,6 +40,27 @@ def _signature_text(obj, method_name: str) -> str:
     return str(inspect.signature(getattr(obj, method_name)))
 
 
+def _imports_for(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(), filename=path.as_posix())
+    imports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            imports.add(node.module)
+    return imports
+
+
+def test_runtime_store_protocols_do_not_import_legacy_models():
+    imports = _imports_for(Path("common/protocols/runtime_store_protocols.py"))
+
+    assert not {
+        module
+        for module in imports
+        if module == "models" or module.startswith("models.")
+    }
+
+
 def test_runtime_store_protocol_signatures_match_current_store_surface():
     from app_shell.repository_store import AppShellRepositoryStore
     from common.protocols.runtime_store_protocols import (
@@ -68,16 +89,15 @@ def test_runtime_store_protocol_signatures_match_current_store_surface():
 
 
 def test_runtime_store_protocol_type_hints_are_resolvable():
-    from models.agent_group import AgentGroup
-    from models.room import RoomAgentMessage
+    from common.dto import RuntimeAgentGroup, RuntimeRoomAgentMessage
 
     agent_group_hints = get_type_hints(RuntimeAgentRoomStore.add_agent_group)
     task_hints = get_type_hints(
         RuntimeTaskLifecycleStore.resolve_client_request_id_for_agent_message
     )
 
-    assert agent_group_hints["agent_group"] is AgentGroup
-    assert task_hints["room_agent_message"] is RoomAgentMessage
+    assert agent_group_hints["agent_group"] is RuntimeAgentGroup
+    assert task_hints["room_agent_message"] is RuntimeRoomAgentMessage
 
 
 def test_protocol_import_tolerates_json_log_format_environment():

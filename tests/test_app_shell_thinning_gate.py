@@ -93,7 +93,10 @@ EXPECTED_APP_SHELL_BASELINE = {
         "lines": 164,
         "public_business_methods": 4,
     },
-    "app_shell/repository_store.py": {"lines": 759, "public_business_methods": 93},
+    # Goal 5 intentionally adds DTO conversion at the aggregate common.protocols
+    # boundary. Focused stores remain model-shaped; later cleanup should move
+    # adapter growth out of this aggregate instead of adding business behavior here.
+    "app_shell/repository_store.py": {"lines": 842, "public_business_methods": 93},
 }
 
 EXPECTED_APP_SHELL_PUBLIC_METHODS = {
