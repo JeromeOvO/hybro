@@ -179,6 +179,17 @@ use API-key auth from `common.api_key_auth`.
 When adding new boundaries, prefer using `common.protocols` instead of importing
 concrete runtime singletons.
 
+- `common.protocols.runtime_store_protocols` is now a leaf-package contract
+  surface. It exposes common-owned runtime DTOs from
+  `common.dto.runtime_store`; app-shell repository adapters convert those DTOs
+  to legacy `models.*` instances before calling focused persistence stores, so
+  legacy models no longer cross the `common.protocols` boundary.
+- Non-goal for Goal 5: focused app-shell stores and the current `container.py`
+  focused-store injections remain legacy-model shaped. This cleanup only
+  removes the upward `models.*` dependency from `common.protocols`;
+  DTO-ifying all live runtime injections belongs to a later app-shell cleanup
+  goal.
+
 #### Runtime Configuration
 
 Runtime application code reads environment-backed configuration through
