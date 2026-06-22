@@ -17,8 +17,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app_shell.room_runtime import RoomServices
-from common.dto import RoomInfo
-from models.request import RoomCenterRoomSettingRequest
+from common.dto import MessageCommitted, RoomInfo
+from models.request import RoomCenterRoomSettingRequest, RoomCenterUserMessageRequest
 from models.room import MessageContent, Room, RoomUserMessage
 
 
@@ -39,6 +39,21 @@ def room_center():
 
 
 _ROOT = Path(__file__).resolve().parents[1]
+
+
+class RecordingEventPublisher:
+    def __init__(self) -> None:
+        self.internal_events = []
+        self.wait_flags = []
+
+    async def emit_internal(
+        self,
+        event,
+        *,
+        wait_for_local_handlers: bool = False,
+    ) -> None:
+        self.internal_events.append(event)
+        self.wait_flags.append(wait_for_local_handlers)
 
 
 def test_room_services_bind_store_sets_runtime_store():
@@ -247,7 +262,7 @@ def test_room_services_migrated_crud_methods_do_not_keep_legacy_store_branches()
 
 
 @pytest.mark.asyncio
-async def test_room_services_persist_user_message_delegates_to_room_facade():
+async def test_room_services_persist_user_message_emits_message_committed_event():
     svc = object.__new__(RoomServices)
     svc._store = MagicMock()
     svc._store.add_room_user_message = AsyncMock(
@@ -255,18 +270,107 @@ async def test_room_services_persist_user_message_delegates_to_room_facade():
     )
     svc._bound = False
     svc._facade = None
+    publisher = RecordingEventPublisher()
     facade = AsyncMock()
     facade.persist_user_message.return_value = True
     svc.bind_facade(facade)
+    svc.bind_message_event_publisher(publisher)
     user_message = RoomUserMessage(
         room_id="r1",
         message_id="u1",
         message_content=MessageContent(message_text="hello"),
     )
 
-    assert await svc._persist_user_message(user_message) is True
+    assert await svc._persist_user_message(
+        user_message,
+        room_agent_set={"a1": "Agent One"},
+    ) is True
+
     facade.persist_user_message.assert_awaited_once_with(user_message)
     svc._store.add_room_user_message.assert_not_awaited()
+    assert len(publisher.internal_events) == 1
+    event = publisher.internal_events[0]
+    assert isinstance(event, MessageCommitted)
+    assert event.room_id == "r1"
+    assert event.message_id == "u1"
+    assert event.message_type == "user"
+    assert event.agent_id is None
+    assert event.room_agent_set == {"a1": "Agent One"}
+    assert publisher.wait_flags == [True]
+
+
+@pytest.mark.asyncio
+async def test_room_services_persist_user_message_does_not_emit_on_failure():
+    svc = object.__new__(RoomServices)
+    svc._bound = False
+    svc._facade = None
+    publisher = RecordingEventPublisher()
+    facade = AsyncMock()
+    facade.persist_user_message.return_value = False
+    svc.bind_facade(facade)
+    svc.bind_message_event_publisher(publisher)
+    user_message = RoomUserMessage(
+        room_id="r1",
+        message_id="u1",
+        message_content=MessageContent(message_text="hello"),
+    )
+
+    assert await svc._persist_user_message(user_message, room_agent_set={}) is False
+
+    assert publisher.internal_events == []
+    assert publisher.wait_flags == []
+
+
+@pytest.mark.asyncio
+async def test_room_services_persist_message_to_room_passes_room_agent_set_to_user_commit_event():
+    svc = object.__new__(RoomServices)
+    svc._store = MagicMock()
+    svc._store.get_room_by_room_id = AsyncMock(
+        return_value=Room(
+            room_id="r1",
+            room_name="Room",
+            room_owner_id="owner",
+            room_owner_name="Owner",
+            room_agent_set={"a1": "Canonical Agent"},
+            extend_info={},
+        )
+    )
+    svc._bound = False
+    svc._facade = None
+    svc.sse_manager = MagicMock()
+    svc.sse_manager.create_token.return_value = object()
+    svc._validate_send_message_request = MagicMock(return_value=None)
+    svc._resolve_and_apply_attachments = AsyncMock(return_value=None)
+    svc._resolve_explicit_target_scope = AsyncMock()
+    svc._materialize_room_quote = AsyncMock(return_value=None)
+    publisher = RecordingEventPublisher()
+    facade = AsyncMock()
+    facade.persist_user_message.return_value = True
+    svc.bind_facade(facade)
+    svc.bind_message_event_publisher(publisher)
+    user_message = RoomUserMessage(
+        room_id="r1",
+        message_id="u1",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="Please ask <@a1|Stale Name> for help"
+        ),
+    )
+
+    response, context = await svc.persist_message_to_room(
+        RoomCenterUserMessageRequest(
+            room_id="r1",
+            user_id="user-1",
+            message=user_message,
+        ),
+        target_group="all_agents",
+    )
+
+    assert response.success is True
+    assert context is not None
+    event = publisher.internal_events[0]
+    assert isinstance(event, MessageCommitted)
+    assert event.room_agent_set == {"a1": "Canonical Agent"}
 
 
 @pytest.mark.asyncio

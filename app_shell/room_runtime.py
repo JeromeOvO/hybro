@@ -18,6 +18,7 @@ from common.dto import (
     ParsedUserMessageRequest,
     RoomInfo,
 )
+from common.message_commit_events import publish_message_committed
 from common.protocols.context_memory_protocols import ContextMemoryRuntime
 from common.types import (
     Message,
@@ -48,7 +49,6 @@ from models.memory import MemoryContent, RoomMemory
 from models.request import (
     AgentCenterRequest,
     RoomCenterAgentMessageRequest,
-    RoomCenterMemoryRequest,
     RoomCenterRoomMessageRequest,
     RoomCenterRoomSettingRequest,
     RoomCenterUserMessageRequest,
@@ -145,6 +145,7 @@ class RoomServices:
         self._bound = False
         self._context_memory_manager = None
         self._context_memory_runtime: ContextMemoryRuntime | None = None
+        self._message_event_publisher = None
         self._attachment_metadata_reader = None
         self._attachment_cleanup = None
         self._quote_writer = None
@@ -186,6 +187,9 @@ class RoomServices:
     ) -> None:
         self._context_memory_manager = memory_manager
         self._context_memory_runtime = context_memory_runtime or memory_manager
+
+    def bind_message_event_publisher(self, event_publisher) -> None:
+        self._message_event_publisher = event_publisher
 
     def bind_message_parser_service(self, service) -> None:
         self.message_parser_service = service
@@ -2012,7 +2016,10 @@ class RoomServices:
         if isinstance(qerr, RoomCenterUserMessageResponse):
             return qerr, None
 
-        if not await self._persist_user_message(user_message):
+        if not await self._persist_user_message(
+            user_message,
+            room_agent_set=room.room_agent_set if room else {},
+        ):
             if getattr(user_message, "quote_id", None):
                 quote_id = user_message.quote_id
                 try:
@@ -2083,10 +2090,6 @@ class RoomServices:
         pre_resolved_mentions = context.pre_resolved_mentions
         pre_resolved_scope = context.pre_resolved_scope
         token = context.token
-
-        memory_response = await self._initialize_room_memory(request, user_message)
-        if memory_response:
-            return memory_response
 
         # ── Dispatch using pre-resolved scope ─────────────────────────────
         # In non-supervisor rooms, explicit mentions are hard routing. In
@@ -2357,41 +2360,31 @@ class RoomServices:
             user_message=user_message,
         )
 
-    async def _persist_user_message(self, user_message: RoomUserMessage) -> bool:
-        """Persist user message to the database."""
-        return await self._require_facade().persist_user_message(user_message)
-
-    async def _initialize_room_memory(
-        self, request: RoomCenterUserMessageRequest, user_message: RoomUserMessage
-    ) -> RoomCenterUserMessageResponse | None:
-        """Initialize or update room memory with conversation history."""
-        # Get room to access room_agent_set for cleaning @mentions
-        room = await self._store.get_room_by_room_id(request.room_id)
-        room_agent_set = room.room_agent_set if room else {}
-
-        room_memory_initialize_or_update_response = (
-            await self.room_memory_service.initialize_or_update_room_memory(
-                RoomCenterMemoryRequest(
-                    room_id=request.room_id,
-                    message_id=user_message.message_id,
-                    memory_content=user_message.message_content.message_text,
-                    room_agent_set=room_agent_set,  # Pass for cleaning @mentions
-                    user_id=user_message.user_id,
-                    attachments=user_message.message_content.attachments,
+    async def _persist_user_message(
+        self,
+        user_message: RoomUserMessage,
+        *,
+        room_agent_set: dict[str, str] | None = None,
+    ) -> bool:
+        """Persist user message to the database and publish its commit event."""
+        persisted = await self._require_facade().persist_user_message(user_message)
+        if persisted:
+            event_publisher = getattr(self, "_message_event_publisher", None)
+            if event_publisher is None:
+                raise RuntimeError(
+                    "RoomServices.bind_message_event_publisher() not called - startup incomplete"
                 )
-            )
-        )
-        if not room_memory_initialize_or_update_response.success:
-            return RoomCenterUserMessageResponse(
+            # Wait for local handler completion before preflight can enqueue or
+            # process agent messages. Delivery still dead-letters handler failures.
+            await publish_message_committed(
+                event_publisher,
+                room_id=user_message.room_id,
                 message_id=user_message.message_id,
-                message=user_message,
-                success=False,
-                error="Failed to initialize or update room memory",
-                status_code=500,
-                preflight_outcome="failed",
-                preflight_details="Failed to initialize room memory",
+                message_type="user",
+                room_agent_set=room_agent_set or {},
+                wait_for_local_handlers=True,
             )
-        return None
+        return persisted
 
     async def _handle_mentions_flow(
         self,

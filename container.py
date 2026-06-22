@@ -966,9 +966,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 get_task_from_agent=task_service.get_task_from_agent,
             )
             execution_room_memory = SimpleNamespace(
-                add_agent_response_to_memory=(
-                    room_memory_service.add_agent_response_to_memory
-                ),
                 add_synthesis_to_history=room_memory_service.add_synthesis_to_history,
                 update_room_summary=room_memory_service.update_room_summary,
             )
@@ -1041,6 +1038,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             sse.bind_sse_dependencies(sse_state_reader, sse_manager)
             room_runtime.bind_store(room_runtime_store)
             room_runtime.bind_facade(_room_facade)
+            room_runtime.bind_message_event_publisher(_delivery_deps.event_publisher)
             room_runtime.bind_object_storage(platform_object_storage)
             room_center.room_center.bind_facade(_room_facade)
             hitl.bind_room_ownership_reader(_room_facade)
@@ -1069,6 +1067,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 memory_writer=execution_memory_writer,
                 hitl_reader=execution_hitl_reader,
                 delivery=execution_delivery,
+                event_publisher=_delivery_deps.event_publisher,
                 coordinator=execution_coordinator,
                 summary_service=summary_llm_service,
                 notification_service=notification_service,
@@ -1201,9 +1200,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             app.state.platform_facade = platform_facade
             app.state.platform_deps = platform_deps
-            # TODO(phase-6/7): Register ContextMemoryEventHandler with EventPublisher
-            # once Delivery wires runtime MessageCommitted delivery. Phase 5 keeps the
-            # direct compaction call path via legacy app_shell.
+            register_context_memory_event_handlers(
+                event_publisher=_delivery_deps.event_publisher,
+                context_memory_facade=context_memory_facade,
+            )
             compaction_service.bind_content_storage(platform_facade.content_storage)
             compaction_service.bind_room_memory_reader(context_memory_facade)
             compaction_service.bind_facade(context_memory_facade)
@@ -2438,6 +2438,24 @@ def create_context_memory_deps(facade: ContextMemoryFacade) -> ContextMemoryDeps
         memory_projector=facade,
         context_memory_runtime=facade,
     )
+
+
+def register_context_memory_event_handlers(
+    *,
+    event_publisher: EventPublisher,
+    context_memory_facade: ContextMemoryFacade,
+):
+    from context_memory.events import ContextMemoryEventHandler
+
+    handler = ContextMemoryEventHandler(
+        projector=context_memory_facade,
+        project_for_event=context_memory_facade.project_message_for_event,
+    )
+    event_publisher.register_internal_handler(
+        "message_committed",
+        handler.handle_message_committed,
+    )
+    return handler
 
 
 def create_api_key_store(*, mongo: MongoDAL):

@@ -72,12 +72,19 @@ class EventPublisherImpl:
         )
         await self._deliver_frontend(event.room_id, frame, event, "sse_fanout")
 
-    async def emit_internal(self, event: InternalEvent) -> None:
-        self._schedule_internal_handlers(event)
+    async def emit_internal(
+        self,
+        event: InternalEvent,
+        *,
+        wait_for_local_handlers: bool = False,
+    ) -> None:
+        handler_tasks = self._schedule_internal_handlers(event)
         try:
             await self.event_bus.publish_internal(event)
         except Exception as exc:
             await self._dead_letter("internal_fanout", event, exc)
+        if wait_for_local_handlers and handler_tasks:
+            await asyncio.gather(*handler_tasks, return_exceptions=True)
 
     def register_internal_handler(self, event_type: str, handler: Callable) -> None:
         self._handlers[event_type].append(handler)
@@ -139,9 +146,10 @@ class EventPublisherImpl:
             )
         return True
 
-    def _schedule_internal_handlers(self, event: InternalEvent) -> None:
+    def _schedule_internal_handlers(self, event: InternalEvent) -> list[asyncio.Task]:
         if self._stopping:
-            return
+            return []
+        tasks: list[asyncio.Task] = []
         for handler in self._handlers.get(event.event_type, []):
             task = self._task_runner(
                 self._run_handler(handler, event),
@@ -149,6 +157,8 @@ class EventPublisherImpl:
             )
             self._handler_tasks.add(task)
             task.add_done_callback(self._handler_tasks.discard)
+            tasks.append(task)
+        return tasks
 
     async def _run_handler(self, handler: Callable, event: InternalEvent) -> None:
         try:

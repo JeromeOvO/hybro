@@ -30,6 +30,7 @@ def create_room_message_center(
         "memory_writer": default_store,
         "hitl_reader": default_store,
         "delivery": _defaults.delivery,
+        "event_publisher": _defaults.event_publisher,
         "coordinator": _defaults.coordinator,
         "summary_service": _defaults.summary_service,
         "notification_service": _defaults.notification_service,
@@ -58,6 +59,8 @@ def create_room_message_center(
     if "s3_service" in kwargs and "object_storage" not in kwargs:
         kwargs["object_storage"] = kwargs.pop("s3_service")
     deps.update(kwargs)
+    if deps.get("event_publisher") is None:
+        raise RuntimeError("RoomMessageCenter event_publisher dependency is required")
     return RoomMessageCenter(**deps)
 
 

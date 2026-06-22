@@ -22,6 +22,7 @@ from uuid import uuid4
 
 from common.a2a_constants import SSEProcessingStatus
 from common.config import settings as _settings
+from common.message_commit_events import publish_message_committed
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -45,6 +46,7 @@ from models.supervisor import (
 )
 
 if TYPE_CHECKING:
+    from common.protocols import EventPublisher
     from execution.dispatch.agent_dispatcher import AgentDispatcher
     from execution.dispatch.agent_message_processor import AgentMessageProcessor
     from execution.orchestration.room_supervisor_service import RoomSupervisorService
@@ -53,7 +55,6 @@ if TYPE_CHECKING:
         HITLCoordinator,
         RateLimitPort,
         RoomContinuationStore,
-        RoomMemoryPort,
         RoomMessageReader,
         RoomMessageWriter,
         RoomRuntimePort,
@@ -87,7 +88,7 @@ class SupervisorExecutor:
         message_writer: RoomMessageWriter,
         task_state_store: RoomTaskStateStore,
         continuation_store: RoomContinuationStore,
-        room_memory: RoomMemoryPort,
+        event_publisher: EventPublisher,
         rate_limit_service: RateLimitPort,
         agent_dispatcher: AgentDispatcher,
         agent_message_processor: AgentMessageProcessor,
@@ -95,6 +96,8 @@ class SupervisorExecutor:
         hitl_coordinator: HITLCoordinator | None = None,
         debate_rounds: int = 2,
     ) -> None:
+        if event_publisher is None:
+            raise RuntimeError("SupervisorExecutor event_publisher dependency is required")
         self.supervisor_service = supervisor_service
         self.room_runtime = room_runtime
         self.tsm = tsm
@@ -103,7 +106,7 @@ class SupervisorExecutor:
         self.message_writer = message_writer
         self.task_state_store = task_state_store
         self.continuation_store = continuation_store
-        self.room_memory = room_memory
+        self.event_publisher = event_publisher
         self.rate_limit_service = rate_limit_service
         self.agent_dispatcher = agent_dispatcher
         self.agent_message_processor = agent_message_processor
@@ -114,6 +117,27 @@ class SupervisorExecutor:
 
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
         self._processing_status_emitter = processing_status_emitter
+
+    async def _publish_agent_message_committed(
+        self,
+        *,
+        room_id: str,
+        message_id: str | None,
+        agent_id: str | None,
+        agent_name: str,
+        was_successful: bool,
+    ) -> None:
+        if not message_id:
+            return
+        await publish_message_committed(
+            self.event_publisher,
+            room_id=room_id,
+            message_id=message_id,
+            message_type="agent",
+            agent_id=agent_id,
+            agent_name=agent_name,
+            was_successful=was_successful,
+        )
 
     async def _emit_processing_status(
         self,
@@ -787,20 +811,19 @@ class SupervisorExecutor:
                         quoted_text=quoted_text,
                     )
 
-                    # Write completed results to room memory regardless of
-                    # whether some targets are PAUSED — this ensures subsequent
-                    # agents (after resume) have cross-agent context.
+                    # Publish completed results regardless of whether some
+                    # targets are PAUSED so ContextMemory can project them for
+                    # subsequent agents after resume.
                     for result in results:
                         if (
                             result.status == StepStatus.SUCCESS
                             and result.success
                             and result.response_text
                         ):
-                            await self.room_memory.add_agent_response_to_memory(
+                            await self._publish_agent_message_committed(
                                 room_id=room_id,
                                 agent_id=result.agent_id,
-                                agent_name=result.agent_name,
-                                response_text=result.response_text,
+                                agent_name=result.agent_name or "Agent",
                                 was_successful=result.success,
                                 message_id=getattr(result, "agent_message_id", None),
                             )
@@ -1963,11 +1986,10 @@ class SupervisorExecutor:
                 break
 
             if is_success and response_text:
-                await self.room_memory.add_agent_response_to_memory(
+                await self._publish_agent_message_committed(
                     room_id=room_id,
                     agent_id=pr.agent_id,
                     agent_name=pr.agent_name or "Agent",
-                    response_text=response_text,
                     was_successful=True,
                     message_id=msg_id,
                 )
