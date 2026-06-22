@@ -75,6 +75,35 @@ def test_runtime_room_memory_accepts_python_metadata_and_freezes_containers():
         memory.room_facts.append({"content": "other"})
 
 
+def test_runtime_to_legacy_dump_omits_unset_default_containers():
+    from app_shell.runtime_store_contracts import _dump_runtime
+    from common.dto import RuntimeRoomMemory, RuntimeRoomRecord
+
+    room = RuntimeRoomRecord(
+        room_id="r1",
+        room_name="Renamed",
+        room_owner_id="owner-1",
+        room_owner_name="Owner",
+    )
+    room_payload = _dump_runtime(room)
+
+    assert room_payload == {
+        "room_id": "r1",
+        "room_name": "Renamed",
+        "room_owner_id": "owner-1",
+        "room_owner_name": "Owner",
+    }
+    assert "room_agent_set" not in room_payload
+
+    memory = RuntimeRoomMemory(room_id="r1", memory_id="mem-1")
+    memory_payload = _dump_runtime(memory)
+
+    assert memory_payload == {"room_id": "r1", "memory_id": "mem-1"}
+    assert "conversation_history" not in memory_payload
+    assert "room_summary" not in memory_payload
+    assert "agent_success_history" not in memory_payload
+
+
 def _agent_card() -> AgentCard:
     return AgentCard(
         name="Agent One",
