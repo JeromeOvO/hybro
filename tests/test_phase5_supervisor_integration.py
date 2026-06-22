@@ -48,6 +48,20 @@ async def _noop_processing_status_emitter(**_kwargs):
     return None
 
 
+class RecordingEventPublisher:
+    def __init__(self):
+        self.internal_events = []
+
+    async def emit_internal(
+        self,
+        event,
+        *,
+        wait_for_local_handlers: bool = False,
+        broadcast: bool = True,
+    ):
+        self.internal_events.append((event, wait_for_local_handlers, broadcast))
+
+
 class BoundRoomMemoryFacade:
     def __init__(self, service):
         self.service = service
@@ -1139,7 +1153,10 @@ class TestHandleV2RunResultUnifiedSummary:
 
             from execution.orchestration.factory import create_room_message_center
 
-            rmc = create_room_message_center(debate_rounds=2)
+            rmc = create_room_message_center(
+                debate_rounds=2,
+                event_publisher=RecordingEventPublisher(),
+            )
             rmc._emit_unified_summary = AsyncMock(return_value=("synthesis", "Final synthesis."))
             rmc._emit_deterministic_digest = AsyncMock()
             rmc._trigger_compaction_safe = AsyncMock()

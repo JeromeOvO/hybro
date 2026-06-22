@@ -184,7 +184,15 @@ class ContextMemoryFacade:
     async def project_message(self, room_id: str, message_id: str) -> None:
         await self.project_message_for_event(room_id, message_id)
 
-    async def project_message_for_event(self, room_id: str, message_id: str) -> dict:
+    async def project_message_for_event(
+        self,
+        room_id: str,
+        message_id: str,
+        *,
+        room_agent_set: dict[str, str] | None = None,
+        agent_name: str | None = None,
+        was_successful: bool | None = None,
+    ) -> dict:
         return await projection.project_message_from_history(
             room_id=room_id,
             message_id=message_id,
@@ -192,6 +200,12 @@ class ContextMemoryFacade:
             room_history_reader=self.room_history_reader,
             id_factory=self.id_factory,
             now=self.now,
+            room_agent_set=room_agent_set,
+            agent_name=agent_name,
+            was_successful=was_successful,
+            llm_provider=self.llm_provider,
+            llm_config=self.llm_config,
+            background_task_runner=self.background_task_runner,
         )
 
     async def run_compaction(self, room_id: str) -> CompactionResult:

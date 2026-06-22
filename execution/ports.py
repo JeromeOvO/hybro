@@ -13,7 +13,7 @@ from models.agent_group import AgentGroup
 from models.memory import RoomMemory
 from models.quote import QuotedSnippet
 from models.request import RoomCenterAgentMessageRequest
-from models.response import RoomCenterAgentMessageResponse, RoomCenterMemoryResponse
+from models.response import RoomCenterAgentMessageResponse
 from models.room import (
     CoordinatorAgentId,
     MessageContent,
@@ -377,16 +377,6 @@ RoomCoordinatorPort = CoordinatorSynthesisPort
 
 
 class RoomMemoryPort(Protocol):
-    async def add_agent_response_to_memory(
-        self,
-        room_id: str,
-        agent_id: str,
-        agent_name: str,
-        response_text: str,
-        was_successful: bool = True,
-        message_id: str | None = None,
-    ) -> RoomCenterMemoryResponse: ...
-
     async def add_synthesis_to_history(
         self,
         room_id: str,

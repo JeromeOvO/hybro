@@ -65,11 +65,7 @@ def test_execution_shell_ports_use_named_method_contracts() -> None:
         ports.RateLimitPort: ["check_rate_limit", "record_request"],
         ports.QuotedSnippetReaderPort: ["get_quoted_snippet_by_id"],
         ports.RemoteTaskReaderPort: ["get_task_from_agent"],
-        ports.RoomMemoryPort: [
-            "add_agent_response_to_memory",
-            "add_synthesis_to_history",
-            "update_room_summary",
-        ],
+        ports.RoomMemoryPort: ["add_synthesis_to_history", "update_room_summary"],
         ports.RoomRuntimePort: [
             "create_agent_message",
             "process_agent_message",
