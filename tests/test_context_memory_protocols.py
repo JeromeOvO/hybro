@@ -351,6 +351,35 @@ def test_room_delete_logs_when_context_memory_cleanup_is_unbound():
     assert "_context_memory_manager is None" in source
 
 
+def test_message_write_flows_do_not_call_context_memory_write_shims():
+    forbidden = {
+        "initialize_or_update_room_memory",
+        "add_agent_response_to_memory",
+    }
+    checked_paths = [
+        Path("app_shell/room_runtime.py"),
+        Path("execution/orchestration/queue_executor.py"),
+        Path("execution/orchestration/supervisor_executor.py"),
+        Path("execution/orchestration/room_message_center.py"),
+    ]
+    violations: list[str] = []
+    for path in checked_paths:
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr in forbidden:
+                    violations.append(f"{path}:{node.lineno}:{node.func.attr}")
+
+    assert violations == []
+
+
+def test_execution_startup_adapter_does_not_inject_agent_memory_write_shim():
+    source = Path("container.py").read_text()
+
+    assert "room_memory_service.add_agent_response_to_memory" not in source
+    assert "add_agent_response_to_memory=(" not in source
+
+
 def test_context_memory_import_boundary():
     forbidden = {
         "a2a_adapter",
