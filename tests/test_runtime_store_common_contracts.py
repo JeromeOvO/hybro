@@ -75,9 +75,13 @@ def test_runtime_room_memory_accepts_python_metadata_and_freezes_containers():
         memory.room_facts.append({"content": "other"})
 
 
-def test_runtime_to_legacy_dump_omits_unset_default_containers():
-    from app_shell.runtime_store_contracts import _dump_runtime
-    from common.dto import RuntimeRoomMemory, RuntimeRoomRecord
+def test_runtime_to_legacy_dump_omits_unset_defaults_and_preserves_explicit_none():
+    from app_shell.runtime_store_contracts import (
+        _dump_runtime,
+        runtime_to_chat_context,
+        runtime_to_room,
+    )
+    from common.dto import RuntimeChatContext, RuntimeRoomMemory, RuntimeRoomRecord
 
     room = RuntimeRoomRecord(
         room_id="r1",
@@ -94,6 +98,34 @@ def test_runtime_to_legacy_dump_omits_unset_default_containers():
         "room_owner_name": "Owner",
     }
     assert "room_agent_set" not in room_payload
+
+    cleared_room = RuntimeRoomRecord(
+        room_id="r1",
+        room_name="Renamed",
+        room_owner_id="owner-1",
+        room_owner_name="Owner",
+        applied_from_group=None,
+    )
+    cleared_room_payload = _dump_runtime(cleared_room)
+
+    assert cleared_room_payload["applied_from_group"] is None
+    assert "room_agent_set" not in cleared_room_payload
+    assert runtime_to_room(cleared_room).model_dump(
+        mode="json", exclude_unset=True
+    )["applied_from_group"] is None
+
+    cleared_context = RuntimeChatContext(
+        memory_id="ctx-1",
+        user_name="User",
+        session_id="s1",
+        context_data=None,
+    )
+    cleared_context_payload = _dump_runtime(cleared_context)
+
+    assert cleared_context_payload["context_data"] is None
+    assert runtime_to_chat_context(cleared_context).model_dump(
+        mode="json", exclude_unset=True
+    )["context_data"] is None
 
     memory = RuntimeRoomMemory(room_id="r1", memory_id="mem-1")
     memory_payload = _dump_runtime(memory)

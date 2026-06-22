@@ -25,7 +25,7 @@ def _dump_model(value: BaseModel) -> dict:
 
 
 def _dump_runtime(value: BaseModel) -> dict:
-    return value.model_dump(mode="json", exclude_unset=True, exclude_none=True)
+    return value.model_dump(mode="json", exclude_unset=True)
 
 
 def agent_to_runtime(agent: Agent) -> RuntimeAgentRecord:
