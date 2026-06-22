@@ -376,8 +376,12 @@ def test_message_write_flows_do_not_call_context_memory_write_shims():
 def test_execution_startup_adapter_does_not_inject_agent_memory_write_shim():
     source = Path("container.py").read_text()
 
-    assert "room_memory_service.add_agent_response_to_memory" not in source
-    assert "add_agent_response_to_memory=(" not in source
+    for shim in {
+        "initialize_or_update_room_memory",
+        "add_agent_response_to_memory",
+    }:
+        assert f"room_memory_service.{shim}" not in source
+        assert f"{shim}=(" not in source
 
 
 def test_context_memory_import_boundary():
