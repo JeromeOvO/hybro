@@ -1,11 +1,5 @@
 {
-    "blocked_cleanup": [
-        {
-            "path": "common/protocols/runtime_store_protocols.py",
-            "contract": "common_import_boundary",
-            "reason": "Runtime store protocols require importing concrete domain models to provide a type-safe contract."
-        }
-    ],
+    "blocked_cleanup": [],
     "content_storage_callers": [
         {
             "classification": "Platform-owned behavior now covered by tests",

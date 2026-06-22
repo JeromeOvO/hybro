@@ -30,6 +30,36 @@ from app_shell.repository_parts.webhook_tokens import (
     hash_webhook_token,
     verify_webhook_token,
 )
+from app_shell.runtime_store_contracts import (
+    agent_group_to_runtime,
+    agent_to_runtime,
+    chat_context_to_runtime,
+    room_agent_message_to_runtime,
+    room_memory_to_runtime,
+    room_to_runtime,
+    room_user_message_to_runtime,
+    runtime_agent_groups,
+    runtime_agent_messages,
+    runtime_agents,
+    runtime_rooms,
+    runtime_to_agent_group,
+    runtime_to_chat_context,
+    runtime_to_message_content,
+    runtime_to_room,
+    runtime_to_room_agent_message,
+    runtime_to_room_user_message,
+    runtime_user_messages,
+)
+from common.dto import (
+    RuntimeAgentGroup,
+    RuntimeAgentRecord,
+    RuntimeChatContext,
+    RuntimeMessageContent,
+    RuntimeRoomAgentMessage,
+    RuntimeRoomMemory,
+    RuntimeRoomRecord,
+    RuntimeRoomUserMessage,
+)
 from common.protocols import (
     AgentRepository,
     MessageRepository,
@@ -37,10 +67,6 @@ from common.protocols import (
     RoomRepository,
 )
 from common.utils.logger import get_logger
-from models.agent import Agent
-from models.agent_group import AgentGroup
-from models.memory import ChatContext, RoomMemory
-from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 
 logger = get_logger(__name__)
 
@@ -187,14 +213,21 @@ class AppShellRepositoryStore:
             room_repository=getattr(self, "_room_repository", None),
         )
 
-    async def add_agent_group(self, agent_group: AgentGroup) -> bool:
-        return await self.agent_room.add_agent_group(agent_group)
+    async def add_agent_group(self, agent_group: RuntimeAgentGroup) -> bool:
+        return await self.agent_room.add_agent_group(
+            runtime_to_agent_group(agent_group)
+        )
 
-    async def get_agent_groups_by_owner(self, owner_id: str) -> list[AgentGroup]:
-        return await self.agent_room.get_agent_groups_by_owner(owner_id)
+    async def get_agent_groups_by_owner(self, owner_id: str) -> list[RuntimeAgentGroup]:
+        return runtime_agent_groups(
+            await self.agent_room.get_agent_groups_by_owner(owner_id)
+        )
 
-    async def get_agent_group_by_id(self, group_id: str) -> AgentGroup | None:
-        return await self.agent_room.get_agent_group_by_id(group_id)
+    async def get_agent_group_by_id(
+        self, group_id: str
+    ) -> RuntimeAgentGroup | None:
+        agent_group = await self.agent_room.get_agent_group_by_id(group_id)
+        return agent_group_to_runtime(agent_group) if agent_group is not None else None
 
     async def update_agent_group(self, group_id: str, updates: dict) -> bool:
         return await self.agent_room.update_agent_group(group_id, updates)
@@ -202,91 +235,117 @@ class AppShellRepositoryStore:
     async def delete_agent_group(self, group_id: str) -> bool:
         return await self.agent_room.delete_agent_group(group_id)
 
-    async def get_all_active_agents(self, user_id: str | None = None) -> list[Agent]:
-        return await self.agent_room.get_all_active_agents(user_id)
+    async def get_all_active_agents(
+        self, user_id: str | None = None
+    ) -> list[RuntimeAgentRecord]:
+        return runtime_agents(await self.agent_room.get_all_active_agents(user_id))
 
     async def get_agent_name_by_agent_id(self, agent_id: str) -> str | None:
         return await self.agent_room.get_agent_name_by_agent_id(agent_id)
 
-    async def get_agent_by_agent_id(self, agent_id: str) -> Agent | None:
-        return await self.agent_room.get_agent_by_agent_id(agent_id)
+    async def get_agent_by_agent_id(self, agent_id: str) -> RuntimeAgentRecord | None:
+        agent = await self.agent_room.get_agent_by_agent_id(agent_id)
+        return agent_to_runtime(agent) if agent is not None else None
 
     async def get_agents_with_conditions(
         self,
         query: dict[str, Any] | None = None,
         limit: int = 0,
-    ) -> list[Agent]:
-        return await self.agent_room.get_agents_with_conditions(query, limit)
+    ) -> list[RuntimeAgentRecord]:
+        return runtime_agents(
+            await self.agent_room.get_agents_with_conditions(query, limit)
+        )
 
     async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> None:
         return await self.agent_room.increment_agent_call_count(
             agent_id, success=success
         )
 
-    async def get_room_by_room_id(self, room_id: str) -> Room | None:
-        return await self.agent_room.get_room_by_room_id(room_id)
+    async def get_room_by_room_id(self, room_id: str) -> RuntimeRoomRecord | None:
+        room = await self.agent_room.get_room_by_room_id(room_id)
+        return room_to_runtime(room) if room is not None else None
 
-    async def get_rooms_by_room_owner_id(self, room_owner_id: str) -> list[Room]:
-        return await self.agent_room.get_rooms_by_room_owner_id(room_owner_id)
+    async def get_rooms_by_room_owner_id(
+        self, room_owner_id: str
+    ) -> list[RuntimeRoomRecord]:
+        return runtime_rooms(
+            await self.agent_room.get_rooms_by_room_owner_id(room_owner_id)
+        )
 
-    async def update_room_by_room_id(self, room_id: str, room: Room) -> bool:
-        return await self.agent_room.update_room_by_room_id(room_id, room)
+    async def update_room_by_room_id(
+        self, room_id: str, room: RuntimeRoomRecord
+    ) -> bool:
+        return await self.agent_room.update_room_by_room_id(
+            room_id, runtime_to_room(room)
+        )
 
     async def get_room_user_message_by_message_id(
         self, message_id: str
-    ) -> RoomUserMessage | None:
-        return await self._message_delegate().get_room_user_message_by_message_id(
+    ) -> RuntimeRoomUserMessage | None:
+        message = await self._message_delegate().get_room_user_message_by_message_id(
             message_id
         )
+        return room_user_message_to_runtime(message) if message is not None else None
 
     async def get_room_user_messages_by_room_id(
         self,
         room_id: str,
-    ) -> list[RoomUserMessage]:
-        return await self._message_delegate().get_room_user_messages_by_room_id(room_id)
+    ) -> list[RuntimeRoomUserMessage]:
+        return runtime_user_messages(
+            await self._message_delegate().get_room_user_messages_by_room_id(room_id)
+        )
 
     async def get_room_agent_message_by_message_id(
         self, message_id: str
-    ) -> RoomAgentMessage | None:
-        return await self._message_delegate().get_room_agent_message_by_message_id(
+    ) -> RuntimeRoomAgentMessage | None:
+        message = await self._message_delegate().get_room_agent_message_by_message_id(
             message_id
         )
+        return room_agent_message_to_runtime(message) if message is not None else None
 
     async def get_room_agent_messages_by_room_id(
         self,
         room_id: str,
-    ) -> list[RoomAgentMessage]:
-        return await self._message_delegate().get_room_agent_messages_by_room_id(
-            room_id
+    ) -> list[RuntimeRoomAgentMessage]:
+        return runtime_agent_messages(
+            await self._message_delegate().get_room_agent_messages_by_room_id(room_id)
         )
 
     async def get_room_agent_messages_by_related_message_id(
         self, related_message_id: str
-    ) -> list[RoomAgentMessage]:
-        return await self._message_delegate().get_room_agent_messages_by_related_message_id(
-            related_message_id
+    ) -> list[RuntimeRoomAgentMessage]:
+        return runtime_agent_messages(
+            await self._message_delegate().get_room_agent_messages_by_related_message_id(
+                related_message_id
+            )
         )
 
     async def add_room_agent_message(
-        self, room_agent_message: RoomAgentMessage
+        self, room_agent_message: RuntimeRoomAgentMessage
     ) -> bool:
-        return await self._message_delegate().add_room_agent_message(room_agent_message)
+        return await self._message_delegate().add_room_agent_message(
+            runtime_to_room_agent_message(room_agent_message)
+        )
 
-    async def add_room_user_message(self, room_user_message: RoomUserMessage) -> bool:
-        return await self._message_delegate().add_room_user_message(room_user_message)
+    async def add_room_user_message(
+        self, room_user_message: RuntimeRoomUserMessage
+    ) -> bool:
+        return await self._message_delegate().add_room_user_message(
+            runtime_to_room_user_message(room_user_message)
+        )
 
     async def update_room_user_message_by_message_id(
-        self, message_id: str, room_user_message: RoomUserMessage
+        self, message_id: str, room_user_message: RuntimeRoomUserMessage
     ) -> bool:
         return await self._message_delegate().update_room_user_message_by_message_id(
-            message_id, room_user_message
+            message_id, runtime_to_room_user_message(room_user_message)
         )
 
     async def upsert_room_agent_message(
-        self, room_agent_message: RoomAgentMessage
+        self, room_agent_message: RuntimeRoomAgentMessage
     ) -> None:
         return await self._message_delegate().upsert_room_agent_message(
-            room_agent_message
+            runtime_to_room_agent_message(room_agent_message)
         )
 
     async def delete_room_agent_message_by_message_id(self, message_id: str) -> bool:
@@ -295,10 +354,10 @@ class AppShellRepositoryStore:
         )
 
     async def update_room_agent_message_by_message_id(
-        self, message_id: str, room_agent_message: RoomAgentMessage
+        self, message_id: str, room_agent_message: RuntimeRoomAgentMessage
     ) -> bool:
         return await self._message_delegate().update_room_agent_message_by_message_id(
-            message_id, room_agent_message
+            message_id, runtime_to_room_agent_message(room_agent_message)
         )
 
     async def get_active_runs_by_room_id(self, room_id: str) -> list[dict]:
@@ -314,10 +373,10 @@ class AppShellRepositoryStore:
         )
 
     async def resolve_client_request_id_for_agent_message(
-        self, room_agent_message: RoomAgentMessage
+        self, room_agent_message: RuntimeRoomAgentMessage
     ) -> str | None:
         return await self._task_delegate().resolve_client_request_id_for_agent_message(
-            room_agent_message
+            runtime_to_room_agent_message(room_agent_message)
         )
 
     async def resolve_client_request_id_for_message_id(
@@ -329,16 +388,20 @@ class AppShellRepositoryStore:
 
     async def get_task_messages_for_room(
         self, room_id: str, *, limit: int = 50
-    ) -> list[RoomAgentMessage]:
-        return await self._task_delegate().get_task_messages_for_room(
-            room_id, limit=limit
+    ) -> list[RuntimeRoomAgentMessage]:
+        return runtime_agent_messages(
+            await self._task_delegate().get_task_messages_for_room(
+                room_id, limit=limit
+            )
         )
 
     async def get_pending_task_messages_for_user(
         self, user_id: str, states: list[str]
-    ) -> list[RoomAgentMessage]:
-        return await self._task_delegate().get_pending_task_messages_for_user(
-            user_id, states
+    ) -> list[RuntimeRoomAgentMessage]:
+        return runtime_agent_messages(
+            await self._task_delegate().get_pending_task_messages_for_user(
+                user_id, states
+            )
         )
 
     def hash_webhook_token(self, token: str) -> str:
@@ -435,35 +498,43 @@ class AppShellRepositoryStore:
         self,
         stale_minutes: int,
         non_terminal_states: list[str],
-    ) -> list[RoomAgentMessage]:
-        return await self._task_delegate().get_stale_task_messages(
-            stale_minutes, non_terminal_states
+    ) -> list[RuntimeRoomAgentMessage]:
+        return runtime_agent_messages(
+            await self._task_delegate().get_stale_task_messages(
+                stale_minutes, non_terminal_states
+            )
         )
 
     async def get_expired_task_messages(
         self,
         max_age_hours: int,
         non_terminal_states: list[str],
-    ) -> list[RoomAgentMessage]:
-        return await self._task_delegate().get_expired_task_messages(
-            max_age_hours, non_terminal_states
+    ) -> list[RuntimeRoomAgentMessage]:
+        return runtime_agent_messages(
+            await self._task_delegate().get_expired_task_messages(
+                max_age_hours, non_terminal_states
+            )
         )
 
     async def get_non_tracked_stale_task_messages(
         self,
         max_age_hours: int,
         non_terminal_states: list[str],
-    ) -> list[RoomAgentMessage]:
-        return await self._task_delegate().get_non_tracked_stale_task_messages(
-            max_age_hours, non_terminal_states
+    ) -> list[RuntimeRoomAgentMessage]:
+        return runtime_agent_messages(
+            await self._task_delegate().get_non_tracked_stale_task_messages(
+                max_age_hours, non_terminal_states
+            )
         )
 
     async def get_orphaned_agent_messages(
         self,
         orphan_threshold_minutes: int,
-    ) -> list[RoomAgentMessage]:
-        return await self._task_delegate().get_orphaned_agent_messages(
-            orphan_threshold_minutes
+    ) -> list[RuntimeRoomAgentMessage]:
+        return runtime_agent_messages(
+            await self._task_delegate().get_orphaned_agent_messages(
+                orphan_threshold_minutes
+            )
         )
 
     async def touch_task_message(self, message_id: str) -> bool:
@@ -509,8 +580,11 @@ class AppShellRepositoryStore:
     async def claim_stuck_supervisor_trajectory(self, message_id: str) -> bool:
         return await self._task_delegate().claim_stuck_supervisor_trajectory(message_id)
 
-    async def get_room_memory_by_room_id(self, room_id: str) -> RoomMemory | None:
-        return await self._memory_delegate().get_room_memory_by_room_id(room_id)
+    async def get_room_memory_by_room_id(
+        self, room_id: str
+    ) -> RuntimeRoomMemory | None:
+        room_memory = await self._memory_delegate().get_room_memory_by_room_id(room_id)
+        return room_memory_to_runtime(room_memory) if room_memory is not None else None
 
     async def get_pending_hitl_requests_for_message(
         self, user_message_id: str
@@ -631,19 +705,28 @@ class AppShellRepositoryStore:
     async def ensure_hitl_indexes(self) -> None:
         return await self._hitl_delegate().ensure_hitl_indexes()
 
-    async def add_chat_context(self, chat_context: ChatContext) -> bool:
-        return await self._memory_delegate().add_chat_context(chat_context)
+    async def add_chat_context(self, chat_context: RuntimeChatContext) -> bool:
+        return await self._memory_delegate().add_chat_context(
+            runtime_to_chat_context(chat_context)
+        )
 
     async def get_chat_context_by_session_id(
         self, session_id: str
-    ) -> ChatContext | None:
-        return await self._memory_delegate().get_chat_context_by_session_id(session_id)
+    ) -> RuntimeChatContext | None:
+        chat_context = await self._memory_delegate().get_chat_context_by_session_id(
+            session_id
+        )
+        return (
+            chat_context_to_runtime(chat_context)
+            if chat_context is not None
+            else None
+        )
 
     async def update_chat_context_by_session_id(
-        self, session_id: str, chat_context: ChatContext
+        self, session_id: str, chat_context: RuntimeChatContext
     ) -> bool:
         return await self._memory_delegate().update_chat_context_by_session_id(
-            session_id, chat_context
+            session_id, runtime_to_chat_context(chat_context)
         )
 
     async def delete_chat_context_by_session_id(self, session_id: str) -> bool:
@@ -704,10 +787,10 @@ class AppShellRepositoryStore:
         return await self._message_delegate().cancel_agent_messages_by_ids(message_ids)
 
     async def update_room_agent_message_with_new_message_content_by_message_id(
-        self, message_id: str, message_content: MessageContent
+        self, message_id: str, message_content: RuntimeMessageContent
     ) -> bool:
         return await self._message_delegate().update_room_agent_message_with_new_message_content_by_message_id(
-            message_id, message_content
+            message_id, runtime_to_message_content(message_content)
         )
 
     async def update_last_notified_state(self, message_id: str, state: str) -> bool:
