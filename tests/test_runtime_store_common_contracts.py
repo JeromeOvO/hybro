@@ -6,6 +6,7 @@ from common.dto import (
     RuntimeAgentGroup,
     RuntimeMessageContent,
     RuntimeRoomAgentMessage,
+    RuntimeRoomMemory,
 )
 from common.dto.base import FrozenDict
 
@@ -43,3 +44,31 @@ def test_runtime_agent_message_preserves_task_tracking_fields():
     assert isinstance(message.pending_continuation, FrozenDict)
     with pytest.raises(TypeError):
         message.pending_continuation["step"] = "changed"
+
+
+def test_runtime_room_memory_accepts_python_metadata_and_freezes_containers():
+    created_at = datetime(2026, 6, 22, tzinfo=UTC)
+    memory = RuntimeRoomMemory(
+        room_id="r1",
+        memory_id="m1",
+        memory_content={"last_seen_at": created_at},
+        conversation_history=[{"role": "user", "created_at": created_at}],
+        room_summary={"last_updated_at": created_at, "key_decisions": ["ship"]},
+        room_facts=[{"content": "fact", "created_at": created_at}],
+        agent_success_history={
+            "agent-1": {"last_called_at": created_at, "total_calls": 1}
+        },
+        extend_info={"checkpoint_at": created_at},
+    )
+
+    assert memory.room_summary["last_updated_at"] == created_at
+    assert isinstance(memory.room_summary, FrozenDict)
+    assert isinstance(memory.room_facts[0], FrozenDict)
+    assert isinstance(memory.agent_success_history["agent-1"], FrozenDict)
+
+    with pytest.raises(TypeError):
+        memory.room_summary["last_updated_at"] = None
+    with pytest.raises(TypeError):
+        memory.room_summary["key_decisions"].append("delay")
+    with pytest.raises(TypeError):
+        memory.room_facts.append({"content": "other"})

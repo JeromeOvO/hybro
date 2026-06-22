@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import Field, JsonValue
+from pydantic import Field
 
 from common.dto.base import FrozenDTO
 from common.types import AgentCard, Task
@@ -52,7 +52,7 @@ class RuntimeRoomRecord(FrozenDTO):
     membership_origin_status: str | None = None
     source_group_id: str | None = None
     source_group_name: str | None = None
-    extend_info: JsonValue | None = None
+    extend_info: Any | None = None
     processing_message_id: str | None = None
 
 
@@ -69,7 +69,7 @@ class RuntimeMessageContent(FrozenDTO):
     message_text: str | None = None
     message_task: Task | None = None
     attachments: list[RuntimeUserAttachment] | None = None
-    content_summary: dict[str, JsonValue] | None = None
+    content_summary: dict[str, Any] | None = None
 
 
 class RuntimeRoomMessage(FrozenDTO):
@@ -88,20 +88,20 @@ class RuntimeRoomMessage(FrozenDTO):
     total_steps: int | None = None
     task_updated_at: datetime | None = None
     task_content: str | None = None
-    extend_info: JsonValue | None = None
+    extend_info: Any | None = None
 
 
 class RuntimeRoomUserMessage(RuntimeRoomMessage):
     message_type: Literal["user"] = "user"
     processing_claimed_at: datetime | None = None
     quote_id: str | None = None
-    quote: dict[str, JsonValue] | None = None
+    quote: dict[str, Any] | None = None
 
 
 class RuntimeRoomAgentMessage(RuntimeRoomMessage):
     message_type: Literal["agent"] = "agent"
     webhook_token_hash: str | None = None
-    pending_continuation: dict[str, JsonValue] | None = None
+    pending_continuation: dict[str, Any] | None = None
     last_notified_state: str | None = None
     agent_url: str | None = None
     task_created_at: datetime | None = None
@@ -112,27 +112,27 @@ class RuntimeRoomAgentMessage(RuntimeRoomMessage):
 class RuntimeRoomMemory(FrozenDTO):
     room_id: str
     memory_id: str
-    memory_content: dict[str, JsonValue] | None = None
-    conversation_history: list[dict[str, JsonValue]] = Field(default_factory=list)
+    memory_content: dict[str, Any] | None = None
+    conversation_history: list[dict[str, Any]] = Field(default_factory=list)
     max_history_turns: int = 100
-    room_summary: dict[str, JsonValue] = Field(default_factory=dict)
-    room_facts: list[dict[str, JsonValue]] = Field(default_factory=list)
-    agent_success_history: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)
+    room_summary: dict[str, Any] = Field(default_factory=dict)
+    room_facts: list[dict[str, Any]] = Field(default_factory=list)
+    agent_success_history: dict[str, dict[str, Any]] = Field(default_factory=dict)
     memory_created_at: datetime | None = None
     last_activity_at: datetime | None = None
     total_messages: int = 0
     total_compactions: int = 0
-    extend_info: JsonValue | None = None
+    extend_info: Any | None = None
 
 
 class RuntimeChatContext(FrozenDTO):
     memory_id: str
     user_name: str
     session_id: str
-    context_data: dict[str, JsonValue] | None = None
+    context_data: dict[str, Any] | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
-    extend_info: JsonValue | None = None
+    extend_info: Any | None = None
 
 
 __all__ = [
