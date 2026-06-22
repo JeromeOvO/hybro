@@ -837,6 +837,10 @@ def test_common_package_has_no_module_or_app_shell_imports():
     assert not violations, "Forbidden Common imports remain:\n" + "\n".join(violations)
 
 
+def test_phase9_cleanup_manifest_has_no_blocked_cleanup_entries():
+    assert _manifest().get("blocked_cleanup", []) == []
+
+
 def test_turn_id_helper_is_common_leaf_without_manifest_blocker():
     blocked_paths = _blocked_cleanup_paths(contract="common_import_boundary")
 
