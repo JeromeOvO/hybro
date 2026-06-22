@@ -77,12 +77,14 @@ class EventPublisherImpl:
         event: InternalEvent,
         *,
         wait_for_local_handlers: bool = False,
+        broadcast: bool = True,
     ) -> None:
         handler_tasks = self._schedule_internal_handlers(event)
-        try:
-            await self.event_bus.publish_internal(event)
-        except Exception as exc:
-            await self._dead_letter("internal_fanout", event, exc)
+        if broadcast:
+            try:
+                await self.event_bus.publish_internal(event)
+            except Exception as exc:
+                await self._dead_letter("internal_fanout", event, exc)
         if wait_for_local_handlers and handler_tasks:
             await asyncio.gather(*handler_tasks, return_exceptions=True)
 

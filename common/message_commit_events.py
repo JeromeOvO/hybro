@@ -36,9 +36,10 @@ async def publish_message_committed(
         await event_publisher.emit_internal(
             event,
             wait_for_local_handlers=True,
+            broadcast=False,
         )
         return
-    await event_publisher.emit_internal(event)
+    await event_publisher.emit_internal(event, broadcast=False)
 
 
 __all__ = ["MessageCommitType", "publish_message_committed"]

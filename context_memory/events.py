@@ -40,7 +40,7 @@ class ContextMemoryEventHandler:
                 agent_name=event.agent_name,
                 was_successful=event.was_successful,
             )
-            if status.get("projected") or status.get("reason") == "duplicate":
+            if status.get("projected"):
                 await self._projector.run_compaction(event.room_id)
         except Exception:
             logger.exception(

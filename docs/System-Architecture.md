@@ -322,18 +322,19 @@ The facade uses:
 `ContextMemoryEventHandler` with Delivery's internal `message_committed` event,
 and exposes the facade through `ContextMemoryDeps.context_memory_runtime` for
 supervisor and agent context assembly. Frontdoor user-message persistence and
-execution response paths publish `MessageCommitted` only after the message write
-succeeds; user-message commits wait for local handler completion before
-preflight continues. Delivery records handler failures in a bounded in-memory
-dead-letter buffer and sends a best-effort Redis dead-letter notification rather
-than propagating failures to the message writer, so this wait establishes local
-ordering but does not guarantee projection success. User commit events carry
-`room_agent_set` so event projection can clean raw `<@id|name>` mentions with
-canonical room agent names before appending attachment descriptions. Agent
-commit events carry `agent_name` and `was_successful` metadata so event
-projection preserves the old direct-memory turn shape. ContextMemory reloads
-the persisted message by `message_id`, projects it idempotently, and runs
-compaction after a successful projection or duplicate turn hit.
+execution response paths publish local-only `MessageCommitted` events only after
+the message write succeeds; user-message commits wait for local handler
+completion before preflight continues. Delivery records handler failures in a
+bounded in-memory dead-letter buffer and sends a best-effort Redis dead-letter
+notification rather than propagating failures to the message writer, so this
+wait establishes local ordering but does not guarantee projection success. User
+commit events carry `room_agent_set` so event projection can clean raw
+`<@id|name>` mentions with canonical room agent names before appending
+attachment descriptions. Agent commit events carry `agent_name` and
+`was_successful` metadata so event projection preserves the old direct-memory
+turn shape. ContextMemory reloads the persisted message by `message_id`,
+projects it idempotently, and runs compaction only after a successful new
+projection.
 `app_shell.context_assembly_service` and `app_shell.memory_search_service`
 remain compatibility shims for tests and legacy callers; production
 `RoomServices` and `RoomMessageCenter` use injected protocols and
@@ -848,7 +849,7 @@ Room memory is updated and used across turns.
 2. Frontdoor user-message persistence and execution response paths publish
    `MessageCommitted(room_id, message_id, message_type, agent_id?,
    room_agent_set?, agent_name?, was_successful?)` through Delivery's internal
-   event publisher.
+   event publisher with Redis fan-out disabled.
    User commits request `wait_for_local_handlers=True`; agent commits keep the
    default asynchronous local-handler behavior. Waiting means the local handler
    task has completed; handler failures are captured in Delivery's bounded
@@ -858,8 +859,8 @@ Room memory is updated and used across turns.
    `project_message_for_event`.
 4. Projection is idempotent by `turn_id == "message:{message_id}"`; duplicate
    hits do not add another turn.
-5. ContextMemory runs `run_compaction(room_id)` after a new projection or a
-   duplicate hit, while missing/empty/mismatched messages skip compaction.
+5. ContextMemory runs `run_compaction(room_id)` after a new projection, while
+   duplicate/missing/empty/mismatched messages skip compaction.
 6. Before agent execution, context assembly builds a token-budgeted context for
    the supervisor or the target agent.
 7. Memory search can retrieve relevant historical turns with vector and keyword

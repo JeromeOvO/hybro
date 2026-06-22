@@ -52,8 +52,14 @@ class RecordingEventPublisher:
     def __init__(self):
         self.internal_events = []
 
-    async def emit_internal(self, event, *, wait_for_local_handlers: bool = False):
-        self.internal_events.append((event, wait_for_local_handlers))
+    async def emit_internal(
+        self,
+        event,
+        *,
+        wait_for_local_handlers: bool = False,
+        broadcast: bool = True,
+    ):
+        self.internal_events.append((event, wait_for_local_handlers, broadcast))
 
 
 class BoundRoomMemoryFacade:

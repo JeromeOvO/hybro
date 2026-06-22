@@ -18,15 +18,18 @@ class RecordingEventPublisher:
     def __init__(self) -> None:
         self.internal_events = []
         self.wait_flags = []
+        self.broadcast_flags = []
 
     async def emit_internal(
         self,
         event,
         *,
         wait_for_local_handlers: bool = False,
+        broadcast: bool = True,
     ) -> None:
         self.internal_events.append(event)
         self.wait_flags.append(wait_for_local_handlers)
+        self.broadcast_flags.append(broadcast)
 
 
 class SchedulingEventPublisher:
@@ -42,6 +45,7 @@ class SchedulingEventPublisher:
         event,
         *,
         wait_for_local_handlers: bool = False,
+        broadcast: bool = True,
     ) -> None:
         tasks = [
             asyncio.create_task(handler(event))
@@ -146,6 +150,7 @@ async def test_publish_message_committed_emits_user_event():
     assert event.payload == {}
     assert event.timestamp.tzinfo is not None
     assert publisher.wait_flags == [False]
+    assert publisher.broadcast_flags == [False]
 
 
 @pytest.mark.asyncio
@@ -161,6 +166,7 @@ async def test_publish_message_committed_can_wait_for_local_handlers():
     )
 
     assert publisher.wait_flags == [True]
+    assert publisher.broadcast_flags == [False]
 
 
 @pytest.mark.asyncio

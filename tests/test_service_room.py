@@ -51,6 +51,7 @@ class RecordingEventPublisher:
         event,
         *,
         wait_for_local_handlers: bool = False,
+        broadcast: bool = True,
     ) -> None:
         self.internal_events.append(event)
         self.wait_flags.append(wait_for_local_handlers)

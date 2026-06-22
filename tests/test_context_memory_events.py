@@ -56,7 +56,7 @@ async def test_handle_message_committed_projects_and_compacts():
 
 
 @pytest.mark.asyncio
-async def test_handle_message_committed_duplicate_still_compacts():
+async def test_handle_message_committed_duplicate_skips_compaction():
     projector = FakeProjector()
     handler = ContextMemoryEventHandler(
         projector,
@@ -67,7 +67,7 @@ async def test_handle_message_committed_duplicate_still_compacts():
 
     await handler.handle_message_committed(event())
 
-    assert projector.compacted_rooms == ["r1"]
+    assert projector.compacted_rooms == []
 
 
 @pytest.mark.asyncio
