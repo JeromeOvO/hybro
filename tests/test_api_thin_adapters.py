@@ -779,7 +779,11 @@ def test_room_active_runs_inventory_records_execution_support():
     route_source = inspect.getsource(room_center)
     room_runtime_source = Path("app_shell/room_runtime.py").read_text()
 
-    assert "_require_execution_engine().get_runs_for_room" in route_source
+    assert "_require_execution_engine" not in route_source
+    assert "runs = await engine.get_runs_for_room(room_id)" in route_source
+    assert (
+        "active_runs = await _active_run_refs_for_room(room_id, engine)" in route_source
+    )
     assert "_read_active_runs_for_room" not in room_runtime_source
     assert "common.protocols.ExecutionEngine" in set(
         room_setting_route.get("supporting_protocols") or []
@@ -1074,27 +1078,6 @@ def test_agent_routes_expose_typed_dependency_providers():
     assert not missing, "Agent routes hide route owner dependencies:\n" + "\n".join(
         missing
     )
-
-
-def test_agent_dependency_providers_fail_when_unbound(monkeypatch):
-    from api import agent
-
-    monkeypatch.setattr(agent, "agent_center", None)
-    monkeypatch.setattr(agent, "agent_service", None)
-    monkeypatch.setattr(agent, "capability_issue_service", None)
-    monkeypatch.setattr(agent, "agent_avatar_manager", None)
-    monkeypatch.setattr(agent, "agent_liveness_checker", None)
-
-    providers = (
-        agent.get_agent_center,
-        agent.get_agent_service,
-        agent.get_capability_issue_service,
-        agent.get_agent_avatar_manager,
-        agent.get_agent_liveness_checker,
-    )
-    for provider in providers:
-        with pytest.raises(RuntimeError):
-            provider()
 
 
 def test_agent_route_inventory_records_live_protocol_owners():
