@@ -7,7 +7,6 @@ uses API key auth for hub daemon communication.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from fastapi.params import Depends as DependsParam
 
 from api_gateway.dependencies import get_hub_relay_service
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
@@ -18,18 +17,11 @@ from models.hub import HubStatusResponse
 router = APIRouter(prefix="/hub")
 
 
-def _resolve_dependency(value, provider) -> HubStatusReader:
-    if isinstance(value, DependsParam):
-        return provider()
-    return value
-
-
 @router.get("/my-status", response_model=HubStatusResponse)
 async def hub_status_for_user(
     user: ClerkUser = Depends(get_current_user),
     svc: HubStatusReader = Depends(get_hub_relay_service),
 ):
-    svc = _resolve_dependency(svc, get_hub_relay_service)
     hubs = await svc.get_hub_status(user.user_id)
     return HubStatusResponse(hubs=hubs)
 

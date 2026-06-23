@@ -1,7 +1,5 @@
-from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
-from fastapi.params import Depends as DependsParam
 
 from api_gateway.dependencies import get_file_storage, get_room_ownership_reader
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
@@ -11,12 +9,6 @@ from common.protocols import FileStorage, RoomOwnershipReader
 from models.file_upload import FileUploadResponse
 
 router = APIRouter(prefix="/files", tags=["files"])
-
-
-def _resolve_dependency(value: Any, provider) -> Any:
-    if isinstance(value, DependsParam):
-        return provider()
-    return value
 
 
 @router.post("/upload")
@@ -35,8 +27,6 @@ async def upload_file(
 
     Returns FileUploadResponse with file_id and presigned URL.
     """
-    storage = _resolve_dependency(storage, get_file_storage)
-    room_ownership = _resolve_dependency(room_ownership, get_room_ownership_reader)
 
     if not room_id:
         raise HTTPException(status_code=400, detail="room_id is required")
