@@ -333,6 +333,10 @@ def test_phase9_route_inventory_matches_live_app_routes():
         assert route["openapi_response_codes"] == live[key]["openapi_response_codes"]
         assert route["response_class"] == live[key]["response_class"]
         assert not route["owning_protocol"].startswith("blocked:")
+        assert not any(
+            protocol.startswith("blocked:")
+            for protocol in route.get("supporting_protocols") or []
+        )
 
 
 def test_route_inventory_auth_dependencies_are_only_auth_dependencies():
@@ -414,6 +418,8 @@ async def test_agent_viewset_mutations_reject_non_owner(mock_user_2, sample_agen
     repo.pk_field = "agent_id"
     repo.get = AsyncMock(return_value=sample_agent.model_dump(mode="json"))
     repo.update = AsyncMock()
+    embedding_provider = MagicMock()
+    vector_index = MagicMock()
 
     with pytest.raises(HTTPException) as exc_info:
         await AgentViewSet()._handle_operation(
@@ -421,6 +427,8 @@ async def test_agent_viewset_mutations_reject_non_owner(mock_user_2, sample_agen
             repo,
             sample_agent.agent_id,
             sample_agent,
+            embedding_provider=embedding_provider,
+            vector_index=vector_index,
             user=mock_user_2,
         )
 
@@ -551,6 +559,21 @@ def test_phase9_route_inventory_does_not_use_app_shell_bound_protocols():
     assert not violations, (
         "Routes must not use app_shell.bound protocol shims:\n" + "\n".join(violations)
     )
+
+
+def test_phase9_route_inventory_has_no_blocked_owners_or_supporting_protocols():
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    violations = []
+
+    for route in routes:
+        owner = route["owning_protocol"]
+        if owner.startswith("blocked:"):
+            violations.append(f"{route['path']} {route['name']}: {owner}")
+        for protocol in route.get("supporting_protocols") or []:
+            if protocol.startswith("blocked:"):
+                violations.append(f"{route['path']} {route['name']}: {protocol}")
+
+    assert not violations, "Blocked route protocols remain:\n" + "\n".join(violations)
 
 
 def test_phase9_route_inventory_owners_are_protocol_symbols():
@@ -779,7 +802,11 @@ def test_room_active_runs_inventory_records_execution_support():
     route_source = inspect.getsource(room_center)
     room_runtime_source = Path("app_shell/room_runtime.py").read_text()
 
-    assert "_require_execution_engine().get_runs_for_room" in route_source
+    assert "_require_execution_engine" not in route_source
+    assert "runs = await engine.get_runs_for_room(room_id)" in route_source
+    assert (
+        "active_runs = await _active_run_refs_for_room(room_id, engine)" in route_source
+    )
     assert "_read_active_runs_for_room" not in room_runtime_source
     assert "common.protocols.ExecutionEngine" in set(
         room_setting_route.get("supporting_protocols") or []
@@ -992,13 +1019,12 @@ def test_hub_route_dependencies_are_typed_with_route_facing_protocol():
     from typing import get_type_hints
 
     from api import hub
+    from api_gateway import dependencies as gateway_deps
     from common.protocols import HubStatusReader
 
-    bind_hints = get_type_hints(hub.bind_hub_dependencies)
-    provider_hints = get_type_hints(hub.get_hub_relay_service)
+    provider_hints = get_type_hints(gateway_deps.get_hub_relay_service)
     route_hints = get_type_hints(hub.hub_status_for_user)
 
-    assert bind_hints["service"] is HubStatusReader
     assert provider_hints["return"] is HubStatusReader
     assert route_hints["svc"] is HubStatusReader
     assert "svc" in inspect.signature(hub.hub_status_for_user).parameters
@@ -1075,27 +1101,6 @@ def test_agent_routes_expose_typed_dependency_providers():
     assert not missing, "Agent routes hide route owner dependencies:\n" + "\n".join(
         missing
     )
-
-
-def test_agent_dependency_providers_fail_when_unbound(monkeypatch):
-    from api import agent
-
-    monkeypatch.setattr(agent, "agent_center", None)
-    monkeypatch.setattr(agent, "agent_service", None)
-    monkeypatch.setattr(agent, "capability_issue_service", None)
-    monkeypatch.setattr(agent, "agent_avatar_manager", None)
-    monkeypatch.setattr(agent, "agent_liveness_checker", None)
-
-    providers = (
-        agent.get_agent_center,
-        agent.get_agent_service,
-        agent.get_capability_issue_service,
-        agent.get_agent_avatar_manager,
-        agent.get_agent_liveness_checker,
-    )
-    for provider in providers:
-        with pytest.raises(RuntimeError):
-            provider()
 
 
 def test_agent_route_inventory_records_live_protocol_owners():
@@ -1219,14 +1224,18 @@ def test_file_upload_route_uses_room_ownership_reader_protocol():
     from typing import get_type_hints
 
     from api import files
-    from common.protocols import RoomOwnershipReader
+    from api_gateway import dependencies as gateway_deps
+    from common.protocols import FileStorage, RoomOwnershipReader
 
-    bind_hints = get_type_hints(files.bind_file_dependencies)
-    provider_hints = get_type_hints(files.get_room_ownership_reader)
+    storage_provider_hints = get_type_hints(gateway_deps.get_file_storage)
+    room_ownership_provider_hints = get_type_hints(
+        gateway_deps.get_room_ownership_reader
+    )
     route_hints = get_type_hints(files.upload_file)
 
-    assert bind_hints["room_ownership"] is RoomOwnershipReader
-    assert provider_hints["return"] is RoomOwnershipReader
+    assert storage_provider_hints["return"] is FileStorage
+    assert room_ownership_provider_hints["return"] is RoomOwnershipReader
+    assert route_hints["storage"] is FileStorage
     assert route_hints["room_ownership"] is RoomOwnershipReader
     assert "room_ownership" in inspect.signature(files.upload_file).parameters
 
@@ -1347,16 +1356,16 @@ def test_relay_route_dependencies_are_typed_with_route_facing_protocol():
     from typing import get_type_hints
 
     from api import relay
+    from api_gateway import dependencies as gateway_deps
     from common.protocols import APIKeyPrincipal, HubRelayManagement
 
-    bind_hints = get_type_hints(relay.bind_relay_dependencies)
-    provider_hints = get_type_hints(relay.get_relay_service)
+    provider_hints = get_type_hints(gateway_deps.get_relay_service)
     route_hints = get_type_hints(relay.relay_register)
     register_sig = inspect.signature(HubRelayManagement.register_hub)
 
-    assert bind_hints["service"] is HubRelayManagement
     assert provider_hints["return"] is HubRelayManagement
     assert route_hints["svc"] is HubRelayManagement
+    assert "svc" in inspect.signature(relay.relay_register).parameters
     assert register_sig.parameters["api_key"].annotation is APIKeyPrincipal
 
 

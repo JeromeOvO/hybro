@@ -428,7 +428,7 @@
       "POST"
     ],
     "name": "create_endpoint",
-    "endpoint_module": "api_gateway.viewsets.base",
+    "endpoint_module": "api_gateway.viewsets.agent",
     "declared_owner": "api_gateway.routes.agent_routes",
     "tags": [
       "agent",
@@ -436,8 +436,11 @@
     ],
     "status_code": 201,
     "dependencies": [
+      "get_agent_viewset_embedding_provider",
+      "get_agent_viewset_vector_index",
       "get_current_user",
-      "get_viewset_repository"
+      "get_viewset_repository",
+      "get_viewset_repository_provider"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -458,8 +461,10 @@
     ],
     "status_code": 204,
     "dependencies": [
+      "get_agent_viewset_vector_index",
       "get_current_user",
-      "get_viewset_repository"
+      "get_viewset_repository",
+      "get_viewset_repository_provider"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -502,8 +507,11 @@
     ],
     "status_code": null,
     "dependencies": [
+      "get_agent_viewset_embedding_provider",
+      "get_agent_viewset_vector_index",
       "get_current_user",
-      "get_viewset_repository"
+      "get_viewset_repository",
+      "get_viewset_repository_provider"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -524,8 +532,11 @@
     ],
     "status_code": null,
     "dependencies": [
+      "get_agent_viewset_embedding_provider",
+      "get_agent_viewset_vector_index",
       "get_current_user",
-      "get_viewset_repository"
+      "get_viewset_repository",
+      "get_viewset_repository_provider"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1037,7 +1048,9 @@
     "status_code": null,
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_execution_engine",
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1058,7 +1071,8 @@
     "status_code": null,
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1079,7 +1093,9 @@
     "status_code": null,
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_execution_engine",
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1120,7 +1136,9 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_execution_engine",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1162,7 +1180,8 @@
     "status_code": null,
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1183,7 +1202,8 @@
     "status_code": null,
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1204,7 +1224,8 @@
     "status_code": null,
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1246,7 +1267,9 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_hitl_manager",
+      "get_room_ownership_reader"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1267,7 +1290,9 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_hitl_manager",
+      "get_room_ownership_reader"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1288,7 +1313,9 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_hitl_manager",
+      "get_room_ownership_reader"
     ],
     "auth_dependencies": [
       "get_current_user"

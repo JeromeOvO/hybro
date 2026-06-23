@@ -1,4 +1,3 @@
-
 """
 Unit tests for Gateway API endpoints.
 
@@ -11,7 +10,7 @@ Tests cover:
 - Error handling
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from a2a.types import (
@@ -38,7 +37,7 @@ from models.gateway import (
     GatewayDiscoveryResponse,
     GatewaySendRequest,
 )
-from tests.conftest import FROZEN_TIME, PATCH
+from tests.conftest import FROZEN_TIME
 
 # =============================================================================
 # Fixtures
@@ -89,17 +88,14 @@ def _mock_gateway_service():
 class TestGatewayDiscover:
     @pytest.mark.asyncio
     async def test_returns_discovery_results(self, sample_api_key):
-        expected = GatewayDiscoveryResponse(
-            query="data analysis", agents=[], count=0
-        )
+        expected = GatewayDiscoveryResponse(query="data analysis", agents=[], count=0)
         mock_svc = _mock_gateway_service()
         mock_svc.discover_agents = AsyncMock(return_value=expected)
         mock_rl = _mock_rate_limit()
 
         body = GatewayDiscoverRequest(query="data analysis", limit=5)
 
-        with patch(PATCH["gateway.gateway_rate_limit_service"], mock_rl):
-            result = await gateway_discover(body, sample_api_key, mock_svc)
+        result = await gateway_discover(body, sample_api_key, mock_svc, mock_rl)
 
         assert result.query == "data analysis"
         assert result.count == 0
@@ -108,16 +104,13 @@ class TestGatewayDiscover:
 
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_no_agents_found(self, sample_api_key):
-        expected = GatewayDiscoveryResponse(
-            query="obscure topic", agents=[], count=0
-        )
+        expected = GatewayDiscoveryResponse(query="obscure topic", agents=[], count=0)
         mock_svc = _mock_gateway_service()
         mock_svc.discover_agents = AsyncMock(return_value=expected)
         mock_rl = _mock_rate_limit()
         body = GatewayDiscoverRequest(query="obscure topic")
 
-        with patch(PATCH["gateway.gateway_rate_limit_service"], mock_rl):
-            result = await gateway_discover(body, sample_api_key, mock_svc)
+        result = await gateway_discover(body, sample_api_key, mock_svc, mock_rl)
 
         assert result.query == "obscure topic"
         assert result.agents == []
@@ -132,9 +125,8 @@ class TestGatewayDiscover:
         mock_rl = _mock_rate_limit()
         body = GatewayDiscoverRequest(query="test")
 
-        with patch(PATCH["gateway.gateway_rate_limit_service"], mock_rl):
-            with pytest.raises(HTTPException) as exc:
-                await gateway_discover(body, sample_api_key, mock_svc)
+        with pytest.raises(HTTPException) as exc:
+            await gateway_discover(body, sample_api_key, mock_svc, mock_rl)
         assert exc.value.status_code == 502
 
     @pytest.mark.asyncio
@@ -174,8 +166,9 @@ class TestGatewaySend:
 
         body = GatewaySendRequest(message=sample_message)
 
-        with patch(PATCH["gateway.gateway_rate_limit_service"], mock_rl):
-            result = await gateway_send("agent-001", body, sample_api_key, mock_svc)
+        result = await gateway_send(
+            "agent-001", body, sample_api_key, mock_svc, mock_rl
+        )
 
         assert result == {"ok": True}
         mock_svc.send_message.assert_called_once_with(
@@ -198,9 +191,8 @@ class TestGatewaySend:
         mock_rl = _mock_rate_limit()
         body = GatewaySendRequest(message=sample_message)
 
-        with patch(PATCH["gateway.gateway_rate_limit_service"], mock_rl):
-            with pytest.raises(HTTPException) as exc:
-                await gateway_send("bad-agent", body, sample_api_key, mock_svc)
+        with pytest.raises(HTTPException) as exc:
+            await gateway_send("bad-agent", body, sample_api_key, mock_svc, mock_rl)
         assert exc.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -235,15 +227,17 @@ class TestGatewaySend:
 class TestGatewayGetCard:
     @pytest.mark.asyncio
     async def test_returns_masked_card(self, sample_api_key):
-        masked_card = {"name": "Test", "url": "https://gateway/agents/agent-001/message/send"}
+        masked_card = {
+            "name": "Test",
+            "url": "https://gateway/agents/agent-001/message/send",
+        }
         mock_svc = _mock_gateway_service()
         mock_svc.get_agent_card = AsyncMock(
             return_value=GatewayResponse(status_code=200, payload=masked_card)
         )
         mock_rl = _mock_rate_limit()
 
-        with patch(PATCH["gateway.gateway_rate_limit_service"], mock_rl):
-            result = await gateway_get_card("agent-001", sample_api_key, mock_svc)
+        result = await gateway_get_card("agent-001", sample_api_key, mock_svc, mock_rl)
 
         assert isinstance(result, GatewayCardResponse)
         assert result.agent_id == "agent-001"
@@ -265,8 +259,9 @@ class TestGatewayStream:
 
         body = GatewaySendRequest(message=sample_message)
 
-        with patch(PATCH["gateway.gateway_rate_limit_service"], mock_rl):
-            result = await gateway_stream("agent-001", body, sample_api_key, mock_svc)
+        result = await gateway_stream(
+            "agent-001", body, sample_api_key, mock_svc, mock_rl
+        )
 
         assert result.media_type == "text/event-stream"
         mock_svc.prepare_stream.assert_called_once_with(
@@ -281,7 +276,9 @@ class TestGatewayStream:
         )
 
     @pytest.mark.asyncio
-    async def test_stream_agent_not_found_returns_http_error(self, sample_api_key, sample_message):
+    async def test_stream_agent_not_found_returns_http_error(
+        self, sample_api_key, sample_message
+    ):
         mock_svc = _mock_gateway_service()
         mock_svc.prepare_stream = AsyncMock(
             side_effect=HTTPException(status_code=404, detail="Not found")
@@ -289,13 +286,14 @@ class TestGatewayStream:
         mock_rl = _mock_rate_limit()
         body = GatewaySendRequest(message=sample_message)
 
-        with patch(PATCH["gateway.gateway_rate_limit_service"], mock_rl):
-            with pytest.raises(HTTPException) as exc:
-                await gateway_stream("bad-agent", body, sample_api_key, mock_svc)
+        with pytest.raises(HTTPException) as exc:
+            await gateway_stream("bad-agent", body, sample_api_key, mock_svc, mock_rl)
         assert exc.value.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_stream_access_denied_returns_http_error(self, sample_api_key, sample_message):
+    async def test_stream_access_denied_returns_http_error(
+        self, sample_api_key, sample_message
+    ):
         mock_svc = _mock_gateway_service()
         mock_svc.prepare_stream = AsyncMock(
             side_effect=HTTPException(status_code=403, detail="Access denied")
@@ -303,9 +301,10 @@ class TestGatewayStream:
         mock_rl = _mock_rate_limit()
         body = GatewaySendRequest(message=sample_message)
 
-        with patch(PATCH["gateway.gateway_rate_limit_service"], mock_rl):
-            with pytest.raises(HTTPException) as exc:
-                await gateway_stream("private-agent", body, sample_api_key, mock_svc)
+        with pytest.raises(HTTPException) as exc:
+            await gateway_stream(
+                "private-agent", body, sample_api_key, mock_svc, mock_rl
+            )
         assert exc.value.status_code == 403
 
     @pytest.mark.asyncio
@@ -342,11 +341,15 @@ class TestGatewayStream:
         self, sample_api_key, sample_message
     ):
         mock_svc = _mock_gateway_service()
-        mock_svc.prepare_stream = AsyncMock(return_value=iterate_in_threadpool([{"ok": True}]))
+        mock_svc.prepare_stream = AsyncMock(
+            return_value=iterate_in_threadpool([{"ok": True}])
+        )
         mock_rl = _mock_rate_limit()
         body = GatewaySendRequest(message=sample_message)
 
-        result = await gateway_stream("agent-001", body, sample_api_key, mock_svc, mock_rl)
+        result = await gateway_stream(
+            "agent-001", body, sample_api_key, mock_svc, mock_rl
+        )
         chunks = [chunk async for chunk in result.body_iterator]
 
         assert chunks == ['data: {"ok": true}\n\n']
@@ -371,7 +374,9 @@ class TestGatewayStream:
         mock_rl = _mock_rate_limit()
         body = GatewaySendRequest(message=sample_message)
 
-        result = await gateway_stream("agent-001", body, sample_api_key, mock_svc, mock_rl)
+        result = await gateway_stream(
+            "agent-001", body, sample_api_key, mock_svc, mock_rl
+        )
         chunks = [chunk async for chunk in result.body_iterator]
 
         assert chunks == [
@@ -393,7 +398,9 @@ class TestGatewayStream:
         mock_rl = _mock_rate_limit()
         body = GatewaySendRequest(message=sample_message)
 
-        result = await gateway_stream("agent-001", body, sample_api_key, mock_svc, mock_rl)
+        result = await gateway_stream(
+            "agent-001", body, sample_api_key, mock_svc, mock_rl
+        )
         chunks = [chunk async for chunk in result.body_iterator]
 
         assert '"message": "agent_error"' in chunks[0]

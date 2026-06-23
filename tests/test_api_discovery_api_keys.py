@@ -24,7 +24,6 @@ from models.response import (
 )
 from tests.conftest import FROZEN_TIME
 
-PATCH_MONGODB = "api.discovery_api_keys.api_key_store"
 PATCH_GENERATE = "api.discovery_api_keys.generate_api_key"
 PATCH_HASH = "api.discovery_api_keys.hash_api_key"
 
@@ -111,8 +110,7 @@ class TestListApiKeys:
             return_value=[older_key, active_key]
         )
 
-        with patch(PATCH_MONGODB, mock_mongodb):
-            result = await list_api_keys(current_user=user)
+        result = await list_api_keys(current_user=user, store=mock_mongodb)
 
         assert isinstance(result, APIKeyListResponse)
         assert result.count == 2
@@ -125,8 +123,7 @@ class TestListApiKeys:
     async def test_list_api_keys_empty(self, user, mock_mongodb):
         mock_mongodb.get_api_keys_by_user = AsyncMock(return_value=[])
 
-        with patch(PATCH_MONGODB, mock_mongodb):
-            result = await list_api_keys(current_user=user)
+        result = await list_api_keys(current_user=user, store=mock_mongodb)
 
         assert result.count == 0
         assert result.keys == []
@@ -137,9 +134,8 @@ class TestListApiKeys:
             side_effect=Exception("connection lost")
         )
 
-        with patch(PATCH_MONGODB, mock_mongodb):
-            with pytest.raises(HTTPException) as exc:
-                await list_api_keys(current_user=user)
+        with pytest.raises(HTTPException) as exc:
+            await list_api_keys(current_user=user, store=mock_mongodb)
 
         assert exc.value.status_code == 500
         assert exc.value.detail["error"] == "internal_error"
@@ -158,11 +154,14 @@ class TestCreateApiKey:
         request_body = APIKeyCreateRequest(name="My New Key")
 
         with (
-            patch(PATCH_MONGODB, mock_mongodb),
             patch(PATCH_GENERATE, return_value=FAKE_PLAINTEXT_KEY),
             patch(PATCH_HASH, return_value=FAKE_HASH),
         ):
-            result = await create_api_key(request_body=request_body, current_user=user)
+            result = await create_api_key(
+                request_body=request_body,
+                current_user=user,
+                store=mock_mongodb,
+            )
 
         assert isinstance(result, APIKeyCreateResponse)
         assert result.api_key == FAKE_PLAINTEXT_KEY
@@ -176,9 +175,12 @@ class TestCreateApiKey:
     async def test_create_api_key_empty_name_rejected(self, user, mock_mongodb):
         request_body = APIKeyCreateRequest(name="   ")
 
-        with patch(PATCH_MONGODB, mock_mongodb):
-            with pytest.raises(HTTPException) as exc:
-                await create_api_key(request_body=request_body, current_user=user)
+        with pytest.raises(HTTPException) as exc:
+            await create_api_key(
+                request_body=request_body,
+                current_user=user,
+                store=mock_mongodb,
+            )
 
         assert exc.value.status_code == 400
         assert exc.value.detail["error"] == "invalid_name"
@@ -189,11 +191,14 @@ class TestCreateApiKey:
         request_body = APIKeyCreateRequest(name="Hash Test Key")
 
         with (
-            patch(PATCH_MONGODB, mock_mongodb),
             patch(PATCH_GENERATE, return_value=FAKE_PLAINTEXT_KEY),
             patch(PATCH_HASH, return_value=FAKE_HASH),
         ):
-            await create_api_key(request_body=request_body, current_user=user)
+            await create_api_key(
+                request_body=request_body,
+                current_user=user,
+                store=mock_mongodb,
+            )
 
         stored_key: APIKey = mock_mongodb.add_api_key.call_args[0][0]
         assert stored_key.key_hash == FAKE_HASH
@@ -213,10 +218,11 @@ class TestDeactivateApiKey:
         mock_mongodb.get_api_key_by_id = AsyncMock(return_value=active_key)
         mock_mongodb.deactivate_api_key = AsyncMock(return_value=True)
 
-        with patch(PATCH_MONGODB, mock_mongodb):
-            result = await deactivate_api_key(
-                key_id=active_key.key_id, current_user=user
-            )
+        result = await deactivate_api_key(
+            key_id=active_key.key_id,
+            current_user=user,
+            store=mock_mongodb,
+        )
 
         assert isinstance(result, APIKeyOperationResponse)
         assert result.success is True
@@ -229,10 +235,11 @@ class TestDeactivateApiKey:
     ):
         mock_mongodb.get_api_key_by_id = AsyncMock(return_value=inactive_key)
 
-        with patch(PATCH_MONGODB, mock_mongodb):
-            result = await deactivate_api_key(
-                key_id=inactive_key.key_id, current_user=user
-            )
+        result = await deactivate_api_key(
+            key_id=inactive_key.key_id,
+            current_user=user,
+            store=mock_mongodb,
+        )
 
         assert result.success is True
         assert "already inactive" in result.message.lower()
@@ -242,9 +249,12 @@ class TestDeactivateApiKey:
     async def test_deactivate_key_not_found_returns_404(self, user, mock_mongodb):
         mock_mongodb.get_api_key_by_id = AsyncMock(return_value=None)
 
-        with patch(PATCH_MONGODB, mock_mongodb):
-            with pytest.raises(HTTPException) as exc:
-                await deactivate_api_key(key_id="nonexistent-key", current_user=user)
+        with pytest.raises(HTTPException) as exc:
+            await deactivate_api_key(
+                key_id="nonexistent-key",
+                current_user=user,
+                store=mock_mongodb,
+            )
 
         assert exc.value.status_code == 404
         assert exc.value.detail["error"] == "not_found"
@@ -255,11 +265,12 @@ class TestDeactivateApiKey:
     ):
         mock_mongodb.get_api_key_by_id = AsyncMock(return_value=active_key)
 
-        with patch(PATCH_MONGODB, mock_mongodb):
-            with pytest.raises(HTTPException) as exc:
-                await deactivate_api_key(
-                    key_id=active_key.key_id, current_user=other_user
-                )
+        with pytest.raises(HTTPException) as exc:
+            await deactivate_api_key(
+                key_id=active_key.key_id,
+                current_user=other_user,
+                store=mock_mongodb,
+            )
 
         assert exc.value.status_code == 404
         assert exc.value.detail["error"] == "not_found"
@@ -269,11 +280,12 @@ class TestDeactivateApiKey:
         mock_mongodb.get_api_key_by_id = AsyncMock(return_value=active_key)
         mock_mongodb.deactivate_api_key = AsyncMock(return_value=False)
 
-        with patch(PATCH_MONGODB, mock_mongodb):
-            with pytest.raises(HTTPException) as exc:
-                await deactivate_api_key(
-                    key_id=active_key.key_id, current_user=user
-                )
+        with pytest.raises(HTTPException) as exc:
+            await deactivate_api_key(
+                key_id=active_key.key_id,
+                current_user=user,
+                store=mock_mongodb,
+            )
 
         assert exc.value.status_code == 500
         assert exc.value.detail["error"] == "deactivation_failed"

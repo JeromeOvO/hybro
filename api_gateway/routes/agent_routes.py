@@ -8,6 +8,13 @@ from agent.protocols import (
     AgentCenterCompatibility,
     AgentLivenessChecker,
 )
+from api_gateway.dependencies import (
+    get_agent_avatar_manager,
+    get_agent_center,
+    get_agent_liveness_checker,
+    get_agent_service,
+    get_capability_issue_service,
+)
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from api_gateway.viewsets.agent import AgentViewSet
 from common.auth import (
@@ -23,82 +30,6 @@ from models.response import AgentCenterResponse
 router = APIRouter()
 agent_viewset = AgentViewSet()
 router.include_router(agent_viewset.get_router())
-agent_center: AgentCenterCompatibility | None = None
-agent_service: AgentRegistry | None = None
-capability_issue_service: AgentCapabilityIssueStore | None = None
-agent_avatar_manager: AgentAvatarManager | None = None
-agent_liveness_checker: AgentLivenessChecker | None = None
-
-
-def bind_agent_dependencies(
-    *,
-    center: AgentCenterCompatibility,
-    service: AgentRegistry,
-    issue_service: AgentCapabilityIssueStore,
-    avatar_manager: AgentAvatarManager,
-) -> None:
-    global agent_center, agent_service, capability_issue_service, agent_avatar_manager
-
-    agent_center = center
-    agent_service = service
-    capability_issue_service = issue_service
-    agent_avatar_manager = avatar_manager
-
-
-def bind_agent_liveness_checker(checker: AgentLivenessChecker) -> None:
-    global agent_liveness_checker
-
-    agent_liveness_checker = checker
-
-
-def _require_agent_center() -> AgentCenterCompatibility:
-    if agent_center is None:
-        raise RuntimeError("Agent center dependency has not been bound")
-    return agent_center
-
-
-def _require_agent_service() -> AgentRegistry:
-    if agent_service is None:
-        raise RuntimeError("Agent service dependency has not been bound")
-    return agent_service
-
-
-def _require_capability_issue_service() -> AgentCapabilityIssueStore:
-    if capability_issue_service is None:
-        raise RuntimeError("Capability issue dependency has not been bound")
-    return capability_issue_service
-
-
-def _require_agent_avatar_manager() -> AgentAvatarManager:
-    if agent_avatar_manager is None:
-        raise RuntimeError("Agent avatar dependency has not been bound")
-    return agent_avatar_manager
-
-
-def _require_agent_liveness_checker() -> AgentLivenessChecker:
-    if agent_liveness_checker is None:
-        raise RuntimeError("Agent liveness dependency has not been bound")
-    return agent_liveness_checker
-
-
-def get_agent_center() -> AgentCenterCompatibility:
-    return _require_agent_center()
-
-
-def get_agent_service() -> AgentRegistry:
-    return _require_agent_service()
-
-
-def get_capability_issue_service() -> AgentCapabilityIssueStore:
-    return _require_capability_issue_service()
-
-
-def get_agent_avatar_manager() -> AgentAvatarManager:
-    return _require_agent_avatar_manager()
-
-
-def get_agent_liveness_checker() -> AgentLivenessChecker:
-    return _require_agent_liveness_checker()
 
 
 def _resolve_dependency(value, provider):
@@ -224,7 +155,9 @@ async def update_agent(
     return agent_center_response
 
 
-_AVATAR_ALLOWED_TYPES = frozenset({"image/jpeg", "image/png", "image/webp", "image/gif"})
+_AVATAR_ALLOWED_TYPES = frozenset(
+    {"image/jpeg", "image/png", "image/webp", "image/gif"}
+)
 _AVATAR_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
 _AVATAR_EXT_MAP = {
     "image/jpeg": "jpg",
@@ -342,9 +275,7 @@ async def resolve_all_capability_issues(
             detail="You do not have permission to resolve issues for this agent",
         )
 
-    count = await issue_store.resolve_all_for_agent(
-        agent_id, user.user_id
-    )
+    count = await issue_store.resolve_all_for_agent(agent_id, user.user_id)
     return {"resolved_count": count}
 
 
@@ -430,7 +361,9 @@ async def get_agent(
         liveness_checker = _resolve_dependency(
             liveness_checker, get_agent_liveness_checker
         )
-        agent_center_response.agent = await liveness_checker(agent_center_response.agent)
+        agent_center_response.agent = await liveness_checker(
+            agent_center_response.agent
+        )
 
     return center.finalize_agent_response_for_route(agent_center_response)
 

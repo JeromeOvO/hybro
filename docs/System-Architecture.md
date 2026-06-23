@@ -993,6 +993,15 @@ app-shell, execution, delivery, platform, or LLM concrete implementations
 directly. API Gateway route modules should not import app-shell protocol surfaces
 or concrete module facades/services directly.
 
+API Gateway route modules are thin HTTP adapters. Business dependencies for
+routes and API viewsets are assembled once during application startup into
+`APIGatewayDeps` and stored on `app.state.api_gateway_deps`; provider functions
+in `api_gateway.dependencies` expose those objects through FastAPI `Depends`.
+Route modules must not own mutable dependency globals or `bind_*` startup
+functions, and route-level scalar configuration such as discovery defaults is
+passed through the same runtime dependency context rather than imported from
+global settings.
+
 ## Testing and Verification
 
 The repository uses `pytest` and `ruff`.

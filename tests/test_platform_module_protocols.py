@@ -122,21 +122,16 @@ def test_api_routes_call_only_api_key_rate_limiter_protocol_methods():
     )
 
 
-def test_container_binds_gateway_and_discovery_rate_limiters_from_platform_facade():
+def test_container_injects_gateway_and_discovery_rate_limiters_into_gateway_deps():
     source = Path("container.py").read_text()
     main_source = Path("main.py").read_text()
-
     assert "PlatformRouteAPIKeyRateLimiter" not in source
+    assert "gateway.bind_gateway_dependencies(" not in source
+    assert "discovery.bind_discovery_dependencies(" not in source
     assert "gateway.bind_gateway_dependencies(" not in main_source
     assert "discovery.bind_discovery_dependencies(" not in main_source
-    assert (
-        "gateway.bind_gateway_dependencies(\n                platform_facade.gateway_service,\n                platform_facade.gateway_rate_limiter"
-        in source
-    )
-    assert (
-        "discovery.bind_discovery_dependencies(\n                platform_facade.discovery_service,\n                platform_facade.discovery_rate_limiter"
-        in source
-    )
+    assert "gateway_rate_limiter=platform_facade.gateway_rate_limiter" in source
+    assert "discovery_rate_limiter=platform_facade.discovery_rate_limiter" in source
 
 
 def test_container_uses_execution_room_message_center_runtime_for_startup_wiring():
@@ -424,20 +419,20 @@ def test_direct_transport_does_not_partially_rebind_a2a_artifact_storage():
     )
 
 
-def test_file_route_dependencies_can_be_rebound_without_concrete_services():
-    from api.files import (
-        bind_file_dependencies,
-        get_file_storage,
-        get_room_ownership_reader,
-    )
+def test_file_route_dependencies_are_read_from_gateway_deps_without_concrete_services():
+    from types import SimpleNamespace
+
+    from api_gateway.dependencies import get_file_storage, get_room_ownership_reader
 
     storage = object()
     room_ownership = object()
+    deps = SimpleNamespace(
+        file_storage=storage,
+        room_ownership_reader=room_ownership,
+    )
 
-    bind_file_dependencies(storage, room_ownership)
-
-    assert get_file_storage() is storage
-    assert get_room_ownership_reader() is room_ownership
+    assert get_file_storage(deps) is storage
+    assert get_room_ownership_reader(deps) is room_ownership
 
 
 def test_platform_config_is_scalar_only():
@@ -473,15 +468,13 @@ def test_platform_module_does_not_import_app_shell_or_legacy_services():
     assert not violations, "Forbidden platform imports:\n" + "\n".join(violations)
 
 
-def test_container_binds_discovery_route_to_platform_facade():
+def test_container_injects_discovery_route_from_platform_facade():
     source = Path("container.py").read_text()
     main_source = Path("main.py").read_text()
 
-    assert (
-        "discovery.bind_discovery_dependencies(\n                platform_facade.discovery_service"
-        in source
-    )
+    assert "discovery.bind_discovery_dependencies(" not in source
     assert "discovery.bind_discovery_dependencies(" not in main_source
+    assert "discovery_service=platform_facade.discovery_service" in source
 
 
 def test_gateway_discovery_is_not_backed_by_legacy_discovery_service():

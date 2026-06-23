@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.params import Depends as DependsParam
 from fastapi.responses import StreamingResponse
 
+from api_gateway.dependencies import get_gateway_rate_limiter, get_gateway_service
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.api_key_auth import get_api_key
 from common.dto import GatewayResponse, InternalAgentMessage
@@ -32,34 +33,9 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 
-gateway_service: GatewayService | None = None
-gateway_rate_limit_service: APIKeyRateLimiter | None = None
-
-
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
-
-def bind_gateway_dependencies(
-    service: GatewayService,
-    rate_limiter: APIKeyRateLimiter,
-) -> None:
-    global gateway_service, gateway_rate_limit_service
-
-    gateway_service = service
-    gateway_rate_limit_service = rate_limiter
-
-
-def get_gateway_service() -> GatewayService:
-    if gateway_service is None:
-        raise RuntimeError("Gateway service dependency has not been bound")
-    return gateway_service
-
-
-def get_gateway_rate_limiter() -> APIKeyRateLimiter:
-    if gateway_rate_limit_service is None:
-        raise RuntimeError("Gateway rate limiter dependency has not been bound")
-    return gateway_rate_limit_service
 
 
 def _resolve_dependency(value: Any, provider) -> Any:
@@ -134,6 +110,7 @@ def _gateway_payload(response: GatewayResponse):
 # Endpoints
 # ---------------------------------------------------------------------------
 
+
 @router.post(
     "/gateway/agents/discover",
     response_model=GatewayDiscoveryResponse,
@@ -161,7 +138,10 @@ async def gateway_discover(
         logger.error(f"Gateway discover failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"error": "discovery_error", "message": "Agent discovery service unavailable"},
+            detail={
+                "error": "discovery_error",
+                "message": "Agent discovery service unavailable",
+            },
         ) from e
     await _record_request(rate_limiter, api_key)
     return result

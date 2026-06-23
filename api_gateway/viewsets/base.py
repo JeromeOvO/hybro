@@ -3,6 +3,7 @@ from collections.abc import Callable, Iterable
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
+from api_gateway.dependencies import get_viewset_repository_provider
 from common.auth import get_current_user
 from common.protocols import (
     ViewSetFilterParams,
@@ -31,28 +32,11 @@ REPO_ACTIONS_MAP = {
     PATCH: "patch",
 }
 
-repository_provider: ViewSetRepositoryProvider | None = None
-
-
-def bind_viewset_dependencies(
-    *,
-    provider: ViewSetRepositoryProvider,
-) -> None:
-    global repository_provider
-
-    repository_provider = provider
-
-
-def _require_repository_provider() -> ViewSetRepositoryProvider:
-    if repository_provider is None:
-        raise RuntimeError("ViewSet repository provider has not been bound")
-    return repository_provider
-
 
 class ViewSet:
     """
     A class-based CRUD router generator for FastAPI with MongoDB support.
-    
+
     Arguments:
         resource_name (str): The name of the resource (used in the URL path).
         collection_name (str): The name of the collection in the database.
@@ -136,8 +120,11 @@ class ViewSet:
             if action in self.allow:
                 getattr(self, f"_add_{action}_route")()
 
-    def get_viewset_repository(self) -> ViewSetRepository:
-        return _require_repository_provider().get_repository(
+    def get_viewset_repository(
+        self,
+        provider: ViewSetRepositoryProvider = Depends(get_viewset_repository_provider),
+    ) -> ViewSetRepository:
+        return provider.get_repository(
             collection_name=self.collection_name,
             pk_field=self.pk_field,
         )
@@ -216,8 +203,11 @@ class ViewSet:
         async def create_endpoint(
             item: schema_in,
             repo: ViewSetRepository = Depends(self.get_viewset_repository),
+            provider: ViewSetRepositoryProvider = Depends(
+                get_viewset_repository_provider
+            ),
         ):
-            return await self._create(repo, item)
+            return await self._create(repo, item, repository_provider=provider)
 
         self.router.add_api_route(
             "",
@@ -237,8 +227,11 @@ class ViewSet:
             item_id: str,
             item: schema_in,
             repo: ViewSetRepository = Depends(self.get_viewset_repository),
+            provider: ViewSetRepositoryProvider = Depends(
+                get_viewset_repository_provider
+            ),
         ):
-            return await self._update(repo, item_id, item)
+            return await self._update(repo, item_id, item, repository_provider=provider)
 
         self.router.add_api_route(
             "/{item_id}",
@@ -257,8 +250,11 @@ class ViewSet:
             item_id: str,
             item: schema_in,
             repo: ViewSetRepository = Depends(self.get_viewset_repository),
+            provider: ViewSetRepositoryProvider = Depends(
+                get_viewset_repository_provider
+            ),
         ):
-            return await self._patch(repo, item_id, item)
+            return await self._patch(repo, item_id, item, repository_provider=provider)
 
         self.router.add_api_route(
             "/{item_id}",
@@ -274,8 +270,11 @@ class ViewSet:
         async def delete_endpoint(
             item_id: str,
             repo: ViewSetRepository = Depends(self.get_viewset_repository),
+            provider: ViewSetRepositoryProvider = Depends(
+                get_viewset_repository_provider
+            ),
         ):
-            return await self._delete(repo, item_id)
+            return await self._delete(repo, item_id, repository_provider=provider)
 
         self.router.add_api_route(
             "/{item_id}",
@@ -288,7 +287,11 @@ class ViewSet:
     # --- Default endpoint implementations (can be overridden) ---
 
     async def _handle_operation(
-        self, action: str, repo: ViewSetRepository, *args
+        self,
+        action: str,
+        repo: ViewSetRepository,
+        *args,
+        repository_provider: ViewSetRepositoryProvider | None = None,
     ) -> ViewSetResult:
         """Generic handler for CRUD operations."""
         method = getattr(repo, REPO_ACTIONS_MAP.get(action, action))
@@ -297,12 +300,14 @@ class ViewSet:
             return await method(*args)
 
         if self.use_transactions:
-            return await _require_repository_provider().run_in_transaction(operation)
+            if repository_provider is None:
+                raise RuntimeError(
+                    "ViewSet repository provider is required for transactions"
+                )
+            return await repository_provider.run_in_transaction(operation)
         return await operation()
 
-    def get_filters(
-        self, filter_params: ViewSetFilterParams | None = None
-    ) -> dict:
+    def get_filters(self, filter_params: ViewSetFilterParams | None = None) -> dict:
         """
         Get the base query filter for the list endpoint.
         Similar to Django's get_queryset - override in subclasses for custom filtering.
@@ -349,9 +354,7 @@ class ViewSet:
             sort_order=filters.sort_order if filters else -1,
         )
 
-        return await self._handle_operation(
-            LIST, repo, pagination, processed_filters
-        )
+        return await self._handle_operation(LIST, repo, pagination, processed_filters)
 
     async def _retrieve(self, repo: ViewSetRepository, item_id):
         result = await self._handle_operation(RETRIEVE, repo, item_id)
@@ -361,32 +364,36 @@ class ViewSet:
         #     )
         return result
 
-    async def _create(self, repo: ViewSetRepository, item):
-        result = await self._handle_operation(CREATE, repo, item)
+    async def _create(self, repo: ViewSetRepository, item, **operation_deps):
+        result = await self._handle_operation(CREATE, repo, item, **operation_deps)
         if not result:
             raise HTTPException(
                 status_code=400, detail=f"Failed to create {self.resource_name}"
             )
         return result
 
-    async def _update(self, repo: ViewSetRepository, item_id, item):
-        result = await self._handle_operation(UPDATE, repo, item_id, item)
+    async def _update(self, repo: ViewSetRepository, item_id, item, **operation_deps):
+        result = await self._handle_operation(
+            UPDATE, repo, item_id, item, **operation_deps
+        )
         if not result:
             raise HTTPException(
                 status_code=400, detail=f"Failed to update {self.resource_name}"
             )
         return result
 
-    async def _patch(self, repo: ViewSetRepository, item_id, item):
-        result = await self._handle_operation(PATCH, repo, item_id, item)
+    async def _patch(self, repo: ViewSetRepository, item_id, item, **operation_deps):
+        result = await self._handle_operation(
+            PATCH, repo, item_id, item, **operation_deps
+        )
         if not result:
             raise HTTPException(
                 status_code=400, detail=f"Failed to patch {self.resource_name}"
             )
         return result
 
-    async def _delete(self, repo: ViewSetRepository, item_id):
-        return await self._handle_operation(DELETE, repo, item_id)
+    async def _delete(self, repo: ViewSetRepository, item_id, **operation_deps):
+        return await self._handle_operation(DELETE, repo, item_id, **operation_deps)
 
     # --- Public methods for customization ---
 

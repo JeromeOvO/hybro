@@ -6,6 +6,7 @@ Delegates all business logic to ``WebhookTransport.handle_webhook()``.
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.params import Depends as DependsParam
 
+from api_gateway.dependencies import get_webhook_receiver
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.protocols import JsonMap, WebhookReceiver
 from common.utils.logger import get_logger
@@ -13,20 +14,6 @@ from common.utils.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter()
-
-webhook_receiver: WebhookReceiver | None = None
-
-
-def bind_webhook_dependencies(receiver: WebhookReceiver) -> None:
-    global webhook_receiver
-
-    webhook_receiver = receiver
-
-
-def get_webhook_receiver() -> WebhookReceiver:
-    if webhook_receiver is None:
-        raise RuntimeError("Webhook transport dependency has not been bound")
-    return webhook_receiver
 
 
 def _resolve_dependency(value: object, provider) -> object:

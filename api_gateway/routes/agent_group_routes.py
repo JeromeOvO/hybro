@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.params import Depends as DependsParam
 
 from agent.protocols import AgentGroupStoreCompatibility
+from api_gateway.dependencies import get_agent_group_store
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
 from models.agent_group import (
@@ -21,19 +22,6 @@ from models.agent_group import (
 )
 
 router = APIRouter()
-agent_group_store: AgentGroupStoreCompatibility | None = None
-
-
-def bind_agent_group_dependencies(store: AgentGroupStoreCompatibility) -> None:
-    global agent_group_store
-
-    agent_group_store = store
-
-
-def get_agent_group_store() -> AgentGroupStoreCompatibility:
-    if agent_group_store is None:
-        raise RuntimeError("Agent group database dependency has not been bound")
-    return agent_group_store
 
 
 def _resolve_dependency(value: Any, provider) -> Any:
