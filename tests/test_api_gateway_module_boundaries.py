@@ -84,6 +84,97 @@ def test_gateway_routes_import_only_module_protocol_surfaces():
     assert violations == []
 
 
+def test_gateway_route_modules_do_not_hold_business_dependency_globals():
+    dependency_global_names = {
+        "agent_avatar_manager",
+        "agent_center",
+        "agent_group_store",
+        "agent_liveness_checker",
+        "agent_selection_service",
+        "agent_service",
+        "api_key_store",
+        "capability_issue_service",
+        "discovery_default_limit",
+        "discovery_rate_limit_service",
+        "discovery_service",
+        "embedding_provider",
+        "execution_engine",
+        "file_storage",
+        "gateway_rate_limit_service",
+        "gateway_service",
+        "hitl_manager",
+        "hub_relay_service",
+        "inspection_center",
+        "memory_center",
+        "relay_service",
+        "repository_provider",
+        "room_center",
+        "room_ownership_reader",
+        "room_store",
+        "sse_manager",
+        "sse_store",
+        "task_store",
+        "vector_index",
+        "webhook_receiver",
+    }
+    paths = [
+        *Path("api_gateway/routes").glob("*.py"),
+        *Path("api_gateway/viewsets").glob("*.py"),
+    ]
+    violations: list[str] = []
+
+    for path in sorted(paths):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if (
+                        isinstance(target, ast.Name)
+                        and target.id in dependency_global_names
+                    ):
+                        violations.append(f"{path}:{node.lineno}: {target.id}")
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                if node.target.id in dependency_global_names:
+                    violations.append(f"{path}:{node.lineno}: {node.target.id}")
+            if isinstance(node, ast.FunctionDef) and node.name.startswith("bind_"):
+                violations.append(f"{path}:{node.lineno}: {node.name}")
+
+    assert not violations, (
+        "API Gateway route modules own mutable business dependencies:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_container_does_not_call_route_level_dependency_binders():
+    forbidden_snippets = (
+        ".bind_a2a_task_dependencies(",
+        ".bind_agent_dependencies(",
+        ".bind_agent_group_dependencies(",
+        ".bind_api_key_store(",
+        ".bind_discovery_dependencies(",
+        ".bind_execution_deps(",
+        ".bind_file_dependencies(",
+        ".bind_gateway_dependencies(",
+        ".bind_hub_dependencies(",
+        ".bind_inspection_dependencies(",
+        ".bind_memory_dependencies(",
+        ".bind_relay_dependencies(",
+        ".bind_room_dependencies(",
+        ".bind_room_ownership_reader(",
+        ".bind_sse_dependencies(",
+        ".bind_viewset_dependencies(",
+        ".bind_agent_viewset_dependencies(",
+        ".bind_webhook_dependencies(",
+    )
+    source = Path("container.py").read_text()
+    violations = [snippet for snippet in forbidden_snippets if snippet in source]
+
+    assert not violations, (
+        "Container still calls route-level dependency binders:\n"
+        + "\n".join(violations)
+    )
+
+
 def test_api_gateway_route_files_do_not_use_legacy_prefix():
     route_dir = Path("api_gateway/routes")
     route_files = route_dir.glob("*.py") if route_dir.exists() else []

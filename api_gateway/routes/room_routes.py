@@ -1,10 +1,14 @@
-from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.params import Depends as DependsParam
 
 from agent.protocols import AgentSuggestionService, serialize_agent_suggestion_result
+from api_gateway.dependencies import (
+    get_agent_selection_service,
+    get_execution_engine,
+    get_room_center,
+    get_room_store,
+)
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
 from common.dto import ExecutionRequest, RunInfo
@@ -23,63 +27,7 @@ from models.response import (
 from room.protocols import RoomCenterCompatibility
 
 router = APIRouter()
-room_center: RoomCenterCompatibility | None = None
-room_store: RoomRouteReader | None = None
-agent_selection_service: AgentSuggestionService | None = None
-execution_engine: ExecutionEngine | None = None
 logger = get_logger(__name__)
-
-
-def bind_room_dependencies(
-    *,
-    center: RoomCenterCompatibility,
-    store: RoomRouteReader,
-    selection_service: AgentSuggestionService,
-) -> None:
-    global room_center, room_store, agent_selection_service
-
-    room_center = center
-    room_store = store
-    agent_selection_service = selection_service
-
-
-def bind_execution_deps(deps) -> None:
-    global execution_engine
-    execution_engine = deps.execution_engine
-
-
-def _require_room_center() -> RoomCenterCompatibility:
-    if room_center is None:
-        raise RuntimeError("Room center dependency has not been bound")
-    return room_center
-
-
-def get_room_center() -> RoomCenterCompatibility:
-    return _require_room_center()
-
-
-def _require_room_store() -> RoomRouteReader:
-    if room_store is None:
-        raise RuntimeError("Room database dependency has not been bound")
-    return room_store
-
-
-def get_agent_selection_service() -> AgentSuggestionService:
-    if agent_selection_service is None:
-        raise RuntimeError("Agent selection dependency has not been bound")
-    return agent_selection_service
-
-
-def _require_execution_engine() -> ExecutionEngine:
-    if execution_engine is None:
-        raise RuntimeError("ExecutionDeps have not been bound")
-    return execution_engine
-
-
-def _resolve_dependency(value: Any, provider) -> Any:
-    if isinstance(value, DependsParam):
-        return provider()
-    return value
 
 
 def _run_info_to_active_run_ref(run: RunInfo) -> ActiveRunRef:
@@ -93,11 +41,16 @@ def _run_info_to_active_run_ref(run: RunInfo) -> ActiveRunRef:
     )
 
 
-async def _active_run_refs_for_room(room_id: str) -> list[ActiveRunRef]:
+async def _active_run_refs_for_room(
+    room_id: str,
+    engine: ExecutionEngine,
+) -> list[ActiveRunRef]:
     try:
-        runs = await _require_execution_engine().get_runs_for_room(room_id)
+        runs = await engine.get_runs_for_room(room_id)
     except Exception:
-        logger.warning("active-run lookup failed for room_id=%s", room_id, exc_info=True)
+        logger.warning(
+            "active-run lookup failed for room_id=%s", room_id, exc_info=True
+        )
         return []
     return [_run_info_to_active_run_ref(run) for run in runs]
 
@@ -144,7 +97,11 @@ def _extract_attachments(request_data: dict, message: dict | None):
     return attachments, inline_file_ids or None, None
 
 
-async def verify_room_ownership(room_id: str, user: ClerkUser) -> None:
+async def verify_room_ownership(
+    room_id: str,
+    user: ClerkUser,
+    store: RoomRouteReader,
+) -> None:
     """
     Verify that the current user owns the specified room.
     Raises HTTPException if the room doesn't exist or user is not the owner.
@@ -152,7 +109,7 @@ async def verify_room_ownership(room_id: str, user: ClerkUser) -> None:
     if not room_id:
         raise HTTPException(status_code=400, detail="room_id is required")
 
-    room = await _require_room_store().get_room_by_room_id(room_id)
+    room = await store.get_room_by_room_id(room_id)
 
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
@@ -185,7 +142,6 @@ async def create_new_room(
         seed_group_id=request_data.get("seed_group_id"),
         seed_all_current_agents=request_data.get("seed_all_current_agents"),
     )
-    center = _resolve_dependency(center, get_room_center)
     room_center_response = await center.create_new_room(room_center_request)
     return room_center_response
 
@@ -194,6 +150,8 @@ async def create_new_room(
 async def inquiry_room_setting(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
+    store: RoomRouteReader = Depends(get_room_store),
+    engine: ExecutionEngine = Depends(get_execution_engine),
     center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     """Get room settings - PROTECTED (requires room ownership)"""
@@ -201,15 +159,17 @@ async def inquiry_room_setting(
     room_id = request_data.get("room_id")
 
     # Verify user owns the room
-    await verify_room_ownership(room_id, user)
+    await verify_room_ownership(room_id, user, store)
 
     room_center_request = RoomCenterRoomSettingRequest(
         room_id=room_id, requesting_user_id=user.user_id
     )
-    center = _resolve_dependency(center, get_room_center)
     room_center_response = await center.inquiry_room_setting(room_center_request)
     if room_center_response.success and room_id:
-        room_center_response.active_runs = await _active_run_refs_for_room(room_id)
+        room_center_response.active_runs = await _active_run_refs_for_room(
+            room_id,
+            engine,
+        )
     return room_center_response
 
 
@@ -217,6 +177,8 @@ async def inquiry_room_setting(
 async def inquiry_active_runs(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
+    store: RoomRouteReader = Depends(get_room_store),
+    engine: ExecutionEngine = Depends(get_execution_engine),
     center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     """List non-terminal orchestration runs for a room — same auth as inquiryRoomSetting."""
@@ -224,21 +186,20 @@ async def inquiry_active_runs(
     room_id = request_data.get("room_id")
     trigger_message_id = request_data.get("trigger_message_id")
 
-    await verify_room_ownership(room_id, user)
+    await verify_room_ownership(room_id, user, store)
 
     room_center_request = RoomCenterRoomSettingRequest(
         room_id=room_id,
         requesting_user_id=user.user_id,
         trigger_message_id=trigger_message_id,
     )
-    active_runs = await _active_run_refs_for_room(room_id)
+    active_runs = await _active_run_refs_for_room(room_id, engine)
 
     turn_completion_kind = None
     trigger_is_active = any(
         run.trigger_message_id == trigger_message_id for run in active_runs
     )
     if trigger_message_id and not trigger_is_active:
-        center = _resolve_dependency(center, get_room_center)
         try:
             room_side_response = await center.inquiry_active_runs(room_center_request)
         except Exception:
@@ -277,7 +238,6 @@ async def inquiry_rooms_by_room_owner_id(
             status_code=403, detail="You do not have permission to access these rooms"
         )
     room_center_request = RoomCenterRoomSettingRequest(room_owner_id=room_owner_id)
-    center = _resolve_dependency(center, get_room_center)
     room_center_response = await center.inquiry_rooms_by_room_owner_id(
         room_center_request
     )
@@ -288,13 +248,14 @@ async def inquiry_rooms_by_room_owner_id(
 async def update_room_agent_set(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
+    store: RoomRouteReader = Depends(get_room_store),
     center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     """Update room agent set - PROTECTED (requires room ownership)"""
     request_data = await request.json()
     room_id = request_data.get("room_id")
 
-    await verify_room_ownership(room_id, user)
+    await verify_room_ownership(room_id, user, store)
 
     room_center_request = RoomCenterRoomSettingRequest(
         room_id=room_id,
@@ -308,7 +269,6 @@ async def update_room_agent_set(
         seed_group_id=request_data.get("seed_group_id"),
         seed_all_current_agents=request_data.get("seed_all_current_agents"),
     )
-    center = _resolve_dependency(center, get_room_center)
     room_center_response = await center.update_room_agent_set(room_center_request)
     return room_center_response
 
@@ -317,6 +277,7 @@ async def update_room_agent_set(
 async def update_room_name(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
+    store: RoomRouteReader = Depends(get_room_store),
     center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     """Update room name - PROTECTED (requires room ownership)"""
@@ -325,12 +286,11 @@ async def update_room_name(
     room_name = request_data.get("room_name")
 
     # Verify user owns the room
-    await verify_room_ownership(room_id, user)
+    await verify_room_ownership(room_id, user, store)
 
     room_center_request = RoomCenterRoomSettingRequest(
         room_id=room_id, room_name=room_name
     )
-    center = _resolve_dependency(center, get_room_center)
     room_center_response = await center.update_room_name(room_center_request)
     return room_center_response
 
@@ -339,6 +299,7 @@ async def update_room_name(
 async def update_room_extend_info(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
+    store: RoomRouteReader = Depends(get_room_store),
     center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     """Update room extended info - PROTECTED (requires room ownership)"""
@@ -347,15 +308,12 @@ async def update_room_extend_info(
     extend_info = request_data.get("extend_info")
 
     # Verify user owns the room
-    await verify_room_ownership(room_id, user)
+    await verify_room_ownership(room_id, user, store)
 
     room_center_request = RoomCenterRoomSettingRequest(
         room_id=room_id, extend_info=extend_info
     )
-    center = _resolve_dependency(center, get_room_center)
-    room_center_response = await center.update_room_extend_info(
-        room_center_request
-    )
+    room_center_response = await center.update_room_extend_info(room_center_request)
     return room_center_response
 
 
@@ -363,6 +321,7 @@ async def update_room_extend_info(
 async def inquiry_room_messages(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
+    store: RoomRouteReader = Depends(get_room_store),
     center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     """Read room messages - PROTECTED (requires room ownership)"""
@@ -370,10 +329,9 @@ async def inquiry_room_messages(
     room_id = request_data.get("room_id")
 
     # Verify user owns the room
-    await verify_room_ownership(room_id, user)
+    await verify_room_ownership(room_id, user, store)
 
     room_center_request = RoomCenterRoomMessageRequest(room_id=room_id)
-    center = _resolve_dependency(center, get_room_center)
     room_center_response = await center.inquiry_room_messages_by_room_id(
         room_center_request
     )
@@ -385,7 +343,9 @@ async def send_message(
     request: Request,
     background_tasks: BackgroundTasks,
     user: ClerkUser = Depends(get_current_user),
-):
+    store: RoomRouteReader = Depends(get_room_store),
+    engine: ExecutionEngine = Depends(get_execution_engine),
+) -> RoomCenterUserMessageResponse:
     """Send message to room - PROTECTED (requires room ownership)
 
     This endpoint:
@@ -423,12 +383,9 @@ async def send_message(
     has_target_group_id = "target_group_id" in request_data
 
     if mentioned_agent_ids is not None:
-        if (
-            not isinstance(mentioned_agent_ids, list)
-            or not all(
-                isinstance(agent_id, str) and agent_id.strip()
-                for agent_id in mentioned_agent_ids
-            )
+        if not isinstance(mentioned_agent_ids, list) or not all(
+            isinstance(agent_id, str) and agent_id.strip()
+            for agent_id in mentioned_agent_ids
         ):
             return RoomCenterUserMessageResponse(
                 message_id=None,
@@ -442,7 +399,9 @@ async def send_message(
     # Reject mixed payloads: mentions + target mode should not coexist.
     if mentioned_agent_ids and message_target_mode is not None:
         return RoomCenterUserMessageResponse(
-            message_id=None, message=None, success=False,
+            message_id=None,
+            message=None,
+            success=False,
             error="Cannot specify both mentioned_agent_ids and message_target_mode",
             status_code=400,
         )
@@ -451,7 +410,9 @@ async def send_message(
         if message_target_mode == "saved_group":
             if not isinstance(target_group_id, str) or not target_group_id.strip():
                 return RoomCenterUserMessageResponse(
-                    message_id=None, message=None, success=False,
+                    message_id=None,
+                    message=None,
+                    success=False,
                     error="target_group_id is required when message_target_mode is saved_group",
                     status_code=400,
                 )
@@ -515,7 +476,7 @@ async def send_message(
             status_code=400,
         )
 
-    await verify_room_ownership(room_id, user)
+    await verify_room_ownership(room_id, user, store)
 
     attachments, inline_file_ids, err = _extract_attachments(request_data, message)
     if err is not None:
@@ -539,12 +500,12 @@ async def send_message(
         mentioned_agent_ids=mentioned_agent_ids,
         parent_message_id=related_message_id or None,
     )
-    ack = await _require_execution_engine().execute(execution_request)
+    ack = await engine.execute(execution_request)
 
     # Auto-trigger processing as background task if message was created successfully
     if ack.success and ack.message_id and ack.should_start_orchestration:
         background_tasks.add_task(
-            _require_execution_engine().start_orchestration,
+            engine.start_orchestration,
             execution_request,
             ack,
         )
@@ -572,15 +533,8 @@ async def suggest_agents(
             "error": "message_text is required",
             "status_code": 400,
         }
-
-    selection_service = _resolve_dependency(
-        selection_service,
-        get_agent_selection_service,
-    )
     try:
-        suggestion_result = await selection_service.suggest_agents(
-            message_text, top_k
-        )
+        suggestion_result = await selection_service.suggest_agents(message_text, top_k)
         return {
             "success": True,
             **serialize_agent_suggestion_result(suggestion_result),

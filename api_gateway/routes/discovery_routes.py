@@ -5,13 +5,16 @@ Public API for external developers to discover agents using semantic search.
 Requires API key authentication via X-API-Key header.
 """
 
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.params import Depends as DependsParam
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from api_gateway.dependencies import (
+    get_discovery_default_limit,
+    get_discovery_rate_limiter,
+    get_discovery_service,
+)
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.api_key_auth import get_api_key
 from common.errors import PlatformRouteError
@@ -21,55 +24,17 @@ from models.response import DiscoveryErrorResponse, DiscoveryResponse
 
 router = APIRouter()
 
-discovery_service: GatewayDiscoveryProvider | None = None
-discovery_rate_limit_service: APIKeyRateLimiter | None = None
-discovery_default_limit: int = 10
-
 
 class DiscoveryRequest(BaseModel):
     """Request body for agent discovery endpoint."""
+
     query: str = Field(..., description="Text query to search for matching agents")
     limit: int | None = Field(
         default=None,
         ge=1,
         le=100,
-        description="Maximum number of agents to return (default: 10, max: 100)"
+        description="Maximum number of agents to return (default: 10, max: 100)",
     )
-
-
-def bind_discovery_dependencies(
-    service: GatewayDiscoveryProvider,
-    rate_limiter: APIKeyRateLimiter,
-    *,
-    default_limit: int = 10,
-) -> None:
-    global discovery_service, discovery_rate_limit_service, discovery_default_limit
-
-    discovery_service = service
-    discovery_rate_limit_service = rate_limiter
-    discovery_default_limit = default_limit
-
-
-def get_discovery_service() -> GatewayDiscoveryProvider:
-    if discovery_service is None:
-        raise RuntimeError("Discovery service dependency has not been bound")
-    return discovery_service
-
-
-def get_discovery_rate_limiter() -> APIKeyRateLimiter:
-    if discovery_rate_limit_service is None:
-        raise RuntimeError("Discovery rate limiter dependency has not been bound")
-    return discovery_rate_limit_service
-
-
-def get_discovery_default_limit() -> int:
-    return discovery_default_limit
-
-
-def _resolve_dependency(value: Any, provider) -> Any:
-    if isinstance(value, DependsParam):
-        return provider()
-    return value
 
 
 def _raise_http_error(error: PlatformRouteError) -> None:
@@ -90,7 +55,10 @@ def _raise_http_error(error: PlatformRouteError) -> None:
     "/discovery/agents",
     response_model=DiscoveryResponse,
     responses={
-        401: {"model": DiscoveryErrorResponse, "description": "Invalid or missing API key"},
+        401: {
+            "model": DiscoveryErrorResponse,
+            "description": "Invalid or missing API key",
+        },
         429: {"model": DiscoveryErrorResponse, "description": "Rate limit exceeded"},
         500: {"model": DiscoveryErrorResponse, "description": "Internal server error"},
     },
@@ -135,38 +103,39 @@ async def discover_agents(
 ) -> DiscoveryResponse:
     """
     Discover agents based on a text query.
-    
+
     Uses semantic search to find agents matching the query.
     Only returns agents with a match score >= threshold.
-    
+
     Args:
         request_body: The discovery request with query and optional limit
         api_key: Validated API key (injected by dependency)
-        
+
     Returns:
         DiscoveryResponse with matching agents and their scores
-        
+
     Raises:
         HTTPException 401: Invalid or missing API key
         HTTPException 429: Rate limit exceeded
         HTTPException 500: Internal server error
     """
     # Log the request (anonymized)
-    query_preview = request_body.query[:50] + "..." if len(request_body.query) > 50 else request_body.query
-    rate_limiter = _resolve_dependency(rate_limiter, get_discovery_rate_limiter)
-    default_limit = _resolve_dependency(default_limit, get_discovery_default_limit)
+    query_preview = (
+        request_body.query[:50] + "..."
+        if len(request_body.query) > 50
+        else request_body.query
+    )
     logger.info(
         f"Discovery API: Request from key {api_key.key_id[:8]}... | "
         f"Query: '{query_preview}' | Limit: {request_body.limit or default_limit}"
     )
-    
+
     # Check rate limits before processing
     try:
         await rate_limiter.check_rate_limit(api_key)
     except PlatformRouteError as exc:
         _raise_http_error(exc)
-    svc = _resolve_dependency(svc, get_discovery_service)
-    
+
     try:
         result = await svc.discover_agents(
             query=request_body.query,

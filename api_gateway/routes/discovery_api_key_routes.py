@@ -5,13 +5,12 @@ Provides authenticated API key management for developer portal users.
 """
 
 import secrets
-from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.params import Depends as DependsParam
 from loguru import logger
 
+from api_gateway.dependencies import get_api_key_store
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.api_key_auth import hash_api_key
 from common.auth import ClerkUser, get_current_user
@@ -27,25 +26,6 @@ from models.response import (
 )
 
 router = APIRouter()
-api_key_store: APIKeyStore | None = None
-
-
-def bind_api_key_store(store: APIKeyStore) -> None:
-    global api_key_store
-
-    api_key_store = store
-
-
-def get_api_key_store() -> APIKeyStore:
-    if api_key_store is None:
-        raise RuntimeError("API key store dependency has not been bound")
-    return api_key_store
-
-
-def _resolve_dependency(value: Any, provider) -> Any:
-    if isinstance(value, DependsParam):
-        return provider()
-    return value
 
 
 def generate_api_key() -> str:
@@ -68,7 +48,6 @@ async def list_api_keys(
     store: APIKeyStore = Depends(get_api_key_store),
 ) -> APIKeyListResponse:
     """List all API keys belonging to the authenticated user."""
-    store = _resolve_dependency(store, get_api_key_store)
     try:
         keys = await store.get_api_keys_by_user(current_user.user_id)
         sorted_keys = sorted(keys, key=lambda key: key.created_at, reverse=True)
@@ -125,7 +104,6 @@ async def create_api_key(
         user_id=current_user.user_id,
         name=key_name,
     )
-    store = _resolve_dependency(store, get_api_key_store)
 
     try:
         await store.add_api_key(api_key)
@@ -159,7 +137,6 @@ async def deactivate_api_key(
     store: APIKeyStore = Depends(get_api_key_store),
 ) -> APIKeyOperationResponse:
     """Soft-delete an API key owned by the authenticated user."""
-    store = _resolve_dependency(store, get_api_key_store)
     api_key = await store.get_api_key_by_id(key_id)
     if not api_key or api_key.user_id != current_user.user_id:
         raise HTTPException(

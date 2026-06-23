@@ -8,7 +8,7 @@ Tests cover:
 - Room ownership verification
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -28,7 +28,13 @@ from execution.hitl.exceptions import (
     HITLRoutingFailedError,
 )
 from models.hitl import HITLResponseRequest
-from tests.conftest import PATCH
+
+
+def _room_ownership(owner_id):
+    reader = MagicMock()
+    reader.get_room_owner = AsyncMock(return_value=owner_id)
+    return reader
+
 
 # =============================================================================
 # HITL Response Tests
@@ -47,19 +53,21 @@ class TestRespondToHitlRequest:
             request_id="hitl-request-123",
             user_input="Yes, proceed with the action",
         )
-        
+
         mock_db_service.get_room_by_room_id.return_value = sample_room
         mock_hitl_service.resolve_hitl.return_value = CommonHITLResponse(
             request_id="hitl-request-123",
             status="ok",
         )
-        
-        with patch(PATCH["hitl.verify_room_ownership"], AsyncMock()):
-            with patch("api.hitl.hitl_manager", mock_hitl_service):
-                result = await respond_to_hitl_request(
-                    sample_room.room_id, body, mock_user
-                )
-        
+
+        result = await respond_to_hitl_request(
+            sample_room.room_id,
+            body,
+            mock_user,
+            manager=mock_hitl_service,
+            room_ownership=_room_ownership(mock_user.user_id),
+        )
+
         assert result == {"status": "ok", "request_id": "hitl-request-123"}
         mock_hitl_service.resolve_hitl.assert_called_once_with(
             sample_room.room_id,
@@ -77,18 +85,21 @@ class TestRespondToHitlRequest:
             request_id="hitl-request-123",
             user_input="Response",
         )
-        
+
         room_ownership_reader = MagicMock()
         room_ownership_reader.get_room_owner = AsyncMock(
             return_value=sample_room.room_owner_id
         )
-        
-        with patch("api.hitl.room_ownership_reader", room_ownership_reader):
-            with pytest.raises(HTTPException) as exc_info:
-                await respond_to_hitl_request(
-                    sample_room.room_id, body, mock_user_2
-                )
-        
+
+        with pytest.raises(HTTPException) as exc_info:
+            await respond_to_hitl_request(
+                sample_room.room_id,
+                body,
+                mock_user_2,
+                manager=MagicMock(),
+                room_ownership=room_ownership_reader,
+            )
+
         assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
@@ -116,12 +127,14 @@ class TestRespondToHitlRequest:
         )
         mock_hitl_service.resolve_hitl.side_effect = error
 
-        with patch(PATCH["hitl.verify_room_ownership"], AsyncMock()):
-            with patch("api.hitl.hitl_manager", mock_hitl_service):
-                with pytest.raises(HTTPException) as exc_info:
-                    await respond_to_hitl_request(
-                        sample_room.room_id, body, mock_user
-                    )
+        with pytest.raises(HTTPException) as exc_info:
+            await respond_to_hitl_request(
+                sample_room.room_id,
+                body,
+                mock_user,
+                manager=mock_hitl_service,
+                room_ownership=_room_ownership(mock_user.user_id),
+            )
 
         assert exc_info.value.status_code == status_code
         assert exc_info.value.detail == error.message
@@ -137,8 +150,12 @@ class TestGetPendingHitlRequests:
 
     @pytest.mark.asyncio
     async def test_returns_pending_requests(
-        self, mock_user, mock_db_service, mock_hitl_service, 
-        sample_room, sample_hitl_request
+        self,
+        mock_user,
+        mock_db_service,
+        mock_hitl_service,
+        sample_room,
+        sample_hitl_request,
     ):
         """Should return pending HITL requests for room."""
         mock_db_service.get_room_by_room_id.return_value = sample_room
@@ -152,13 +169,14 @@ class TestGetPendingHitlRequests:
                 display_message_id=sample_hitl_request.display_message_id,
             )
         ]
-        
-        with patch(PATCH["hitl.verify_room_ownership"], AsyncMock()):
-            with patch("api.hitl.hitl_manager", mock_hitl_service):
-                result = await get_pending_hitl_requests(
-                    sample_room.room_id, mock_user
-                )
-        
+
+        result = await get_pending_hitl_requests(
+            sample_room.room_id,
+            mock_user,
+            manager=mock_hitl_service,
+            room_ownership=_room_ownership(mock_user.user_id),
+        )
+
         assert "requests" in result
         assert len(result["requests"]) == 1
         assert result["requests"][0]["request_id"] == sample_hitl_request.request_id
@@ -170,13 +188,14 @@ class TestGetPendingHitlRequests:
         """Should return empty list when no pending requests."""
         mock_db_service.get_room_by_room_id.return_value = sample_room
         mock_hitl_service.get_pending_hitl.return_value = []
-        
-        with patch(PATCH["hitl.verify_room_ownership"], AsyncMock()):
-            with patch("api.hitl.hitl_manager", mock_hitl_service):
-                result = await get_pending_hitl_requests(
-                    sample_room.room_id, mock_user
-                )
-        
+
+        result = await get_pending_hitl_requests(
+            sample_room.room_id,
+            mock_user,
+            manager=mock_hitl_service,
+            room_ownership=_room_ownership(mock_user.user_id),
+        )
+
         assert result["requests"] == []
 
 
@@ -194,17 +213,21 @@ class TestCancelHitlRequest:
     ):
         """Should cancel HITL request."""
         request_id = "hitl-request-to-cancel"
-        
+
         mock_db_service.get_room_by_room_id.return_value = sample_room
-        
-        with patch(PATCH["hitl.verify_room_ownership"], AsyncMock()):
-            with patch("api.hitl.hitl_manager", mock_hitl_service):
-                result = await cancel_hitl_request(
-                    sample_room.room_id, request_id, mock_user
-                )
-        
+
+        result = await cancel_hitl_request(
+            sample_room.room_id,
+            request_id,
+            mock_user,
+            manager=mock_hitl_service,
+            room_ownership=_room_ownership(mock_user.user_id),
+        )
+
         assert result["status"] == "canceled"
-        mock_hitl_service.cancel_hitl.assert_called_once_with(sample_room.room_id, request_id)
+        mock_hitl_service.cancel_hitl.assert_called_once_with(
+            sample_room.room_id, request_id
+        )
 
     @pytest.mark.asyncio
     async def test_verifies_room_ownership_before_cancel(
@@ -212,18 +235,21 @@ class TestCancelHitlRequest:
     ):
         """Should verify room ownership before canceling."""
         request_id = "hitl-request-to-cancel"
-        
+
         room_ownership_reader = MagicMock()
         room_ownership_reader.get_room_owner = AsyncMock(
             return_value=sample_room.room_owner_id
         )
-        
-        with patch("api.hitl.room_ownership_reader", room_ownership_reader):
-            with pytest.raises(HTTPException) as exc_info:
-                await cancel_hitl_request(
-                    sample_room.room_id, request_id, mock_user_2
-                )
-        
+
+        with pytest.raises(HTTPException) as exc_info:
+            await cancel_hitl_request(
+                sample_room.room_id,
+                request_id,
+                mock_user_2,
+                manager=MagicMock(),
+                room_ownership=room_ownership_reader,
+            )
+
         assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
@@ -233,14 +259,14 @@ class TestCancelHitlRequest:
         error = HITLRoomMismatchError("Room mismatch")
         mock_hitl_service.cancel_hitl.side_effect = error
 
-        with patch(PATCH["hitl.verify_room_ownership"], AsyncMock()):
-            with patch("api.hitl.hitl_manager", mock_hitl_service):
-                with pytest.raises(HTTPException) as exc_info:
-                    await cancel_hitl_request(
-                        sample_room.room_id,
-                        "hitl-request-to-cancel",
-                        mock_user,
-                    )
+        with pytest.raises(HTTPException) as exc_info:
+            await cancel_hitl_request(
+                sample_room.room_id,
+                "hitl-request-to-cancel",
+                mock_user,
+                manager=mock_hitl_service,
+                room_ownership=_room_ownership(mock_user.user_id),
+            )
 
         assert exc_info.value.status_code == 403
         assert exc_info.value.detail == "Room mismatch"
