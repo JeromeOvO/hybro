@@ -55,7 +55,7 @@ class TestCreateAgentGroup:
         mock_db_service.add_agent_group.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_rejects_missing_name(self):
+    async def test_rejects_missing_name(self, mock_db_service):
         """Should return error when name is empty."""
         mock_request = MagicMock()
         mock_request.json = AsyncMock(
@@ -64,12 +64,12 @@ class TestCreateAgentGroup:
             }
         )
 
-        result = await create_agent_group(mock_request)
+        result = await create_agent_group(mock_request, db=mock_db_service)
         assert result["success"] is False
         assert result["status_code"] == 400
 
     @pytest.mark.asyncio
-    async def test_rejects_missing_owner_id(self):
+    async def test_rejects_missing_owner_id(self, mock_db_service):
         """Should return error when owner_id is empty."""
         mock_request = MagicMock()
         mock_request.json = AsyncMock(
@@ -78,7 +78,7 @@ class TestCreateAgentGroup:
             }
         )
 
-        result = await create_agent_group(mock_request)
+        result = await create_agent_group(mock_request, db=mock_db_service)
         assert result["success"] is False
         assert result["status_code"] == 400
 
@@ -145,9 +145,9 @@ class TestListAgentGroups:
         assert result["groups"][1]["group_id"] == BUILTIN_GROUP_ROOM_TEAM
 
     @pytest.mark.asyncio
-    async def test_rejects_missing_owner_id(self):
+    async def test_rejects_missing_owner_id(self, mock_db_service):
         """Should return error when owner_id is not provided."""
-        result = await list_agent_groups(owner_id=None)
+        result = await list_agent_groups(owner_id=None, db=mock_db_service)
         assert result["success"] is False
         assert result["status_code"] == 400
 
@@ -174,17 +174,17 @@ class TestGetAgentGroup:
     """Tests for get_agent_group endpoint."""
 
     @pytest.mark.asyncio
-    async def test_returns_builtin_all_agents(self):
+    async def test_returns_builtin_all_agents(self, mock_db_service):
         """Should return All Agents builtin group without DB lookup."""
-        result = await get_agent_group(BUILTIN_GROUP_ALL_AGENTS)
+        result = await get_agent_group(BUILTIN_GROUP_ALL_AGENTS, db=mock_db_service)
         assert result["success"] is True
         assert result["group"]["group_id"] == BUILTIN_GROUP_ALL_AGENTS
         assert result["group"]["type"] == "builtin"
 
     @pytest.mark.asyncio
-    async def test_returns_builtin_room_team(self):
+    async def test_returns_builtin_room_team(self, mock_db_service):
         """Should return Room Team builtin group without DB lookup."""
-        result = await get_agent_group(BUILTIN_GROUP_ROOM_TEAM)
+        result = await get_agent_group(BUILTIN_GROUP_ROOM_TEAM, db=mock_db_service)
         assert result["success"] is True
         assert result["group"]["group_id"] == BUILTIN_GROUP_ROOM_TEAM
 
@@ -256,23 +256,23 @@ class TestUpdateAgentGroup:
     @pytest.mark.parametrize(
         "builtin_id", [BUILTIN_GROUP_ALL_AGENTS, BUILTIN_GROUP_ROOM_TEAM]
     )
-    async def test_rejects_update_of_builtin_group(self, builtin_id):
+    async def test_rejects_update_of_builtin_group(self, builtin_id, mock_db_service):
         """Should reject updates to builtin groups."""
         mock_request = MagicMock()
         mock_request.json = AsyncMock(return_value={"name": "Hack"})
 
-        result = await update_agent_group(builtin_id, mock_request)
+        result = await update_agent_group(builtin_id, mock_request, db=mock_db_service)
         assert result["success"] is False
         assert result["status_code"] == 400
         assert "built-in" in result["error"].lower()
 
     @pytest.mark.asyncio
-    async def test_rejects_empty_update(self):
+    async def test_rejects_empty_update(self, mock_db_service):
         """Should reject when no updates are provided."""
         mock_request = MagicMock()
         mock_request.json = AsyncMock(return_value={})
 
-        result = await update_agent_group("grp-001", mock_request)
+        result = await update_agent_group("grp-001", mock_request, db=mock_db_service)
         assert result["success"] is False
         assert result["status_code"] == 400
 
@@ -304,9 +304,9 @@ class TestDeleteAgentGroup:
     @pytest.mark.parametrize(
         "builtin_id", [BUILTIN_GROUP_ALL_AGENTS, BUILTIN_GROUP_ROOM_TEAM]
     )
-    async def test_rejects_delete_of_builtin_group(self, builtin_id):
+    async def test_rejects_delete_of_builtin_group(self, builtin_id, mock_db_service):
         """Should reject deletion of builtin groups."""
-        result = await delete_agent_group(builtin_id)
+        result = await delete_agent_group(builtin_id, db=mock_db_service)
         assert result["success"] is False
         assert result["status_code"] == 400
         assert "built-in" in result["error"].lower()

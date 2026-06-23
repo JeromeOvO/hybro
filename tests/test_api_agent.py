@@ -67,13 +67,13 @@ class TestRegisterAgent:
         assert call_args.provider_id == mock_user.user_id
 
     @pytest.mark.asyncio
-    async def test_raises_400_when_agent_url_missing(self, mock_user):
+    async def test_raises_400_when_agent_url_missing(self, mock_user, patch_agent_deps):
         """Should raise 400 when agent_url is not provided."""
         mock_request = MagicMock()
         mock_request.json = AsyncMock(return_value={})
 
         with pytest.raises(HTTPException) as exc_info:
-            await register_agent(mock_request, mock_user)
+            await register_agent(mock_request, mock_user, center=patch_agent_deps)
 
         assert exc_info.value.status_code == 400
         assert "agent_url is required" in exc_info.value.detail
@@ -210,10 +210,15 @@ class TestGetAgent:
         assert call_args.user_id == mock_user.user_id
 
     @pytest.mark.asyncio
-    async def test_raises_400_when_agent_id_empty(self, mock_user):
+    async def test_raises_400_when_agent_id_empty(self, mock_user, patch_agent_deps):
         """Should raise 400 when agent_id is empty."""
         with pytest.raises(HTTPException) as exc_info:
-            await get_agent("", user=mock_user)
+            await get_agent(
+                "",
+                user=mock_user,
+                center=patch_agent_deps,
+                liveness_checker=AsyncMock(side_effect=lambda agent: agent),
+            )
 
         assert exc_info.value.status_code == 400
 
@@ -300,13 +305,13 @@ class TestDeleteAgent:
         assert response.success is True
 
     @pytest.mark.asyncio
-    async def test_raises_400_when_agent_id_missing(self, mock_user):
+    async def test_raises_400_when_agent_id_missing(self, mock_user, patch_agent_deps):
         """Should raise 400 when agent_id is not provided."""
         mock_request = MagicMock()
         mock_request.json = AsyncMock(return_value={})
 
         with pytest.raises(HTTPException) as exc_info:
-            await delete_agent(mock_request, mock_user)
+            await delete_agent(mock_request, mock_user, center=patch_agent_deps)
 
         assert exc_info.value.status_code == 400
 
@@ -528,12 +533,12 @@ class TestGetAgentCardFromUrl:
         assert response.agent_card.name == sample_agent_card.name
 
     @pytest.mark.asyncio
-    async def test_raises_400_when_url_missing(self):
+    async def test_raises_400_when_url_missing(self, patch_agent_deps):
         """Should raise 400 when agent_url is not provided."""
         mock_request = MagicMock()
         mock_request.json = AsyncMock(return_value={})
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_agent_card_from_url(mock_request)
+            await get_agent_card_from_url(mock_request, center=patch_agent_deps)
 
         assert exc_info.value.status_code == 400
