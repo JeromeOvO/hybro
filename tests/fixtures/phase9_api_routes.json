@@ -350,8 +350,8 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user",
-      "get_agent_group_store"
+      "get_agent_group_store",
+      "get_current_user"
     ],
     "methods": [
       "GET"
@@ -374,8 +374,8 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user",
-      "get_agent_group_store"
+      "get_agent_group_store",
+      "get_current_user"
     ],
     "methods": [
       "POST"
@@ -397,8 +397,8 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user",
-      "get_agent_group_store"
+      "get_agent_group_store",
+      "get_current_user"
     ],
     "methods": [
       "DELETE"
@@ -421,8 +421,8 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user",
-      "get_agent_group_store"
+      "get_agent_group_store",
+      "get_current_user"
     ],
     "methods": [
       "GET"
@@ -445,8 +445,8 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user",
-      "get_agent_group_store"
+      "get_agent_group_store",
+      "get_current_user"
     ],
     "methods": [
       "PUT"
@@ -493,13 +493,16 @@
       "get_current_user"
     ],
     "dependencies": [
+      "get_agent_viewset_embedding_provider",
+      "get_agent_viewset_vector_index",
       "get_current_user",
-      "get_viewset_repository"
+      "get_viewset_repository",
+      "get_viewset_repository_provider"
     ],
     "methods": [
       "POST"
     ],
-    "module": "api_gateway.viewsets.base",
+    "module": "api_gateway.viewsets.agent",
     "name": "create_endpoint",
     "openapi_response_codes": [
       "201",
@@ -521,8 +524,10 @@
       "get_current_user"
     ],
     "dependencies": [
+      "get_agent_viewset_vector_index",
       "get_current_user",
-      "get_viewset_repository"
+      "get_viewset_repository",
+      "get_viewset_repository_provider"
     ],
     "methods": [
       "DELETE"
@@ -572,8 +577,11 @@
       "get_current_user"
     ],
     "dependencies": [
+      "get_agent_viewset_embedding_provider",
+      "get_agent_viewset_vector_index",
       "get_current_user",
-      "get_viewset_repository"
+      "get_viewset_repository",
+      "get_viewset_repository_provider"
     ],
     "methods": [
       "PATCH"
@@ -600,8 +608,11 @@
       "get_current_user"
     ],
     "dependencies": [
+      "get_agent_viewset_embedding_provider",
+      "get_agent_viewset_vector_index",
       "get_current_user",
-      "get_viewset_repository"
+      "get_viewset_repository",
+      "get_viewset_repository_provider"
     ],
     "methods": [
       "PUT"
@@ -1220,7 +1231,9 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_execution_engine",
+      "get_room_center",
+      "get_room_store"
     ],
     "methods": [
       "POST"
@@ -1247,7 +1260,8 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_room_center",
+      "get_room_store"
     ],
     "methods": [
       "POST"
@@ -1273,7 +1287,9 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_execution_engine",
+      "get_room_center",
+      "get_room_store"
     ],
     "methods": [
       "POST"
@@ -1322,7 +1338,9 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_execution_engine",
+      "get_room_store"
     ],
     "methods": [
       "POST"
@@ -1335,7 +1353,7 @@
     "owning_protocol": "common.protocols.ExecutionEngine",
     "path": "/api/v1/roomCenter/sendMessage",
     "response_class": null,
-    "response_model": null,
+    "response_model": "RoomCenterUserMessageResponse",
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
@@ -1371,7 +1389,8 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_room_center",
+      "get_room_store"
     ],
     "methods": [
       "POST"
@@ -1397,7 +1416,8 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_room_center",
+      "get_room_store"
     ],
     "methods": [
       "POST"
@@ -1423,7 +1443,8 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_room_center",
+      "get_room_store"
     ],
     "methods": [
       "POST"
@@ -1472,7 +1493,9 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_hitl_manager",
+      "get_room_ownership_reader"
     ],
     "methods": [
       "GET"
@@ -1498,7 +1521,9 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_hitl_manager",
+      "get_room_ownership_reader"
     ],
     "methods": [
       "POST"
@@ -1524,7 +1549,9 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_hitl_manager",
+      "get_room_ownership_reader"
     ],
     "methods": [
       "POST"
@@ -1551,8 +1578,8 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_sse_store",
-      "get_execution_engine"
+      "get_execution_engine",
+      "get_sse_store"
     ],
     "methods": [
       "POST"
@@ -1579,8 +1606,8 @@
     ],
     "dependencies": [
       "get_current_user_with_query_token",
-      "get_sse_store",
-      "get_sse_manager"
+      "get_sse_manager",
+      "get_sse_store"
     ],
     "methods": [
       "GET"
@@ -1607,8 +1634,8 @@
     ],
     "dependencies": [
       "get_current_user_with_query_token",
-      "get_sse_store",
-      "get_sse_manager"
+      "get_sse_manager",
+      "get_sse_store"
     ],
     "methods": [
       "GET"

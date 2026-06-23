@@ -333,6 +333,10 @@ def test_phase9_route_inventory_matches_live_app_routes():
         assert route["openapi_response_codes"] == live[key]["openapi_response_codes"]
         assert route["response_class"] == live[key]["response_class"]
         assert not route["owning_protocol"].startswith("blocked:")
+        assert not any(
+            protocol.startswith("blocked:")
+            for protocol in route.get("supporting_protocols") or []
+        )
 
 
 def test_route_inventory_auth_dependencies_are_only_auth_dependencies():
@@ -555,6 +559,21 @@ def test_phase9_route_inventory_does_not_use_app_shell_bound_protocols():
     assert not violations, (
         "Routes must not use app_shell.bound protocol shims:\n" + "\n".join(violations)
     )
+
+
+def test_phase9_route_inventory_has_no_blocked_owners_or_supporting_protocols():
+    routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
+    violations = []
+
+    for route in routes:
+        owner = route["owning_protocol"]
+        if owner.startswith("blocked:"):
+            violations.append(f"{route['path']} {route['name']}: {owner}")
+        for protocol in route.get("supporting_protocols") or []:
+            if protocol.startswith("blocked:"):
+                violations.append(f"{route['path']} {route['name']}: {protocol}")
+
+    assert not violations, "Blocked route protocols remain:\n" + "\n".join(violations)
 
 
 def test_phase9_route_inventory_owners_are_protocol_symbols():

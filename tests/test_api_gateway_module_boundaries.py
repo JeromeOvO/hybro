@@ -145,6 +145,36 @@ def test_gateway_route_modules_do_not_hold_business_dependency_globals():
     )
 
 
+def test_container_does_not_call_route_level_dependency_binders():
+    forbidden_snippets = (
+        ".bind_a2a_task_dependencies(",
+        ".bind_agent_dependencies(",
+        ".bind_agent_group_dependencies(",
+        ".bind_api_key_store(",
+        ".bind_discovery_dependencies(",
+        ".bind_execution_deps(",
+        ".bind_file_dependencies(",
+        ".bind_gateway_dependencies(",
+        ".bind_hub_dependencies(",
+        ".bind_inspection_dependencies(",
+        ".bind_memory_dependencies(",
+        ".bind_relay_dependencies(",
+        ".bind_room_dependencies(",
+        ".bind_room_ownership_reader(",
+        ".bind_sse_dependencies(",
+        ".bind_viewset_dependencies(",
+        ".bind_agent_viewset_dependencies(",
+        ".bind_webhook_dependencies(",
+    )
+    source = Path("container.py").read_text()
+    violations = [snippet for snippet in forbidden_snippets if snippet in source]
+
+    assert not violations, (
+        "Container still calls route-level dependency binders:\n"
+        + "\n".join(violations)
+    )
+
+
 def test_api_gateway_route_files_do_not_use_legacy_prefix():
     route_dir = Path("api_gateway/routes")
     route_files = route_dir.glob("*.py") if route_dir.exists() else []
