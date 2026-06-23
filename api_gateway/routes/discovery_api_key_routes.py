@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.params import Depends as DependsParam
 from loguru import logger
 
+from api_gateway.dependencies import get_api_key_store
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.api_key_auth import hash_api_key
 from common.auth import ClerkUser, get_current_user
@@ -27,19 +28,6 @@ from models.response import (
 )
 
 router = APIRouter()
-api_key_store: APIKeyStore | None = None
-
-
-def bind_api_key_store(store: APIKeyStore) -> None:
-    global api_key_store
-
-    api_key_store = store
-
-
-def get_api_key_store() -> APIKeyStore:
-    if api_key_store is None:
-        raise RuntimeError("API key store dependency has not been bound")
-    return api_key_store
 
 
 def _resolve_dependency(value: Any, provider) -> Any:

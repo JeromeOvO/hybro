@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.params import Depends as DependsParam
 
+from api_gateway.dependencies import get_task_store
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.a2a_constants import (
     NON_TERMINAL_STATES,
@@ -22,18 +23,6 @@ from common.utils.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter()
-task_store: A2ATaskStatusReader | None = None
-
-def bind_a2a_task_dependencies(store: A2ATaskStatusReader) -> None:
-    global task_store
-
-    task_store = store
-
-
-def get_task_store() -> A2ATaskStatusReader:
-    if task_store is None:
-        raise RuntimeError("A2A task database dependency has not been bound")
-    return task_store
 
 
 def _resolve_dependency(value: Any, provider) -> Any:

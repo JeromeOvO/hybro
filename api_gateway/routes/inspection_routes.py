@@ -5,23 +5,11 @@ from fastapi.params import Depends as DependsParam
 from loguru import logger
 
 from agent.protocols import AgentInspection
+from api_gateway.dependencies import get_inspection_center
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from models.request import InspectionCenterRequest
 
 router = APIRouter()
-inspection_center: AgentInspection | None = None
-
-
-def bind_inspection_dependencies(center: AgentInspection) -> None:
-    global inspection_center
-
-    inspection_center = center
-
-
-def get_inspection_center() -> AgentInspection:
-    if inspection_center is None:
-        raise RuntimeError("Inspection center dependency has not been bound")
-    return inspection_center
 
 
 def _resolve_dependency(value: Any, provider) -> Any:

@@ -424,20 +424,20 @@ def test_direct_transport_does_not_partially_rebind_a2a_artifact_storage():
     )
 
 
-def test_file_route_dependencies_can_be_rebound_without_concrete_services():
-    from api.files import (
-        bind_file_dependencies,
-        get_file_storage,
-        get_room_ownership_reader,
-    )
+def test_file_route_dependencies_are_read_from_gateway_deps_without_concrete_services():
+    from types import SimpleNamespace
+
+    from api_gateway.dependencies import get_file_storage, get_room_ownership_reader
 
     storage = object()
     room_ownership = object()
+    deps = SimpleNamespace(
+        file_storage=storage,
+        room_ownership_reader=room_ownership,
+    )
 
-    bind_file_dependencies(storage, room_ownership)
-
-    assert get_file_storage() is storage
-    assert get_room_ownership_reader() is room_ownership
+    assert get_file_storage(deps) is storage
+    assert get_room_ownership_reader(deps) is room_ownership
 
 
 def test_platform_config_is_scalar_only():

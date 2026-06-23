@@ -13,6 +13,7 @@ from fastapi.params import Depends as DependsParam
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from api_gateway.dependencies import get_relay_service
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.api_key_auth import get_api_key, get_api_key_no_track
 from common.protocols import HubRelayManagement
@@ -28,20 +29,6 @@ from models.hub import (
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/relay")
-
-relay_service: HubRelayManagement | None = None
-
-
-def bind_relay_dependencies(service: HubRelayManagement) -> None:
-    global relay_service
-
-    relay_service = service
-
-
-def get_relay_service() -> HubRelayManagement:
-    if relay_service is None:
-        raise RuntimeError("Relay service dependency has not been bound")
-    return relay_service
 
 
 def _resolve_dependency(value: Any, provider) -> Any:

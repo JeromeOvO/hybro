@@ -3,24 +3,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.params import Depends as DependsParam
 
+from api_gateway.dependencies import get_memory_center
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from context_memory.protocols import LegacyChatContextAPI
 from models.request import ChatMemoryRequest
 
 router = APIRouter()
-memory_center: LegacyChatContextAPI | None = None
-
-
-def bind_memory_dependencies(center: LegacyChatContextAPI) -> None:
-    global memory_center
-
-    memory_center = center
-
-
-def get_memory_center() -> LegacyChatContextAPI:
-    if memory_center is None:
-        raise RuntimeError("Memory center dependency has not been bound")
-    return memory_center
 
 
 def _resolve_dependency(value: Any, provider) -> Any:

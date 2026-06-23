@@ -992,13 +992,12 @@ def test_hub_route_dependencies_are_typed_with_route_facing_protocol():
     from typing import get_type_hints
 
     from api import hub
+    from api_gateway import dependencies as gateway_deps
     from common.protocols import HubStatusReader
 
-    bind_hints = get_type_hints(hub.bind_hub_dependencies)
-    provider_hints = get_type_hints(hub.get_hub_relay_service)
+    provider_hints = get_type_hints(gateway_deps.get_hub_relay_service)
     route_hints = get_type_hints(hub.hub_status_for_user)
 
-    assert bind_hints["service"] is HubStatusReader
     assert provider_hints["return"] is HubStatusReader
     assert route_hints["svc"] is HubStatusReader
     assert "svc" in inspect.signature(hub.hub_status_for_user).parameters
@@ -1219,14 +1218,18 @@ def test_file_upload_route_uses_room_ownership_reader_protocol():
     from typing import get_type_hints
 
     from api import files
-    from common.protocols import RoomOwnershipReader
+    from api_gateway import dependencies as gateway_deps
+    from common.protocols import FileStorage, RoomOwnershipReader
 
-    bind_hints = get_type_hints(files.bind_file_dependencies)
-    provider_hints = get_type_hints(files.get_room_ownership_reader)
+    storage_provider_hints = get_type_hints(gateway_deps.get_file_storage)
+    room_ownership_provider_hints = get_type_hints(
+        gateway_deps.get_room_ownership_reader
+    )
     route_hints = get_type_hints(files.upload_file)
 
-    assert bind_hints["room_ownership"] is RoomOwnershipReader
-    assert provider_hints["return"] is RoomOwnershipReader
+    assert storage_provider_hints["return"] is FileStorage
+    assert room_ownership_provider_hints["return"] is RoomOwnershipReader
+    assert route_hints["storage"] is FileStorage
     assert route_hints["room_ownership"] is RoomOwnershipReader
     assert "room_ownership" in inspect.signature(files.upload_file).parameters
 
@@ -1347,16 +1350,16 @@ def test_relay_route_dependencies_are_typed_with_route_facing_protocol():
     from typing import get_type_hints
 
     from api import relay
+    from api_gateway import dependencies as gateway_deps
     from common.protocols import APIKeyPrincipal, HubRelayManagement
 
-    bind_hints = get_type_hints(relay.bind_relay_dependencies)
-    provider_hints = get_type_hints(relay.get_relay_service)
+    provider_hints = get_type_hints(gateway_deps.get_relay_service)
     route_hints = get_type_hints(relay.relay_register)
     register_sig = inspect.signature(HubRelayManagement.register_hub)
 
-    assert bind_hints["service"] is HubRelayManagement
     assert provider_hints["return"] is HubRelayManagement
     assert route_hints["svc"] is HubRelayManagement
+    assert "svc" in inspect.signature(relay.relay_register).parameters
     assert register_sig.parameters["api_key"].annotation is APIKeyPrincipal
 
 

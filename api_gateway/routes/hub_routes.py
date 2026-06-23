@@ -9,24 +9,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from fastapi.params import Depends as DependsParam
 
+from api_gateway.dependencies import get_hub_relay_service
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
 from common.protocols import HubStatusReader
 from models.hub import HubStatusResponse
 
 router = APIRouter(prefix="/hub")
-hub_relay_service: HubStatusReader | None = None
-
-
-def bind_hub_dependencies(service: HubStatusReader) -> None:
-    global hub_relay_service
-    hub_relay_service = service
-
-
-def get_hub_relay_service() -> HubStatusReader:
-    if hub_relay_service is None:
-        raise RuntimeError("Hub relay dependency has not been bound")
-    return hub_relay_service
 
 
 def _resolve_dependency(value, provider) -> HubStatusReader:
