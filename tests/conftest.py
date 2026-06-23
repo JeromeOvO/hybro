@@ -40,24 +40,6 @@ FROZEN_TIME = datetime(2026, 1, 15, 12, 0, 0)
 
 
 # =============================================================================
-# Centralized Patch Targets
-# =============================================================================
-# Keep all patch target strings here so import path refactors only break one place.
-
-PATCH = {
-    "hitl.hitl_service": "api.hitl.hitl_service",
-    "sse.mongodb": "api.sse.mongodb",
-    "hitl_service_singleton": "app_shell.hitl_service.hitl_service",
-    # Webhook endpoints
-    "webhooks.db_service": "api.webhooks.db_service",
-    "webhooks.sse_manager": "api.webhooks.sse_manager",
-    "s3_service": "app_shell.s3_service.s3_service",
-    "room_runtime.mongodb": "app_shell.room_runtime.mongodb",
-    "room_runtime.s3_service": "app_shell.room_runtime.s3_service",
-}
-
-
-# =============================================================================
 # Pytest Configuration
 # =============================================================================
 
