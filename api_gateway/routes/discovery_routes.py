@@ -5,10 +5,8 @@ Public API for external developers to discover agents using semantic search.
 Requires API key authentication via X-API-Key header.
 """
 
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.params import Depends as DependsParam
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -37,12 +35,6 @@ class DiscoveryRequest(BaseModel):
         le=100,
         description="Maximum number of agents to return (default: 10, max: 100)",
     )
-
-
-def _resolve_dependency(value: Any, provider) -> Any:
-    if isinstance(value, DependsParam):
-        return provider()
-    return value
 
 
 def _raise_http_error(error: PlatformRouteError) -> None:
@@ -133,8 +125,6 @@ async def discover_agents(
         if len(request_body.query) > 50
         else request_body.query
     )
-    rate_limiter = _resolve_dependency(rate_limiter, get_discovery_rate_limiter)
-    default_limit = _resolve_dependency(default_limit, get_discovery_default_limit)
     logger.info(
         f"Discovery API: Request from key {api_key.key_id[:8]}... | "
         f"Query: '{query_preview}' | Limit: {request_body.limit or default_limit}"
@@ -145,7 +135,6 @@ async def discover_agents(
         await rate_limiter.check_rate_limit(api_key)
     except PlatformRouteError as exc:
         _raise_http_error(exc)
-    svc = _resolve_dependency(svc, get_discovery_service)
 
     try:
         result = await svc.discover_agents(

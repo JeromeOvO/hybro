@@ -4,7 +4,6 @@ Delegates all business logic to ``WebhookTransport.handle_webhook()``.
 """
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.params import Depends as DependsParam
 
 from api_gateway.dependencies import get_webhook_receiver
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
@@ -14,12 +13,6 @@ from common.utils.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter()
-
-
-def _resolve_dependency(value: object, provider) -> object:
-    if isinstance(value, DependsParam):
-        return provider()
-    return value
 
 
 @router.post("/webhooks/a2a/{message_id}", response_model=None)
@@ -46,8 +39,6 @@ async def handle_a2a_webhook(
         raise HTTPException(status_code=400, detail=f"Invalid payload: {e}") from e
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Invalid payload: expected JSON object")
-
-    transport = _resolve_dependency(transport, get_webhook_receiver)
     assert isinstance(transport, WebhookReceiver)
     return await transport.handle_webhook(message_id, payload, token)
 

@@ -8,10 +8,8 @@ All endpoints require X-API-Key authentication.
 """
 
 import json
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.params import Depends as DependsParam
 from fastapi.responses import StreamingResponse
 
 from api_gateway.dependencies import get_gateway_rate_limiter, get_gateway_service
@@ -36,12 +34,6 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
-
-
-def _resolve_dependency(value: Any, provider) -> Any:
-    if isinstance(value, DependsParam):
-        return provider()
-    return value
 
 
 async def _check_rate_limit(rate_limiter: APIKeyRateLimiter, api_key: APIKey) -> None:
@@ -122,7 +114,6 @@ async def gateway_discover(
     svc: GatewayService = Depends(get_gateway_service),
     rate_limiter: APIKeyRateLimiter = Depends(get_gateway_rate_limiter),
 ):
-    rate_limiter = _resolve_dependency(rate_limiter, get_gateway_rate_limiter)
     await _check_rate_limit(rate_limiter, api_key)
     try:
         result = await svc.discover_agents(
@@ -158,7 +149,6 @@ async def gateway_send(
     svc: GatewayService = Depends(get_gateway_service),
     rate_limiter: APIKeyRateLimiter = Depends(get_gateway_rate_limiter),
 ):
-    rate_limiter = _resolve_dependency(rate_limiter, get_gateway_rate_limiter)
     await _check_rate_limit(rate_limiter, api_key)
     try:
         result = await svc.send_message(
@@ -183,7 +173,6 @@ async def gateway_stream(
     svc: GatewayService = Depends(get_gateway_service),
     rate_limiter: APIKeyRateLimiter = Depends(get_gateway_rate_limiter),
 ):
-    rate_limiter = _resolve_dependency(rate_limiter, get_gateway_rate_limiter)
     await _check_rate_limit(rate_limiter, api_key)
 
     try:
@@ -251,7 +240,6 @@ async def gateway_get_card(
     svc: GatewayService = Depends(get_gateway_service),
     rate_limiter: APIKeyRateLimiter = Depends(get_gateway_rate_limiter),
 ):
-    rate_limiter = _resolve_dependency(rate_limiter, get_gateway_rate_limiter)
     await _check_rate_limit(rate_limiter, api_key)
     try:
         card = await svc.get_agent_card(agent_id=agent_id, user_id=api_key.user_id)

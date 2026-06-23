@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.params import Depends as DependsParam
 
 from agent.protocols import AgentGroupStoreCompatibility
 from api_gateway.dependencies import get_agent_group_store
@@ -24,16 +23,8 @@ from models.agent_group import (
 router = APIRouter()
 
 
-def _resolve_dependency(value: Any, provider) -> Any:
-    if isinstance(value, DependsParam):
-        return provider()
-    return value
-
-
-def _current_user_id(user: ClerkUser | DependsParam) -> str | None:
-    if isinstance(user, DependsParam):
-        return None
-    return user.user_id
+def _current_user_id(user: ClerkUser | None) -> str | None:
+    return user.user_id if user else None
 
 
 def _forbidden(message: str) -> dict[str, Any]:
@@ -68,7 +59,6 @@ async def create_agent_group(
         return {"success": False, "error": "Owner ID is required", "status_code": 400}
     if user_id and requested_owner_id and requested_owner_id != user_id:
         return _forbidden("Cannot create an agent group for another owner")
-    db = _resolve_dependency(db, get_agent_group_store)
 
     agent_group = AgentGroup(
         name=name,
@@ -110,7 +100,6 @@ async def list_agent_groups(
         return {"success": False, "error": "Owner ID is required", "status_code": 400}
     if user_id and owner_id and owner_id != user_id:
         return _forbidden("Cannot list another owner's agent groups")
-    db = _resolve_dependency(db, get_agent_group_store)
 
     # Get user's custom groups
     user_groups = await db.get_agent_groups_by_owner(effective_owner_id)
@@ -180,8 +169,6 @@ async def get_agent_group(
             },
             "status_code": 200,
         }
-
-    db = _resolve_dependency(db, get_agent_group_store)
     group = await db.get_agent_group_by_id(group_id)
 
     if group:
@@ -230,8 +217,6 @@ async def update_agent_group(
 
     if not updates:
         return {"success": False, "error": "No updates provided", "status_code": 400}
-
-    db = _resolve_dependency(db, get_agent_group_store)
     existing_group = await db.get_agent_group_by_id(group_id)
     if not existing_group:
         return {"success": False, "error": "Agent group not found", "status_code": 404}
@@ -279,8 +264,6 @@ async def delete_agent_group(
             "error": "Cannot delete built-in groups",
             "status_code": 400,
         }
-
-    db = _resolve_dependency(db, get_agent_group_store)
     existing_group = await db.get_agent_group_by_id(group_id)
     if not existing_group:
         return {"success": False, "error": "Agent group not found", "status_code": 404}

@@ -1,8 +1,6 @@
-from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.params import Depends as DependsParam
 
 from agent.protocols import AgentSuggestionService, serialize_agent_suggestion_result
 from api_gateway.dependencies import (
@@ -30,12 +28,6 @@ from room.protocols import RoomCenterCompatibility
 
 router = APIRouter()
 logger = get_logger(__name__)
-
-
-def _resolve_dependency(value: Any, provider) -> Any:
-    if isinstance(value, DependsParam):
-        return provider()
-    return value
 
 
 def _run_info_to_active_run_ref(run: RunInfo) -> ActiveRunRef:
@@ -150,7 +142,6 @@ async def create_new_room(
         seed_group_id=request_data.get("seed_group_id"),
         seed_all_current_agents=request_data.get("seed_all_current_agents"),
     )
-    center = _resolve_dependency(center, get_room_center)
     room_center_response = await center.create_new_room(room_center_request)
     return room_center_response
 
@@ -173,7 +164,6 @@ async def inquiry_room_setting(
     room_center_request = RoomCenterRoomSettingRequest(
         room_id=room_id, requesting_user_id=user.user_id
     )
-    center = _resolve_dependency(center, get_room_center)
     room_center_response = await center.inquiry_room_setting(room_center_request)
     if room_center_response.success and room_id:
         room_center_response.active_runs = await _active_run_refs_for_room(
@@ -210,7 +200,6 @@ async def inquiry_active_runs(
         run.trigger_message_id == trigger_message_id for run in active_runs
     )
     if trigger_message_id and not trigger_is_active:
-        center = _resolve_dependency(center, get_room_center)
         try:
             room_side_response = await center.inquiry_active_runs(room_center_request)
         except Exception:
@@ -249,7 +238,6 @@ async def inquiry_rooms_by_room_owner_id(
             status_code=403, detail="You do not have permission to access these rooms"
         )
     room_center_request = RoomCenterRoomSettingRequest(room_owner_id=room_owner_id)
-    center = _resolve_dependency(center, get_room_center)
     room_center_response = await center.inquiry_rooms_by_room_owner_id(
         room_center_request
     )
@@ -281,7 +269,6 @@ async def update_room_agent_set(
         seed_group_id=request_data.get("seed_group_id"),
         seed_all_current_agents=request_data.get("seed_all_current_agents"),
     )
-    center = _resolve_dependency(center, get_room_center)
     room_center_response = await center.update_room_agent_set(room_center_request)
     return room_center_response
 
@@ -304,7 +291,6 @@ async def update_room_name(
     room_center_request = RoomCenterRoomSettingRequest(
         room_id=room_id, room_name=room_name
     )
-    center = _resolve_dependency(center, get_room_center)
     room_center_response = await center.update_room_name(room_center_request)
     return room_center_response
 
@@ -327,7 +313,6 @@ async def update_room_extend_info(
     room_center_request = RoomCenterRoomSettingRequest(
         room_id=room_id, extend_info=extend_info
     )
-    center = _resolve_dependency(center, get_room_center)
     room_center_response = await center.update_room_extend_info(room_center_request)
     return room_center_response
 
@@ -347,7 +332,6 @@ async def inquiry_room_messages(
     await verify_room_ownership(room_id, user, store)
 
     room_center_request = RoomCenterRoomMessageRequest(room_id=room_id)
-    center = _resolve_dependency(center, get_room_center)
     room_center_response = await center.inquiry_room_messages_by_room_id(
         room_center_request
     )
@@ -549,11 +533,6 @@ async def suggest_agents(
             "error": "message_text is required",
             "status_code": 400,
         }
-
-    selection_service = _resolve_dependency(
-        selection_service,
-        get_agent_selection_service,
-    )
     try:
         suggestion_result = await selection_service.suggest_agents(message_text, top_k)
         return {
