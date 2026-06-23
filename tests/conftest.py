@@ -45,34 +45,15 @@ FROZEN_TIME = datetime(2026, 1, 15, 12, 0, 0)
 # Keep all patch target strings here so import path refactors only break one place.
 
 PATCH = {
-    "room_center.room_store": "api.room_center.room_store",
-    "room_center.room_center": "api.room_center.room_center",
-    "agent.agent_center": "api.agent.agent_center",
-    "agent.agent_service": "api.agent.agent_service",
-    "hitl.verify_room_ownership": "api.hitl.verify_room_ownership",
     "hitl.hitl_service": "api.hitl.hitl_service",
-    "sse.sse_store": "api.sse.sse_store",
-    "sse.sse_manager": "api.sse.sse_manager",
     "sse.mongodb": "api.sse.mongodb",
-    "a2a_tasks.task_store": "api.a2a_tasks.task_store",
-    "agent_selection_service": "api.room_center.agent_selection_service",
     "hitl_service_singleton": "app_shell.hitl_service.hitl_service",
     # Webhook endpoints
     "webhooks.db_service": "api.webhooks.db_service",
     "webhooks.sse_manager": "api.webhooks.sse_manager",
-    # Agent group endpoints
-    "agent_group.agent_group_store": "api.agent_group.agent_group_store",
-    # Discovery endpoints
-    "discovery.discovery_service": "api.discovery.discovery_service",
-    "discovery.discovery_rate_limit_service": "api.discovery.discovery_rate_limit_service",
-    # File upload / S3
-    "files.room_ownership_reader": "api.files.room_ownership_reader",
     "s3_service": "app_shell.s3_service.s3_service",
     "room_runtime.mongodb": "app_shell.room_runtime.mongodb",
     "room_runtime.s3_service": "app_shell.room_runtime.s3_service",
-    # Gateway endpoints
-    "gateway.gateway_service": "api.gateway.gateway_service",
-    "gateway.gateway_rate_limit_service": "api.gateway.gateway_rate_limit_service",
 }
 
 
@@ -85,6 +66,7 @@ PATCH = {
 def event_loop_policy():
     """Use default event loop policy for async tests."""
     import asyncio
+
     return asyncio.DefaultEventLoopPolicy()
 
 
@@ -124,24 +106,30 @@ def mock_user_2() -> ClerkUser:
 @pytest.fixture
 def mock_auth(mock_user):
     """Mock the authentication dependency."""
+
     async def override_get_current_user():
         return mock_user
+
     return override_get_current_user
 
 
 @pytest.fixture
 def mock_optional_auth(mock_user):
     """Mock the optional authentication dependency."""
+
     async def override_get_optional_user():
         return mock_user
+
     return override_get_optional_user
 
 
 @pytest.fixture
 def mock_no_auth():
     """Mock optional auth returning None (unauthenticated)."""
+
     async def override_get_optional_user():
         return None
+
     return override_get_optional_user
 
 
@@ -154,14 +142,14 @@ def mock_no_auth():
 def mock_db_service():
     """Create a mock database service with common methods."""
     mock = MagicMock()
-    
+
     # Room operations
     mock.get_room_by_room_id = AsyncMock(return_value=None)
     mock.create_room = AsyncMock(return_value=True)
     mock.update_room = AsyncMock(return_value=True)
     mock.delete_room = AsyncMock(return_value=True)
     mock.get_rooms_by_owner_id = AsyncMock(return_value=[])
-    
+
     # Agent operations
     mock.get_agent_by_agent_id = AsyncMock(return_value=None)
     mock.get_all_agents = AsyncMock(return_value=[])
@@ -170,7 +158,7 @@ def mock_db_service():
     mock.update_agent = AsyncMock(return_value=True)
     mock.delete_agent = AsyncMock(return_value=True)
     mock.get_agents_by_provider_id = AsyncMock(return_value=[])
-    
+
     # Message operations
     mock.get_room_user_message_by_message_id = AsyncMock(return_value=None)
     mock.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
@@ -182,19 +170,19 @@ def mock_db_service():
     mock.get_pending_task_messages_for_user = AsyncMock(return_value=[])
     mock.update_task_state_on_message = AsyncMock(return_value=(True, None))
     mock.is_message_cancelled = AsyncMock(return_value=False)
-    
+
     # Memory operations
     mock.get_room_memory_by_room_id = AsyncMock(return_value=None)
     mock.create_room_memory = AsyncMock(return_value=True)
     mock.update_room_memory = AsyncMock(return_value=True)
     mock.compact_turns_bulk = AsyncMock(return_value=True)
-    
+
     # HITL operations
     mock.create_hitl_request = AsyncMock(return_value=True)
     mock.get_hitl_request = AsyncMock(return_value=None)
     mock.update_hitl_request = AsyncMock(return_value=True)
     mock.get_pending_hitl_requests = AsyncMock(return_value=[])
-    
+
     return mock
 
 
@@ -327,7 +315,9 @@ def sample_user_message(sample_room, mock_user) -> RoomUserMessage:
 
 
 @pytest.fixture
-def sample_agent_message(sample_room, sample_agent, sample_user_message) -> RoomAgentMessage:
+def sample_agent_message(
+    sample_room, sample_agent, sample_user_message
+) -> RoomAgentMessage:
     """Create a sample agent message."""
     return RoomAgentMessage(
         room_id=sample_room.room_id,
@@ -396,9 +386,9 @@ def sample_room_memory(sample_room) -> RoomMemory:
             timestamp=FROZEN_TIME,
         ),
     ]
-    
+
     memory_content = MemoryContent(conversation_history=turns)
-    
+
     return RoomMemory(
         room_id=sample_room.room_id,
         memory_id="test-memory-001",
@@ -430,6 +420,7 @@ def sample_hitl_request(sample_room, sample_user_message) -> HITLRequest:
 def app():
     """Create a FastAPI app instance for testing (imported once per session)."""
     from main import app as main_app
+
     return main_app
 
 
@@ -497,7 +488,9 @@ def mock_agent_center():
     mock.get_all_active_agents = AsyncMock()
     mock.remove_agent = AsyncMock()
     mock.update_agent = AsyncMock()
-    mock.finalize_agent_response_for_route = MagicMock(side_effect=lambda response: response)
+    mock.finalize_agent_response_for_route = MagicMock(
+        side_effect=lambda response: response
+    )
 
     async def register_agent_from_route(*, agent_url: str, provider_id: str):
         from models.request import AgentCenterRequest
@@ -520,7 +513,9 @@ def mock_agent_center():
             AgentCenterRequest(agent_id=agent_id, provider_id=provider_id)
         )
 
-    async def update_agent_settings_from_route(*, agent_id: str, provider_id: str, settings):
+    async def update_agent_settings_from_route(
+        *, agent_id: str, provider_id: str, settings
+    ):
         from models.request import AgentCenterRequest
 
         return await mock.update_agent(AgentCenterRequest(agent_id=agent_id))
@@ -528,7 +523,9 @@ def mock_agent_center():
     async def get_agent_card_from_url_for_route(*, agent_url: str):
         from models.request import AgentCenterRequest
 
-        return await mock.get_agent_card_from_url(AgentCenterRequest(agent_url=agent_url))
+        return await mock.get_agent_card_from_url(
+            AgentCenterRequest(agent_url=agent_url)
+        )
 
     async def get_visible_agent_for_route(*, agent_id: str, user_id: str | None):
         from models.request import AgentCenterRequest
@@ -550,7 +547,9 @@ def mock_agent_center():
     async def list_agents_with_conditions_for_route(*, user_id: str | None):
         from models.request import AgentCenterRequest
 
-        return await mock.get_agents_with_conditions(AgentCenterRequest(user_id=user_id))
+        return await mock.get_agents_with_conditions(
+            AgentCenterRequest(user_id=user_id)
+        )
 
     mock.register_agent_from_route = AsyncMock(side_effect=register_agent_from_route)
     mock.get_agents_by_provider_for_route = AsyncMock(
@@ -563,8 +562,12 @@ def mock_agent_center():
     mock.get_agent_card_from_url_for_route = AsyncMock(
         side_effect=get_agent_card_from_url_for_route
     )
-    mock.get_visible_agent_for_route = AsyncMock(side_effect=get_visible_agent_for_route)
-    mock.list_visible_agents_for_route = AsyncMock(side_effect=list_visible_agents_for_route)
+    mock.get_visible_agent_for_route = AsyncMock(
+        side_effect=get_visible_agent_for_route
+    )
+    mock.list_visible_agents_for_route = AsyncMock(
+        side_effect=list_visible_agents_for_route
+    )
     mock.list_agents_with_conditions_for_route = AsyncMock(
         side_effect=list_agents_with_conditions_for_route
     )
@@ -638,60 +641,161 @@ def create_mock_response(success: bool = True, data: Any = None, error: str = No
 
 
 @pytest.fixture
-def patch_sse_deps(mock_db_service, mock_sse_manager, mock_mongodb, mock_hitl_service):
-    """Patch all SSE endpoint dependencies at once."""
-    from contextlib import ExitStack
-    with ExitStack() as stack:
-        stack.enter_context(patch(PATCH["sse.sse_store"], mock_db_service))
-        stack.enter_context(patch(PATCH["sse.sse_manager"], mock_sse_manager))
-        stack.enter_context(patch(PATCH["hitl_service_singleton"], mock_hitl_service))
-        execution_engine = MagicMock()
-        execution_engine.cancel = AsyncMock(return_value=True)
-        stack.enter_context(patch("api.sse.execution_engine", execution_engine))
-        yield {
-            "db_service": mock_db_service,
-            "sse_manager": mock_sse_manager,
-            "mongodb": mock_mongodb,
-            "hitl_service": mock_hitl_service,
-            "execution_engine": execution_engine,
-        }
-
-
-@pytest.fixture
-def patch_room_center_deps(mock_db_service, mock_room_center):
-    """Patch all room center endpoint dependencies at once."""
-    from contextlib import ExitStack
-
+def make_api_gateway_deps(
+    mock_db_service,
+    mock_agent_center,
+    mock_room_center,
+    mock_sse_manager,
+    mock_hitl_service,
+    mock_s3_service,
+):
+    """Factory for complete APIGatewayDeps instances."""
+    from api_gateway.dependencies import APIGatewayDeps
     from common.dto import ExecutionAck
-    with ExitStack() as stack:
-        stack.enter_context(patch(PATCH["room_center.room_store"], mock_db_service))
-        stack.enter_context(patch(PATCH["room_center.room_center"], mock_room_center))
+
+    def _rate_limiter():
+        mock = MagicMock()
+        mock.check_rate_limit = AsyncMock()
+        mock.record_request = AsyncMock()
+        return mock
+
+    def _make(**overrides):
         execution_engine = MagicMock()
         execution_engine.execute = AsyncMock(
             return_value=ExecutionAck(success=True, message_id="new-message-id")
         )
         execution_engine.start_orchestration = AsyncMock()
         execution_engine.get_runs_for_room = AsyncMock(return_value=[])
-        stack.enter_context(patch("api.room_center.execution_engine", execution_engine))
-        yield {
-            "db_service": mock_db_service,
+        execution_engine.cancel = AsyncMock(return_value=True)
+
+        agent_service = MagicMock()
+        agent_service.get_agent = AsyncMock(return_value=None)
+        agent_service.get_agent_by_agent_id = AsyncMock(return_value=None)
+        agent_service.get_agents_by_ids = AsyncMock(return_value=[])
+
+        capability_issue_service = MagicMock()
+        capability_issue_service.get_issues_for_agent = AsyncMock(return_value=[])
+        capability_issue_service.get_issue_by_id = AsyncMock(return_value=None)
+        capability_issue_service.resolve_all_for_agent = AsyncMock(return_value=0)
+        capability_issue_service.resolve_issue = AsyncMock(return_value=None)
+
+        agent_avatar_manager = MagicMock()
+        agent_avatar_manager.store_avatar = AsyncMock(
+            return_value="https://avatar.test/a.png"
+        )
+
+        room_ownership_reader = MagicMock()
+        room_ownership_reader.get_room_owner = AsyncMock(return_value=None)
+
+        discovery_service = MagicMock()
+        discovery_service.discover_agents = AsyncMock()
+
+        gateway_service = MagicMock()
+        gateway_service.discover_agents = AsyncMock()
+        gateway_service.send_message = AsyncMock()
+        gateway_service.prepare_stream = AsyncMock()
+        gateway_service.get_agent_card = AsyncMock()
+
+        agent_selection_service = MagicMock()
+        agent_selection_service.suggest_agents = AsyncMock()
+
+        defaults = {
+            "task_store": mock_db_service,
+            "agent_center": mock_agent_center,
+            "agent_service": agent_service,
+            "capability_issue_service": capability_issue_service,
+            "agent_avatar_manager": agent_avatar_manager,
+            "agent_liveness_checker": AsyncMock(side_effect=lambda agent: agent),
+            "agent_group_store": mock_db_service,
+            "api_key_store": MagicMock(),
+            "discovery_service": discovery_service,
+            "discovery_rate_limiter": _rate_limiter(),
+            "discovery_default_limit": 10,
+            "file_storage": mock_s3_service,
+            "room_ownership_reader": room_ownership_reader,
+            "hitl_manager": mock_hitl_service,
+            "hub_relay_service": MagicMock(),
+            "inspection_center": MagicMock(),
+            "memory_center": MagicMock(),
+            "gateway_service": gateway_service,
+            "gateway_rate_limiter": _rate_limiter(),
+            "relay_service": MagicMock(),
             "room_center": mock_room_center,
+            "room_store": mock_db_service,
+            "agent_selection_service": agent_selection_service,
             "execution_engine": execution_engine,
+            "sse_store": mock_db_service,
+            "sse_manager": mock_sse_manager,
+            "webhook_receiver": MagicMock(),
+            "repository_provider": MagicMock(),
+            "embedding_provider": MagicMock(),
+            "vector_index": MagicMock(),
         }
+        defaults.update(overrides)
+        return APIGatewayDeps(**defaults)
+
+    return _make
+
+
+@pytest.fixture
+def patch_sse_deps(
+    mock_db_service,
+    mock_sse_manager,
+    mock_mongodb,
+    mock_hitl_service,
+    make_api_gateway_deps,
+):
+    """Return explicit SSE endpoint dependencies."""
+    execution_engine = MagicMock()
+    execution_engine.cancel = AsyncMock(return_value=True)
+    return {
+        "db_service": mock_db_service,
+        "sse_manager": mock_sse_manager,
+        "mongodb": mock_mongodb,
+        "hitl_service": mock_hitl_service,
+        "execution_engine": execution_engine,
+        "deps": make_api_gateway_deps(
+            task_store=mock_db_service,
+            sse_store=mock_db_service,
+            sse_manager=mock_sse_manager,
+            hitl_manager=mock_hitl_service,
+            execution_engine=execution_engine,
+        ),
+    }
+
+
+@pytest.fixture
+def patch_room_center_deps(mock_db_service, mock_room_center, make_api_gateway_deps):
+    """Return explicit room center endpoint dependencies."""
+    from common.dto import ExecutionAck
+
+    execution_engine = MagicMock()
+    execution_engine.execute = AsyncMock(
+        return_value=ExecutionAck(success=True, message_id="new-message-id")
+    )
+    execution_engine.start_orchestration = AsyncMock()
+    execution_engine.get_runs_for_room = AsyncMock(return_value=[])
+    execution_engine.cancel = AsyncMock(return_value=True)
+    return {
+        "db_service": mock_db_service,
+        "room_center": mock_room_center,
+        "execution_engine": execution_engine,
+        "deps": make_api_gateway_deps(
+            task_store=mock_db_service,
+            room_store=mock_db_service,
+            room_center=mock_room_center,
+            execution_engine=execution_engine,
+        ),
+    }
 
 
 @pytest.fixture
 def patch_agent_deps(mock_agent_center):
-    """Patch agent center endpoint dependencies with auto-masking."""
+    """Return agent center endpoint dependency with auto-masking."""
     mock_agent_center._mask_sensitive_information = MagicMock(
         side_effect=lambda r, _: r
     )
-    with patch(PATCH["agent.agent_center"], mock_agent_center):
-        with patch(
-            "api.agent.agent_liveness_checker",
-            new=AsyncMock(side_effect=lambda agent: agent),
-        ):
-            yield mock_agent_center
+    return mock_agent_center
 
 
 # =============================================================================
@@ -704,7 +808,9 @@ def mock_s3_service():
     """Create a mock S3 service with common methods."""
     mock = AsyncMock()
     mock.upload_file = AsyncMock(return_value="uploads/room1/f1/test.png")
-    mock.generate_presigned_url = AsyncMock(return_value="https://s3.example.com/presigned")
+    mock.generate_presigned_url = AsyncMock(
+        return_value="https://s3.example.com/presigned"
+    )
     mock.batch_presigned_urls = AsyncMock(
         return_value={"uploads/room1/f1/test.png": "https://s3.example.com/presigned"}
     )
@@ -718,6 +824,7 @@ def mock_s3_service():
 @pytest.fixture
 def sample_file_upload_metadata():
     """Factory for file upload metadata dicts (as stored in MongoDB)."""
+
     def _make(
         file_id="f_test_001",
         room_id="room_test_123",
@@ -736,4 +843,5 @@ def sample_file_upload_metadata():
             "size_bytes": size_bytes,
             "uploaded_at": FROZEN_TIME.isoformat(),
         }
+
     return _make

@@ -8,7 +8,7 @@ Tests cover:
 - Authorization checks
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -18,7 +18,6 @@ from api.a2a_tasks import (
     list_room_tasks,
     list_user_pending_tasks,
 )
-from tests.conftest import PATCH
 
 # =============================================================================
 # Get Task Status Tests
@@ -36,27 +35,23 @@ class TestGetTaskStatus:
         mock_db_service.get_room_agent_message_by_message_id.return_value = (
             sample_agent_message_with_task
         )
-        
-        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
-            result = await get_task_status(
-                sample_agent_message_with_task.message_id, mock_user
-            )
-        
+
+        result = await get_task_status(
+            sample_agent_message_with_task.message_id, mock_user, db=mock_db_service
+        )
+
         assert result["message_id"] == sample_agent_message_with_task.message_id
         assert "status" in result
         assert "task" in result
 
     @pytest.mark.asyncio
-    async def test_raises_404_when_message_not_found(
-        self, mock_user, mock_db_service
-    ):
+    async def test_raises_404_when_message_not_found(self, mock_user, mock_db_service):
         """Should raise 404 when message doesn't exist."""
         mock_db_service.get_room_agent_message_by_message_id.return_value = None
-        
-        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
-            with pytest.raises(HTTPException) as exc_info:
-                await get_task_status("nonexistent-message", mock_user)
-        
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_task_status("nonexistent-message", mock_user, db=mock_db_service)
+
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -68,11 +63,12 @@ class TestGetTaskStatus:
         mock_db_service.get_room_agent_message_by_message_id.return_value = (
             sample_agent_message
         )
-        
-        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
-            with pytest.raises(HTTPException) as exc_info:
-                await get_task_status(sample_agent_message.message_id, mock_user)
-        
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_task_status(
+                sample_agent_message.message_id, mock_user, db=mock_db_service
+            )
+
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -83,13 +79,14 @@ class TestGetTaskStatus:
         mock_db_service.get_room_agent_message_by_message_id.return_value = (
             sample_agent_message_with_task
         )
-        
-        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
-            with pytest.raises(HTTPException) as exc_info:
-                await get_task_status(
-                    sample_agent_message_with_task.message_id, mock_user_2
-                )
-        
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_task_status(
+                sample_agent_message_with_task.message_id,
+                mock_user_2,
+                db=mock_db_service,
+            )
+
         assert exc_info.value.status_code == 403
 
 
@@ -109,13 +106,17 @@ class TestListRoomTasks:
         mock_db_service.get_task_messages_for_room.return_value = [
             sample_agent_message_with_task
         ]
-        
-        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
-            result = await list_room_tasks(sample_room.room_id, limit=50, current_user=mock_user)
-        
+
+        result = await list_room_tasks(
+            sample_room.room_id, limit=50, current_user=mock_user, db=mock_db_service
+        )
+
         assert "tasks" in result
         assert len(result["tasks"]) == 1
-        assert result["tasks"][0]["message_id"] == sample_agent_message_with_task.message_id
+        assert (
+            result["tasks"][0]["message_id"]
+            == sample_agent_message_with_task.message_id
+        )
 
     @pytest.mark.asyncio
     async def test_filters_tasks_by_user(
@@ -126,12 +127,13 @@ class TestListRoomTasks:
         other_user_task = MagicMock()
         other_user_task.user_id = mock_user_2.user_id
         other_user_task.message_id = "other-user-task"
-        
+
         mock_db_service.get_task_messages_for_room.return_value = [other_user_task]
-        
-        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
-            result = await list_room_tasks(sample_room.room_id, limit=50, current_user=mock_user)
-        
+
+        result = await list_room_tasks(
+            sample_room.room_id, limit=50, current_user=mock_user, db=mock_db_service
+        )
+
         # Should be empty since the task belongs to another user
         assert result["tasks"] == []
 
@@ -141,10 +143,11 @@ class TestListRoomTasks:
     ):
         """Should pass limit parameter to database query."""
         mock_db_service.get_task_messages_for_room.return_value = []
-        
-        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
-            await list_room_tasks(sample_room.room_id, limit=25, current_user=mock_user)
-        
+
+        await list_room_tasks(
+            sample_room.room_id, limit=25, current_user=mock_user, db=mock_db_service
+        )
+
         mock_db_service.get_task_messages_for_room.assert_called_once_with(
             sample_room.room_id, limit=25
         )
@@ -166,23 +169,19 @@ class TestListUserPendingTasks:
         mock_db_service.get_pending_task_messages_for_user.return_value = [
             sample_agent_message_with_task
         ]
-        
-        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
-            result = await list_user_pending_tasks(mock_user)
-        
+
+        result = await list_user_pending_tasks(mock_user, db=mock_db_service)
+
         assert "tasks" in result
         assert len(result["tasks"]) == 1
 
     @pytest.mark.asyncio
-    async def test_queries_with_non_terminal_states(
-        self, mock_user, mock_db_service
-    ):
+    async def test_queries_with_non_terminal_states(self, mock_user, mock_db_service):
         """Should query for non-terminal task states."""
         mock_db_service.get_pending_task_messages_for_user.return_value = []
-        
-        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
-            await list_user_pending_tasks(mock_user)
-        
+
+        await list_user_pending_tasks(mock_user, db=mock_db_service)
+
         # Verify the call was made with user_id and state values
         call_args = mock_db_service.get_pending_task_messages_for_user.call_args
         assert call_args[0][0] == mock_user.user_id
@@ -195,8 +194,7 @@ class TestListUserPendingTasks:
     ):
         """Should return empty list when user has no pending tasks."""
         mock_db_service.get_pending_task_messages_for_user.return_value = []
-        
-        with patch(PATCH["a2a_tasks.task_store"], mock_db_service):
-            result = await list_user_pending_tasks(mock_user)
-        
+
+        result = await list_user_pending_tasks(mock_user, db=mock_db_service)
+
         assert result["tasks"] == []
