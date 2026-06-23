@@ -122,21 +122,16 @@ def test_api_routes_call_only_api_key_rate_limiter_protocol_methods():
     )
 
 
-def test_container_binds_gateway_and_discovery_rate_limiters_from_platform_facade():
+def test_container_injects_gateway_and_discovery_rate_limiters_into_gateway_deps():
     source = Path("container.py").read_text()
     main_source = Path("main.py").read_text()
-
     assert "PlatformRouteAPIKeyRateLimiter" not in source
+    assert "gateway.bind_gateway_dependencies(" not in source
+    assert "discovery.bind_discovery_dependencies(" not in source
     assert "gateway.bind_gateway_dependencies(" not in main_source
     assert "discovery.bind_discovery_dependencies(" not in main_source
-    assert (
-        "gateway.bind_gateway_dependencies(\n                platform_facade.gateway_service,\n                platform_facade.gateway_rate_limiter"
-        in source
-    )
-    assert (
-        "discovery.bind_discovery_dependencies(\n                platform_facade.discovery_service,\n                platform_facade.discovery_rate_limiter"
-        in source
-    )
+    assert "gateway_rate_limiter=platform_facade.gateway_rate_limiter" in source
+    assert "discovery_rate_limiter=platform_facade.discovery_rate_limiter" in source
 
 
 def test_container_uses_execution_room_message_center_runtime_for_startup_wiring():
@@ -473,15 +468,13 @@ def test_platform_module_does_not_import_app_shell_or_legacy_services():
     assert not violations, "Forbidden platform imports:\n" + "\n".join(violations)
 
 
-def test_container_binds_discovery_route_to_platform_facade():
+def test_container_injects_discovery_route_from_platform_facade():
     source = Path("container.py").read_text()
     main_source = Path("main.py").read_text()
 
-    assert (
-        "discovery.bind_discovery_dependencies(\n                platform_facade.discovery_service"
-        in source
-    )
+    assert "discovery.bind_discovery_dependencies(" not in source
     assert "discovery.bind_discovery_dependencies(" not in main_source
+    assert "discovery_service=platform_facade.discovery_service" in source
 
 
 def test_gateway_discovery_is_not_backed_by_legacy_discovery_service():

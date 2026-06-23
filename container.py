@@ -17,53 +17,6 @@ from api_gateway.dependencies import (
     bind_api_gateway_deps,
     missing_required_deps,
 )
-from api_gateway.routes import (
-    a2a_task_routes as a2a_tasks,
-)
-from api_gateway.routes import (
-    agent_group_routes as agent_group,
-)
-from api_gateway.routes import (
-    agent_routes as agent,
-)
-from api_gateway.routes import (
-    discovery_api_key_routes as discovery_api_keys,
-)
-from api_gateway.routes import (
-    discovery_routes as discovery,
-)
-from api_gateway.routes import (
-    files_routes as files,
-)
-from api_gateway.routes import (
-    hitl_routes as hitl,
-)
-from api_gateway.routes import (
-    hub_routes as hub,
-)
-from api_gateway.routes import (
-    inspection_routes as inspection_center,
-)
-from api_gateway.routes import (
-    memory_routes as memory_center,
-)
-from api_gateway.routes import (
-    platform_gateway_routes as gateway,
-)
-from api_gateway.routes import (
-    relay_routes as relay,
-)
-from api_gateway.routes import (
-    room_routes as room_center,
-)
-from api_gateway.routes import (
-    sse_routes as sse,
-)
-from api_gateway.routes import (
-    webhook_routes as webhooks,
-)
-from api_gateway.viewsets import agent as agent_viewset
-from api_gateway.viewsets import base as viewset
 from app_shell.agent_health_service import agent_health_service
 from app_shell.api_key_auth import MongoAPIKeyAuthenticator
 from app_shell.delivery_runtime import sse_manager
@@ -252,9 +205,6 @@ def validate_runtime_bindings(
     del runtime
     errors: list[str] = []
 
-    if getattr(room_center, "execution_engine", None) is None:
-        errors.append("api.room_center.execution_engine")
-
     from execution.orchestration.room_message_center import (
         room_message_center as execution_room_message_center,
     )
@@ -275,7 +225,8 @@ def validate_runtime_bindings(
 
     if getattr(app.state, "platform_facade", None) is None:
         errors.append("app.state.platform_facade")
-    for missing in missing_required_deps():
+    api_gateway_deps = getattr(app.state, "api_gateway_deps", None)
+    for missing in missing_required_deps(api_gateway_deps):
         errors.append(f"api_gateway.{missing}")
 
     if errors:
@@ -402,17 +353,21 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     "agent_requests",
                 ),
             )
-            viewset.bind_viewset_dependencies(
-                provider=AppShellDALViewSetRepositoryProvider(mongo=mongo_dal),
-            )
-
-            inspection_center.bind_inspection_dependencies(AppShellInspectionCenter())
-            memory_center.bind_memory_dependencies(AppShellMemoryCenter())
             # Bind Platform-owned API key store after MongoDAL is created
             api_key_store = create_api_key_store(mongo=mongo_dal)
-            discovery_api_keys.bind_api_key_store(api_key_store)
             bind_api_key_authenticator(MongoAPIKeyAuthenticator(api_key_store))
             vector_dal = create_vector_dal()
+            route_agent_center = AppShellAgentCenter()
+            route_room_center = AppShellRoomCenter()
+            route_inspection_center = AppShellInspectionCenter()
+            route_memory_center = AppShellMemoryCenter()
+            route_repository_provider = AppShellDALViewSetRepositoryProvider(
+                mongo=mongo_dal
+            )
+            route_agent_vector_index = create_agent_viewset_vector_index(
+                vector=vector_dal,
+                index_name=runtime.settings.pinecone_index_name,
+            )
             _delivery_config = create_delivery_config(runtime.settings)
             delivery_startup_policy = create_delivery_startup_policy(
                 redis_url=runtime.settings.redis_url,
@@ -564,12 +519,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             room_coordinator_service.bind_summary_service(summary_llm_service)
             openai_service.bind_debate_service(debate_llm_service)
-            agent_viewset.bind_agent_viewset_dependencies(
-                embedding_source=embedding_llm_service,
-                vector_index_service=create_agent_viewset_vector_index(
-                    vector=vector_dal
-                ),
-            )
             agent_card_resolver = AgentCardResolverImpl()
             _agent_deps = create_agent_deps(
                 mongo=mongo_dal,
@@ -579,21 +528,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 hub_liveness=None,
                 exclusion_reader=CapabilityIssueExclusionReader(),
                 gateway_base_url=runtime.settings.gateway_base_url,
+                agent_index=runtime.settings.pinecone_index_name,
             )
             _agent_facade = _agent_deps.agent_registry
             agent_service.bind_facade(_agent_facade)
             agent_matcher.bind_facade(_agent_facade)
             agent_selection_service.bind_facade(_agent_facade)
             agent_health_service.bind_repository(_agent_deps.agent_repository)
-            agent.bind_agent_dependencies(
-                center=AppShellAgentCenter(),
-                service=agent_service,
-                issue_service=capability_issue_service,
-                avatar_manager=PlatformAgentAvatarManager(
-                    platform_object_storage,
-                    _agent_deps.agent_repository,
-                ),
-            )
             _resolver_repo = create_agent_resolver_repository(service=agent_service)
             agent_resolver_service.bind_repository(_resolver_repo)
             from agent.domain_alias import DomainAliasService as _DomainAliasSvc
@@ -1028,20 +969,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     message_store.get_room_user_message_by_message_id
                 ),
             )
-            room_center.bind_room_dependencies(
-                center=AppShellRoomCenter(),
-                store=route_room_reader,
-                selection_service=agent_selection_service,
-            )
-            a2a_tasks.bind_a2a_task_dependencies(a2a_task_status_reader)
-            agent_group.bind_agent_group_dependencies(agent_room_store)
-            sse.bind_sse_dependencies(sse_state_reader, sse_manager)
             room_runtime.bind_store(room_runtime_store)
             room_runtime.bind_facade(_room_facade)
             room_runtime.bind_message_event_publisher(_delivery_deps.event_publisher)
             room_runtime.bind_object_storage(platform_object_storage)
-            room_center.room_center.bind_facade(_room_facade)
-            hitl.bind_room_ownership_reader(_room_facade)
+            route_room_center.bind_facade(_room_facade)
             context_memory_facade = create_context_memory_facade(
                 mongo=mongo_dal,
                 vector=vector_dal,
@@ -1122,7 +1054,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 )
 
             execution_facade = create_execution_facade(
-                room_center=room_center.room_center,
+                room_center=route_room_center,
                 room_message_center=execution_room_message_center,
                 hitl_service=hitl_service,
                 run_lifecycle=run_lifecycle,
@@ -1152,14 +1084,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     client_request_id_resolver=app_shell_client_request_id_resolver,
                 )
 
-            webhooks.bind_webhook_dependencies(create_webhook_transport())
             bind_task_processing_status_emitter(emit_room_processing_status)
             execution_room_message_center.bind_execution_event_deps(
                 emit_room_processing_status
             )
-            room_center.bind_execution_deps(_execution_deps)
-            hitl.bind_execution_deps(_execution_deps)
-            sse.bind_execution_deps(_execution_deps)
             app.state.execution_facade = execution_facade
             app.state.execution_deps = _execution_deps
 
@@ -1185,19 +1113,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 deps=platform_deps,
             )
 
-            gateway.bind_gateway_dependencies(
-                platform_facade.gateway_service,
-                platform_facade.gateway_rate_limiter,
-            )
-            discovery.bind_discovery_dependencies(
-                platform_facade.discovery_service,
-                platform_facade.discovery_rate_limiter,
-                default_limit=runtime.settings.discovery_default_limit,
-            )
-            files.bind_file_dependencies(
-                platform_facade.file_storage,
-                _room_deps.room_registry,
-            )
             app.state.platform_facade = platform_facade
             app.state.platform_deps = platform_deps
             register_context_memory_event_handlers(
@@ -1448,8 +1363,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             config=config_from_settings(settings),
         )
         app.state.relay_service = _relay_svc
-        relay.bind_relay_dependencies(_relay_svc)
-        hub.bind_hub_dependencies(_relay_svc)
         if _delivery_deps is not None:
             router = _relay_svc.internal_response_dispatcher
             if router is None:
@@ -1468,7 +1381,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 hub_liveness_reader=hub_liveness_reader,
                 agent_registry_writer=_agent_deps.agent_registry_writer,
             )
-            agent.bind_agent_liveness_checker(check_and_sync_liveness)
         await _relay_svc.start()
         logger.info("Relay service initialized and heartbeat checker started")
 
@@ -1481,13 +1393,41 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
 
         bind_api_gateway_deps(
+            app,
             APIGatewayDeps(
-                gateway_service=getattr(gateway, "gateway_service", None),
-                file_storage=getattr(files, "file_storage", None),
-                relay_service=getattr(relay, "relay_service", None),
-                execution_deps=getattr(app.state, "execution_deps", None),
-                platform_facade=getattr(app.state, "platform_facade", None),
-            )
+                task_store=a2a_task_status_reader,
+                agent_center=route_agent_center,
+                agent_service=agent_service,
+                capability_issue_service=capability_issue_service,
+                agent_avatar_manager=PlatformAgentAvatarManager(
+                    platform_object_storage, _agent_deps.agent_repository
+                ),
+                agent_liveness_checker=check_and_sync_liveness,
+                agent_group_store=agent_room_store,
+                api_key_store=api_key_store,
+                discovery_service=platform_facade.discovery_service,
+                discovery_rate_limiter=platform_facade.discovery_rate_limiter,
+                discovery_default_limit=runtime.settings.discovery_default_limit,
+                file_storage=platform_facade.file_storage,
+                room_ownership_reader=_room_deps.room_registry,
+                hitl_manager=_execution_deps.hitl_manager,
+                hub_relay_service=_relay_svc,
+                inspection_center=route_inspection_center,
+                memory_center=route_memory_center,
+                gateway_service=platform_facade.gateway_service,
+                gateway_rate_limiter=platform_facade.gateway_rate_limiter,
+                relay_service=_relay_svc,
+                room_center=route_room_center,
+                room_store=route_room_reader,
+                agent_selection_service=agent_selection_service,
+                execution_engine=_execution_deps.execution_engine,
+                sse_store=sse_state_reader,
+                sse_manager=sse_manager,
+                webhook_receiver=create_webhook_transport(),
+                repository_provider=route_repository_provider,
+                embedding_provider=embedding_llm_service,
+                vector_index=route_agent_vector_index,
+            ),
         )
 
     except BaseException:
@@ -1965,9 +1905,8 @@ class AgentViewsetVectorIndexAdapter:
 
 
 def create_agent_viewset_vector_index(
-    *, vector: VectorDAL
+    *, vector: VectorDAL, index_name: str
 ) -> AgentViewsetVectorIndexAdapter:
-    index_name = settings.pinecone_index_name
     return AgentViewsetVectorIndexAdapter(vector_dal=vector, index=index_name)
 
 
@@ -2310,6 +2249,7 @@ def create_agent_deps(
     vector: VectorDAL,
     llm_provider: LLMEmbeddingGateway,
     card_resolver: AgentCardResolver,
+    agent_index: str,
     hub_liveness: HubLivenessReader | None = None,
     exclusion_reader: AgentExclusionReader | None = None,
     gateway_base_url: str | None = None,
@@ -2320,7 +2260,7 @@ def create_agent_deps(
         vector=vector,
         llm_provider=llm_provider,
         card_resolver=card_resolver,
-        agent_index=settings.pinecone_index_name,
+        agent_index=agent_index,
         hub_liveness=hub_liveness,
         exclusion_reader=exclusion_reader,
         gateway_base_url=gateway_base_url,
