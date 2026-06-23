@@ -414,6 +414,8 @@ async def test_agent_viewset_mutations_reject_non_owner(mock_user_2, sample_agen
     repo.pk_field = "agent_id"
     repo.get = AsyncMock(return_value=sample_agent.model_dump(mode="json"))
     repo.update = AsyncMock()
+    embedding_provider = MagicMock()
+    vector_index = MagicMock()
 
     with pytest.raises(HTTPException) as exc_info:
         await AgentViewSet()._handle_operation(
@@ -421,6 +423,8 @@ async def test_agent_viewset_mutations_reject_non_owner(mock_user_2, sample_agen
             repo,
             sample_agent.agent_id,
             sample_agent,
+            embedding_provider=embedding_provider,
+            vector_index=vector_index,
             user=mock_user_2,
         )
 
