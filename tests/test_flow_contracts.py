@@ -18,7 +18,7 @@ Tests cover:
 """
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from a2a.types import (
@@ -42,6 +42,7 @@ from models.response import (
     RoomCenterUserMessageResponse,
 )
 from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
+
 # =============================================================================
 # Fixtures
 # =============================================================================
