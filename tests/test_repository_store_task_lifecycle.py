@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from app_shell.repository_store import AppShellRepositoryStore
+from dal.runtime_store import AppShellRepositoryStore
 
 
 class FakeMongo:
@@ -154,7 +154,7 @@ def test_webhook_token_helpers_do_not_require_repository_attributes():
 
 
 def test_webhook_token_helpers_live_in_shared_module():
-    from app_shell.repository_parts import webhook_tokens
+    from dal.runtime_store.parts import webhook_tokens
 
     assert callable(webhook_tokens.generate_webhook_token)
     assert callable(webhook_tokens.hash_webhook_token)

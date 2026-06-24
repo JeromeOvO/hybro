@@ -148,7 +148,22 @@ FINAL_APP_SHELL_SHIMS = {
     },
     "app_shell/repository_store.py": {
         "max_lines": 80,
-        "required_exports": {"AppShellRepositoryStore"},
+        "required_exports": {
+            "AppShellRepositoryStore",
+            "_extract_text_from_artifact_parts",
+            "_modified_count",
+            "_mongo_update_succeeded",
+            "_safe_parse_agent",
+            "_safe_parse_agent_group",
+            "_safe_parse_agent_message",
+            "_safe_parse_chat_context",
+            "_safe_parse_room",
+            "_safe_parse_room_memory",
+            "_safe_parse_user_message",
+            "_strip_file_urls",
+            "_strip_unset_task_tracking_fields",
+            "_task_tracking_matches",
+        },
         "owning_module": "dal.runtime_store.app_shell_store",
     },
 }

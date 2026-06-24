@@ -104,7 +104,7 @@ from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
 from room.repository import RoomQuoteMongoRepository
 
 if TYPE_CHECKING:
-    from app_shell.repository_store import AppShellRepositoryStore
+    from dal.runtime_store import AppShellRepositoryStore
 
 
 # Pure function — trivially testable without lifespan/DB
@@ -2413,7 +2413,7 @@ def create_app_shell_repository_store(
     room_deps: RoomDeps,
     agent_deps: AgentDeps,
 ) -> AppShellRepositoryStore:
-    from app_shell.repository_store import AppShellRepositoryStore
+    from dal.runtime_store import AppShellRepositoryStore
 
     return AppShellRepositoryStore(
         mongo=mongo,

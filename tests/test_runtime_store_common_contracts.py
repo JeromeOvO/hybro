@@ -76,12 +76,12 @@ def test_runtime_room_memory_accepts_python_metadata_and_freezes_containers():
 
 
 def test_runtime_to_legacy_dump_omits_unset_defaults_and_preserves_explicit_none():
-    from app_shell.runtime_store_contracts import (
+    from common.dto import RuntimeChatContext, RuntimeRoomMemory, RuntimeRoomRecord
+    from dal.runtime_store.contracts import (
         _dump_runtime,
         runtime_to_chat_context,
         runtime_to_room,
     )
-    from common.dto import RuntimeChatContext, RuntimeRoomMemory, RuntimeRoomRecord
 
     room = RuntimeRoomRecord(
         room_id="r1",
@@ -147,7 +147,7 @@ def _agent_card() -> AgentCard:
 
 
 def test_agent_group_conversion_round_trips_legacy_model():
-    from app_shell.runtime_store_contracts import (
+    from dal.runtime_store.contracts import (
         agent_group_to_runtime,
         runtime_to_agent_group,
     )
@@ -171,7 +171,7 @@ def test_agent_group_conversion_round_trips_legacy_model():
 
 
 def test_agent_conversion_preserves_agent_card_and_status_value():
-    from app_shell.runtime_store_contracts import agent_to_runtime, runtime_to_agent
+    from dal.runtime_store.contracts import agent_to_runtime, runtime_to_agent
     from models.agent import Agent, AgentStatus
 
     legacy = Agent(
@@ -193,7 +193,7 @@ def test_agent_conversion_preserves_agent_card_and_status_value():
 
 
 def test_room_and_message_conversion_preserves_runtime_fields():
-    from app_shell.runtime_store_contracts import (
+    from dal.runtime_store.contracts import (
         message_content_to_runtime,
         room_agent_message_to_runtime,
         room_to_runtime,
@@ -240,7 +240,7 @@ def test_room_and_message_conversion_preserves_runtime_fields():
 
 
 def test_memory_conversion_preserves_summary_and_chat_context():
-    from app_shell.runtime_store_contracts import (
+    from dal.runtime_store.contracts import (
         chat_context_to_runtime,
         room_memory_to_runtime,
         runtime_to_chat_context,

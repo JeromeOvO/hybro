@@ -192,6 +192,8 @@ packages = [
     "dal.mongo",
     "dal.pinecone",
     "dal.redis",
+    "dal.runtime_store",
+    "dal.runtime_store.parts",
     "dal.s3",
     "delivery",
     "delivery.sse",
