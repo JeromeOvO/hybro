@@ -441,7 +441,7 @@ def test_context_memory_import_boundary():
 
 def test_non_protocol_helper_call_boundary():
     allowed_call_sites = {
-        "app_shell/context_assembly_service.py": {
+        "context_memory/compat/context_assembly.py": {
             "assemble_supervisor_context_from_memory",
             "assemble_agent_execution_context_from_memory",
         },

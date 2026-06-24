@@ -795,7 +795,7 @@ class TestMaxContextCharsEnforcement:
     @pytest.fixture
     def service(self):
         """Create a ContextAssemblyService with mock settings."""
-        with patch("models.context_config.settings") as mock_settings:
+        with patch("common.config.settings") as mock_settings:
             mock_settings.context_model_window = 128000
             mock_settings.context_system_prompt_tokens = 2000
             mock_settings.context_tool_schema_tokens = 1000
@@ -803,7 +803,7 @@ class TestMaxContextCharsEnforcement:
             mock_settings.context_room_pct = 0.2
             mock_settings.context_history_pct = 0.6
             mock_settings.context_task_pct = 0.2
-            from app_shell.context_assembly_service import ContextAssemblyService
+            from context_memory.compat.context_assembly import ContextAssemblyService
 
             yield bind_assembly_facade(ContextAssemblyService())
 

@@ -1,4 +1,4 @@
-"""Compatibility imports for the legacy app-shell context assembly service."""
+"""Compatibility adapters owned by ContextMemory."""
 
 from context_memory.compat.context_assembly import (
     ContextAssemblyResult,
