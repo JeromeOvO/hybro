@@ -603,18 +603,18 @@ class RoomServices:
         """
         Validate that the user has access to all specified agents.
         Private agents can only be added by their owner.
-        
+
         Returns:
             List of inaccessible agent IDs (empty if all accessible)
         """
         if not agent_ids:
             return []
-        
+
         # Fetch all agents in one query
         agents = await self._store.get_agents_with_conditions(
             {"agent_id": {"$in": agent_ids}}
         )
-        
+
         return [agent.agent_id for agent in agents if not agent.is_public and agent.provider_id != user_id]
 
     # room setting management
