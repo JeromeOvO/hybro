@@ -159,11 +159,10 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 > Delivery only translates and delivers. See §4.5 for the enforced call-site
 > contract.
 
-> **Phase 7b deviation:** The Phase 7b execution plan temporarily allowlists A2A
-> SDK imports in exact moved dispatch/orchestration files while preserving
-> behavior. That is not the target state; new Execution HITL/cancellation code
-> must use string/domain-state ports, and the allowlist should shrink as A2A
-> protocol adapters are introduced.
+> **Accepted A2A SDK confinement:** Execution dispatch/orchestration files use
+> explicit compatibility adapters for legacy A2A behavior. New Execution
+> HITL/cancellation code must use string/domain-state ports, and A2A protocol
+> adapter ownership remains in `a2a_adapter`.
 
 > **Goal 7 acceptance state (2026-06-23):** The modular decoupling design is
 > accepted. The app-shell focus files `room_runtime.py`, `a2a_runtime.py`,
@@ -1434,18 +1433,19 @@ execution/
     └── hitl_repo.py
 ```
 
-> **Phase 7b scope note (2026-05-17):** The structure above remains the target
-> architecture. The Phase 7b plan delivers the Execution module boundary,
-> compatibility shims, typed Delivery emits, and adapter-backed run/HITL
-> persistence. It intentionally defers the `execution/repository/` package and
-> the full lifecycle-command port (`create_run`, `start_run`, `complete_run`,
-> `fail_run`, `pause_run`, `cancel_run`, `emit_event`) to a follow-up phase.
-> Phase 7b also uses pragmatic adapter filenames such as
+> **Accepted Execution scope note (2026-06-23):** The structure above remains the
+> target architecture. The accepted implementation delivers the Execution module
+> boundary, compatibility shims, typed Delivery emits, and adapter-backed run/HITL
+> persistence. The repository package and full lifecycle-command port
+> (`create_run`, `start_run`, `complete_run`, `fail_run`, `pause_run`,
+> `cancel_run`, `emit_event`) remain target interfaces for future expansion while
+> current persistence is adapter-backed. The implementation also uses pragmatic
+> adapter filenames such as
 > `execution/run_lifecycle.py`, `execution/run_queries.py`,
 > `execution/hitl/service.py`, `execution/hitl/detector.py`, and
 > `execution/dispatch/transports/direct.py`; the tree above is the target layout,
-> not a claim that those target paths are fully delivered by the Phase 7b plan.
-> Phase 7b still includes the existing watchdog-specific
+> not a claim that those target paths are fully delivered by the accepted state.
+> The accepted implementation still includes the existing watchdog-specific
 > `append_run_timeout_failure(room_id, run_id, stale_minutes=...)` adapter so
 > stale-run recovery keeps its current timeout event semantics.
 > Until repositories land, `ExecutionEngine.get_run()` and `get_runs_for_room()`
@@ -2072,7 +2072,7 @@ Rules:
 > **Total estimated: 18-22 weeks** (vs original 9 weeks)
 > Strategy: "Facade wrap first, internal rewrite second" — each phase has a wrap sub-phase (fast, low risk) and a rewrite sub-phase (slower, needs golden tests).
 >
-> **Repository implementation:** Domain-scoped Repository Protocols (§4.9.2) are implemented as part of each business module phase. Phase 3 includes `AgentRepository` impl in `agent/repository/`; Phase 4 includes `RoomRepository` + `MessageRepository`; Phase 5 includes `MemoryRepository`; Phase 6+7 defines the target `RunRepository` + `RunEventRepository` + `HITLRepository`, but the current Phase 7b plan defers those implementations and uses adapter-backed persistence; Phase 8 includes `HubRepository`.
+> **Repository implementation:** Domain-scoped Repository Protocols (§4.9.2) are implemented as part of each business module phase. Phase 3 includes `AgentRepository` impl in `agent/repository/`; Phase 4 includes `RoomRepository` + `MessageRepository`; Phase 5 includes `MemoryRepository`; Phase 6+7 defines the target `RunRepository` + `RunEventRepository` + `HITLRepository`, while the accepted implementation uses adapter-backed persistence for those paths; Phase 8 includes `HubRepository`.
 
 #### Phase 0a: Common Foundation (1 week)
 
@@ -2417,8 +2417,8 @@ class AgentService:
 8. **Settings are read-only after container creation**
 9. **Background jobs run under LeaderElector** — exactly once per job
 10. **Cancellation watcher runs in EVERY worker** — not leader-elected (A6)
-11. **a2a-sdk types are target-state confined to `a2a_adapter/`** — Phase 7b
-    temporarily allowlists exact moved Execution dispatch/orchestration files;
+11. **a2a-sdk types are confined to `a2a_adapter/` ownership** — exact legacy
+    Execution dispatch/orchestration compatibility paths are documented and gated;
     new HITL/cancellation code must not use A2A SDK types.
 12. **LLM provider SDK types never appear outside `llm_gateway/`**
 13. **Room writes canonical messages; Context & Memory projects derived artifacts**
@@ -2837,7 +2837,7 @@ async def test_send_message_response_contract(client, seeded_room):
 | 13 | Legacy Workflow deleted, not wrapped | Zero value wrapping dead code; saves ~1.5 weeks dev + ongoing maintenance | Wrap (cost with no benefit) |
 | 14 | Execution owns record_processing_status | Delivery must be pure transport | Delivery calls back (violates Rule 6) |
 | 15 | IndexRegistry centralized | Startup ordering constraint (heal needs indexes) | Per-module init (ordering unclear) |
-| 16 | Config unification in Phase 0b | Silent breakage risk from env var mismatch | Defer (risk accumulates) |
+| 16 | Config unification in Phase 0b | Silent breakage risk from env var mismatch | Split config sources (risk accumulates) |
 | 17 | Domain-scoped Repository Protocols | Prevent cross-module raw query coupling; explicit schema ownership | Single generic MongoDAL (god interface) |
 | 18 | HybroError hierarchy for cross-module errors | Consistent error propagation without catching/re-raising SDK exceptions | Untyped exceptions (no contract) |
 | 19 | Trace context seam per facade method | Cross-module tracing is hard to retrofit; Phase 7b keeps no-dependency hooks that OpenTelemetry can wrap later | Ad hoc tracing later (lost context) |

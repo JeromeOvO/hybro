@@ -556,10 +556,11 @@ file uploads and converted binary artifacts.
 
 ### `app_shell`
 
-`app_shell` focus files are accepted compatibility shims that preserve legacy
-import paths and route method names while runtime behavior lives in owner
-modules. They are not behavior owners and must stay within the Goal 7
-line-count, export-surface, and dependency gates.
+`app_shell` is now limited to route-facing adapters that still protect public
+startup/API contracts and import-compatible shims for legacy module paths. The
+Goal 7 focus files are final shims: they expose old names and fail fast through
+their owning implementations when startup has not injected required ports, but
+they do not own business behavior.
 
 Examples:
 
