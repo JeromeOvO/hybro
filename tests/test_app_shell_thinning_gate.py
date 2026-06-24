@@ -431,17 +431,28 @@ def _top_level_function(path: Path, name: str) -> ast.FunctionDef | None:
 
 
 def _compares_name_to_string(node: ast.Compare, name: str) -> str | None:
-    operands = [node.left, *node.comparators]
-    if not any(
-        isinstance(operand, ast.Name) and operand.id == name for operand in operands
-    ):
+    if len(node.ops) != 1 or not isinstance(node.ops[0], ast.Eq):
         return None
-    constants = [
-        operand.value
-        for operand in operands
-        if isinstance(operand, ast.Constant) and isinstance(operand.value, str)
-    ]
-    return constants[0] if len(constants) == 1 else None
+    if len(node.comparators) != 1:
+        return None
+
+    left = node.left
+    right = node.comparators[0]
+    if (
+        isinstance(left, ast.Name)
+        and left.id == name
+        and isinstance(right, ast.Constant)
+        and isinstance(right.value, str)
+    ):
+        return right.value
+    if (
+        isinstance(right, ast.Name)
+        and right.id == name
+        and isinstance(left, ast.Constant)
+        and isinstance(left.value, str)
+    ):
+        return left.value
+    return None
 
 
 def _raises_attribute_error(node: ast.AST) -> bool:
@@ -540,6 +551,24 @@ def _dynamic_required_export_is_allowed(path: Path, export: str) -> bool:
     return export == "relay_service" and _relay_getattr_is_valid(path)
 
 
+def _module_path(module: str) -> Path:
+    module_base = Path(*module.split("."))
+    module_file = module_base.with_suffix(".py")
+    package_file = module_base / "__init__.py"
+    if module_file.exists():
+        return module_file
+    if package_file.exists():
+        return package_file
+    return module_file
+
+
+def _owner_static_exports_or_bindings(owning_module: str) -> set[str]:
+    owner_path = _module_path(owning_module)
+    if not owner_path.exists():
+        return set()
+    return _module_exports(owner_path) | _module_bound_names(owner_path)
+
+
 def _owner_import_provenance(
     node: ast.AST,
     owning_module: str,
@@ -559,7 +588,9 @@ def _owner_import_provenance(
     elif isinstance(node, ast.ImportFrom) and node.module == owning_module:
         for alias in node.names:
             if alias.name == "*":
-                backed_exports.update(required_exports)
+                backed_exports.update(
+                    required_exports & _owner_static_exports_or_bindings(owning_module)
+                )
             else:
                 backed_exports.add(alias.asname or alias.name)
 
@@ -652,17 +683,6 @@ def _required_export_violations(
     return violations
 
 
-def _module_path(module: str) -> Path:
-    module_base = Path(*module.split("."))
-    module_file = module_base.with_suffix(".py")
-    package_file = module_base / "__init__.py"
-    if module_file.exists():
-        return module_file
-    if package_file.exists():
-        return package_file
-    return module_file
-
-
 def _concrete_definitions(path: Path) -> list[str]:
     tree = ast.parse(path.read_text(), filename=str(path))
     return [
@@ -748,6 +768,43 @@ def test_forbidden_prefix_matching_is_segment_aware():
     assert _forbidden_prefix("a2a") == "a2a"
     assert _forbidden_prefix("a2a.client") == "a2a"
     assert _forbidden_prefix("a2a_adapter.client_facade") is None
+
+
+def _comparison_expression(source: str) -> ast.Compare:
+    expression = ast.parse(source, mode="eval").body
+    assert isinstance(expression, ast.Compare)
+    return expression
+
+
+def test_relay_getattr_export_comparison_requires_equality_operator():
+    assert (
+        _compares_name_to_string(
+            _comparison_expression('name == "relay_service"'),
+            "name",
+        )
+        == "relay_service"
+    )
+    assert (
+        _compares_name_to_string(
+            _comparison_expression('"relay_service" == name'),
+            "name",
+        )
+        == "relay_service"
+    )
+    assert (
+        _compares_name_to_string(
+            _comparison_expression('name != "relay_service"'),
+            "name",
+        )
+        is None
+    )
+    assert (
+        _compares_name_to_string(
+            _comparison_expression('name is "relay_service"'),
+            "name",
+        )
+        is None
+    )
 
 
 def test_app_shell_forbidden_imports_are_manifest_blocked_by_exact_prefix():
