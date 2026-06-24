@@ -117,8 +117,10 @@ route -> app-shell route owner -> facade -> repository/DAL
 
 Examples:
 
-- `app_shell.room_runtime.AppShellRoomCenter` delegates to `app_shell.room_runtime`, which is bound to
-  `room.RoomFacade` and an explicit repository-backed app-shell store.
+- `room.compat.runtime.AppShellRoomCenter` delegates to `RoomServices`, which is
+  bound to `room.RoomFacade`, room-owned unbound startup sentinels, and an
+  explicit repository-backed runtime store; `app_shell.room_runtime` is a
+  static compatibility shim.
 - `app_shell.agent_runtime.AppShellAgentCenter` delegates to `app_shell.agent_service`, which is bound to
   `agent.AgentFacade`.
 - `app_shell.relay_service` exposes relay route behavior while delegating
@@ -131,7 +133,7 @@ Examples:
 
 Execution is intentionally independent from
 app-shell compatibility objects.
-`container.py` may wrap `app_shell.a2a_runtime`, `app_shell.room_runtime`,
+`container.py` may wrap `app_shell.a2a_runtime`, `room.compat.runtime`,
 Delivery/SSE, room memory, notification, and repository-store objects into
 focused execution ports, but files under `execution/` do not import app-shell
 modules and do not accept broad app-shell composite stores. Queue, supervisor,
@@ -558,8 +560,10 @@ ports; app-shell modules preserve legacy import and route method names.
 
 Examples:
 
-- `app_shell.room_runtime`: legacy room-center and room-runtime method surface
-  over Room, Execution, ContextMemory, Platform, and Delivery ports.
+- `app_shell.room_runtime`: static compatibility shim for
+  `room.compat.runtime`, which owns the legacy room-center and room-runtime
+  method surface over Room, Execution, ContextMemory, Platform, and Delivery
+  ports.
 - `app_shell.a2a_runtime`: route/execution compatibility over `a2a_adapter`.
   Runtime settings are injected through `A2ARuntimeConfig`; task tracking and
   call counting are bound as explicit ports rather than read from global
@@ -631,7 +635,7 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - checks pending HITL requests before persistence,
    - checks active runs before persistence,
    - delegates room persistence to `AppShellRoomCenter.persist_message_to_room`,
-     which reaches `app_shell.room_runtime.RoomServices.persist_message_to_room`,
+     which reaches `room.compat.runtime.RoomServices.persist_message_to_room`,
    - emits preflight `processing` status immediately after the user message is
      persisted so the frontend has a cancellable `message_id`,
    - continues room-side preflight through

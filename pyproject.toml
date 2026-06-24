@@ -131,7 +131,7 @@ ignore = ["E501"]
 "app_shell/openai_service.py" = ["C901"]
 "app_shell/relay_service.py" = ["C901"]
 "app_shell/room_coordinator_service.py" = ["C901"]
-"app_shell/room_runtime.py" = ["C901", "UP042"]
+"room/compat/runtime.py" = ["C901", "UP042"]
 "common/a2a_constants.py" = ["UP042"]
 "common/dto/execution.py" = ["UP042"]
 "common/observability/tracing.py" = ["UP035"]
@@ -184,6 +184,7 @@ packages = [
     "agent",
     "agent.repository",
     "room",
+    "room.compat",
     "room.repository",
     "context_memory",
     "context_memory.compat",

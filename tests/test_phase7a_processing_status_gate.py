@@ -19,7 +19,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "tests" / "fixtures" / "phase7a_processing_status_callers.json"
-PRODUCTION_ROOTS = ("api", "app_shell", "jobs", "execution")
+PRODUCTION_ROOTS = ("api", "app_shell", "jobs", "execution", "room")
 OBSOLETE_CALL_IDS = {
     "api.sse.cancel_message.canceled",
 }
@@ -217,7 +217,7 @@ def _discover_calls() -> list[ProcessingStatusCall]:
                 )
                 emitter_kind = "direct_transport"
                 if (
-                    rel_path == "app_shell/room_runtime.py"
+                    rel_path == "room/compat/runtime.py"
                     and _enclosing_function(node, parents)
                     == "RoomServices._emit_processing_status_event"
                 ):
@@ -299,7 +299,7 @@ def _assert_lifecycle_helper_matches(
     helper = _find_prior_awaited_helper(item, "record_and_maybe_emit_run_event")
     if (
         helper is None
-        and item.path == "app_shell/room_runtime.py"
+        and item.path == "room/compat/runtime.py"
         and item.function_or_method == "RoomServices._emit_processing_status_event"
     ):
         for stmt in reversed(_prior_statements(item)):

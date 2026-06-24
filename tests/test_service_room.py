@@ -241,7 +241,7 @@ def test_room_services_migrated_crud_methods_do_not_keep_legacy_store_branches()
         "update_room_name": {"get_room_by_room_id", "update_room_by_room_id"},
         "update_room_extend_info": {"get_room_by_room_id", "update_room_by_room_id"},
     }
-    source = _ROOT / "app_shell" / "room_runtime.py"
+    source = _ROOT / "room" / "compat" / "runtime.py"
     tree = ast.parse(source.read_text())
     methods = {
         item.name: item
@@ -425,7 +425,7 @@ def test_room_services_migrated_message_methods_do_not_call_legacy_store():
             "get_room_agent_messages_by_related_message_id",
         },
     }
-    source = _ROOT / "app_shell" / "room_runtime.py"
+    source = _ROOT / "room" / "compat" / "runtime.py"
     tree = ast.parse(source.read_text())
     methods = {
         item.name: item

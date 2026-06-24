@@ -357,7 +357,7 @@ def test_message_write_flows_do_not_call_context_memory_write_shims():
         "add_agent_response_to_memory",
     }
     checked_paths = [
-        Path("app_shell/room_runtime.py"),
+        Path("room/compat/runtime.py"),
         Path("execution/orchestration/queue_executor.py"),
         Path("execution/orchestration/supervisor_executor.py"),
         Path("execution/orchestration/room_message_center.py"),

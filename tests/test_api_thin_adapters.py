@@ -800,7 +800,7 @@ def test_room_active_runs_inventory_records_execution_support():
         and route["name"] == "inquiry_active_runs"
     )
     route_source = inspect.getsource(room_center)
-    room_runtime_source = Path("app_shell/room_runtime.py").read_text()
+    room_runtime_source = Path("room/compat/runtime.py").read_text()
 
     assert "_require_execution_engine" not in route_source
     assert "runs = await engine.get_runs_for_room(room_id)" in route_source

@@ -12,6 +12,14 @@ from app_shell.relay_service import RelayService, init_relay_service
 from app_shell.room_runtime import AppShellRoomCenter, RoomServices
 from common.dto import RoomInfo
 from models.request import RoomCenterRoomSettingRequest
+from room.compat.unbound import (
+    UNBOUND_A2A_SERVICE,
+    UNBOUND_AGENT_SELECTION_SERVICE,
+    UNBOUND_AGENT_SERVICE,
+    UNBOUND_DELIVERY_MANAGER,
+    UNBOUND_ROOM_MEMORY_SERVICE,
+    UNBOUND_TASK_SERVICE,
+)
 
 
 @pytest.mark.asyncio
@@ -23,6 +31,38 @@ async def test_room_services_fails_before_facade_bind() -> None:
         match=r"RoomServices\.bind_facade\(\) not called - startup incomplete",
     ):
         await service.create_new_room(RoomCenterRoomSettingRequest(room_name="Room"))
+
+
+def test_room_services_defaults_to_room_owned_unbound_legacy_dependencies() -> None:
+    service = RoomServices()
+
+    assert service.agent_service is UNBOUND_AGENT_SERVICE
+    assert service.agent_selection_service is UNBOUND_AGENT_SELECTION_SERVICE
+    assert service.a2a_service is UNBOUND_A2A_SERVICE
+    assert service.room_memory_service is UNBOUND_ROOM_MEMORY_SERVICE
+    assert service.sse_manager is UNBOUND_DELIVERY_MANAGER
+    assert service.task_service is UNBOUND_TASK_SERVICE
+
+
+def test_room_services_bind_legacy_dependencies_replaces_unbound_defaults() -> None:
+    service = RoomServices()
+    deps = {
+        "agent_service": object(),
+        "agent_selection_service": object(),
+        "a2a_service": object(),
+        "room_memory_service": object(),
+        "sse_manager": object(),
+        "task_service": object(),
+    }
+
+    service.bind_legacy_dependencies(**deps)
+
+    assert service.agent_service is deps["agent_service"]
+    assert service.agent_selection_service is deps["agent_selection_service"]
+    assert service.a2a_service is deps["a2a_service"]
+    assert service.room_memory_service is deps["room_memory_service"]
+    assert service.sse_manager is deps["sse_manager"]
+    assert service.task_service is deps["task_service"]
 
 
 @pytest.mark.asyncio

@@ -158,19 +158,31 @@ def test_container_imports_room_runtime_singleton_for_lifespan_bindings():
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom):
             continue
-        if node.module != "app_shell.room_runtime":
+        if node.module != "room.compat.runtime":
             continue
         imported_names.update(alias.asname or alias.name for alias in node.names)
 
     main_room_runtime_imports = [
         node
         for node in ast.walk(main_tree)
-        if isinstance(node, ast.ImportFrom) and node.module == "app_shell.room_runtime"
+        if isinstance(node, ast.ImportFrom) and node.module == "room.compat.runtime"
     ]
 
     assert room_runtime_uses
     assert "room_runtime" in imported_names
     assert main_room_runtime_imports == []
+
+
+def test_container_binds_room_compat_legacy_dependencies_at_startup():
+    source = Path("container.py").read_text()
+
+    assert "room_runtime.bind_legacy_dependencies(" in source
+    assert "agent_service=agent_service" in source
+    assert "agent_selection_service=agent_selection_service" in source
+    assert "a2a_service=a2a_service" in source
+    assert "room_memory_service=room_memory_service" in source
+    assert "sse_manager=sse_manager" in source
+    assert "task_service=task_service" in source
 
 
 def test_container_builds_platform_config_from_scalar_settings():

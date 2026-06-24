@@ -119,7 +119,7 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 | 3 | **A2A Protocol Adapter** | Anti-corruption for a2a-sdk, internal model ↔ A2A types | `a2a_adapter/`, with `app_shell/a2a_runtime.py` as compatibility shim |
 | 4 | **LLM Gateway** | Unified LLM invocation, provider routing, capability registry | `app_shell/openai_service.py`, `app_shell/gemini_service.py`, `app_shell/bedrock_service.py` |
 | 5 | **Agent** | Agent lifecycle, health, matching, discovery | `app_shell/agent_*.py`, `api/agent.py`, `api/discovery.py` |
-| 6 | **Room** | Room CRUD, membership, raw message persistence, message graph | `room/`, with `app_shell/room_runtime.py` as compatibility shim |
+| 6 | **Room** | Room CRUD, membership, raw message persistence, message graph | `room/`, with `room/compat/runtime.py` as runtime compatibility owner and `app_shell/room_runtime.py` as shim |
 | 7 | **Context & Memory** | Context assembly, compaction, search, user memory, ~~chat contexts~~ (legacy; source removed in Phase 0d/8) | `context_memory/`, with app-shell memory/context shims for compatibility |
 | 8 | **Execution** | Run lifecycle, supervisor, debate, HITL, dispatch (NOT workflow) | `execution/`, `app_shell/hitl_service.py` |
 | 9 | **Delivery** | SSE connections, event broker, dedup, domain→frontend event translation | `app_shell/delivery_runtime.py`, `delivery/` |
@@ -2333,11 +2333,11 @@ class AgentService:
 | is_directly_callable (hub 502) | implicit in gateway_service | Agent | `facade.is_directly_callable()` |
 | Hub agent enrichment (is_hub_online) | Agent facade + `HubLivenessReader` | Agent + HubRuntimeBridge | Agent calls `HubLivenessReader` |
 | **Room & messages** | | | |
-| Room CRUD | `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `room/repository/` |
-| Room membership (3 seed modes) | `app_shell/room_runtime.py` shim | Room | `room/facade.py` compatibility methods |
-| User message persistence | `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `MessageMongoRepository` |
-| Agent message persistence | `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `MessageMongoRepository` |
-| Message graph | `app_shell/room_runtime.py` shim | Room | `room/repository/` message queries |
+| Room CRUD | `room/compat/runtime.py` owner, `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `room/repository/` |
+| Room membership (3 seed modes) | `room/compat/runtime.py` owner, `app_shell/room_runtime.py` shim | Room | `room/facade.py` compatibility methods |
+| User message persistence | `room/compat/runtime.py` owner, `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `MessageMongoRepository` |
+| Agent message persistence | `room/compat/runtime.py` owner, `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `MessageMongoRepository` |
+| Message graph | `room/compat/runtime.py` owner, `app_shell/room_runtime.py` shim | Room | `room/repository/` message queries |
 | **Context & Memory** | | | |
 | Context assembly and legacy selection/metrics | `app_shell/context_assembly_service.py` shim | Context & Memory | `context_memory/facade.py`, `context_memory/assembly.py`, `context_memory/legacy_assembly.py` |
 | Memory compaction | `app_shell/compaction_service.py` | Context & Memory | `service/compaction.py` |

@@ -301,12 +301,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from app_shell.openai_service import openai_service
             from app_shell.room_coordinator_service import room_coordinator_service
             from app_shell.room_membership_source import LegacyRoomMembershipSeedSource
-            from app_shell.room_runtime import (
-                AppShellRoomCenter,
-                build_turn_content,
-                room_runtime,
-                room_services,
-            )
             from app_shell.task_service import task_service
             from common.utils.a2a_helpers import bind_a2a_artifact_storage
             from context_memory.config import ContextMemoryLLMConfig
@@ -334,6 +328,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             from platform_module.adapters import RateLimitCollectionAdapter
             from platform_module.rate_limit import PlatformAgentRateLimiter
+            from room.compat.runtime import (
+                AppShellRoomCenter,
+                build_turn_content,
+                room_runtime,
+                room_services,
+            )
 
             object_storage = create_object_storage_dal()
             platform_object_storage = PlatformObjectStorage(
@@ -970,6 +970,14 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
             )
             room_runtime.bind_store(room_runtime_store)
+            room_runtime.bind_legacy_dependencies(
+                agent_service=agent_service,
+                agent_selection_service=agent_selection_service,
+                a2a_service=a2a_service,
+                room_memory_service=room_memory_service,
+                sse_manager=sse_manager,
+                task_service=task_service,
+            )
             room_runtime.bind_facade(_room_facade)
             room_runtime.bind_message_event_publisher(_delivery_deps.event_publisher)
             room_runtime.bind_object_storage(platform_object_storage)
