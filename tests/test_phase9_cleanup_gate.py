@@ -841,6 +841,35 @@ def test_phase9_cleanup_manifest_has_no_blocked_cleanup_entries():
     assert _manifest().get("blocked_cleanup", []) == []
 
 
+def _manifest_string_values(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _manifest_string_values(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _manifest_string_values(item)
+
+
+def test_phase9_cleanup_manifest_has_no_transitional_exceptions():
+    manifest = _manifest()
+    forbidden_tokens = ("temporary", "transitional", "deferred")
+    violations = [
+        f"{token}: {value}"
+        for value in _manifest_string_values(manifest)
+        for token in forbidden_tokens
+        if token in value.lower()
+    ]
+
+    assert manifest.get("blocked_cleanup", []) == []
+    assert manifest.get("app_shell_runtime_blockers", []) == []
+    assert not violations, (
+        "Phase 9 cleanup manifest still records transitional exceptions:\n"
+        + "\n".join(violations)
+    )
+
+
 def test_turn_id_helper_is_common_leaf_without_manifest_blocker():
     blocked_paths = _blocked_cleanup_paths(contract="common_import_boundary")
 

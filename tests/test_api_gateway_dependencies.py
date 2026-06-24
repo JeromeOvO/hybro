@@ -1,4 +1,5 @@
 import inspect
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -134,6 +135,22 @@ def test_get_api_gateway_deps_reads_request_app_state():
     request = _request_with_state(api_gateway_deps=deps)
 
     assert get_api_gateway_deps(request) is deps
+
+
+def test_api_gateway_dependencies_are_app_state_injected_not_route_global():
+    from api_gateway.dependencies import bind_api_gateway_deps, get_api_gateway_deps
+
+    app = SimpleNamespace(state=SimpleNamespace())
+    deps = _deps()
+
+    bind_api_gateway_deps(app, deps)
+    request = _request_with_state(api_gateway_deps=app.state.api_gateway_deps)
+
+    assert get_api_gateway_deps(request) is deps
+
+    source = Path("api_gateway/dependencies.py").read_text()
+    assert "app.state.api_gateway_deps = deps" in source
+    assert 'getattr(request.app.state, "api_gateway_deps", None)' in source
 
 
 def test_get_api_gateway_deps_fails_when_startup_did_not_bind():

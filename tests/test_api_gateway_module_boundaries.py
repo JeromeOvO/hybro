@@ -16,6 +16,16 @@ MODULE_ROUTE_PROTOCOL_IMPORTS = {
     "context_memory.protocols",
 }
 FORBIDDEN_ROUTE_MODULE_ROOTS = {"agent", "room", "context_memory", "a2a_adapter"}
+FOCUS_APP_SHELL_RUNTIME_MODULES = {
+    "app_shell.a2a_runtime",
+    "app_shell.context_assembly_service",
+    "app_shell.relay_service",
+    "app_shell.repository_store",
+    "app_shell.room_runtime",
+}
+FOCUS_APP_SHELL_RUNTIME_NAMES = {
+    module.removeprefix("app_shell.") for module in FOCUS_APP_SHELL_RUNTIME_MODULES
+}
 
 
 def _api_gateway_py_files():
@@ -23,6 +33,31 @@ def _api_gateway_py_files():
     if not root.exists():
         return []
     return sorted(root.rglob("*.py"))
+
+
+def _app_shell_focus_runtime_imports_for_node(
+    path: Path,
+    node: ast.AST,
+) -> list[str]:
+    if isinstance(node, ast.Import):
+        return [
+            f"{path}:{node.lineno}: {alias.name}"
+            for alias in node.names
+            if alias.name in FOCUS_APP_SHELL_RUNTIME_MODULES
+        ]
+    if not isinstance(node, ast.ImportFrom) or node.module is None:
+        return []
+
+    violations: list[str] = []
+    if node.module in FOCUS_APP_SHELL_RUNTIME_MODULES:
+        violations.append(f"{path}:{node.lineno}: {node.module}")
+    if node.module == "app_shell":
+        violations.extend(
+            f"{path}:{node.lineno}: app_shell.{alias.name}"
+            for alias in node.names
+            if alias.name in FOCUS_APP_SHELL_RUNTIME_NAMES
+        )
+    return violations
 
 
 def test_api_gateway_package_exists():
@@ -82,6 +117,24 @@ def test_gateway_routes_import_only_module_protocol_surfaces():
                 violations.append(f"{path}: import {module}")
 
     assert violations == []
+
+
+def test_api_gateway_surfaces_do_not_import_app_shell_focus_runtime_modules():
+    violations: list[str] = []
+    paths = [
+        *Path("api_gateway/routes").glob("*.py"),
+        *Path("api_gateway/viewsets").glob("*.py"),
+    ]
+
+    for path in sorted(paths):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            violations.extend(_app_shell_focus_runtime_imports_for_node(path, node))
+
+    assert not violations, (
+        "API Gateway surfaces still import app_shell focus runtime modules:\n"
+        + "\n".join(violations)
+    )
 
 
 def test_gateway_route_modules_do_not_hold_business_dependency_globals():

@@ -104,226 +104,114 @@ FORBIDDEN_MAIN_WIRING_SNIPPETS = (
     "init_relay_service(",
 )
 
-EXPECTED_APP_SHELL_BASELINE = {
-    "app_shell/room_runtime.py": {"lines": 3766, "public_business_methods": 54},
-    "app_shell/a2a_runtime.py": {"lines": 613, "public_business_methods": 16},
-    "app_shell/relay_service.py": {"lines": 403, "public_business_methods": 27},
-    "app_shell/context_assembly_service.py": {
-        "lines": 164,
-        "public_business_methods": 4,
+FINAL_APP_SHELL_SHIMS = {
+    "app_shell/room_runtime.py": {
+        "max_lines": 80,
+        "required_exports": {
+            "AppShellRoomCenter",
+            "DispatchStrategy",
+            "RoomServices",
+            "_ResolvedAttachments",
+            "_human_size",
+            "build_turn_content",
+            "resolve_strategy",
+            "room_runtime",
+            "room_services",
+        },
+        "owning_module": "room.compat.runtime",
     },
-    # Goal 5 intentionally adds DTO conversion at the aggregate common.protocols
-    # boundary. Focused stores remain model-shaped; later cleanup should move
-    # adapter growth out of this aggregate instead of adding business behavior here.
-    "app_shell/repository_store.py": {"lines": 842, "public_business_methods": 93},
+    "app_shell/a2a_runtime.py": {
+        "max_lines": 60,
+        "required_exports": {"A2ARuntimeConfig", "A2AService", "a2a_service"},
+        "owning_module": "a2a_adapter.runtime_service",
+    },
+    "app_shell/relay_service.py": {
+        "max_lines": 80,
+        "required_exports": {
+            "RelayHubLivenessReader",
+            "RelayService",
+            "init_relay_service",
+            "relay_service",
+        },
+        "owning_module": "hub_runtime_bridge.compat.relay_service",
+    },
+    "app_shell/context_assembly_service.py": {
+        "max_lines": 70,
+        "required_exports": {
+            "ContextAssemblyResult",
+            "ContextAssemblyService",
+            "ContextMetrics",
+            "TruncationReason",
+            "context_assembly_service",
+        },
+        "owning_module": "context_memory.compat.context_assembly",
+    },
+    "app_shell/repository_store.py": {
+        "max_lines": 80,
+        "required_exports": {"AppShellRepositoryStore"},
+        "owning_module": "dal.runtime_store.app_shell_store",
+    },
 }
 
-EXPECTED_APP_SHELL_PUBLIC_METHODS = {
-    "app_shell/room_runtime.py": [
-        "RoomServices.bind_object_storage",
-        "RoomServices.bind_store",
-        "RoomServices.bind_facade",
-        "RoomServices.bind_context_memory",
-        "RoomServices.bind_message_event_publisher",
-        "RoomServices.bind_message_parser_service",
-        "RoomServices.bind_debate_rounds",
-        "RoomServices.bind_attachment_metadata_reader",
-        "RoomServices.bind_attachment_cleanup",
-        "RoomServices.bind_quote_writer",
-        "RoomServices.create_new_room",
-        "RoomServices.inquiry_room_setting",
-        "RoomServices.inquiry_active_runs",
-        "RoomServices.inquiry_rooms_by_room_owner_id",
-        "RoomServices.update_room_agent_set",
-        "RoomServices.update_room_name",
-        "RoomServices.update_room_extend_info",
-        "RoomServices.delete_room_by_room_id",
-        "RoomServices.parse_agent_mentions",
-        "RoomServices.extract_agent_message_content",
-        "RoomServices.group_mentions_by_context",
-        "RoomServices.create_shared_message_content",
-        "RoomServices.create_task_for_agent",
-        "RoomServices.create_task_for_agents_group",
-        "RoomServices.create_agent_message",
-        "RoomServices.parse_user_message",
-        "RoomServices.send_message_to_room",
-        "RoomServices.persist_message_to_room",
-        "RoomServices.run_message_preflight_to_room",
-        "RoomServices.parse_user_message_with_mentions",
-        "RoomServices.process_agent_message",
-        "RoomServices.update_agent_message_by_message_id",
-        "RoomServices.inquiry_user_messages_by_room_id",
-        "RoomServices.inquiry_agent_messages_by_room_id",
-        "RoomServices.inquiry_agent_message_by_message_id",
-        "RoomServices.inquiry_user_message_by_message_id",
-        "RoomServices.inquiry_agent_messages_by_related_message_id",
-        "RoomServices.inquiry_room_messages_by_room_id",
-        "RoomServices.handle_a2a_response_for_room",
-        "AppShellRoomCenter.bind_facade",
-        "AppShellRoomCenter.bind_room_services",
-        "AppShellRoomCenter.create_new_room",
-        "AppShellRoomCenter.inquiry_room_setting",
-        "AppShellRoomCenter.inquiry_active_runs",
-        "AppShellRoomCenter.delete_room_by_room_id",
-        "AppShellRoomCenter.inquiry_rooms_by_room_owner_id",
-        "AppShellRoomCenter.update_room_agent_set",
-        "AppShellRoomCenter.update_room_name",
-        "AppShellRoomCenter.update_room_extend_info",
-        "AppShellRoomCenter.inquiry_room_messages_by_room_id",
-        "AppShellRoomCenter.inquiry_agent_messages_by_related_message_id",
-        "AppShellRoomCenter.send_message_to_room",
-        "AppShellRoomCenter.persist_message_to_room",
-        "AppShellRoomCenter.run_message_preflight_to_room",
-    ],
-    "app_shell/a2a_runtime.py": [
-        "A2AService.bind_runtime_config",
-        "A2AService.bind_task_db",
-        "A2AService.get_agent_card_from_url",
-        "A2AService.has_streaming_capability",
-        "A2AService.has_push_notification_capability",
-        "A2AService.create_task_for_tracking",
-        "A2AService.send_message_to_tracked_agent",
-        "A2AService.send_message_sync",
-        "A2AService.send_message_streaming",
-        "A2AService.send_message",
-        "A2AService.dry_send_message",
-        "A2AService.validate_a2a_response",
-        "A2AService.validate_message",
-        "A2AService.process_a2a_response",
-        "A2AService.cancel_remote_task",
-        "A2AService.reply_to_task",
-    ],
-    "app_shell/relay_service.py": [
-        "RelayService.set_relay_transport",
-        "RelayService.bind_response_handler",
-        "RelayService.set_stream_service",
-        "RelayService.set_leader_election",
-        "RelayService.bind_agent_registry_writer",
-        "RelayService.start",
-        "RelayService.stop",
-        "RelayService.register_hub",
-        "RelayService.get_hub_owner_id",
-        "RelayService.connect_hub",
-        "RelayService.record_hub_heartbeat",
-        "RelayService.is_hub_alive",
-        "RelayService.is_hub_alive_cached",
-        "RelayService.mark_hub_agents_offline",
-        "RelayService.sync_agents",
-        "RelayService.push_to_hub",
-        "RelayService.process_publish",
-        "RelayService.cancel_relay_task",
-        "RelayService.cancel_hub_task",
-        "RelayService.reply_to_relay_task",
-        "RelayService.reply_to_hub_task",
-        "RelayService.send_to_hub",
-        "RelayService.get_hub_status",
-        "RelayService.sweep_offline_queues",
-        "RelayHubLivenessReader.is_hub_online",
-        "RelayHubLivenessReader.get_hub_owner_id",
-        "init_relay_service",
-    ],
-    "app_shell/context_assembly_service.py": [
-        "ContextAssemblyService.bind_facade",
-        "ContextAssemblyService.build_supervisor_context",
-        "ContextAssemblyService.build_agent_execution_context",
-        "ContextAssemblyService.get_budget_summary",
-    ],
-    "app_shell/repository_store.py": [
-        "AppShellRepositoryStore.add_agent_group",
-        "AppShellRepositoryStore.get_agent_groups_by_owner",
-        "AppShellRepositoryStore.get_agent_group_by_id",
-        "AppShellRepositoryStore.update_agent_group",
-        "AppShellRepositoryStore.delete_agent_group",
-        "AppShellRepositoryStore.get_all_active_agents",
-        "AppShellRepositoryStore.get_agent_name_by_agent_id",
-        "AppShellRepositoryStore.get_agent_by_agent_id",
-        "AppShellRepositoryStore.get_agents_with_conditions",
-        "AppShellRepositoryStore.increment_agent_call_count",
-        "AppShellRepositoryStore.get_room_by_room_id",
-        "AppShellRepositoryStore.get_rooms_by_room_owner_id",
-        "AppShellRepositoryStore.update_room_by_room_id",
-        "AppShellRepositoryStore.get_room_user_message_by_message_id",
-        "AppShellRepositoryStore.get_room_user_messages_by_room_id",
-        "AppShellRepositoryStore.get_room_agent_message_by_message_id",
-        "AppShellRepositoryStore.get_room_agent_messages_by_room_id",
-        "AppShellRepositoryStore.get_room_agent_messages_by_related_message_id",
-        "AppShellRepositoryStore.add_room_agent_message",
-        "AppShellRepositoryStore.add_room_user_message",
-        "AppShellRepositoryStore.update_room_user_message_by_message_id",
-        "AppShellRepositoryStore.upsert_room_agent_message",
-        "AppShellRepositoryStore.delete_room_agent_message_by_message_id",
-        "AppShellRepositoryStore.update_room_agent_message_by_message_id",
-        "AppShellRepositoryStore.get_active_runs_by_room_id",
-        "AppShellRepositoryStore.save_continuation_on_message",
-        "AppShellRepositoryStore.resolve_client_request_id_for_agent_message",
-        "AppShellRepositoryStore.resolve_client_request_id_for_message_id",
-        "AppShellRepositoryStore.get_task_messages_for_room",
-        "AppShellRepositoryStore.get_pending_task_messages_for_user",
-        "AppShellRepositoryStore.hash_webhook_token",
-        "AppShellRepositoryStore.verify_webhook_token",
-        "AppShellRepositoryStore.generate_webhook_token",
-        "AppShellRepositoryStore.check_task_limits",
-        "AppShellRepositoryStore.enable_task_tracking_on_message",
-        "AppShellRepositoryStore.update_task_on_message",
-        "AppShellRepositoryStore.update_webhook_token_hash_on_message",
-        "AppShellRepositoryStore.verify_webhook_token_on_message",
-        "AppShellRepositoryStore.verify_webhook_token_for_task",
-        "AppShellRepositoryStore.is_message_cancelled",
-        "AppShellRepositoryStore.cancel_message",
-        "AppShellRepositoryStore.get_room_ids_with_non_terminal_runs",
-        "AppShellRepositoryStore.find_stale_non_terminal_runs",
-        "AppShellRepositoryStore.get_stale_task_messages",
-        "AppShellRepositoryStore.get_expired_task_messages",
-        "AppShellRepositoryStore.get_non_tracked_stale_task_messages",
-        "AppShellRepositoryStore.get_orphaned_agent_messages",
-        "AppShellRepositoryStore.touch_task_message",
-        "AppShellRepositoryStore.get_and_clear_continuation_on_message",
-        "AppShellRepositoryStore.get_pending_continuation_on_message",
-        "AppShellRepositoryStore.get_and_clear_continuation_on_user_message",
-        "AppShellRepositoryStore.save_continuation_on_user_message",
-        "AppShellRepositoryStore.get_stuck_supervisor_trajectory_messages",
-        "AppShellRepositoryStore.claim_stuck_supervisor_trajectory",
-        "AppShellRepositoryStore.get_room_memory_by_room_id",
-        "AppShellRepositoryStore.get_pending_hitl_requests_for_message",
-        "AppShellRepositoryStore.create_hitl_request",
-        "AppShellRepositoryStore.get_hitl_request",
-        "AppShellRepositoryStore.update_hitl_request",
-        "AppShellRepositoryStore.cas_update_hitl_request",
-        "AppShellRepositoryStore.fenced_update_hitl_request",
-        "AppShellRepositoryStore.claim_hitl_request",
-        "AppShellRepositoryStore.get_pending_hitl_requests",
-        "AppShellRepositoryStore.get_hitl_group_requests",
-        "AppShellRepositoryStore.count_pending_in_hitl_group",
-        "AppShellRepositoryStore.claim_hitl_group_routing",
-        "AppShellRepositoryStore.release_hitl_group_routing",
-        "AppShellRepositoryStore.count_hitl_requests_for_message",
-        "AppShellRepositoryStore.update_agent_message_task_state",
-        "AppShellRepositoryStore.persist_hitl_user_answer",
-        "AppShellRepositoryStore.persist_hitl_group_metadata",
-        "AppShellRepositoryStore.iter_stale_processing_hitl_requests",
-        "AppShellRepositoryStore.ensure_hitl_indexes",
-        "AppShellRepositoryStore.add_chat_context",
-        "AppShellRepositoryStore.get_chat_context_by_session_id",
-        "AppShellRepositoryStore.update_chat_context_by_session_id",
-        "AppShellRepositoryStore.delete_chat_context_by_session_id",
-        "AppShellRepositoryStore.increment_user_interactions",
-        "AppShellRepositoryStore.record_agent_call",
-        "AppShellRepositoryStore.update_turn_notes",
-        "AppShellRepositoryStore.claim_user_message_for_processing",
-        "AppShellRepositoryStore.unclaim_user_message",
-        "AppShellRepositoryStore.claim_or_reclaim_user_message",
-        "AppShellRepositoryStore.refresh_processing_claim",
-        "AppShellRepositoryStore.turn_exists",
-        "AppShellRepositoryStore.cancel_descendants",
-        "AppShellRepositoryStore.cancel_agent_messages_by_ids",
-        "AppShellRepositoryStore.update_room_agent_message_with_new_message_content_by_message_id",
-        "AppShellRepositoryStore.update_last_notified_state",
-        "AppShellRepositoryStore.reset_last_notified_state",
-        "AppShellRepositoryStore.update_task_state_on_message",
-        "AppShellRepositoryStore.accumulate_artifact_on_message",
-        "AppShellRepositoryStore.update_task_state_on_message_if_not_terminal",
-    ],
+FINAL_APP_SHELL_REEXPORT_SHIMS = {
+    "app_shell/runtime_store_contracts.py": {
+        "max_lines": 40,
+        "owning_module": "dal.runtime_store.contracts",
+    },
+    "app_shell/repository_parts/__init__.py": {
+        "max_lines": 40,
+        "owning_module": "dal.runtime_store.parts",
+    },
+    "app_shell/repository_parts/agent_room_store.py": {
+        "max_lines": 30,
+        "owning_module": "dal.runtime_store.parts.agent_room_store",
+    },
+    "app_shell/repository_parts/message_store.py": {
+        "max_lines": 30,
+        "owning_module": "dal.runtime_store.parts.message_store",
+    },
+    "app_shell/repository_parts/task_lifecycle_store.py": {
+        "max_lines": 30,
+        "owning_module": "dal.runtime_store.parts.task_lifecycle_store",
+    },
+    "app_shell/repository_parts/hitl_store.py": {
+        "max_lines": 30,
+        "owning_module": "dal.runtime_store.parts.hitl_store",
+    },
+    "app_shell/repository_parts/memory_store.py": {
+        "max_lines": 30,
+        "owning_module": "dal.runtime_store.parts.memory_store",
+    },
+    "app_shell/repository_parts/parsing.py": {
+        "max_lines": 70,
+        "owning_module": "dal.runtime_store.parts.parsing",
+    },
+    "app_shell/repository_parts/webhook_tokens.py": {
+        "max_lines": 40,
+        "owning_module": "dal.runtime_store.parts.webhook_tokens",
+    },
 }
+
+FOCUS_MODULES = {
+    path.removesuffix(".py").replace("/", ".") for path in FINAL_APP_SHELL_SHIMS
+}
+FOCUS_APP_SHELL_NAMES = {
+    module.removeprefix("app_shell.") for module in FOCUS_MODULES
+}
+
+PRODUCTION_MODULE_ROOTS = (
+    "a2a_adapter",
+    "agent",
+    "api_gateway",
+    "common",
+    "context_memory",
+    "delivery",
+    "execution",
+    "hub_runtime_bridge",
+    "jobs",
+    "platform_module",
+    "room",
+)
 
 
 def _manifest() -> dict:
@@ -395,6 +283,107 @@ def _public_business_methods(path: Path) -> list[str]:
     return methods
 
 
+def _line_count(path: Path) -> int:
+    return sum(1 for _ in path.open())
+
+
+def _module_exports(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    exports: set[str] = set()
+
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            exports.update(
+                alias.asname or alias.name.split(".", 1)[0] for alias in node.names
+            )
+        elif isinstance(node, ast.ImportFrom):
+            exports.update(
+                alias.asname or alias.name for alias in node.names if alias.name != "*"
+            )
+        elif isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            exports.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    exports.add(target.id)
+                    if target.id == "__all__":
+                        exports.update(_string_literal_sequence(node.value))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            exports.add(node.target.id)
+
+    return exports
+
+
+def _string_literal_sequence(node: ast.AST) -> set[str]:
+    if not isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return set()
+    return {item.value for item in node.elts if isinstance(item, ast.Constant)}
+
+
+def _module_path(module: str) -> Path:
+    module_base = Path(*module.split("."))
+    module_file = module_base.with_suffix(".py")
+    package_file = module_base / "__init__.py"
+    if module_file.exists():
+        return module_file
+    if package_file.exists():
+        return package_file
+    return module_file
+
+
+def _concrete_definitions(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    return [
+        f"{path}:{node.lineno}: {node.name}"
+        for node in tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+
+
+def _imports_module(path: Path, expected_module: str) -> bool:
+    for _lineno, imported_module in _import_modules(path):
+        if (
+            imported_module == expected_module
+            or imported_module.startswith(f"{expected_module}.")
+        ):
+            return True
+    return False
+
+
+def _app_shell_focus_runtime_imports_for_node(
+    path: Path,
+    node: ast.AST,
+) -> list[str]:
+    if isinstance(node, ast.Import):
+        return [
+            f"{path}:{node.lineno}: {alias.name}"
+            for alias in node.names
+            if alias.name in FOCUS_MODULES
+        ]
+    if not isinstance(node, ast.ImportFrom) or node.module is None:
+        return []
+
+    violations: list[str] = []
+    if node.module in FOCUS_MODULES:
+        violations.append(f"{path}:{node.lineno}: {node.module}")
+    if node.module == "app_shell":
+        violations.extend(
+            f"{path}:{node.lineno}: app_shell.{alias.name}"
+            for alias in node.names
+            if alias.name in FOCUS_APP_SHELL_NAMES
+        )
+    return violations
+
+
+def _app_shell_focus_runtime_import_violations(paths: list[Path]) -> list[str]:
+    violations: list[str] = []
+    for path in sorted(paths):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            violations.extend(_app_shell_focus_runtime_imports_for_node(path, node))
+    return violations
+
+
 def test_forbidden_prefix_matching_is_segment_aware():
     assert _forbidden_prefix("a2a") == "a2a"
     assert _forbidden_prefix("a2a.client") == "a2a"
@@ -437,25 +426,71 @@ def test_legacy_import_boundary_blockers_are_exact_current_files():
     assert not bad, "App-shell thinning blockers are stale:\n" + "\n".join(bad)
 
 
-def test_app_shell_focus_file_baseline_sizes_are_recorded():
-    actual = {
-        target: {
-            "lines": sum(1 for _ in Path(target).open()),
-            "public_business_methods": _public_business_method_count(Path(target)),
-        }
-        for target in sorted(APP_SHELL_TARGETS)
+def test_app_shell_focus_files_are_final_import_shims():
+    violations: list[str] = []
+
+    for target, contract in sorted(FINAL_APP_SHELL_SHIMS.items()):
+        path = Path(target)
+        if not path.exists():
+            violations.append(f"{target}: missing final import shim")
+            continue
+
+        line_count = _line_count(path)
+        max_lines = contract["max_lines"]
+        if line_count > max_lines:
+            violations.append(f"{target}: {line_count} lines exceeds {max_lines}")
+
+        exports = _module_exports(path)
+        missing_exports = sorted(contract["required_exports"] - exports)
+        if missing_exports:
+            violations.append(
+                f"{target}: missing required exports: {', '.join(missing_exports)}"
+            )
+
+        concrete_definitions = _concrete_definitions(path)
+        if concrete_definitions:
+            violations.append(
+                f"{target}: concrete definitions remain:\n"
+                + "\n".join(concrete_definitions)
+            )
+
+        public_methods = _public_business_methods(path)
+        if public_methods:
+            violations.append(
+                f"{target}: public business methods remain "
+                f"({_public_business_method_count(path)}): "
+                + ", ".join(public_methods)
+            )
+
+        owning_module = contract["owning_module"]
+        if not _imports_module(path, owning_module):
+            violations.append(f"{target}: does not import owning module {owning_module}")
+
+    assert not violations, "App-shell focus files are not final import shims:\n" + (
+        "\n".join(violations)
+    )
+
+
+def test_app_shell_focus_owning_modules_exist_and_are_not_app_shell_owned():
+    violations: list[str] = []
+
+    contracts = {
+        **FINAL_APP_SHELL_SHIMS,
+        **FINAL_APP_SHELL_REEXPORT_SHIMS,
     }
+    for target, contract in sorted(contracts.items()):
+        owning_module = contract["owning_module"]
+        owning_path = _module_path(owning_module)
+        if owning_module == "app_shell" or owning_module.startswith("app_shell."):
+            violations.append(f"{target}: owner remains in app_shell: {owning_module}")
+        if not owning_path.exists():
+            violations.append(f"{target}: owner module does not exist: {owning_module}")
+        elif owning_path.parts and owning_path.parts[0] == "app_shell":
+            violations.append(f"{target}: owner path remains in app_shell: {owning_path}")
 
-    assert actual == EXPECTED_APP_SHELL_BASELINE
-
-
-def test_app_shell_public_surface_is_explicitly_allowlisted():
-    actual = {
-        target: _public_business_methods(Path(target))
-        for target in sorted(APP_SHELL_TARGETS)
-    }
-
-    assert actual == EXPECTED_APP_SHELL_PUBLIC_METHODS
+    assert not violations, "App-shell shim owners are not final:\n" + "\n".join(
+        violations
+    )
 
 
 def test_context_memory_runtime_wiring_avoids_app_shell_singletons():
@@ -478,6 +513,72 @@ def test_context_memory_runtime_wiring_avoids_app_shell_singletons():
 
     assert not violations, "App-shell context singleton imports remain:\n" + "\n".join(
         violations
+    )
+
+
+def test_domain_modules_do_not_depend_on_app_shell_focus_runtime_modules():
+    paths: list[Path] = []
+    for root in PRODUCTION_MODULE_ROOTS:
+        root_path = Path(root)
+        if root_path.exists():
+            paths.extend(sorted(root_path.rglob("*.py")))
+
+    violations = _app_shell_focus_runtime_import_violations(paths)
+
+    assert not violations, (
+        "Domain modules still import app_shell focus runtime modules:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_focus_owning_modules_do_not_import_app_shell_runtime():
+    violations: list[str] = []
+
+    for target, contract in sorted(FINAL_APP_SHELL_SHIMS.items()):
+        owning_module = contract["owning_module"]
+        owning_path = _module_path(owning_module)
+        if not owning_path.exists():
+            violations.append(f"{target}: owner module does not exist: {owning_module}")
+            continue
+        owner_violations = _app_shell_focus_runtime_import_violations([owning_path])
+        violations.extend(
+            f"{owning_module}: {violation}" for violation in owner_violations
+        )
+
+    assert not violations, (
+        "Focus owning modules still import app_shell runtime shims:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_app_shell_repository_submodules_are_final_reexport_shims():
+    violations: list[str] = []
+
+    for target, contract in sorted(FINAL_APP_SHELL_REEXPORT_SHIMS.items()):
+        path = Path(target)
+        if not path.exists():
+            violations.append(f"{target}: missing final re-export shim")
+            continue
+
+        line_count = _line_count(path)
+        max_lines = contract["max_lines"]
+        if line_count > max_lines:
+            violations.append(f"{target}: {line_count} lines exceeds {max_lines}")
+
+        concrete_definitions = _concrete_definitions(path)
+        if concrete_definitions:
+            violations.append(
+                f"{target}: concrete definitions remain:\n"
+                + "\n".join(concrete_definitions)
+            )
+
+        owning_module = contract["owning_module"]
+        if not _imports_module(path, owning_module):
+            violations.append(f"{target}: does not import owning module {owning_module}")
+
+    assert not violations, (
+        "App-shell repository submodules are not final re-export shims:\n"
+        + "\n".join(violations)
     )
 
 
