@@ -153,7 +153,7 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 > **NOTE (A1 fix)**: Rule 6 means Delivery is a **pure transport**. Historically,
 > before the Phase 7a/Phase 6 separation, `sse_manager.send_processing_status()`
 > combined frontend delivery with run lifecycle recording, which violated this
-> rule. The current Phase 7b prerequisite is that SSE no longer calls
+> rule. The accepted architecture requires that SSE no longer calls
 > `run_command_handler`: Execution records through `RunLifecyclePort.record_processing_status()`
 > **before** calling `EventPublisher.emit("processing_status", ...)`, and
 > Delivery only translates and delivers. See §4.5 for the enforced call-site
@@ -1451,11 +1451,11 @@ execution/
 > Until repositories land, `ExecutionEngine.get_run()` and `get_runs_for_room()`
 > are served by an adapter-backed run read port that preserves the current
 > active-run response fields such as `trigger_message_id`.
-> The initial Phase 7b `HITLCoordinator` seam starts with the currently used
+> The accepted `HITLCoordinator` seam starts with the currently used
 > `request_input()` method plus `cancel_request()` for supervisor clarification
 > cleanup; query helpers such as `is_hitl_pending()` and `get_active_hitl()`
-> remain target-design methods until needed by runtime call sites. The Phase 7b
-> plan also keeps adapter-oriented filenames
+> remain target-design methods until needed by runtime call sites. The accepted
+> implementation also keeps adapter-oriented filenames
 > (`execution/run_lifecycle.py`, `execution/hitl/service.py`,
 > `execution/hitl/detector.py`, `execution/dispatch/agent_dispatcher.py`, and
 > `execution/dispatch/transports/direct.py`) rather than fully matching this
@@ -1541,11 +1541,11 @@ plain string before calling lifecycle persistence or typed Delivery emitters.
 | `hitl/hitl_detector.py` | Pure heuristic (pattern matching) |
 | `state/task_state_manager.py` | In-memory bookkeeping, only used by orchestrator |
 
-Phase 7b exception: `dispatch/response_handler.py` is stateful and performs DB,
-SSE, HITL continuation, and notification side effects. The Phase 7b plan
-introduces an `AgentResponseHandlerPort` seam for facade Hub-response handling
-and app-shell shared handler construction; it is not treated as a direct
-no-protocol import.
+Accepted response-handler seam: `dispatch/response_handler.py` is stateful and
+performs DB, SSE, HITL continuation, and notification side effects. The
+implementation provides an `AgentResponseHandlerPort` seam for facade
+Hub-response handling and app-shell shared handler construction; it is not
+treated as a direct no-protocol import.
 
 ### 5.4 Processing Status Call Flow (A1 Resolution)
 
