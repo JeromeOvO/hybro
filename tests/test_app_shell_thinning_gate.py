@@ -400,13 +400,26 @@ def _module_bound_names(path: Path) -> set[str]:
     return names
 
 
-def _assigns_all(node: ast.AST) -> bool:
+def _target_root_names(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Name):
+        return {node.id}
+    if isinstance(node, (ast.Attribute, ast.Subscript)):
+        return _target_root_names(node.value)
+    if isinstance(node, (ast.Tuple, ast.List)):
+        names: set[str] = set()
+        for item in node.elts:
+            names.update(_target_root_names(item))
+        return names
+    return set()
+
+
+def _targets_all(node: ast.AST) -> bool:
     if isinstance(node, ast.Assign):
-        return any("__all__" in _target_names(target) for target in node.targets)
-    if isinstance(node, ast.AnnAssign):
-        return "__all__" in _target_names(node.target)
-    if isinstance(node, ast.AugAssign):
-        return "__all__" in _target_names(node.target)
+        return any("__all__" in _target_root_names(target) for target in node.targets)
+    if isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+        return "__all__" in _target_root_names(node.target)
+    if isinstance(node, ast.Delete):
+        return any("__all__" in _target_root_names(target) for target in node.targets)
     return False
 
 
@@ -430,8 +443,7 @@ def _mutates_all(node: ast.AST) -> bool:
         isinstance(node, ast.Expr)
         and isinstance(node.value, ast.Call)
         and isinstance(node.value.func, ast.Attribute)
-        and isinstance(node.value.func.value, ast.Name)
-        and node.value.func.value.id == "__all__"
+        and "__all__" in _target_root_names(node.value.func.value)
     )
 
 
@@ -443,7 +455,7 @@ def _explicit_all_values(path: Path) -> list[ast.AST]:
         if _mutates_all(node):
             values.append(node)
             continue
-        if not _assigns_all(node):
+        if not _targets_all(node):
             continue
         if _is_direct_all_assignment(node) and isinstance(
             node,
@@ -467,7 +479,7 @@ def _explicit_all_exports(path: Path) -> set[str] | None:
 def _all_static_literal_violation(path: Path) -> str | None:
     all_values = _explicit_all_values(path)
     if not all_values:
-        return None
+        return f"{path}: missing explicit __all__"
     if len(all_values) == 1 and _static_string_literal_sequence(all_values[0]) is not None:
         return None
     return f"{path}: __all__ must be a static string literal sequence"
@@ -664,11 +676,11 @@ def _owner_star_import_exports(path: Path, owning_module: str) -> set[str]:
     return _owner_static_exports_or_bindings(owning_module)
 
 
-def _module_export_surface(path: Path, owning_module: str) -> set[str]:
+def _module_export_surface(path: Path, _owning_module: str) -> set[str]:
     all_exports = _explicit_all_exports(path)
     if all_exports is not None:
         return all_exports
-    return _module_bound_names(path) | _owner_star_import_exports(path, owning_module)
+    return set()
 
 
 def _owner_import_provenance(
@@ -912,6 +924,23 @@ __all__.append("ExtraExport")
     assert _module_exports(path) == set()
 
 
+def test_explicit_all_rejects_subscript_mutation_and_deletion(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+__all__ = ["RequiredExport"]
+__all__[0] = "OtherExport"
+del __all__[:]
+""",
+    )
+
+    assert (
+        _all_static_literal_violation(path)
+        == f"{path}: __all__ must be a static string literal sequence"
+    )
+    assert _module_exports(path) == set()
+
+
 def test_explicit_all_rejects_set_literals(tmp_path):
     path = tmp_path / "shim.py"
     path.write_text('__all__ = {"RequiredExport"}\n')
@@ -921,6 +950,20 @@ def test_explicit_all_rejects_set_literals(tmp_path):
         == f"{path}: __all__ must be a static string literal sequence"
     )
     assert _module_exports(path) == set()
+
+
+def test_required_exports_require_explicit_all(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text("from owner.module import RequiredExport\n")
+
+    violations = _required_export_violations(
+        path,
+        {"RequiredExport"},
+        "owner.module",
+    )
+
+    assert f"{path}: missing explicit __all__" in violations
+    assert _module_export_surface(path, "owner.module") == set()
 
 
 def test_relay_getattr_export_comparison_requires_equality_operator():
