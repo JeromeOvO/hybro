@@ -1,5 +1,6 @@
 import ast
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -263,6 +264,25 @@ FINAL_APP_SHELL_REEXPORT_SHIMS = {
         },
         "owning_module": "dal.runtime_store.parts.webhook_tokens",
     },
+}
+
+EXPECTED_MOVED_RUFF_IGNORES = {
+    "app_shell/a2a_runtime.py": (
+        "a2a_adapter/runtime_service.py",
+        ["C901"],
+    ),
+    "app_shell/context_assembly_service.py": (
+        "context_memory/compat/context_assembly.py",
+        ["C901", "UP042"],
+    ),
+    "app_shell/relay_service.py": (
+        "hub_runtime_bridge/compat/relay_service.py",
+        ["C901"],
+    ),
+    "app_shell/room_runtime.py": (
+        "room/compat/runtime.py",
+        ["C901", "UP042"],
+    ),
 }
 
 def _module_name_from_source_path(path: str) -> str:
@@ -1628,6 +1648,33 @@ def test_focus_owning_modules_do_not_import_app_shell_runtime():
 
     assert not violations, (
         "Focus owning modules still import app_shell runtime shims:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_final_app_shell_shims_do_not_keep_ruff_ignore_baseline():
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text())
+    per_file_ignores = pyproject["tool"]["ruff"]["lint"]["per-file-ignores"]
+    shim_paths = {*FINAL_APP_SHELL_SHIMS, *FINAL_APP_SHELL_REEXPORT_SHIMS}
+    violations: list[str] = []
+
+    for shim_path in sorted(shim_paths):
+        if shim_path in per_file_ignores:
+            violations.append(f"{shim_path}: final shim keeps Ruff ignore baseline")
+
+    for shim_path, (
+        owner_path,
+        expected_ignores,
+    ) in sorted(EXPECTED_MOVED_RUFF_IGNORES.items()):
+        actual = per_file_ignores.get(owner_path)
+        if actual != expected_ignores:
+            violations.append(
+                f"{owner_path}: expected moved ignores from {shim_path} "
+                f"to be {expected_ignores}, got {actual}"
+            )
+
+    assert not violations, (
+        "Final app-shell Ruff ignores are not owned by implementation modules:\n"
         + "\n".join(violations)
     )
 
