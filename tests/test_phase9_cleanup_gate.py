@@ -76,6 +76,12 @@ FORBIDDEN_LEGACY_SHIM_GLOBALS = {"mongodb", "settings", "s3_service"}
 FORBIDDEN_LEGACY_SHIM_CLASS_PREFIXES = ("_Legacy", "_Mongo")
 
 FORBIDDEN_COMMON_IMPORT_PREFIXES = (
+    "api",
+    "api_gateway",
+    "agent",
+    "app_shell",
+    "context_memory",
+    "dal",
     "database",
     "services",
     "modules",
@@ -83,9 +89,11 @@ FORBIDDEN_COMMON_IMPORT_PREFIXES = (
     "delivery",
     "execution",
     "hub_runtime_bridge",
+    "llm_gateway",
     "models",
     "platform_module",
     "a2a_adapter",
+    "room",
 )
 
 SDK_CONFINEMENT_ROOTS = (

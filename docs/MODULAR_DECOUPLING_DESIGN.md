@@ -23,7 +23,7 @@ This document records the accepted restructuring of the codebase into **well-def
 
 ---
 
-## 2. Current Architecture Problems
+## 2. Original Architecture Problems
 
 ### 2.1 Coupling Analysis
 
@@ -39,7 +39,7 @@ This document records the accepted restructuring of the codebase into **well-def
 | Hub Coupling | RelayService directly writes agents_collection | Hub logic and agent lifecycle tangled |
 | Config Scatter | 30+ `os.getenv()` calls outside settings.py | Settings model incomplete; silent key mismatches |
 
-### 2.2 Current Dependency Graph (Implicit)
+### 2.2 Original Dependency Graph (Implicit)
 
 ```
 api/* ──→ app_shell/* ──→ domain facades ──→ database/*
