@@ -565,10 +565,8 @@ Examples:
   call counting are bound as explicit ports rather than read from global
   settings or broad stores during calls.
 - `app_shell.agent_service`: route-facing adapter over `AgentFacade`.
-- `dal.runtime_store`: compatibility composite over focused runtime store parts.
-  Legacy `app_shell.repository_store`, `app_shell.runtime_store_contracts`, and
-  `app_shell.repository_parts` modules re-export the DAL-owned implementation for
-  import compatibility only. Startup splits the composite into
+- `app_shell.repository_store`: compatibility composite over focused runtime
+  store parts in `app_shell.repository_parts`. Startup splits the composite into
   focused agent/room, message, task lifecycle, HITL, and memory ports before
   binding production consumers; production runtime consumers no longer receive
   the composite directly. Room runtime, relay, debate, and room-coordinator
@@ -739,13 +737,13 @@ transport, relay, or webhook.
 Task lifecycle data access for A2A task submission, webhook token validation,
 cancellation persistence, HITL lifecycle, task notification persistence, webhook
 response handling, and stale-task cleanup is routed through focused runtime-store
-ports assembled in `container.py`. `dal.runtime_store.AppShellRepositoryStore`
-backs those ports with module repositories and `MongoDAL` collections, while the
-legacy `app_shell` paths remain thin shims. Production bindings use the store's
-scoped `parts` surfaces or focused startup adapters wherever a narrower port is
-sufficient. Relay route registration, hub status, and liveness use explicit
-repository-backed app-shell adapters. Remaining aggregate-store use is limited
-to documented compatibility shims rather than new production business owners.
+ports assembled in `main.py`. `AppShellRepositoryStore` still backs those ports
+with module repositories and `MongoDAL` collections, but production bindings use
+its scoped `repository_parts` surfaces or focused startup adapters wherever a
+narrower port is sufficient. Relay route registration, hub status, and liveness
+use explicit repository-backed app-shell adapters. Remaining aggregate-store use
+is limited to documented compatibility shims rather than new production
+business owners.
 
 **Agent display text:** Terminal `message_text` and artifact text parts are persisted as received from agents. List/section markdown repair runs only in the frontend remark plugin pipeline (`hybro-frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown render time. Hybro-controlled LLM paths (supervisor synthesis, `SummaryLLMService`) append `HYBRO_MARKDOWN_RESPONSE_FORMAT` so synthesis uses `###` section headers; third-party agent text is still stored as-is. Backend terminal helpers in `common/utils/a2a_helpers.py` (`prepare_terminal_agent_content`, `resolve_terminal_sse_content`, `sync_artifact_dicts_to_canonical_text`) resolve canonical text from artifacts and align artifact payloads without transforming markdown. Terminal resolution is owned by `update_task_state_on_message`; streaming text parts collapse to a single canonical text part while file/data parts are preserved. SSE terminal `content` is authoritative for display text; `parts` carries only non-text payloads.
 

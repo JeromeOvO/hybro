@@ -175,11 +175,9 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 > HubRuntimeBridge; A2A task-tracking placeholder creation, tracked-send push
 > configuration, failure persistence, terminal response persistence, and HITL
 > reply task persistence live in Execution; object-storage behavior lives in
-> Platform/DAL. The DAL-owned `dal.runtime_store.AppShellRepositoryStore`
-> composite is split at startup into focused runtime-store adapters before
-> binding Room runtime, Execution `RoomMessageCenter`, Relay, debate, and
-> coordinator compatibility services; legacy `app_shell` repository-store modules
-> are import shims only.
+> Platform/DAL. Startup splits the legacy `AppShellRepositoryStore` composite
+> into focused runtime-store adapters before binding Room runtime, Execution
+> `RoomMessageCenter`, Relay, debate, and coordinator compatibility services.
 > The cleanup gates now ratchet both exact forbidden imports and the explicit
 > public app-shell shim method surface.
 
