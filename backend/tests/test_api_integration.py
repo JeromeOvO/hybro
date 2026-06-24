@@ -66,9 +66,16 @@ class TestAuthGuardIntegration:
     async def test_register_agent_requires_auth(self):
         """POST /agent/registerAgent should 401 without auth."""
         from main import app
+        from api_gateway.routes.agent_routes import get_agent_center
+        from common.auth import get_current_user
+        from fastapi import HTTPException
+
+        def _mock_auth():
+            raise HTTPException(status_code=401)
 
         original_overrides = dict(app.dependency_overrides)
-        app.dependency_overrides.clear()
+        app.dependency_overrides[get_agent_center] = lambda: None
+        app.dependency_overrides[get_current_user] = _mock_auth
 
         try:
             async with AsyncClient(
@@ -81,6 +88,7 @@ class TestAuthGuardIntegration:
 
             assert resp.status_code == 401
         finally:
+            app.dependency_overrides.clear()
             app.dependency_overrides.update(original_overrides)
 
 

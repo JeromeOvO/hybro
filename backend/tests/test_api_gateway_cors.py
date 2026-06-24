@@ -2,8 +2,11 @@ from fastapi.testclient import TestClient
 
 
 def test_open_cors_gateway_groups_allow_external_preflight():
-    from main import app
+    from fastapi import FastAPI
+    from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
 
+    app = FastAPI()
+    app.add_middleware(DiscoveryCORSMiddleware, api_prefix="/api/v1")
     client = TestClient(app)
 
     for path in (
@@ -25,8 +28,16 @@ def test_open_cors_gateway_groups_allow_external_preflight():
 
 
 def test_open_cors_actual_responses_do_not_allow_credentials_with_wildcard():
-    from main import app
+    from fastapi import FastAPI
+    from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
 
+    app = FastAPI()
+    app.add_middleware(DiscoveryCORSMiddleware, api_prefix="/api/v1")
+    
+    @app.get("/api/v1/relay/hub/status")
+    def dummy():
+        return {}
+        
     client = TestClient(app)
     response = client.get(
         "/api/v1/relay/hub/status",

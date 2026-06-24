@@ -56,7 +56,6 @@
     "status_code": null,
     "dependencies": [
       "get_agent_center",
-      "get_agent_service",
       "get_current_user"
     ],
     "auth_dependencies": [
@@ -223,7 +222,6 @@
     "status_code": null,
     "dependencies": [
       "get_agent_center",
-      "get_agent_service",
       "get_current_user"
     ],
     "auth_dependencies": [
@@ -535,203 +533,6 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/api-keys",
-    "methods": [
-      "GET"
-    ],
-    "name": "list_api_keys",
-    "endpoint_module": "api_gateway.routes.discovery_api_key_routes",
-    "declared_owner": "api_gateway.routes.discovery_api_key_routes",
-    "tags": [
-      "api_keys"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_api_key_store",
-      "get_current_user"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/api-keys",
-    "methods": [
-      "POST"
-    ],
-    "name": "create_api_key",
-    "endpoint_module": "api_gateway.routes.discovery_api_key_routes",
-    "declared_owner": "api_gateway.routes.discovery_api_key_routes",
-    "tags": [
-      "api_keys"
-    ],
-    "status_code": 201,
-    "dependencies": [
-      "get_api_key_store",
-      "get_current_user"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/api-keys/{key_id}",
-    "methods": [
-      "DELETE"
-    ],
-    "name": "deactivate_api_key",
-    "endpoint_module": "api_gateway.routes.discovery_api_key_routes",
-    "declared_owner": "api_gateway.routes.discovery_api_key_routes",
-    "tags": [
-      "api_keys"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_api_key_store",
-      "get_current_user"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/discovery/agents",
-    "methods": [
-      "POST"
-    ],
-    "name": "discover_agents",
-    "endpoint_module": "api_gateway.routes.discovery_routes",
-    "declared_owner": "api_gateway.routes.discovery_routes",
-    "tags": [
-      "discovery"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_api_key",
-      "get_discovery_default_limit",
-      "get_discovery_rate_limiter",
-      "get_discovery_service"
-    ],
-    "auth_dependencies": [
-      "get_api_key"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/files/upload",
-    "methods": [
-      "POST"
-    ],
-    "name": "upload_file",
-    "endpoint_module": "api_gateway.routes.files_routes",
-    "declared_owner": "api_gateway.routes.files_routes",
-    "tags": [
-      "files",
-      "files"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_current_user",
-      "get_file_storage",
-      "get_room_ownership_reader"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/gateway/agents/discover",
-    "methods": [
-      "POST"
-    ],
-    "name": "gateway_discover",
-    "endpoint_module": "api_gateway.routes.platform_gateway_routes",
-    "declared_owner": "api_gateway.routes.platform_gateway_routes",
-    "tags": [
-      "gateway"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_api_key",
-      "get_gateway_rate_limiter",
-      "get_gateway_service"
-    ],
-    "auth_dependencies": [
-      "get_api_key"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/gateway/agents/{agent_id}/card",
-    "methods": [
-      "GET"
-    ],
-    "name": "gateway_get_card",
-    "endpoint_module": "api_gateway.routes.platform_gateway_routes",
-    "declared_owner": "api_gateway.routes.platform_gateway_routes",
-    "tags": [
-      "gateway"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_api_key",
-      "get_gateway_rate_limiter",
-      "get_gateway_service"
-    ],
-    "auth_dependencies": [
-      "get_api_key"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/gateway/agents/{agent_id}/message/send",
-    "methods": [
-      "POST"
-    ],
-    "name": "gateway_send",
-    "endpoint_module": "api_gateway.routes.platform_gateway_routes",
-    "declared_owner": "api_gateway.routes.platform_gateway_routes",
-    "tags": [
-      "gateway"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_api_key",
-      "get_gateway_rate_limiter",
-      "get_gateway_service"
-    ],
-    "auth_dependencies": [
-      "get_api_key"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/gateway/agents/{agent_id}/message/stream",
-    "methods": [
-      "POST"
-    ],
-    "name": "gateway_stream",
-    "endpoint_module": "api_gateway.routes.platform_gateway_routes",
-    "declared_owner": "api_gateway.routes.platform_gateway_routes",
-    "tags": [
-      "gateway"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_api_key",
-      "get_gateway_rate_limiter",
-      "get_gateway_service"
-    ],
-    "auth_dependencies": [
-      "get_api_key"
-    ],
-    "include_in_schema": true
-  },
-  {
     "path": "/api/v1/hub/my-status",
     "methods": [
       "GET"
@@ -1017,7 +818,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1037,7 +839,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1057,7 +860,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1077,7 +881,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1097,7 +902,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1158,7 +964,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1178,7 +985,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1198,7 +1006,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1389,7 +1198,7 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_webhook_transport"
+      "get_webhook_receiver"
     ],
     "auth_dependencies": [],
     "include_in_schema": true

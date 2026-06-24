@@ -1,1771 +1,1303 @@
 [
   {
-    "auth_dependencies": [
-      "get_current_user"
+    "path": "/health",
+    "methods": [
+      "GET"
     ],
+    "name": "health_check",
+    "module": "main",
+    "dependencies": [
+      "get_health_check"
+    ],
+    "auth_dependencies": [],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
+    "path": "/api/v1/agents",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_endpoint",
+    "module": "api_gateway.viewsets.agent",
+    "dependencies": [
+      "get_optional_user",
+      "get_viewset_repository"
+    ],
+    "auth_dependencies": [
+      "get_optional_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": "PaginatedResponse[AgentResponse]",
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/agents/{item_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "retrieve_endpoint",
+    "module": "api_gateway.viewsets.agent",
+    "dependencies": [
+      "get_optional_user",
+      "get_viewset_repository"
+    ],
+    "auth_dependencies": [
+      "get_optional_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": "AgentResponse",
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/agents",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_endpoint",
+    "module": "api_gateway.viewsets.base",
     "dependencies": [
       "get_current_user",
-      "get_task_store"
+      "get_viewset_repository"
     ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.a2a_task_routes",
-    "name": "get_task_status",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.A2ATaskStatusReader",
-    "path": "/api/v1/a2a-tasks/{message_id}",
-    "response_class": null,
-    "response_model": "dict",
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
     "auth_dependencies": [
       "get_current_user"
     ],
-    "dependencies": [
-      "get_agent_service",
-      "get_capability_issue_service",
-      "get_current_user"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.agent_routes",
-    "name": "resolve_capability_issue",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "agent.protocols.AgentCapabilityIssueStore",
-    "path": "/api/v1/agent/capability-issues/{issue_id}/resolve",
+    "owning_protocol": "",
+    "status_code": 201,
+    "response_model": "AgentResponse",
     "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.AgentRegistry"
+    "openapi_response_codes": [
+      "201",
+      "422"
     ]
   },
   {
+    "path": "/api/v1/agents/{item_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_endpoint",
+    "module": "api_gateway.viewsets.agent",
+    "dependencies": [
+      "get_current_user",
+      "get_viewset_repository"
+    ],
     "auth_dependencies": [
       "get_current_user"
     ],
-    "dependencies": [
-      "get_agent_center",
-      "get_current_user"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.agent_routes",
-    "name": "delete_agent",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
-    "path": "/api/v1/agent/deleteAgent",
-    "response_class": null,
+    "owning_protocol": "",
+    "status_code": 204,
     "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_agent_center",
-      "get_current_user"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.agent_routes",
-    "name": "get_agent_by_provider",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
-    "path": "/api/v1/agent/getAgent/me",
     "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_optional_user"
-    ],
-    "dependencies": [
-      "get_agent_center",
-      "get_agent_liveness_checker",
-      "get_optional_user"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.agent_routes",
-    "name": "get_agent",
     "openapi_response_codes": [
-      "200",
+      "204",
       "422"
-    ],
-    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
-    "path": "/api/v1/agent/getAgent/{agent_id}",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "agent.protocols.AgentLivenessChecker"
     ]
   },
   {
-    "auth_dependencies": [],
-    "dependencies": [
-      "get_agent_center"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.agent_routes",
-    "name": "get_agent_card_from_url",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
-    "path": "/api/v1/agent/getAgentCardFromUrl",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_optional_user"
-    ],
-    "dependencies": [
-      "get_agent_center",
-      "get_optional_user"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.agent_routes",
-    "name": "get_agent_list_with_conditions",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
-    "path": "/api/v1/agent/getAgentListWithConditions",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_optional_user"
-    ],
-    "dependencies": [
-      "get_agent_center",
-      "get_optional_user"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.agent_routes",
-    "name": "get_all_active_agents",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
-    "path": "/api/v1/agent/getAllActiveAgents",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_optional_user"
-    ],
-    "dependencies": [
-      "get_agent_center",
-      "get_optional_user"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.agent_routes",
-    "name": "get_agent_list",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
-    "path": "/api/v1/agent/getAllAgents",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_agent_center",
-      "get_current_user"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.agent_routes",
-    "name": "register_agent",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
-    "path": "/api/v1/agent/registerAgent",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_agent_center",
-      "get_current_user"
-    ],
+    "path": "/api/v1/agents/{item_id}",
     "methods": [
       "PUT"
     ],
-    "module": "api_gateway.routes.agent_routes",
-    "name": "update_agent",
-    "openapi_response_codes": [
-      "200",
-      "422"
+    "name": "update_endpoint",
+    "module": "api_gateway.viewsets.agent",
+    "dependencies": [
+      "get_current_user",
+      "get_viewset_repository"
     ],
-    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
-    "path": "/api/v1/agent/updateAgent/{agent_id}",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
     "auth_dependencies": [
       "get_current_user"
     ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": "AgentResponse",
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/agents/{item_id}",
+    "methods": [
+      "PATCH"
+    ],
+    "name": "patch_endpoint",
+    "module": "api_gateway.viewsets.agent",
+    "dependencies": [
+      "get_current_user",
+      "get_viewset_repository"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": "AgentResponse",
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/agent/registerAgent",
+    "methods": [
+      "POST"
+    ],
+    "name": "register_agent",
+    "module": "api_gateway.routes.agent_routes",
+    "dependencies": [
+      "get_agent_center",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
+    "path": "/api/v1/agent/getAgent/me",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_agent_by_provider",
+    "module": "api_gateway.routes.agent_routes",
+    "dependencies": [
+      "get_agent_center",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
+    "path": "/api/v1/agent/deleteAgent",
+    "methods": [
+      "POST"
+    ],
+    "name": "delete_agent",
+    "module": "api_gateway.routes.agent_routes",
+    "dependencies": [
+      "get_agent_center",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
+    "path": "/api/v1/agent/updateAgent/{agent_id}",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_agent",
+    "module": "api_gateway.routes.agent_routes",
+    "dependencies": [
+      "get_agent_center",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/agent/{agent_id}/avatar",
+    "methods": [
+      "POST"
+    ],
+    "name": "upload_agent_avatar",
+    "module": "api_gateway.routes.agent_routes",
     "dependencies": [
       "get_agent_avatar_manager",
       "get_agent_service",
       "get_current_user"
     ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.agent_routes",
-    "name": "upload_agent_avatar",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.AgentAvatarManager",
-    "path": "/api/v1/agent/{agent_id}/avatar",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.AgentRegistry"
-    ]
-  },
-  {
     "auth_dependencies": [
       "get_current_user"
     ],
-    "dependencies": [
-      "get_agent_service",
-      "get_capability_issue_service",
-      "get_current_user"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.agent_routes",
-    "name": "get_capability_issues",
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
     "openapi_response_codes": [
       "200",
       "422"
-    ],
-    "owning_protocol": "agent.protocols.AgentCapabilityIssueStore",
+    ]
+  },
+  {
     "path": "/api/v1/agent/{agent_id}/capability-issues",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.AgentRegistry"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
+    "methods": [
+      "GET"
     ],
+    "name": "get_capability_issues",
+    "module": "api_gateway.routes.agent_routes",
     "dependencies": [
       "get_agent_service",
       "get_capability_issue_service",
       "get_current_user"
     ],
-    "methods": [
-      "POST"
+    "auth_dependencies": [
+      "get_current_user"
     ],
-    "module": "api_gateway.routes.agent_routes",
-    "name": "resolve_all_capability_issues",
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
     "openapi_response_codes": [
       "200",
       "422"
-    ],
-    "owning_protocol": "agent.protocols.AgentCapabilityIssueStore",
+    ]
+  },
+  {
     "path": "/api/v1/agent/{agent_id}/capability-issues/resolve-all",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.AgentRegistry"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_agent_group_store"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.agent_group_routes",
-    "name": "list_agent_groups",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
-    "path": "/api/v1/agentGroups",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_agent_group_store"
-    ],
     "methods": [
       "POST"
     ],
-    "module": "api_gateway.routes.agent_group_routes",
-    "name": "create_agent_group",
-    "openapi_response_codes": [
-      "200"
+    "name": "resolve_all_capability_issues",
+    "module": "api_gateway.routes.agent_routes",
+    "dependencies": [
+      "get_agent_service",
+      "get_capability_issue_service",
+      "get_current_user"
     ],
-    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
-    "path": "/api/v1/agentGroups",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
     "auth_dependencies": [
       "get_current_user"
     ],
-    "dependencies": [
-      "get_current_user",
-      "get_agent_group_store"
-    ],
-    "methods": [
-      "DELETE"
-    ],
-    "module": "api_gateway.routes.agent_group_routes",
-    "name": "delete_agent_group",
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
     "openapi_response_codes": [
       "200",
       "422"
-    ],
-    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
-    "path": "/api/v1/agentGroups/{group_id}",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
+    ]
   },
   {
+    "path": "/api/v1/agent/capability-issues/{issue_id}/resolve",
+    "methods": [
+      "POST"
+    ],
+    "name": "resolve_capability_issue",
+    "module": "api_gateway.routes.agent_routes",
+    "dependencies": [
+      "get_agent_service",
+      "get_capability_issue_service",
+      "get_current_user"
+    ],
     "auth_dependencies": [
       "get_current_user"
     ],
-    "dependencies": [
-      "get_current_user",
-      "get_agent_group_store"
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/agent/getAgentCardFromUrl",
+    "methods": [
+      "POST"
     ],
+    "name": "get_agent_card_from_url",
+    "module": "api_gateway.routes.agent_routes",
+    "dependencies": [
+      "get_agent_center"
+    ],
+    "auth_dependencies": [],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
+    "path": "/api/v1/agent/getAgent/{agent_id}",
     "methods": [
       "GET"
     ],
-    "module": "api_gateway.routes.agent_group_routes",
-    "name": "get_agent_group",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
-    "path": "/api/v1/agentGroups/{group_id}",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
+    "name": "get_agent",
+    "module": "api_gateway.routes.agent_routes",
     "dependencies": [
-      "get_current_user",
-      "get_agent_group_store"
+      "get_agent_center",
+      "get_agent_liveness_checker",
+      "get_optional_user"
     ],
-    "methods": [
-      "PUT"
-    ],
-    "module": "api_gateway.routes.agent_group_routes",
-    "name": "update_agent_group",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
-    "path": "/api/v1/agentGroups/{group_id}",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
     "auth_dependencies": [
       "get_optional_user"
     ],
-    "dependencies": [
-      "get_optional_user",
-      "get_viewset_repository"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.viewsets.agent",
-    "name": "list_endpoint",
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
     "openapi_response_codes": [
       "200",
       "422"
-    ],
-    "owning_protocol": "common.protocols.ViewSetRepository",
-    "path": "/api/v1/agents",
-    "response_class": null,
-    "response_model": "PaginatedResponse[AgentResponse]",
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_viewset_repository"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.viewsets.base",
-    "name": "create_endpoint",
-    "openapi_response_codes": [
-      "201",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.ViewSetRepository",
-    "path": "/api/v1/agents",
-    "response_class": null,
-    "response_model": "AgentResponse",
-    "status_code": 201,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.EmbeddingServiceProtocol",
-      "common.protocols.AgentVectorIndexWriter"
     ]
   },
   {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_viewset_repository"
-    ],
+    "path": "/api/v1/agent/getAllAgents",
     "methods": [
-      "DELETE"
+      "GET"
     ],
-    "module": "api_gateway.viewsets.agent",
-    "name": "delete_endpoint",
-    "openapi_response_codes": [
-      "204",
-      "422"
+    "name": "get_agent_list",
+    "module": "api_gateway.routes.agent_routes",
+    "dependencies": [
+      "get_agent_center",
+      "get_optional_user"
     ],
-    "owning_protocol": "common.protocols.ViewSetRepository",
-    "path": "/api/v1/agents/{item_id}",
-    "response_class": null,
-    "response_model": null,
-    "status_code": 204,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.AgentVectorIndexWriter"
-    ]
-  },
-  {
     "auth_dependencies": [
       "get_optional_user"
     ],
-    "dependencies": [
-      "get_optional_user",
-      "get_viewset_repository"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.viewsets.agent",
-    "name": "retrieve_endpoint",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.ViewSetRepository",
-    "path": "/api/v1/agents/{item_id}",
-    "response_class": null,
-    "response_model": "AgentResponse",
+    "owning_protocol": "",
     "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_viewset_repository"
-    ],
-    "methods": [
-      "PATCH"
-    ],
-    "module": "api_gateway.viewsets.agent",
-    "name": "patch_endpoint",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.ViewSetRepository",
-    "path": "/api/v1/agents/{item_id}",
-    "response_class": null,
-    "response_model": "AgentResponse",
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.EmbeddingServiceProtocol",
-      "common.protocols.AgentVectorIndexWriter"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_viewset_repository"
-    ],
-    "methods": [
-      "PUT"
-    ],
-    "module": "api_gateway.viewsets.agent",
-    "name": "update_endpoint",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.ViewSetRepository",
-    "path": "/api/v1/agents/{item_id}",
-    "response_class": null,
-    "response_model": "AgentResponse",
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.EmbeddingServiceProtocol",
-      "common.protocols.AgentVectorIndexWriter"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_api_key_store",
-      "get_current_user"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.discovery_api_key_routes",
-    "name": "list_api_keys",
-    "openapi_response_codes": [
-      "200",
-      "401",
-      "500"
-    ],
-    "owning_protocol": "common.protocols.APIKeyStore",
-    "path": "/api/v1/api-keys",
-    "response_class": null,
-    "response_model": "APIKeyListResponse",
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_api_key_store",
-      "get_current_user"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.discovery_api_key_routes",
-    "name": "create_api_key",
-    "openapi_response_codes": [
-      "201",
-      "400",
-      "401",
-      "422",
-      "500"
-    ],
-    "owning_protocol": "common.protocols.APIKeyStore",
-    "path": "/api/v1/api-keys",
-    "response_class": null,
-    "response_model": "APIKeyCreateResponse",
-    "status_code": 201,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_api_key_store",
-      "get_current_user"
-    ],
-    "methods": [
-      "DELETE"
-    ],
-    "module": "api_gateway.routes.discovery_api_key_routes",
-    "name": "deactivate_api_key",
-    "openapi_response_codes": [
-      "200",
-      "401",
-      "404",
-      "422",
-      "500"
-    ],
-    "owning_protocol": "common.protocols.APIKeyStore",
-    "path": "/api/v1/api-keys/{key_id}",
-    "response_class": null,
-    "response_model": "APIKeyOperationResponse",
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_api_key"
-    ],
-    "dependencies": [
-      "get_api_key",
-      "get_discovery_default_limit",
-      "get_discovery_rate_limiter",
-      "get_discovery_service"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.discovery_routes",
-    "name": "discover_agents",
-    "openapi_response_codes": [
-      "200",
-      "401",
-      "422",
-      "429",
-      "500"
-    ],
-    "owning_protocol": "common.protocols.GatewayDiscoveryProvider",
-    "path": "/api/v1/discovery/agents",
-    "response_class": null,
-    "response_model": "DiscoveryResponse",
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.APIKeyRateLimiter"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_file_storage",
-      "get_room_ownership_reader"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.files_routes",
-    "name": "upload_file",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.FileStorage",
-    "path": "/api/v1/files/upload",
-    "response_class": null,
     "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomOwnershipReader"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_api_key"
-    ],
-    "dependencies": [
-      "get_api_key",
-      "get_gateway_rate_limiter",
-      "get_gateway_service"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.platform_gateway_routes",
-    "name": "gateway_discover",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.GatewayService",
-    "path": "/api/v1/gateway/agents/discover",
     "response_class": null,
-    "response_model": "GatewayDiscoveryResponse",
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.APIKeyRateLimiter"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_api_key"
-    ],
-    "dependencies": [
-      "get_api_key",
-      "get_gateway_rate_limiter",
-      "get_gateway_service"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.platform_gateway_routes",
-    "name": "gateway_get_card",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.GatewayService",
-    "path": "/api/v1/gateway/agents/{agent_id}/card",
-    "response_class": null,
-    "response_model": "GatewayCardResponse",
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.APIKeyRateLimiter"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_api_key"
-    ],
-    "dependencies": [
-      "get_api_key",
-      "get_gateway_rate_limiter",
-      "get_gateway_service"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.platform_gateway_routes",
-    "name": "gateway_send",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.GatewayService",
-    "path": "/api/v1/gateway/agents/{agent_id}/message/send",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.APIKeyRateLimiter"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_api_key"
-    ],
-    "dependencies": [
-      "get_api_key",
-      "get_gateway_rate_limiter",
-      "get_gateway_service"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.platform_gateway_routes",
-    "name": "gateway_stream",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.GatewayService",
-    "path": "/api/v1/gateway/agents/{agent_id}/message/stream",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": {
-      "headers": [
-        "Cache-Control",
-        "X-Accel-Buffering"
-      ],
-      "media_type": "text/event-stream"
-    },
-    "supporting_protocols": [
-      "common.protocols.APIKeyRateLimiter"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_hub_relay_service"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.hub_routes",
-    "name": "hub_status_for_user",
     "openapi_response_codes": [
       "200"
-    ],
-    "owning_protocol": "common.protocols.HubStatusReader",
-    "path": "/api/v1/hub/my-status",
-    "response_class": null,
-    "response_model": "HubStatusResponse",
-    "status_code": null,
-    "streaming_response": null
+    ]
   },
   {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_inspection_center"
-    ],
+    "path": "/api/v1/agent/getAllActiveAgents",
     "methods": [
-      "POST"
+      "GET"
     ],
-    "module": "api_gateway.routes.inspection_routes",
-    "name": "inspect_a2a_connection",
-    "openapi_response_codes": [
-      "200"
+    "name": "get_all_active_agents",
+    "module": "api_gateway.routes.agent_routes",
+    "dependencies": [
+      "get_agent_center",
+      "get_optional_user"
     ],
-    "owning_protocol": "agent.protocols.AgentInspection",
-    "path": "/api/v1/inspectionCenter/inspectA2AConnection",
-    "response_class": null,
+    "auth_dependencies": [
+      "get_optional_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
     "response_model": null,
-    "status_code": null,
-    "streaming_response": null
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
   },
   {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_inspection_center"
-    ],
+    "path": "/api/v1/agent/getAgentListWithConditions",
     "methods": [
       "POST"
     ],
-    "module": "api_gateway.routes.inspection_routes",
-    "name": "inspect_agent",
+    "name": "get_agent_list_with_conditions",
+    "module": "api_gateway.routes.agent_routes",
+    "dependencies": [
+      "get_agent_center",
+      "get_optional_user"
+    ],
+    "auth_dependencies": [
+      "get_optional_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
     "openapi_response_codes": [
       "200"
-    ],
-    "owning_protocol": "agent.protocols.AgentInspection",
+    ]
+  },
+  {
     "path": "/api/v1/inspectionCenter/inspectAgentCard",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_memory_center"
-    ],
     "methods": [
       "POST"
     ],
-    "module": "api_gateway.routes.memory_routes",
-    "name": "add_chat_context",
+    "name": "inspect_agent",
+    "module": "api_gateway.routes.inspection_routes",
+    "dependencies": [
+      "get_current_user",
+      "get_inspection_center"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
     "openapi_response_codes": [
       "200"
+    ]
+  },
+  {
+    "path": "/api/v1/inspectionCenter/inspectA2AConnection",
+    "methods": [
+      "POST"
     ],
-    "owning_protocol": "context_memory.protocols.LegacyChatContextAPI",
+    "name": "inspect_a2a_connection",
+    "module": "api_gateway.routes.inspection_routes",
+    "dependencies": [
+      "get_current_user",
+      "get_inspection_center"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
     "path": "/api/v1/memoryCenter/addChatContext",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
+    "methods": [
+      "POST"
     ],
+    "name": "add_chat_context",
+    "module": "api_gateway.routes.memory_routes",
     "dependencies": [
       "get_current_user",
       "get_memory_center"
     ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.memory_routes",
-    "name": "delete_chat_context_by_session_id",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "context_memory.protocols.LegacyChatContextAPI",
-    "path": "/api/v1/memoryCenter/deleteChatContextBySessionId",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
     "auth_dependencies": [
       "get_current_user"
     ],
-    "dependencies": [
-      "get_current_user",
-      "get_memory_center"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.memory_routes",
-    "name": "get_chat_context_by_session_id",
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
     "openapi_response_codes": [
       "200"
-    ],
-    "owning_protocol": "context_memory.protocols.LegacyChatContextAPI",
+    ]
+  },
+  {
     "path": "/api/v1/memoryCenter/getChatContextBySessionId",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
+    "methods": [
+      "POST"
     ],
+    "name": "get_chat_context_by_session_id",
+    "module": "api_gateway.routes.memory_routes",
     "dependencies": [
       "get_current_user",
       "get_memory_center"
     ],
-    "methods": [
-      "POST"
+    "auth_dependencies": [
+      "get_current_user"
     ],
-    "module": "api_gateway.routes.memory_routes",
-    "name": "update_chat_context_by_session_id",
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
     "openapi_response_codes": [
       "200"
-    ],
-    "owning_protocol": "context_memory.protocols.LegacyChatContextAPI",
+    ]
+  },
+  {
     "path": "/api/v1/memoryCenter/updateChatContextBySessionId",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_api_key_no_track"
-    ],
-    "dependencies": [
-      "get_api_key_no_track",
-      "get_relay_service"
-    ],
     "methods": [
       "POST"
     ],
-    "module": "api_gateway.routes.relay_routes",
-    "name": "relay_register",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.HubRelayManagement",
-    "path": "/api/v1/relay/hub/register",
-    "response_class": null,
-    "response_model": "RegisterHubResponse",
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_api_key"
-    ],
+    "name": "update_chat_context_by_session_id",
+    "module": "api_gateway.routes.memory_routes",
     "dependencies": [
-      "get_api_key",
-      "get_relay_service"
+      "get_current_user",
+      "get_memory_center"
     ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.relay_routes",
-    "name": "relay_status",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "common.protocols.HubRelayManagement",
-    "path": "/api/v1/relay/hub/status",
-    "response_class": null,
-    "response_model": "HubStatusResponse",
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_api_key_no_track"
-    ],
-    "dependencies": [
-      "get_api_key_no_track",
-      "get_relay_service"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.relay_routes",
-    "name": "relay_sync_agents",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.HubRelayManagement",
-    "path": "/api/v1/relay/hub/{hub_id}/agents/sync",
-    "response_class": null,
-    "response_model": "HubAgentSyncResponse",
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_api_key_no_track"
-    ],
-    "dependencies": [
-      "get_api_key_no_track",
-      "get_relay_service"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.relay_routes",
-    "name": "relay_events",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.HubRelayManagement",
-    "path": "/api/v1/relay/hub/{hub_id}/events",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": {
-      "headers": [
-        "Cache-Control",
-        "Connection",
-        "X-Accel-Buffering"
-      ],
-      "media_type": "text/event-stream"
-    }
-  },
-  {
-    "auth_dependencies": [
-      "get_api_key_no_track"
-    ],
-    "dependencies": [
-      "get_api_key_no_track",
-      "get_relay_service"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.relay_routes",
-    "name": "relay_heartbeat",
-    "openapi_response_codes": [
-      "204",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.HubRelayManagement",
-    "path": "/api/v1/relay/hub/{hub_id}/heartbeat",
-    "response_class": null,
-    "response_model": null,
-    "status_code": 204,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_api_key"
-    ],
-    "dependencies": [
-      "get_api_key",
-      "get_relay_service"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.relay_routes",
-    "name": "relay_publish",
-    "openapi_response_codes": [
-      "204",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.HubRelayManagement",
-    "path": "/api/v1/relay/hub/{hub_id}/publish",
-    "response_class": null,
-    "response_model": null,
-    "status_code": 204,
-    "streaming_response": null
-  },
-  {
     "auth_dependencies": [
       "get_current_user"
     ],
-    "dependencies": [
-      "get_current_user",
-      "get_room_center"
-    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
+    "path": "/api/v1/memoryCenter/deleteChatContextBySessionId",
     "methods": [
       "POST"
     ],
-    "module": "api_gateway.routes.room_routes",
-    "name": "create_new_room",
+    "name": "delete_chat_context_by_session_id",
+    "module": "api_gateway.routes.memory_routes",
+    "dependencies": [
+      "get_current_user",
+      "get_memory_center"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
     "openapi_response_codes": [
       "200"
-    ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
+    ]
+  },
+  {
     "path": "/api/v1/roomCenter/createNewRoom",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
+    "methods": [
+      "POST"
     ],
+    "name": "create_new_room",
+    "module": "api_gateway.routes.room_routes",
     "dependencies": [
       "get_current_user",
       "get_room_center"
     ],
-    "methods": [
-      "POST"
+    "auth_dependencies": [
+      "get_current_user"
     ],
-    "module": "api_gateway.routes.room_routes",
-    "name": "inquiry_active_runs",
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
     "openapi_response_codes": [
       "200"
-    ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/inquiryActiveRuns",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.ExecutionEngine",
-      "common.protocols.RoomRouteReader"
     ]
   },
   {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_room_center"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.room_routes",
-    "name": "inquiry_room_messages",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/inquiryRoomMessagesByRoomId",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomRouteReader"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_room_center"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.room_routes",
-    "name": "inquiry_room_setting",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/inquiryRoomSetting",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomRouteReader"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
+    "methods": [
+      "POST"
     ],
+    "name": "inquiry_room_setting",
+    "module": "api_gateway.routes.room_routes",
     "dependencies": [
       "get_current_user",
       "get_room_center"
     ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.room_routes",
-    "name": "inquiry_rooms_by_room_owner_id",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/inquiryRoomsByRoomOwnerId",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
     "auth_dependencies": [
       "get_current_user"
     ],
-    "dependencies": [
-      "get_current_user"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.room_routes",
-    "name": "send_message",
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
     "openapi_response_codes": [
       "200"
-    ],
-    "owning_protocol": "common.protocols.ExecutionEngine",
-    "path": "/api/v1/roomCenter/sendMessage",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomRouteReader"
     ]
   },
   {
+    "path": "/api/v1/roomCenter/inquiryActiveRuns",
+    "methods": [
+      "POST"
+    ],
+    "name": "inquiry_active_runs",
+    "module": "api_gateway.routes.room_routes",
+    "dependencies": [
+      "get_current_user",
+      "get_room_center"
+    ],
     "auth_dependencies": [
       "get_current_user"
     ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
+    "path": "/api/v1/roomCenter/inquiryRoomsByRoomOwnerId",
+    "methods": [
+      "POST"
+    ],
+    "name": "inquiry_rooms_by_room_owner_id",
+    "module": "api_gateway.routes.room_routes",
+    "dependencies": [
+      "get_current_user",
+      "get_room_center"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
+    "path": "/api/v1/roomCenter/updateRoomAgentSet",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_room_agent_set",
+    "module": "api_gateway.routes.room_routes",
+    "dependencies": [
+      "get_current_user",
+      "get_room_center"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
+    "path": "/api/v1/roomCenter/updateRoomName",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_room_name",
+    "module": "api_gateway.routes.room_routes",
+    "dependencies": [
+      "get_current_user",
+      "get_room_center"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
+    "path": "/api/v1/roomCenter/updateRoomExtendInfo",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_room_extend_info",
+    "module": "api_gateway.routes.room_routes",
+    "dependencies": [
+      "get_current_user",
+      "get_room_center"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
+    "path": "/api/v1/roomCenter/inquiryRoomMessagesByRoomId",
+    "methods": [
+      "POST"
+    ],
+    "name": "inquiry_room_messages",
+    "module": "api_gateway.routes.room_routes",
+    "dependencies": [
+      "get_current_user",
+      "get_room_center"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
+    "path": "/api/v1/roomCenter/sendMessage",
+    "methods": [
+      "POST"
+    ],
+    "name": "send_message",
+    "module": "api_gateway.routes.room_routes",
+    "dependencies": [
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
+    "path": "/api/v1/roomCenter/suggestAgents",
+    "methods": [
+      "POST"
+    ],
+    "name": "suggest_agents",
+    "module": "api_gateway.routes.room_routes",
     "dependencies": [
       "get_agent_selection_service",
       "get_current_user"
     ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.room_routes",
-    "name": "suggest_agents",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "agent.protocols.AgentSuggestionService",
-    "path": "/api/v1/roomCenter/suggestAgents",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
     "auth_dependencies": [
       "get_current_user"
     ],
-    "dependencies": [
-      "get_current_user",
-      "get_room_center"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.room_routes",
-    "name": "update_room_agent_set",
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
     "openapi_response_codes": [
       "200"
-    ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/updateRoomAgentSet",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomRouteReader"
     ]
   },
   {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_room_center"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.room_routes",
-    "name": "update_room_extend_info",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/updateRoomExtendInfo",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomRouteReader"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_room_center"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.room_routes",
-    "name": "update_room_name",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/updateRoomName",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomRouteReader"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_task_store"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.a2a_task_routes",
-    "name": "list_room_tasks",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.A2ATaskStatusReader",
-    "path": "/api/v1/rooms/{room_id}/a2a-tasks",
-    "response_class": null,
-    "response_model": "dict",
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.hitl_routes",
-    "name": "get_pending_hitl_requests",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.HITLManager",
-    "path": "/api/v1/rooms/{room_id}/hitl/pending",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomOwnershipReader"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.hitl_routes",
-    "name": "respond_to_hitl_request",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.HITLManager",
     "path": "/api/v1/rooms/{room_id}/hitl/respond",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomOwnershipReader"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user"
-    ],
     "methods": [
       "POST"
     ],
+    "name": "respond_to_hitl_request",
     "module": "api_gateway.routes.hitl_routes",
-    "name": "cancel_hitl_request",
-    "openapi_response_codes": [
-      "200",
-      "422"
+    "dependencies": [
+      "get_current_user"
     ],
-    "owning_protocol": "common.protocols.HITLManager",
-    "path": "/api/v1/rooms/{room_id}/hitl/{request_id}/cancel",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomOwnershipReader"
-    ]
-  },
-  {
     "auth_dependencies": [
       "get_current_user"
     ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/rooms/{room_id}/hitl/pending",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_pending_hitl_requests",
+    "module": "api_gateway.routes.hitl_routes",
+    "dependencies": [
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/rooms/{room_id}/hitl/{request_id}/cancel",
+    "methods": [
+      "POST"
+    ],
+    "name": "cancel_hitl_request",
+    "module": "api_gateway.routes.hitl_routes",
+    "dependencies": [
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/hub/my-status",
+    "methods": [
+      "GET"
+    ],
+    "name": "hub_status_for_user",
+    "module": "api_gateway.routes.hub_routes",
     "dependencies": [
       "get_current_user",
-      "get_sse_store",
-      "get_execution_engine"
+      "get_hub_relay_service"
     ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.sse_routes",
-    "name": "cancel_message",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.ExecutionEngine",
-    "path": "/api/v1/sse/message/{message_id}/cancel",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.SSEStateReader"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user_with_query_token"
-    ],
-    "dependencies": [
-      "get_current_user_with_query_token",
-      "get_sse_store",
-      "get_sse_manager"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.sse_routes",
-    "name": "get_room_sse_status",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.SSERouteTransport",
-    "path": "/api/v1/sse/room/{room_id}/status",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.SSEStateReader"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user_with_query_token"
-    ],
-    "dependencies": [
-      "get_current_user_with_query_token",
-      "get_sse_store",
-      "get_sse_manager"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.sse_routes",
-    "name": "stream_room_messages",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.SSERouteTransport",
-    "path": "/api/v1/sse/room/{room_id}/stream",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": {
-      "headers": [
-        "Cache-Control",
-        "Connection",
-        "Content-Type",
-        "X-Accel-Buffering"
-      ],
-      "media_type": "text/event-stream"
-    },
-    "supporting_protocols": [
-      "common.protocols.SSEStateReader"
-    ]
-  },
-  {
     "auth_dependencies": [
       "get_current_user"
     ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": "HubStatusResponse",
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
+    "path": "/api/v1/sse/room/{room_id}/stream",
+    "methods": [
+      "GET"
+    ],
+    "name": "stream_room_messages",
+    "module": "api_gateway.routes.sse_routes",
+    "dependencies": [
+      "get_current_user_with_query_token",
+      "get_sse_manager",
+      "get_sse_store"
+    ],
+    "auth_dependencies": [
+      "get_current_user_with_query_token"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/sse/room/{room_id}/status",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_room_sse_status",
+    "module": "api_gateway.routes.sse_routes",
+    "dependencies": [
+      "get_current_user_with_query_token",
+      "get_sse_manager",
+      "get_sse_store"
+    ],
+    "auth_dependencies": [
+      "get_current_user_with_query_token"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/sse/message/{message_id}/cancel",
+    "methods": [
+      "POST"
+    ],
+    "name": "cancel_message",
+    "module": "api_gateway.routes.sse_routes",
+    "dependencies": [
+      "get_current_user",
+      "get_execution_engine",
+      "get_sse_store"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/agentGroups",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_agent_group",
+    "module": "api_gateway.routes.agent_group_routes",
+    "dependencies": [
+      "get_agent_group_store",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
+    "path": "/api/v1/agentGroups",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_agent_groups",
+    "module": "api_gateway.routes.agent_group_routes",
+    "dependencies": [
+      "get_agent_group_store",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/agentGroups/{group_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_agent_group",
+    "module": "api_gateway.routes.agent_group_routes",
+    "dependencies": [
+      "get_agent_group_store",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/agentGroups/{group_id}",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_agent_group",
+    "module": "api_gateway.routes.agent_group_routes",
+    "dependencies": [
+      "get_agent_group_store",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/agentGroups/{group_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_agent_group",
+    "module": "api_gateway.routes.agent_group_routes",
+    "dependencies": [
+      "get_agent_group_store",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/a2a-tasks/{message_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_task_status",
+    "module": "api_gateway.routes.a2a_task_routes",
     "dependencies": [
       "get_current_user",
       "get_task_store"
     ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": "dict",
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/rooms/{room_id}/a2a-tasks",
     "methods": [
       "GET"
     ],
+    "name": "list_room_tasks",
     "module": "api_gateway.routes.a2a_task_routes",
-    "name": "list_user_pending_tasks",
-    "openapi_response_codes": [
-      "200"
+    "dependencies": [
+      "get_current_user",
+      "get_task_store"
     ],
-    "owning_protocol": "common.protocols.A2ATaskStatusReader",
-    "path": "/api/v1/users/me/a2a-tasks",
-    "response_class": null,
-    "response_model": "dict",
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
     "status_code": null,
-    "streaming_response": null
+    "response_model": "dict",
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
   },
   {
-    "auth_dependencies": [],
+    "path": "/api/v1/users/me/a2a-tasks",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_user_pending_tasks",
+    "module": "api_gateway.routes.a2a_task_routes",
+    "dependencies": [
+      "get_current_user",
+      "get_task_store"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": "dict",
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
+    "path": "/api/v1/relay/hub/register",
+    "methods": [
+      "POST"
+    ],
+    "name": "relay_register",
+    "module": "api_gateway.routes.relay_routes",
+    "dependencies": [
+      "get_api_key_no_track",
+      "get_relay_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key_no_track"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": "RegisterHubResponse",
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/relay/hub/{hub_id}/events",
+    "methods": [
+      "GET"
+    ],
+    "name": "relay_events",
+    "module": "api_gateway.routes.relay_routes",
+    "dependencies": [
+      "get_api_key_no_track",
+      "get_relay_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key_no_track"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/relay/hub/{hub_id}/publish",
+    "methods": [
+      "POST"
+    ],
+    "name": "relay_publish",
+    "module": "api_gateway.routes.relay_routes",
+    "dependencies": [
+      "get_api_key",
+      "get_relay_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key"
+    ],
+    "owning_protocol": "",
+    "status_code": 204,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "204",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/relay/hub/{hub_id}/agents/sync",
+    "methods": [
+      "POST"
+    ],
+    "name": "relay_sync_agents",
+    "module": "api_gateway.routes.relay_routes",
+    "dependencies": [
+      "get_api_key_no_track",
+      "get_relay_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key_no_track"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": "HubAgentSyncResponse",
+    "response_class": null,
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/relay/hub/status",
+    "methods": [
+      "GET"
+    ],
+    "name": "relay_status",
+    "module": "api_gateway.routes.relay_routes",
+    "dependencies": [
+      "get_api_key",
+      "get_relay_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key"
+    ],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": "HubStatusResponse",
+    "response_class": null,
+    "openapi_response_codes": [
+      "200"
+    ]
+  },
+  {
+    "path": "/api/v1/relay/hub/{hub_id}/heartbeat",
+    "methods": [
+      "POST"
+    ],
+    "name": "relay_heartbeat",
+    "module": "api_gateway.routes.relay_routes",
+    "dependencies": [
+      "get_api_key_no_track",
+      "get_relay_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key_no_track"
+    ],
+    "owning_protocol": "",
+    "status_code": 204,
+    "response_model": null,
+    "response_class": null,
+    "openapi_response_codes": [
+      "204",
+      "422"
+    ]
+  },
+  {
+    "path": "/api/v1/webhooks/a2a/{message_id}",
+    "methods": [
+      "POST"
+    ],
+    "name": "handle_a2a_webhook",
+    "module": "api_gateway.routes.webhook_routes",
     "dependencies": [
       "get_webhook_receiver"
     ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.webhook_routes",
-    "name": "handle_a2a_webhook",
+    "auth_dependencies": [],
+    "owning_protocol": "",
+    "status_code": null,
+    "response_model": null,
+    "response_class": null,
     "openapi_response_codes": [
       "200",
       "422"
-    ],
-    "owning_protocol": "common.protocols.WebhookReceiver",
-    "path": "/api/v1/webhooks/a2a/{message_id}",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [],
-    "dependencies": [],
-    "methods": [
-      "GET",
-      "HEAD"
-    ],
-    "module": "fastapi.applications",
-    "name": "swagger_ui_html",
-    "openapi_response_codes": [],
-    "owning_protocol": "fastapi.documentation",
-    "path": "/docs",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [],
-    "dependencies": [],
-    "methods": [
-      "GET",
-      "HEAD"
-    ],
-    "module": "fastapi.applications",
-    "name": "swagger_ui_redirect",
-    "openapi_response_codes": [],
-    "owning_protocol": "fastapi.documentation",
-    "path": "/docs/oauth2-redirect",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [],
-    "dependencies": [
-      "get_health_check"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "main",
-    "name": "health_check",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "app_shell.health_check.HealthCheck",
-    "path": "/health",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [],
-    "dependencies": [],
-    "methods": [
-      "GET",
-      "HEAD"
-    ],
-    "module": "fastapi.applications",
-    "name": "openapi",
-    "openapi_response_codes": [],
-    "owning_protocol": "fastapi.documentation",
-    "path": "/openapi.json",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [],
-    "dependencies": [],
-    "methods": [
-      "GET",
-      "HEAD"
-    ],
-    "module": "fastapi.applications",
-    "name": "redoc_html",
-    "openapi_response_codes": [],
-    "owning_protocol": "fastapi.documentation",
-    "path": "/redoc",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
+    ]
   }
 ]

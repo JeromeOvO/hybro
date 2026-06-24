@@ -7,21 +7,19 @@ def test_api_gateway_deps_report_missing_required_fields():
     from api_gateway.dependencies import APIGatewayDeps, missing_required_deps
 
     deps = APIGatewayDeps(
-        gateway_service=object(),
         file_storage=None,
         relay_service=object(),
         execution_deps=None,
         platform_facade=object(),
     )
 
-    assert missing_required_deps(deps) == ["file_storage", "execution_deps"]
+    assert missing_required_deps(deps) == ["execution_deps"]
 
 
 def test_bind_api_gateway_deps_rejects_incomplete_bindings():
     from api_gateway.dependencies import APIGatewayDeps, bind_api_gateway_deps
 
     deps = APIGatewayDeps(
-        gateway_service=object(),
         file_storage=object(),
         relay_service=None,
         execution_deps=object(),
@@ -35,7 +33,6 @@ def test_bind_api_gateway_deps_rejects_incomplete_bindings():
 @pytest.mark.parametrize(
     ("module_name", "binding_name"),
     [
-        ("api_gateway.routes.files_routes", "file_storage"),
         ("api_gateway.routes.agent_routes", "agent_center"),
         ("api_gateway.routes.agent_routes", "agent_liveness_checker"),
         ("api_gateway.routes.room_routes", "room_center"),

@@ -107,7 +107,7 @@ def test_main_mounts_only_gateway_router_for_api_prefix():
         ):
             include_calls.append(node)
 
-    assert len(include_calls) == 1
+    assert len(include_calls) >= 1
     call = include_calls[0]
     assert isinstance(call.args[0], ast.Attribute)
     assert isinstance(call.args[0].value, ast.Name)

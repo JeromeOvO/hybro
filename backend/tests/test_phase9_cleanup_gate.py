@@ -14,7 +14,6 @@ PRODUCTION_ROOTS = (
     "hub_runtime_bridge",
     "a2a_adapter",
     "llm_gateway",
-    "platform_module",
     "common",
     "app_shell",
     "jobs",
@@ -84,7 +83,6 @@ FORBIDDEN_COMMON_IMPORT_PREFIXES = (
     "execution",
     "hub_runtime_bridge",
     "models",
-    "platform_module",
     "a2a_adapter",
 )
 
@@ -100,7 +98,6 @@ SDK_CONFINEMENT_ROOTS = (
     "hub_runtime_bridge",
     "jobs",
     "models",
-    "platform_module",
     "common",
     "app_shell",
 )
@@ -108,7 +105,6 @@ SDK_CONFINEMENT_ROOTS = (
 PHASE9_IMPORT_SMOKE_MODULES = (
     "hub_runtime_bridge",
     "hub_runtime_bridge.service.hub_publish",
-    "platform_module",
 )
 
 FORBIDDEN_SDK_IMPORT_PREFIXES = ("a2a",)
@@ -672,26 +668,6 @@ def test_no_numbered_duplicate_python_artifacts_are_shipped():
     )
 
 
-def test_container_does_not_define_platform_adapter_classes_inline():
-    tree = ast.parse(Path("container.py").read_text(), filename="container.py")
-    inline_adapters = {
-        node.name
-        for node in tree.body
-        if isinstance(node, ast.ClassDef)
-        and node.name in {"RateLimitCollectionAdapter", "MongoFileMetadataRepository"}
-    }
-
-    assert inline_adapters == set()
-
-    from platform_module.adapters import (
-        MongoFileMetadataRepository,
-        RateLimitCollectionAdapter,
-    )
-
-    assert RateLimitCollectionAdapter.__module__.startswith("platform_module.adapters.")
-    assert MongoFileMetadataRepository.__module__.startswith(
-        "platform_module.adapters."
-    )
 
 
 def test_a2a_sdk_blockers_are_exact_current_files():
