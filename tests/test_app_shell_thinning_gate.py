@@ -774,6 +774,34 @@ def _owner_import_provenance(
     return backed_exports, owner_refs
 
 
+def _rebound_owner_import_exports(
+    tree: ast.Module,
+    owning_module: str,
+    required_exports: set[str],
+) -> set[str]:
+    imported_exports: set[str] = set()
+    rebound_exports: set[str] = set()
+
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module == owning_module:
+            for alias in node.names:
+                if alias.name == "*":
+                    imported_exports.update(
+                        required_exports
+                        & _owner_static_exports_or_bindings(owning_module)
+                    )
+                elif alias.name in required_exports and alias.asname in {
+                    None,
+                    alias.name,
+                }:
+                    imported_exports.add(alias.name)
+            continue
+
+        rebound_exports.update(imported_exports & _mutation_target_roots(node))
+
+    return rebound_exports
+
+
 def _owner_assignment_backed_exports(
     node: ast.AST,
     owner_refs: set[tuple[str, ...]],
@@ -816,6 +844,11 @@ def _owner_backed_exports(
         owner_refs.update(imported_refs)
 
     owner_refs -= _invalidated_owner_refs(tree, owner_refs)
+    backed_exports -= _rebound_owner_import_exports(
+        tree,
+        owning_module,
+        required_exports,
+    )
 
     for node in tree.body:
         backed_exports.update(_owner_assignment_backed_exports(node, owner_refs))
@@ -1184,6 +1217,52 @@ owner_alias = object()
 RequiredExport = owner_alias.RequiredExport
 """,
     )
+
+    assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
+
+
+def test_direct_owner_import_rebinding_invalidates_provenance(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+from owner.module import RequiredExport
+
+RequiredExport = object()
+__all__ = ["RequiredExport"]
+""",
+    )
+
+    assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
+
+
+def test_direct_owner_import_without_rebinding_keeps_provenance(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+from owner.module import RequiredExport
+
+__all__ = ["RequiredExport"]
+""",
+    )
+
+    assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == {
+        "RequiredExport"
+    }
+
+
+def test_owner_star_import_rebinding_invalidates_provenance(tmp_path, monkeypatch):
+    (tmp_path / "owner").mkdir()
+    (tmp_path / "owner" / "module.py").write_text("RequiredExport = object()\n")
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+from owner.module import *
+
+RequiredExport = object()
+__all__ = ["RequiredExport"]
+""",
+    )
+    monkeypatch.chdir(tmp_path)
 
     assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
 
