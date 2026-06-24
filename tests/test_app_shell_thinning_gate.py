@@ -1,6 +1,7 @@
 import ast
 import json
 import tomllib
+from fnmatch import fnmatch
 from pathlib import Path
 
 import pytest
@@ -1133,6 +1134,10 @@ def _app_shell_import_violations(paths: list[Path]) -> list[str]:
     return violations
 
 
+def _ruff_pattern_matches_path(pattern: str, path: str) -> bool:
+    return pattern == path or fnmatch(path, pattern) or Path(path).match(pattern)
+
+
 def _is_focus_module(module: str) -> bool:
     return any(
         module == focus_module or module.startswith(f"{focus_module}.")
@@ -1252,6 +1257,15 @@ import app_shell.task_service
     assert f"{path}:2: app_shell.agent_service" in violations
     assert f"{path}:3: app_shell.notification_service" in violations
     assert f"{path}:4: app_shell.task_service" in violations
+
+
+def test_ruff_pattern_matching_detects_app_shell_globs():
+    assert _ruff_pattern_matches_path("app_shell/*.py", "app_shell/room_runtime.py")
+    assert _ruff_pattern_matches_path(
+        "app_shell/repository_parts/*.py",
+        "app_shell/repository_parts/message_store.py",
+    )
+    assert not _ruff_pattern_matches_path("room/**/*.py", "app_shell/room_runtime.py")
 
 
 def test_explicit_all_rejects_dynamic_mutation(tmp_path):
@@ -1808,21 +1822,38 @@ def test_final_app_shell_shims_do_not_keep_ruff_ignore_baseline():
     pyproject = tomllib.loads(Path("pyproject.toml").read_text())
     per_file_ignores = pyproject["tool"]["ruff"]["lint"]["per-file-ignores"]
     shim_paths = {*FINAL_APP_SHELL_SHIMS, *FINAL_APP_SHELL_REEXPORT_SHIMS}
+    allowed_owner_ignores = {
+        owner_path: set(expected_ignores)
+        for _shim_path, (owner_path, expected_ignores) in (
+            EXPECTED_MOVED_RUFF_IGNORES.items()
+        )
+    }
     violations: list[str] = []
 
     for shim_path in sorted(shim_paths):
-        if shim_path in per_file_ignores:
-            violations.append(f"{shim_path}: final shim keeps Ruff ignore baseline")
+        matched_patterns = sorted(
+            pattern
+            for pattern in per_file_ignores
+            if _ruff_pattern_matches_path(pattern, shim_path)
+        )
+        if matched_patterns:
+            violations.append(
+                f"{shim_path}: final shim keeps Ruff ignore baseline through "
+                + ", ".join(matched_patterns)
+            )
 
     for shim_path, (
         owner_path,
         expected_ignores,
     ) in sorted(EXPECTED_MOVED_RUFF_IGNORES.items()):
         actual = per_file_ignores.get(owner_path)
-        if actual != expected_ignores:
+        if actual is None:
+            continue
+        unexpected = sorted(set(actual) - allowed_owner_ignores[owner_path])
+        if unexpected:
             violations.append(
-                f"{owner_path}: expected moved ignores from {shim_path} "
-                f"to be {expected_ignores}, got {actual}"
+                f"{owner_path}: unexpected Ruff ignores after moving from "
+                f"{shim_path}: {unexpected}; allowed: {expected_ignores}"
             )
 
     assert not violations, (
