@@ -156,38 +156,96 @@ FINAL_APP_SHELL_SHIMS = {
 FINAL_APP_SHELL_REEXPORT_SHIMS = {
     "app_shell/runtime_store_contracts.py": {
         "max_lines": 40,
+        "required_exports": {
+            "_dump_model",
+            "_dump_runtime",
+            "agent_group_to_runtime",
+            "agent_to_runtime",
+            "chat_context_to_runtime",
+            "message_content_to_runtime",
+            "room_agent_message_to_runtime",
+            "room_memory_to_runtime",
+            "room_to_runtime",
+            "room_user_message_to_runtime",
+            "runtime_agent_groups",
+            "runtime_agent_messages",
+            "runtime_agents",
+            "runtime_rooms",
+            "runtime_to_agent",
+            "runtime_to_agent_group",
+            "runtime_to_chat_context",
+            "runtime_to_message_content",
+            "runtime_to_room",
+            "runtime_to_room_agent_message",
+            "runtime_to_room_memory",
+            "runtime_to_room_user_message",
+            "runtime_user_messages",
+        },
         "owning_module": "dal.runtime_store.contracts",
     },
     "app_shell/repository_parts/__init__.py": {
         "max_lines": 40,
+        "required_exports": {
+            "AppShellAgentRoomStore",
+            "AppShellHITLStore",
+            "AppShellMemoryStore",
+            "AppShellMessageStore",
+            "AppShellTaskLifecycleStore",
+        },
         "owning_module": "dal.runtime_store.parts",
     },
     "app_shell/repository_parts/agent_room_store.py": {
         "max_lines": 30,
+        "required_exports": {"AppShellAgentRoomStore"},
         "owning_module": "dal.runtime_store.parts.agent_room_store",
     },
     "app_shell/repository_parts/message_store.py": {
         "max_lines": 30,
+        "required_exports": {"AppShellMessageStore"},
         "owning_module": "dal.runtime_store.parts.message_store",
     },
     "app_shell/repository_parts/task_lifecycle_store.py": {
         "max_lines": 30,
+        "required_exports": {"AppShellTaskLifecycleStore"},
         "owning_module": "dal.runtime_store.parts.task_lifecycle_store",
     },
     "app_shell/repository_parts/hitl_store.py": {
         "max_lines": 30,
+        "required_exports": {"AppShellHITLStore"},
         "owning_module": "dal.runtime_store.parts.hitl_store",
     },
     "app_shell/repository_parts/memory_store.py": {
         "max_lines": 30,
+        "required_exports": {"AppShellMemoryStore"},
         "owning_module": "dal.runtime_store.parts.memory_store",
     },
     "app_shell/repository_parts/parsing.py": {
         "max_lines": 70,
+        "required_exports": {
+            "_extract_text_from_artifact_parts",
+            "_modified_count",
+            "_mongo_update_succeeded",
+            "_safe_parse_agent",
+            "_safe_parse_agent_group",
+            "_safe_parse_agent_message",
+            "_safe_parse_chat_context",
+            "_safe_parse_room",
+            "_safe_parse_room_memory",
+            "_safe_parse_user_message",
+            "_strip_file_urls",
+            "_strip_unset_task_tracking_fields",
+            "_task_tracking_matches",
+        },
         "owning_module": "dal.runtime_store.parts.parsing",
     },
     "app_shell/repository_parts/webhook_tokens.py": {
         "max_lines": 40,
+        "required_exports": {
+            "generate_webhook_token",
+            "get_webhook_signing_key",
+            "hash_webhook_token",
+            "verify_webhook_token",
+        },
         "owning_module": "dal.runtime_store.parts.webhook_tokens",
     },
 }
@@ -202,9 +260,12 @@ FOCUS_APP_SHELL_NAMES = {
 PRODUCTION_MODULE_ROOTS = (
     "a2a_adapter",
     "agent",
+    "api",
     "api_gateway",
     "common",
     "context_memory",
+    "dal",
+    "database",
     "delivery",
     "execution",
     "hub_runtime_bridge",
@@ -212,6 +273,14 @@ PRODUCTION_MODULE_ROOTS = (
     "platform_module",
     "room",
 )
+
+EXCLUDED_PRODUCTION_SCAN_PARTS = {
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+}
 
 
 def _manifest() -> dict:
@@ -287,31 +356,89 @@ def _line_count(path: Path) -> int:
     return sum(1 for _ in path.open())
 
 
-def _module_exports(path: Path) -> set[str]:
+def _target_names(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Name):
+        return {node.id}
+    if isinstance(node, (ast.Tuple, ast.List)):
+        names: set[str] = set()
+        for item in node.elts:
+            names.update(_target_names(item))
+        return names
+    return set()
+
+
+def _module_bound_names(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(), filename=str(path))
-    exports: set[str] = set()
+    names: set[str] = set()
 
     for node in tree.body:
         if isinstance(node, ast.Import):
-            exports.update(
+            names.update(
                 alias.asname or alias.name.split(".", 1)[0] for alias in node.names
             )
         elif isinstance(node, ast.ImportFrom):
-            exports.update(
+            names.update(
                 alias.asname or alias.name for alias in node.names if alias.name != "*"
             )
         elif isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-            exports.add(node.name)
+            names.add(node.name)
         elif isinstance(node, ast.Assign):
             for target in node.targets:
-                if isinstance(target, ast.Name):
-                    exports.add(target.id)
-                    if target.id == "__all__":
-                        exports.update(_string_literal_sequence(node.value))
+                names.update(_target_names(target))
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            exports.add(node.target.id)
+            names.add(node.target.id)
 
-    return exports
+    return names
+
+
+def _module_exports(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    all_exports: set[str] | None = None
+
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == "__all__":
+                all_exports = _string_literal_sequence(node.value)
+
+    if all_exports is not None:
+        return all_exports
+    return _module_bound_names(path)
+
+
+def _dynamic_required_export_is_allowed(path: Path, export: str) -> bool:
+    return (
+        path == Path("app_shell/relay_service.py")
+        and export == "relay_service"
+        and "__getattr__" in _module_bound_names(path)
+    )
+
+
+def _required_export_violations(
+    path: Path,
+    required_exports: set[str],
+) -> list[str]:
+    exports = _module_exports(path)
+    bound_names = _module_bound_names(path)
+    missing_exports = sorted(required_exports - exports)
+    missing_bound_names = sorted(
+        export
+        for export in required_exports - bound_names
+        if not _dynamic_required_export_is_allowed(path, export)
+    )
+    violations: list[str] = []
+
+    if missing_exports:
+        violations.append(
+            f"{path}: missing required exports: {', '.join(missing_exports)}"
+        )
+    if missing_bound_names:
+        violations.append(
+            f"{path}: required exports are not bound: "
+            + ", ".join(missing_bound_names)
+        )
+    return violations
 
 
 def _string_literal_sequence(node: ast.AST) -> set[str]:
@@ -384,6 +511,18 @@ def _app_shell_focus_runtime_import_violations(paths: list[Path]) -> list[str]:
     return violations
 
 
+def _production_module_python_files() -> list[Path]:
+    paths: list[Path] = []
+    for root in PRODUCTION_MODULE_ROOTS:
+        root_path = Path(root)
+        if not root_path.exists():
+            continue
+        for path in root_path.rglob("*.py"):
+            if EXCLUDED_PRODUCTION_SCAN_PARTS.isdisjoint(path.parts):
+                paths.append(path)
+    return sorted(paths)
+
+
 def test_forbidden_prefix_matching_is_segment_aware():
     assert _forbidden_prefix("a2a") == "a2a"
     assert _forbidden_prefix("a2a.client") == "a2a"
@@ -440,12 +579,9 @@ def test_app_shell_focus_files_are_final_import_shims():
         if line_count > max_lines:
             violations.append(f"{target}: {line_count} lines exceeds {max_lines}")
 
-        exports = _module_exports(path)
-        missing_exports = sorted(contract["required_exports"] - exports)
-        if missing_exports:
-            violations.append(
-                f"{target}: missing required exports: {', '.join(missing_exports)}"
-            )
+        violations.extend(
+            _required_export_violations(path, contract["required_exports"])
+        )
 
         concrete_definitions = _concrete_definitions(path)
         if concrete_definitions:
@@ -517,13 +653,9 @@ def test_context_memory_runtime_wiring_avoids_app_shell_singletons():
 
 
 def test_domain_modules_do_not_depend_on_app_shell_focus_runtime_modules():
-    paths: list[Path] = []
-    for root in PRODUCTION_MODULE_ROOTS:
-        root_path = Path(root)
-        if root_path.exists():
-            paths.extend(sorted(root_path.rglob("*.py")))
-
-    violations = _app_shell_focus_runtime_import_violations(paths)
+    violations = _app_shell_focus_runtime_import_violations(
+        _production_module_python_files()
+    )
 
     assert not violations, (
         "Domain modules still import app_shell focus runtime modules:\n"
@@ -575,6 +707,10 @@ def test_app_shell_repository_submodules_are_final_reexport_shims():
                 f"{target}: concrete definitions remain:\n"
                 + "\n".join(concrete_definitions)
             )
+
+        violations.extend(
+            _required_export_violations(path, contract["required_exports"])
+        )
 
         owning_module = contract["owning_module"]
         if not _imports_module(path, owning_module):
