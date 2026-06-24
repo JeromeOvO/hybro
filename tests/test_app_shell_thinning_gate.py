@@ -533,8 +533,12 @@ def test_domain_modules_do_not_depend_on_app_shell_focus_runtime_modules():
 
 def test_focus_owning_modules_do_not_import_app_shell_runtime():
     violations: list[str] = []
+    contracts = {
+        **FINAL_APP_SHELL_SHIMS,
+        **FINAL_APP_SHELL_REEXPORT_SHIMS,
+    }
 
-    for target, contract in sorted(FINAL_APP_SHELL_SHIMS.items()):
+    for target, contract in sorted(contracts.items()):
         owning_module = contract["owning_module"]
         owning_path = _module_path(owning_module)
         if not owning_path.exists():
