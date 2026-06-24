@@ -726,6 +726,20 @@ def _owner_static_exports_or_bindings(owning_module: str) -> set[str]:
     return _module_exports(owner_path) | _module_bound_names(owner_path)
 
 
+def _owner_static_star_import_exports(owning_module: str) -> set[str]:
+    owner_path = _module_path(owning_module)
+    if not owner_path.exists():
+        return set()
+
+    all_values = _explicit_all_values(owner_path)
+    if all_values:
+        if len(all_values) != 1:
+            return set()
+        return _static_string_literal_sequence(all_values[0]) or set()
+
+    return {name for name in _module_bound_names(owner_path) if not name.startswith("_")}
+
+
 def _owner_star_import_exports(path: Path, owning_module: str) -> set[str]:
     tree = ast.parse(path.read_text(), filename=str(path))
     has_owner_star_import = any(
@@ -736,7 +750,7 @@ def _owner_star_import_exports(path: Path, owning_module: str) -> set[str]:
     )
     if not has_owner_star_import:
         return set()
-    return _owner_static_exports_or_bindings(owning_module)
+    return _owner_static_star_import_exports(owning_module)
 
 
 def _module_export_surface(path: Path, _owning_module: str) -> set[str]:
@@ -766,7 +780,8 @@ def _owner_import_provenance(
         for alias in node.names:
             if alias.name == "*":
                 backed_exports.update(
-                    required_exports & _owner_static_exports_or_bindings(owning_module)
+                    required_exports
+                    & _owner_static_star_import_exports(owning_module)
                 )
             elif alias.name in required_exports and alias.asname in {None, alias.name}:
                 backed_exports.add(alias.name)
@@ -788,7 +803,7 @@ def _rebound_owner_import_exports(
                 if alias.name == "*":
                     imported_exports.update(
                         required_exports
-                        & _owner_static_exports_or_bindings(owning_module)
+                        & _owner_static_star_import_exports(owning_module)
                     )
                 elif alias.name in required_exports and alias.asname in {
                     None,
@@ -1265,6 +1280,51 @@ __all__ = ["RequiredExport"]
     monkeypatch.chdir(tmp_path)
 
     assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
+
+
+def test_owner_star_import_does_not_back_private_name_without_all(
+    tmp_path,
+    monkeypatch,
+):
+    (tmp_path / "owner").mkdir()
+    (tmp_path / "owner" / "module.py").write_text("_PrivateExport = object()\n")
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+from owner.module import *
+
+__all__ = ["_PrivateExport"]
+""",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert _owner_backed_exports(path, "owner.module", {"_PrivateExport"}) == set()
+
+
+def test_owner_star_import_backs_private_name_declared_in_owner_all(
+    tmp_path,
+    monkeypatch,
+):
+    (tmp_path / "owner").mkdir()
+    (tmp_path / "owner" / "module.py").write_text(
+        """
+__all__ = ["_PrivateExport"]
+_PrivateExport = object()
+""",
+    )
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+from owner.module import *
+
+__all__ = ["_PrivateExport"]
+""",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert _owner_backed_exports(path, "owner.module", {"_PrivateExport"}) == {
+        "_PrivateExport"
+    }
 
 
 def test_app_shell_forbidden_imports_are_manifest_blocked_by_exact_prefix():
