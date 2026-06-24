@@ -455,34 +455,85 @@ def _raises_attribute_error(node: ast.AST) -> bool:
     return False
 
 
+def _attribute_chain(node: ast.AST) -> tuple[str, ...] | None:
+    if isinstance(node, ast.Name):
+        return (node.id,)
+    if isinstance(node, ast.Attribute):
+        parent = _attribute_chain(node.value)
+        if parent is None:
+            return None
+        return (*parent, node.attr)
+    return None
+
+
+def _relay_impl_aliases(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    aliases: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.module != "hub_runtime_bridge.compat":
+            continue
+        aliases.update(
+            alias.asname or alias.name
+            for alias in node.names
+            if alias.name == "relay_service"
+        )
+    return aliases
+
+
+def _returns_relay_impl_service(node: ast.AST, relay_impl_aliases: set[str]) -> bool:
+    if not isinstance(node, ast.Return) or node.value is None:
+        return False
+    chain = _attribute_chain(node.value)
+    return chain in {(alias, "relay_service") for alias in relay_impl_aliases}
+
+
+def _relay_getattr_handler_if(
+    function: ast.FunctionDef,
+    attr_name_arg: str,
+    relay_impl_aliases: set[str],
+) -> ast.If | None:
+    for node in function.body:
+        if not isinstance(node, ast.If):
+            continue
+        if not isinstance(node.test, ast.Compare):
+            continue
+        if _compares_name_to_string(node.test, attr_name_arg) != "relay_service":
+            continue
+        if any(_returns_relay_impl_service(child, relay_impl_aliases) for child in node.body):
+            return node
+    return None
+
+
+def _relay_getattr_has_attribute_error_fallback(
+    function: ast.FunctionDef,
+    handler_if: ast.If,
+) -> bool:
+    handler_index = function.body.index(handler_if)
+    fallback_nodes = [*handler_if.orelse, *function.body[handler_index + 1 :]]
+    return any(_raises_attribute_error(node) for node in fallback_nodes)
+
+
 def _relay_getattr_is_valid(path: Path) -> bool:
     if path != Path("app_shell/relay_service.py"):
         return False
     function = _top_level_function(path, "__getattr__")
     if function is None or not function.args.args:
         return False
+    relay_impl_aliases = _relay_impl_aliases(path)
+    if not relay_impl_aliases:
+        return False
 
     attr_name_arg = function.args.args[0].arg
-    handled_exports: set[str] = set()
-    returns_relay_service = False
-    raises_attribute_error = False
-
-    for node in ast.walk(function):
-        if isinstance(node, ast.Compare):
-            handled_export = _compares_name_to_string(node, attr_name_arg)
-            if handled_export is not None:
-                handled_exports.add(handled_export)
-        elif isinstance(node, ast.Return) and isinstance(node.value, ast.Name):
-            if node.value.id == "relay_service":
-                returns_relay_service = True
-        elif _raises_attribute_error(node):
-            raises_attribute_error = True
-
-    return (
-        handled_exports == {"relay_service"}
-        and returns_relay_service
-        and raises_attribute_error
+    handler_if = _relay_getattr_handler_if(
+        function,
+        attr_name_arg,
+        relay_impl_aliases,
     )
+    if handler_if is None:
+        return False
+    return _relay_getattr_has_attribute_error_fallback(function, handler_if)
 
 
 def _dynamic_required_export_is_allowed(path: Path, export: str) -> bool:
@@ -493,16 +544,18 @@ def _owner_import_provenance(
     node: ast.AST,
     owning_module: str,
     required_exports: set[str],
-) -> tuple[set[str], set[str]]:
+) -> tuple[set[str], set[tuple[str, ...]]]:
     backed_exports: set[str] = set()
-    owner_aliases: set[str] = set()
+    owner_refs: set[tuple[str, ...]] = set()
 
     if isinstance(node, ast.Import):
-        owner_aliases.update(
-            alias.asname or alias.name.split(".", 1)[0]
-            for alias in node.names
-            if alias.name == owning_module
-        )
+        for alias in node.names:
+            if alias.name != owning_module:
+                continue
+            if alias.asname:
+                owner_refs.add((alias.asname,))
+            else:
+                owner_refs.add(tuple(owning_module.split(".")))
     elif isinstance(node, ast.ImportFrom) and node.module == owning_module:
         for alias in node.names:
             if alias.name == "*":
@@ -510,25 +563,29 @@ def _owner_import_provenance(
             else:
                 backed_exports.add(alias.asname or alias.name)
 
-    return backed_exports, owner_aliases
+    return backed_exports, owner_refs
 
 
 def _owner_assignment_backed_exports(
     node: ast.AST,
-    owner_aliases: set[str],
+    owner_refs: set[tuple[str, ...]],
 ) -> set[str]:
     if not isinstance(node, ast.Assign):
         return set()
-    if not isinstance(node.value, ast.Attribute):
+    chain = _attribute_chain(node.value)
+    if chain is None or len(chain) < 2:
         return set()
-    if not isinstance(node.value.value, ast.Name):
-        return set()
-    if node.value.value.id not in owner_aliases:
+    imported_member = chain[-1]
+    if chain[:-1] not in owner_refs:
         return set()
 
     backed_exports: set[str] = set()
     for target in node.targets:
-        backed_exports.update(_target_names(target))
+        backed_exports.update(
+            target_name
+            for target_name in _target_names(target)
+            if target_name == imported_member
+        )
     return backed_exports
 
 
@@ -539,19 +596,19 @@ def _owner_backed_exports(
 ) -> set[str]:
     tree = ast.parse(path.read_text(), filename=str(path))
     backed_exports: set[str] = set()
-    owner_aliases: set[str] = set()
+    owner_refs: set[tuple[str, ...]] = set()
 
     for node in tree.body:
-        imported_exports, imported_aliases = _owner_import_provenance(
+        imported_exports, imported_refs = _owner_import_provenance(
             node,
             owning_module,
             required_exports,
         )
         backed_exports.update(imported_exports)
-        owner_aliases.update(imported_aliases)
+        owner_refs.update(imported_refs)
 
     for node in tree.body:
-        backed_exports.update(_owner_assignment_backed_exports(node, owner_aliases))
+        backed_exports.update(_owner_assignment_backed_exports(node, owner_refs))
 
     return backed_exports
 
