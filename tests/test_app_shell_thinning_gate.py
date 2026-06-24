@@ -416,24 +416,164 @@ def _module_exports(path: Path) -> set[str]:
     return _module_bound_names(path)
 
 
-def _dynamic_required_export_is_allowed(path: Path, export: str) -> bool:
+def _string_literal_sequence(node: ast.AST) -> set[str]:
+    if not isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return set()
+    return {item.value for item in node.elts if isinstance(item, ast.Constant)}
+
+
+def _top_level_function(path: Path, name: str) -> ast.FunctionDef | None:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    return None
+
+
+def _compares_name_to_string(node: ast.Compare, name: str) -> str | None:
+    operands = [node.left, *node.comparators]
+    if not any(
+        isinstance(operand, ast.Name) and operand.id == name for operand in operands
+    ):
+        return None
+    constants = [
+        operand.value
+        for operand in operands
+        if isinstance(operand, ast.Constant) and isinstance(operand.value, str)
+    ]
+    return constants[0] if len(constants) == 1 else None
+
+
+def _raises_attribute_error(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Raise) or node.exc is None:
+        return False
+    exc = node.exc
+    if isinstance(exc, ast.Name):
+        return exc.id == "AttributeError"
+    if isinstance(exc, ast.Call):
+        return isinstance(exc.func, ast.Name) and exc.func.id == "AttributeError"
+    return False
+
+
+def _relay_getattr_is_valid(path: Path) -> bool:
+    if path != Path("app_shell/relay_service.py"):
+        return False
+    function = _top_level_function(path, "__getattr__")
+    if function is None or not function.args.args:
+        return False
+
+    attr_name_arg = function.args.args[0].arg
+    handled_exports: set[str] = set()
+    returns_relay_service = False
+    raises_attribute_error = False
+
+    for node in ast.walk(function):
+        if isinstance(node, ast.Compare):
+            handled_export = _compares_name_to_string(node, attr_name_arg)
+            if handled_export is not None:
+                handled_exports.add(handled_export)
+        elif isinstance(node, ast.Return) and isinstance(node.value, ast.Name):
+            if node.value.id == "relay_service":
+                returns_relay_service = True
+        elif _raises_attribute_error(node):
+            raises_attribute_error = True
+
     return (
-        path == Path("app_shell/relay_service.py")
-        and export == "relay_service"
-        and "__getattr__" in _module_bound_names(path)
+        handled_exports == {"relay_service"}
+        and returns_relay_service
+        and raises_attribute_error
     )
+
+
+def _dynamic_required_export_is_allowed(path: Path, export: str) -> bool:
+    return export == "relay_service" and _relay_getattr_is_valid(path)
+
+
+def _owner_import_provenance(
+    node: ast.AST,
+    owning_module: str,
+    required_exports: set[str],
+) -> tuple[set[str], set[str]]:
+    backed_exports: set[str] = set()
+    owner_aliases: set[str] = set()
+
+    if isinstance(node, ast.Import):
+        owner_aliases.update(
+            alias.asname or alias.name.split(".", 1)[0]
+            for alias in node.names
+            if alias.name == owning_module
+        )
+    elif isinstance(node, ast.ImportFrom) and node.module == owning_module:
+        for alias in node.names:
+            if alias.name == "*":
+                backed_exports.update(required_exports)
+            else:
+                backed_exports.add(alias.asname or alias.name)
+
+    return backed_exports, owner_aliases
+
+
+def _owner_assignment_backed_exports(
+    node: ast.AST,
+    owner_aliases: set[str],
+) -> set[str]:
+    if not isinstance(node, ast.Assign):
+        return set()
+    if not isinstance(node.value, ast.Attribute):
+        return set()
+    if not isinstance(node.value.value, ast.Name):
+        return set()
+    if node.value.value.id not in owner_aliases:
+        return set()
+
+    backed_exports: set[str] = set()
+    for target in node.targets:
+        backed_exports.update(_target_names(target))
+    return backed_exports
+
+
+def _owner_backed_exports(
+    path: Path,
+    owning_module: str,
+    required_exports: set[str],
+) -> set[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    backed_exports: set[str] = set()
+    owner_aliases: set[str] = set()
+
+    for node in tree.body:
+        imported_exports, imported_aliases = _owner_import_provenance(
+            node,
+            owning_module,
+            required_exports,
+        )
+        backed_exports.update(imported_exports)
+        owner_aliases.update(imported_aliases)
+
+    for node in tree.body:
+        backed_exports.update(_owner_assignment_backed_exports(node, owner_aliases))
+
+    return backed_exports
 
 
 def _required_export_violations(
     path: Path,
     required_exports: set[str],
+    owning_module: str,
 ) -> list[str]:
     exports = _module_exports(path)
     bound_names = _module_bound_names(path)
+    owner_backed_exports = _owner_backed_exports(path, owning_module, required_exports)
+    effective_bound_names = bound_names | owner_backed_exports
     missing_exports = sorted(required_exports - exports)
     missing_bound_names = sorted(
         export
-        for export in required_exports - bound_names
+        for export in required_exports - effective_bound_names
+        if not _dynamic_required_export_is_allowed(path, export)
+    )
+    missing_owner_backing = sorted(
+        export
+        for export in required_exports - owner_backed_exports
         if not _dynamic_required_export_is_allowed(path, export)
     )
     violations: list[str] = []
@@ -447,13 +587,12 @@ def _required_export_violations(
             f"{path}: required exports are not bound: "
             + ", ".join(missing_bound_names)
         )
+    if missing_owner_backing:
+        violations.append(
+            f"{path}: required exports are not backed by {owning_module}: "
+            + ", ".join(missing_owner_backing)
+        )
     return violations
-
-
-def _string_literal_sequence(node: ast.AST) -> set[str]:
-    if not isinstance(node, (ast.List, ast.Tuple, ast.Set)):
-        return set()
-    return {item.value for item in node.elts if isinstance(item, ast.Constant)}
 
 
 def _module_path(module: str) -> Path:
@@ -473,6 +612,11 @@ def _concrete_definitions(path: Path) -> list[str]:
         f"{path}:{node.lineno}: {node.name}"
         for node in tree.body
         if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+        and not (
+            isinstance(node, ast.FunctionDef)
+            and node.name == "__getattr__"
+            and _relay_getattr_is_valid(path)
+        )
     ]
 
 
@@ -600,7 +744,11 @@ def test_app_shell_focus_files_are_final_import_shims():
             violations.append(f"{target}: {line_count} lines exceeds {max_lines}")
 
         violations.extend(
-            _required_export_violations(path, contract["required_exports"])
+            _required_export_violations(
+                path,
+                contract["required_exports"],
+                contract["owning_module"],
+            )
         )
 
         concrete_definitions = _concrete_definitions(path)
@@ -729,7 +877,11 @@ def test_app_shell_repository_submodules_are_final_reexport_shims():
             )
 
         violations.extend(
-            _required_export_violations(path, contract["required_exports"])
+            _required_export_violations(
+                path,
+                contract["required_exports"],
+                contract["owning_module"],
+            )
         )
 
         owning_module = contract["owning_module"]
