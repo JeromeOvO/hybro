@@ -1021,6 +1021,118 @@ def _imports_module(path: Path, expected_module: str) -> bool:
     return False
 
 
+def _is_owner_import_module(imported_module: str, owning_module: str) -> bool:
+    return imported_module == owning_module or imported_module.startswith(
+        f"{owning_module}."
+    )
+
+
+def _is_module_docstring_node(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    )
+
+
+def _owner_reexport_import_from_violations(
+    path: Path,
+    node: ast.ImportFrom,
+    required_exports: set[str],
+    owning_module: str,
+) -> list[str]:
+    if node.module == "__future__":
+        return []
+    if node.module is None or not _is_owner_import_module(node.module, owning_module):
+        module = node.module or "<relative import>"
+        return [f"{path}:{node.lineno}: imports non-owner module {module}"]
+
+    violations: list[str] = []
+    for alias in node.names:
+        if alias.name == "*":
+            violations.append(f"{path}:{node.lineno}: star import from {node.module}")
+            continue
+        bound_name = alias.asname or alias.name
+        if bound_name not in required_exports:
+            violations.append(
+                f"{path}:{node.lineno}: non-exported owner import {bound_name}"
+            )
+    return violations
+
+
+def _owner_reexport_import_violations(
+    path: Path,
+    required_exports: set[str],
+    owning_module: str,
+) -> list[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    violations: list[str] = []
+
+    for node in tree.body:
+        if _is_module_docstring_node(node):
+            continue
+
+        if isinstance(node, ast.Import):
+            violations.extend(
+                f"{path}:{node.lineno}: imports non-owner module {alias.name}"
+                for alias in node.names
+            )
+            continue
+
+        if isinstance(node, ast.ImportFrom):
+            violations.extend(
+                _owner_reexport_import_from_violations(
+                    path,
+                    node,
+                    required_exports,
+                    owning_module,
+                )
+            )
+            continue
+
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and _targets_all(node):
+            continue
+
+        violations.append(
+            f"{path}:{node.lineno}: non-re-export top-level statement "
+            f"{type(node).__name__}"
+        )
+
+    return violations
+
+
+def _is_app_shell_module(module: str) -> bool:
+    return module == "app_shell" or module.startswith("app_shell.")
+
+
+def _app_shell_imports_for_node(path: Path, node: ast.AST) -> list[str]:
+    if isinstance(node, ast.Import):
+        return [
+            f"{path}:{node.lineno}: {alias.name}"
+            for alias in node.names
+            if _is_app_shell_module(alias.name)
+        ]
+    if not isinstance(node, ast.ImportFrom) or node.module is None:
+        return []
+    if _is_app_shell_module(node.module) and node.module != "app_shell":
+        return [f"{path}:{node.lineno}: {node.module}"]
+    if node.module == "app_shell":
+        return [
+            f"{path}:{node.lineno}: app_shell.{alias.name}"
+            for alias in node.names
+        ]
+    return []
+
+
+def _app_shell_import_violations(paths: list[Path]) -> list[str]:
+    violations: list[str] = []
+    for path in sorted(paths):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            violations.extend(_app_shell_imports_for_node(path, node))
+    return violations
+
+
 def _is_focus_module(module: str) -> bool:
     return any(
         module == focus_module or module.startswith(f"{focus_module}.")
@@ -1100,6 +1212,46 @@ def _import_from_source(source: str) -> ast.ImportFrom:
     node = ast.parse(source).body[0]
     assert isinstance(node, ast.ImportFrom)
     return node
+
+
+def test_reexport_shim_import_gate_rejects_non_owner_modules_and_bindings(tmp_path):
+    path = tmp_path / "message_store.py"
+    path.write_text(
+        """
+from dal.runtime_store.parts.message_store import AppShellMessageStore, ExtraHelper
+from app_shell import repository_store
+import os
+
+__all__ = ["AppShellMessageStore"]
+""",
+    )
+
+    violations = _owner_reexport_import_violations(
+        path,
+        {"AppShellMessageStore"},
+        "dal.runtime_store.parts.message_store",
+    )
+
+    assert f"{path}:2: non-exported owner import ExtraHelper" in violations
+    assert f"{path}:3: imports non-owner module app_shell" in violations
+    assert f"{path}:4: imports non-owner module os" in violations
+
+
+def test_owner_import_gate_rejects_non_focus_app_shell_imports(tmp_path):
+    path = tmp_path / "owner.py"
+    path.write_text(
+        """
+from app_shell import agent_service
+from app_shell.notification_service import notification_service
+import app_shell.task_service
+""",
+    )
+
+    violations = _app_shell_import_violations([path])
+
+    assert f"{path}:2: app_shell.agent_service" in violations
+    assert f"{path}:3: app_shell.notification_service" in violations
+    assert f"{path}:4: app_shell.task_service" in violations
 
 
 def test_explicit_all_rejects_dynamic_mutation(tmp_path):
@@ -1641,13 +1793,13 @@ def test_focus_owning_modules_do_not_import_app_shell_runtime():
         if not owning_path.exists():
             violations.append(f"{target}: owner module does not exist: {owning_module}")
             continue
-        owner_violations = _app_shell_focus_runtime_import_violations([owning_path])
+        owner_violations = _app_shell_import_violations([owning_path])
         violations.extend(
             f"{owning_module}: {violation}" for violation in owner_violations
         )
 
     assert not violations, (
-        "Focus owning modules still import app_shell runtime shims:\n"
+        "Focus owning modules still import app_shell modules:\n"
         + "\n".join(violations)
     )
 
@@ -1711,6 +1863,13 @@ def test_app_shell_repository_submodules_are_final_reexport_shims():
         owning_module = contract["owning_module"]
         if not _imports_module(path, owning_module):
             violations.append(f"{target}: does not import owning module {owning_module}")
+        violations.extend(
+            _owner_reexport_import_violations(
+                path,
+                contract["required_exports"],
+                owning_module,
+            )
+        )
 
     assert not violations, (
         "App-shell repository submodules are not final re-export shims:\n"
