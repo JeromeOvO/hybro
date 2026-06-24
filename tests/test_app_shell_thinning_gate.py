@@ -400,16 +400,46 @@ def _module_bound_names(path: Path) -> set[str]:
     return names
 
 
-def _explicit_all_exports(path: Path) -> set[str] | None:
+def _assigns_all(node: ast.AST) -> bool:
+    if isinstance(node, ast.Assign):
+        return any("__all__" in _target_names(target) for target in node.targets)
+    if isinstance(node, ast.AnnAssign):
+        return "__all__" in _target_names(node.target)
+    if isinstance(node, ast.AugAssign):
+        return "__all__" in _target_names(node.target)
+    return False
+
+
+def _explicit_all_values(path: Path) -> list[ast.AST]:
     tree = ast.parse(path.read_text(), filename=str(path))
+    values: list[ast.AST] = []
 
     for node in tree.body:
-        if not isinstance(node, ast.Assign):
+        if not _assigns_all(node):
             continue
-        for target in node.targets:
-            if isinstance(target, ast.Name) and target.id == "__all__":
-                return _string_literal_sequence(node.value)
-    return None
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            values.append(node.value)
+        else:
+            values.append(node)
+    return values
+
+
+def _explicit_all_exports(path: Path) -> set[str] | None:
+    all_values = _explicit_all_values(path)
+    if not all_values:
+        return None
+    if len(all_values) != 1:
+        return set()
+    return _static_string_literal_sequence(all_values[0]) or set()
+
+
+def _all_static_literal_violation(path: Path) -> str | None:
+    all_values = _explicit_all_values(path)
+    if not all_values:
+        return None
+    if len(all_values) == 1 and _static_string_literal_sequence(all_values[0]) is not None:
+        return None
+    return f"{path}: __all__ must be a static string literal sequence"
 
 
 def _module_exports(path: Path) -> set[str]:
@@ -420,10 +450,15 @@ def _module_exports(path: Path) -> set[str]:
     return _module_bound_names(path)
 
 
-def _string_literal_sequence(node: ast.AST) -> set[str]:
+def _static_string_literal_sequence(node: ast.AST) -> set[str] | None:
     if not isinstance(node, (ast.List, ast.Tuple, ast.Set)):
-        return set()
-    return {item.value for item in node.elts if isinstance(item, ast.Constant)}
+        return None
+    exports: set[str] = set()
+    for item in node.elts:
+        if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
+            return None
+        exports.add(item.value)
+    return exports
 
 
 def _top_level_function(path: Path, name: str) -> ast.FunctionDef | None:
@@ -516,7 +551,10 @@ def _relay_getattr_handler_if(
             continue
         if _compares_name_to_string(node.test, attr_name_arg) != "relay_service":
             continue
-        if any(_returns_relay_impl_service(child, relay_impl_aliases) for child in node.body):
+        if len(node.body) == 1 and _returns_relay_impl_service(
+            node.body[0],
+            relay_impl_aliases,
+        ):
             return node
     return None
 
@@ -526,7 +564,14 @@ def _relay_getattr_has_attribute_error_fallback(
     handler_if: ast.If,
 ) -> bool:
     handler_index = function.body.index(handler_if)
-    fallback_nodes = handler_if.orelse or function.body[handler_index + 1 :]
+    if handler_index != 0:
+        return False
+    if handler_if.orelse:
+        if len(function.body) != 1:
+            return False
+        fallback_nodes = handler_if.orelse
+    else:
+        fallback_nodes = function.body[handler_index + 1 :]
     if len(fallback_nodes) != 1:
         return False
     return _raises_attribute_error(fallback_nodes[0])
@@ -617,8 +662,8 @@ def _owner_import_provenance(
                 backed_exports.update(
                     required_exports & _owner_static_exports_or_bindings(owning_module)
                 )
-            else:
-                backed_exports.add(alias.asname or alias.name)
+            elif alias.name in required_exports and alias.asname in {None, alias.name}:
+                backed_exports.add(alias.name)
 
     return backed_exports, owner_refs
 
@@ -692,7 +737,10 @@ def _required_export_violations(
         if not _dynamic_required_export_is_allowed(path, export)
     )
     violations: list[str] = []
+    all_violation = _all_static_literal_violation(path)
 
+    if all_violation is not None:
+        violations.append(all_violation)
     if missing_exports:
         violations.append(
             f"{path}: missing required exports: {', '.join(missing_exports)}"
@@ -811,6 +859,12 @@ def _function_from_source(source: str) -> ast.FunctionDef:
     return function
 
 
+def _import_from_source(source: str) -> ast.ImportFrom:
+    node = ast.parse(source).body[0]
+    assert isinstance(node, ast.ImportFrom)
+    return node
+
+
 def test_relay_getattr_export_comparison_requires_equality_operator():
     assert (
         _compares_name_to_string(
@@ -870,6 +924,36 @@ def __getattr__(name):
         invalid_function,
         invalid_handler,
     )
+
+
+def test_relay_getattr_branch_must_directly_return_owner_service():
+    invalid_function = _function_from_source(
+        """
+def __getattr__(name):
+    if name == "relay_service":
+        return None
+        return _impl.relay_service
+    raise AttributeError(name)
+"""
+    )
+
+    assert _relay_getattr_handler_if(invalid_function, "name", {"_impl"}) is None
+
+
+def test_owner_import_provenance_rejects_renamed_member_spoofing():
+    spoofed_exports, _owner_refs = _owner_import_provenance(
+        _import_from_source("from owner.module import OtherName as RequiredExport"),
+        "owner.module",
+        {"RequiredExport"},
+    )
+    assert spoofed_exports == set()
+
+    backed_exports, _owner_refs = _owner_import_provenance(
+        _import_from_source("from owner.module import RequiredExport as RequiredExport"),
+        "owner.module",
+        {"RequiredExport"},
+    )
+    assert backed_exports == {"RequiredExport"}
 
 
 def test_app_shell_forbidden_imports_are_manifest_blocked_by_exact_prefix():

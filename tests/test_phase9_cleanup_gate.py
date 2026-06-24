@@ -852,6 +852,20 @@ def _manifest_string_values(value):
             yield from _manifest_string_values(item)
 
 
+def _package_removal_blocker_violations(manifest: dict) -> list[str]:
+    violations: list[str] = []
+    for index, entry in enumerate(manifest.get("package_removal_checklist") or []):
+        if not isinstance(entry, dict):
+            continue
+        package = entry.get("package") or f"entry {index}"
+        for key, value in sorted(entry.items()):
+            if key.endswith("_blockers") and value:
+                violations.append(
+                    f"package_removal_checklist[{package!r}].{key}: {value}"
+                )
+    return violations
+
+
 def test_phase9_cleanup_manifest_has_no_transitional_exceptions():
     manifest = _manifest()
     forbidden_tokens = ("temporary", "transitional", "deferred")
@@ -864,6 +878,11 @@ def test_phase9_cleanup_manifest_has_no_transitional_exceptions():
 
     assert manifest.get("blocked_cleanup", []) == []
     assert manifest.get("app_shell_runtime_blockers", []) == []
+    nested_blockers = _package_removal_blocker_violations(manifest)
+    assert not nested_blockers, (
+        "Phase 9 cleanup manifest still records package-removal blockers:\n"
+        + "\n".join(nested_blockers)
+    )
     assert not violations, (
         "Phase 9 cleanup manifest still records transitional exceptions:\n"
         + "\n".join(violations)
