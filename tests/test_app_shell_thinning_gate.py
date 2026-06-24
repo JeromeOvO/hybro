@@ -400,16 +400,20 @@ def _module_bound_names(path: Path) -> set[str]:
     return names
 
 
-def _module_exports(path: Path) -> set[str]:
+def _explicit_all_exports(path: Path) -> set[str] | None:
     tree = ast.parse(path.read_text(), filename=str(path))
-    all_exports: set[str] | None = None
 
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
         for target in node.targets:
             if isinstance(target, ast.Name) and target.id == "__all__":
-                all_exports = _string_literal_sequence(node.value)
+                return _string_literal_sequence(node.value)
+    return None
+
+
+def _module_exports(path: Path) -> set[str]:
+    all_exports = _explicit_all_exports(path)
 
     if all_exports is not None:
         return all_exports
@@ -522,8 +526,10 @@ def _relay_getattr_has_attribute_error_fallback(
     handler_if: ast.If,
 ) -> bool:
     handler_index = function.body.index(handler_if)
-    fallback_nodes = [*handler_if.orelse, *function.body[handler_index + 1 :]]
-    return any(_raises_attribute_error(node) for node in fallback_nodes)
+    fallback_nodes = handler_if.orelse or function.body[handler_index + 1 :]
+    if len(fallback_nodes) != 1:
+        return False
+    return _raises_attribute_error(fallback_nodes[0])
 
 
 def _relay_getattr_is_valid(path: Path) -> bool:
@@ -567,6 +573,26 @@ def _owner_static_exports_or_bindings(owning_module: str) -> set[str]:
     if not owner_path.exists():
         return set()
     return _module_exports(owner_path) | _module_bound_names(owner_path)
+
+
+def _owner_star_import_exports(path: Path, owning_module: str) -> set[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    has_owner_star_import = any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == owning_module
+        and any(alias.name == "*" for alias in node.names)
+        for node in tree.body
+    )
+    if not has_owner_star_import:
+        return set()
+    return _owner_static_exports_or_bindings(owning_module)
+
+
+def _module_export_surface(path: Path, owning_module: str) -> set[str]:
+    all_exports = _explicit_all_exports(path)
+    if all_exports is not None:
+        return all_exports
+    return _module_bound_names(path) | _owner_star_import_exports(path, owning_module)
 
 
 def _owner_import_provenance(
@@ -649,11 +675,12 @@ def _required_export_violations(
     required_exports: set[str],
     owning_module: str,
 ) -> list[str]:
-    exports = _module_exports(path)
+    exports = _module_export_surface(path, owning_module)
     bound_names = _module_bound_names(path)
     owner_backed_exports = _owner_backed_exports(path, owning_module, required_exports)
     effective_bound_names = bound_names | owner_backed_exports
     missing_exports = sorted(required_exports - exports)
+    unexpected_exports = sorted(exports - required_exports)
     missing_bound_names = sorted(
         export
         for export in required_exports - effective_bound_names
@@ -670,6 +697,8 @@ def _required_export_violations(
         violations.append(
             f"{path}: missing required exports: {', '.join(missing_exports)}"
         )
+    if unexpected_exports:
+        violations.append(f"{path}: unexpected exports: {', '.join(unexpected_exports)}")
     if missing_bound_names:
         violations.append(
             f"{path}: required exports are not bound: "
@@ -776,6 +805,12 @@ def _comparison_expression(source: str) -> ast.Compare:
     return expression
 
 
+def _function_from_source(source: str) -> ast.FunctionDef:
+    function = ast.parse(source).body[0]
+    assert isinstance(function, ast.FunctionDef)
+    return function
+
+
 def test_relay_getattr_export_comparison_requires_equality_operator():
     assert (
         _compares_name_to_string(
@@ -804,6 +839,36 @@ def test_relay_getattr_export_comparison_requires_equality_operator():
             "name",
         )
         is None
+    )
+
+
+def test_relay_getattr_fallback_rejects_return_before_attribute_error():
+    valid_function = _function_from_source(
+        """
+def __getattr__(name):
+    if name == "relay_service":
+        return _impl.relay_service
+    raise AttributeError(name)
+"""
+    )
+    valid_handler = _relay_getattr_handler_if(valid_function, "name", {"_impl"})
+    assert valid_handler is not None
+    assert _relay_getattr_has_attribute_error_fallback(valid_function, valid_handler)
+
+    invalid_function = _function_from_source(
+        """
+def __getattr__(name):
+    if name == "relay_service":
+        return _impl.relay_service
+    return None
+    raise AttributeError(name)
+"""
+    )
+    invalid_handler = _relay_getattr_handler_if(invalid_function, "name", {"_impl"})
+    assert invalid_handler is not None
+    assert not _relay_getattr_has_attribute_error_fallback(
+        invalid_function,
+        invalid_handler,
     )
 
 
