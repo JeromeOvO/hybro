@@ -207,6 +207,7 @@ packages = [
     "hub_runtime_bridge.service",
     "hub_runtime_bridge.transport",
     "hub_runtime_bridge.adapters",
+    "hub_runtime_bridge.compat",
     "platform_module",
     "platform_module.adapters",
     "api_gateway",

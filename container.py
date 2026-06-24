@@ -1325,15 +1325,15 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             check_and_sync_liveness,
         )
         from app_shell.execution_runtime import get_bound_room_message_center
-        from app_shell.relay_service import (
-            RelayHubLivenessReader,
-            init_relay_service,
-        )
         from app_shell.relay_store import AppShellRelayHubStore
         from app_shell.room_lock import RedisRoomDistributedLock
         from execution.facade import hub_agent_response_internal_to_agent_event
         from hub_runtime_bridge.adapters.legacy_failure import (
             RelayOfflineFailureAdapter,
+        )
+        from hub_runtime_bridge.compat.relay_service import (
+            RelayHubLivenessReader,
+            init_relay_service,
         )
         from hub_runtime_bridge.config import config_from_settings
         from hub_runtime_bridge.repository.mongo import HubMongoRepository
@@ -1464,7 +1464,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         yield
     finally:
         # Stop the relay service heartbeat checker
-        from app_shell.relay_service import relay_service as _relay_svc_shutdown
+        from hub_runtime_bridge.compat.relay_service import (
+            relay_service as _relay_svc_shutdown,
+        )
 
         if _relay_svc_shutdown:
             await _relay_svc_shutdown.stop()

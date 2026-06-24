@@ -16,11 +16,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app_shell.relay_service import (
-    RelayService,
-    _LegacyPublishSink,
-    init_relay_service,
-)
 from common.dto import HubDispatchCommand
 from common.dto.agent import SyncedHubAgent
 from execution.dispatch.agent_event import AgentEvent
@@ -28,6 +23,11 @@ from execution.dispatch.response_handler import AgentResponseHandler
 from execution.dispatch.transports.relay import RelayTransport
 from hub_runtime_bridge.adapters.legacy_publish import (
     LegacyHubPublishAuthorizationReader,
+)
+from hub_runtime_bridge.compat.relay_service import (
+    RelayService,
+    _LegacyPublishSink,
+    init_relay_service,
 )
 from hub_runtime_bridge.config import HubRuntimeBridgeConfig
 from models.api_key import APIKey

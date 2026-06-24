@@ -59,6 +59,7 @@ def test_hub_runtime_bridge_package_exists_and_is_registered() -> None:
         "hub_runtime_bridge.service",
         "hub_runtime_bridge.transport",
         "hub_runtime_bridge.adapters",
+        "hub_runtime_bridge.compat",
     ]:
         assert f'"{package}"' in pyproject
 
@@ -84,6 +85,7 @@ def test_hub_runtime_bridge_import_boundaries() -> None:
         "hub_runtime_bridge.adapters.api_key",
         "hub_runtime_bridge.adapters.legacy_failure",
         "hub_runtime_bridge.adapters.legacy_lifecycle",
+        "hub_runtime_bridge.compat.relay_service",
     }
     a2a_agent_card_allowlist = {"hub_runtime_bridge.adapters.a2a_card"}
     a2a_task_status_allowlist = {"hub_runtime_bridge.adapters.legacy_failure"}
@@ -153,7 +155,35 @@ def test_legacy_relay_is_shim_and_stream_runtime_moved_to_app_shell() -> None:
     from app_shell.redis_runtime import AppShellRelayStreamService
     from hub_runtime_bridge.transport.relay_streams import RelayStreamService
 
-    relay = ROOT / "app_shell/relay_service.py"
+    shim = ROOT / "app_shell/relay_service.py"
+    shim_imports = _imports(shim)
+    shim_text = shim.read_text()
+    shim_tree = ast.parse(shim_text, filename=str(shim))
+
+    assert len(shim_text.splitlines()) <= 80
+    assert "hub_runtime_bridge.compat" in shim_imports
+    assert "hub_runtime_bridge.compat.relay_service" in shim_imports
+    assert "relay_service" in shim_text
+    assert "__getattr__" in shim_text
+    assert "_LegacyPublishSink" not in shim_text
+    assert not any(name.startswith("modules") for name in shim_imports)
+
+    getattr_defs = [
+        node for node in shim_tree.body if isinstance(node, ast.FunctionDef)
+    ]
+    assert [node.name for node in getattr_defs] == ["__getattr__"]
+    export_assignments = [
+        node
+        for node in shim_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__all__"
+            for target in node.targets
+        )
+    ]
+    assert len(export_assignments) == 1
+
+    relay = ROOT / "hub_runtime_bridge/compat/relay_service.py"
     relay_imports = _imports(relay)
     relay_calls = _calls(relay)
     relay_text = relay.read_text()
@@ -171,7 +201,7 @@ def test_legacy_relay_is_shim_and_stream_runtime_moved_to_app_shell() -> None:
 
 
 def test_legacy_relay_does_not_import_delivery_runtime_concrete() -> None:
-    relay = ROOT / "app_shell/relay_service.py"
+    relay = ROOT / "hub_runtime_bridge/compat/relay_service.py"
     relay_imports = _imports(relay)
     relay_text = relay.read_text()
 
@@ -181,7 +211,7 @@ def test_legacy_relay_does_not_import_delivery_runtime_concrete() -> None:
 
 
 def test_legacy_relay_does_not_import_redis_runtime_concretes() -> None:
-    relay = ROOT / "app_shell/relay_service.py"
+    relay = ROOT / "hub_runtime_bridge/compat/relay_service.py"
     relay_imports = _imports(relay)
     relay_text = relay.read_text()
 
@@ -191,7 +221,7 @@ def test_legacy_relay_does_not_import_redis_runtime_concretes() -> None:
 
 
 def test_legacy_relay_has_single_transport_state() -> None:
-    relay = ROOT / "app_shell/relay_service.py"
+    relay = ROOT / "hub_runtime_bridge/compat/relay_service.py"
     tree = ast.parse(relay.read_text(), filename=str(relay))
 
     private_transport_refs = [
