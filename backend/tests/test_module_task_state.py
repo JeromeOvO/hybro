@@ -91,7 +91,10 @@ class TestTransitionTask:
         )
         notif_svc = MagicMock()
         notif_svc.send_task_update = AsyncMock()
-        return TaskStateManager(room_svc, notif_svc)
+        return TaskStateManager(
+            room_runtime=room_svc,
+            notification_service=notif_svc,
+        )
 
     @pytest.mark.asyncio
     async def test_transitions_non_terminal_state(self, tsm):
@@ -167,7 +170,10 @@ class TestCancelRemainingQueue:
             return_value=MagicMock(success=True)
         )
         notif_svc = MagicMock()
-        return TaskStateManager(room_svc, notif_svc)
+        return TaskStateManager(
+            room_runtime=room_svc,
+            notification_service=notif_svc,
+        )
 
     @pytest.mark.asyncio
     async def test_cancels_current_and_queued(self, tsm):

@@ -858,9 +858,8 @@ async def test_transport_stream_message_unwraps_jsonrpc_sse_results(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_transport_stream_message_preserves_jsonrpc_sse_errors(monkeypatch):
-    from platform_module.gateway import PlatformGateway
-
     from a2a_adapter import transport as transport_module
+    from platform_module.gateway import PlatformGateway
 
     @asynccontextmanager
     async def fake_aconnect_sse(client, method, url, **kwargs):

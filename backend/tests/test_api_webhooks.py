@@ -16,7 +16,6 @@ import pytest
 from a2a.types import (
     Artifact,
     Task,
-    TaskArtifactUpdateEvent,
     TaskState,
     TaskStatus,
     TextPart,
@@ -90,7 +89,7 @@ class TestParseStreamResponse:
         assert len(result.artifacts) == 1
 
     def test_parses_artifact_update_variant(self):
-        """Should parse artifactUpdate as TaskArtifactUpdateEvent."""
+        """Should parse artifactUpdate as working Task with artifact."""
         payload = {
             "artifactUpdate": {
                 "taskId": "task-004",
@@ -100,16 +99,11 @@ class TestParseStreamResponse:
                     "name": "streamed",
                     "parts": [{"text": "chunk"}],
                 },
-                "append": True,
-                "lastChunk": False,
             }
         }
         result = parse_stream_response(payload, "msg-004")
-        assert isinstance(result, TaskArtifactUpdateEvent)
-        assert result.task_id == "task-004"
-        assert result.artifact.artifact_id == "art-004"
-        assert result.append is True
-        assert result.last_chunk is False
+        assert result.status.state == TaskState.working
+        assert len(result.artifacts) == 1
 
     def test_parses_raw_task_fallback(self):
         """Should parse raw Task (backwards compatibility)."""

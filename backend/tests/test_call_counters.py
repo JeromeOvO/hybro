@@ -25,7 +25,7 @@ def _make_relay_transport(
     relay_service=None,
     task_tracker=None,
     call_counter=None,
-    sse_manager=None,
+    delivery=None,
     ownership_store=None,
     ownership_lease_maintainer=None,
 ):
@@ -37,15 +37,15 @@ def _make_relay_transport(
     if task_tracker is None:
         task_tracker = MagicMock()
         task_tracker.enable_task_tracking_on_message = AsyncMock()
-    if sse_manager is None:
-        sse_manager = MagicMock()
-        sse_manager.send_error = AsyncMock()
+    if delivery is None:
+        delivery = MagicMock()
+        delivery.send_error = AsyncMock()
     return RelayTransport(
         response_handler=handler,
         relay_service=relay_service,
         task_tracker=task_tracker,
         call_counter=call_counter,
-        sse_manager=sse_manager,
+        delivery=delivery,
         ownership_store=ownership_store,
         ownership_lease_maintainer=ownership_lease_maintainer,
         worker_id="worker-1",

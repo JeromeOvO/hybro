@@ -32,12 +32,18 @@ from models.room import CoordinatorAgentId, RoomAgentMessage
 if TYPE_CHECKING:
     from execution.dispatch.response_handler import AgentResponseHandler
     from execution.ports import (
-        A2AServicePort,
         DebateServicePort,
+        ExecutionDeliveryPort,
+        HITLCoordinator,
         RateLimitPort,
+        RoomContinuationStore,
         RoomMemoryPort,
+        RoomMemoryReader,
+        RoomMessageReader,
+        RoomMessageWriter,
+        RoomReader,
         RoomRuntimePort,
-        SSEDeliveryPort,
+        RoomTaskStateStore,
     )
 
 logger = get_logger(__name__)
@@ -91,11 +97,16 @@ class QueueExecutor:
         self,
         *,
         tsm: TaskStateManager,
-        sse_manager: SSEDeliveryPort,
-        a2a_service: A2AServicePort,
-        room_services: RoomRuntimePort,
-        room_memory_service: RoomMemoryPort,
-        store,
+        delivery: ExecutionDeliveryPort,
+        room_runtime: RoomRuntimePort,
+        room_memory: RoomMemoryPort,
+        message_reader: RoomMessageReader,
+        message_writer: RoomMessageWriter,
+        task_state_store: RoomTaskStateStore,
+        continuation_store: RoomContinuationStore,
+        agent_lookup: RoomReader,
+        room_reader: RoomReader,
+        memory_reader: RoomMemoryReader,
         debate_service: DebateServicePort,
         rate_limit_service: RateLimitPort,
         agent_dispatcher: AgentDispatcher,
@@ -103,14 +114,19 @@ class QueueExecutor:
         response_handler: AgentResponseHandler,
         slot_lifecycle=None,
         turn_event_appender=None,
-        hitl_coordinator=None,
+        hitl_coordinator: HITLCoordinator | None = None,
     ) -> None:
         self.tsm = tsm
-        self.sse_manager = sse_manager
-        self.a2a_service = a2a_service
-        self.room_runtime = room_services
-        self.room_memory_service = room_memory_service
-        self._store = store
+        self.delivery = delivery
+        self.room_runtime = room_runtime
+        self.room_memory = room_memory
+        self.message_reader = message_reader
+        self.message_writer = message_writer
+        self.task_state_store = task_state_store
+        self.continuation_store = continuation_store
+        self.agent_lookup = agent_lookup
+        self.room_reader = room_reader
+        self.memory_reader = memory_reader
         self.debate_service = debate_service
         self.rate_limit_service = rate_limit_service
         self.agent_dispatcher = agent_dispatcher
@@ -200,9 +216,9 @@ class QueueExecutor:
                 canceled_ids = [msg.message_id for msg in message_queue]
                 message_queue.clear()
                 for mid in canceled_ids:
-                    await self._store.cancel_descendants(mid)
+                    await self.message_writer.cancel_descendants(mid)
             if last_popped:
-                await self._store.cancel_descendants(last_popped[0])
+                await self.message_writer.cancel_descendants(last_popped[0])
 
     # ------------------------------------------------------------------
     # Main queue loop
@@ -237,13 +253,13 @@ class QueueExecutor:
         )
 
         sys_message_id = f"sys-{user_message_id}"
-        client_req_id = await self._store.resolve_client_request_id_for_message_id(
+        client_req_id = await self.task_state_store.resolve_client_request_id_for_message_id(
             user_message_id
         )
 
         try:
             # Phase 1/3: Emit system:hybro task on start if not already emitted
-            existing_sys_msg = await self._store.get_room_agent_message_by_message_id(
+            existing_sys_msg = await self.message_reader.get_room_agent_message_by_message_id(
                 sys_message_id
             )
             if not existing_sys_msg:
@@ -260,9 +276,9 @@ class QueueExecutor:
                     client_request_id=client_req_id,
                 )
                 sys_msg.message_id = sys_message_id
-                await self._store.add_room_agent_message(sys_msg)
+                await self.message_writer.add_room_agent_message(sys_msg)
 
-                await self.sse_manager.send_task_submitted(
+                await self.delivery.send_task_submitted(
                     room_id=room_id,
                     message_id=sys_message_id,
                     task_id=sys_message_id,
@@ -465,7 +481,7 @@ class QueueExecutor:
                     )
 
                 if result.response_text:
-                    await self.room_memory_service.add_agent_response_to_memory(
+                    await self.room_memory.add_agent_response_to_memory(
                         room_id=room_id,
                         agent_id=current_message.agent_id,
                         agent_name=agent.agent_card.name if agent else "Agent",
@@ -492,13 +508,13 @@ class QueueExecutor:
                     if queue_result == QueueResult.COMPLETED
                     else queue_result.value
                 )
-                await self.sse_manager.send_task_update(
+                await self.delivery.send_task_update(
                     room_id=room_id,
                     message_id=sys_message_id,
                     status=task_status,
                 )
 
-                db_msg = await self._store.get_room_agent_message_by_message_id(
+                db_msg = await self.message_reader.get_room_agent_message_by_message_id(
                     sys_message_id
                 )
                 if (
@@ -511,7 +527,7 @@ class QueueExecutor:
                     db_msg.message_content.message_task.status.state = TaskState(
                         task_status
                     )
-                    await self._store.update_room_agent_message_with_new_message_content_by_message_id(
+                    await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
                         db_msg.message_id, db_msg.message_content
                     )
             except Exception:
@@ -540,7 +556,7 @@ class QueueExecutor:
                 lifecycle_message_id=user_message_id,
             )
             if clear_cancel:
-                self.sse_manager.clear_cancellation(user_message_id)
+                self.delivery.clear_cancellation(user_message_id)
 
         if queue_result == QueueResult.COMPLETED:
             logger.info("QueueExecutor: Finished processing message queue")
@@ -622,7 +638,7 @@ class QueueExecutor:
                 return None
             return agent
 
-        agent = await self._store.get_agent_by_agent_id(current_message.agent_id)
+        agent = await self.agent_lookup.get_agent_by_agent_id(current_message.agent_id)
         if agent is None:
             logger.error(
                 "QueueExecutor: Assigned agent %s not found for message %s",
@@ -750,7 +766,7 @@ class QueueExecutor:
                 request_user_id,
                 rate_limit_result.reason,
             )
-            await self.sse_manager.send_rate_limit_error(
+            await self.delivery.send_rate_limit_error(
                 room_id=room_id,
                 message_id=user_message_id,
                 agent_id=agent.agent_id,
@@ -824,7 +840,7 @@ class QueueExecutor:
             "current_agent_name": current_agent.agent_card.name,
         }
 
-        success = await self._store.save_continuation_on_message(
+        success = await self.continuation_store.save_continuation_on_message(
             message_id, continuation_data
         )
 
@@ -848,7 +864,7 @@ class QueueExecutor:
         Returns a ``ResumeResult`` indicating whether the caller should trigger
         post-completion logic (coordinator + COMPLETED SSE status).
         """
-        continuation = await self._store.get_and_clear_continuation_on_message(
+        continuation = await self.continuation_store.get_and_clear_continuation_on_message(
             message_id
         )
 
@@ -881,7 +897,7 @@ class QueueExecutor:
             return ResumeResult(success=False)
 
         quoted_text_resume: str | None = None
-        um_resume = await self._store.get_room_user_message_by_message_id(
+        um_resume = await self.message_reader.get_room_user_message_by_message_id(
             user_message_id
         )
         if um_resume:
@@ -891,7 +907,7 @@ class QueueExecutor:
             )
 
             try:
-                tc = await load_turn_context(self._store, um_resume)
+                tc = await load_turn_context(self.message_reader, um_resume)
                 quoted_text_resume = tc.quoted_text
             except TurnQuoteMissingError:
                 logger.error(
@@ -905,7 +921,7 @@ class QueueExecutor:
         if task_result_text:
             current_agent_id = continuation.get("current_agent_id")
             current_agent_name = continuation.get("current_agent_name", "Agent")
-            await self.room_memory_service.add_agent_response_to_memory(
+            await self.room_memory.add_agent_response_to_memory(
                 room_id=room_id,
                 agent_id=current_agent_id,
                 agent_name=current_agent_name,
@@ -915,9 +931,9 @@ class QueueExecutor:
             )
 
         if len(remaining_queue) > 0:
-            token = self.sse_manager.get_token(user_message_id)
+            token = self.delivery.get_token(user_message_id)
             if token is None:
-                token = self.sse_manager.create_token(user_message_id)
+                token = self.delivery.create_token(user_message_id)
 
             queue_processing_result = await self.process_queue(
                 remaining_queue,
@@ -975,7 +991,7 @@ class QueueExecutor:
             current_message.step_number,
             current_message.total_steps,
         )
-        next_messages = await self._store.get_room_agent_messages_by_related_message_id(
+        next_messages = await self.message_reader.get_room_agent_messages_by_related_message_id(
             current_message.message_id
         )
         logger.info(
@@ -985,7 +1001,7 @@ class QueueExecutor:
         )
 
         is_debate_mode = False
-        room = await self._store.get_room_by_room_id(room_id)
+        room = await self.room_reader.get_room_by_room_id(room_id)
         if room and room.extend_info and isinstance(room.extend_info, dict):
             is_debate_mode = bool(room.extend_info.get("debateMode", False))
 

@@ -528,7 +528,7 @@ def test_room_services_migrated_crud_methods_do_not_keep_legacy_store_branches()
         for node in tree.body
         if isinstance(node, ast.ClassDef) and node.name == "RoomServices"
         for item in node.body
-        if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef)
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     violations: list[str] = []
     for method_name, forbidden_attrs in forbidden_by_method.items():
@@ -623,7 +623,7 @@ def test_room_services_migrated_message_methods_do_not_call_legacy_store():
         for node in tree.body
         if isinstance(node, ast.ClassDef) and node.name == "RoomServices"
         for item in node.body
-        if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef)
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     violations: list[str] = []
     for method_name, forbidden_attrs in forbidden_by_method.items():

@@ -12,8 +12,10 @@ from typing import Any
 
 @dataclass(frozen=True)
 class APIGatewayDeps:
+    file_storage: Any
     relay_service: Any
     execution_deps: Any
+    platform_facade: Any
 
 
 _deps: APIGatewayDeps | None = None
@@ -24,6 +26,7 @@ def missing_gateway_route_bindings() -> list[str]:
         a2a_task_routes,
         agent_group_routes,
         agent_routes,
+
         hitl_routes,
         hub_routes,
         inspection_routes,
@@ -49,6 +52,7 @@ def missing_gateway_route_bindings() -> list[str]:
                 "agent_liveness_checker",
             ),
         ),
+
         "api_gateway.routes.hitl_routes": (
             hitl_routes,
             ("hitl_manager", "room_ownership_reader"),
@@ -96,6 +100,8 @@ def missing_required_deps(deps: APIGatewayDeps | None = None) -> list[str]:
 
     missing = []
     for field_name in APIGatewayDeps.__dataclass_fields__:
+        if field_name in {"file_storage", "platform_facade"}:
+            continue
         if getattr(deps, field_name) is None:
             missing.append(field_name)
     if include_route_bindings:

@@ -1,18 +1,21 @@
 """AgentResponseHandler — single source of truth for processing agent results.
 
 Terminal events delegate to ``notify_task_update`` for SSE emission.
-Streaming events (artifact_update) use ``SSEManager`` directly.
+Streaming events (artifact_update) use ``delivery port`` directly.
 """
 
 from __future__ import annotations
 
 import inspect
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from a2a_adapter.task_status import coerce_task_state
 from common.a2a_constants import is_interactive_state
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
+
+if TYPE_CHECKING:
+    from execution.ports import ExecutionDeliveryPort
 
 
 class ResponseMessageWriter(Protocol):
@@ -84,7 +87,7 @@ class AgentResponseHandler:
     """Single source of truth for processing agent results.
 
     Terminal events delegate to notify_task_update for SSE emission.
-    Streaming events (artifact_update) use sse_manager directly.
+    Streaming events (artifact_update) use delivery directly.
     """
 
     def __init__(
@@ -95,7 +98,7 @@ class AgentResponseHandler:
         client_request_resolver: ResponseClientRequestResolver,
         room_reader: ResponseRoomReader,
         hitl_reader: ResponseHITLReader,
-        sse_manager: object,
+        delivery: ExecutionDeliveryPort,
         room_message_center: object,
         slot_lifecycle=None,
         hitl_coordinator=None,
@@ -108,7 +111,7 @@ class AgentResponseHandler:
         self._client_request_resolver = client_request_resolver
         self._room_reader = room_reader
         self._hitl_reader = hitl_reader
-        self._sse = sse_manager
+        self._delivery = delivery
         self._rmc = room_message_center
         self._slot_lifecycle = slot_lifecycle
         self.hitl_coordinator = hitl_coordinator
@@ -263,7 +266,7 @@ class AgentResponseHandler:
                 e.append,
                 e.last_chunk,
             )
-            await self._sse.send_artifact_update(
+            await self._delivery.send_artifact_update(
                 room_id=e.room_id,
                 message_id=e.message_id,
                 agent_id=e.agent_id,
@@ -277,7 +280,7 @@ class AgentResponseHandler:
                 "artifact_id": f"{e.message_id}-stream",
                 "parts": [{"kind": "text", "text": e.text}],
             }
-            await self._sse.send_artifact_update(
+            await self._delivery.send_artifact_update(
                 room_id=e.room_id,
                 message_id=e.message_id,
                 agent_id=e.agent_id,
@@ -496,7 +499,7 @@ class AgentResponseHandler:
         kw: dict = {}
         if client_request_id:
             kw["client_request_id"] = client_request_id
-        await self._sse.send_task_submitted(
+        await self._delivery.send_task_submitted(
             room_id=e.room_id,
             message_id=e.message_id,
             task_id=e.task_id,
@@ -516,7 +519,7 @@ class AgentResponseHandler:
             kw: dict = {}
             if client_request_id:
                 kw["client_request_id"] = client_request_id
-            await self._sse.send_task_update(
+            await self._delivery.send_task_update(
                 room_id=e.room_id,
                 message_id=e.message_id,
                 status="working",
@@ -645,10 +648,33 @@ class AgentResponseHandler:
         if self._notification_service is None or self._task_notification_impl is None:
             raise RuntimeError("Task notification dependencies have not been bound")
 
+        from types import SimpleNamespace
+
+        # The shared implementation (_notify_task_update_impl) expects a TaskNotificationStore
+        # with a mix of reader/writer methods. Rather than bloating a single writer port,
+        # we assemble them from the handler's specialized dependencies here.
+        notification_store = SimpleNamespace(
+            update_last_notified_state=getattr(
+                self._task_writer, "update_last_notified_state", None
+            ) or getattr(
+                self._message_writer, "update_last_notified_state", None
+            ),
+            get_room_agent_message_by_message_id=self._client_request_resolver.get_room_agent_message_by_message_id,
+            update_room_agent_message_by_message_id=getattr(
+                self._task_writer, "update_room_agent_message_by_message_id", None
+            ) or getattr(
+                self._message_writer, "update_room_agent_message_by_message_id", None
+            ),
+            get_room_by_room_id=self._room_reader.get_room_by_room_id,
+            resolve_client_request_id_for_agent_message=getattr(
+                self._client_request_resolver, "resolve_client_request_id_for_agent_message", None
+            ),
+        )
+
         return await self._task_notification_impl(
-            self._task_writer,
+            notification_store,
             self._notification_service,
-            self._sse,
+            self._delivery,
             message_id=message_id,
             state=state,
             room_id=room_id,

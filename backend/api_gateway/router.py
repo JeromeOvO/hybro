@@ -1,7 +1,6 @@
 """Root API Gateway router for all `/api/v1/*` traffic."""
 
 from fastapi import APIRouter, Depends
-
 from api_gateway.routes import (
     a2a_task_routes,
     agent_group_routes,

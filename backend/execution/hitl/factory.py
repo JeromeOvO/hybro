@@ -6,27 +6,34 @@ from execution.hitl.service import BoundHITLServiceProxy, HITLService
 
 
 def create_hitl_service(**kwargs: Any) -> HITLService:
-    constructor_kwargs = {}
-    for name in ("continuation", "task_notifications"):
-        if name in kwargs:
-            constructor_kwargs[name] = kwargs.pop(name)
-    service = HITLService(**constructor_kwargs)
-    legacy_store_aliases = {"database" + "_service", "db" + "_service"}
-    for name, value in kwargs.items():
-        if name in legacy_store_aliases:
+    allowed = {
+        "persistence",
+        "delivery",
+        "agent_reply",
+        "continuation",
+        "task_notifications",
+    }
+    legacy_aliases = {
+        "store",
+        "database" + "_service",
+        "db" + "_service",
+        "a2a" + "_" + "service",
+    }
+    for name in kwargs:
+        if name in legacy_aliases:
             raise TypeError(f"create_hitl_service no longer accepts {name!r}")
-        if name == "store":
-            service._store = value
-        elif name == "delivery":
-            service._delivery = value
-        elif name == "a2a_service":
-            service._a2a_service = value
-        elif name == "continuation":
-            service._continuation = value
-        elif name == "task_notifications":
-            service._task_notifications = value
-        else:
-            setattr(service, name, value)
+        if name not in allowed:
+            raise TypeError(f"create_hitl_service got unexpected argument {name!r}")
+
+    service = HITLService(
+        continuation=kwargs.get("continuation"),
+        task_notifications=kwargs.get("task_notifications"),
+    )
+    service._persistence = kwargs.get("persistence")
+    service._delivery = kwargs.get("delivery")
+    service._agent_reply = kwargs.get("agent_reply")
+    service._continuation = kwargs.get("continuation")
+    service._task_notifications = kwargs.get("task_notifications")
     return service
 
 

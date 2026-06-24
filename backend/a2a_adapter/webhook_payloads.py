@@ -136,10 +136,8 @@ def _task_from_status_update_dict(raw: dict[str, Any], message_id: str) -> Task:
     )
 
 
-def parse_stream_response_payload(
-    payload: dict[str, Any], message_id: str
-) -> Task | TaskArtifactUpdateEvent:
-    """Parse A2A StreamResponse variants into an SDK Task or Event."""
+def parse_stream_response_payload(payload: dict[str, Any], message_id: str) -> Task:
+    """Parse A2A StreamResponse variants into an SDK Task."""
     if "task" in payload:
         task_data = payload["task"]
         if _is_proto_format(task_data):
@@ -189,7 +187,12 @@ def parse_stream_response_payload(
         if isinstance(raw, dict) and ("artifactId" in raw or "contextId" in raw):
             raw = _normalize_proto_payload(raw)
         artifact_event = TaskArtifactUpdateEvent.model_validate(raw)
-        return artifact_event
+        return Task(
+            id=artifact_event.task_id,
+            context_id=artifact_event.context_id,
+            status=TaskStatus(state=TaskState.working),
+            artifacts=[artifact_event.artifact],
+        )
 
     if "id" in payload and "status" in payload:
         if _is_proto_format(payload):

@@ -30,7 +30,8 @@ flowchart TD
     APIGateway --> Execution[execution facade]
     APIGateway --> Platform[platform facade]
 
-    Execution --> RoomServices[app_shell.room_runtime]
+    Container[container.py composition root] --> ExecutionPorts[Execution ports]
+    Execution --> ExecutionPorts
     Execution --> RoomMessageCenter[execution.orchestration.RoomMessageCenter]
     RoomMessageCenter --> QueueExecutor[QueueExecutor]
     RoomMessageCenter --> SupervisorExecutor[SupervisorExecutor]
@@ -127,6 +128,15 @@ Examples:
   persistence, terminal response persistence, and HITL reply token/task
   persistence to `execution.task_tracking`; A2A SDK transport/coercion work
   stays in `a2a_adapter`.
+
+Execution is intentionally independent from
+app-shell compatibility objects.
+`container.py` may wrap `app_shell.a2a_runtime`, `app_shell.room_runtime`,
+Delivery/SSE, room memory, notification, and repository-store objects into
+focused execution ports, but files under `execution/` do not import app-shell
+modules and do not accept broad app-shell composite stores. Queue, supervisor,
+dispatch, HITL, cancellation, and webhook resume paths receive only the methods
+they call through execution-owned protocols in `execution/ports.py`.
 
 ## Major Code Areas
 

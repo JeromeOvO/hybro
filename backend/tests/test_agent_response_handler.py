@@ -55,7 +55,7 @@ def _make_handler(
         client_request_resolver=db,
         room_reader=db,
         hitl_reader=db,
-        sse_manager=sse,
+        delivery=sse,
         room_message_center=rmc,
         hitl_coordinator=hitl_coordinator,
         notification_service=notification_service,
@@ -131,7 +131,7 @@ class TestArtifactUpdateEvent:
         h._message_writer.accumulate_artifact_on_message.assert_awaited_once_with(
             "msg-001", {"id": "a1"}, append=False,
         )
-        h._sse.send_artifact_update.assert_awaited_once_with(
+        h._delivery.send_artifact_update.assert_awaited_once_with(
             room_id="room-001",
             message_id="msg-001",
             agent_id="agent-001",
@@ -149,7 +149,7 @@ class TestArtifactUpdateEvent:
         )
         await h.handle(event)
         h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
-        h._sse.send_artifact_update.assert_awaited_once()
+        h._delivery.send_artifact_update.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_append_flag_passed(self):
@@ -162,8 +162,8 @@ class TestArtifactUpdateEvent:
         h._message_writer.accumulate_artifact_on_message.assert_awaited_once_with(
             "msg-001", {"id": "a1"}, append=True,
         )
-        h._sse.send_artifact_update.assert_awaited_once()
-        call_kwargs = h._sse.send_artifact_update.call_args.kwargs
+        h._delivery.send_artifact_update.assert_awaited_once()
+        call_kwargs = h._delivery.send_artifact_update.call_args.kwargs
         assert call_kwargs["append"] is True
 
     @pytest.mark.asyncio
@@ -174,7 +174,7 @@ class TestArtifactUpdateEvent:
             artifacts=[{"id": "a1"}], append=True, last_chunk=True,
         )
         await h.handle(event)
-        call_kwargs = h._sse.send_artifact_update.call_args.kwargs
+        call_kwargs = h._delivery.send_artifact_update.call_args.kwargs
         assert call_kwargs["last_chunk"] is True
 
     @pytest.mark.asyncio
@@ -187,8 +187,8 @@ class TestArtifactUpdateEvent:
         )
         await h.handle(event)
         h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
-        h._sse.send_artifact_update.assert_awaited_once()
-        call_kwargs = h._sse.send_artifact_update.call_args.kwargs
+        h._delivery.send_artifact_update.assert_awaited_once()
+        call_kwargs = h._delivery.send_artifact_update.call_args.kwargs
         assert call_kwargs["artifact"]["artifact_id"] == "msg-001-stream"
         assert call_kwargs["artifact"]["parts"] == [{"kind": "text", "text": "chunk"}]
 
@@ -201,7 +201,7 @@ class TestArtifactUpdateEvent:
         )
         await h.handle(event)
         h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
-        h._sse.send_artifact_update.assert_not_awaited()
+        h._delivery.send_artifact_update.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_artifact_with_file_parts_broadcasts(self):
@@ -224,7 +224,7 @@ class TestArtifactUpdateEvent:
             )
             await h.handle(event)
 
-        h._sse.send_artifact_update.assert_awaited_once()
+        h._delivery.send_artifact_update.assert_awaited_once()
         h._message_writer.accumulate_artifact_on_message.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -252,7 +252,7 @@ class TestArtifactUpdateEvent:
         # S3 conversion should NOT be called (already done by transport)
         mock_convert.assert_not_awaited()
         # But SSE and DB should still fire
-        h._sse.send_artifact_update.assert_awaited_once()
+        h._delivery.send_artifact_update.assert_awaited_once()
         h._message_writer.accumulate_artifact_on_message.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -277,7 +277,7 @@ class TestArtifactUpdateEvent:
             await h.handle(event)
 
         # SSE should still be sent despite S3 failure
-        h._sse.send_artifact_update.assert_awaited_once()
+        h._delivery.send_artifact_update.assert_awaited_once()
         # DB persist should still happen
         h._message_writer.accumulate_artifact_on_message.assert_awaited_once()
 
@@ -364,7 +364,7 @@ class TestResponseEvent:
             await h.handle(event)
 
         # send_agent_response removed — _notify() delivers parts via task_update
-        h._sse.send_agent_response.assert_not_awaited()
+        h._delivery.send_agent_response.assert_not_awaited()
 
 
 # =============================================================================
@@ -530,7 +530,7 @@ class TestInteractiveEvent:
             details=None,
             error_message=None,
         )
-        h._sse.send_processing_status.assert_not_awaited()
+        h._delivery.send_processing_status.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_creates_hitl_request_for_async_auth_required_continuation(self):
@@ -669,7 +669,7 @@ class TestInteractiveEvent:
         hitl.request_input.assert_awaited_once()
         assert hitl.request_input.call_args.kwargs["agent_name"] is None
         emitter.assert_awaited_once()
-        h._sse.send_processing_status.assert_not_awaited()
+        h._delivery.send_processing_status.assert_not_awaited()
 
 
 # =============================================================================
@@ -686,7 +686,7 @@ class TestSubmittedEvent:
             task_id="t-1", agent_name="Agent X",
         )
         await h.handle(event)
-        h._sse.send_task_submitted.assert_awaited_once()
+        h._delivery.send_task_submitted.assert_awaited_once()
         h._message_writer.update_task_state_on_message.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -702,7 +702,7 @@ class TestSubmittedEvent:
         )
         await h.handle(event)
 
-        call_kwargs = h._sse.send_task_submitted.call_args.kwargs
+        call_kwargs = h._delivery.send_task_submitted.call_args.kwargs
         assert call_kwargs["client_request_id"] == "cr-001"
         db.resolve_client_request_id_for_message_id.assert_awaited_once_with("msg-001")
 
@@ -715,8 +715,8 @@ class TestStatusUpdateEvent:
             kind="status_update", **_base_event(), text="still working",
         )
         await h.handle(event)
-        h._sse.send_task_update.assert_awaited_once()
-        call_kwargs = h._sse.send_task_update.call_args.kwargs
+        h._delivery.send_task_update.assert_awaited_once()
+        call_kwargs = h._delivery.send_task_update.call_args.kwargs
         assert call_kwargs["status"] == "working"
         assert call_kwargs["status_message"] == "still working"
 
@@ -727,7 +727,7 @@ class TestStatusUpdateEvent:
             kind="status_update", **_base_event(), text="",
         )
         await h.handle(event)
-        h._sse.send_task_update.assert_not_awaited()
+        h._delivery.send_task_update.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_sends_task_update_with_resolved_client_request_id(self):
@@ -741,7 +741,7 @@ class TestStatusUpdateEvent:
         )
         await h.handle(event)
 
-        call_kwargs = h._sse.send_task_update.call_args.kwargs
+        call_kwargs = h._delivery.send_task_update.call_args.kwargs
         assert call_kwargs["client_request_id"] == "cr-002"
         db.resolve_client_request_id_for_message_id.assert_awaited_once_with("msg-001")
 
@@ -768,7 +768,7 @@ class TestProcessingStatusEvent:
             details={"message": "all done"},
             error_message=None,
         )
-        h._sse.send_processing_status.assert_not_awaited()
+        h._delivery.send_processing_status.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_records_when_lifecycle_message_id_is_explicit(self):
@@ -795,7 +795,7 @@ class TestProcessingStatusEvent:
             details={"message": "all done"},
             error_message=None,
         )
-        h._sse.send_processing_status.assert_not_awaited()
+        h._delivery.send_processing_status.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_processing_status_without_lifecycle_id_is_dropped(self):
@@ -810,7 +810,7 @@ class TestProcessingStatusEvent:
         await h.handle(event)
 
         emitter.assert_not_awaited()
-        h._sse.send_processing_status.assert_not_awaited()
+        h._delivery.send_processing_status.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_processing_status_resolves_client_request_id_for_emitter(self):
@@ -882,8 +882,8 @@ class TestArtifactTextFallback:
             text="chunk", artifacts=None, append=True, last_chunk=False,
         )
         await h.handle(event)
-        h._sse.send_artifact_update.assert_awaited_once()
-        call_kwargs = h._sse.send_artifact_update.call_args.kwargs
+        h._delivery.send_artifact_update.assert_awaited_once()
+        call_kwargs = h._delivery.send_artifact_update.call_args.kwargs
         assert call_kwargs["artifact"]["artifact_id"] == "msg-001-stream"
         assert call_kwargs["artifact"]["parts"] == [{"kind": "text", "text": "chunk"}]
         assert call_kwargs["append"] is True
@@ -900,8 +900,8 @@ class TestStatusUpdateSendsTaskUpdate:
             kind="status_update", **_base_event(), text="Searching the web...",
         )
         await h.handle(event)
-        h._sse.send_task_update.assert_awaited_once()
-        call_kwargs = h._sse.send_task_update.call_args.kwargs
+        h._delivery.send_task_update.assert_awaited_once()
+        call_kwargs = h._delivery.send_task_update.call_args.kwargs
         assert call_kwargs["status"] == "working"
         assert call_kwargs["status_message"] == "Searching the web..."
         assert call_kwargs["message_id"] == "msg-001"
@@ -934,10 +934,12 @@ class TestHandlerNotifyTaskUpdate:
         assert result is True
         mock_impl.assert_awaited_once()
         call_args = mock_impl.call_args
-        # First positional arg is the handler's notification store
-        assert call_args[0][0] is h._task_writer
+        # First positional arg is the handler's assembled notification store
+        notification_store = call_args[0][0]
+        assert hasattr(notification_store, "get_room_agent_message_by_message_id")
+        assert hasattr(notification_store, "update_room_agent_message_by_message_id")
         # Third positional arg is the handler's sse instance
-        assert call_args[0][2] is h._sse
+        assert call_args[0][2] is h._delivery
         assert call_args.kwargs["emit_processing_status"] is True
         assert call_args.kwargs["processing_status_emitter"] is emitter
 

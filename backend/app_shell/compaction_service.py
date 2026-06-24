@@ -8,8 +8,6 @@ Original content is always retrievable on demand.
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6 for design details.
 """
 
-import hashlib
-
 from common.config import settings as _settings
 from common.utils.context_utils import estimate_tokens
 from common.utils.logger import get_logger
@@ -20,14 +18,13 @@ from models.compaction import (
     StorageType,
 )
 from models.memory import ConversationTurn, RoomMemory, TurnRepresentation
-
+import hashlib
 
 class ContentExpiredError(Exception):
     pass
 
 def hash_content(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
-
 
 logger = get_logger(__name__)
 

@@ -31,17 +31,24 @@ async def _drain_sse(conn) -> list[tuple[str, dict]]:
 
 def _make_rmc_for_supervisor_result(manager: SSEManager) -> RoomMessageCenter:
     rmc = object.__new__(RoomMessageCenter)
-    rmc.sse_manager = manager
-    rmc.database_service = SimpleNamespace(
+    rmc.delivery = manager
+    rmc.message_reader = SimpleNamespace(
         get_room_user_message_by_message_id=AsyncMock(
             return_value=SimpleNamespace(extend_info={})
         ),
+    )
+    rmc.message_writer = SimpleNamespace(
         update_room_user_message_by_message_id=AsyncMock(),
+        cancel_descendants=AsyncMock(),
+        cancel_agent_messages_by_ids=AsyncMock(),
+    )
+    rmc.room_reader = SimpleNamespace(
         get_room_by_room_id=AsyncMock(return_value=SimpleNamespace(extend_info={})),
+    )
+    rmc.room_writer = SimpleNamespace(
         update_room_by_room_id=AsyncMock(),
     )
-    rmc._store = rmc.database_service
-    rmc.room_coordinator_service = SimpleNamespace(
+    rmc.coordinator = SimpleNamespace(
         emit_synthesis_message=AsyncMock()
     )
     rmc._emit_unified_summary = AsyncMock(return_value=("synthesis", "summary content"))
@@ -162,13 +169,14 @@ async def test_golden_hitl_resolve_resume_completion_order(monkeypatch):
     monkeypatch.setattr(settings, "feature_run_event_sse", True)
 
     rmc = object.__new__(RoomMessageCenter)
-    rmc.sse_manager = manager
+    rmc.delivery = manager
     _bind_test_processing_emitter(rmc, manager, record)
-    rmc.database_service = SimpleNamespace(
+    rmc.continuation_store = SimpleNamespace(
         save_continuation_on_message=AsyncMock(),
+    )
+    rmc.room_reader = SimpleNamespace(
         get_room_by_room_id=AsyncMock(return_value=SimpleNamespace(extend_info={})),
     )
-    rmc._store = rmc.database_service
     rmc.queue_executor = SimpleNamespace(
         resume_from_continuation=AsyncMock(
             return_value=SimpleNamespace(
@@ -212,13 +220,14 @@ async def test_resume_completion_uses_deterministic_kind_when_summary_skipped(mo
     monkeypatch.setattr(settings, "feature_run_event_sse", True)
 
     rmc = object.__new__(RoomMessageCenter)
-    rmc.sse_manager = manager
+    rmc.delivery = manager
     _bind_test_processing_emitter(rmc, manager, record)
-    rmc.database_service = SimpleNamespace(
+    rmc.continuation_store = SimpleNamespace(
         save_continuation_on_message=AsyncMock(),
+    )
+    rmc.room_reader = SimpleNamespace(
         get_room_by_room_id=AsyncMock(return_value=SimpleNamespace(extend_info={})),
     )
-    rmc._store = rmc.database_service
     rmc.queue_executor = SimpleNamespace(
         resume_from_continuation=AsyncMock(
             return_value=SimpleNamespace(
@@ -260,7 +269,7 @@ async def test_emit_summary_working_includes_turn_phase(monkeypatch):
     record = AsyncMock(return_value=None)
 
     rmc = object.__new__(RoomMessageCenter)
-    rmc.sse_manager = manager
+    rmc.delivery = manager
     _bind_test_processing_emitter(rmc, manager, record)
 
     await rmc._emit_summary_working(
@@ -412,7 +421,7 @@ async def test_golden_clarify_resume_retry_failure_completed_is_transport_only(
     original_msg = SimpleNamespace(extend_info={"supervisor_trajectory": {}})
     rmc = _make_rmc_for_supervisor_result(manager)
     _bind_test_processing_emitter(rmc, manager, lifecycle)
-    rmc.database_service.get_room_user_message_by_message_id = AsyncMock(
+    rmc.message_reader.get_room_user_message_by_message_id = AsyncMock(
         return_value=original_msg
     )
     rmc.supervisor_executor = SimpleNamespace(
@@ -505,9 +514,11 @@ async def test_supervisor_completed_emits_turn_completion_kind_in_details():
         user_message=SimpleNamespace(extend_info={}),
     )
 
-    db = rmc.database_service
-    db.update_room_user_message_by_message_id.assert_called()
-    persisted_msg = db.update_room_user_message_by_message_id.call_args_list[-1][0][1]
+    writer = rmc.message_writer
+    writer.update_room_user_message_by_message_id.assert_called()
+    persisted_msg = (
+        writer.update_room_user_message_by_message_id.call_args_list[-1][0][1]
+    )
     assert persisted_msg.extend_info["turn_completion_kind"] == "deterministic"
 
     frames = await _drain_sse(conn)
@@ -567,8 +578,10 @@ async def test_supervisor_synthesis_completed_emits_synthesis_kind():
         user_message=SimpleNamespace(extend_info={}),
     )
 
-    db = rmc.database_service
-    persisted_msg = db.update_room_user_message_by_message_id.call_args_list[-1][0][1]
+    writer = rmc.message_writer
+    persisted_msg = (
+        writer.update_room_user_message_by_message_id.call_args_list[-1][0][1]
+    )
     assert persisted_msg.extend_info["turn_completion_kind"] == "synthesis"
 
     frames = await _drain_sse(conn)

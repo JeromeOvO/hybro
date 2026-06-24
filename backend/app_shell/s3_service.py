@@ -6,14 +6,14 @@ the implementation delegates to a bound platform object-storage adapter.
 
 from __future__ import annotations
 
-from typing import Any, BinaryIO
+from typing import BinaryIO, Any as ObjectStoragePort
 
 
 class S3Service:
-    def __init__(self, delegate: Any | None = None) -> None:
+    def __init__(self, delegate: ObjectStoragePort | None = None) -> None:
         self._delegate = delegate
 
-    def bind_object_storage(self, delegate: Any) -> None:
+    def bind_object_storage(self, delegate: ObjectStoragePort) -> None:
         self._delegate = delegate
 
     async def upload_file(
@@ -74,7 +74,7 @@ class S3Service:
     async def get_text(self, s3_key: str) -> str | None:
         return await self.download_text(s3_key)
 
-    def _require_delegate(self) -> Any:
+    def _require_delegate(self) -> ObjectStoragePort:
         if self._delegate is None:
             raise RuntimeError(
                 "S3Service.bind_object_storage() not called - startup incomplete"

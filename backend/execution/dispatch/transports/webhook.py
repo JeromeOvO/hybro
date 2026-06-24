@@ -13,8 +13,6 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from fastapi import HTTPException
 
-from a2a.types import TaskArtifactUpdateEvent
-
 from a2a_adapter.webhook_payloads import (
     _is_proto_format,  # noqa: F401 - compatibility re-export
     _normalize_proto_payload,  # noqa: F401 - compatibility re-export
@@ -118,21 +116,12 @@ class WebhookTransport(AgentTransport):
 
         # 2. Parse StreamResponse
         updated_task = parse_stream_response(payload, message_id)
-        
-        if isinstance(updated_task, TaskArtifactUpdateEvent):
-            logger.info(
-                "Webhook for task %s: Parsed artifact_update (append=%s, last_chunk=%s)",
-                message_id,
-                updated_task.append,
-                updated_task.last_chunk,
-            )
-        else:
-            logger.info(
-                "Webhook for task %s: Parsed task state=%s, artifacts=%d",
-                message_id,
-                updated_task.status.state,
-                len(updated_task.artifacts) if updated_task.artifacts else 0,
-            )
+        logger.info(
+            "Webhook for task %s: Parsed task state=%s, artifacts=%d",
+            message_id,
+            updated_task.status.state,
+            len(updated_task.artifacts) if updated_task.artifacts else 0,
+        )
 
         # 3. Load current message, check idempotency
         current_msg = await self._message_reader.get_room_agent_message_by_message_id(message_id)
@@ -160,24 +149,23 @@ class WebhookTransport(AgentTransport):
                 )
             return {"status": "canceled"}
 
-        if not isinstance(updated_task, TaskArtifactUpdateEvent):
-            current_task = (
-                current_msg.message_content.message_task
-                if current_msg.message_content
-                else None
-            )
-            if current_task:
-                current_state = current_task.status.state
-                if is_terminal_state(current_state):
-                    logger.debug(
-                        "Webhook for task %s: Already terminal (%s)", message_id, current_state
-                    )
-                    return {
-                        "status": "already_terminal",
-                        "state": current_state.value
-                        if hasattr(current_state, "value")
-                        else str(current_state),
-                    }
+        current_task = (
+            current_msg.message_content.message_task
+            if current_msg.message_content
+            else None
+        )
+        if current_task:
+            current_state = current_task.status.state
+            if is_terminal_state(current_state):
+                logger.debug(
+                    "Webhook for task %s: Already terminal (%s)", message_id, current_state
+                )
+                return {
+                    "status": "already_terminal",
+                    "state": current_state.value
+                    if hasattr(current_state, "value")
+                    else str(current_state),
+                }
 
         # 4. Normalize Task -> AgentEvent and delegate
         event = self._task_to_event(updated_task, current_msg)
@@ -186,7 +174,8 @@ class WebhookTransport(AgentTransport):
         return {"status": "accepted"}
 
     def _task_to_event(self, task: Any, msg: RoomAgentMessage) -> AgentEvent:
-        """Convert A2A Task or TaskArtifactUpdateEvent -> AgentEvent."""
+        """Convert A2A Task -> AgentEvent."""
+        state = task.status.state
         base = dict(
             message_id=msg.message_id,
             room_id=msg.room_id,
@@ -194,20 +183,9 @@ class WebhookTransport(AgentTransport):
             related_message_id=msg.related_message_id,
             user_id=msg.user_id,
             client_request_id=msg.client_request_id,
-            task_id=task.task_id if isinstance(task, TaskArtifactUpdateEvent) else (task.id if hasattr(task, "id") else None),
+            task_id=task.id if hasattr(task, "id") else None,
             context_id=task.context_id if hasattr(task, "context_id") else None,
         )
-
-        if isinstance(task, TaskArtifactUpdateEvent):
-            return AgentEvent(
-                kind="artifact_update",
-                **base,
-                artifacts=[task.artifact.model_dump(mode="json", exclude_none=True)],
-                append=bool(task.append),
-                last_chunk=bool(task.last_chunk),
-            )
-
-        state = task.status.state
 
         text = None
         parts = None

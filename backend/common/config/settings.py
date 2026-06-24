@@ -82,6 +82,8 @@ class Settings(BaseSettings):
     debate_rounds: int = 2  # todo: can be as parameter
     parse_confidence_threshold: float = 0.3
 
+    # Clerk Authentication
+    clerk_secret_key: str = ""  # Clerk Secret Key for backend API
 
     # Agent Health Check Settings
     agent_health_check_enabled: bool = True  # enable/disable agent health check

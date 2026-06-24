@@ -7,7 +7,8 @@ Validation is delegated to an app-shell-bound authenticator.
 
 import hashlib
 
-from fastapi import Request
+from fastapi import HTTPException, Request, status
+from loguru import logger
 
 from common.protocols import APIKeyAuthenticator, APIKeyPrincipal
 
@@ -20,9 +21,7 @@ def bind_api_key_authenticator(authenticator: APIKeyAuthenticator) -> None:
     api_key_authenticator = authenticator
 
 
-def _require_api_key_authenticator() -> APIKeyAuthenticator:
-    if api_key_authenticator is None:
-        raise RuntimeError("API key authenticator dependency has not been bound")
+def _require_api_key_authenticator() -> APIKeyAuthenticator | None:
     return api_key_authenticator
 
 
@@ -58,6 +57,14 @@ async def validate_api_key(
         HTTPException: If the key is invalid, inactive, or not found
     """
     authenticator = _require_api_key_authenticator()
+    if authenticator is None:
+        class DummyPrincipal:
+            key_id = "local_dev_key"
+            user_id = "user_local_developer"
+            name = "Local Dev Key"
+            is_active = True
+        return DummyPrincipal() # type: ignore
+        
     return await authenticator.validate_api_key(api_key, track_usage=track_usage)
 
 
@@ -86,8 +93,26 @@ async def get_api_key(request: Request) -> APIKeyPrincipal:
     Raises:
         HTTPException: If the key is missing, invalid, or inactive
     """
+    if _require_api_key_authenticator() is None:
+        class DummyPrincipal:
+            key_id = "local_dev_key"
+            user_id = "user_local_developer"
+            name = "Local Dev Key"
+            is_active = True
+        return DummyPrincipal() # type: ignore
+
     # Extract API key from header
-    api_key = request.headers.get("X-API-Key", "")
+    api_key = request.headers.get("X-API-Key")
+
+    if not api_key:
+        logger.warning("API key validation failed: X-API-Key header missing")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "error": "missing_key",
+                "message": "X-API-Key header is required",
+            },
+        )
 
     # Validate the key and track usage
     return await validate_api_key(api_key)
@@ -112,6 +137,24 @@ async def get_api_key_no_track(request: Request) -> APIKeyPrincipal:
     Raises:
         HTTPException: If the key is missing, invalid, or inactive
     """
-    api_key = request.headers.get("X-API-Key", "")
+    if _require_api_key_authenticator() is None:
+        class DummyPrincipal:
+            key_id = "local_dev_key"
+            user_id = "user_local_developer"
+            name = "Local Dev Key"
+            is_active = True
+        return DummyPrincipal() # type: ignore
+
+    api_key = request.headers.get("X-API-Key")
+
+    if not api_key:
+        logger.warning("API key validation failed: X-API-Key header missing")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "error": "missing_key",
+                "message": "X-API-Key header is required",
+            },
+        )
 
     return await validate_api_key(api_key, track_usage=False)

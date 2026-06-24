@@ -1,26 +1,50 @@
+from fastapi import HTTPException, status
+from loguru import logger
 
 from common.api_key_auth import hash_api_key
+from common.protocols import APIKeyValidationStore
 from models.api_key import APIKey
 
 
-class StaticAPIKeyAuthenticator:
+class MongoAPIKeyAuthenticator:
+    def __init__(self, store: APIKeyValidationStore) -> None:
+        self._store = store
+
     async def validate_api_key(
         self, api_key: str, *, track_usage: bool = True
     ) -> APIKey:
-        # For the open source version, we accept any key for internal daemon traffic.
-        # In a real enterprise environment, this would validate against a MongoDB collection.
+        key_hash = hash_api_key(api_key)
+        api_key_doc = await self._store.get_api_key_by_hash(key_hash)
 
-        # Return a dummy principal
-        from common.utils.time import utcnow
-        return APIKey(
-            key_id="static-key",
-            key_hash=hash_api_key(api_key),
-            user_id="user_local_developer",
-            name="Static Dev Key",
-            is_active=True,
-            created_at=utcnow(),
-            usage_count=0
-        )
+        if not api_key_doc:
+            logger.warning("API key validation failed: key not found")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "error": "invalid_key",
+                    "message": "Invalid API key",
+                },
+            )
 
-__all__ = ["StaticAPIKeyAuthenticator"]
+        if not api_key_doc.is_active:
+            logger.warning(
+                f"API key validation failed: key {api_key_doc.key_id} is inactive"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "error": "key_inactive",
+                    "message": "API key is inactive",
+                },
+            )
 
+        if track_usage:
+            try:
+                await self._store.update_api_key_usage(key_hash)
+            except Exception as exc:
+                logger.warning(f"Failed to update API key usage: {exc}")
+
+        return api_key_doc
+
+
+__all__ = ["MongoAPIKeyAuthenticator"]

@@ -35,4 +35,3 @@ logs/
 *.cover
 .coverage
 htmlcov/
-!context_memory/config.py

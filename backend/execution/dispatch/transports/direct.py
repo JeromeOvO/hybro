@@ -58,6 +58,12 @@ logger = get_logger(__name__)
 
 
 if TYPE_CHECKING:
+    from execution.ports import (
+        A2ATransportPort,
+        ExecutionDeliveryPort,
+        RemoteTaskReaderPort,
+    )
+
     class DirectMessageReader(Protocol):
         async def get_room_agent_message_by_message_id(self, message_id: str): ...
 
@@ -102,9 +108,9 @@ class DirectTransport(AgentTransport):
         self,
         response_handler,
         tsm: TaskStateManager,
-        a2a_service,
-        task_service,
-        sse_manager,
+        a2a_transport: "A2ATransportPort",
+        remote_task_reader: "RemoteTaskReaderPort",
+        delivery: "ExecutionDeliveryPort",
         message_reader: "DirectMessageReader",
         artifact_store: "DirectArtifactStore",
         task_updater: "DirectTaskUpdatePort",
@@ -114,9 +120,9 @@ class DirectTransport(AgentTransport):
     ) -> None:
         super().__init__(response_handler)
         self.tsm = tsm
-        self.sse_manager = sse_manager
-        self.a2a_service = a2a_service
-        self.task_service = task_service
+        self.delivery = delivery
+        self.a2a_transport = a2a_transport
+        self.remote_task_reader = remote_task_reader
         self._message_reader = message_reader
         self._artifact_store = artifact_store
         self._task_updater = task_updater
@@ -156,7 +162,7 @@ class DirectTransport(AgentTransport):
 
         skip_persist=True because the task document was already written to DB
         — either by tsm.transition_task / tsm.persist_message (streaming and
-        degraded sync paths) or by a2a_service's partial $set via
+        degraded sync paths) or by A2A transport partial $set via
         update_task_on_message (tracked sync path).
         """
         msg = ctx.current_message
@@ -207,7 +213,7 @@ class DirectTransport(AgentTransport):
         step_number = ctx.step_number
         total_steps = ctx.total_steps
 
-        support_streaming = self.a2a_service.has_streaming_capability(
+        support_streaming = self.a2a_transport.has_streaming_capability(
             agent_card=agent.agent_card
         )
 
@@ -433,7 +439,7 @@ class DirectTransport(AgentTransport):
             remote_task_id,
             agent_card.name,
         )
-        await self.a2a_service.cancel_remote_task(agent_card, remote_task_id)
+        await self.a2a_transport.cancel_remote_task(agent_card, remote_task_id)
 
     async def _setup_task_tracking(
         self,
@@ -452,7 +458,7 @@ class DirectTransport(AgentTransport):
                 total_steps,
                 agent_card.name,
             )
-            task_info = await self.a2a_service.create_task_for_tracking(
+            task_info = await self.a2a_transport.create_task_for_tracking(
                 current_message,
                 agent_card,
                 prepared_message,
@@ -475,7 +481,7 @@ class DirectTransport(AgentTransport):
                 task_content[:50] if task_content else "None",
             )
 
-            await self.sse_manager.send_task_submitted(
+            await self.delivery.send_task_submitted(
                 room_id=room_id,
                 message_id=current_message.message_id,
                 task_id=SyntheticTaskId.PENDING,
@@ -494,7 +500,7 @@ class DirectTransport(AgentTransport):
             # Agents that emit their own A2A status-update messages will
             # overwrite this with more specific text.
             initial_status_msg = task_content or "Working on your request…"
-            await self.sse_manager.send_task_update(
+            await self.delivery.send_task_update(
                 room_id=room_id,
                 message_id=current_message.message_id,
                 status="working",
@@ -682,7 +688,7 @@ class DirectTransport(AgentTransport):
         )
         streaming_state = MessageStreamingState()
 
-        async for a2a_response in self.a2a_service.send_message_streaming(
+        async for a2a_response in self.a2a_transport.send_message_streaming(
             agent_card, prepared_message, agent_id=current_message.agent_id,
         ):
             if token and token.is_cancelled:
@@ -785,7 +791,7 @@ class DirectTransport(AgentTransport):
         if ctx.task_info:
             await self._emit_terminal(ctx, CommonTaskState.FAILED, error=error_message)
         if ctx.send_sse:
-            await self.sse_manager.send_error(ctx.room_id, error_message)
+            await self.delivery.send_error(ctx.room_id, error_message)
 
         # Record capability issue for the agent
         if self.capability_issue_service is not None:
@@ -862,11 +868,11 @@ class DirectTransport(AgentTransport):
                 "artifact_id": f"{ctx.current_message.message_id}-stream",
                 "parts": [{"kind": "text", "text": content}],
             }
-            await self.sse_manager.send_artifact_update(
-                ctx.room_id,
-                ctx.current_message.message_id,
-                ctx.current_message.agent_id,
-                artifact_dict,
+            await self.delivery.send_artifact_update(
+                room_id=ctx.room_id,
+                message_id=ctx.current_message.message_id,
+                agent_id=ctx.current_message.agent_id,
+                artifact=artifact_dict,
                 append=True,
                 last_chunk=False,
                 client_request_id=ctx.current_message.client_request_id,
@@ -937,7 +943,7 @@ class DirectTransport(AgentTransport):
                 ctx.current_message.message_id,
                 state,
             )
-            fetched_task = await self.task_service.get_task_from_agent(
+            fetched_task = await self.remote_task_reader.get_task_from_agent(
                 ctx.agent_card, result.task_id
             )
             if fetched_task is not None:
@@ -1047,11 +1053,14 @@ class DirectTransport(AgentTransport):
     ) -> tuple[ProcessingStatus, str]:
         """Finalize streaming: persist final state, send task_update SSE."""
         if ctx.send_sse:
-            await self.sse_manager.send_artifact_update(
-                ctx.room_id,
-                ctx.current_message.message_id,
-                ctx.current_message.agent_id,
-                {"artifact_id": f"{ctx.current_message.message_id}-stream", "parts": []},
+            await self.delivery.send_artifact_update(
+                room_id=ctx.room_id,
+                message_id=ctx.current_message.message_id,
+                agent_id=ctx.current_message.agent_id,
+                artifact={
+                    "artifact_id": f"{ctx.current_message.message_id}-stream",
+                    "parts": [],
+                },
                 append=True,
                 last_chunk=True,
                 client_request_id=ctx.current_message.client_request_id,
@@ -1347,7 +1356,7 @@ class DirectTransport(AgentTransport):
                 "DirectTransport: task tracking setup failed for message %s — degraded mode",
                 current_message.message_id,
             )
-            await self.sse_manager.send_task_submitted(
+            await self.delivery.send_task_submitted(
                 room_id=room_id,
                 message_id=current_message.message_id,
                 task_id=SyntheticTaskId.DEGRADED,
@@ -1384,7 +1393,7 @@ class DirectTransport(AgentTransport):
         # Call the agent
         try:
             if task_info:
-                agent_coro = self.a2a_service.send_message_to_tracked_agent(
+                agent_coro = self.a2a_transport.send_message_to_tracked_agent(
                     agent_card=agent_card,
                     message=prepared_message,
                     message_id=message_id,
@@ -1395,7 +1404,7 @@ class DirectTransport(AgentTransport):
             else:
 
                 async def _sync_fallback():
-                    raw = await self.a2a_service.send_message_sync(
+                    raw = await self.a2a_transport.send_message_sync(
                         agent_card=agent_card,
                         message=prepared_message,
                         agent_id=current_message.agent_id,
@@ -1432,7 +1441,7 @@ class DirectTransport(AgentTransport):
             if task_info:
                 await self._emit_terminal(ctx, CommonTaskState.FAILED, error=str(exc),
                 )
-            await self.sse_manager.send_error(room_id, str(exc))
+            await self.delivery.send_error(room_id, str(exc))
 
             # Record capability issue for the agent
             if self.capability_issue_service is not None:
@@ -1508,7 +1517,7 @@ class DirectTransport(AgentTransport):
             non_text_parts = response.get("parts")
 
             # Respect the actual terminal state from the response.
-            # a2a_service returns type="message" for ALL terminal task states
+            # a2a_transport returns type="message" for ALL terminal task states
             # (completed, failed, canceled, rejected), not just completed.
             actual_state_str = response.get("status")
             if actual_state_str:
@@ -1532,7 +1541,7 @@ class DirectTransport(AgentTransport):
                         task, non_text_parts,
                     )
 
-            # On the tracked path, a2a_service already persisted the real
+            # On the tracked path, a2a_transport already persisted the real
             # task (with artifacts) to DB via partial $set.  The in-memory
             # current_message still holds the stale placeholder — a full-
             # document persist here would overwrite the real data.  On the
@@ -1569,7 +1578,7 @@ class DirectTransport(AgentTransport):
                     "DirectTransport: Degraded mode — sending task_update directly for %s",
                     message_id,
                 )
-                await self.sse_manager.send_task_update(
+                await self.delivery.send_task_update(
                     room_id=room_id,
                     message_id=message_id,
                     status=actual_state,
@@ -1625,7 +1634,7 @@ class DirectTransport(AgentTransport):
                         )
                 return True, None, message_id, response.get("task_id")
 
-            if self.a2a_service.has_push_notification_capability(agent_card):
+            if self.a2a_transport.has_push_notification_capability(agent_card):
                 return True, None, message_id, None
 
             # Non-push agent: poll for completion
@@ -1762,7 +1771,7 @@ class DirectTransport(AgentTransport):
                 "DirectTransport: Degraded mode — sending polled task_update for %s",
                 message_id,
             )
-            await self.sse_manager.send_task_update(
+            await self.delivery.send_task_update(
                 room_id=room_id,
                 message_id=message_id,
                 status=state,

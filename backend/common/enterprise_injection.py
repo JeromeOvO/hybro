@@ -43,3 +43,15 @@ class AttachmentCleanupPortProtocol(Protocol):
 class NoOpAttachmentCleanupPort:
     async def cleanup(self, attachment_id: str) -> None:
         pass
+
+
+class NoOpAgentAvatarManager:
+    async def store_avatar(
+        self,
+        *,
+        agent_id: str,
+        s3_key: str,
+        content: bytes,
+        content_type: str,
+    ) -> str:
+        return ""

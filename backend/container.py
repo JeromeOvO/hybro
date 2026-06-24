@@ -26,6 +26,7 @@ from api_gateway.routes import (
 from api_gateway.routes import (
     agent_routes as agent,
 )
+
 from api_gateway.routes import (
     files_routes as files,
 )
@@ -42,9 +43,6 @@ from api_gateway.routes import (
     memory_routes as memory_center,
 )
 from api_gateway.routes import (
-    platform_gateway_routes as gateway,
-)
-from api_gateway.routes import (
     relay_routes as relay,
 )
 from api_gateway.routes import (
@@ -59,8 +57,10 @@ from api_gateway.routes import (
 from api_gateway.viewsets import agent as agent_viewset
 from api_gateway.viewsets import base as viewset
 from app_shell.agent_health_service import agent_health_service
+from app_shell.api_key_auth import MongoAPIKeyAuthenticator
 from app_shell.delivery_runtime import sse_manager
 from app_shell.viewset import AppShellDALViewSetRepositoryProvider
+from common.api_key_auth import bind_api_key_authenticator
 from common.config.settings import settings
 from common.dto import VectorRecord
 from common.observability import MetricsCollector, traced_create_task
@@ -73,11 +73,13 @@ from common.protocols import (
     AgentRegistry,
     AgentRegistryWriter,
     AgentRepository,
+    AgentTransport,
     ContentStorageRepository,
     ContextAssembler,
     ContextMemoryRuntime,
     EventPublisher,
     ExecutionEngine,
+    GatewayDiscoveryProvider,
     HITLManager,
     HubAgentResponseSink,
     HubDispatchPolicy,
@@ -130,6 +132,9 @@ from jobs.cleanup_orphaned_uploads import (
 from jobs.compaction_sweep import CompactionSweepDeps, compaction_sweep
 from jobs.constants import ALL_JOB_NAMES
 from jobs.stale_task_checker import StaleTaskCheckerDeps, stale_task_checker
+from models.request import RoomCenterAgentMessageRequest
+
+
 from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
 from room.repository import RoomQuoteMongoRepository
 
@@ -256,8 +261,7 @@ def validate_runtime_bindings(
     if getattr(app.state, "execution_deps", None) is None:
         errors.append("app.state.execution_deps")
 
-    if getattr(app.state, "platform_facade", None) is None:
-        errors.append("app.state.platform_facade")
+
     for missing in missing_required_deps():
         errors.append(f"api_gateway.{missing}")
 
@@ -308,7 +312,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         await mongo_dal.connect()
 
         if await mongo_dal.ping():
-            from a2a_adapter import AgentCardResolverImpl
+            from a2a_adapter import AgentCardResolverImpl, AgentTransportImpl
             from a2a_adapter import artifact_storage as a2a_artifact_storage
             from app_shell.agent_capability_issue_service import (
                 CapabilityIssueExclusionReader,
@@ -339,7 +343,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 room_runtime,
                 room_services,
             )
-            from app_shell.s3_service import s3_service
             from app_shell.task_service import task_service
             from common.utils.a2a_helpers import bind_a2a_artifact_storage
             from context_memory.config import ContextMemoryLLMConfig
@@ -359,44 +362,22 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 SummaryLLMService,
                 SupervisorLLMService,
             )
+            from common.enterprise_injection import (
+                NoOpAgentRateLimiter,
+                NoOpAgentAvatarManager,
+            )
 
-            class AppShellAgentAvatarManager:
-                def __init__(self, storage, agent_repository) -> None:
-                    self._storage = storage
-                    self._agent_repository = agent_repository
-
-                async def store_avatar(
-                    self,
-                    *,
-                    agent_id: str,
-                    s3_key: str,
-                    content: bytes,
-                    content_type: str,
-                ) -> str:
-                    await self._storage.upload_file(
-                        file_data=content,
-                        s3_key=s3_key,
-                        content_type=content_type,
-                        content_length=len(content),
-                    )
-                    icon_url = self._storage.get_public_url(s3_key)
-                    await self._agent_repository.update(
-                        agent_id,
-                        {"agent_card.iconUrl": icon_url},
-                    )
-                    return icon_url
-
+            object_storage = create_object_storage_dal()
             a2a_artifact_storage.bind_a2a_storage_dependencies(
-                storage_service=s3_service,
+                storage_service=object_storage,
                 s3_bucket_name=runtime.settings.s3_bucket_name,
                 max_file_size_mb=runtime.settings.max_file_size_mb,
             )
             bind_a2a_artifact_storage(a2a_artifact_storage)
             await ensure_runtime_indexes(mongo=mongo_dal)
-            if hasattr(app.state, "agent_rate_limiter_factory") and app.state.agent_rate_limiter_factory:
-                agent_rate_limiter = app.state.agent_rate_limiter_factory(mongo_dal)
+            if getattr(app.state, "agent_rate_limiter_factory", None):
+                agent_rate_limiter = app.state.agent_rate_limiter_factory(redis_kv, mongo_dal)
             else:
-                from common.enterprise_injection import NoOpAgentRateLimiter
                 agent_rate_limiter = NoOpAgentRateLimiter()
             viewset.bind_viewset_dependencies(
                 provider=AppShellDALViewSetRepositoryProvider(mongo=mongo_dal),
@@ -404,9 +385,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
             inspection_center.bind_inspection_dependencies(AppShellInspectionCenter())
             memory_center.bind_memory_dependencies(AppShellMemoryCenter())
-            from app_shell.api_key_auth import StaticAPIKeyAuthenticator
-            from common.api_key_auth import bind_api_key_authenticator
-            bind_api_key_authenticator(StaticAPIKeyAuthenticator())
+
             vector_dal = create_vector_dal()
             _delivery_config = create_delivery_config(runtime.settings)
             delivery_startup_policy = create_delivery_startup_policy(
@@ -491,6 +470,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from execution.run_lifecycle import RunLifecycleAdapter
             from execution.run_lifecycle_service import bind_run_lifecycle_service
             from execution.run_queries import RunQueryAdapter
+            from models.quote import QuotedSnippet
 
             _execution_repos = create_execution_repositories(mongo=mongo_dal)
             run_command_handler = RunCommandHandler(
@@ -583,10 +563,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 center=AppShellAgentCenter(),
                 service=agent_service,
                 issue_service=capability_issue_service,
-                avatar_manager=AppShellAgentAvatarManager(
-                    s3_service,
-                    _agent_deps.agent_repository,
-                ),
+                avatar_manager=NoOpAgentAvatarManager(),
             )
             _resolver_repo = create_agent_resolver_repository(service=agent_service)
             agent_resolver_service.bind_repository(_resolver_repo)
@@ -797,7 +774,27 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 increment_agent_call_count=agent_room_store.increment_agent_call_count,
                 is_message_cancelled=task_store.is_message_cancelled,
             )
-            room_message_center_store = SimpleNamespace(
+            async def get_quoted_snippet_by_id(quote_id: str):
+                quote_doc = await _room_deps.room_quote_repository.get_by_id(quote_id)
+                return (
+                    QuotedSnippet.model_validate(quote_doc)
+                    if quote_doc is not None
+                    else None
+                )
+
+            execution_message_reader = SimpleNamespace(
+                get_quoted_snippet_by_id=get_quoted_snippet_by_id,
+                get_room_agent_message_by_message_id=(
+                    message_store.get_room_agent_message_by_message_id
+                ),
+                get_room_agent_messages_by_related_message_id=(
+                    message_store.get_room_agent_messages_by_related_message_id
+                ),
+                get_room_user_message_by_message_id=(
+                    message_store.get_room_user_message_by_message_id
+                ),
+            )
+            execution_message_writer = SimpleNamespace(
                 accumulate_artifact_on_message=(
                     message_store.accumulate_artifact_on_message
                 ),
@@ -815,12 +812,37 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 delete_room_agent_message_by_message_id=(
                     message_store.delete_room_agent_message_by_message_id
                 ),
+                refresh_processing_claim=message_store.refresh_processing_claim,
+                reset_last_notified_state=message_store.reset_last_notified_state,
+                turn_exists=message_store.turn_exists,
+                unclaim_user_message=message_store.unclaim_user_message,
+                update_last_notified_state=message_store.update_last_notified_state,
+                update_room_agent_message_by_message_id=(
+                    message_store.update_room_agent_message_by_message_id
+                ),
+                update_room_agent_message_with_new_message_content_by_message_id=(
+                    message_store.update_room_agent_message_with_new_message_content_by_message_id
+                ),
+                update_room_user_message_by_message_id=(
+                    message_store.update_room_user_message_by_message_id
+                ),
+                update_task_state_on_message=message_store.update_task_state_on_message,
+                upsert_room_agent_message=message_store.upsert_room_agent_message,
+            )
+            execution_task_state_store = SimpleNamespace(
                 enable_task_tracking_on_message=(
                     task_store.enable_task_tracking_on_message
                 ),
-                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
-                get_agent_group_by_id=agent_room_store.get_agent_group_by_id,
-                get_agent_name_by_agent_id=agent_room_store.get_agent_name_by_agent_id,
+                is_message_cancelled=task_store.is_message_cancelled,
+                resolve_client_request_id_for_agent_message=(
+                    task_store.resolve_client_request_id_for_agent_message
+                ),
+                resolve_client_request_id_for_message_id=(
+                    task_store.resolve_client_request_id_for_message_id
+                ),
+                update_task_on_message=task_store.update_task_on_message,
+            )
+            execution_continuation_store = SimpleNamespace(
                 get_and_clear_continuation_on_message=(
                     task_store.get_and_clear_continuation_on_message
                 ),
@@ -830,46 +852,96 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 get_pending_continuation_on_message=(
                     task_store.get_pending_continuation_on_message
                 ),
-                get_pending_hitl_requests_for_message=(
-                    hitl_store.get_pending_hitl_requests_for_message
-                ),
-                get_room_agent_message_by_message_id=(
-                    message_store.get_room_agent_message_by_message_id
-                ),
-                get_room_agent_messages_by_related_message_id=(
-                    message_store.get_room_agent_messages_by_related_message_id
-                ),
-                get_room_by_room_id=agent_room_store.get_room_by_room_id,
-                get_room_memory_by_room_id=memory_store.get_room_memory_by_room_id,
-                get_room_user_message_by_message_id=(
-                    message_store.get_room_user_message_by_message_id
-                ),
-                refresh_processing_claim=message_store.refresh_processing_claim,
-                resolve_client_request_id_for_agent_message=(
-                    task_store.resolve_client_request_id_for_agent_message
-                ),
-                resolve_client_request_id_for_message_id=(
-                    task_store.resolve_client_request_id_for_message_id
-                ),
                 save_continuation_on_message=task_store.save_continuation_on_message,
                 save_continuation_on_user_message=(
                     task_store.save_continuation_on_user_message
                 ),
-                turn_exists=message_store.turn_exists,
-                unclaim_user_message=message_store.unclaim_user_message,
-                update_room_agent_message_by_message_id=(
-                    message_store.update_room_agent_message_by_message_id
-                ),
-                update_room_agent_message_with_new_message_content_by_message_id=(
-                    message_store.update_room_agent_message_with_new_message_content_by_message_id
-                ),
+            )
+            execution_agent_lookup = SimpleNamespace(
+                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
+            )
+            execution_agent_group_reader = SimpleNamespace(
+                get_agent_group_by_id=agent_room_store.get_agent_group_by_id,
+            )
+            execution_room_reader = SimpleNamespace(
+                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
+                get_agent_group_by_id=agent_room_store.get_agent_group_by_id,
+                get_agent_name_by_agent_id=agent_room_store.get_agent_name_by_agent_id,
+                get_room_by_room_id=agent_room_store.get_room_by_room_id,
+            )
+            execution_room_writer = SimpleNamespace(
                 update_room_by_room_id=agent_room_store.update_room_by_room_id,
-                update_room_user_message_by_message_id=(
-                    message_store.update_room_user_message_by_message_id
+            )
+            execution_memory_reader = SimpleNamespace(
+                get_room_memory_by_room_id=memory_store.get_room_memory_by_room_id,
+            )
+            execution_memory_writer = SimpleNamespace()
+            execution_hitl_reader = SimpleNamespace(
+                get_pending_hitl_requests_for_message=(
+                    hitl_store.get_pending_hitl_requests_for_message
                 ),
-                update_task_on_message=task_store.update_task_on_message,
-                update_task_state_on_message=message_store.update_task_state_on_message,
-                upsert_room_agent_message=message_store.upsert_room_agent_message,
+            )
+            execution_coordinator = SimpleNamespace(
+                emit_synthesis_message=room_coordinator_service.emit_synthesis_message,
+            )
+
+            async def execution_inquiry_agent_messages_by_related_message_id(
+                related_message_id: str,
+            ):
+                request = RoomCenterAgentMessageRequest(related_message_id=related_message_id)
+                return await room_services.inquiry_agent_messages_by_related_message_id(
+                    request
+                )
+
+            execution_room_runtime = SimpleNamespace(
+                create_agent_message=room_services.create_agent_message,
+                process_agent_message=room_services.process_agent_message,
+                update_agent_message_by_message_id=(
+                    room_services.update_agent_message_by_message_id
+                ),
+                inquiry_agent_messages_by_related_message_id=(
+                    execution_inquiry_agent_messages_by_related_message_id
+                ),
+            )
+            execution_delivery_methods = {
+                "send_task_submitted": sse_manager.send_task_submitted,
+                "send_task_update": sse_manager.send_task_update,
+                "send_rate_limit_error": sse_manager.send_rate_limit_error,
+                "send_agent_response": sse_manager.send_agent_response,
+                "send_artifact_update": sse_manager.send_artifact_update,
+                "send_error": sse_manager.send_error,
+                "clear_cancellation": sse_manager.clear_cancellation,
+                "get_token": sse_manager.get_token,
+                "create_token": sse_manager.create_token,
+                "remove_token": sse_manager.remove_token,
+            }
+            if hasattr(sse_manager, "cancel_message_and_broadcast"):
+                execution_delivery_methods["cancel_message_and_broadcast"] = (
+                    sse_manager.cancel_message_and_broadcast
+                )
+            execution_delivery = SimpleNamespace(**execution_delivery_methods)
+            execution_a2a_transport = SimpleNamespace(
+                has_streaming_capability=a2a_service.has_streaming_capability,
+                send_message_streaming=a2a_service.send_message_streaming,
+                send_message_sync=a2a_service.send_message_sync,
+                send_message_to_tracked_agent=(
+                    a2a_service.send_message_to_tracked_agent
+                ),
+                create_task_for_tracking=a2a_service.create_task_for_tracking,
+                cancel_remote_task=a2a_service.cancel_remote_task,
+                has_push_notification_capability=(
+                    a2a_service.has_push_notification_capability
+                ),
+            )
+            execution_remote_task_reader = SimpleNamespace(
+                get_task_from_agent=task_service.get_task_from_agent,
+            )
+            execution_room_memory = SimpleNamespace(
+                add_agent_response_to_memory=(
+                    room_memory_service.add_agent_response_to_memory
+                ),
+                add_synthesis_to_history=room_memory_service.add_synthesis_to_history,
+                update_room_summary=room_memory_service.update_room_summary,
             )
 
             membership_source.bind_store(agent_room_store)
@@ -880,7 +952,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             bind_notification_store(task_notification_store)
             bind_task_notification_runtime(
                 notification_service=notification_service,
-                sse_manager=sse_manager,
+                delivery=execution_delivery,
             )
             a2a_service.bind_runtime_config(
                 A2ARuntimeConfig(webhook_base_url=runtime.settings.webhook_base_url)
@@ -897,9 +969,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             bind_hitl_service(
                 create_hitl_service(
-                    store=hitl_runtime_store,
+                    persistence=hitl_runtime_store,
                     delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
-                    a2a_service=a2a_service,
+                    agent_reply=A2AHITLContinuationAdapter(
+                        a2a_service,
+                        lambda: execution_room_message_center,
+                    ),
                     continuation=A2AHITLContinuationAdapter(
                         a2a_service,
                         lambda: execution_room_message_center,
@@ -937,7 +1012,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             sse.bind_sse_dependencies(sse_state_reader, sse_manager)
             room_runtime.bind_store(room_runtime_store)
             room_runtime.bind_facade(_room_facade)
-            room_runtime.bind_object_storage(s3_service)
+            room_runtime.bind_object_storage(object_storage)
             room_center.room_center.bind_facade(_room_facade)
             hitl.bind_room_ownership_reader(_room_facade)
             context_memory_facade = create_context_memory_facade(
@@ -952,16 +1027,26 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             _context_memory_deps = create_context_memory_deps(context_memory_facade)
             room_message_center_impl = create_room_message_center(
-                room_services=room_services,
-                store=room_message_center_store,
-                sse_manager=sse_manager,
-                room_coordinator_service=room_coordinator_service,
+                room_runtime=execution_room_runtime,
+                message_reader=execution_message_reader,
+                message_writer=execution_message_writer,
+                task_state_store=execution_task_state_store,
+                continuation_store=execution_continuation_store,
+                agent_lookup=execution_agent_lookup,
+                agent_group_reader=execution_agent_group_reader,
+                room_reader=execution_room_reader,
+                room_writer=execution_room_writer,
+                memory_reader=execution_memory_reader,
+                memory_writer=execution_memory_writer,
+                hitl_reader=execution_hitl_reader,
+                delivery=execution_delivery,
+                coordinator=execution_coordinator,
                 summary_service=summary_llm_service,
                 notification_service=notification_service,
                 agent_resolver_service=agent_resolver_service,
-                a2a_service=a2a_service,
-                task_service=task_service,
-                room_memory_service=room_memory_service,
+                a2a_transport=execution_a2a_transport,
+                remote_task_reader=execution_remote_task_reader,
+                room_memory=execution_room_memory,
                 debate_service=debate_service,
                 rate_limit_service=agent_rate_limiter,
                 room_supervisor_service=room_supervisor_service,
@@ -971,7 +1056,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
                 task_notification_impl=_notify_task_update_impl,
                 agent_health_service=agent_health_service,
-                object_storage=s3_service,
+                object_storage=object_storage,
                 capability_issue_service=capability_issue_service,
                 context_memory_runtime=_context_memory_deps.context_memory_runtime,
                 compaction_service=compaction_service,
@@ -993,7 +1078,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     client_request_resolver=response_client_request_resolver,
                     room_reader=agent_room_store,
                     hitl_reader=hitl_store,
-                    sse_manager=sse_manager,
+                    delivery=execution_delivery,
                     room_message_center=execution_room_message_center,
                     hitl_coordinator=hitl_service,
                     notification_service=notification_service,
@@ -1014,11 +1099,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 hitl_service=hitl_service,
                 run_lifecycle=run_lifecycle,
                 run_reader=RunQueryAdapter(_execution_repos["run_repository"]),
-                cancellation_state=CancellationStateC3Adapter(sse_manager),
+                cancellation_state=CancellationStateC3Adapter(execution_delivery),
                 cancellation_store=MongoCancellationStoreAdapter(task_store),
                 hitl_message_cancellation=HITLMessageCancellationAdapter(hitl_service),
                 agent_task_cleanup=AgentTaskCleanupAdapter(
-                    store=message_store,
+                    message_task_store=message_store,
                     get_agent_card_from_url=a2a_service.get_agent_card_from_url,
                     cancel_remote_task=a2a_service.cancel_remote_task,
                     notify_task_update=notify_task_update_with_string_state,
@@ -1069,19 +1154,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             app.state.execution_facade = execution_facade
             app.state.execution_deps = _execution_deps
 
-            if hasattr(app.state, "platform_facade_factory") and app.state.platform_facade_factory:
-                platform_facade = app.state.platform_facade_factory(
-                    mongo_dal=mongo_dal,
-                    agent_deps=_agent_deps,
-                    room_deps=_room_deps,
-                    context_memory_facade=context_memory_facade,
-                    s3_service=s3_service,
-                    discovery_llm_service=discovery_llm_service,
-                    agent_card_resolver=agent_card_resolver,
-                    logger=logger,
-                )
-                room_runtime.bind_attachment_metadata_reader(platform_facade.attachment_metadata_reader)
-                room_runtime.bind_attachment_cleanup(platform_facade.attachment_cleanup_port)
+            if getattr(app.state, "platform_facade_factory", None):
+                platform_facade = app.state.platform_facade_factory(runtime.settings, _agent_deps, mongo_dal, object_storage, context_memory_facade, discovery_llm_service, logger)
+                app.state.platform_facade = platform_facade
+                compaction_service.bind_content_storage(platform_facade.content_storage)
             else:
                 platform_facade = None
                 from common.enterprise_injection import (
@@ -1090,28 +1166,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 )
                 room_runtime.bind_attachment_metadata_reader(NoOpAttachmentMetadataReader())
                 room_runtime.bind_attachment_cleanup(NoOpAttachmentCleanupPort())
-            if platform_facade:
-                import sys
-                if 'api_gateway.routes.platform_gateway_routes' in sys.modules:
-                    sys.modules['api_gateway.routes.platform_gateway_routes'].bind_gateway_dependencies(
-                        platform_facade.gateway_service,
-                        platform_facade.gateway_rate_limiter,
-                    )
-                if 'api_gateway.routes.discovery_routes' in sys.modules:
-                    sys.modules['api_gateway.routes.discovery_routes'].bind_discovery_dependencies(
-                        platform_facade.discovery_service,
-                        platform_facade.discovery_rate_limiter,
-                        default_limit=runtime.settings.discovery_default_limit,
-                    )
-                files.bind_file_dependencies(
-                    platform_facade.file_storage,
-                    _room_deps.room_registry,
-                )
-            app.state.platform_facade = platform_facade
-            # TODO(phase-6/7): Register ContextMemoryEventHandler with EventPublisher
-            # once Delivery wires runtime MessageCommitted delivery. Phase 5 keeps the
-            # direct compaction call path via legacy app_shell.
-            compaction_service.bind_content_storage(platform_facade.content_storage if platform_facade else None)
+                compaction_service.bind_content_storage(None)
+
             compaction_service.bind_room_memory_reader(context_memory_facade)
             compaction_service.bind_facade(context_memory_facade)
             room_memory_service.bind_facade(context_memory_facade)
@@ -1290,7 +1346,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             OrphanedUploadCleanerDeps(
                 file_uploads_collection=mongo_dal.collection("file_uploads"),
                 room_user_messages_collection=mongo_dal.collection("room_user_messages"),
-                object_storage=s3_service,
+                object_storage=object_storage,
             )
         )
 
@@ -1389,7 +1445,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
         bind_api_gateway_deps(
             APIGatewayDeps(
-                gateway_service=getattr(gateway, "gateway_service", None),
                 file_storage=getattr(files, "file_storage", None),
                 relay_service=getattr(relay, "relay_service", None),
                 execution_deps=getattr(app.state, "execution_deps", None),
@@ -2261,6 +2316,7 @@ def create_context_memory_deps(facade: ContextMemoryFacade) -> ContextMemoryDeps
         memory_projector=facade,
         context_memory_runtime=facade,
     )
+
 
 
 

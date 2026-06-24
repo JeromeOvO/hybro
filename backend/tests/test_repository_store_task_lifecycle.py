@@ -220,7 +220,7 @@ class TestRepositoryStoreAccumulateArtifact:
         }
         set_stage = _set_stage(update_doc)
         assert "$map" in set_stage["message_content.message_task.artifacts"]
-        assert set_stage["message_content.message_text"] == "new"
+        assert set_stage["message_content.message_text"] == {"$literal": "new"}
         assert set_stage["message_content.message_task.status.state"] == "working"
 
     @pytest.mark.asyncio
@@ -260,7 +260,7 @@ class TestRepositoryStoreAccumulateArtifact:
         set_stage = _set_stage(update_doc)
         assert "$map" in set_stage["message_content.message_task.artifacts"]
         assert set_stage["message_content.message_text"] == {
-            "$concat": [{"$ifNull": ["$message_content.message_text", ""]}, " more"]
+            "$concat": [{"$ifNull": ["$message_content.message_text", ""]}, {"$literal": " more"}]
         }
 
     @pytest.mark.asyncio
@@ -443,7 +443,7 @@ class TestRepositoryStoreHITL:
         )
 
         _, update_doc, _ = collection.update_one_calls[0]
-        assert _set_stage(update_doc)["message_content.message_text"] == "nested text"
+        assert _set_stage(update_doc)["message_content.message_text"] == {"$literal": "nested text"}
 
     @pytest.mark.asyncio
     async def test_exception_returns_false(self):

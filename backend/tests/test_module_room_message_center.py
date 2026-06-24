@@ -104,11 +104,10 @@ async def test_process_room_user_message_cancelled_error_emits_canceled_and_rera
         room_user_message_id="user-msg-1",
         is_recovery=False,
     )
-    rmc.database_service = SimpleNamespace(
+    rmc.message_writer = SimpleNamespace(
         claim_user_message_for_processing=AsyncMock(return_value=True),
         refresh_processing_claim=AsyncMock(),
     )
-    rmc._store = rmc.database_service
     rmc._acquire_room_lock = AsyncMock(return_value="owner-1")
     rmc._release_room_lock = AsyncMock()
     rmc._process_room_user_message_locked = AsyncMock(
@@ -116,7 +115,7 @@ async def test_process_room_user_message_cancelled_error_emits_canceled_and_rera
     )
     rmc._notify_all_non_terminal_tasks_failed = AsyncMock()
     rmc._emit_processing_status = AsyncMock()
-    rmc.sse_manager = SimpleNamespace(clear_cancellation=MagicMock())
+    rmc.delivery = SimpleNamespace(clear_cancellation=MagicMock())
     rmc._turn_event_appender = SimpleNamespace(append=AsyncMock())
 
     with pytest.raises(asyncio.CancelledError):
@@ -134,7 +133,7 @@ async def test_process_room_user_message_cancelled_error_emits_canceled_and_rera
         message_id="user-msg-1",
         lifecycle_message_id="user-msg-1",
     )
-    rmc.sse_manager.clear_cancellation.assert_called_once_with("user-msg-1")
+    rmc.delivery.clear_cancellation.assert_called_once_with("user-msg-1")
     rmc._release_room_lock.assert_awaited_once_with(
         "room-1", "owner-1", acquired_at=pytest.approx(rmc._release_room_lock.call_args.kwargs["acquired_at"])
     )
@@ -529,20 +528,21 @@ async def test_failed_room_lock_still_emits_terminal_status_when_task_transition
         has_task_tracking=True,
         message_content=SimpleNamespace(message_task=task),
     )
-    rmc.database_service = SimpleNamespace(
+    rmc.message_writer = SimpleNamespace(
         claim_user_message_for_processing=AsyncMock(return_value=True),
         unclaim_user_message=AsyncMock(),
+    )
+    rmc.message_reader = SimpleNamespace(
         get_room_agent_messages_by_related_message_id=AsyncMock(
             return_value=[agent_message]
         ),
     )
-    rmc._store = rmc.database_service
     rmc._acquire_room_lock = AsyncMock(return_value=None)
     rmc.tsm = SimpleNamespace(
         transition_task=AsyncMock(side_effect=RuntimeError("task db unavailable"))
     )
     rmc.task_notifications = SimpleNamespace(notify_task_update=AsyncMock())
-    rmc.sse_manager = SimpleNamespace(send_processing_status=AsyncMock())
+    rmc.delivery = SimpleNamespace(send_processing_status=AsyncMock())
     emit = AsyncMock()
     rmc._processing_status_emitter = emit
 
@@ -555,7 +555,7 @@ async def test_failed_room_lock_still_emits_terminal_status_when_task_transition
         error="Processing failed",
     )
     emit.assert_awaited_once()
-    rmc.sse_manager.send_processing_status.assert_not_awaited()
+    rmc.delivery.send_processing_status.assert_not_awaited()
 
 
 def test_failed_room_lock_notifies_non_terminal_tasks_before_failed_processing_status():

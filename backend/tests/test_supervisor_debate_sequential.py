@@ -42,18 +42,20 @@ def _make_agent_profile(agent_id: str, name: str, healthy: bool = True) -> Agent
 
 def _make_supervisor_executor() -> SupervisorExecutor:
     se = object.__new__(SupervisorExecutor)
-    se.database_service = AsyncMock()
-    se.sse_manager = AsyncMock()
-    se.sse_manager.send_processing_status = AsyncMock()
+    se.message_reader = AsyncMock()
+    se.message_writer = AsyncMock()
+    se.task_state_store = AsyncMock()
+    se.continuation_store = AsyncMock()
+    se.delivery = AsyncMock()
+    se.delivery.send_processing_status = AsyncMock()
     se.room_runtime = MagicMock()
     se.supervisor_service = MagicMock()
     se.tsm = MagicMock()
     se.agent_dispatcher = MagicMock()
     se.agent_message_processor = MagicMock()
-    se.room_memory_service = AsyncMock()
-    se.room_memory_service.add_agent_response_to_memory = AsyncMock()
+    se.room_memory = AsyncMock()
+    se.room_memory.add_agent_response_to_memory = AsyncMock()
     se.rate_limit_service = MagicMock()
-    se.room_coordinator_service = MagicMock()
     se.debate_rounds = 1
     return se
 
@@ -416,7 +418,7 @@ class TestSequentialDebateDispatch:
         assert dispatch_calls[1] == ["a2"]
         assert [
             call.kwargs["message_id"]
-            for call in se.room_memory_service.add_agent_response_to_memory.await_args_list
+            for call in se.room_memory.add_agent_response_to_memory.await_args_list
         ] == ["agent-msg-a1", "agent-msg-a2"]
 
     @pytest.mark.asyncio
