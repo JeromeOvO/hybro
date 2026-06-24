@@ -410,14 +410,45 @@ def _assigns_all(node: ast.AST) -> bool:
     return False
 
 
+def _is_direct_all_assignment(node: ast.AST) -> bool:
+    if isinstance(node, ast.Assign):
+        return (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "__all__"
+        )
+    return (
+        isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "__all__"
+        and node.value is not None
+    )
+
+
+def _mutates_all(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and isinstance(node.value.func.value, ast.Name)
+        and node.value.func.value.id == "__all__"
+    )
+
+
 def _explicit_all_values(path: Path) -> list[ast.AST]:
     tree = ast.parse(path.read_text(), filename=str(path))
     values: list[ast.AST] = []
 
     for node in tree.body:
+        if _mutates_all(node):
+            values.append(node)
+            continue
         if not _assigns_all(node):
             continue
-        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+        if _is_direct_all_assignment(node) and isinstance(
+            node,
+            (ast.Assign, ast.AnnAssign),
+        ):
             values.append(node.value)
         else:
             values.append(node)
@@ -451,7 +482,7 @@ def _module_exports(path: Path) -> set[str]:
 
 
 def _static_string_literal_sequence(node: ast.AST) -> set[str] | None:
-    if not isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+    if not isinstance(node, (ast.List, ast.Tuple)):
         return None
     exports: set[str] = set()
     for item in node.elts:
@@ -863,6 +894,33 @@ def _import_from_source(source: str) -> ast.ImportFrom:
     node = ast.parse(source).body[0]
     assert isinstance(node, ast.ImportFrom)
     return node
+
+
+def test_explicit_all_rejects_dynamic_mutation(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+__all__ = ["RequiredExport"]
+__all__.append("ExtraExport")
+""",
+    )
+
+    assert (
+        _all_static_literal_violation(path)
+        == f"{path}: __all__ must be a static string literal sequence"
+    )
+    assert _module_exports(path) == set()
+
+
+def test_explicit_all_rejects_set_literals(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text('__all__ = {"RequiredExport"}\n')
+
+    assert (
+        _all_static_literal_violation(path)
+        == f"{path}: __all__ must be a static string literal sequence"
+    )
+    assert _module_exports(path) == set()
 
 
 def test_relay_getattr_export_comparison_requires_equality_operator():
