@@ -186,6 +186,7 @@ packages = [
     "room",
     "room.repository",
     "context_memory",
+    "context_memory.compat",
     "context_memory.repository",
     "dal",
     "dal.mongo",
