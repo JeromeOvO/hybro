@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app_shell.a2a_runtime import A2AService
+from a2a_adapter.runtime_service import A2AService
 from execution.dispatch.response_handler import AgentResponseHandler
 from execution.dispatch.transports.relay import RelayTransport
 from hub_runtime_bridge.task_ownership import InMemoryHubTaskOwnershipStore

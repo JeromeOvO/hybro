@@ -394,11 +394,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             app.state.delivery_facade = _delivery_facade
             app.state.delivery_deps = _delivery_deps
 
-            from a2a_adapter.task_status import coerce_task_state
-            from app_shell.a2a_runtime import (
+            from a2a_adapter.runtime_service import (
                 A2ARuntimeConfig,
                 a2a_service,
             )
+            from a2a_adapter.task_status import coerce_task_state
             from app_shell.hitl_service import (
                 bind_hitl_service,
                 create_hitl_service,
