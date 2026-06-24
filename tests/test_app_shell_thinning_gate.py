@@ -607,13 +607,19 @@ def _mutation_target_roots(node: ast.AST) -> set[str]:
     return set()
 
 
+def _top_level_rebound_names(node: ast.AST) -> set[str]:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return {node.name}
+    return _mutation_target_roots(node)
+
+
 def _invalidated_owner_refs(
     tree: ast.Module,
     owner_refs: set[tuple[str, ...]],
 ) -> set[tuple[str, ...]]:
     mutated_roots: set[str] = set()
     for node in tree.body:
-        mutated_roots.update(_mutation_target_roots(node))
+        mutated_roots.update(_top_level_rebound_names(node))
     return {ref for ref in owner_refs if ref and ref[0] in mutated_roots}
 
 
@@ -812,7 +818,7 @@ def _rebound_owner_import_exports(
                     imported_exports.add(alias.name)
             continue
 
-        rebound_exports.update(imported_exports & _mutation_target_roots(node))
+        rebound_exports.update(imported_exports & _top_level_rebound_names(node))
 
     return rebound_exports
 
@@ -1250,6 +1256,31 @@ __all__ = ["RequiredExport"]
     assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
 
 
+@pytest.mark.parametrize(
+    "shadowing_definition",
+    [
+        "def RequiredExport():\n    return object()\n",
+        "async def RequiredExport():\n    return object()\n",
+        "class RequiredExport:\n    pass\n",
+    ],
+)
+def test_direct_owner_import_definition_shadowing_invalidates_provenance(
+    tmp_path,
+    shadowing_definition,
+):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        f"""
+from owner.module import RequiredExport
+
+{shadowing_definition}
+__all__ = ["RequiredExport"]
+""",
+    )
+
+    assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
+
+
 def test_direct_owner_import_without_rebinding_keeps_provenance(tmp_path):
     path = tmp_path / "shim.py"
     path.write_text(
@@ -1274,6 +1305,35 @@ def test_owner_star_import_rebinding_invalidates_provenance(tmp_path, monkeypatc
 from owner.module import *
 
 RequiredExport = object()
+__all__ = ["RequiredExport"]
+""",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
+
+
+@pytest.mark.parametrize(
+    "shadowing_definition",
+    [
+        "def RequiredExport():\n    return object()\n",
+        "async def RequiredExport():\n    return object()\n",
+        "class RequiredExport:\n    pass\n",
+    ],
+)
+def test_owner_star_import_definition_shadowing_invalidates_provenance(
+    tmp_path,
+    monkeypatch,
+    shadowing_definition,
+):
+    (tmp_path / "owner").mkdir()
+    (tmp_path / "owner" / "module.py").write_text("RequiredExport = object()\n")
+    path = tmp_path / "shim.py"
+    path.write_text(
+        f"""
+from owner.module import *
+
+{shadowing_definition}
 __all__ = ["RequiredExport"]
 """,
     )
