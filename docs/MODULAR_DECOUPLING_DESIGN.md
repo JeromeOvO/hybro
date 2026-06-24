@@ -9,7 +9,7 @@
 
 ## 1. Executive Summary
 
-The current codebase delivers a full-featured multi-agent orchestration platform with rooms, supervisor/debate workflows, HITL, hub relay, memory compaction, and a discovery/gateway API. However, it suffers from tight coupling via singleton imports, a service-locator anti-pattern, no interface abstractions, and monolithic initialization.
+The original codebase delivered a full-featured multi-agent orchestration platform with rooms, supervisor/debate workflows, HITL, hub relay, memory compaction, and a discovery/gateway API, but it suffered from tight coupling via singleton imports, a service-locator anti-pattern, missing interface seams, and monolithic initialization.
 
 This document records the accepted restructuring of the codebase into **well-defined modules** connected through **Python Protocol interfaces**, managed by **module-scoped sub-containers**, while preserving every non-decommissioned feature and API endpoint (legacy workflow endpoints are explicitly removed via Phase 0d deprecation). The modular structure enables future technology stack replacement (DBOS, AG-UI, etc.) by creating clean seams — but this document does not introduce any new technology.
 
