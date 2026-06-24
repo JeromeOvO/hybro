@@ -567,10 +567,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             max_tasks_per_user = app_shell_store.MAX_TASKS_PER_USER
             max_tasks_per_room = app_shell_store.MAX_TASKS_PER_ROOM
 
-            # Transitional P3 adapters: keep startup wiring narrow without
-            # introducing long-lived app-shell classes in this slice. Follow-up
-            # hardening can replace these SimpleNamespace seams with concrete
-            # protocol adapters when static type enforcement becomes the goal.
+            # P3 compatibility adapters keep startup wiring narrow without
+            # introducing long-lived app-shell classes. These SimpleNamespace
+            # seams are intentionally constrained to container assembly.
             async def check_task_limits(
                 user_id: str,
                 room_id: str,

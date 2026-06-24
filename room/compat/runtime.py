@@ -902,7 +902,7 @@ class RoomServices:
                 status_code=500,
             )
         cleanup_ok = await self._cleanup_context_memory_for_room(room_id)
-        await self._delete_transitional_non_room_data(room_id)
+        await self._delete_legacy_non_room_data(room_id)
         if not cleanup_ok:
             logger.warning(
                 "Context & Memory cleanup failed after room deletion for room %s",
@@ -913,8 +913,9 @@ class RoomServices:
         )
 
     async def _cleanup_context_memory_for_room(self, room_id: str) -> bool:
-        # TODO(Phase 9): Move this transitional cleanup behind a repository/DAL
-        # boundary when the remaining legacy room data paths are retired.
+        # Accepted room-deletion cleanup; startup binds the ContextMemory
+        # protocol surface and this compatibility owner never imports the
+        # concrete facade.
         if self._context_memory_manager is None:
             logger.warning(
                 "Context & Memory cleanup skipped for room %s; manager not bound",
@@ -937,7 +938,7 @@ class RoomServices:
             )
             return False
 
-    async def _delete_transitional_non_room_data(self, room_id: str) -> None:
+    async def _delete_legacy_non_room_data(self, room_id: str) -> None:
         s3_cleanup_ok = True
         try:
             await self.object_storage.delete_prefix(f"uploads/{room_id}/")
@@ -955,7 +956,7 @@ class RoomServices:
                     await attachment_cleanup.delete_for_room(room_id)
             except Exception:
                 logger.warning(
-                    "Transitional file upload cleanup failed for room %s",
+                    "Legacy file upload cleanup failed for room %s",
                     room_id,
                     exc_info=True,
                 )

@@ -98,8 +98,8 @@ select = ["E", "F", "B", "I", "UP", "C90"]
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
-# Temporary legacy lint baseline. Global rules stay enabled so new files and
-# newly introduced violations outside these exact files are still checked.
+# Compatibility lint baseline. Global rules stay enabled so new files and newly
+# introduced violations outside these exact files are still checked.
 "a2a_adapter/artifact_storage.py" = ["C901"]
 "a2a_adapter/runtime_service.py" = ["C901"]
 "a2a_adapter/webhook_payloads.py" = ["C901"]
