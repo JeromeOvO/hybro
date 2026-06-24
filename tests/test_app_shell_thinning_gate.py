@@ -270,6 +270,8 @@ PRODUCTION_MODULE_ROOTS = (
     "execution",
     "hub_runtime_bridge",
     "jobs",
+    "llm_gateway",
+    "models",
     "platform_module",
     "room",
 )
