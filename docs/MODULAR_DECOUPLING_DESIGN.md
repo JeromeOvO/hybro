@@ -873,7 +873,7 @@ class HubAgentResponseInternal(InternalEventBase):
 InternalEvent = MessageCommitted | RunStateChanged | HubAgentResponseInternal
 ```
 
-For Phase 7b handler registration, `HubAgentResponseInternal.payload` must be
+For accepted handler registration, `HubAgentResponseInternal.payload` is
 normalized before Execution handles it. Required fields are `kind` and either
 `message_id` or `continuation_message_id`; optional fields mirror the
 `AgentEvent` normalized event fields (`text`, `state`, `parts`, `artifacts`,
@@ -1597,9 +1597,8 @@ class ExecutionFacade:
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        # Phase 7b implementation must add and test orchestrator CancelledError
-        # handlers so each cancelled run transitions to RunState.CANCELED before
-        # shutdown cancellation is considered complete.
+        # Orchestrator CancelledError handlers ensure each cancelled run
+        # transitions to RunState.CANCELED before shutdown cancellation completes.
         return count
 ```
 
@@ -2722,9 +2721,9 @@ source_modules = ["agent", "room", "context_memory", "execution", "delivery", "p
 forbidden_modules = ["openai", "google.genai", "aioboto3"]
 ```
 
-The A2A contract above is the target-state contract. Phase 7b uses an exact AST
-allowlist for moved Execution files that still carry A2A protocol translation
-during extraction; new HITL/cancellation code must not use that allowlist.
+The A2A contract above is the target-state contract. Exact legacy Execution
+compatibility files that still carry A2A protocol translation are documented and
+gated; new HITL/cancellation code must not use those compatibility paths.
 
 **AST scan (CI) — replaces the no-op import-linter contract (fix 2.8):**
 ```python
