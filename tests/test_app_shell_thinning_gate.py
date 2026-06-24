@@ -607,7 +607,22 @@ def _mutation_target_roots(node: ast.AST) -> set[str]:
     return set()
 
 
+def _import_bound_names(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Import):
+        return {alias.asname or alias.name.split(".", 1)[0] for alias in node.names}
+    if isinstance(node, ast.ImportFrom):
+        return {
+            alias.asname or alias.name
+            for alias in node.names
+            if alias.name != "*"
+        }
+    return set()
+
+
 def _top_level_rebound_names(node: ast.AST) -> set[str]:
+    import_bound_names = _import_bound_names(node)
+    if import_bound_names:
+        return import_bound_names
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
         return {node.name}
     return _mutation_target_roots(node)
@@ -616,7 +631,22 @@ def _top_level_rebound_names(node: ast.AST) -> set[str]:
 def _invalidated_owner_refs(
     tree: ast.Module,
     owner_refs: set[tuple[str, ...]],
+    owner_ref_lines: dict[tuple[str, ...], int] | None = None,
 ) -> set[tuple[str, ...]]:
+    if owner_ref_lines is not None:
+        invalidated_refs: set[tuple[str, ...]] = set()
+        for node in tree.body:
+            rebound_names = _top_level_rebound_names(node)
+            if not rebound_names:
+                continue
+            for ref in owner_refs:
+                if not ref or ref[0] not in rebound_names:
+                    continue
+                owner_line = owner_ref_lines.get(ref)
+                if owner_line is None or node.lineno > owner_line:
+                    invalidated_refs.add(ref)
+        return invalidated_refs
+
     mutated_roots: set[str] = set()
     for node in tree.body:
         mutated_roots.update(_top_level_rebound_names(node))
@@ -626,20 +656,27 @@ def _invalidated_owner_refs(
 def _relay_impl_aliases(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(), filename=str(path))
     aliases: set[str] = set()
+    alias_lines: dict[tuple[str, ...], int] = {}
     for node in tree.body:
         if not isinstance(node, ast.ImportFrom):
             continue
         if node.module != "hub_runtime_bridge.compat":
             continue
-        aliases.update(
-            alias.asname or alias.name
-            for alias in node.names
-            if alias.name == "relay_service"
-        )
+        for alias in node.names:
+            if alias.name != "relay_service":
+                continue
+            local_name = alias.asname or alias.name
+            aliases.add(local_name)
+            alias_lines[(local_name,)] = node.lineno
     invalidated_aliases = {
         alias
         for alias in aliases
-        if (alias,) in _invalidated_owner_refs(tree, {(alias,) for alias in aliases})
+        if (alias,)
+        in _invalidated_owner_refs(
+            tree,
+            {(alias,) for alias in aliases},
+            alias_lines,
+        )
     }
     return aliases - invalidated_aliases
 
@@ -854,6 +891,7 @@ def _owner_backed_exports(
     tree = ast.parse(path.read_text(), filename=str(path))
     backed_exports: set[str] = set()
     owner_refs: set[tuple[str, ...]] = set()
+    owner_ref_lines: dict[tuple[str, ...], int] = {}
 
     for node in tree.body:
         imported_exports, imported_refs = _owner_import_provenance(
@@ -863,8 +901,10 @@ def _owner_backed_exports(
         )
         backed_exports.update(imported_exports)
         owner_refs.update(imported_refs)
+        for ref in imported_refs:
+            owner_ref_lines[ref] = node.lineno
 
-    owner_refs -= _invalidated_owner_refs(tree, owner_refs)
+    owner_refs -= _invalidated_owner_refs(tree, owner_refs, owner_ref_lines)
     backed_exports -= _rebound_owner_import_exports(
         tree,
         owning_module,
@@ -1242,6 +1282,20 @@ RequiredExport = owner_alias.RequiredExport
     assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
 
 
+def test_later_import_alias_spoofing_invalidates_assignment_provenance(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+import owner.module as owner_alias
+import other.module as owner_alias
+
+RequiredExport = owner_alias.RequiredExport
+""",
+    )
+
+    assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
+
+
 def test_direct_owner_import_rebinding_invalidates_provenance(tmp_path):
     path = tmp_path / "shim.py"
     path.write_text(
@@ -1249,6 +1303,20 @@ def test_direct_owner_import_rebinding_invalidates_provenance(tmp_path):
 from owner.module import RequiredExport
 
 RequiredExport = object()
+__all__ = ["RequiredExport"]
+""",
+    )
+
+    assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
+
+
+def test_later_direct_import_spoofing_invalidates_provenance(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+from owner.module import RequiredExport
+from other.module import RequiredExport
+
 __all__ = ["RequiredExport"]
 """,
     )
