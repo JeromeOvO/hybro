@@ -413,13 +413,14 @@ def _target_root_names(node: ast.AST) -> set[str]:
     return set()
 
 
-def _targets_all(node: ast.AST) -> bool:
+def _targets_all(node: ast.AST, all_aliases: set[str] | None = None) -> bool:
+    all_names = {"__all__", *(all_aliases or set())}
     if isinstance(node, ast.Assign):
-        return any("__all__" in _target_root_names(target) for target in node.targets)
+        return any(_target_root_names(target) & all_names for target in node.targets)
     if isinstance(node, (ast.AnnAssign, ast.AugAssign)):
-        return "__all__" in _target_root_names(node.target)
+        return bool(_target_root_names(node.target) & all_names)
     if isinstance(node, ast.Delete):
-        return any("__all__" in _target_root_names(target) for target in node.targets)
+        return any(_target_root_names(target) & all_names for target in node.targets)
     return False
 
 
@@ -438,24 +439,55 @@ def _is_direct_all_assignment(node: ast.AST) -> bool:
     )
 
 
-def _mutates_all(node: ast.AST) -> bool:
+def _is_all_alias_assignment(node: ast.AST) -> bool:
+    if isinstance(node, ast.Assign):
+        return (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "__all__"
+        )
+    return (
+        isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "__all__"
+    )
+
+
+def _all_alias_names(tree: ast.Module) -> set[str]:
+    aliases: set[str] = set()
+    for node in tree.body:
+        if _is_all_alias_assignment(node):
+            if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+                aliases.add(node.targets[0].id)
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                aliases.add(node.target.id)
+    return aliases
+
+
+def _mutates_all(node: ast.AST, all_aliases: set[str] | None = None) -> bool:
+    all_names = {"__all__", *(all_aliases or set())}
     return (
         isinstance(node, ast.Expr)
         and isinstance(node.value, ast.Call)
         and isinstance(node.value.func, ast.Attribute)
-        and "__all__" in _target_root_names(node.value.func.value)
+        and bool(_target_root_names(node.value.func.value) & all_names)
     )
 
 
 def _explicit_all_values(path: Path) -> list[ast.AST]:
     tree = ast.parse(path.read_text(), filename=str(path))
+    all_aliases = _all_alias_names(tree)
     values: list[ast.AST] = []
 
     for node in tree.body:
-        if _mutates_all(node):
+        if _is_all_alias_assignment(node):
+            continue
+        if _mutates_all(node, all_aliases):
             values.append(node)
             continue
-        if not _targets_all(node):
+        if not _targets_all(node, all_aliases):
             continue
         if _is_direct_all_assignment(node) and isinstance(
             node,
@@ -559,6 +591,32 @@ def _attribute_chain(node: ast.AST) -> tuple[str, ...] | None:
     return None
 
 
+def _mutation_target_roots(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Assign):
+        roots: set[str] = set()
+        for target in node.targets:
+            roots.update(_target_root_names(target))
+        return roots
+    if isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+        return _target_root_names(node.target)
+    if isinstance(node, ast.Delete):
+        roots: set[str] = set()
+        for target in node.targets:
+            roots.update(_target_root_names(target))
+        return roots
+    return set()
+
+
+def _invalidated_owner_refs(
+    tree: ast.Module,
+    owner_refs: set[tuple[str, ...]],
+) -> set[tuple[str, ...]]:
+    mutated_roots: set[str] = set()
+    for node in tree.body:
+        mutated_roots.update(_mutation_target_roots(node))
+    return {ref for ref in owner_refs if ref and ref[0] in mutated_roots}
+
+
 def _relay_impl_aliases(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(), filename=str(path))
     aliases: set[str] = set()
@@ -572,7 +630,12 @@ def _relay_impl_aliases(path: Path) -> set[str]:
             for alias in node.names
             if alias.name == "relay_service"
         )
-    return aliases
+    invalidated_aliases = {
+        alias
+        for alias in aliases
+        if (alias,) in _invalidated_owner_refs(tree, {(alias,) for alias in aliases})
+    }
+    return aliases - invalidated_aliases
 
 
 def _returns_relay_impl_service(node: ast.AST, relay_impl_aliases: set[str]) -> bool:
@@ -752,6 +815,8 @@ def _owner_backed_exports(
         backed_exports.update(imported_exports)
         owner_refs.update(imported_refs)
 
+    owner_refs -= _invalidated_owner_refs(tree, owner_refs)
+
     for node in tree.body:
         backed_exports.update(_owner_assignment_backed_exports(node, owner_refs))
 
@@ -924,6 +989,40 @@ __all__.append("ExtraExport")
     assert _module_exports(path) == set()
 
 
+def test_explicit_all_rejects_alias_call_mutation(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+__all__ = ["RequiredExport"]
+exports = __all__
+exports.append("ExtraExport")
+""",
+    )
+
+    assert (
+        _all_static_literal_violation(path)
+        == f"{path}: __all__ must be a static string literal sequence"
+    )
+    assert _module_exports(path) == set()
+
+
+def test_explicit_all_rejects_alias_subscript_mutation(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+__all__ = ["RequiredExport"]
+exports = __all__
+exports[0] = "OtherExport"
+""",
+    )
+
+    assert (
+        _all_static_literal_violation(path)
+        == f"{path}: __all__ must be a static string literal sequence"
+    )
+    assert _module_exports(path) == set()
+
+
 def test_explicit_all_rejects_subscript_mutation_and_deletion(tmp_path):
     path = tmp_path / "shim.py"
     path.write_text(
@@ -1041,6 +1140,24 @@ def __getattr__(name):
     assert _relay_getattr_handler_if(invalid_function, "name", {"_impl"}) is None
 
 
+def test_relay_impl_alias_rebinding_invalidates_dynamic_export(tmp_path):
+    path = tmp_path / "relay_service.py"
+    path.write_text(
+        """
+from hub_runtime_bridge.compat import relay_service as _impl
+
+_impl = object()
+
+def __getattr__(name):
+    if name == "relay_service":
+        return _impl.relay_service
+    raise AttributeError(name)
+""",
+    )
+
+    assert _relay_impl_aliases(path) == set()
+
+
 def test_owner_import_provenance_rejects_renamed_member_spoofing():
     spoofed_exports, _owner_refs = _owner_import_provenance(
         _import_from_source("from owner.module import OtherName as RequiredExport"),
@@ -1055,6 +1172,20 @@ def test_owner_import_provenance_rejects_renamed_member_spoofing():
         {"RequiredExport"},
     )
     assert backed_exports == {"RequiredExport"}
+
+
+def test_owner_alias_rebinding_invalidates_assignment_provenance(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+import owner.module as owner_alias
+
+owner_alias = object()
+RequiredExport = owner_alias.RequiredExport
+""",
+    )
+
+    assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
 
 
 def test_app_shell_forbidden_imports_are_manifest_blocked_by_exact_prefix():
