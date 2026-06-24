@@ -250,11 +250,16 @@ FINAL_APP_SHELL_REEXPORT_SHIMS = {
     },
 }
 
+def _module_name_from_source_path(path: str) -> str:
+    return path.removesuffix(".py").replace("/", ".").removesuffix(".__init__")
+
+
 FOCUS_MODULES = {
-    path.removesuffix(".py").replace("/", ".") for path in FINAL_APP_SHELL_SHIMS
-}
-FOCUS_APP_SHELL_NAMES = {
-    module.removeprefix("app_shell.") for module in FOCUS_MODULES
+    _module_name_from_source_path(path)
+    for path in {
+        **FINAL_APP_SHELL_SHIMS,
+        **FINAL_APP_SHELL_REEXPORT_SHIMS,
+    }
 }
 
 PRODUCTION_MODULE_ROOTS = (
@@ -275,6 +280,8 @@ PRODUCTION_MODULE_ROOTS = (
     "platform_module",
     "room",
 )
+
+PRODUCTION_MODULE_FILES = ("container.py",)
 
 EXCLUDED_PRODUCTION_SCAN_PARTS = {
     ".mypy_cache",
@@ -479,6 +486,13 @@ def _imports_module(path: Path, expected_module: str) -> bool:
     return False
 
 
+def _is_focus_module(module: str) -> bool:
+    return any(
+        module == focus_module or module.startswith(f"{focus_module}.")
+        for focus_module in FOCUS_MODULES
+    )
+
+
 def _app_shell_focus_runtime_imports_for_node(
     path: Path,
     node: ast.AST,
@@ -487,19 +501,19 @@ def _app_shell_focus_runtime_imports_for_node(
         return [
             f"{path}:{node.lineno}: {alias.name}"
             for alias in node.names
-            if alias.name in FOCUS_MODULES
+            if _is_focus_module(alias.name)
         ]
     if not isinstance(node, ast.ImportFrom) or node.module is None:
         return []
 
     violations: list[str] = []
-    if node.module in FOCUS_MODULES:
+    if _is_focus_module(node.module):
         violations.append(f"{path}:{node.lineno}: {node.module}")
     if node.module == "app_shell":
         violations.extend(
             f"{path}:{node.lineno}: app_shell.{alias.name}"
             for alias in node.names
-            if alias.name in FOCUS_APP_SHELL_NAMES
+            if _is_focus_module(f"app_shell.{alias.name}")
         )
     return violations
 
@@ -515,6 +529,10 @@ def _app_shell_focus_runtime_import_violations(paths: list[Path]) -> list[str]:
 
 def _production_module_python_files() -> list[Path]:
     paths: list[Path] = []
+    for filename in PRODUCTION_MODULE_FILES:
+        path = Path(filename)
+        if path.exists() and EXCLUDED_PRODUCTION_SCAN_PARTS.isdisjoint(path.parts):
+            paths.append(path)
     for root in PRODUCTION_MODULE_ROOTS:
         root_path = Path(root)
         if not root_path.exists():
