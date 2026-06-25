@@ -177,7 +177,7 @@ def test_container_binds_room_compat_legacy_dependencies_at_startup():
     source = Path("container.py").read_text()
 
     assert "room_runtime.bind_legacy_dependencies(" in source
-    assert "agent_service=agent_service" in source
+    assert "agent_service=agent_compat_service" in source
     assert "agent_selection_service=agent_selection_service" in source
     assert "a2a_service=a2a_service" in source
     assert "room_memory_service=room_memory_service" in source

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from app_shell.agent_service import agent_service
 from app_shell.runtime_store import UNBOUND_RUNTIME_STORE
 from common.utils.a2a_helpers import extract_agent_text_from_room_message
 from common.utils.logger import get_logger
@@ -12,7 +11,6 @@ logger = get_logger(__name__)
 
 class DebateService:
     def __init__(self, *, message_store=None):
-        self.agent_service = agent_service
         self._store = message_store or UNBOUND_RUNTIME_STORE
         self.active_debates = {}  # Store active debate sessions
 

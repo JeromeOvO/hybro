@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 def test_agent_resolver_service_has_no_a2a_sdk_imports():
-    tree = ast.parse(Path("app_shell/agent_resolver_service.py").read_text())
+    tree = ast.parse(Path("agent/resolver.py").read_text())
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.ImportFrom)

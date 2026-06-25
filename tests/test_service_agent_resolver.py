@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app_shell.agent_resolver_service import (
+from agent.resolver import (
     AgentResolverService,
     ResolveResult,
     _HealthCache,
@@ -70,6 +70,7 @@ class TestPickFirstHealthy:
         svc = object.__new__(AgentResolverService)
         svc._resolution_repository = MagicMock()
         svc.agent_selection_service = None
+        svc.capability_issue_reader = None
         svc._health_cache = _HealthCache(ttl=60.0)
         return svc
 
@@ -127,7 +128,10 @@ class TestPickFirstHealthy:
 @pytest.mark.asyncio
 async def test_reorder_by_llm_uses_bound_agent_selection_service():
     svc = object.__new__(AgentResolverService)
+    svc._resolution_repository = MagicMock()
     svc.agent_selection_service = MagicMock()
+    svc.capability_issue_reader = None
+    svc._health_cache = _HealthCache(ttl=60.0)
     svc.agent_selection_service.select_best_agent_for_task = AsyncMock(
         return_value="a2"
     )
@@ -144,7 +148,10 @@ async def test_reorder_by_llm_uses_bound_agent_selection_service():
 @pytest.mark.asyncio
 async def test_reorder_by_llm_raises_when_agent_selection_service_unbound():
     svc = object.__new__(AgentResolverService)
+    svc._resolution_repository = MagicMock()
     svc.agent_selection_service = None
+    svc.capability_issue_reader = None
+    svc._health_cache = _HealthCache(ttl=60.0)
     a1 = _make_agent("a1", "Alpha")
     a2 = _make_agent("a2", "Beta")
 
@@ -155,7 +162,10 @@ async def test_reorder_by_llm_raises_when_agent_selection_service_unbound():
 @pytest.mark.asyncio
 async def test_reorder_by_llm_propagates_routing_errors():
     svc = object.__new__(AgentResolverService)
+    svc._resolution_repository = MagicMock()
     svc.agent_selection_service = MagicMock()
+    svc.capability_issue_reader = None
+    svc._health_cache = _HealthCache(ttl=60.0)
     svc.agent_selection_service.select_best_agent_for_task = AsyncMock(
         side_effect=LLMModelRoutingError("unregistered model")
     )
@@ -174,20 +184,17 @@ async def test_reorder_by_llm_propagates_routing_errors():
 
 class TestResolve:
     @pytest.fixture
-    def resolver(self):
-        svc = object.__new__(AgentResolverService)
-        svc._resolution_repository = MagicMock()
-        svc.agent_selection_service = None
-        svc._health_cache = _HealthCache(ttl=60.0)
-        return svc
+    def mock_capability_issue_reader(self):
+        reader = MagicMock()
+        reader.get_excluded_agent_ids = AsyncMock(return_value=set())
+        return reader
 
-    @pytest.fixture(autouse=True)
-    def _mock_capability_issues(self):
-        with patch(
-            "app_shell.agent_resolver_service.capability_issue_service"
-        ) as mock_svc:
-            mock_svc.get_excluded_agent_ids = AsyncMock(return_value=set())
-            yield mock_svc
+    @pytest.fixture
+    def resolver(self, mock_capability_issue_reader):
+        return AgentResolverService(
+            repository=MagicMock(),
+            capability_issue_reader=mock_capability_issue_reader,
+        )
 
     @pytest.mark.asyncio
     async def test_returns_failure_when_no_candidates(self, resolver):
@@ -214,7 +221,7 @@ class TestResolve:
         resolver._sanitize_allowed_ids = AsyncMock(return_value=None)
         resolver._resolution_repository.query_similar_agents = AsyncMock(return_value=[a1])
 
-        with patch("app_shell.agent_resolver_service.settings") as mock_settings:
+        with patch("agent.resolver.settings") as mock_settings:
             mock_settings.agent_health_check_enabled = False
             result = await resolver.resolve("test query")
 
@@ -229,7 +236,7 @@ class TestResolve:
             return_value=ResolveResult(agent=a1, tried_agents=["Alpha"])
         )
 
-        with patch("app_shell.agent_resolver_service.settings") as mock_settings:
+        with patch("agent.resolver.settings") as mock_settings:
             mock_settings.agent_health_check_enabled = True
             result = await resolver.resolve("test query")
 
@@ -238,16 +245,16 @@ class TestResolve:
 
     @pytest.mark.asyncio
     async def test_passes_excluded_ids_to_query(
-        self, resolver, _mock_capability_issues
+        self, resolver, mock_capability_issue_reader
     ):
-        _mock_capability_issues.get_excluded_agent_ids = AsyncMock(
+        mock_capability_issue_reader.get_excluded_agent_ids = AsyncMock(
             return_value={"bad-agent"}
         )
         a1 = _make_agent("a1", "Alpha")
         resolver._sanitize_allowed_ids = AsyncMock(return_value=None)
         resolver._resolution_repository.query_similar_agents = AsyncMock(return_value=[a1])
 
-        with patch("app_shell.agent_resolver_service.settings") as mock_settings:
+        with patch("agent.resolver.settings") as mock_settings:
             mock_settings.agent_health_check_enabled = False
             result = await resolver.resolve("test query")
 

@@ -262,8 +262,12 @@ class AgentHealthPort(Protocol):
 class AgentResolverPort(Protocol):
     async def resolve(
         self,
-        user_input: str,
+        query_text: str,
+        *,
         allowed_agent_ids: list[str] | None = None,
+        count: int = 5,
+        use_llm_selection: bool = False,
+        user_id: str | None = None,
     ) -> Any: ...
 
 

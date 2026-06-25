@@ -8,7 +8,7 @@ from a2a_adapter.constants import (
     AGENT_CARD_WELL_KNOWN_PATH,
     PREV_AGENT_CARD_WELL_KNOWN_PATH,
 )
-from app_shell.agent_health_service import AgentHealthService
+from agent.health import AgentHealthService
 from common.types import AgentCard
 from models.agent import Agent
 
@@ -124,7 +124,7 @@ async def test_check_agent_health_returns_unhealthy_on_request_errors(monkeypatc
         raise httpx.TimeoutException("timed out")
 
     monkeypatch.setattr(
-        "app_shell.agent_health_service.fetch_agent_card_for_health",
+        "agent.health.fetch_agent_card_for_health",
         _raise_timeout,
     )
     service = AgentHealthService(repository=_Repo())
