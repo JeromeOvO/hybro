@@ -278,12 +278,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         if await mongo_dal.ping():
             from a2a_adapter import AgentCardResolverImpl, AgentTransportImpl
             from a2a_adapter import artifact_storage as a2a_artifact_storage
+            from agent.resolver import AgentResolverService
             from app_shell.agent_capability_issue_service import (
                 CapabilityIssueExclusionReader,
                 capability_issue_service,
             )
             from app_shell.agent_matcher import agent_matcher
-            from app_shell.agent_resolver_service import agent_resolver_service
             from app_shell.agent_runtime import AppShellAgentCenter
             from app_shell.agent_selection_service import agent_selection_service
             from app_shell.agent_service import agent_service
@@ -514,9 +514,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             chat_memory_service.bind_room_memory_llm_service(room_memory_llm_service)
             room_runtime.bind_message_parser_service(message_parser_llm_service)
             room_runtime.bind_debate_rounds(runtime.settings.debate_rounds)
-            agent_resolver_service.bind_agent_selection_service(
-                agent_selection_llm_service
-            )
             room_coordinator_service.bind_summary_service(summary_llm_service)
             openai_service.bind_debate_service(debate_llm_service)
             agent_card_resolver = AgentCardResolverImpl()
@@ -536,7 +533,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             agent_selection_service.bind_facade(_agent_facade)
             agent_health_service.bind_repository(_agent_deps.agent_repository)
             _resolver_repo = create_agent_resolver_repository(service=agent_service)
-            agent_resolver_service.bind_repository(_resolver_repo)
+            agent_resolver_service = AgentResolverService(
+                repository=_resolver_repo,
+                capability_issue_reader=CapabilityIssueExclusionReader(),
+                agent_selection_service=agent_selection_llm_service,
+            )
             from agent.domain_alias import DomainAliasService as _DomainAliasSvc
             from app_shell.domain_alias_service import (
                 bind_domain_alias_service as _bind_domain_alias,
