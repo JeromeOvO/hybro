@@ -121,8 +121,9 @@ Examples:
   `room.compat.runtime`, where `AppShellRoomCenter` delegates to `RoomServices`
   bound to `room.RoomFacade`, room-owned unbound startup sentinels, and an
   explicit repository-backed runtime store.
-- `app_shell.agent_runtime.AppShellAgentCenter` delegates to
-  `app_shell.agent_service`, which is bound to `agent.AgentFacade`.
+- Agent route compatibility is owned by `agent.route_adapter.AgentRouteAdapter`
+  and `agent.service.AgentService`, both constructed directly by `container.py`
+  over `agent.AgentFacade`.
 - `app_shell.relay_service` is an import-compatible shim over
   `hub_runtime_bridge.compat.relay_service`; relay behavior is owned by
   `hub_runtime_bridge.HubFacade` and HubRuntimeBridge adapters.
@@ -142,6 +143,13 @@ app-shell compatibility objects.
 composite stores. Queue, supervisor, dispatch, HITL, cancellation, and webhook
 resume paths receive only the methods they call through execution-owned
 protocols in `execution/ports.py`.
+
+Agent dependency assembly is also container-owned. `container.py` constructs
+`AgentService`, `AgentRouteAdapter`, `AgentMatcher`, `AgentSelectionService`,
+`AgentResolverService`, `AgentHealthService`, `AgentLivenessService`, and
+`AgentInspectionService` from `agent/`; `APIGatewayDeps` receives these
+Agent-owned protocol implementations directly. `app_shell` no longer owns Agent
+runtime behavior.
 
 ## Major Code Areas
 
@@ -252,8 +260,10 @@ SDK clients or read LLM environment variables directly.
 - Merge hub liveness into agent status when hub agents are involved.
 
 Mongo persistence is implemented by `agent.repository.mongo.AgentMongoRepository`.
-Route-facing app-shell owners access this through `app_shell.agent_service` and
-`app_shell.agent_runtime.AppShellAgentCenter`.
+Route-facing compatibility, legacy request/response translation, resolver
+selection, health/liveness, capability-issue exclusion, and inspection workflows
+now live under `agent/`. API gateway dependencies receive Agent-owned protocol
+implementations directly from `container.py`.
 
 ### `room`
 
@@ -572,7 +582,10 @@ Examples:
   `context_memory.compat.context_assembly`.
 - `app_shell.repository_store`: re-exports
   `dal.runtime_store.app_shell_store`.
-- `app_shell.agent_service`: route-facing adapter over `AgentFacade`.
+- Agent runtime focus shim modules under `app_shell` re-export `agent.*` owner
+  modules; runtime construction happens in `container.py`.
+- `app_shell.domain_alias_service`: separate compatibility binding facade for
+  domain alias lookup.
 - `execution.dispatch.task_notifications`: terminal task update notifications.
 - `app_shell.hitl_service`: HITL lifecycle and response handling.
 
@@ -591,7 +604,8 @@ pass:
   and run watchdog events.
 - `compaction_sweep`: runs context memory compaction for eligible rooms.
 - `orphaned_upload_cleaner`: removes uploaded files that were never attached.
-- `app_shell.agent_health_service`: periodic health/liveness support for agents.
+- `agent.health.AgentHealthService`: periodic health/liveness support for
+  agents; the app-shell health module is a re-export shim.
 
 App-shell Redis runtime modules contain Redis services, leader election, room
 locks, relay streams, and event broker support. Leader election prevents
