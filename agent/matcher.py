@@ -96,7 +96,11 @@ class AgentMatcher:
                 message_text,
                 requesting_user_id=user_id,
             )
-        converted = [_to_matched_agent(match) for match in matches]
+        converted: list[MatchedAgent] = []
+        for match in matches:
+            matched_agent = _to_matched_agent(match)
+            if matched_agent is not None:
+                converted.append(matched_agent)
         return MatchResult(
             agents=converted,
             total_candidates=len(converted),
@@ -104,9 +108,14 @@ class AgentMatcher:
         )
 
 
-def _to_matched_agent(match) -> MatchedAgent:
+def _to_matched_agent(match) -> MatchedAgent | None:
     if isinstance(match, dict):
-        agent = _agent_info_to_legacy_agent(match["agent"])
+        agent_info = match.get("agent")
+        if agent_info is None:
+            return None
+        agent = _agent_info_to_legacy_agent(agent_info)
+        if agent is None:
+            return None
         return MatchedAgent(
             agent=agent,
             vector_score=match.get("vector_score", match.get("score", 0.0)),
@@ -114,7 +123,11 @@ def _to_matched_agent(match) -> MatchedAgent:
             final_score=match.get("final_score", match.get("score", 0.0)),
         )
 
+    if getattr(match, "agent", None) is None:
+        return None
     agent = _agent_info_to_legacy_agent(match.agent)
+    if agent is None:
+        return None
     return MatchedAgent(
         agent=agent,
         vector_score=getattr(match, "score", 0.0),

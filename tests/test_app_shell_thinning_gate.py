@@ -1290,8 +1290,6 @@ def _source_package_parts(path: Path) -> tuple[str, ...]:
     if "app_shell" in parts:
         app_shell_index = parts.index("app_shell")
         parts = parts[app_shell_index:]
-    if parts[-1] == "__init__":
-        return parts[:-1]
     return parts[:-1]
 
 

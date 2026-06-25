@@ -640,6 +640,24 @@ class TestValidateAgentCard:
         assert any("url" in e.lower() for e in errors)
 
     @pytest.mark.asyncio
+    async def test_validates_url_type(self, agent_service):
+        """Should reject explicit null/non-string URLs instead of raising."""
+        card = {
+            "name": "Test Agent",
+            "description": "A test agent",
+            "url": None,
+            "version": "1.0.0",
+            "capabilities": {},
+            "defaultInputModes": ["text"],
+            "defaultOutputModes": ["text"],
+            "skills": [{"id": "s1", "name": "Skill"}],
+        }
+
+        errors = await agent_service.validate_agent_card(card)
+
+        assert "Field 'url' must be a string." in errors
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("bad_capabilities", [
         "not-an-object",
         ["a", "list"],
@@ -771,6 +789,21 @@ class TestMaskSensitiveInformation:
         
         # The URL should be masked
         assert masked.agent.agent_card.url == ""
+
+    def test_masks_root_level_nested_field(self, agent_service, sample_agent_card):
+        """Should mask nested fields directly on the response root."""
+        from models.response import AgentCenterResponse
+
+        response = AgentCenterResponse(
+            success=True,
+            agent_card=sample_agent_card,
+        )
+
+        masked = agent_service._mask_sensitive_information(
+            response, ["agent_card.url"]
+        )
+
+        assert masked.agent_card.url == ""
 
     def test_masks_nested_field_in_agents_list(self, agent_service, sample_agent):
         """Should mask nested fields in agents list."""

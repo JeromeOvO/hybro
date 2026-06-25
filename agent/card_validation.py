@@ -36,10 +36,12 @@ def _missing_required_field_errors(card_data: dict[str, Any]) -> list[str]:
 
 
 def _url_errors(card_data: dict[str, Any]) -> list[str]:
-    if "url" in card_data and not (
-        card_data["url"].startswith("http://")
-        or card_data["url"].startswith("https://")
-    ):
+    if "url" not in card_data:
+        return []
+    url = card_data["url"]
+    if not isinstance(url, str):
+        return ["Field 'url' must be a string."]
+    if not (url.startswith("http://") or url.startswith("https://")):
         return [
             "Field 'url' must be an absolute URL starting with http:// or https://."
         ]
