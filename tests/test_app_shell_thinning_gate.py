@@ -1983,10 +1983,11 @@ def _context_memory_legacy_import_violations(path: Path) -> list[str]:
             for alias in node.names:
                 if alias.name in forbidden_modules:
                     violations.append(f"{path}:{node.lineno}: {alias.name}")
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            if node.module in forbidden_modules:
-                violations.append(f"{path}:{node.lineno}: {node.module}")
-            if node.module == "app_shell":
+        elif isinstance(node, ast.ImportFrom):
+            module = _resolved_import_from_module(path, node)
+            if module in forbidden_modules:
+                violations.append(f"{path}:{node.lineno}: {module}")
+            if module == "app_shell":
                 for alias in node.names:
                     if alias.name in CONTEXT_MEMORY_APP_SHELL_LEGACY_SUFFIXES:
                         violations.append(
@@ -1996,9 +1997,17 @@ def _context_memory_legacy_import_violations(path: Path) -> list[str]:
     return violations
 
 
+def _context_memory_runtime_scan_files() -> list[Path]:
+    paths = set(_production_module_python_files())
+    app_shell_root = Path("app_shell")
+    if app_shell_root.exists():
+        paths.update(app_shell_root.rglob("*.py"))
+    return sorted(paths)
+
+
 def test_context_memory_legacy_modules_are_not_imported_anywhere_runtime_uses():
     production_and_tests = [
-        *_production_module_python_files(),
+        *_context_memory_runtime_scan_files(),
         *sorted(Path("tests").rglob("*.py")),
     ]
     violations: list[str] = []
@@ -2011,6 +2020,22 @@ def test_context_memory_legacy_modules_are_not_imported_anywhere_runtime_uses():
     assert not violations, (
         "ContextMemory legacy app_shell imports remain:\n" + "\n".join(violations)
     )
+
+
+def test_context_memory_legacy_gate_catches_relative_app_shell_imports(tmp_path):
+    package = tmp_path / "app_shell"
+    package.mkdir()
+    path = package / "consumer.py"
+    path.write_text(
+        "from .memory_service import MemoryService\n"
+        "from . import compaction_service\n"
+    )
+
+    violations = _context_memory_legacy_import_violations(path)
+    app_shell_prefix = "app_shell" + "."
+
+    assert f"{path}:1: {app_shell_prefix}memory_service" in violations
+    assert f"{path}:2: {app_shell_prefix}compaction_service" in violations
 
 
 def test_domain_modules_do_not_depend_on_app_shell_focus_runtime_modules():
