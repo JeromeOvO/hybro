@@ -1160,6 +1160,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             compaction_service.bind_content_storage(platform_facade.content_storage)
             compaction_service.bind_room_memory_reader(context_memory_facade)
             compaction_service.bind_facade(context_memory_facade)
+            room_memory_service.bind_facade(context_memory_facade)
             room_runtime.bind_context_memory(
                 _context_memory_deps.memory_manager,
                 _context_memory_deps.context_memory_runtime,
