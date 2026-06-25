@@ -1386,6 +1386,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 _agent_deps.agent_registry.bind_hub_liveness(hub_liveness_reader)
             _relay_svc.bind_agent_registry_writer(_agent_deps.agent_registry_writer)
             bind_agent_liveness_deps(
+                health_service=agent_health_service,
                 hub_liveness_reader=hub_liveness_reader,
                 agent_registry_writer=_agent_deps.agent_registry_writer,
             )
