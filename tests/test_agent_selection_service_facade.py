@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from a2a.types import AgentCapabilities, AgentCard
 
+from agent.matcher import MatchedAgent, MatchResult
 from agent.protocols import AgentSuggestion
-from app_shell.agent_matcher import MatchedAgent, MatchResult
-from app_shell.agent_selection_service import (
+from agent.selection_service import (
     AgentSelectionResult,
     AgentSelectionService,
     RoutingStrategy,
@@ -60,7 +60,7 @@ async def test_facade_delegates_to_matcher(mock_matched_agents):
         filtered_count=5,
     )
 
-    with patch("app_shell.agent_matcher.AgentMatcher") as MockMatcher:
+    with patch("agent.selection_service.AgentMatcher") as MockMatcher:
         mock_matcher_instance = AsyncMock()
         mock_matcher_instance.match.return_value = mock_match_result
         MockMatcher.return_value = mock_matcher_instance
@@ -97,7 +97,7 @@ async def test_facade_backward_compat_single(mock_matched_agents):
         filtered_count=5,
     )
 
-    with patch("app_shell.agent_matcher.AgentMatcher") as MockMatcher:
+    with patch("agent.selection_service.AgentMatcher") as MockMatcher:
         mock_matcher_instance = AsyncMock()
         mock_matcher_instance.match.return_value = mock_match_result
         MockMatcher.return_value = mock_matcher_instance
@@ -121,7 +121,7 @@ async def test_facade_backward_compat_parallel(mock_matched_agents):
         filtered_count=5,
     )
 
-    with patch("app_shell.agent_matcher.AgentMatcher") as MockMatcher:
+    with patch("agent.selection_service.AgentMatcher") as MockMatcher:
         mock_matcher_instance = AsyncMock()
         mock_matcher_instance.match.return_value = mock_match_result
         MockMatcher.return_value = mock_matcher_instance
@@ -145,7 +145,7 @@ async def test_facade_empty_result():
         filtered_count=0,
     )
 
-    with patch("app_shell.agent_matcher.AgentMatcher") as MockMatcher:
+    with patch("agent.selection_service.AgentMatcher") as MockMatcher:
         mock_matcher_instance = AsyncMock()
         mock_matcher_instance.match.return_value = mock_match_result
         MockMatcher.return_value = mock_matcher_instance
@@ -170,7 +170,7 @@ async def test_facade_passes_required_input_modes(mock_matched_agents):
         filtered_count=5,
     )
 
-    with patch("app_shell.agent_matcher.AgentMatcher") as MockMatcher:
+    with patch("agent.selection_service.AgentMatcher") as MockMatcher:
         mock_matcher_instance = AsyncMock()
         mock_matcher_instance.match.return_value = mock_match_result
         MockMatcher.return_value = mock_matcher_instance
@@ -196,7 +196,7 @@ async def test_facade_passes_is_debate_mode(mock_matched_agents):
         filtered_count=5,
     )
 
-    with patch("app_shell.agent_matcher.AgentMatcher") as MockMatcher:
+    with patch("agent.selection_service.AgentMatcher") as MockMatcher:
         mock_matcher_instance = AsyncMock()
         mock_matcher_instance.match.return_value = mock_match_result
         MockMatcher.return_value = mock_matcher_instance
@@ -308,7 +308,7 @@ def test_resolve_strategy_single():
 @pytest.mark.asyncio
 async def test_facade_propagates_matcher_error():
     """Test that matcher exceptions propagate to callers for proper error handling."""
-    with patch("app_shell.agent_matcher.AgentMatcher") as MockMatcher:
+    with patch("agent.selection_service.AgentMatcher") as MockMatcher:
         mock_matcher_instance = AsyncMock()
         mock_matcher_instance.match.side_effect = RuntimeError("Pinecone unreachable")
         MockMatcher.return_value = mock_matcher_instance
@@ -329,7 +329,7 @@ async def test_facade_respects_top_k(mock_matched_agents):
         filtered_count=5,
     )
 
-    with patch("app_shell.agent_matcher.AgentMatcher") as MockMatcher:
+    with patch("agent.selection_service.AgentMatcher") as MockMatcher:
         mock_matcher_instance = AsyncMock()
         mock_matcher_instance.match.return_value = mock_match_result
         MockMatcher.return_value = mock_matcher_instance
@@ -374,7 +374,7 @@ async def test_suggest_agents_uses_facade(mock_matched_agents):
         filtered_count=5,
     )
 
-    with patch("app_shell.agent_matcher.AgentMatcher") as MockMatcher:
+    with patch("agent.selection_service.AgentMatcher") as MockMatcher:
         mock_matcher_instance = AsyncMock()
         mock_matcher_instance.match.return_value = mock_match_result
         MockMatcher.return_value = mock_matcher_instance
