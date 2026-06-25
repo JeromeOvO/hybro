@@ -128,6 +128,15 @@ def test_bind_api_gateway_deps_stores_deps_on_app_state():
     assert app.state.api_gateway_deps is deps
 
 
+def test_api_gateway_memory_center_accepts_context_memory_route_center():
+    from context_memory.compat.runtime import ContextMemoryRouteCenter
+
+    route_center = object.__new__(ContextMemoryRouteCenter)
+    deps = _deps(memory_center=route_center)
+
+    assert deps.memory_center is route_center
+
+
 def test_get_api_gateway_deps_reads_request_app_state():
     from api_gateway.dependencies import get_api_gateway_deps
 
