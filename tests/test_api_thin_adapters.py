@@ -1014,12 +1014,12 @@ def test_route_bound_compatibility_adapters_satisfy_protocols():
     assert isinstance(AppShellRoomCenter(), RoomCenterCompatibility)
 
 
-def test_agent_runtime_shim_accepts_optional_service():
-    from app_shell.agent_runtime import AppShellAgentCenter
+def test_agent_route_adapter_accepts_service():
+    from agent.route_adapter import AgentRouteAdapter
 
     service = object()
 
-    center = AppShellAgentCenter(service=service)
+    center = AgentRouteAdapter(service=service)
 
     assert center.agent_service is service
 
