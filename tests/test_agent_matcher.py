@@ -353,6 +353,30 @@ async def test_agent_matcher_returns_sorted_result():
 
 
 @pytest.mark.asyncio
+async def test_agent_matcher_filters_missing_agents_from_stale_matches():
+    """Vector hits without live agent records should not reach selection."""
+    live_agent = create_test_agent("a1", "LiveAgent")
+    facade = MagicMock()
+    facade.match_for_message = AsyncMock(return_value=[
+        {"agent": None, "final_score": 0.99},
+        {
+            "agent": _info_from_agent(live_agent),
+            "vector_score": 0.7,
+            "capability_score": 1.0,
+            "final_score": 0.74,
+        },
+        MagicMock(agent=None, score=0.6),
+    ])
+    matcher = AgentMatcher(facade=facade)
+
+    result = await matcher.match("help with python coding")
+
+    assert [match.agent.agent_id for match in result.agents] == ["a1"]
+    assert result.total_candidates == 1
+    assert result.filtered_count == 1
+
+
+@pytest.mark.asyncio
 async def test_agent_matcher_debate_mode_returns_more_agents():
     """Test debate mode is forwarded to the facade."""
     agents = [

@@ -317,6 +317,8 @@ def _mask_field_path(data: dict[str, Any], field_path: str) -> None:
     if len(parts) == 1:
         data.pop(parts[0], None)
         return
+    if parts[0] in data and parts[0] not in ("agents", "agent"):
+        _remove_nested_field(data, parts)
     if "agents" in data:
         _remove_nested_field(data["agents"], parts)
     if "agent" in data:
