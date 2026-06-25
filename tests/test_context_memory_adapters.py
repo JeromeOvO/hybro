@@ -6,11 +6,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app_shell.compaction_service import CompactionService
-from app_shell.context_assembly_service import ContextAssemblyService
 from app_shell.memory_search_service import MemorySearchService
 from app_shell.memory_service import RoomMemoryService
 from common.dto import AssembledContext, CompactionResult, MemorySearchResult
 from context_memory import ContextMemoryFacade
+from context_memory.compat.context_assembly import ContextAssemblyService
 from context_memory.config import CompactionConfig, MemorySearchConfig
 from models.memory import ConversationTurn, RoomMemory, TurnRole
 from models.request import RoomCenterMemoryRequest

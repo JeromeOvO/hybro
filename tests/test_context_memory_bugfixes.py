@@ -387,7 +387,7 @@ class TestSearchToContextIntegration:
     """Verify memory search results flow through to supervisor context output."""
 
     def test_search_results_appear_in_supervisor_context(self, mock_compaction_config):
-        from app_shell.context_assembly_service import ContextAssemblyService
+        from context_memory.compat.context_assembly import ContextAssemblyService
         from models.search import MemorySearchResult, MemorySourceType
 
         mock_compaction_config.context_model_window = 32000

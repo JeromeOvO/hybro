@@ -10,6 +10,7 @@ from loguru import logger
 from uvicorn.config import LOGGING_CONFIG
 
 import api_gateway
+from api_gateway.registry import open_cors_path_prefixes
 from common.auth import bind_auth_config
 from common.config.settings import settings
 from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
@@ -116,7 +117,10 @@ app.add_middleware(
 # Add Discovery, Gateway & Relay API CORS middleware
 # This applies permissive CORS to /api/v1/discovery/*, /api/v1/gateway/*, and /api/v1/relay/* paths
 # Note: Middleware runs in reverse order, so adding after global CORS makes it run first.
-app.add_middleware(DiscoveryCORSMiddleware, api_prefix=settings.api_prefix)
+app.add_middleware(
+    DiscoveryCORSMiddleware,
+    open_cors_path_prefixes=open_cors_path_prefixes(settings.api_prefix),
+)
 
 
 # Pure function — trivially testable without lifespan/DB

@@ -357,7 +357,7 @@ def test_message_write_flows_do_not_call_context_memory_write_shims():
         "add_agent_response_to_memory",
     }
     checked_paths = [
-        Path("app_shell/room_runtime.py"),
+        Path("room/compat/runtime.py"),
         Path("execution/orchestration/queue_executor.py"),
         Path("execution/orchestration/supervisor_executor.py"),
         Path("execution/orchestration/room_message_center.py"),
@@ -441,7 +441,7 @@ def test_context_memory_import_boundary():
 
 def test_non_protocol_helper_call_boundary():
     allowed_call_sites = {
-        "app_shell/context_assembly_service.py": {
+        "context_memory/compat/context_assembly.py": {
             "assemble_supervisor_context_from_memory",
             "assemble_agent_execution_context_from_memory",
         },

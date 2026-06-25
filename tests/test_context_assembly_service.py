@@ -16,13 +16,13 @@ from unittest.mock import patch
 
 import pytest
 
-from app_shell.context_assembly_service import (
+from context_memory import assembly as context_memory_assembly
+from context_memory import legacy_assembly
+from context_memory.compat.context_assembly import (
     ContextAssemblyResult,
     ContextAssemblyService,
     TruncationReason,
 )
-from context_memory import assembly as context_memory_assembly
-from context_memory import legacy_assembly
 from context_memory.config import TokenBudgetConfig
 from models.context_config import TokenBudget
 from models.memory import (
@@ -130,7 +130,7 @@ class TestContextAssemblyService:
     @pytest.fixture
     def service(self):
         """Create a ContextAssemblyService instance with mocked settings."""
-        with patch("models.context_config.settings") as mock_settings:
+        with patch("common.config.settings") as mock_settings:
             mock_settings.context_model_window = 32000
             mock_settings.context_system_prompt_tokens = 2000
             mock_settings.context_tool_schema_tokens = 3000
@@ -327,7 +327,7 @@ class TestTurnSelection:
     @pytest.fixture
     def service(self):
         """Create a ContextAssemblyService instance."""
-        with patch("models.context_config.settings") as mock_settings:
+        with patch("common.config.settings") as mock_settings:
             mock_settings.context_model_window = 32000
             mock_settings.context_system_prompt_tokens = 2000
             mock_settings.context_tool_schema_tokens = 3000
@@ -404,7 +404,7 @@ class TestOccupancyThresholds:
     @pytest.fixture
     def service(self):
         """Create a ContextAssemblyService instance."""
-        with patch("models.context_config.settings") as mock_settings:
+        with patch("common.config.settings") as mock_settings:
             mock_settings.context_model_window = 10000  # Small window for testing
             mock_settings.context_system_prompt_tokens = 500
             mock_settings.context_tool_schema_tokens = 500
@@ -494,7 +494,7 @@ class TestHardCapEnforcement:
     @pytest.fixture
     def service(self):
         """Create a ContextAssemblyService instance with small budget."""
-        with patch("models.context_config.settings") as mock_settings:
+        with patch("common.config.settings") as mock_settings:
             mock_settings.context_model_window = 5000  # Very small for testing
             mock_settings.context_system_prompt_tokens = 500
             mock_settings.context_tool_schema_tokens = 500
@@ -596,7 +596,7 @@ class TestTaskBudgetEnforcement:
     @pytest.fixture
     def service(self):
         """Create a ContextAssemblyService instance."""
-        with patch("models.context_config.settings") as mock_settings:
+        with patch("common.config.settings") as mock_settings:
             mock_settings.context_model_window = 10000
             mock_settings.context_system_prompt_tokens = 500
             mock_settings.context_tool_schema_tokens = 500

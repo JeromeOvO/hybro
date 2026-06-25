@@ -98,9 +98,10 @@ select = ["E", "F", "B", "I", "UP", "C90"]
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
-# Temporary legacy lint baseline. Global rules stay enabled so new files and
-# newly introduced violations outside these exact files are still checked.
+# Compatibility lint baseline. Global rules stay enabled so new files and newly
+# introduced violations outside these exact files are still checked.
 "a2a_adapter/artifact_storage.py" = ["C901"]
+"a2a_adapter/runtime_service.py" = ["C901"]
 "a2a_adapter/webhook_payloads.py" = ["C901"]
 "agent/facade.py" = ["C901"]
 "api_gateway/registry.py" = ["C901"]
@@ -121,17 +122,14 @@ ignore = ["E501"]
 "api_gateway/routes/webhook_routes.py" = ["B008"]
 "api_gateway/viewsets/agent.py" = ["B008"]
 "api_gateway/viewsets/base.py" = ["B008"]
-"app_shell/a2a_runtime.py" = ["C901"]
 "app_shell/agent_health_service.py" = ["C901"]
 "app_shell/agent_selection_service.py" = ["UP042"]
 "app_shell/agent_service.py" = ["C901"]
 "app_shell/bound.py" = ["UP040"]
-"app_shell/context_assembly_service.py" = ["C901", "UP042"]
 "app_shell/memory_search_service.py" = ["C901"]
 "app_shell/openai_service.py" = ["C901"]
-"app_shell/relay_service.py" = ["C901"]
 "app_shell/room_coordinator_service.py" = ["C901"]
-"app_shell/room_runtime.py" = ["C901", "UP042"]
+"room/compat/runtime.py" = ["C901", "UP042"]
 "common/a2a_constants.py" = ["UP042"]
 "common/dto/execution.py" = ["UP042"]
 "common/observability/tracing.py" = ["UP035"]
@@ -141,6 +139,7 @@ ignore = ["E501"]
 "common/utils/context_utils.py" = ["C901", "UP047"]
 "common/utils/remote_agent_connection.py" = ["C901"]
 "context_memory/assembly.py" = ["C901"]
+"context_memory/compat/context_assembly.py" = ["C901", "UP042"]
 "context_memory/compaction.py" = ["C901"]
 "context_memory/models.py" = ["UP042"]
 "delivery/translator.py" = ["C901"]
@@ -153,6 +152,7 @@ ignore = ["E501"]
 "execution/orchestration/room_supervisor_service.py" = ["C901"]
 "execution/orchestration/supervisor_executor.py" = ["C901"]
 "hub_runtime_bridge/facade.py" = ["C901"]
+"hub_runtime_bridge/compat/relay_service.py" = ["C901"]
 "hub_runtime_bridge/service/hub_publish.py" = ["C901"]
 "jobs/compaction_sweep.py" = ["C901"]
 "jobs/stale_task_checker.py" = ["C901"]
@@ -184,13 +184,17 @@ packages = [
     "agent",
     "agent.repository",
     "room",
+    "room.compat",
     "room.repository",
     "context_memory",
+    "context_memory.compat",
     "context_memory.repository",
     "dal",
     "dal.mongo",
     "dal.pinecone",
     "dal.redis",
+    "dal.runtime_store",
+    "dal.runtime_store.parts",
     "dal.s3",
     "delivery",
     "delivery.sse",
@@ -207,6 +211,7 @@ packages = [
     "hub_runtime_bridge.service",
     "hub_runtime_bridge.transport",
     "hub_runtime_bridge.adapters",
+    "hub_runtime_bridge.compat",
     "platform_module",
     "platform_module.adapters",
     "api_gateway",

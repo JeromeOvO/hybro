@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app_shell.relay_service import RelayService
+from hub_runtime_bridge.compat.relay_service import RelayService
 
 
 class _DatabaseService:

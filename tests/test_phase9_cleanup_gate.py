@@ -76,6 +76,12 @@ FORBIDDEN_LEGACY_SHIM_GLOBALS = {"mongodb", "settings", "s3_service"}
 FORBIDDEN_LEGACY_SHIM_CLASS_PREFIXES = ("_Legacy", "_Mongo")
 
 FORBIDDEN_COMMON_IMPORT_PREFIXES = (
+    "api",
+    "api_gateway",
+    "agent",
+    "app_shell",
+    "context_memory",
+    "dal",
     "database",
     "services",
     "modules",
@@ -83,9 +89,11 @@ FORBIDDEN_COMMON_IMPORT_PREFIXES = (
     "delivery",
     "execution",
     "hub_runtime_bridge",
+    "llm_gateway",
     "models",
     "platform_module",
     "a2a_adapter",
+    "room",
 )
 
 SDK_CONFINEMENT_ROOTS = (
@@ -839,6 +847,54 @@ def test_common_package_has_no_module_or_app_shell_imports():
 
 def test_phase9_cleanup_manifest_has_no_blocked_cleanup_entries():
     assert _manifest().get("blocked_cleanup", []) == []
+
+
+def _manifest_string_values(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _manifest_string_values(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _manifest_string_values(item)
+
+
+def _package_removal_blocker_violations(manifest: dict) -> list[str]:
+    violations: list[str] = []
+    for index, entry in enumerate(manifest.get("package_removal_checklist") or []):
+        if not isinstance(entry, dict):
+            continue
+        package = entry.get("package") or f"entry {index}"
+        for key, value in sorted(entry.items()):
+            if key.endswith("_blockers") and value:
+                violations.append(
+                    f"package_removal_checklist[{package!r}].{key}: {value}"
+                )
+    return violations
+
+
+def test_phase9_cleanup_manifest_has_no_transitional_exceptions():
+    manifest = _manifest()
+    forbidden_tokens = ("temporary", "transitional", "deferred")
+    violations = [
+        f"{token}: {value}"
+        for value in _manifest_string_values(manifest)
+        for token in forbidden_tokens
+        if token in value.lower()
+    ]
+
+    assert manifest.get("blocked_cleanup", []) == []
+    assert manifest.get("app_shell_runtime_blockers", []) == []
+    nested_blockers = _package_removal_blocker_violations(manifest)
+    assert not nested_blockers, (
+        "Phase 9 cleanup manifest still records package-removal blockers:\n"
+        + "\n".join(nested_blockers)
+    )
+    assert not violations, (
+        "Phase 9 cleanup manifest still records transitional exceptions:\n"
+        + "\n".join(violations)
+    )
 
 
 def test_turn_id_helper_is_common_leaf_without_manifest_blocker():

@@ -13,7 +13,7 @@ FOCUSED_LLM_CONSUMERS = [
     Path("app_shell/memory_search_service.py"),
     Path("app_shell/memory_service.py"),
     Path("app_shell/room_coordinator_service.py"),
-    Path("app_shell/room_runtime.py"),
+    Path("room/compat/runtime.py"),
     Path("execution/orchestration/room_supervisor_service.py"),
 ]
 

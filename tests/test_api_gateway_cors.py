@@ -55,3 +55,26 @@ def test_open_cors_matching_is_path_segment_bounded():
     )
 
     assert "access-control-allow-origin" not in response.headers
+
+
+def test_open_cors_middleware_uses_injected_prefixes_without_gateway_import():
+    from fastapi import FastAPI
+
+    from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
+
+    app = FastAPI()
+    app.add_middleware(
+        DiscoveryCORSMiddleware,
+        open_cors_path_prefixes=("/custom/open",),
+    )
+    client = TestClient(app)
+
+    response = client.options(
+        "/custom/open",
+        headers={
+            "Origin": "https://external.example",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert response.headers["access-control-allow-origin"] == "*"

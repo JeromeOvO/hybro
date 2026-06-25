@@ -1,5 +1,7 @@
 import ast
 import json
+import tomllib
+from fnmatch import fnmatch
 from pathlib import Path
 
 import pytest
@@ -104,225 +106,225 @@ FORBIDDEN_MAIN_WIRING_SNIPPETS = (
     "init_relay_service(",
 )
 
-EXPECTED_APP_SHELL_BASELINE = {
-    "app_shell/room_runtime.py": {"lines": 3766, "public_business_methods": 54},
-    "app_shell/a2a_runtime.py": {"lines": 613, "public_business_methods": 16},
-    "app_shell/relay_service.py": {"lines": 403, "public_business_methods": 27},
-    "app_shell/context_assembly_service.py": {
-        "lines": 164,
-        "public_business_methods": 4,
+FINAL_APP_SHELL_SHIMS = {
+    "app_shell/room_runtime.py": {
+        "max_lines": 80,
+        "required_exports": {
+            "AppShellRoomCenter",
+            "DispatchStrategy",
+            "RoomServices",
+            "_ResolvedAttachments",
+            "_human_size",
+            "build_turn_content",
+            "resolve_strategy",
+            "room_runtime",
+            "room_services",
+        },
+        "owning_module": "room.compat.runtime",
     },
-    # Goal 5 intentionally adds DTO conversion at the aggregate common.protocols
-    # boundary. Focused stores remain model-shaped; later cleanup should move
-    # adapter growth out of this aggregate instead of adding business behavior here.
-    "app_shell/repository_store.py": {"lines": 842, "public_business_methods": 93},
+    "app_shell/a2a_runtime.py": {
+        "max_lines": 60,
+        "required_exports": {"A2ARuntimeConfig", "A2AService", "a2a_service"},
+        "owning_module": "a2a_adapter.runtime_service",
+    },
+    "app_shell/relay_service.py": {
+        "max_lines": 80,
+        "required_exports": {
+            "RelayHubLivenessReader",
+            "RelayService",
+            "init_relay_service",
+            "relay_service",
+        },
+        "owning_module": "hub_runtime_bridge.compat.relay_service",
+    },
+    "app_shell/context_assembly_service.py": {
+        "max_lines": 70,
+        "required_exports": {
+            "ContextAssemblyResult",
+            "ContextAssemblyService",
+            "ContextMetrics",
+            "TruncationReason",
+            "context_assembly_service",
+        },
+        "owning_module": "context_memory.compat.context_assembly",
+    },
+    "app_shell/repository_store.py": {
+        "max_lines": 80,
+        "required_exports": {
+            "AppShellRepositoryStore",
+            "_extract_text_from_artifact_parts",
+            "_modified_count",
+            "_mongo_update_succeeded",
+            "_safe_parse_agent",
+            "_safe_parse_agent_group",
+            "_safe_parse_agent_message",
+            "_safe_parse_chat_context",
+            "_safe_parse_room",
+            "_safe_parse_room_memory",
+            "_safe_parse_user_message",
+            "_strip_file_urls",
+            "_strip_unset_task_tracking_fields",
+            "_task_tracking_matches",
+        },
+        "owning_module": "dal.runtime_store.app_shell_store",
+    },
 }
 
-EXPECTED_APP_SHELL_PUBLIC_METHODS = {
-    "app_shell/room_runtime.py": [
-        "RoomServices.bind_object_storage",
-        "RoomServices.bind_store",
-        "RoomServices.bind_facade",
-        "RoomServices.bind_context_memory",
-        "RoomServices.bind_message_event_publisher",
-        "RoomServices.bind_message_parser_service",
-        "RoomServices.bind_debate_rounds",
-        "RoomServices.bind_attachment_metadata_reader",
-        "RoomServices.bind_attachment_cleanup",
-        "RoomServices.bind_quote_writer",
-        "RoomServices.create_new_room",
-        "RoomServices.inquiry_room_setting",
-        "RoomServices.inquiry_active_runs",
-        "RoomServices.inquiry_rooms_by_room_owner_id",
-        "RoomServices.update_room_agent_set",
-        "RoomServices.update_room_name",
-        "RoomServices.update_room_extend_info",
-        "RoomServices.delete_room_by_room_id",
-        "RoomServices.parse_agent_mentions",
-        "RoomServices.extract_agent_message_content",
-        "RoomServices.group_mentions_by_context",
-        "RoomServices.create_shared_message_content",
-        "RoomServices.create_task_for_agent",
-        "RoomServices.create_task_for_agents_group",
-        "RoomServices.create_agent_message",
-        "RoomServices.parse_user_message",
-        "RoomServices.send_message_to_room",
-        "RoomServices.persist_message_to_room",
-        "RoomServices.run_message_preflight_to_room",
-        "RoomServices.parse_user_message_with_mentions",
-        "RoomServices.process_agent_message",
-        "RoomServices.update_agent_message_by_message_id",
-        "RoomServices.inquiry_user_messages_by_room_id",
-        "RoomServices.inquiry_agent_messages_by_room_id",
-        "RoomServices.inquiry_agent_message_by_message_id",
-        "RoomServices.inquiry_user_message_by_message_id",
-        "RoomServices.inquiry_agent_messages_by_related_message_id",
-        "RoomServices.inquiry_room_messages_by_room_id",
-        "RoomServices.handle_a2a_response_for_room",
-        "AppShellRoomCenter.bind_facade",
-        "AppShellRoomCenter.bind_room_services",
-        "AppShellRoomCenter.create_new_room",
-        "AppShellRoomCenter.inquiry_room_setting",
-        "AppShellRoomCenter.inquiry_active_runs",
-        "AppShellRoomCenter.delete_room_by_room_id",
-        "AppShellRoomCenter.inquiry_rooms_by_room_owner_id",
-        "AppShellRoomCenter.update_room_agent_set",
-        "AppShellRoomCenter.update_room_name",
-        "AppShellRoomCenter.update_room_extend_info",
-        "AppShellRoomCenter.inquiry_room_messages_by_room_id",
-        "AppShellRoomCenter.inquiry_agent_messages_by_related_message_id",
-        "AppShellRoomCenter.send_message_to_room",
-        "AppShellRoomCenter.persist_message_to_room",
-        "AppShellRoomCenter.run_message_preflight_to_room",
-    ],
-    "app_shell/a2a_runtime.py": [
-        "A2AService.bind_runtime_config",
-        "A2AService.bind_task_db",
-        "A2AService.get_agent_card_from_url",
-        "A2AService.has_streaming_capability",
-        "A2AService.has_push_notification_capability",
-        "A2AService.create_task_for_tracking",
-        "A2AService.send_message_to_tracked_agent",
-        "A2AService.send_message_sync",
-        "A2AService.send_message_streaming",
-        "A2AService.send_message",
-        "A2AService.dry_send_message",
-        "A2AService.validate_a2a_response",
-        "A2AService.validate_message",
-        "A2AService.process_a2a_response",
-        "A2AService.cancel_remote_task",
-        "A2AService.reply_to_task",
-    ],
-    "app_shell/relay_service.py": [
-        "RelayService.set_relay_transport",
-        "RelayService.bind_response_handler",
-        "RelayService.set_stream_service",
-        "RelayService.set_leader_election",
-        "RelayService.bind_agent_registry_writer",
-        "RelayService.start",
-        "RelayService.stop",
-        "RelayService.register_hub",
-        "RelayService.get_hub_owner_id",
-        "RelayService.connect_hub",
-        "RelayService.record_hub_heartbeat",
-        "RelayService.is_hub_alive",
-        "RelayService.is_hub_alive_cached",
-        "RelayService.mark_hub_agents_offline",
-        "RelayService.sync_agents",
-        "RelayService.push_to_hub",
-        "RelayService.process_publish",
-        "RelayService.cancel_relay_task",
-        "RelayService.cancel_hub_task",
-        "RelayService.reply_to_relay_task",
-        "RelayService.reply_to_hub_task",
-        "RelayService.send_to_hub",
-        "RelayService.get_hub_status",
-        "RelayService.sweep_offline_queues",
-        "RelayHubLivenessReader.is_hub_online",
-        "RelayHubLivenessReader.get_hub_owner_id",
-        "init_relay_service",
-    ],
-    "app_shell/context_assembly_service.py": [
-        "ContextAssemblyService.bind_facade",
-        "ContextAssemblyService.build_supervisor_context",
-        "ContextAssemblyService.build_agent_execution_context",
-        "ContextAssemblyService.get_budget_summary",
-    ],
-    "app_shell/repository_store.py": [
-        "AppShellRepositoryStore.add_agent_group",
-        "AppShellRepositoryStore.get_agent_groups_by_owner",
-        "AppShellRepositoryStore.get_agent_group_by_id",
-        "AppShellRepositoryStore.update_agent_group",
-        "AppShellRepositoryStore.delete_agent_group",
-        "AppShellRepositoryStore.get_all_active_agents",
-        "AppShellRepositoryStore.get_agent_name_by_agent_id",
-        "AppShellRepositoryStore.get_agent_by_agent_id",
-        "AppShellRepositoryStore.get_agents_with_conditions",
-        "AppShellRepositoryStore.increment_agent_call_count",
-        "AppShellRepositoryStore.get_room_by_room_id",
-        "AppShellRepositoryStore.get_rooms_by_room_owner_id",
-        "AppShellRepositoryStore.update_room_by_room_id",
-        "AppShellRepositoryStore.get_room_user_message_by_message_id",
-        "AppShellRepositoryStore.get_room_user_messages_by_room_id",
-        "AppShellRepositoryStore.get_room_agent_message_by_message_id",
-        "AppShellRepositoryStore.get_room_agent_messages_by_room_id",
-        "AppShellRepositoryStore.get_room_agent_messages_by_related_message_id",
-        "AppShellRepositoryStore.add_room_agent_message",
-        "AppShellRepositoryStore.add_room_user_message",
-        "AppShellRepositoryStore.update_room_user_message_by_message_id",
-        "AppShellRepositoryStore.upsert_room_agent_message",
-        "AppShellRepositoryStore.delete_room_agent_message_by_message_id",
-        "AppShellRepositoryStore.update_room_agent_message_by_message_id",
-        "AppShellRepositoryStore.get_active_runs_by_room_id",
-        "AppShellRepositoryStore.save_continuation_on_message",
-        "AppShellRepositoryStore.resolve_client_request_id_for_agent_message",
-        "AppShellRepositoryStore.resolve_client_request_id_for_message_id",
-        "AppShellRepositoryStore.get_task_messages_for_room",
-        "AppShellRepositoryStore.get_pending_task_messages_for_user",
-        "AppShellRepositoryStore.hash_webhook_token",
-        "AppShellRepositoryStore.verify_webhook_token",
-        "AppShellRepositoryStore.generate_webhook_token",
-        "AppShellRepositoryStore.check_task_limits",
-        "AppShellRepositoryStore.enable_task_tracking_on_message",
-        "AppShellRepositoryStore.update_task_on_message",
-        "AppShellRepositoryStore.update_webhook_token_hash_on_message",
-        "AppShellRepositoryStore.verify_webhook_token_on_message",
-        "AppShellRepositoryStore.verify_webhook_token_for_task",
-        "AppShellRepositoryStore.is_message_cancelled",
-        "AppShellRepositoryStore.cancel_message",
-        "AppShellRepositoryStore.get_room_ids_with_non_terminal_runs",
-        "AppShellRepositoryStore.find_stale_non_terminal_runs",
-        "AppShellRepositoryStore.get_stale_task_messages",
-        "AppShellRepositoryStore.get_expired_task_messages",
-        "AppShellRepositoryStore.get_non_tracked_stale_task_messages",
-        "AppShellRepositoryStore.get_orphaned_agent_messages",
-        "AppShellRepositoryStore.touch_task_message",
-        "AppShellRepositoryStore.get_and_clear_continuation_on_message",
-        "AppShellRepositoryStore.get_pending_continuation_on_message",
-        "AppShellRepositoryStore.get_and_clear_continuation_on_user_message",
-        "AppShellRepositoryStore.save_continuation_on_user_message",
-        "AppShellRepositoryStore.get_stuck_supervisor_trajectory_messages",
-        "AppShellRepositoryStore.claim_stuck_supervisor_trajectory",
-        "AppShellRepositoryStore.get_room_memory_by_room_id",
-        "AppShellRepositoryStore.get_pending_hitl_requests_for_message",
-        "AppShellRepositoryStore.create_hitl_request",
-        "AppShellRepositoryStore.get_hitl_request",
-        "AppShellRepositoryStore.update_hitl_request",
-        "AppShellRepositoryStore.cas_update_hitl_request",
-        "AppShellRepositoryStore.fenced_update_hitl_request",
-        "AppShellRepositoryStore.claim_hitl_request",
-        "AppShellRepositoryStore.get_pending_hitl_requests",
-        "AppShellRepositoryStore.get_hitl_group_requests",
-        "AppShellRepositoryStore.count_pending_in_hitl_group",
-        "AppShellRepositoryStore.claim_hitl_group_routing",
-        "AppShellRepositoryStore.release_hitl_group_routing",
-        "AppShellRepositoryStore.count_hitl_requests_for_message",
-        "AppShellRepositoryStore.update_agent_message_task_state",
-        "AppShellRepositoryStore.persist_hitl_user_answer",
-        "AppShellRepositoryStore.persist_hitl_group_metadata",
-        "AppShellRepositoryStore.iter_stale_processing_hitl_requests",
-        "AppShellRepositoryStore.ensure_hitl_indexes",
-        "AppShellRepositoryStore.add_chat_context",
-        "AppShellRepositoryStore.get_chat_context_by_session_id",
-        "AppShellRepositoryStore.update_chat_context_by_session_id",
-        "AppShellRepositoryStore.delete_chat_context_by_session_id",
-        "AppShellRepositoryStore.increment_user_interactions",
-        "AppShellRepositoryStore.record_agent_call",
-        "AppShellRepositoryStore.update_turn_notes",
-        "AppShellRepositoryStore.claim_user_message_for_processing",
-        "AppShellRepositoryStore.unclaim_user_message",
-        "AppShellRepositoryStore.claim_or_reclaim_user_message",
-        "AppShellRepositoryStore.refresh_processing_claim",
-        "AppShellRepositoryStore.turn_exists",
-        "AppShellRepositoryStore.cancel_descendants",
-        "AppShellRepositoryStore.cancel_agent_messages_by_ids",
-        "AppShellRepositoryStore.update_room_agent_message_with_new_message_content_by_message_id",
-        "AppShellRepositoryStore.update_last_notified_state",
-        "AppShellRepositoryStore.reset_last_notified_state",
-        "AppShellRepositoryStore.update_task_state_on_message",
-        "AppShellRepositoryStore.accumulate_artifact_on_message",
-        "AppShellRepositoryStore.update_task_state_on_message_if_not_terminal",
-    ],
+FINAL_APP_SHELL_REEXPORT_SHIMS = {
+    "app_shell/runtime_store_contracts.py": {
+        "max_lines": 40,
+        "required_exports": {
+            "_dump_model",
+            "_dump_runtime",
+            "agent_group_to_runtime",
+            "agent_to_runtime",
+            "chat_context_to_runtime",
+            "message_content_to_runtime",
+            "room_agent_message_to_runtime",
+            "room_memory_to_runtime",
+            "room_to_runtime",
+            "room_user_message_to_runtime",
+            "runtime_agent_groups",
+            "runtime_agent_messages",
+            "runtime_agents",
+            "runtime_rooms",
+            "runtime_to_agent",
+            "runtime_to_agent_group",
+            "runtime_to_chat_context",
+            "runtime_to_message_content",
+            "runtime_to_room",
+            "runtime_to_room_agent_message",
+            "runtime_to_room_memory",
+            "runtime_to_room_user_message",
+            "runtime_user_messages",
+        },
+        "owning_module": "dal.runtime_store.contracts",
+    },
+    "app_shell/repository_parts/__init__.py": {
+        "max_lines": 40,
+        "required_exports": {
+            "AppShellAgentRoomStore",
+            "AppShellHITLStore",
+            "AppShellMemoryStore",
+            "AppShellMessageStore",
+            "AppShellTaskLifecycleStore",
+        },
+        "owning_module": "dal.runtime_store.parts",
+    },
+    "app_shell/repository_parts/agent_room_store.py": {
+        "max_lines": 30,
+        "required_exports": {"AppShellAgentRoomStore"},
+        "owning_module": "dal.runtime_store.parts.agent_room_store",
+    },
+    "app_shell/repository_parts/message_store.py": {
+        "max_lines": 30,
+        "required_exports": {"AppShellMessageStore"},
+        "owning_module": "dal.runtime_store.parts.message_store",
+    },
+    "app_shell/repository_parts/task_lifecycle_store.py": {
+        "max_lines": 30,
+        "required_exports": {"AppShellTaskLifecycleStore"},
+        "owning_module": "dal.runtime_store.parts.task_lifecycle_store",
+    },
+    "app_shell/repository_parts/hitl_store.py": {
+        "max_lines": 30,
+        "required_exports": {"AppShellHITLStore"},
+        "owning_module": "dal.runtime_store.parts.hitl_store",
+    },
+    "app_shell/repository_parts/memory_store.py": {
+        "max_lines": 30,
+        "required_exports": {"AppShellMemoryStore"},
+        "owning_module": "dal.runtime_store.parts.memory_store",
+    },
+    "app_shell/repository_parts/parsing.py": {
+        "max_lines": 70,
+        "required_exports": {
+            "_extract_text_from_artifact_parts",
+            "_modified_count",
+            "_mongo_update_succeeded",
+            "_safe_parse_agent",
+            "_safe_parse_agent_group",
+            "_safe_parse_agent_message",
+            "_safe_parse_chat_context",
+            "_safe_parse_room",
+            "_safe_parse_room_memory",
+            "_safe_parse_user_message",
+            "_strip_file_urls",
+            "_strip_unset_task_tracking_fields",
+            "_task_tracking_matches",
+        },
+        "owning_module": "dal.runtime_store.parts.parsing",
+    },
+    "app_shell/repository_parts/webhook_tokens.py": {
+        "max_lines": 40,
+        "required_exports": {
+            "generate_webhook_token",
+            "get_webhook_signing_key",
+            "hash_webhook_token",
+            "verify_webhook_token",
+        },
+        "owning_module": "dal.runtime_store.parts.webhook_tokens",
+    },
+}
+
+EXPECTED_MOVED_RUFF_IGNORES = {
+    "app_shell/a2a_runtime.py": (
+        "a2a_adapter/runtime_service.py",
+        ["C901"],
+    ),
+    "app_shell/context_assembly_service.py": (
+        "context_memory/compat/context_assembly.py",
+        ["C901", "UP042"],
+    ),
+    "app_shell/relay_service.py": (
+        "hub_runtime_bridge/compat/relay_service.py",
+        ["C901"],
+    ),
+    "app_shell/room_runtime.py": (
+        "room/compat/runtime.py",
+        ["C901", "UP042"],
+    ),
+}
+
+def _module_name_from_source_path(path: str) -> str:
+    return path.removesuffix(".py").replace("/", ".").removesuffix(".__init__")
+
+
+FOCUS_MODULES = {
+    _module_name_from_source_path(path)
+    for path in {
+        **FINAL_APP_SHELL_SHIMS,
+        **FINAL_APP_SHELL_REEXPORT_SHIMS,
+    }
+}
+
+PRODUCTION_MODULE_ROOTS = (
+    "a2a_adapter",
+    "agent",
+    "api",
+    "api_gateway",
+    "common",
+    "context_memory",
+    "dal",
+    "database",
+    "delivery",
+    "execution",
+    "hub_runtime_bridge",
+    "jobs",
+    "llm_gateway",
+    "models",
+    "platform_module",
+    "room",
+)
+
+PRODUCTION_MODULE_FILES = ("container.py",)
+
+EXCLUDED_PRODUCTION_SCAN_PARTS = {
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
 }
 
 
@@ -395,10 +397,1263 @@ def _public_business_methods(path: Path) -> list[str]:
     return methods
 
 
+def _line_count(path: Path) -> int:
+    return sum(1 for _ in path.open())
+
+
+def _target_names(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Name):
+        return {node.id}
+    if isinstance(node, (ast.Tuple, ast.List)):
+        names: set[str] = set()
+        for item in node.elts:
+            names.update(_target_names(item))
+        return names
+    return set()
+
+
+def _module_bound_names(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    names: set[str] = set()
+
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            names.update(
+                alias.asname or alias.name.split(".", 1)[0] for alias in node.names
+            )
+        elif isinstance(node, ast.ImportFrom):
+            names.update(
+                alias.asname or alias.name for alias in node.names if alias.name != "*"
+            )
+        elif isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                names.update(_target_names(target))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+
+    return names
+
+
+def _target_root_names(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Name):
+        return {node.id}
+    if isinstance(node, (ast.Attribute, ast.Subscript)):
+        return _target_root_names(node.value)
+    if isinstance(node, (ast.Tuple, ast.List)):
+        names: set[str] = set()
+        for item in node.elts:
+            names.update(_target_root_names(item))
+        return names
+    return set()
+
+
+def _targets_all(node: ast.AST, all_aliases: set[str] | None = None) -> bool:
+    all_names = {"__all__", *(all_aliases or set())}
+    if isinstance(node, ast.Assign):
+        return any(_target_root_names(target) & all_names for target in node.targets)
+    if isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+        return bool(_target_root_names(node.target) & all_names)
+    if isinstance(node, ast.Delete):
+        return any(_target_root_names(target) & all_names for target in node.targets)
+    return False
+
+
+def _is_direct_all_assignment(node: ast.AST) -> bool:
+    if isinstance(node, ast.Assign):
+        return (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "__all__"
+        )
+    return (
+        isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "__all__"
+        and node.value is not None
+    )
+
+
+def _is_all_alias_assignment(node: ast.AST) -> bool:
+    if isinstance(node, ast.Assign):
+        return (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "__all__"
+        )
+    return (
+        isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "__all__"
+    )
+
+
+def _all_alias_names(tree: ast.Module) -> set[str]:
+    aliases: set[str] = set()
+    for node in tree.body:
+        if _is_all_alias_assignment(node):
+            if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+                aliases.add(node.targets[0].id)
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                aliases.add(node.target.id)
+    return aliases
+
+
+def _mutates_all(node: ast.AST, all_aliases: set[str] | None = None) -> bool:
+    all_names = {"__all__", *(all_aliases or set())}
+    return (
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and bool(_target_root_names(node.value.func.value) & all_names)
+    )
+
+
+def _explicit_all_values(path: Path) -> list[ast.AST]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    all_aliases = _all_alias_names(tree)
+    values: list[ast.AST] = []
+
+    for node in tree.body:
+        if _is_all_alias_assignment(node):
+            continue
+        if _mutates_all(node, all_aliases):
+            values.append(node)
+            continue
+        if not _targets_all(node, all_aliases):
+            continue
+        if _is_direct_all_assignment(node) and isinstance(
+            node,
+            (ast.Assign, ast.AnnAssign),
+        ):
+            values.append(node.value)
+        else:
+            values.append(node)
+    return values
+
+
+def _explicit_all_exports(path: Path) -> set[str] | None:
+    all_values = _explicit_all_values(path)
+    if not all_values:
+        return None
+    if len(all_values) != 1:
+        return set()
+    return _static_string_literal_sequence(all_values[0]) or set()
+
+
+def _all_static_literal_violation(path: Path) -> str | None:
+    all_values = _explicit_all_values(path)
+    if not all_values:
+        return f"{path}: missing explicit __all__"
+    if len(all_values) == 1 and _static_string_literal_sequence(all_values[0]) is not None:
+        return None
+    return f"{path}: __all__ must be a static string literal sequence"
+
+
+def _module_exports(path: Path) -> set[str]:
+    all_exports = _explicit_all_exports(path)
+
+    if all_exports is not None:
+        return all_exports
+    return _module_bound_names(path)
+
+
+def _static_string_literal_sequence(node: ast.AST) -> set[str] | None:
+    if not isinstance(node, (ast.List, ast.Tuple)):
+        return None
+    exports: set[str] = set()
+    for item in node.elts:
+        if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
+            return None
+        exports.add(item.value)
+    return exports
+
+
+def _top_level_function(path: Path, name: str) -> ast.FunctionDef | None:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    return None
+
+
+def _compares_name_to_string(node: ast.Compare, name: str) -> str | None:
+    if len(node.ops) != 1 or not isinstance(node.ops[0], ast.Eq):
+        return None
+    if len(node.comparators) != 1:
+        return None
+
+    left = node.left
+    right = node.comparators[0]
+    if (
+        isinstance(left, ast.Name)
+        and left.id == name
+        and isinstance(right, ast.Constant)
+        and isinstance(right.value, str)
+    ):
+        return right.value
+    if (
+        isinstance(right, ast.Name)
+        and right.id == name
+        and isinstance(left, ast.Constant)
+        and isinstance(left.value, str)
+    ):
+        return left.value
+    return None
+
+
+def _raises_attribute_error(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Raise) or node.exc is None:
+        return False
+    exc = node.exc
+    if isinstance(exc, ast.Name):
+        return exc.id == "AttributeError"
+    if isinstance(exc, ast.Call):
+        return isinstance(exc.func, ast.Name) and exc.func.id == "AttributeError"
+    return False
+
+
+def _attribute_chain(node: ast.AST) -> tuple[str, ...] | None:
+    if isinstance(node, ast.Name):
+        return (node.id,)
+    if isinstance(node, ast.Attribute):
+        parent = _attribute_chain(node.value)
+        if parent is None:
+            return None
+        return (*parent, node.attr)
+    return None
+
+
+def _mutation_target_roots(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Assign):
+        roots: set[str] = set()
+        for target in node.targets:
+            roots.update(_target_root_names(target))
+        return roots
+    if isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+        return _target_root_names(node.target)
+    if isinstance(node, ast.Delete):
+        roots: set[str] = set()
+        for target in node.targets:
+            roots.update(_target_root_names(target))
+        return roots
+    return set()
+
+
+def _import_bound_names(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Import):
+        return {alias.asname or alias.name.split(".", 1)[0] for alias in node.names}
+    if isinstance(node, ast.ImportFrom):
+        return {
+            alias.asname or alias.name
+            for alias in node.names
+            if alias.name != "*"
+        }
+    return set()
+
+
+def _top_level_rebound_names(node: ast.AST) -> set[str]:
+    import_bound_names = _import_bound_names(node)
+    if import_bound_names:
+        return import_bound_names
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return {node.name}
+    return _mutation_target_roots(node)
+
+
+def _invalidated_owner_refs(
+    tree: ast.Module,
+    owner_refs: set[tuple[str, ...]],
+    owner_ref_lines: dict[tuple[str, ...], int] | None = None,
+) -> set[tuple[str, ...]]:
+    if owner_ref_lines is not None:
+        invalidated_refs: set[tuple[str, ...]] = set()
+        for node in tree.body:
+            rebound_names = _top_level_rebound_names(node)
+            if not rebound_names:
+                continue
+            for ref in owner_refs:
+                if not ref or ref[0] not in rebound_names:
+                    continue
+                owner_line = owner_ref_lines.get(ref)
+                if owner_line is None or node.lineno > owner_line:
+                    invalidated_refs.add(ref)
+        return invalidated_refs
+
+    mutated_roots: set[str] = set()
+    for node in tree.body:
+        mutated_roots.update(_top_level_rebound_names(node))
+    return {ref for ref in owner_refs if ref and ref[0] in mutated_roots}
+
+
+def _relay_impl_aliases(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    aliases: set[str] = set()
+    alias_lines: dict[tuple[str, ...], int] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.module != "hub_runtime_bridge.compat":
+            continue
+        for alias in node.names:
+            if alias.name != "relay_service":
+                continue
+            local_name = alias.asname or alias.name
+            aliases.add(local_name)
+            alias_lines[(local_name,)] = node.lineno
+    invalidated_aliases = {
+        alias
+        for alias in aliases
+        if (alias,)
+        in _invalidated_owner_refs(
+            tree,
+            {(alias,) for alias in aliases},
+            alias_lines,
+        )
+    }
+    return aliases - invalidated_aliases
+
+
+def _returns_relay_impl_service(node: ast.AST, relay_impl_aliases: set[str]) -> bool:
+    if not isinstance(node, ast.Return) or node.value is None:
+        return False
+    chain = _attribute_chain(node.value)
+    return chain in {(alias, "relay_service") for alias in relay_impl_aliases}
+
+
+def _relay_getattr_handler_if(
+    function: ast.FunctionDef,
+    attr_name_arg: str,
+    relay_impl_aliases: set[str],
+) -> ast.If | None:
+    for node in function.body:
+        if not isinstance(node, ast.If):
+            continue
+        if not isinstance(node.test, ast.Compare):
+            continue
+        if _compares_name_to_string(node.test, attr_name_arg) != "relay_service":
+            continue
+        if len(node.body) == 1 and _returns_relay_impl_service(
+            node.body[0],
+            relay_impl_aliases,
+        ):
+            return node
+    return None
+
+
+def _relay_getattr_has_attribute_error_fallback(
+    function: ast.FunctionDef,
+    handler_if: ast.If,
+) -> bool:
+    handler_index = function.body.index(handler_if)
+    if handler_index != 0:
+        return False
+    if handler_if.orelse:
+        if len(function.body) != 1:
+            return False
+        fallback_nodes = handler_if.orelse
+    else:
+        fallback_nodes = function.body[handler_index + 1 :]
+    if len(fallback_nodes) != 1:
+        return False
+    return _raises_attribute_error(fallback_nodes[0])
+
+
+def _relay_getattr_is_valid(path: Path) -> bool:
+    if path != Path("app_shell/relay_service.py"):
+        return False
+    function = _top_level_function(path, "__getattr__")
+    if function is None or not function.args.args:
+        return False
+    relay_impl_aliases = _relay_impl_aliases(path)
+    if not relay_impl_aliases:
+        return False
+
+    attr_name_arg = function.args.args[0].arg
+    handler_if = _relay_getattr_handler_if(
+        function,
+        attr_name_arg,
+        relay_impl_aliases,
+    )
+    if handler_if is None:
+        return False
+    return _relay_getattr_has_attribute_error_fallback(function, handler_if)
+
+
+def _dynamic_required_export_is_allowed(path: Path, export: str) -> bool:
+    return export == "relay_service" and _relay_getattr_is_valid(path)
+
+
+def _module_path(module: str) -> Path:
+    module_base = Path(*module.split("."))
+    module_file = module_base.with_suffix(".py")
+    package_file = module_base / "__init__.py"
+    if module_file.exists():
+        return module_file
+    if package_file.exists():
+        return package_file
+    return module_file
+
+
+def _owner_static_exports_or_bindings(owning_module: str) -> set[str]:
+    owner_path = _module_path(owning_module)
+    if not owner_path.exists():
+        return set()
+    return _module_exports(owner_path) | _module_bound_names(owner_path)
+
+
+def _owner_static_star_import_exports(owning_module: str) -> set[str]:
+    owner_path = _module_path(owning_module)
+    if not owner_path.exists():
+        return set()
+
+    all_values = _explicit_all_values(owner_path)
+    if all_values:
+        if len(all_values) != 1:
+            return set()
+        return _static_string_literal_sequence(all_values[0]) or set()
+
+    return {name for name in _module_bound_names(owner_path) if not name.startswith("_")}
+
+
+def _owner_star_import_exports(path: Path, owning_module: str) -> set[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    has_owner_star_import = any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == owning_module
+        and any(alias.name == "*" for alias in node.names)
+        for node in tree.body
+    )
+    if not has_owner_star_import:
+        return set()
+    return _owner_static_star_import_exports(owning_module)
+
+
+def _module_export_surface(path: Path, _owning_module: str) -> set[str]:
+    all_exports = _explicit_all_exports(path)
+    if all_exports is not None:
+        return all_exports
+    return set()
+
+
+def _owner_import_provenance(
+    node: ast.AST,
+    owning_module: str,
+    required_exports: set[str],
+) -> tuple[set[str], set[tuple[str, ...]]]:
+    backed_exports: set[str] = set()
+    owner_refs: set[tuple[str, ...]] = set()
+
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            if alias.name != owning_module:
+                continue
+            if alias.asname:
+                owner_refs.add((alias.asname,))
+            else:
+                owner_refs.add(tuple(owning_module.split(".")))
+    elif isinstance(node, ast.ImportFrom) and node.module == owning_module:
+        for alias in node.names:
+            if alias.name == "*":
+                backed_exports.update(
+                    required_exports
+                    & _owner_static_star_import_exports(owning_module)
+                )
+            elif alias.name in required_exports and alias.asname in {None, alias.name}:
+                backed_exports.add(alias.name)
+
+    return backed_exports, owner_refs
+
+
+def _rebound_owner_import_exports(
+    tree: ast.Module,
+    owning_module: str,
+    required_exports: set[str],
+) -> set[str]:
+    imported_exports: set[str] = set()
+    rebound_exports: set[str] = set()
+
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module == owning_module:
+            for alias in node.names:
+                if alias.name == "*":
+                    imported_exports.update(
+                        required_exports
+                        & _owner_static_star_import_exports(owning_module)
+                    )
+                elif alias.name in required_exports and alias.asname in {
+                    None,
+                    alias.name,
+                }:
+                    imported_exports.add(alias.name)
+            continue
+
+        rebound_exports.update(imported_exports & _top_level_rebound_names(node))
+
+    return rebound_exports
+
+
+def _owner_assignment_backed_exports(
+    node: ast.AST,
+    owner_refs: set[tuple[str, ...]],
+) -> set[str]:
+    if not isinstance(node, ast.Assign):
+        return set()
+    chain = _attribute_chain(node.value)
+    if chain is None or len(chain) < 2:
+        return set()
+    imported_member = chain[-1]
+    if chain[:-1] not in owner_refs:
+        return set()
+
+    backed_exports: set[str] = set()
+    for target in node.targets:
+        backed_exports.update(
+            target_name
+            for target_name in _target_names(target)
+            if target_name == imported_member
+        )
+    return backed_exports
+
+
+def _owner_backed_exports(
+    path: Path,
+    owning_module: str,
+    required_exports: set[str],
+) -> set[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    backed_exports: set[str] = set()
+    owner_refs: set[tuple[str, ...]] = set()
+    owner_ref_lines: dict[tuple[str, ...], int] = {}
+
+    for node in tree.body:
+        imported_exports, imported_refs = _owner_import_provenance(
+            node,
+            owning_module,
+            required_exports,
+        )
+        backed_exports.update(imported_exports)
+        owner_refs.update(imported_refs)
+        for ref in imported_refs:
+            owner_ref_lines[ref] = node.lineno
+
+    owner_refs -= _invalidated_owner_refs(tree, owner_refs, owner_ref_lines)
+    backed_exports -= _rebound_owner_import_exports(
+        tree,
+        owning_module,
+        required_exports,
+    )
+
+    for node in tree.body:
+        backed_exports.update(_owner_assignment_backed_exports(node, owner_refs))
+
+    return backed_exports
+
+
+def _required_export_violations(
+    path: Path,
+    required_exports: set[str],
+    owning_module: str,
+) -> list[str]:
+    exports = _module_export_surface(path, owning_module)
+    bound_names = _module_bound_names(path)
+    owner_backed_exports = _owner_backed_exports(path, owning_module, required_exports)
+    effective_bound_names = bound_names | owner_backed_exports
+    missing_exports = sorted(required_exports - exports)
+    unexpected_exports = sorted(exports - required_exports)
+    missing_bound_names = sorted(
+        export
+        for export in required_exports - effective_bound_names
+        if not _dynamic_required_export_is_allowed(path, export)
+    )
+    missing_owner_backing = sorted(
+        export
+        for export in required_exports - owner_backed_exports
+        if not _dynamic_required_export_is_allowed(path, export)
+    )
+    violations: list[str] = []
+    all_violation = _all_static_literal_violation(path)
+
+    if all_violation is not None:
+        violations.append(all_violation)
+    if missing_exports:
+        violations.append(
+            f"{path}: missing required exports: {', '.join(missing_exports)}"
+        )
+    if unexpected_exports:
+        violations.append(f"{path}: unexpected exports: {', '.join(unexpected_exports)}")
+    if missing_bound_names:
+        violations.append(
+            f"{path}: required exports are not bound: "
+            + ", ".join(missing_bound_names)
+        )
+    if missing_owner_backing:
+        violations.append(
+            f"{path}: required exports are not backed by {owning_module}: "
+            + ", ".join(missing_owner_backing)
+        )
+    return violations
+
+
+def _concrete_definitions(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    return [
+        f"{path}:{node.lineno}: {node.name}"
+        for node in tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+        and not (
+            isinstance(node, ast.FunctionDef)
+            and node.name == "__getattr__"
+            and _relay_getattr_is_valid(path)
+        )
+    ]
+
+
+def _imports_module(path: Path, expected_module: str) -> bool:
+    for _lineno, imported_module in _import_modules(path):
+        if (
+            imported_module == expected_module
+            or imported_module.startswith(f"{expected_module}.")
+        ):
+            return True
+    return False
+
+
+def _is_owner_import_module(imported_module: str, owning_module: str) -> bool:
+    return imported_module == owning_module or imported_module.startswith(
+        f"{owning_module}."
+    )
+
+
+def _is_module_docstring_node(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    )
+
+
+def _owner_reexport_import_from_violations(
+    path: Path,
+    node: ast.ImportFrom,
+    required_exports: set[str],
+    owning_module: str,
+) -> list[str]:
+    if node.module == "__future__":
+        return []
+    if node.module is None or not _is_owner_import_module(node.module, owning_module):
+        module = node.module or "<relative import>"
+        return [f"{path}:{node.lineno}: imports non-owner module {module}"]
+
+    violations: list[str] = []
+    for alias in node.names:
+        if alias.name == "*":
+            violations.append(f"{path}:{node.lineno}: star import from {node.module}")
+            continue
+        bound_name = alias.asname or alias.name
+        if bound_name not in required_exports:
+            violations.append(
+                f"{path}:{node.lineno}: non-exported owner import {bound_name}"
+            )
+    return violations
+
+
+def _owner_reexport_import_violations(
+    path: Path,
+    required_exports: set[str],
+    owning_module: str,
+) -> list[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    violations: list[str] = []
+
+    for node in tree.body:
+        if _is_module_docstring_node(node):
+            continue
+
+        if isinstance(node, ast.Import):
+            violations.extend(
+                f"{path}:{node.lineno}: imports non-owner module {alias.name}"
+                for alias in node.names
+            )
+            continue
+
+        if isinstance(node, ast.ImportFrom):
+            violations.extend(
+                _owner_reexport_import_from_violations(
+                    path,
+                    node,
+                    required_exports,
+                    owning_module,
+                )
+            )
+            continue
+
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and _targets_all(node):
+            continue
+
+        violations.append(
+            f"{path}:{node.lineno}: non-re-export top-level statement "
+            f"{type(node).__name__}"
+        )
+
+    return violations
+
+
+def _is_app_shell_module(module: str) -> bool:
+    return module == "app_shell" or module.startswith("app_shell.")
+
+
+def _app_shell_imports_for_node(path: Path, node: ast.AST) -> list[str]:
+    if isinstance(node, ast.Import):
+        return [
+            f"{path}:{node.lineno}: {alias.name}"
+            for alias in node.names
+            if _is_app_shell_module(alias.name)
+        ]
+    if not isinstance(node, ast.ImportFrom) or node.module is None:
+        return []
+    if _is_app_shell_module(node.module) and node.module != "app_shell":
+        return [f"{path}:{node.lineno}: {node.module}"]
+    if node.module == "app_shell":
+        return [
+            f"{path}:{node.lineno}: app_shell.{alias.name}"
+            for alias in node.names
+        ]
+    return []
+
+
+def _app_shell_import_violations(paths: list[Path]) -> list[str]:
+    violations: list[str] = []
+    for path in sorted(paths):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            violations.extend(_app_shell_imports_for_node(path, node))
+    return violations
+
+
+def _ruff_pattern_matches_path(pattern: str, path: str) -> bool:
+    return pattern == path or fnmatch(path, pattern) or Path(path).match(pattern)
+
+
+def _is_focus_module(module: str) -> bool:
+    return any(
+        module == focus_module or module.startswith(f"{focus_module}.")
+        for focus_module in FOCUS_MODULES
+    )
+
+
+def _app_shell_focus_runtime_imports_for_node(
+    path: Path,
+    node: ast.AST,
+) -> list[str]:
+    if isinstance(node, ast.Import):
+        return [
+            f"{path}:{node.lineno}: {alias.name}"
+            for alias in node.names
+            if _is_focus_module(alias.name)
+        ]
+    if not isinstance(node, ast.ImportFrom) or node.module is None:
+        return []
+
+    violations: list[str] = []
+    if _is_focus_module(node.module):
+        violations.append(f"{path}:{node.lineno}: {node.module}")
+    if node.module == "app_shell":
+        violations.extend(
+            f"{path}:{node.lineno}: app_shell.{alias.name}"
+            for alias in node.names
+            if _is_focus_module(f"app_shell.{alias.name}")
+        )
+    return violations
+
+
+def _app_shell_focus_runtime_import_violations(paths: list[Path]) -> list[str]:
+    violations: list[str] = []
+    for path in sorted(paths):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            violations.extend(_app_shell_focus_runtime_imports_for_node(path, node))
+    return violations
+
+
+def _production_module_python_files() -> list[Path]:
+    paths: list[Path] = []
+    for filename in PRODUCTION_MODULE_FILES:
+        path = Path(filename)
+        if path.exists() and EXCLUDED_PRODUCTION_SCAN_PARTS.isdisjoint(path.parts):
+            paths.append(path)
+    for root in PRODUCTION_MODULE_ROOTS:
+        root_path = Path(root)
+        if not root_path.exists():
+            continue
+        for path in root_path.rglob("*.py"):
+            if EXCLUDED_PRODUCTION_SCAN_PARTS.isdisjoint(path.parts):
+                paths.append(path)
+    return sorted(paths)
+
+
 def test_forbidden_prefix_matching_is_segment_aware():
     assert _forbidden_prefix("a2a") == "a2a"
     assert _forbidden_prefix("a2a.client") == "a2a"
     assert _forbidden_prefix("a2a_adapter.client_facade") is None
+
+
+def _comparison_expression(source: str) -> ast.Compare:
+    expression = ast.parse(source, mode="eval").body
+    assert isinstance(expression, ast.Compare)
+    return expression
+
+
+def _function_from_source(source: str) -> ast.FunctionDef:
+    function = ast.parse(source).body[0]
+    assert isinstance(function, ast.FunctionDef)
+    return function
+
+
+def _import_from_source(source: str) -> ast.ImportFrom:
+    node = ast.parse(source).body[0]
+    assert isinstance(node, ast.ImportFrom)
+    return node
+
+
+def test_reexport_shim_import_gate_rejects_non_owner_modules_and_bindings(tmp_path):
+    path = tmp_path / "message_store.py"
+    path.write_text(
+        """
+from dal.runtime_store.parts.message_store import AppShellMessageStore, ExtraHelper
+from app_shell import repository_store
+import os
+
+__all__ = ["AppShellMessageStore"]
+""",
+    )
+
+    violations = _owner_reexport_import_violations(
+        path,
+        {"AppShellMessageStore"},
+        "dal.runtime_store.parts.message_store",
+    )
+
+    assert f"{path}:2: non-exported owner import ExtraHelper" in violations
+    assert f"{path}:3: imports non-owner module app_shell" in violations
+    assert f"{path}:4: imports non-owner module os" in violations
+
+
+def test_owner_import_gate_rejects_non_focus_app_shell_imports(tmp_path):
+    path = tmp_path / "owner.py"
+    path.write_text(
+        """
+from app_shell import agent_service
+from app_shell.notification_service import notification_service
+import app_shell.task_service
+""",
+    )
+
+    violations = _app_shell_import_violations([path])
+
+    assert f"{path}:2: app_shell.agent_service" in violations
+    assert f"{path}:3: app_shell.notification_service" in violations
+    assert f"{path}:4: app_shell.task_service" in violations
+
+
+def test_ruff_pattern_matching_detects_app_shell_globs():
+    assert _ruff_pattern_matches_path("app_shell/*.py", "app_shell/room_runtime.py")
+    assert _ruff_pattern_matches_path(
+        "app_shell/repository_parts/*.py",
+        "app_shell/repository_parts/message_store.py",
+    )
+    assert not _ruff_pattern_matches_path("room/**/*.py", "app_shell/room_runtime.py")
+
+
+def test_explicit_all_rejects_dynamic_mutation(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+__all__ = ["RequiredExport"]
+__all__.append("ExtraExport")
+""",
+    )
+
+    assert (
+        _all_static_literal_violation(path)
+        == f"{path}: __all__ must be a static string literal sequence"
+    )
+    assert _module_exports(path) == set()
+
+
+def test_explicit_all_rejects_alias_call_mutation(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+__all__ = ["RequiredExport"]
+exports = __all__
+exports.append("ExtraExport")
+""",
+    )
+
+    assert (
+        _all_static_literal_violation(path)
+        == f"{path}: __all__ must be a static string literal sequence"
+    )
+    assert _module_exports(path) == set()
+
+
+def test_explicit_all_rejects_alias_subscript_mutation(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+__all__ = ["RequiredExport"]
+exports = __all__
+exports[0] = "OtherExport"
+""",
+    )
+
+    assert (
+        _all_static_literal_violation(path)
+        == f"{path}: __all__ must be a static string literal sequence"
+    )
+    assert _module_exports(path) == set()
+
+
+def test_explicit_all_rejects_subscript_mutation_and_deletion(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+__all__ = ["RequiredExport"]
+__all__[0] = "OtherExport"
+del __all__[:]
+""",
+    )
+
+    assert (
+        _all_static_literal_violation(path)
+        == f"{path}: __all__ must be a static string literal sequence"
+    )
+    assert _module_exports(path) == set()
+
+
+def test_explicit_all_rejects_set_literals(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text('__all__ = {"RequiredExport"}\n')
+
+    assert (
+        _all_static_literal_violation(path)
+        == f"{path}: __all__ must be a static string literal sequence"
+    )
+    assert _module_exports(path) == set()
+
+
+def test_required_exports_require_explicit_all(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text("from owner.module import RequiredExport\n")
+
+    violations = _required_export_violations(
+        path,
+        {"RequiredExport"},
+        "owner.module",
+    )
+
+    assert f"{path}: missing explicit __all__" in violations
+    assert _module_export_surface(path, "owner.module") == set()
+
+
+def test_relay_getattr_export_comparison_requires_equality_operator():
+    assert (
+        _compares_name_to_string(
+            _comparison_expression('name == "relay_service"'),
+            "name",
+        )
+        == "relay_service"
+    )
+    assert (
+        _compares_name_to_string(
+            _comparison_expression('"relay_service" == name'),
+            "name",
+        )
+        == "relay_service"
+    )
+    assert (
+        _compares_name_to_string(
+            _comparison_expression('name != "relay_service"'),
+            "name",
+        )
+        is None
+    )
+    assert (
+        _compares_name_to_string(
+            _comparison_expression('name is "relay_service"'),
+            "name",
+        )
+        is None
+    )
+
+
+def test_relay_getattr_fallback_rejects_return_before_attribute_error():
+    valid_function = _function_from_source(
+        """
+def __getattr__(name):
+    if name == "relay_service":
+        return _impl.relay_service
+    raise AttributeError(name)
+"""
+    )
+    valid_handler = _relay_getattr_handler_if(valid_function, "name", {"_impl"})
+    assert valid_handler is not None
+    assert _relay_getattr_has_attribute_error_fallback(valid_function, valid_handler)
+
+    invalid_function = _function_from_source(
+        """
+def __getattr__(name):
+    if name == "relay_service":
+        return _impl.relay_service
+    return None
+    raise AttributeError(name)
+"""
+    )
+    invalid_handler = _relay_getattr_handler_if(invalid_function, "name", {"_impl"})
+    assert invalid_handler is not None
+    assert not _relay_getattr_has_attribute_error_fallback(
+        invalid_function,
+        invalid_handler,
+    )
+
+
+def test_relay_getattr_branch_must_directly_return_owner_service():
+    invalid_function = _function_from_source(
+        """
+def __getattr__(name):
+    if name == "relay_service":
+        return None
+        return _impl.relay_service
+    raise AttributeError(name)
+"""
+    )
+
+    assert _relay_getattr_handler_if(invalid_function, "name", {"_impl"}) is None
+
+
+def test_relay_impl_alias_rebinding_invalidates_dynamic_export(tmp_path):
+    path = tmp_path / "relay_service.py"
+    path.write_text(
+        """
+from hub_runtime_bridge.compat import relay_service as _impl
+
+_impl = object()
+
+def __getattr__(name):
+    if name == "relay_service":
+        return _impl.relay_service
+    raise AttributeError(name)
+""",
+    )
+
+    assert _relay_impl_aliases(path) == set()
+
+
+def test_owner_import_provenance_rejects_renamed_member_spoofing():
+    spoofed_exports, _owner_refs = _owner_import_provenance(
+        _import_from_source("from owner.module import OtherName as RequiredExport"),
+        "owner.module",
+        {"RequiredExport"},
+    )
+    assert spoofed_exports == set()
+
+    backed_exports, _owner_refs = _owner_import_provenance(
+        _import_from_source("from owner.module import RequiredExport as RequiredExport"),
+        "owner.module",
+        {"RequiredExport"},
+    )
+    assert backed_exports == {"RequiredExport"}
+
+
+def test_owner_alias_rebinding_invalidates_assignment_provenance(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+import owner.module as owner_alias
+
+owner_alias = object()
+RequiredExport = owner_alias.RequiredExport
+""",
+    )
+
+    assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
+
+
+def test_later_import_alias_spoofing_invalidates_assignment_provenance(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+import owner.module as owner_alias
+import other.module as owner_alias
+
+RequiredExport = owner_alias.RequiredExport
+""",
+    )
+
+    assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
+
+
+def test_direct_owner_import_rebinding_invalidates_provenance(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+from owner.module import RequiredExport
+
+RequiredExport = object()
+__all__ = ["RequiredExport"]
+""",
+    )
+
+    assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
+
+
+def test_later_direct_import_spoofing_invalidates_provenance(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+from owner.module import RequiredExport
+from other.module import RequiredExport
+
+__all__ = ["RequiredExport"]
+""",
+    )
+
+    assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
+
+
+@pytest.mark.parametrize(
+    "shadowing_definition",
+    [
+        "def RequiredExport():\n    return object()\n",
+        "async def RequiredExport():\n    return object()\n",
+        "class RequiredExport:\n    pass\n",
+    ],
+)
+def test_direct_owner_import_definition_shadowing_invalidates_provenance(
+    tmp_path,
+    shadowing_definition,
+):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        f"""
+from owner.module import RequiredExport
+
+{shadowing_definition}
+__all__ = ["RequiredExport"]
+""",
+    )
+
+    assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
+
+
+def test_direct_owner_import_without_rebinding_keeps_provenance(tmp_path):
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+from owner.module import RequiredExport
+
+__all__ = ["RequiredExport"]
+""",
+    )
+
+    assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == {
+        "RequiredExport"
+    }
+
+
+def test_owner_star_import_rebinding_invalidates_provenance(tmp_path, monkeypatch):
+    (tmp_path / "owner").mkdir()
+    (tmp_path / "owner" / "module.py").write_text("RequiredExport = object()\n")
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+from owner.module import *
+
+RequiredExport = object()
+__all__ = ["RequiredExport"]
+""",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
+
+
+@pytest.mark.parametrize(
+    "shadowing_definition",
+    [
+        "def RequiredExport():\n    return object()\n",
+        "async def RequiredExport():\n    return object()\n",
+        "class RequiredExport:\n    pass\n",
+    ],
+)
+def test_owner_star_import_definition_shadowing_invalidates_provenance(
+    tmp_path,
+    monkeypatch,
+    shadowing_definition,
+):
+    (tmp_path / "owner").mkdir()
+    (tmp_path / "owner" / "module.py").write_text("RequiredExport = object()\n")
+    path = tmp_path / "shim.py"
+    path.write_text(
+        f"""
+from owner.module import *
+
+{shadowing_definition}
+__all__ = ["RequiredExport"]
+""",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert _owner_backed_exports(path, "owner.module", {"RequiredExport"}) == set()
+
+
+def test_owner_star_import_does_not_back_private_name_without_all(
+    tmp_path,
+    monkeypatch,
+):
+    (tmp_path / "owner").mkdir()
+    (tmp_path / "owner" / "module.py").write_text("_PrivateExport = object()\n")
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+from owner.module import *
+
+__all__ = ["_PrivateExport"]
+""",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert _owner_backed_exports(path, "owner.module", {"_PrivateExport"}) == set()
+
+
+def test_owner_star_import_backs_private_name_declared_in_owner_all(
+    tmp_path,
+    monkeypatch,
+):
+    (tmp_path / "owner").mkdir()
+    (tmp_path / "owner" / "module.py").write_text(
+        """
+__all__ = ["_PrivateExport"]
+_PrivateExport = object()
+""",
+    )
+    path = tmp_path / "shim.py"
+    path.write_text(
+        """
+from owner.module import *
+
+__all__ = ["_PrivateExport"]
+""",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert _owner_backed_exports(path, "owner.module", {"_PrivateExport"}) == {
+        "_PrivateExport"
+    }
 
 
 def test_app_shell_forbidden_imports_are_manifest_blocked_by_exact_prefix():
@@ -437,25 +1692,72 @@ def test_legacy_import_boundary_blockers_are_exact_current_files():
     assert not bad, "App-shell thinning blockers are stale:\n" + "\n".join(bad)
 
 
-def test_app_shell_focus_file_baseline_sizes_are_recorded():
-    actual = {
-        target: {
-            "lines": sum(1 for _ in Path(target).open()),
-            "public_business_methods": _public_business_method_count(Path(target)),
-        }
-        for target in sorted(APP_SHELL_TARGETS)
+def test_app_shell_focus_files_are_final_import_shims():
+    violations: list[str] = []
+
+    for target, contract in sorted(FINAL_APP_SHELL_SHIMS.items()):
+        path = Path(target)
+        if not path.exists():
+            violations.append(f"{target}: missing final import shim")
+            continue
+
+        line_count = _line_count(path)
+        max_lines = contract["max_lines"]
+        if line_count > max_lines:
+            violations.append(f"{target}: {line_count} lines exceeds {max_lines}")
+
+        violations.extend(
+            _required_export_violations(
+                path,
+                contract["required_exports"],
+                contract["owning_module"],
+            )
+        )
+
+        concrete_definitions = _concrete_definitions(path)
+        if concrete_definitions:
+            violations.append(
+                f"{target}: concrete definitions remain:\n"
+                + "\n".join(concrete_definitions)
+            )
+
+        public_methods = _public_business_methods(path)
+        if public_methods:
+            violations.append(
+                f"{target}: public business methods remain "
+                f"({_public_business_method_count(path)}): "
+                + ", ".join(public_methods)
+            )
+
+        owning_module = contract["owning_module"]
+        if not _imports_module(path, owning_module):
+            violations.append(f"{target}: does not import owning module {owning_module}")
+
+    assert not violations, "App-shell focus files are not final import shims:\n" + (
+        "\n".join(violations)
+    )
+
+
+def test_app_shell_focus_owning_modules_exist_and_are_not_app_shell_owned():
+    violations: list[str] = []
+
+    contracts = {
+        **FINAL_APP_SHELL_SHIMS,
+        **FINAL_APP_SHELL_REEXPORT_SHIMS,
     }
+    for target, contract in sorted(contracts.items()):
+        owning_module = contract["owning_module"]
+        owning_path = _module_path(owning_module)
+        if owning_module == "app_shell" or owning_module.startswith("app_shell."):
+            violations.append(f"{target}: owner remains in app_shell: {owning_module}")
+        if not owning_path.exists():
+            violations.append(f"{target}: owner module does not exist: {owning_module}")
+        elif owning_path.parts and owning_path.parts[0] == "app_shell":
+            violations.append(f"{target}: owner path remains in app_shell: {owning_path}")
 
-    assert actual == EXPECTED_APP_SHELL_BASELINE
-
-
-def test_app_shell_public_surface_is_explicitly_allowlisted():
-    actual = {
-        target: _public_business_methods(Path(target))
-        for target in sorted(APP_SHELL_TARGETS)
-    }
-
-    assert actual == EXPECTED_APP_SHELL_PUBLIC_METHODS
+    assert not violations, "App-shell shim owners are not final:\n" + "\n".join(
+        violations
+    )
 
 
 def test_context_memory_runtime_wiring_avoids_app_shell_singletons():
@@ -478,6 +1780,131 @@ def test_context_memory_runtime_wiring_avoids_app_shell_singletons():
 
     assert not violations, "App-shell context singleton imports remain:\n" + "\n".join(
         violations
+    )
+
+
+def test_domain_modules_do_not_depend_on_app_shell_focus_runtime_modules():
+    violations = _app_shell_focus_runtime_import_violations(
+        _production_module_python_files()
+    )
+
+    assert not violations, (
+        "Domain modules still import app_shell focus runtime modules:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_focus_owning_modules_do_not_import_app_shell_runtime():
+    violations: list[str] = []
+    contracts = {
+        **FINAL_APP_SHELL_SHIMS,
+        **FINAL_APP_SHELL_REEXPORT_SHIMS,
+    }
+
+    for target, contract in sorted(contracts.items()):
+        owning_module = contract["owning_module"]
+        owning_path = _module_path(owning_module)
+        if not owning_path.exists():
+            violations.append(f"{target}: owner module does not exist: {owning_module}")
+            continue
+        owner_violations = _app_shell_import_violations([owning_path])
+        violations.extend(
+            f"{owning_module}: {violation}" for violation in owner_violations
+        )
+
+    assert not violations, (
+        "Focus owning modules still import app_shell modules:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_final_app_shell_shims_do_not_keep_ruff_ignore_baseline():
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text())
+    per_file_ignores = pyproject["tool"]["ruff"]["lint"]["per-file-ignores"]
+    shim_paths = {*FINAL_APP_SHELL_SHIMS, *FINAL_APP_SHELL_REEXPORT_SHIMS}
+    allowed_owner_ignores = {
+        owner_path: set(expected_ignores)
+        for _shim_path, (owner_path, expected_ignores) in (
+            EXPECTED_MOVED_RUFF_IGNORES.items()
+        )
+    }
+    violations: list[str] = []
+
+    for shim_path in sorted(shim_paths):
+        matched_patterns = sorted(
+            pattern
+            for pattern in per_file_ignores
+            if _ruff_pattern_matches_path(pattern, shim_path)
+        )
+        if matched_patterns:
+            violations.append(
+                f"{shim_path}: final shim keeps Ruff ignore baseline through "
+                + ", ".join(matched_patterns)
+            )
+
+    for shim_path, (
+        owner_path,
+        expected_ignores,
+    ) in sorted(EXPECTED_MOVED_RUFF_IGNORES.items()):
+        actual = per_file_ignores.get(owner_path)
+        if actual is None:
+            continue
+        unexpected = sorted(set(actual) - allowed_owner_ignores[owner_path])
+        if unexpected:
+            violations.append(
+                f"{owner_path}: unexpected Ruff ignores after moving from "
+                f"{shim_path}: {unexpected}; allowed: {expected_ignores}"
+            )
+
+    assert not violations, (
+        "Final app-shell Ruff ignores are not owned by implementation modules:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_app_shell_repository_submodules_are_final_reexport_shims():
+    violations: list[str] = []
+
+    for target, contract in sorted(FINAL_APP_SHELL_REEXPORT_SHIMS.items()):
+        path = Path(target)
+        if not path.exists():
+            violations.append(f"{target}: missing final re-export shim")
+            continue
+
+        line_count = _line_count(path)
+        max_lines = contract["max_lines"]
+        if line_count > max_lines:
+            violations.append(f"{target}: {line_count} lines exceeds {max_lines}")
+
+        concrete_definitions = _concrete_definitions(path)
+        if concrete_definitions:
+            violations.append(
+                f"{target}: concrete definitions remain:\n"
+                + "\n".join(concrete_definitions)
+            )
+
+        violations.extend(
+            _required_export_violations(
+                path,
+                contract["required_exports"],
+                contract["owning_module"],
+            )
+        )
+
+        owning_module = contract["owning_module"]
+        if not _imports_module(path, owning_module):
+            violations.append(f"{target}: does not import owning module {owning_module}")
+        violations.extend(
+            _owner_reexport_import_violations(
+                path,
+                contract["required_exports"],
+                owning_module,
+            )
+        )
+
+    assert not violations, (
+        "App-shell repository submodules are not final re-export shims:\n"
+        + "\n".join(violations)
     )
 
 

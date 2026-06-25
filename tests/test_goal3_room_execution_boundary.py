@@ -21,7 +21,7 @@ def _class_methods(path: Path, class_name: str) -> set[str]:
 
 
 def test_room_services_has_no_execution_reverse_binding_surface():
-    source_path = ROOT / "app_shell" / "room_runtime.py"
+    source_path = ROOT / "room" / "compat" / "runtime.py"
     source = source_path.read_text()
     methods = _class_methods(source_path, "RoomServices")
 

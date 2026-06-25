@@ -22,7 +22,7 @@ class TestClaimUserMessageForProcessing:
     @pytest.mark.asyncio
     async def test_claim_succeeds_for_never_claimed(self):
         """claim_user_message_for_processing returns True for unclaimed messages."""
-        from app_shell.repository_store import AppShellRepositoryStore
+        from dal.runtime_store import AppShellRepositoryStore
 
         store = object.__new__(AppShellRepositoryStore)
         mock_collection = MagicMock()
@@ -38,7 +38,7 @@ class TestClaimUserMessageForProcessing:
     @pytest.mark.asyncio
     async def test_claim_fails_for_already_claimed(self):
         """claim_user_message_for_processing returns False if already claimed."""
-        from app_shell.repository_store import AppShellRepositoryStore
+        from dal.runtime_store import AppShellRepositoryStore
 
         store = object.__new__(AppShellRepositoryStore)
         mock_collection = MagicMock()
@@ -55,7 +55,7 @@ class TestClaimOrReclaimUserMessage:
     @pytest.mark.asyncio
     async def test_reclaim_succeeds_for_stale(self):
         """claim_or_reclaim_user_message returns True for stale-claimed messages."""
-        from app_shell.repository_store import AppShellRepositoryStore
+        from dal.runtime_store import AppShellRepositoryStore
 
         store = object.__new__(AppShellRepositoryStore)
         mock_collection = MagicMock()
@@ -75,7 +75,7 @@ class TestClaimOrReclaimUserMessage:
     @pytest.mark.asyncio
     async def test_reclaim_fails_for_recently_claimed(self):
         """claim_or_reclaim_user_message returns False if recently claimed."""
-        from app_shell.repository_store import AppShellRepositoryStore
+        from dal.runtime_store import AppShellRepositoryStore
 
         store = object.__new__(AppShellRepositoryStore)
         mock_collection = MagicMock()

@@ -104,7 +104,7 @@ from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
 from room.repository import RoomQuoteMongoRepository
 
 if TYPE_CHECKING:
-    from app_shell.repository_store import AppShellRepositoryStore
+    from dal.runtime_store import AppShellRepositoryStore
 
 
 # Pure function — trivially testable without lifespan/DB
@@ -301,12 +301,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from app_shell.openai_service import openai_service
             from app_shell.room_coordinator_service import room_coordinator_service
             from app_shell.room_membership_source import LegacyRoomMembershipSeedSource
-            from app_shell.room_runtime import (
-                AppShellRoomCenter,
-                build_turn_content,
-                room_runtime,
-                room_services,
-            )
             from app_shell.task_service import task_service
             from common.utils.a2a_helpers import bind_a2a_artifact_storage
             from context_memory.config import ContextMemoryLLMConfig
@@ -334,6 +328,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             from platform_module.adapters import RateLimitCollectionAdapter
             from platform_module.rate_limit import PlatformAgentRateLimiter
+            from room.compat.runtime import (
+                AppShellRoomCenter,
+                build_turn_content,
+                room_runtime,
+                room_services,
+            )
 
             object_storage = create_object_storage_dal()
             platform_object_storage = PlatformObjectStorage(
@@ -394,11 +394,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             app.state.delivery_facade = _delivery_facade
             app.state.delivery_deps = _delivery_deps
 
-            from a2a_adapter.task_status import coerce_task_state
-            from app_shell.a2a_runtime import (
+            from a2a_adapter.runtime_service import (
                 A2ARuntimeConfig,
                 a2a_service,
             )
+            from a2a_adapter.task_status import coerce_task_state
             from app_shell.hitl_service import (
                 bind_hitl_service,
                 create_hitl_service,
@@ -567,10 +567,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             max_tasks_per_user = app_shell_store.MAX_TASKS_PER_USER
             max_tasks_per_room = app_shell_store.MAX_TASKS_PER_ROOM
 
-            # Transitional P3 adapters: keep startup wiring narrow without
-            # introducing long-lived app-shell classes in this slice. Follow-up
-            # hardening can replace these SimpleNamespace seams with concrete
-            # protocol adapters when static type enforcement becomes the goal.
+            # P3 compatibility adapters keep startup wiring narrow without
+            # introducing long-lived app-shell classes. These SimpleNamespace
+            # seams are intentionally constrained to container assembly.
             async def check_task_limits(
                 user_id: str,
                 room_id: str,
@@ -970,6 +969,14 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
             )
             room_runtime.bind_store(room_runtime_store)
+            room_runtime.bind_legacy_dependencies(
+                agent_service=agent_service,
+                agent_selection_service=agent_selection_service,
+                a2a_service=a2a_service,
+                room_memory_service=room_memory_service,
+                sse_manager=sse_manager,
+                task_service=task_service,
+            )
             room_runtime.bind_facade(_room_facade)
             room_runtime.bind_message_event_publisher(_delivery_deps.event_publisher)
             room_runtime.bind_object_storage(platform_object_storage)
@@ -1325,15 +1332,15 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             check_and_sync_liveness,
         )
         from app_shell.execution_runtime import get_bound_room_message_center
-        from app_shell.relay_service import (
-            RelayHubLivenessReader,
-            init_relay_service,
-        )
         from app_shell.relay_store import AppShellRelayHubStore
         from app_shell.room_lock import RedisRoomDistributedLock
         from execution.facade import hub_agent_response_internal_to_agent_event
         from hub_runtime_bridge.adapters.legacy_failure import (
             RelayOfflineFailureAdapter,
+        )
+        from hub_runtime_bridge.compat.relay_service import (
+            RelayHubLivenessReader,
+            init_relay_service,
         )
         from hub_runtime_bridge.config import config_from_settings
         from hub_runtime_bridge.repository.mongo import HubMongoRepository
@@ -1464,7 +1471,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         yield
     finally:
         # Stop the relay service heartbeat checker
-        from app_shell.relay_service import relay_service as _relay_svc_shutdown
+        from hub_runtime_bridge.compat.relay_service import (
+            relay_service as _relay_svc_shutdown,
+        )
 
         if _relay_svc_shutdown:
             await _relay_svc_shutdown.stop()
@@ -2411,7 +2420,7 @@ def create_app_shell_repository_store(
     room_deps: RoomDeps,
     agent_deps: AgentDeps,
 ) -> AppShellRepositoryStore:
-    from app_shell.repository_store import AppShellRepositoryStore
+    from dal.runtime_store import AppShellRepositoryStore
 
     return AppShellRepositoryStore(
         mongo=mongo,

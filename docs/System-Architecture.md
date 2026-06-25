@@ -2,7 +2,7 @@
 
 This document describes the current architecture and core workflows of the
 `multi-agents-backend` codebase. It is based on the repository state as of
-2026-06-21 and focuses on the code that is currently present, not on older
+2026-06-23 and focuses on the code that is currently present, not on older
 design documents that may have existed previously.
 
 ## High-Level Shape
@@ -26,7 +26,7 @@ At runtime the system follows this broad layering:
 flowchart TD
     Client[Frontend / API client] --> FastAPI[main.py FastAPI app]
     FastAPI --> APIGateway[api_gateway routers]
-    APIGateway --> AppShell[app_shell bindings]
+    APIGateway --> AppShell[app_shell compatibility shims]
     APIGateway --> Execution[execution facade]
     APIGateway --> Platform[platform facade]
 
@@ -109,34 +109,39 @@ points still pass through app-shell adapters, but the preferred direction is:
 route -> protocol/facade -> repository/DAL -> external service
 ```
 
-The current compatibility shape is:
+The accepted compatibility shape is:
 
 ```text
-route -> app-shell route owner -> facade -> repository/DAL
+route -> app-shell compatibility shim -> owner facade/service -> repository/DAL
 ```
 
 Examples:
 
-- `app_shell.room_runtime.AppShellRoomCenter` delegates to `app_shell.room_runtime`, which is bound to
-  `room.RoomFacade` and an explicit repository-backed app-shell store.
-- `app_shell.agent_runtime.AppShellAgentCenter` delegates to `app_shell.agent_service`, which is bound to
-  `agent.AgentFacade`.
-- `app_shell.relay_service` exposes relay route behavior while delegating
-  runtime behavior into `hub_runtime_bridge.HubFacade`.
-- `app_shell.a2a_runtime.A2AService` keeps legacy method names while delegating
-  task-tracking placeholder creation, tracked-send push configuration, failure
-  persistence, terminal response persistence, and HITL reply token/task
-  persistence to `execution.task_tracking`; A2A SDK transport/coercion work
-  stays in `a2a_adapter`.
+- `app_shell.room_runtime` is an import-compatible shim over
+  `room.compat.runtime`, where `AppShellRoomCenter` delegates to `RoomServices`
+  bound to `room.RoomFacade`, room-owned unbound startup sentinels, and an
+  explicit repository-backed runtime store.
+- `app_shell.agent_runtime.AppShellAgentCenter` delegates to
+  `app_shell.agent_service`, which is bound to `agent.AgentFacade`.
+- `app_shell.relay_service` is an import-compatible shim over
+  `hub_runtime_bridge.compat.relay_service`; relay behavior is owned by
+  `hub_runtime_bridge.HubFacade` and HubRuntimeBridge adapters.
+- `app_shell.a2a_runtime` is an import-compatible shim over
+  `a2a_adapter.runtime_service`. `A2AService` keeps legacy method names while
+  delegating task-tracking placeholder creation, tracked-send push
+  configuration, failure persistence, terminal response persistence, and HITL
+  reply token/task persistence to `execution.task_tracking`; A2A SDK
+  transport/coercion work stays in `a2a_adapter`.
 
 Execution is intentionally independent from
 app-shell compatibility objects.
-`container.py` may wrap `app_shell.a2a_runtime`, `app_shell.room_runtime`,
-Delivery/SSE, room memory, notification, and repository-store objects into
-focused execution ports, but files under `execution/` do not import app-shell
-modules and do not accept broad app-shell composite stores. Queue, supervisor,
-dispatch, HITL, cancellation, and webhook resume paths receive only the methods
-they call through execution-owned protocols in `execution/ports.py`.
+`container.py` wires owner modules such as `a2a_adapter.runtime_service`,
+`room.compat.runtime`, Delivery/SSE, room memory, notification, and
+`dal.runtime_store` objects into focused execution ports. Files under
+`execution/` do not import app-shell modules and do not accept broad app-shell
+composite stores. Queue, supervisor, dispatch, HITL, cancellation, and webhook
+resume paths receive only the methods they call through execution-owned
+protocols in `execution/ports.py`.
 
 ## Major Code Areas
 
@@ -502,7 +507,7 @@ become a new dependency target for domain or platform modules.
 The object-storage convergence gate scans static and dynamic imports across
 production code, including `main.py` and `app_shell/`, and exempts only
 `app_shell/s3_service.py` itself. AWS SDK imports are confined to `dal/s3/`;
-the only temporary exception is `llm_gateway/providers/bedrock_provider.py`
+the only provider-specific exception is `llm_gateway/providers/bedrock_provider.py`
 importing `aioboto3` for Bedrock until that provider's SDK access moves behind
 a dedicated transport.
 Startup also configures A2A artifact storage once with the platform object
@@ -551,36 +556,23 @@ file uploads and converted binary artifacts.
 
 ### `app_shell`
 
-`app_shell` contains route-facing runtime adapters, process-level compatibility
-bindings, and fail-fast shims. Business ownership for the P3 focus areas lives
-in module facades, services, repositories, adapters, and narrow runtime-store
-ports; app-shell modules preserve legacy import and route method names.
+`app_shell` is now limited to route-facing adapters that still protect public
+startup/API contracts and import-compatible shims for legacy module paths. The
+Goal 7 focus files are final shims: they expose old names and fail fast through
+their owning implementations when startup has not injected required ports, but
+they do not own business behavior.
 
 Examples:
 
-- `app_shell.room_runtime`: legacy room-center and room-runtime method surface
-  over Room, Execution, ContextMemory, Platform, and Delivery ports.
-- `app_shell.a2a_runtime`: route/execution compatibility over `a2a_adapter`.
-  Runtime settings are injected through `A2ARuntimeConfig`; task tracking and
-  call counting are bound as explicit ports rather than read from global
-  settings or broad stores during calls.
+- `app_shell.room_runtime`: re-exports `room.compat.runtime`.
+- `app_shell.a2a_runtime`: re-exports `a2a_adapter.runtime_service`.
+- `app_shell.relay_service`: re-exports
+  `hub_runtime_bridge.compat.relay_service`.
+- `app_shell.context_assembly_service`: re-exports
+  `context_memory.compat.context_assembly`.
+- `app_shell.repository_store`: re-exports
+  `dal.runtime_store.app_shell_store`.
 - `app_shell.agent_service`: route-facing adapter over `AgentFacade`.
-- `app_shell.repository_store`: compatibility composite over focused runtime
-  store parts in `app_shell.repository_parts`. Startup splits the composite into
-  focused agent/room, message, task lifecycle, HITL, and memory ports before
-  binding production consumers; production runtime consumers no longer receive
-  the composite directly. Room runtime, relay, debate, and room-coordinator
-  compatibility services receive focused startup adapters that expose only the
-  cancellation, message, memory, and agent/room lookup methods they call. Execution
-  `RoomMessageCenter` receives a focused startup adapter composed from those
-  runtime-store parts rather than the app-shell composite.
-- `app_shell.relay_service`: relay route surface over
-  `hub_runtime_bridge`. Hub-owned liveness, stream binding, agent sync,
-  legacy push delivery, offline queues, offline failure persistence, heartbeat
-  monitoring, command dispatch, ownership, and internal response router setup
-  are handled by `HubFacade`; relay runtime settings are injected as
-  `HubRuntimeBridgeConfig`, and persistence reaches Mongo through
-  repository-backed app-shell adapters.
 - `execution.dispatch.task_notifications`: terminal task update notifications.
 - `app_shell.hitl_service`: HITL lifecycle and response handling.
 
@@ -631,7 +623,7 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - checks pending HITL requests before persistence,
    - checks active runs before persistence,
    - delegates room persistence to `AppShellRoomCenter.persist_message_to_room`,
-     which reaches `app_shell.room_runtime.RoomServices.persist_message_to_room`,
+     which reaches `room.compat.runtime.RoomServices.persist_message_to_room`,
    - emits preflight `processing` status immediately after the user message is
      persisted so the frontend has a cancellable `message_id`,
    - continues room-side preflight through
@@ -948,32 +940,18 @@ The normal terminal states seen by clients are:
 - `rate_limited`
 - `error`
 
-## Current Architectural Tensions
+## Accepted Architecture State
 
-The current codebase has a mixed architecture:
-
-- Newer modules use explicit facades, protocol interfaces, DTOs, and container
-  construction.
-- Some app-shell modules still expose singleton-style process runtime objects as
-  compatibility shims, but focus-area behavior is bound through fail-fast
-  facades, adapters, and narrow ports.
-- Legacy database files still exist for the final deletion phase, but
-  production startup no longer imports or binds them.
-- Room orchestration still has a compatibility store surface, but it is backed
-  by module repositories and DAL collections rather than the legacy database
-  singleton.
-- Some route modules bind dependencies via module-level globals during startup.
-- Compatibility layers are intentionally kept so the repo can migrate in phases
-  without breaking existing route behavior.
-
-When making new changes, prefer the newer shape:
-
-```text
-route -> protocol/facade -> repository/DAL -> external service
-```
-
-Avoid adding new direct dependencies on broad app-shell runtime singletons
-unless the surrounding module already requires that path.
+- API gateway dependencies are injected through `app.state.api_gateway_deps`.
+- ContextMemory projection is event-driven through `MessageCommitted`.
+- `common` remains a leaf package and exposes only DTOs, protocols, auth,
+  config, errors, observability, and utilities.
+- Domain modules do not import app-shell focus runtime modules for business
+  behavior.
+- App-shell focus files are compatibility shims with hard line-count and export
+  gates.
+- Remaining non-focus app-shell adapters are compatibility surfaces documented
+  in this architecture file and should not gain new business ownership.
 
 ## API Route Protocol Ownership
 
