@@ -46,13 +46,12 @@ class ContextMemoryChatAdapter:
         self,
         request: ChatMemoryRequest,
     ) -> ChatMemoryResponse:
-        if request.session_id is None:
-            raise SessionIdRequiredError()
+        session_id = _require_session_id(request.session_id)
         try:
             chat_context = ChatContext(
                 memory_id=str(uuid4()),
                 user_name=_response_user_name(request),
-                session_id=request.session_id,
+                session_id=session_id,
                 context_data=ContextData(context_content=request.user_input or ""),
                 created_at=utcnow(),
                 updated_at=utcnow(),
@@ -82,11 +81,10 @@ class ContextMemoryChatAdapter:
         self,
         request: ChatMemoryRequest,
     ) -> ChatMemoryResponse:
-        if request.session_id is None:
-            raise SessionIdRequiredError()
+        session_id = _require_session_id(request.session_id)
         try:
             chat_context = _chat_context_model(
-                await self._store.get_chat_context_by_session_id(request.session_id)
+                await self._store.get_chat_context_by_session_id(session_id)
             )
             if chat_context is not None:
                 return ChatMemoryResponse(
@@ -109,12 +107,11 @@ class ContextMemoryChatAdapter:
         self,
         request: ChatMemoryRequest,
     ) -> ChatMemoryResponse:
-        if request.session_id is None:
-            raise SessionIdRequiredError()
+        session_id = _require_session_id(request.session_id)
 
         try:
             chat_context = _chat_context_model(
-                await self._store.get_chat_context_by_session_id(request.session_id)
+                await self._store.get_chat_context_by_session_id(session_id)
             )
         except Exception as exc:
             return _chat_memory_error_response(request, exc)
@@ -141,14 +138,14 @@ class ContextMemoryChatAdapter:
             updated_context = ChatContext(
                 memory_id=chat_context.memory_id,
                 user_name=_response_user_name(request),
-                session_id=request.session_id,
+                session_id=session_id,
                 context_data=ContextData(context_content=new_context_data),
                 created_at=chat_context.created_at,
                 updated_at=utcnow(),
                 extend_info=chat_context.extend_info,
             )
             success = await self._store.update_chat_context_by_session_id(
-                request.session_id,
+                session_id,
                 _runtime_chat_context(updated_context),
             )
             if success:
@@ -171,12 +168,9 @@ class ContextMemoryChatAdapter:
         self,
         request: ChatMemoryRequest,
     ) -> ChatMemoryResponse:
-        if request.session_id is None:
-            raise SessionIdRequiredError()
+        session_id = _require_session_id(request.session_id)
         try:
-            success = await self._store.delete_chat_context_by_session_id(
-                request.session_id
-            )
+            success = await self._store.delete_chat_context_by_session_id(session_id)
             if success:
                 return ChatMemoryResponse(
                     user_name=_response_user_name(request),
@@ -539,6 +533,12 @@ class ContextMemoryRoomMemoryAdapter:
 
 def _response_user_name(request: ChatMemoryRequest) -> str:
     return request.user_name or ""
+
+
+def _require_session_id(session_id: str | None) -> str:
+    if session_id is None or not session_id.strip():
+        raise SessionIdRequiredError()
+    return session_id
 
 
 def _chat_context_content(chat_context: ChatContext) -> str | None:

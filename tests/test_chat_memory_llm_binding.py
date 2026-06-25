@@ -45,6 +45,37 @@ async def test_chat_memory_delete_requires_session_id_before_store_call():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "store_method_name"),
+    [
+        ("create_chat_context", "add_chat_context"),
+        ("get_chat_context_by_session_id", "get_chat_context_by_session_id"),
+        ("update_chat_context_by_session_id", "get_chat_context_by_session_id"),
+        ("delete_chat_context_by_session_id", "delete_chat_context_by_session_id"),
+    ],
+)
+@pytest.mark.parametrize("session_id", ["", "   "])
+async def test_chat_memory_methods_reject_blank_session_id_before_store_call(
+    method_name: str,
+    store_method_name: str,
+    session_id: str,
+):
+    store = MagicMock()
+    store.add_chat_context = AsyncMock()
+    store.get_chat_context_by_session_id = AsyncMock()
+    store.update_chat_context_by_session_id = AsyncMock()
+    store.delete_chat_context_by_session_id = AsyncMock()
+    service = ContextMemoryChatAdapter(chat_store=store)
+
+    with pytest.raises(SessionIdRequiredError):
+        await getattr(service, method_name)(
+            ChatMemoryRequest(user_name="user", session_id=session_id)
+        )
+
+    getattr(store, store_method_name).assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_chat_memory_update_uses_bound_room_memory_llm_service():
     created_at = datetime(2026, 1, 1, tzinfo=UTC)
     store = MagicMock()
