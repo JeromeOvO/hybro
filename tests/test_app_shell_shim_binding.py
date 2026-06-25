@@ -7,7 +7,6 @@ import pytest
 
 from app_shell import relay_service as relay_module
 from app_shell.a2a_runtime import A2AService
-from app_shell.context_assembly_service import ContextAssemblyService
 from app_shell.relay_service import RelayService, init_relay_service
 from app_shell.room_runtime import AppShellRoomCenter, RoomServices
 from common.dto import RoomInfo
@@ -150,28 +149,6 @@ async def test_a2a_service_delegates_after_task_store_bind() -> None:
         step_number=1,
         total_steps=2,
     )
-
-
-def test_context_assembly_service_fails_before_facade_bind() -> None:
-    service = ContextAssemblyService()
-
-    with pytest.raises(
-        RuntimeError,
-        match=(
-            r"ContextAssemblyService\.bind_facade\(\) not called - startup incomplete"
-        ),
-    ):
-        service.get_budget_summary()
-
-
-def test_context_assembly_service_delegates_after_facade_bind() -> None:
-    service = ContextAssemblyService()
-    facade = SimpleNamespace(get_budget_summary=MagicMock(return_value={"budget": 1}))
-
-    service.bind_facade(facade)
-
-    assert service.get_budget_summary() == {"budget": 1}
-    facade.get_budget_summary.assert_called_once_with()
 
 
 class _RelayFacadeSpy:

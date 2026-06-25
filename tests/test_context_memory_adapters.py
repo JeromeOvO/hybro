@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app_shell.compaction_service import CompactionService
 from common.dto import AssembledContext, CompactionResult, MemorySearchResult
 from context_memory import ContextMemoryFacade
 from context_memory.compat.context_assembly import ContextAssemblyService
@@ -444,85 +443,6 @@ def test_context_assembly_service_delegates_agent():
 
     assert result.context == "agent context"
     assert facade.calls[0][0] == "assemble_agent"
-
-
-@pytest.mark.asyncio
-async def test_compaction_service_delegates_should_compact():
-    facade = FakeFacade()
-    service = CompactionService()
-    service.bind_facade(facade)
-
-    assert await service.should_compact("r1") is True
-    assert facade.calls == [("should_compact", "r1")]
-
-
-@pytest.mark.asyncio
-async def test_compaction_service_delegates_compact_if_needed():
-    facade = FakeFacade()
-    service = CompactionService()
-    service.bind_facade(facade)
-
-    result = await service.compact_if_needed("r1")
-
-    assert result.compacted_count == 1
-    assert facade.calls == [("compact_if_needed", "r1")]
-
-
-@pytest.mark.asyncio
-async def test_compaction_service_exercises_real_facade_compaction_path():
-    memory_repository = RealFacadeMemoryRepository(
-        {
-            "room_id": "r1",
-            "memory_id": "m1",
-            "memory_content": {
-                "conversation_history": [
-                    {
-                        "turn_id": "t1",
-                        "role": "user",
-                        "content": "old content",
-                        "representation": "full",
-                        "content_type": "text",
-                        "estimated_tokens_full": 40,
-                        "estimated_tokens_compact": 5,
-                    }
-                ]
-            },
-            "conversation_history": [
-                {
-                    "turn_id": "t1",
-                    "role": "user",
-                    "content": "old content",
-                    "representation": "full",
-                    "content_type": "text",
-                    "estimated_tokens_full": 40,
-                    "estimated_tokens_compact": 5,
-                }
-            ],
-        }
-    )
-    content_repository = RealFacadeContentRepository()
-    service = CompactionService()
-    service.bind_facade(
-        real_context_memory_facade(
-            memory_repository=memory_repository,
-            content_repository=content_repository,
-            search_config=MemorySearchConfig(enabled=False),
-            compaction_config=CompactionConfig(
-                enabled=True,
-                max_full_turns=0,
-                max_total_tokens=1,
-                preserve_recent_turns=0,
-                content_ttl_days=0,
-                concurrency=1,
-            ),
-        )
-    )
-
-    result = await service.compact_room_memory("r1")
-
-    assert result.compacted_count == 1
-    assert content_repository.stored[0]["turn_id"] == "t1"
-    assert memory_repository.compacted_entries[0]["turn_id"] == "t1"
 
 
 @pytest.mark.asyncio
@@ -1103,11 +1023,6 @@ async def test_services_fail_fast_before_bind():
         ContextAssemblyService().build_supervisor_context(room_memory(), "task")
     with pytest.raises(
         RuntimeError,
-        match="CompactionService.bind_facade\\(\\) not called - startup incomplete",
-    ):
-        await CompactionService().should_compact("r1")
-    with pytest.raises(
-        RuntimeError,
         match="ContextMemorySearchAdapter has no facade bound",
     ):
         await ContextMemorySearchAdapter().search("query", "r1")
@@ -1116,11 +1031,4 @@ async def test_services_fail_fast_before_bind():
     ):
         await ContextMemoryRoomMemoryAdapter().create_room_memory(
             RoomCenterMemoryRequest(room_id="r1")
-        )
-    with pytest.raises(
-        RuntimeError,
-        match="CompactionService.bind_content_storage\\(\\) not called - startup incomplete",
-    ):
-        await CompactionService().content_storage.upsert_full_content(
-            "r1", "t1", "hello", "text"
         )
