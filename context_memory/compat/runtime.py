@@ -262,7 +262,9 @@ class ContextMemoryRoomMemoryAdapter:
                     extend_info=request.extend_info,
                 ).model_dump(mode="json")
             created = await facade.legacy_create_room_memory(memory_doc)
-            memory = _room_memory_from_doc(created) if created else None
+            memory = (
+                None if created is None else _room_memory_from_doc(created)
+            )
             return RoomCenterMemoryResponse(
                 room_id=request.room_id,
                 memory_id=memory.memory_id if memory else request.memory_id,
@@ -368,6 +370,28 @@ class ContextMemoryRoomMemoryAdapter:
                 memory_id=request.memory_id,
             )
 
+    async def delete_room_memory_by_room_id(
+        self,
+        request: RoomCenterMemoryRequest,
+    ) -> RoomCenterMemoryResponse:
+        facade = self._require_facade()
+        try:
+            ok = await facade.legacy_delete_room_memory_by_room_id(request.room_id)
+            return RoomCenterMemoryResponse(
+                room_id=request.room_id,
+                memory_id=request.memory_id if ok else None,
+                memory=None,
+                success=ok,
+                error=None if ok else "Room memory not found",
+                status_code=200 if ok else 404,
+            )
+        except Exception as exc:
+            return _room_memory_error_response(
+                request,
+                exc,
+                memory_id=request.memory_id,
+            )
+
     async def delete_room_memory_by_memory_id(
         self,
         request: RoomCenterMemoryRequest,
@@ -404,14 +428,17 @@ class ContextMemoryRoomMemoryAdapter:
                 attachments=request.attachments,
                 message_id=request.message_id,
             )
-            duplicate_turn = bool(doc and doc.get("_context_memory_duplicate_turn"))
-            if doc and not duplicate_turn:
-                await self._track_user_interaction(request.user_id)
+            duplicate_turn = bool(
+                isinstance(doc, dict)
+                and doc.get("_context_memory_duplicate_turn")
+            )
             memory = (
                 _room_memory_from_doc(_strip_internal_memory_flags(doc))
-                if doc
+                if doc is not None
                 else None
             )
+            if memory is not None and not duplicate_turn:
+                await self._track_user_interaction(request.user_id)
             return RoomCenterMemoryResponse(
                 room_id=request.room_id,
                 memory_id=memory.memory_id if memory else None,
@@ -584,7 +611,7 @@ def _room_memory_from_doc(doc: Any | None) -> RoomMemory | None:
 
 
 def _strip_internal_memory_flags(doc: dict | None) -> dict | None:
-    if not doc:
+    if doc is None:
         return None
     clean = dict(doc)
     clean.pop("_context_memory_duplicate_turn", None)

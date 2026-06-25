@@ -133,6 +133,9 @@ class RaisingRoomMemoryFacade(FakeFacade):
     async def legacy_delete_room_memory_by_memory_id(self, memory_id: str):
         raise RuntimeError("facade memory-id delete failed")
 
+    async def legacy_delete_room_memory_by_room_id(self, room_id: str):
+        raise RuntimeError("facade room-id delete failed")
+
     async def initialize_or_update_room_memory(self, *args, **kwargs):
         raise RuntimeError("facade projection failed")
 
@@ -662,6 +665,21 @@ async def test_context_memory_room_adapter_create_translates_facade_exception():
 
 
 @pytest.mark.asyncio
+async def test_context_memory_room_adapter_create_empty_doc_is_malformed():
+    class EmptyCreateFacade(FakeFacade):
+        async def legacy_create_room_memory(self, memory_doc: dict) -> dict:
+            return {}
+
+    service = ContextMemoryRoomMemoryAdapter(facade=EmptyCreateFacade())
+
+    response = await service.create_room_memory(RoomCenterMemoryRequest(room_id="r1"))
+
+    assert response.success is False
+    assert response.status_code == 500
+    assert "room_id" in response.error
+
+
+@pytest.mark.asyncio
 async def test_context_memory_room_adapter_get_translates_facade_exception():
     service = ContextMemoryRoomMemoryAdapter(facade=RaisingRoomMemoryFacade())
 
@@ -794,6 +812,46 @@ async def test_context_memory_room_adapter_delete_by_memory_id_translates_facade
 
 
 @pytest.mark.asyncio
+async def test_context_memory_room_adapter_delete_by_room_id_delegates_success():
+    class DeleteByRoomFacade(FakeFacade):
+        async def legacy_delete_room_memory_by_room_id(self, room_id: str):
+            self.calls.append(("legacy_delete_room_memory_by_room_id", room_id))
+            return True
+
+    facade = DeleteByRoomFacade()
+    service = ContextMemoryRoomMemoryAdapter(facade=facade)
+
+    response = await service.delete_room_memory_by_room_id(
+        RoomCenterMemoryRequest(room_id="r1")
+    )
+
+    assert response.success is True
+    assert response.status_code == 200
+    assert response.room_id == "r1"
+    assert facade.calls == [("legacy_delete_room_memory_by_room_id", "r1")]
+
+
+@pytest.mark.asyncio
+async def test_context_memory_room_adapter_delete_by_room_id_not_found():
+    class DeleteByRoomFacade(FakeFacade):
+        async def legacy_delete_room_memory_by_room_id(self, room_id: str):
+            self.calls.append(("legacy_delete_room_memory_by_room_id", room_id))
+            return False
+
+    facade = DeleteByRoomFacade()
+    service = ContextMemoryRoomMemoryAdapter(facade=facade)
+
+    response = await service.delete_room_memory_by_room_id(
+        RoomCenterMemoryRequest(room_id="r1")
+    )
+
+    assert response.success is False
+    assert response.status_code == 404
+    assert response.error == "Room memory not found"
+    assert facade.calls == [("legacy_delete_room_memory_by_room_id", "r1")]
+
+
+@pytest.mark.asyncio
 async def test_context_memory_room_adapter_initialize_translates_facade_exception():
     service = ContextMemoryRoomMemoryAdapter(facade=RaisingRoomMemoryFacade())
 
@@ -804,6 +862,38 @@ async def test_context_memory_room_adapter_initialize_translates_facade_exceptio
     assert response.success is False
     assert response.status_code == 500
     assert response.error == "facade projection failed"
+
+
+@pytest.mark.asyncio
+async def test_context_memory_room_adapter_initialize_empty_doc_is_malformed_and_does_not_track_user():
+    class EmptyProjectionFacade(FakeFacade):
+        async def initialize_or_update_room_memory(self, *args, **kwargs):
+            self.calls.append(
+                ("initialize_or_update_room_memory", kwargs.get("message_id"))
+            )
+            return {}
+
+    usage_store = type(
+        "DB",
+        (),
+        {"increment_user_interactions": AsyncMock()},
+    )()
+    facade = EmptyProjectionFacade()
+    service = ContextMemoryRoomMemoryAdapter(facade=facade, usage_store=usage_store)
+
+    response = await service.initialize_or_update_room_memory(
+        RoomCenterMemoryRequest(
+            room_id="r1",
+            message_id="msg-1",
+            memory_content="hello",
+            user_id="u1",
+        )
+    )
+
+    assert response.success is False
+    assert response.status_code == 500
+    assert "room_id" in response.error
+    usage_store.increment_user_interactions.assert_not_awaited()
 
 
 @pytest.mark.asyncio
