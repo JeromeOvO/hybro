@@ -449,6 +449,24 @@ def test_non_protocol_helper_call_boundary():
             "assemble_supervisor_context_from_memory",
             "assemble_agent_execution_context_from_memory",
         },
+        "context_memory/compat/runtime.py": {
+            "legacy_create_room_memory",
+            "legacy_get_room_memory_by_room_id",
+            "legacy_get_room_memory_by_memory_id",
+            "legacy_update_room_memory_by_room_id",
+            "legacy_update_room_memory_by_memory_id",
+            "legacy_delete_room_memory_by_room_id",
+            "legacy_delete_room_memory_by_memory_id",
+            "initialize_or_update_room_memory",
+            "add_agent_response_to_memory",
+            "add_synthesis_to_history",
+            "update_room_summary",
+        },
+        "context_memory/search_adapter.py": {
+            "legacy_search",
+            "index_turn_for_search",
+            "delete_room_index",
+        },
         "app_shell/memory_service.py": {
             "legacy_create_room_memory",
             "legacy_get_room_memory_by_room_id",
@@ -486,7 +504,8 @@ def test_non_protocol_helper_call_boundary():
     violations = []
     for path in Path(".").rglob("*.py"):
         if (
-            path.parts[0] in {"context_memory", "tests"}
+            path.parts[0] == "tests"
+                or (path.parts[0] == "context_memory" and path not in path_allowed_helpers)
                 or path in {Path("container.py"), Path("main.py")}
                 or ".venv" in path.parts
                 or ".worktrees" in path.parts

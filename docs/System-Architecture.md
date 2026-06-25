@@ -120,7 +120,9 @@ Examples:
 - `app_shell.room_runtime` is an import-compatible shim over
   `room.compat.runtime`, where `AppShellRoomCenter` delegates to `RoomServices`
   bound to `room.RoomFacade`, room-owned unbound startup sentinels, and an
-  explicit repository-backed runtime store.
+  explicit repository-backed runtime store. `RoomServices` does not expose a
+  legacy memory-service slot; ContextMemory access is bound through the
+  ContextMemory runtime protocol and route adapters.
 - Agent route compatibility is owned by `agent.route_adapter.AgentRouteAdapter`
   and `agent.service.AgentService`, both constructed directly by `container.py`
   over `agent.AgentFacade`.
@@ -368,9 +370,11 @@ remain compatibility shims for tests and legacy callers; production
 Legacy turn-selection and context metric logging helpers live in
 `context_memory.legacy_assembly`, leaving the app-shell context assembly shim to
 convert result shapes and expose the legacy truncation counter.
-`app_shell.compaction_service` and `app_shell.memory_service` are still bound to
-the facade by the container runtime while their compatibility surfaces remain in
-use.
+`app_shell.compaction_service` is still bound to the facade by the container
+runtime while its compatibility surface remains in use. Memory route and
+execution compatibility use `ContextMemoryChatAdapter` and
+`ContextMemoryRoomMemoryAdapter` over the ContextMemory facade instead of a room
+runtime memory-service dependency.
 
 ### `delivery`
 

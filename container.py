@@ -296,7 +296,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from app_shell.compaction_service import compaction_service
             from app_shell.debate_service import debate_service
             from app_shell.gemini_service import gemini_service
-            from app_shell.memory_service import room_memory_service
             from app_shell.notification_service import notification_service
             from app_shell.openai_service import openai_service
             from app_shell.room_coordinator_service import room_coordinator_service
@@ -517,7 +516,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 llm_gateway_config=llm_gateway_config,
             )
             room_supervisor_service.bind_supervisor_service(supervisor_llm_service)
-            room_memory_service.bind_turn_notes_llm_provider(llm_provider)
             room_runtime.bind_message_parser_service(message_parser_llm_service)
             room_runtime.bind_debate_rounds(runtime.settings.debate_rounds)
             room_coordinator_service.bind_summary_service(summary_llm_service)
@@ -928,7 +926,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             membership_source.bind_store(agent_room_store)
             debate_service.bind_store(debate_message_store)
             room_coordinator_service.bind_store(room_coordinator_message_store)
-            room_memory_service.bind_store(memory_store)
             bind_notification_store(task_notification_store)
             bind_task_notification_runtime(
                 notification_service=notification_service,
@@ -987,7 +984,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_service=agent_compat_service,
                 agent_selection_service=agent_selection_service,
                 a2a_service=a2a_service,
-                room_memory_service=room_memory_service,
                 sse_manager=sse_manager,
                 task_service=task_service,
             )
@@ -1160,7 +1156,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             compaction_service.bind_content_storage(platform_facade.content_storage)
             compaction_service.bind_room_memory_reader(context_memory_facade)
             compaction_service.bind_facade(context_memory_facade)
-            room_memory_service.bind_facade(context_memory_facade)
             room_runtime.bind_context_memory(
                 _context_memory_deps.memory_manager,
                 _context_memory_deps.context_memory_runtime,
