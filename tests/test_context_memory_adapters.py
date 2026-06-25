@@ -654,6 +654,22 @@ async def test_context_memory_room_adapter_delegates_create_with_initial_content
 
 
 @pytest.mark.asyncio
+async def test_context_memory_room_adapter_create_uses_persisted_memory_metadata():
+    facade = FakeFacade()
+    service = ContextMemoryRoomMemoryAdapter(facade=facade)
+
+    response = await service.create_room_memory(
+        RoomCenterMemoryRequest(
+            memory=RoomMemory(room_id="memory-room", memory_id="memory-id")
+        )
+    )
+
+    assert response.success is True
+    assert response.room_id == "memory-room"
+    assert response.memory_id == "memory-id"
+
+
+@pytest.mark.asyncio
 async def test_context_memory_room_adapter_create_translates_facade_exception():
     service = ContextMemoryRoomMemoryAdapter(facade=RaisingRoomMemoryFacade())
 
@@ -716,6 +732,25 @@ async def test_context_memory_room_adapter_get_by_memory_id_translates_facade_ex
     assert response.success is False
     assert response.status_code == 500
     assert response.error == "facade memory-id read failed"
+
+
+@pytest.mark.asyncio
+async def test_context_memory_room_adapter_get_by_memory_id_uses_memory_room_id():
+    facade = FakeFacade()
+    facade.doc = {
+        "room_id": "memory-room",
+        "memory_id": "m1",
+        "conversation_history": [],
+    }
+    service = ContextMemoryRoomMemoryAdapter(facade=facade)
+
+    response = await service.get_room_memory_by_memory_id(
+        RoomCenterMemoryRequest(memory_id="m1")
+    )
+
+    assert response.success is True
+    assert response.room_id == "memory-room"
+    assert response.memory_id == "m1"
 
 
 @pytest.mark.asyncio
@@ -783,6 +818,48 @@ async def test_context_memory_room_adapter_update_by_memory_id_persists_request_
     assert facade.calls[-1][0] == "legacy_update_room_memory_by_memory_id"
     assert facade.doc["memory_id"] == "m1"
     assert facade.doc["room_id"] == "r1"
+
+
+@pytest.mark.asyncio
+async def test_context_memory_room_adapter_update_by_room_id_uses_request_memory_id():
+    class UpdateByRoomFacade(FakeFacade):
+        async def legacy_update_room_memory_by_room_id(
+            self, room_id: str, updates: dict
+        ) -> bool:
+            self.calls.append(("legacy_update_room_memory_by_room_id", room_id))
+            return True
+
+    facade = UpdateByRoomFacade()
+    service = ContextMemoryRoomMemoryAdapter(facade=facade)
+    updated = RoomMemory(room_id="r1", memory_id="memory-id")
+
+    response = await service.update_room_memory_by_room_id(
+        RoomCenterMemoryRequest(room_id="r1", memory=updated)
+    )
+
+    assert response.success is True
+    assert response.room_id == "r1"
+    assert response.memory_id == "memory-id"
+
+
+@pytest.mark.asyncio
+async def test_context_memory_room_adapter_update_by_memory_id_uses_request_memory_metadata():
+    facade = FakeFacade()
+    facade.doc = {
+        "room_id": "memory-room",
+        "memory_id": "lookup-id",
+        "conversation_history": [],
+    }
+    service = ContextMemoryRoomMemoryAdapter(facade=facade)
+    updated = RoomMemory(room_id="memory-room", memory_id="memory-id")
+
+    response = await service.update_room_memory_by_memory_id(
+        RoomCenterMemoryRequest(memory_id="lookup-id", memory=updated)
+    )
+
+    assert response.success is True
+    assert response.room_id == "memory-room"
+    assert response.memory_id == "memory-id"
 
 
 @pytest.mark.asyncio

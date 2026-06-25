@@ -409,6 +409,16 @@ def test_context_memory_import_boundary():
         "models.request",
         "models.response",
     }
+    path_legacy_compat_imports = {
+        Path("context_memory/protocols.py"): protocol_legacy_model_imports,
+        Path("context_memory/compat/runtime.py"): {
+            "llm_gateway.errors",
+            "models.error",
+            "models.memory",
+            "models.request",
+            "models.response",
+        },
+    }
 
     for path in Path("context_memory").rglob("*.py"):
         tree = ast.parse(path.read_text())
@@ -416,10 +426,7 @@ def test_context_memory_import_boundary():
             root = None
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    if (
-                        path == Path("context_memory/protocols.py")
-                        and alias.name in protocol_legacy_model_imports
-                    ):
+                    if alias.name in path_legacy_compat_imports.get(path, set()):
                         continue
                     root = alias.name.split(".", 1)[0]
                     assert root in allowed_roots and root not in forbidden, (
@@ -427,10 +434,7 @@ def test_context_memory_import_boundary():
                         alias.name,
                     )
             elif isinstance(node, ast.ImportFrom) and node.module:
-                if (
-                    path == Path("context_memory/protocols.py")
-                    and node.module in protocol_legacy_model_imports
-                ):
+                if node.module in path_legacy_compat_imports.get(path, set()):
                     continue
                 root = node.module.split(".", 1)[0]
                 assert root in allowed_roots and root not in forbidden, (

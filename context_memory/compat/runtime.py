@@ -266,8 +266,8 @@ class ContextMemoryRoomMemoryAdapter:
                 None if created is None else _room_memory_from_doc(created)
             )
             return RoomCenterMemoryResponse(
-                room_id=request.room_id,
-                memory_id=memory.memory_id if memory else request.memory_id,
+                room_id=_response_room_id(request, memory),
+                memory_id=_response_memory_id(request, memory),
                 memory=memory,
                 success=memory is not None,
                 error=None if memory else "Failed to create room memory",
@@ -285,8 +285,8 @@ class ContextMemoryRoomMemoryAdapter:
             doc = await facade.legacy_get_room_memory_by_room_id(request.room_id)
             memory = None if doc is None else _room_memory_from_doc(doc)
             return RoomCenterMemoryResponse(
-                room_id=request.room_id,
-                memory_id=memory.memory_id if memory else None,
+                room_id=_response_room_id(request, memory),
+                memory_id=_response_memory_id(request, memory),
                 memory=memory,
                 success=memory is not None,
                 error=None if memory else "Room memory not found",
@@ -307,8 +307,8 @@ class ContextMemoryRoomMemoryAdapter:
                 doc,
             )
             return RoomCenterMemoryResponse(
-                room_id=request.room_id,
-                memory_id=request.memory_id,
+                room_id=_response_room_id(request, request.memory if ok else None),
+                memory_id=_response_memory_id(request, request.memory if ok else None),
                 memory=request.memory if ok else None,
                 success=ok,
                 error=None if ok else "Room memory not found",
@@ -330,8 +330,8 @@ class ContextMemoryRoomMemoryAdapter:
             doc = await facade.legacy_get_room_memory_by_memory_id(request.memory_id)
             memory = None if doc is None else _room_memory_from_doc(doc)
             return RoomCenterMemoryResponse(
-                room_id=request.room_id,
-                memory_id=memory.memory_id if memory else request.memory_id,
+                room_id=_response_room_id(request, memory),
+                memory_id=_response_memory_id(request, memory),
                 memory=memory,
                 success=memory is not None,
                 error=None if memory else "Room memory not found",
@@ -356,8 +356,8 @@ class ContextMemoryRoomMemoryAdapter:
                 doc,
             )
             return RoomCenterMemoryResponse(
-                room_id=request.room_id,
-                memory_id=request.memory_id,
+                room_id=_response_room_id(request, request.memory if ok else None),
+                memory_id=_response_memory_id(request, request.memory if ok else None),
                 memory=request.memory if ok else None,
                 success=ok,
                 error=None if ok else "Room memory not found",
@@ -608,6 +608,20 @@ def _room_memory_from_doc(doc: Any | None) -> RoomMemory | None:
     if isinstance(doc, RoomMemory):
         return doc
     return RoomMemory.model_validate(doc)
+
+
+def _response_room_id(
+    request: RoomCenterMemoryRequest,
+    memory: RoomMemory | None,
+) -> str | None:
+    return memory.room_id if memory is not None else request.room_id
+
+
+def _response_memory_id(
+    request: RoomCenterMemoryRequest,
+    memory: RoomMemory | None,
+) -> str | None:
+    return memory.memory_id if memory is not None else request.memory_id
 
 
 def _strip_internal_memory_flags(doc: dict | None) -> dict | None:
