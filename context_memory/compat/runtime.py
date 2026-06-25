@@ -46,11 +46,13 @@ class ContextMemoryChatAdapter:
         self,
         request: ChatMemoryRequest,
     ) -> ChatMemoryResponse:
+        if request.session_id is None:
+            raise SessionIdRequiredError()
         try:
             chat_context = ChatContext(
                 memory_id=str(uuid4()),
                 user_name=_response_user_name(request),
-                session_id=request.session_id or "",
+                session_id=request.session_id,
                 context_data=ContextData(context_content=request.user_input or ""),
                 created_at=utcnow(),
                 updated_at=utcnow(),
@@ -169,6 +171,8 @@ class ContextMemoryChatAdapter:
         self,
         request: ChatMemoryRequest,
     ) -> ChatMemoryResponse:
+        if request.session_id is None:
+            raise SessionIdRequiredError()
         try:
             success = await self._store.delete_chat_context_by_session_id(
                 request.session_id
@@ -576,11 +580,7 @@ def _room_memory_from_doc(doc: Any | None) -> RoomMemory | None:
         return None
     if isinstance(doc, RoomMemory):
         return doc
-    try:
-        return RoomMemory.model_validate(doc)
-    except Exception:
-        logger.warning("Invalid room memory document", exc_info=True)
-        return None
+    return RoomMemory.model_validate(doc)
 
 
 def _strip_internal_memory_flags(doc: dict | None) -> dict | None:

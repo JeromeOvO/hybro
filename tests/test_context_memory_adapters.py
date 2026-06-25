@@ -701,7 +701,7 @@ async def test_context_memory_room_adapter_get_by_memory_id_translates_facade_ex
 
 
 @pytest.mark.asyncio
-async def test_context_memory_room_adapter_get_by_memory_id_treats_malformed_doc_as_not_found():
+async def test_context_memory_room_adapter_get_by_memory_id_treats_malformed_doc_as_error():
     class MalformedFacade(FakeFacade):
         async def legacy_get_room_memory_by_memory_id(self, memory_id: str):
             return {"memory_id": memory_id}
@@ -713,8 +713,8 @@ async def test_context_memory_room_adapter_get_by_memory_id_treats_malformed_doc
     )
 
     assert response.success is False
-    assert response.status_code == 404
-    assert response.error == "Room memory not found"
+    assert response.status_code == 500
+    assert "room_id" in response.error
 
 
 @pytest.mark.asyncio
