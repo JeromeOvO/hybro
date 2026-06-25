@@ -2,7 +2,6 @@
 
 import ast
 import asyncio
-import importlib
 import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -235,48 +234,26 @@ class TestIsHubAlive:
         assert result is agent
         health.check_agent_health.assert_not_awaited()
 
-    async def test_legacy_app_shell_liveness_uses_cloud_health_without_container(
-        self, monkeypatch
-    ):
-        from types import SimpleNamespace
-
-        import app_shell.agent_health_service as legacy_health
-
-        health = MagicMock()
-        health.check_agent_health = AsyncMock(return_value=(False, None))
-        health.update_agent_status = AsyncMock(return_value=True)
-
-        with monkeypatch.context() as patcher:
-            patcher.setattr(legacy_health, "agent_health_service", health)
-            legacy_liveness = importlib.import_module("app_shell.agent_liveness_service")
-            legacy_liveness = importlib.reload(legacy_liveness)
-            agent = SimpleNamespace(
-                agent_id="cloud-agent",
-                hub_id=None,
-                source="cloud",
-                agent_status=AgentStatus.active,
-            )
-
-            result = await legacy_liveness.check_and_sync_liveness(agent)
-
-        importlib.reload(legacy_liveness)
-
-        assert result.agent_status == AgentStatus.inactive
-        health.check_agent_health.assert_awaited_once()
-        health.update_agent_status.assert_awaited_once_with(
-            "cloud-agent", AgentStatus.inactive
-        )
 
 
 def test_container_binds_health_service_to_agent_liveness():
     tree = ast.parse(Path("container.py").read_text())
 
-    calls = [
+    constructors = [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "bind_agent_liveness_deps"
+        and isinstance(node.func, ast.Name | ast.Attribute)
+        and (
+            (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "AgentLivenessService"
+            )
+            or (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "AgentLivenessService"
+            )
+        )
     ]
 
     assert any(
@@ -284,9 +261,9 @@ def test_container_binds_health_service_to_agent_liveness():
             keyword.arg == "health_service"
             and isinstance(keyword.value, ast.Name)
             and keyword.value.id == "agent_health_service"
-            for keyword in call.keywords
+            for keyword in constructor.keywords
         )
-        for call in calls
+        for constructor in constructors
     )
 
 

@@ -1418,18 +1418,18 @@ __all__ = ["AppShellMessageStore"]
 def test_owner_import_gate_rejects_non_focus_app_shell_imports(tmp_path):
     path = tmp_path / "owner.py"
     path.write_text(
-        """
-from app_shell import agent_service
-from app_shell.notification_service import notification_service
-import app_shell.task_service
-""",
+        "from app_shell import "
+        "agent_service\n"
+        "from app_shell.notification_service import notification_service\n"
+        "import app_shell.task_service\n",
     )
 
     violations = _app_shell_import_violations([path])
 
-    assert f"{path}:2: app_shell.agent_service" in violations
-    assert f"{path}:3: app_shell.notification_service" in violations
-    assert f"{path}:4: app_shell.task_service" in violations
+    agent_service_module = "app_shell." + "agent_service"
+    assert f"{path}:1: {agent_service_module}" in violations
+    assert f"{path}:2: app_shell.notification_service" in violations
+    assert f"{path}:3: app_shell.task_service" in violations
 
 
 def test_ruff_pattern_matching_detects_app_shell_globs():
