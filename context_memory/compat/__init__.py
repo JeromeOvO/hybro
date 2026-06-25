@@ -5,7 +5,7 @@ from context_memory.compat.context_assembly import (
     ContextAssemblyService,
     ContextMetrics,
     TruncationReason,
-    context_assembly_service,
+    context_assembly_adapter,
 )
 from context_memory.compat.runtime import (
     ContextMemoryChatAdapter,
@@ -21,5 +21,5 @@ __all__ = [
     "ContextMemoryRouteCenter",
     "ContextMetrics",
     "TruncationReason",
-    "context_assembly_service",
+    "context_assembly_adapter",
 ]

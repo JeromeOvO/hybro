@@ -145,7 +145,7 @@ class ContextAssemblyService:
         return self._budget.get_budget_summary()
 
 
-context_assembly_service = ContextAssemblyService()
+context_assembly_adapter = ContextAssemblyService()
 
 
 def _legacy_context_result(assembled) -> ContextAssemblyResult:
