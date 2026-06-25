@@ -163,7 +163,6 @@ def test_focused_llm_consumers_do_not_import_openai_compatibility_adapter():
 
 
 def test_focused_llm_binding_targets_expose_startup_methods():
-    from agent.resolver import AgentResolverService
     from app_shell.memory_search_service import memory_search_service
     from app_shell.memory_service import chat_memory_service, room_memory_service
     from app_shell.openai_service import openai_service
@@ -171,10 +170,6 @@ def test_focused_llm_binding_targets_expose_startup_methods():
     from app_shell.room_runtime import room_runtime
 
     bindings = [
-        (
-            AgentResolverService(repository=object(), capability_issue_reader=object()),
-            "bind_agent_selection_service",
-        ),
         (room_runtime, "bind_message_parser_service"),
         (room_runtime, "bind_debate_rounds"),
         (memory_search_service, "bind_embedding_service"),

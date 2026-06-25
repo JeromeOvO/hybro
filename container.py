@@ -17,7 +17,6 @@ from api_gateway.dependencies import (
     bind_api_gateway_deps,
     missing_required_deps,
 )
-from app_shell.agent_health_service import agent_health_service
 from app_shell.api_key_auth import MongoAPIKeyAuthenticator
 from app_shell.delivery_runtime import sse_manager
 from app_shell.viewset import AppShellDALViewSetRepositoryProvider
@@ -265,6 +264,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
     _mongo_dal = None
     _delivery_bound = False
     _bg_started = False
+    agent_health_service = None
 
     try:
         # ── Phase 1: Infrastructure (DB + Redis, no background work) ──
@@ -278,21 +278,25 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         if await mongo_dal.ping():
             from a2a_adapter import AgentCardResolverImpl, AgentTransportImpl
             from a2a_adapter import artifact_storage as a2a_artifact_storage
-            from agent.resolver import AgentResolverService
-            from app_shell.agent_capability_issue_service import (
+            from agent.capability_issue import (
                 CapabilityIssueExclusionReader,
-                capability_issue_service,
             )
-            from app_shell.agent_matcher import agent_matcher
-            from app_shell.agent_runtime import AppShellAgentCenter
-            from app_shell.agent_selection_service import agent_selection_service
-            from app_shell.agent_service import agent_service
+            from agent.health import AgentHealthService
+            from agent.inspection import AgentInspectionService
+            from agent.liveness import AgentLivenessService
+            from agent.matcher import AgentMatcher
+            from agent.resolver import (
+                AgentResolverFacadeRepository,
+                AgentResolverService,
+            )
+            from agent.route_adapter import AgentRouteAdapter
+            from agent.selection_service import AgentSelectionService
+            from agent.service import AgentService
             from app_shell.bedrock_service import bedrock_service
             from app_shell.compaction_service import compaction_service
             from app_shell.context_memory_runtime import AppShellMemoryCenter
             from app_shell.debate_service import debate_service
             from app_shell.gemini_service import gemini_service
-            from app_shell.inspection_runtime import AppShellInspectionCenter
             from app_shell.memory_service import (
                 chat_memory_service,
                 room_memory_service,
@@ -357,9 +361,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             api_key_store = create_api_key_store(mongo=mongo_dal)
             bind_api_key_authenticator(MongoAPIKeyAuthenticator(api_key_store))
             vector_dal = create_vector_dal()
-            route_agent_center = AppShellAgentCenter()
             route_room_center = AppShellRoomCenter()
-            route_inspection_center = AppShellInspectionCenter()
             route_memory_center = AppShellMemoryCenter()
             route_repository_provider = AppShellDALViewSetRepositoryProvider(
                 mongo=mongo_dal
@@ -405,7 +407,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 hitl_service,
             )
 
-            capability_issue_service.bind_mongo(mongo_dal)
+            agent_capability_issue_repository = create_agent_capability_issue_repository(
+                mongo_dal
+            )
+            agent_capability_issue_service = create_agent_capability_issue_service(
+                repository=agent_capability_issue_repository
+            )
             from common.observability.run_metrics import increment_counter
             from execution.cancellation import (
                 AgentTaskCleanupAdapter,
@@ -523,21 +530,31 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 llm_provider=llm_provider,
                 card_resolver=agent_card_resolver,
                 hub_liveness=None,
-                exclusion_reader=CapabilityIssueExclusionReader(),
+                exclusion_reader=CapabilityIssueExclusionReader(
+                    agent_capability_issue_service
+                ),
                 gateway_base_url=runtime.settings.gateway_base_url,
                 agent_index=runtime.settings.pinecone_index_name,
             )
             _agent_facade = _agent_deps.agent_registry
-            agent_service.bind_facade(_agent_facade)
-            agent_matcher.bind_facade(_agent_facade)
-            agent_selection_service.bind_facade(_agent_facade)
-            agent_health_service.bind_repository(_agent_deps.agent_repository)
-            _resolver_repo = create_agent_resolver_repository(service=agent_service)
+            agent_compat_service = AgentService(facade=_agent_facade)
+            route_agent_center = AgentRouteAdapter(service=agent_compat_service)
+            agent_matcher = AgentMatcher(facade=_agent_facade)
+            agent_selection_service = AgentSelectionService(matcher=agent_matcher)
             agent_resolver_service = AgentResolverService(
-                repository=_resolver_repo,
-                capability_issue_reader=CapabilityIssueExclusionReader(),
+                repository=AgentResolverFacadeRepository(_agent_facade),
+                capability_issue_reader=agent_capability_issue_service,
                 agent_selection_service=agent_selection_llm_service,
             )
+            agent_health_service = AgentHealthService(
+                repository=_agent_deps.agent_repository
+            )
+            agent_liveness_checker = AgentLivenessService(
+                health_service=agent_health_service,
+                hub_liveness_reader=None,
+                agent_registry_writer=_agent_deps.agent_registry_writer,
+            )
+            route_inspection_center = AgentInspectionService()
             from agent.domain_alias import DomainAliasService as _DomainAliasSvc
             from app_shell.domain_alias_service import (
                 bind_domain_alias_service as _bind_domain_alias,
@@ -545,7 +562,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
             _bind_domain_alias(_DomainAliasSvc(repository=_agent_deps.agent_repository))
 
-            membership_source = LegacyRoomMembershipSeedSource()
+            membership_source = LegacyRoomMembershipSeedSource(
+                agent_service_adapter=agent_compat_service
+            )
             _room_deps = create_room_deps(
                 mongo=mongo_dal,
                 agent_registry=_agent_deps.agent_registry,
@@ -971,7 +990,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             room_runtime.bind_store(room_runtime_store)
             room_runtime.bind_legacy_dependencies(
-                agent_service=agent_service,
+                agent_service=agent_compat_service,
                 agent_selection_service=agent_selection_service,
                 a2a_service=a2a_service,
                 room_memory_service=room_memory_service,
@@ -1025,7 +1044,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 task_notification_impl=_notify_task_update_impl,
                 agent_health_service=agent_health_service,
                 object_storage=platform_object_storage,
-                capability_issue_service=capability_issue_service,
+                capability_issue_service=agent_capability_issue_service,
                 context_memory_runtime=_context_memory_deps.context_memory_runtime,
                 compaction_service=compaction_service,
                 build_turn_content_func=build_turn_content,
@@ -1203,6 +1222,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             _leader = _redis_runtime.leader
             logger.info("Leader election enabled for background jobs")
 
+        if agent_health_service is None:
+            raise RuntimeError("Agent health service has not been initialized")
         agent_health_service.set_leader_election(_leader)
         stale_task_checker.set_leader_election(_leader)
         stale_task_checker.configure_timing(
@@ -1328,10 +1349,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         await orphaned_upload_cleaner.start()
 
         # Initialize relay service
-        from app_shell.agent_liveness_service import (
-            bind_agent_liveness_deps,
-            check_and_sync_liveness,
-        )
         from app_shell.execution_runtime import get_bound_room_message_center
         from app_shell.relay_store import AppShellRelayHubStore
         from app_shell.room_lock import RedisRoomDistributedLock
@@ -1385,7 +1402,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             if hasattr(_agent_deps.agent_registry, "bind_hub_liveness"):
                 _agent_deps.agent_registry.bind_hub_liveness(hub_liveness_reader)
             _relay_svc.bind_agent_registry_writer(_agent_deps.agent_registry_writer)
-            bind_agent_liveness_deps(
+            agent_liveness_checker.bind_deps(
                 health_service=agent_health_service,
                 hub_liveness_reader=hub_liveness_reader,
                 agent_registry_writer=_agent_deps.agent_registry_writer,
@@ -1406,12 +1423,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             APIGatewayDeps(
                 task_store=a2a_task_status_reader,
                 agent_center=route_agent_center,
-                agent_service=agent_service,
-                capability_issue_service=capability_issue_service,
+                agent_service=_agent_deps.agent_registry,
+                capability_issue_service=agent_capability_issue_service,
                 agent_avatar_manager=PlatformAgentAvatarManager(
                     platform_object_storage, _agent_deps.agent_repository
                 ),
-                agent_liveness_checker=check_and_sync_liveness,
+                agent_liveness_checker=agent_liveness_checker,
                 agent_group_store=agent_room_store,
                 api_key_store=api_key_store,
                 discovery_service=platform_facade.discovery_service,
@@ -1451,7 +1468,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             await stale_task_checker.stop()
             await compaction_sweep.stop()
             await orphaned_upload_cleaner.stop()
-            await agent_health_service.stop()
+            if agent_health_service is not None:
+                await agent_health_service.stop()
         if _leader:
             await _leader.release_all(ALL_JOB_NAMES)
         if _redis_service:
@@ -1488,7 +1506,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         await stale_task_checker.stop()
         await compaction_sweep.stop()
         await orphaned_upload_cleaner.stop()
-        await agent_health_service.stop()
+        if agent_health_service is not None:
+            await agent_health_service.stop()
 
         # Release any leader locks
         if _leader:
@@ -1933,61 +1952,6 @@ def create_agent_capability_issue_service(*, repository: Any) -> Any:
     from agent.capability_issue import AgentCapabilityIssueService
 
     return AgentCapabilityIssueService(repository=repository)
-
-
-def create_agent_resolver_repository(*, service) -> Any:
-    from models.request import AgentCenterRequest
-
-    class _ResolverRepository:
-        async def query_similar_agents(
-            self,
-            query_text: str,
-            count: int,
-            allowed_agent_ids: list[str] | None,
-            excluded_agent_ids: set[str],
-            active_only: bool,
-            user_id: str | None = None,
-        ) -> list[Any]:
-            del active_only  # compatibility with repository protocol
-            request = AgentCenterRequest(
-                query_text=query_text,
-                user_id=user_id,
-                agent_count=count,
-            )
-            response = await service.query_similar_agents(request)
-            if response.success is False:
-                return []
-            candidates = response.agents or []
-            if allowed_agent_ids is not None:
-                allowed = set(allowed_agent_ids)
-                candidates = [
-                    agent for agent in candidates if agent.agent_id in allowed
-                ]
-            if excluded_agent_ids:
-                candidates = [
-                    agent
-                    for agent in candidates
-                    if agent.agent_id not in excluded_agent_ids
-                ]
-            return candidates
-
-        async def get_agents_with_conditions_visible(
-            self,
-            user_id: str | None,
-            query: dict,
-            limit: int = 0,
-        ) -> list[Any]:
-            request = AgentCenterRequest(
-                user_id=user_id,
-                query=query,
-                limit=limit,
-            )
-            response = await service.get_agents_with_conditions(request)
-            if response.success is False:
-                return []
-            return response.agents or []
-
-    return _ResolverRepository()
 
 
 def create_object_storage_dal() -> ObjectStorageDAL:
