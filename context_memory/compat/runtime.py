@@ -281,7 +281,7 @@ class ContextMemoryRoomMemoryAdapter:
         facade = self._require_facade()
         try:
             doc = await facade.legacy_get_room_memory_by_room_id(request.room_id)
-            memory = _room_memory_from_doc(doc) if doc else None
+            memory = None if doc is None else _room_memory_from_doc(doc)
             return RoomCenterMemoryResponse(
                 room_id=request.room_id,
                 memory_id=memory.memory_id if memory else None,
@@ -326,7 +326,7 @@ class ContextMemoryRoomMemoryAdapter:
         facade = self._require_facade()
         try:
             doc = await facade.legacy_get_room_memory_by_memory_id(request.memory_id)
-            memory = _room_memory_from_doc(doc) if doc else None
+            memory = None if doc is None else _room_memory_from_doc(doc)
             return RoomCenterMemoryResponse(
                 room_id=request.room_id,
                 memory_id=memory.memory_id if memory else request.memory_id,
@@ -576,7 +576,7 @@ def _chat_memory_error_response(
 
 
 def _room_memory_from_doc(doc: Any | None) -> RoomMemory | None:
-    if not doc:
+    if doc is None:
         return None
     if isinstance(doc, RoomMemory):
         return doc

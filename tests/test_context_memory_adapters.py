@@ -718,6 +718,34 @@ async def test_context_memory_room_adapter_get_by_memory_id_treats_malformed_doc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "memory_request"),
+    [
+        ("get_room_memory_by_room_id", RoomCenterMemoryRequest(room_id="r1")),
+        ("get_room_memory_by_memory_id", RoomCenterMemoryRequest(memory_id="m1")),
+    ],
+)
+async def test_context_memory_room_adapter_empty_doc_is_malformed_not_missing(
+    method_name: str,
+    memory_request: RoomCenterMemoryRequest,
+):
+    class EmptyDocFacade(FakeFacade):
+        async def legacy_get_room_memory_by_room_id(self, room_id: str):
+            return {}
+
+        async def legacy_get_room_memory_by_memory_id(self, memory_id: str):
+            return {}
+
+    service = ContextMemoryRoomMemoryAdapter(facade=EmptyDocFacade())
+
+    response = await getattr(service, method_name)(memory_request)
+
+    assert response.success is False
+    assert response.status_code == 500
+    assert "room_id" in response.error
+
+
+@pytest.mark.asyncio
 async def test_context_memory_room_adapter_update_by_memory_id_persists_request_memory():
     facade = FakeFacade()
     facade.doc = {
