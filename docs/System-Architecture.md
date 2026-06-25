@@ -370,9 +370,11 @@ remain compatibility shims for tests and legacy callers; production
 Legacy turn-selection and context metric logging helpers live in
 `context_memory.legacy_assembly`, leaving the app-shell context assembly shim to
 convert result shapes and expose the legacy truncation counter.
-`app_shell.compaction_service` is still bound to the facade by the container
-runtime while its compatibility surface remains in use. Memory route and
-execution compatibility use `ContextMemoryChatAdapter` and
+Execution orchestration and the background compaction sweep receive the facade
+through the `ContextMemoryCompactionPort` as `context_compaction`, so inline
+post-run compaction and periodic sweep compaction both call the ContextMemory
+facade directly instead of binding `app_shell.compaction_service`. Memory route
+and execution compatibility use `ContextMemoryChatAdapter` and
 `ContextMemoryRoomMemoryAdapter` over the ContextMemory facade instead of a room
 runtime memory-service dependency.
 

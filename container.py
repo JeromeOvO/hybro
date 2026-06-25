@@ -293,7 +293,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.selection_service import AgentSelectionService
             from agent.service import AgentService
             from app_shell.bedrock_service import bedrock_service
-            from app_shell.compaction_service import compaction_service
             from app_shell.debate_service import debate_service
             from app_shell.gemini_service import gemini_service
             from app_shell.notification_service import notification_service
@@ -1053,7 +1052,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 object_storage=platform_object_storage,
                 capability_issue_service=agent_capability_issue_service,
                 context_memory_runtime=_context_memory_deps.context_memory_runtime,
-                compaction_service=compaction_service,
+                context_compaction=context_memory_facade,
                 build_turn_content_func=build_turn_content,
                 supervisor_planning_error_cls=SupervisorPlanningError,
                 orphan_threshold_minutes=runtime.settings.orphan_threshold_minutes,
@@ -1153,9 +1152,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 event_publisher=_delivery_deps.event_publisher,
                 context_memory_facade=context_memory_facade,
             )
-            compaction_service.bind_content_storage(platform_facade.content_storage)
-            compaction_service.bind_room_memory_reader(context_memory_facade)
-            compaction_service.bind_facade(context_memory_facade)
             room_runtime.bind_context_memory(
                 _context_memory_deps.memory_manager,
                 _context_memory_deps.context_memory_runtime,
@@ -1325,7 +1321,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         "run_repository"
                     ].get_room_ids_with_non_terminal_runs
                 ),
-                compaction_service=compaction_service,
+                context_compaction=context_memory_facade,
             )
         )
         orphaned_upload_cleaner.set_leader_election(_leader)

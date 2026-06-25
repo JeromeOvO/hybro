@@ -98,7 +98,7 @@ class TestCompactionSweep:
             CompactionSweepDeps(
                 list_room_ids_with_memory=AsyncMock(return_value=["room_1"]),
                 get_room_ids_with_non_terminal_runs=AsyncMock(return_value=[]),
-                compaction_service=mock_compaction_svc,
+                context_compaction=mock_compaction_svc,
             )
         )
 
@@ -131,7 +131,7 @@ class TestCompactionSweep:
                 get_room_ids_with_non_terminal_runs=AsyncMock(
                     return_value=["active_room"]
                 ),
-                compaction_service=mock_compaction_svc,
+                context_compaction=mock_compaction_svc,
             )
         )
 

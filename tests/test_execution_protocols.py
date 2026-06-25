@@ -305,6 +305,7 @@ def _make_room_message_center_port_deps():
         "rate_limit_service": MagicMock(),
         "room_supervisor_service": MagicMock(),
         "context_memory_runtime": MagicMock(),
+        "context_compaction": MagicMock(),
         "hitl_coordinator": MagicMock(),
         "task_notifications": MagicMock(),
         "object_storage": MagicMock(),
@@ -394,6 +395,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.task_notifications is deps["task_notifications"]
     assert runtime.context_memory_runtime is deps["context_memory_runtime"]
+    assert runtime.context_compaction is deps["context_compaction"]
     assert runtime.direct_transport.object_storage is deps["object_storage"]
 
 
@@ -433,6 +435,7 @@ def test_room_message_center_factory_owns_default_dependency_wiring():
     assert runtime.room_runtime is deps["room_runtime"]
     assert runtime.debate_rounds == 6
     assert runtime.context_memory_runtime is deps["context_memory_runtime"]
+    assert runtime.context_compaction is deps["context_compaction"]
 
 
 def test_container_wires_execution_with_focused_port_names():
@@ -485,6 +488,7 @@ def test_container_wires_execution_with_focused_port_names():
         "a2a_transport",
         "remote_task_reader",
         "room_memory",
+        "context_compaction",
     }
     legacy_keywords = {
         "store",
@@ -494,6 +498,7 @@ def test_container_wires_execution_with_focused_port_names():
         "a2a_service",
         "task_service",
         "room_memory_service",
+        "compaction_service",
     }
     assert focused_keywords <= room_center_keywords
     assert room_center_keywords.isdisjoint(legacy_keywords)
@@ -504,6 +509,7 @@ def test_container_wires_execution_with_focused_port_names():
         "remote_task_reader": "execution_remote_task_reader",
         "room_memory": "execution_room_memory",
         "event_publisher": "_delivery_deps.event_publisher",
+        "context_compaction": "context_memory_facade",
     }
     for keyword, expected_name in expected_room_center_adapter_names.items():
         value = keyword_value(room_center_call, keyword)
@@ -526,6 +532,13 @@ def test_container_wires_execution_with_focused_port_names():
         "RoomCenterAgentMessageRequest(related_message_id=related_message_id)"
         in source
     )
+    assert (
+        "from app_shell." + "compaction_service import compaction_service"
+        not in source
+    )
+    assert "compaction_service.bind_content_storage" not in source
+    assert "compaction_service.bind_room_memory_reader" not in source
+    assert "compaction_service.bind_facade" not in source
 
     rmc_source = (
         ROOT / "execution" / "orchestration" / "room_message_center.py"
@@ -588,6 +601,7 @@ def test_room_message_center_constructor_requires_explicit_dependencies():
         "task_service",
         "room_memory_service",
         "room_coordinator_service",
+        "compaction_service",
     }
     assert legacy_names.isdisjoint(params)
 

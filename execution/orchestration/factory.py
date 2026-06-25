@@ -48,7 +48,7 @@ def create_room_message_center(
         "object_storage": None,
         "capability_issue_service": None,
         "context_memory_runtime": _defaults.context_memory_runtime,
-        "compaction_service": _defaults.compaction_service,
+        "context_compaction": _defaults.context_compaction,
         "build_turn_content_func": _defaults.build_turn_content,
         "supervisor_planning_error_cls": _defaults.SupervisorPlanningError,
         "orphan_threshold_minutes": _defaults.settings.orphan_threshold_minutes,
