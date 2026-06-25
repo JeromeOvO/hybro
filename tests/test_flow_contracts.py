@@ -354,7 +354,7 @@ class TestAgentLifecycleFlow:
     @pytest.mark.asyncio
     async def test_private_agent_visibility(self, flow_user):
         """Private agent: owner sees it, others get 404."""
-        from app_shell.agent_service import AgentService
+        from agent.service import AgentService
         from models.request import AgentCenterRequest
 
         agent_id = "private-flow-001"
@@ -376,7 +376,6 @@ class TestAgentLifecycleFlow:
             is_public=False,
         )
 
-        svc = AgentService()
         facade = MagicMock()
         facade.get_agent = AsyncMock(
             return_value=AgentInfo(
@@ -389,7 +388,7 @@ class TestAgentLifecycleFlow:
                 is_public=False,
             )
         )
-        svc.bind_facade(facade)
+        svc = AgentService(facade=facade)
 
         owner_resp = await svc.query_agent_by_agent_id(
             AgentCenterRequest(agent_id=agent_id, user_id=flow_user.user_id)
@@ -648,15 +647,14 @@ class TestErrorHandlingFlow:
 
     @pytest.mark.asyncio
     async def test_graceful_db_error_handling(self):
-        from app_shell.agent_service import AgentService
+        from agent.service import AgentService
         from models.request import AgentCenterRequest
 
-        svc = AgentService()
         facade = MagicMock()
         facade.list_visible_agents = AsyncMock(
             side_effect=Exception("Database connection failed"),
         )
-        svc.bind_facade(facade)
+        svc = AgentService(facade=facade)
 
         result = await svc.get_all_active_agents(AgentCenterRequest())
         assert result.success is False

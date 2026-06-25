@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from a2a.types import AgentCapabilities, AgentCard, AgentProvider, AgentSkill
 
-from app_shell.agent_matcher import (
+from agent.matcher import (
     AgentMatcher,
     MatchedAgent,
     MatchResult,

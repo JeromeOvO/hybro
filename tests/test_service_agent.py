@@ -15,12 +15,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app_shell.agent_service import (
-    AgentService,
-    _agent_info_to_legacy_agent,
-    is_local_agent_url,
-    normalize_agent_url,
-)
+from agent.service import AgentService, _agent_info_to_legacy_agent
+from agent.url_utils import is_local_agent_url, normalize_agent_url
 from common.dto.agent import AgentInfo
 from models.agent import Agent, AgentStatus
 from models.error import (
@@ -202,13 +198,13 @@ class TestRegisterAgent:
 
     @pytest.mark.asyncio
     async def test_agent_center_register_agent_delegates_without_a2a_prefetch(self):
-        from app_shell.agent_runtime import AppShellAgentCenter as AgentCenter
+        from agent.route_adapter import AgentRouteAdapter
 
-        center = AgentCenter()
-        center.agent_service = MagicMock()
-        center.agent_service.register_agent = AsyncMock(
+        service = MagicMock()
+        service.register_agent = AsyncMock(
             return_value=AgentCenterResponse(success=True, agent_id="agent-123")
         )
+        center = AgentRouteAdapter(service=service)
         center.a2a_service = MagicMock()
         center.a2a_service.get_agent_card_from_url = AsyncMock()
         request = AgentCenterRequest(agent_url="https://agent.example")
@@ -217,7 +213,7 @@ class TestRegisterAgent:
 
         assert result.success is True
         assert result.agent_id == "agent-123"
-        center.agent_service.register_agent.assert_awaited_once_with(request)
+        service.register_agent.assert_awaited_once_with(request)
         center.a2a_service.get_agent_card_from_url.assert_not_awaited()
         assert request.agent_card is None
 

@@ -168,6 +168,84 @@ FINAL_APP_SHELL_SHIMS = {
         },
         "owning_module": "dal.runtime_store.app_shell_store",
     },
+    "app_shell/agent_service.py": {
+        "max_lines": 40,
+        "required_exports": {
+            "AgentService",
+            "_agent_info_to_legacy_agent",
+            "_card_snapshot_to_legacy_card",
+            "is_local_agent_url",
+            "normalize_agent_url",
+        },
+        "owning_module": "agent.service",
+    },
+    "app_shell/agent_runtime.py": {
+        "max_lines": 30,
+        "required_exports": {"AppShellAgentCenter"},
+        "owning_module": "agent.route_adapter",
+    },
+    "app_shell/agent_matcher.py": {
+        "max_lines": 40,
+        "required_exports": {
+            "AgentMatcher",
+            "MatchedAgent",
+            "MatchResult",
+            "_agent_supports_files",
+            "compute_capability_score",
+            "select_top_agents",
+        },
+        "owning_module": "agent.matcher",
+    },
+    "app_shell/agent_selection_service.py": {
+        "max_lines": 40,
+        "required_exports": {
+            "AgentSelection",
+            "AgentSelectionResult",
+            "AgentSelectionService",
+            "RoutingStrategy",
+        },
+        "owning_module": "agent.selection_service",
+    },
+    "app_shell/agent_resolver_service.py": {
+        "max_lines": 40,
+        "required_exports": {
+            "AgentResolverFacadeRepository",
+            "AgentResolverService",
+            "ResolveResult",
+            "_HealthCache",
+            "_agent_to_routing_candidate",
+        },
+        "owning_module": "agent.resolver",
+    },
+    "app_shell/agent_health_service.py": {
+        "max_lines": 40,
+        "required_exports": {"AgentHealthRepositoryPort", "AgentHealthService"},
+        "owning_module": "agent.health",
+    },
+    "app_shell/agent_liveness_service.py": {
+        "max_lines": 40,
+        "required_exports": {
+            "AgentLivenessService",
+            "bind_agent_liveness_deps",
+            "check_and_sync_liveness",
+            "reset_agent_liveness_deps",
+        },
+        "owning_module": "agent.liveness",
+    },
+    "app_shell/inspection_runtime.py": {
+        "max_lines": 30,
+        "required_exports": {"AppShellInspectionCenter"},
+        "owning_module": "agent.inspection",
+    },
+    "app_shell/agent_capability_issue_service.py": {
+        "max_lines": 40,
+        "required_exports": {
+            "AgentCapabilityIssueServiceAdapter",
+            "AgentCapabilityIssueServiceNotBound",
+            "CapabilityIssueExclusionReader",
+        },
+        "owning_module": "agent.capability_issue",
+    },
 }
 
 FINAL_APP_SHELL_REEXPORT_SHIMS = {
@@ -272,6 +350,14 @@ EXPECTED_MOVED_RUFF_IGNORES = {
         "a2a_adapter/runtime_service.py",
         ["C901"],
     ),
+    "app_shell/agent_health_service.py": (
+        "agent/health.py",
+        ["C901"],
+    ),
+    "app_shell/agent_service.py": (
+        "agent/service.py",
+        ["C901"],
+    ),
     "app_shell/context_assembly_service.py": (
         "context_memory/compat/context_assembly.py",
         ["C901", "UP042"],
@@ -317,7 +403,7 @@ PRODUCTION_MODULE_ROOTS = (
     "room",
 )
 
-PRODUCTION_MODULE_FILES = ("container.py",)
+PRODUCTION_MODULE_FILES = ("container.py", "main.py")
 
 EXCLUDED_PRODUCTION_SCAN_PARTS = {
     ".mypy_cache",
@@ -1179,6 +1265,93 @@ def _app_shell_focus_runtime_import_violations(paths: list[Path]) -> list[str]:
     return violations
 
 
+def _app_shell_agent_shim_paths() -> set[Path]:
+    return {
+        Path(path)
+        for path, contract in FINAL_APP_SHELL_SHIMS.items()
+        if contract["owning_module"] == "agent"
+        or contract["owning_module"].startswith("agent.")
+    }
+
+
+def _app_shell_agent_forbidden_modules() -> set[str]:
+    return {
+        _module_name_from_source_path(str(path))
+        for path in _app_shell_agent_shim_paths()
+    }
+
+
+def _app_shell_agent_forbidden_from_app_shell_names() -> set[str]:
+    return {path.stem for path in _app_shell_agent_shim_paths()}
+
+
+def _source_package_parts(path: Path) -> tuple[str, ...]:
+    parts = path.with_suffix("").parts
+    if "app_shell" in parts:
+        app_shell_index = parts.index("app_shell")
+        parts = parts[app_shell_index:]
+    if parts[-1] == "__init__":
+        return parts[:-1]
+    return parts[:-1]
+
+
+def _resolved_import_from_module(path: Path, node: ast.ImportFrom) -> str | None:
+    if node.level == 0:
+        return node.module
+
+    package_parts = _source_package_parts(path)
+    if node.level > len(package_parts):
+        return None
+
+    base_parts = package_parts[: len(package_parts) - node.level + 1]
+    if node.module:
+        base_parts = (*base_parts, *node.module.split("."))
+    return ".".join(base_parts)
+
+
+def _app_shell_agent_imports_for_node(path: Path, node: ast.AST) -> list[str]:
+    forbidden_modules = _app_shell_agent_forbidden_modules()
+    forbidden_from_app_shell_names = _app_shell_agent_forbidden_from_app_shell_names()
+
+    if isinstance(node, ast.Import):
+        return [
+            f"{path}: import {alias.name}"
+            for alias in node.names
+            if alias.name in forbidden_modules
+        ]
+    if not isinstance(node, ast.ImportFrom):
+        return []
+    module = _resolved_import_from_module(path, node)
+    if module in forbidden_modules:
+        return [f"{path}: from {module} import ..."]
+    if module == "app_shell":
+        return [
+            f"{path}: from app_shell import {alias.name}"
+            for alias in node.names
+            if alias.name in forbidden_from_app_shell_names
+        ]
+    return []
+
+
+def _app_shell_agent_import_violations(paths: list[Path]) -> list[str]:
+    violations: list[str] = []
+    for path in sorted(paths):
+        if not path.exists():
+            continue
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            violations.extend(_app_shell_agent_imports_for_node(path, node))
+    return violations
+
+
+def _agent_runtime_consumer_python_files() -> list[Path]:
+    paths = set(_production_module_python_files())
+    app_shell_root = Path("app_shell")
+    if app_shell_root.exists():
+        paths.update(app_shell_root.rglob("*.py"))
+    return sorted(paths)
+
+
 def _production_module_python_files() -> list[Path]:
     paths: list[Path] = []
     for filename in PRODUCTION_MODULE_FILES:
@@ -1245,18 +1418,18 @@ __all__ = ["AppShellMessageStore"]
 def test_owner_import_gate_rejects_non_focus_app_shell_imports(tmp_path):
     path = tmp_path / "owner.py"
     path.write_text(
-        """
-from app_shell import agent_service
-from app_shell.notification_service import notification_service
-import app_shell.task_service
-""",
+        "from app_shell import "
+        "agent_service\n"
+        "from app_shell.notification_service import notification_service\n"
+        "import app_shell.task_service\n",
     )
 
     violations = _app_shell_import_violations([path])
 
-    assert f"{path}:2: app_shell.agent_service" in violations
-    assert f"{path}:3: app_shell.notification_service" in violations
-    assert f"{path}:4: app_shell.task_service" in violations
+    agent_service_module = "app_shell." + "agent_service"
+    assert f"{path}:1: {agent_service_module}" in violations
+    assert f"{path}:2: app_shell.notification_service" in violations
+    assert f"{path}:3: app_shell.task_service" in violations
 
 
 def test_ruff_pattern_matching_detects_app_shell_globs():
@@ -1792,6 +1965,43 @@ def test_domain_modules_do_not_depend_on_app_shell_focus_runtime_modules():
         "Domain modules still import app_shell focus runtime modules:\n"
         + "\n".join(violations)
     )
+
+
+def test_agent_runtime_consumers_do_not_import_app_shell_agent_modules():
+    allowed_app_shell_shims = _app_shell_agent_shim_paths()
+    scan_paths = [
+        path
+        for path in _agent_runtime_consumer_python_files()
+        if path not in allowed_app_shell_shims
+    ]
+    violations = _app_shell_agent_import_violations(scan_paths)
+
+    assert not violations, (
+        "Agent runtime consumers still import app_shell Agent modules:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_agent_runtime_gate_catches_from_app_shell_inspection_import(tmp_path):
+    path = tmp_path / "consumer.py"
+    path.write_text("from app_shell import inspection_runtime\n")
+
+    assert _app_shell_agent_import_violations([path])
+
+
+def test_agent_runtime_gate_catches_relative_app_shell_inspection_imports(tmp_path):
+    package = tmp_path / "app_shell"
+    package.mkdir()
+    path = package / "consumer.py"
+    path.write_text(
+        "from . import inspection_runtime\n"
+        "from .inspection_runtime import AppShellInspectionCenter\n"
+    )
+
+    violations = _app_shell_agent_import_violations([path])
+
+    assert f"{path}: from app_shell import inspection_runtime" in violations
+    assert f"{path}: from app_shell.inspection_runtime import ..." in violations
 
 
 def test_focus_owning_modules_do_not_import_app_shell_runtime():

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from app_shell.agent_service import agent_service
 from app_shell.runtime_store import UNBOUND_RUNTIME_STORE
 from common.dto import AgentInfo, SavedAgentGroupSnapshot
 from common.utils.logger import get_logger
@@ -16,7 +15,7 @@ class LegacyRoomMembershipSeedSource:
         self,
         *,
         membership_store=None,
-        agent_service_adapter=agent_service,
+        agent_service_adapter=None,
     ) -> None:
         self._store = membership_store or UNBOUND_RUNTIME_STORE
         self._agent_service = agent_service_adapter
@@ -37,21 +36,24 @@ class LegacyRoomMembershipSeedSource:
         )
 
     async def list_current_agents(self, user_id: str | None) -> list[AgentInfo]:
-        try:
-            response = await self._agent_service.get_agents_with_conditions(
-                AgentCenterRequest(
-                    user_id=user_id,
-                    query={"agent_status": "active"},
-                    limit=0,
+        if self._agent_service is not None:
+            try:
+                response = await self._agent_service.get_agents_with_conditions(
+                    AgentCenterRequest(
+                        user_id=user_id,
+                        query={"agent_status": "active"},
+                        limit=0,
+                    )
                 )
-            )
-            if response.success and response.agents is not None:
-                return [self.agent_info_from_legacy(agent) for agent in response.agents]
-        except Exception as exc:
-            logger.debug(
-                "Legacy room membership source falling back to database active agents: %s",
-                exc,
-            )
+                if response.success and response.agents is not None:
+                    return [
+                        self.agent_info_from_legacy(agent) for agent in response.agents
+                    ]
+            except Exception as exc:
+                logger.debug(
+                    "Legacy room membership source falling back to database active agents: %s",
+                    exc,
+                )
 
         agents = await self._store.get_all_active_agents(user_id=user_id)
         return [self.agent_info_from_legacy(agent) for agent in agents or []]

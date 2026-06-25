@@ -9,7 +9,7 @@ LLM_COMPATIBILITY_SERVICES = [
 ]
 
 FOCUSED_LLM_CONSUMERS = [
-    Path("app_shell/agent_resolver_service.py"),
+    Path("agent/resolver.py"),
     Path("app_shell/memory_search_service.py"),
     Path("app_shell/memory_service.py"),
     Path("app_shell/room_coordinator_service.py"),
@@ -136,7 +136,7 @@ def test_container_binds_focused_llm_services_to_production_consumers():
     source = Path("container.py").read_text()
     main_source = Path("main.py").read_text()
     expected_snippets = [
-        "agent_resolver_service.bind_agent_selection_service(",
+        "agent_selection_service=agent_selection_llm_service,",
         "room_runtime.bind_message_parser_service(",
         "room_runtime.bind_debate_rounds(runtime.settings.debate_rounds)",
         "context_memory_facade = create_context_memory_facade(",
@@ -163,7 +163,6 @@ def test_focused_llm_consumers_do_not_import_openai_compatibility_adapter():
 
 
 def test_focused_llm_binding_targets_expose_startup_methods():
-    from app_shell.agent_resolver_service import agent_resolver_service
     from app_shell.memory_search_service import memory_search_service
     from app_shell.memory_service import chat_memory_service, room_memory_service
     from app_shell.openai_service import openai_service
@@ -171,7 +170,6 @@ def test_focused_llm_binding_targets_expose_startup_methods():
     from app_shell.room_runtime import room_runtime
 
     bindings = [
-        (agent_resolver_service, "bind_agent_selection_service"),
         (room_runtime, "bind_message_parser_service"),
         (room_runtime, "bind_debate_rounds"),
         (memory_search_service, "bind_embedding_service"),
