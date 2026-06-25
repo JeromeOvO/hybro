@@ -7,13 +7,18 @@ import pytest
 
 from app_shell.compaction_service import CompactionService
 from app_shell.memory_search_service import MemorySearchService
-from app_shell.memory_service import RoomMemoryService
 from common.dto import AssembledContext, CompactionResult, MemorySearchResult
 from context_memory import ContextMemoryFacade
 from context_memory.compat.context_assembly import ContextAssemblyService
+from context_memory.compat.runtime import (
+    ContextMemoryChatAdapter,
+    ContextMemoryRoomMemoryAdapter,
+    ContextMemoryRouteCenter,
+)
 from context_memory.config import CompactionConfig, MemorySearchConfig
 from models.memory import ConversationTurn, RoomMemory, TurnRole
-from models.request import RoomCenterMemoryRequest
+from models.request import ChatMemoryRequest, RoomCenterMemoryRequest
+from models.response import ChatMemoryResponse
 
 NOW = datetime(2026, 5, 13, tzinfo=UTC)
 
@@ -24,11 +29,17 @@ class FakeFacade:
         self.created_doc = None
         self.doc = None
 
-    def assemble_supervisor_context_from_memory(self, room_memory_doc, current_task, **kwargs):
-        self.calls.append(("assemble_supervisor", room_memory_doc, current_task, kwargs))
+    def assemble_supervisor_context_from_memory(
+        self, room_memory_doc, current_task, **kwargs
+    ):
+        self.calls.append(
+            ("assemble_supervisor", room_memory_doc, current_task, kwargs)
+        )
         return assembled("supervisor context", mode="supervisor")
 
-    def assemble_agent_execution_context_from_memory(self, room_memory_doc, current_task, **kwargs):
+    def assemble_agent_execution_context_from_memory(
+        self, room_memory_doc, current_task, **kwargs
+    ):
         self.calls.append(("assemble_agent", room_memory_doc, current_task, kwargs))
         return assembled("agent context", mode="agent")
 
@@ -88,14 +99,18 @@ class FakeFacade:
     async def legacy_update_room_memory_by_memory_id(
         self, memory_id: str, updates: dict
     ) -> bool:
-        self.calls.append(("legacy_update_room_memory_by_memory_id", memory_id, updates))
+        self.calls.append(
+            ("legacy_update_room_memory_by_memory_id", memory_id, updates)
+        )
         if not self.doc or self.doc.get("memory_id") != memory_id:
             return False
         self.doc.update(updates)
         return True
 
     async def content_upsert_full_content(self, **kwargs) -> str:
-        self.calls.append(("content_upsert_full_content", kwargs["room_id"], kwargs["turn_id"]))
+        self.calls.append(
+            ("content_upsert_full_content", kwargs["room_id"], kwargs["turn_id"])
+        )
         return "doc1"
 
 
@@ -130,7 +145,9 @@ class DuplicateAgentResponseFacade(FakeFacade):
 
 class DuplicateUserProjectionFacade(FakeFacade):
     async def initialize_or_update_room_memory(self, *args, **kwargs):
-        self.calls.append(("initialize_or_update_room_memory", kwargs.get("message_id")))
+        self.calls.append(
+            ("initialize_or_update_room_memory", kwargs.get("message_id"))
+        )
         return {
             "room_id": "r1",
             "memory_id": "m1",
@@ -145,7 +162,9 @@ class DuplicateUserProjectionFacade(FakeFacade):
 
 class FailedUserProjectionFacade(FakeFacade):
     async def initialize_or_update_room_memory(self, *args, **kwargs):
-        self.calls.append(("initialize_or_update_room_memory", kwargs.get("message_id")))
+        self.calls.append(
+            ("initialize_or_update_room_memory", kwargs.get("message_id"))
+        )
         return None
 
 
@@ -189,7 +208,9 @@ class RealFacadeMemoryRepository:
         self.doc.update(updates)
         return True
 
-    async def update_room_memory_by_memory_id(self, memory_id: str, updates: dict) -> bool:
+    async def update_room_memory_by_memory_id(
+        self, memory_id: str, updates: dict
+    ) -> bool:
         if not self.doc or self.doc.get("memory_id") != memory_id:
             return False
         self.doc.update(updates)
@@ -198,7 +219,9 @@ class RealFacadeMemoryRepository:
     async def legacy_update_room_memory_by_memory_id(
         self, memory_id: str, updates: dict
     ) -> bool:
-        self.calls.append(("legacy_update_room_memory_by_memory_id", memory_id, updates))
+        self.calls.append(
+            ("legacy_update_room_memory_by_memory_id", memory_id, updates)
+        )
         return await self.update_room_memory_by_memory_id(memory_id, updates)
 
     async def delete_room_memory_by_memory_id(self, memory_id: str) -> bool:
@@ -211,7 +234,9 @@ class RealFacadeMemoryRepository:
     async def push_and_trim_conversation_turn_if_absent(self, *args, **kwargs):
         return True, True, False
 
-    async def update_turn_notes(self, room_id: str, turn_id: str, turn_notes: dict) -> bool:
+    async def update_turn_notes(
+        self, room_id: str, turn_id: str, turn_notes: dict
+    ) -> bool:
         return True
 
     async def get_room_summary_projection(self, room_id: str) -> dict | None:
@@ -220,7 +245,9 @@ class RealFacadeMemoryRepository:
     async def update_room_summary_atomic(self, *args, **kwargs) -> bool:
         return True
 
-    async def compact_turns_bulk(self, room_id: str, compacted_turns: list[dict]) -> bool:
+    async def compact_turns_bulk(
+        self, room_id: str, compacted_turns: list[dict]
+    ) -> bool:
         self.compacted_entries.extend(compacted_turns)
         return True
 
@@ -258,7 +285,9 @@ class RealFacadeContentRepository:
     async def get_content_stats_for_room(self, room_id: str) -> dict:
         return {"room_id": room_id, "total_documents": len(self.stored)}
 
-    async def text_search(self, room_id: str, query: str, limit: int = 50) -> list[dict]:
+    async def text_search(
+        self, room_id: str, query: str, limit: int = 50
+    ) -> list[dict]:
         return self.text_results[:limit]
 
     async def hydrate_turn_notes(self, room_id: str, turn_ids: list[str]) -> list[dict]:
@@ -358,6 +387,28 @@ def truncated_assembled(context: str, *, mode: str):
     return result.model_copy(update={"metadata": metadata})
 
 
+def test_context_memory_chat_adapter_requires_store():
+    with pytest.raises(
+        RuntimeError,
+        match=r"ContextMemoryChatAdapter requires chat_store",
+    ):
+        ContextMemoryChatAdapter(chat_store=None)
+
+
+@pytest.mark.asyncio
+async def test_context_memory_route_center_delegates_chat_context_create():
+    chat_adapter = AsyncMock()
+    expected = ChatMemoryResponse(user_name="u", success=True, status_code=200)
+    chat_adapter.create_chat_context.return_value = expected
+    center = ContextMemoryRouteCenter(chat_adapter=chat_adapter)
+    request = ChatMemoryRequest(user_name="u", session_id="s1", user_input="hello")
+
+    result = await center.add_chat_context(request)
+
+    assert result is expected
+    chat_adapter.create_chat_context.assert_awaited_once_with(request)
+
+
 def room_memory():
     return RoomMemory(
         room_id="r1",
@@ -384,7 +435,9 @@ def test_context_assembly_service_delegates_agent():
     service = ContextAssemblyService()
     service.bind_facade(facade)
 
-    result = service.build_agent_execution_context(room_memory(), "task", agent_name="Agent")
+    result = service.build_agent_execution_context(
+        room_memory(), "task", agent_name="Agent"
+    )
 
     assert result.context == "agent context"
     assert facade.calls[0][0] == "assemble_agent"
@@ -478,7 +531,9 @@ async def test_memory_search_service_delegates_search():
     result = await service.search("query", "r1", user_id="u1")
 
     assert result.results[0].content == "result"
-    assert facade.calls == [("legacy_search", "query", "r1", "u1", service.config.max_results)]
+    assert facade.calls == [
+        ("legacy_search", "query", "r1", "u1", service.config.max_results)
+    ]
 
 
 @pytest.mark.asyncio
@@ -559,10 +614,9 @@ async def test_memory_search_service_delegates_index():
 
 
 @pytest.mark.asyncio
-async def test_room_memory_service_delegates_create():
+async def test_context_memory_room_adapter_delegates_create():
     facade = FakeFacade()
-    service = RoomMemoryService()
-    service.bind_facade(facade)
+    service = ContextMemoryRoomMemoryAdapter(facade=facade)
 
     response = await service.create_room_memory(
         RoomCenterMemoryRequest(room_id="r1", memory_id="m1")
@@ -574,10 +628,9 @@ async def test_room_memory_service_delegates_create():
 
 
 @pytest.mark.asyncio
-async def test_room_memory_service_delegates_create_with_initial_content():
+async def test_context_memory_room_adapter_delegates_create_with_initial_content():
     facade = FakeFacade()
-    service = RoomMemoryService()
-    service.bind_facade(facade)
+    service = ContextMemoryRoomMemoryAdapter(facade=facade)
 
     response = await service.create_room_memory(
         RoomCenterMemoryRequest(
@@ -588,14 +641,18 @@ async def test_room_memory_service_delegates_create_with_initial_content():
     )
 
     assert response.success is True
-    assert response.memory.get_conversation_history()[0].content == "initial user request"
-    assert facade.created_doc["memory_content"]["conversation_history"][0]["content"] == "initial user request"
+    assert (
+        response.memory.get_conversation_history()[0].content == "initial user request"
+    )
+    assert (
+        facade.created_doc["memory_content"]["conversation_history"][0]["content"]
+        == "initial user request"
+    )
 
 
 @pytest.mark.asyncio
-async def test_room_memory_service_create_translates_facade_exception():
-    service = RoomMemoryService()
-    service.bind_facade(RaisingRoomMemoryFacade())
+async def test_context_memory_room_adapter_create_translates_facade_exception():
+    service = ContextMemoryRoomMemoryAdapter(facade=RaisingRoomMemoryFacade())
 
     response = await service.create_room_memory(RoomCenterMemoryRequest(room_id="r1"))
 
@@ -605,9 +662,8 @@ async def test_room_memory_service_create_translates_facade_exception():
 
 
 @pytest.mark.asyncio
-async def test_room_memory_service_get_translates_facade_exception():
-    service = RoomMemoryService()
-    service.bind_facade(RaisingRoomMemoryFacade())
+async def test_context_memory_room_adapter_get_translates_facade_exception():
+    service = ContextMemoryRoomMemoryAdapter(facade=RaisingRoomMemoryFacade())
 
     response = await service.get_room_memory_by_room_id(
         RoomCenterMemoryRequest(room_id="r1")
@@ -619,9 +675,8 @@ async def test_room_memory_service_get_translates_facade_exception():
 
 
 @pytest.mark.asyncio
-async def test_room_memory_service_update_translates_facade_exception():
-    service = RoomMemoryService()
-    service.bind_facade(RaisingRoomMemoryFacade())
+async def test_context_memory_room_adapter_update_translates_facade_exception():
+    service = ContextMemoryRoomMemoryAdapter(facade=RaisingRoomMemoryFacade())
 
     response = await service.update_room_memory_by_room_id(
         RoomCenterMemoryRequest(room_id="r1", memory=room_memory())
@@ -633,9 +688,8 @@ async def test_room_memory_service_update_translates_facade_exception():
 
 
 @pytest.mark.asyncio
-async def test_room_memory_service_get_by_memory_id_translates_facade_exception():
-    service = RoomMemoryService()
-    service.bind_facade(RaisingRoomMemoryFacade())
+async def test_context_memory_room_adapter_get_by_memory_id_translates_facade_exception():
+    service = ContextMemoryRoomMemoryAdapter(facade=RaisingRoomMemoryFacade())
 
     response = await service.get_room_memory_by_memory_id(
         RoomCenterMemoryRequest(memory_id="m1")
@@ -647,13 +701,12 @@ async def test_room_memory_service_get_by_memory_id_translates_facade_exception(
 
 
 @pytest.mark.asyncio
-async def test_room_memory_service_get_by_memory_id_treats_malformed_doc_as_not_found():
+async def test_context_memory_room_adapter_get_by_memory_id_treats_malformed_doc_as_not_found():
     class MalformedFacade(FakeFacade):
         async def legacy_get_room_memory_by_memory_id(self, memory_id: str):
             return {"memory_id": memory_id}
 
-    service = RoomMemoryService()
-    service.bind_facade(MalformedFacade())
+    service = ContextMemoryRoomMemoryAdapter(facade=MalformedFacade())
 
     response = await service.get_room_memory_by_memory_id(
         RoomCenterMemoryRequest(memory_id="m1")
@@ -665,15 +718,14 @@ async def test_room_memory_service_get_by_memory_id_treats_malformed_doc_as_not_
 
 
 @pytest.mark.asyncio
-async def test_room_memory_service_update_by_memory_id_persists_request_memory():
+async def test_context_memory_room_adapter_update_by_memory_id_persists_request_memory():
     facade = FakeFacade()
     facade.doc = {
         "room_id": "r1",
         "memory_id": "m1",
         "conversation_history": [],
     }
-    service = RoomMemoryService()
-    service.bind_facade(facade)
+    service = ContextMemoryRoomMemoryAdapter(facade=facade)
     updated = room_memory().model_copy(update={"conversation_history": []})
 
     response = await service.update_room_memory_by_memory_id(
@@ -688,9 +740,8 @@ async def test_room_memory_service_update_by_memory_id_persists_request_memory()
 
 
 @pytest.mark.asyncio
-async def test_room_memory_service_update_by_memory_id_translates_facade_exception():
-    service = RoomMemoryService()
-    service.bind_facade(RaisingRoomMemoryFacade())
+async def test_context_memory_room_adapter_update_by_memory_id_translates_facade_exception():
+    service = ContextMemoryRoomMemoryAdapter(facade=RaisingRoomMemoryFacade())
 
     response = await service.update_room_memory_by_memory_id(
         RoomCenterMemoryRequest(memory_id="m1", memory=room_memory())
@@ -702,9 +753,8 @@ async def test_room_memory_service_update_by_memory_id_translates_facade_excepti
 
 
 @pytest.mark.asyncio
-async def test_room_memory_service_delete_by_memory_id_translates_facade_exception():
-    service = RoomMemoryService()
-    service.bind_facade(RaisingRoomMemoryFacade())
+async def test_context_memory_room_adapter_delete_by_memory_id_translates_facade_exception():
+    service = ContextMemoryRoomMemoryAdapter(facade=RaisingRoomMemoryFacade())
 
     response = await service.delete_room_memory_by_memory_id(
         RoomCenterMemoryRequest(memory_id="m1")
@@ -716,9 +766,8 @@ async def test_room_memory_service_delete_by_memory_id_translates_facade_excepti
 
 
 @pytest.mark.asyncio
-async def test_room_memory_service_initialize_translates_facade_exception():
-    service = RoomMemoryService()
-    service.bind_facade(RaisingRoomMemoryFacade())
+async def test_context_memory_room_adapter_initialize_translates_facade_exception():
+    service = ContextMemoryRoomMemoryAdapter(facade=RaisingRoomMemoryFacade())
 
     response = await service.initialize_or_update_room_memory(
         RoomCenterMemoryRequest(room_id="r1", memory_content="hello")
@@ -730,15 +779,14 @@ async def test_room_memory_service_initialize_translates_facade_exception():
 
 
 @pytest.mark.asyncio
-async def test_room_memory_service_initialize_duplicate_message_does_not_track_user():
+async def test_context_memory_room_adapter_initialize_duplicate_message_does_not_track_user():
     facade = DuplicateUserProjectionFacade()
-    service = RoomMemoryService()
-    service.database_service = type(
+    usage_store = type(
         "DB",
         (),
         {"increment_user_interactions": AsyncMock()},
     )()
-    service.bind_facade(facade)
+    service = ContextMemoryRoomMemoryAdapter(facade=facade, usage_store=usage_store)
 
     response = await service.initialize_or_update_room_memory(
         RoomCenterMemoryRequest(
@@ -750,19 +798,18 @@ async def test_room_memory_service_initialize_duplicate_message_does_not_track_u
     )
 
     assert response.success is True
-    service.database_service.increment_user_interactions.assert_not_awaited()
+    usage_store.increment_user_interactions.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_room_memory_service_initialize_failed_write_does_not_track_user():
+async def test_context_memory_room_adapter_initialize_failed_write_does_not_track_user():
     facade = FailedUserProjectionFacade()
-    service = RoomMemoryService()
-    service.database_service = type(
+    usage_store = type(
         "DB",
         (),
         {"increment_user_interactions": AsyncMock()},
     )()
-    service.bind_facade(facade)
+    service = ContextMemoryRoomMemoryAdapter(facade=facade, usage_store=usage_store)
 
     response = await service.initialize_or_update_room_memory(
         RoomCenterMemoryRequest(
@@ -775,14 +822,13 @@ async def test_room_memory_service_initialize_failed_write_does_not_track_user()
 
     assert response.success is False
     assert response.status_code == 500
-    service.database_service.increment_user_interactions.assert_not_awaited()
+    usage_store.increment_user_interactions.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_room_memory_service_agent_response_duplicate_message_is_success():
+async def test_context_memory_room_adapter_agent_response_duplicate_message_is_success():
     facade = DuplicateAgentResponseFacade()
-    service = RoomMemoryService()
-    service.bind_facade(facade)
+    service = ContextMemoryRoomMemoryAdapter(facade=facade)
 
     response = await service.add_agent_response_to_memory(
         room_id="r1",
@@ -801,7 +847,9 @@ async def test_room_memory_service_agent_response_duplicate_message_is_success()
 
 def test_bound_context_assembly_updates_truncation_count():
     class TruncatedFacade(FakeFacade):
-        def assemble_supervisor_context_from_memory(self, room_memory_doc, current_task, **kwargs):
+        def assemble_supervisor_context_from_memory(
+            self, room_memory_doc, current_task, **kwargs
+        ):
             return truncated_assembled("truncated supervisor", mode="supervisor")
 
     service = ContextAssemblyService()
@@ -818,7 +866,9 @@ def test_bound_context_assembly_logs_metrics():
     service = ContextAssemblyService()
     service.bind_facade(facade)
 
-    with patch("context_memory.legacy_assembly.record_context_metrics") as record_metrics:
+    with patch(
+        "context_memory.legacy_assembly.record_context_metrics"
+    ) as record_metrics:
         record_metrics.return_value = False
         service.build_supervisor_context(room_memory(), "task")
 
@@ -831,15 +881,31 @@ def test_bound_context_assembly_logs_metrics():
 
 @pytest.mark.asyncio
 async def test_services_fail_fast_before_bind():
-    with pytest.raises(RuntimeError, match="ContextAssemblyService.bind_facade\\(\\) not called - startup incomplete"):
+    with pytest.raises(
+        RuntimeError,
+        match="ContextAssemblyService.bind_facade\\(\\) not called - startup incomplete",
+    ):
         ContextAssemblyService().build_supervisor_context(room_memory(), "task")
-    with pytest.raises(RuntimeError, match="CompactionService.bind_facade\\(\\) not called - startup incomplete"):
+    with pytest.raises(
+        RuntimeError,
+        match="CompactionService.bind_facade\\(\\) not called - startup incomplete",
+    ):
         await CompactionService().should_compact("r1")
-    with pytest.raises(RuntimeError, match="MemorySearchService.bind_facade\\(\\) not called - startup incomplete"):
+    with pytest.raises(
+        RuntimeError,
+        match="MemorySearchService.bind_facade\\(\\) not called - startup incomplete",
+    ):
         await MemorySearchService().search("query", "r1")
-    with pytest.raises(RuntimeError, match="RoomMemoryService.bind_facade\\(\\) not called - startup incomplete"):
-        await RoomMemoryService().create_room_memory(RoomCenterMemoryRequest(room_id="r1"))
-    with pytest.raises(RuntimeError, match="CompactionService.bind_content_storage\\(\\) not called - startup incomplete"):
+    with pytest.raises(
+        RuntimeError, match="ContextMemoryRoomMemoryAdapter requires facade"
+    ):
+        await ContextMemoryRoomMemoryAdapter().create_room_memory(
+            RoomCenterMemoryRequest(room_id="r1")
+        )
+    with pytest.raises(
+        RuntimeError,
+        match="CompactionService.bind_content_storage\\(\\) not called - startup incomplete",
+    ):
         await CompactionService().content_storage.upsert_full_content(
             "r1", "t1", "hello", "text"
         )

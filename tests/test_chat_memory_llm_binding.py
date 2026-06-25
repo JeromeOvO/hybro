@@ -1,28 +1,26 @@
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app_shell.memory_service import ChatMemoryService, RoomMemoryService
 from common.dto import ChatContextGenerationInput
+from context_memory.compat.runtime import ContextMemoryChatAdapter
 from models.memory import ChatContext, ContextData
 from models.request import ChatMemoryRequest
 
 
-def test_memory_service_default_constructors_do_not_import_database_service():
-    with patch("importlib.import_module", side_effect=AssertionError("legacy import attempted")):
-        chat_service = ChatMemoryService()
-        room_service = RoomMemoryService()
-
-    assert chat_service._store is not None
-    assert room_service._store is not None
+def test_context_memory_chat_adapter_requires_explicit_store():
+    with pytest.raises(
+        RuntimeError,
+        match=r"ContextMemoryChatAdapter requires chat_store",
+    ):
+        ContextMemoryChatAdapter(chat_store=None)
 
 
 @pytest.mark.asyncio
 async def test_chat_memory_update_uses_bound_room_memory_llm_service():
-    service = ChatMemoryService()
-    service._store = MagicMock()
-    service._store.get_chat_context_by_session_id = AsyncMock(
+    store = MagicMock()
+    store.get_chat_context_by_session_id = AsyncMock(
         return_value=ChatContext(
             memory_id="mem-1",
             user_name="user",
@@ -33,12 +31,12 @@ async def test_chat_memory_update_uses_bound_room_memory_llm_service():
             extend_info=[],
         )
     )
-    service._store.update_chat_context_by_session_id = AsyncMock(
-        return_value=True
-    )
-    service.room_memory_llm_service = MagicMock()
-    service.room_memory_llm_service.generate_chat_context = AsyncMock(
-        return_value="focused context"
+    store.update_chat_context_by_session_id = AsyncMock(return_value=True)
+    llm_service = MagicMock()
+    llm_service.generate_chat_context = AsyncMock(return_value="focused context")
+    service = ContextMemoryChatAdapter(
+        chat_store=store,
+        chat_context_llm=llm_service,
     )
 
     result = await service.update_chat_context_by_session_id(
@@ -51,7 +49,7 @@ async def test_chat_memory_update_uses_bound_room_memory_llm_service():
     )
 
     assert result.success is True
-    service.room_memory_llm_service.generate_chat_context.assert_awaited_once_with(
+    llm_service.generate_chat_context.assert_awaited_once_with(
         ChatContextGenerationInput(
             user_input="hello",
             agent_response="hi",
