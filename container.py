@@ -301,12 +301,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from app_shell.room_membership_source import LegacyRoomMembershipSeedSource
             from app_shell.task_service import task_service
             from common.utils.a2a_helpers import bind_a2a_artifact_storage
-            from context_memory.config import ContextMemoryLLMConfig
             from context_memory.compat.runtime import (
                 ContextMemoryChatAdapter,
                 ContextMemoryRoomMemoryAdapter,
                 ContextMemoryRouteCenter,
             )
+            from context_memory.config import ContextMemoryLLMConfig
             from execution.orchestration.room_supervisor_service import (
                 SupervisorPlanningError,
                 room_supervisor_service,
