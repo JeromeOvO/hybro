@@ -6,7 +6,7 @@ from common.utils.time import utcnow
 
 
 class ContextMemorySearchAdapter:
-    """Compatibility adapter for app shell memory search consumers.
+    """Compatibility adapter for legacy memory search response consumers.
 
     Delegates legacy-oriented operations to a ``ContextMemoryFacade``-compatible
     object while keeping the app shell's existing response surface.

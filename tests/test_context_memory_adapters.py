@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app_shell.compaction_service import CompactionService
-from app_shell.memory_search_service import MemorySearchService
 from common.dto import AssembledContext, CompactionResult, MemorySearchResult
 from context_memory import ContextMemoryFacade
 from context_memory.compat.context_assembly import ContextAssemblyService
@@ -16,6 +15,7 @@ from context_memory.compat.runtime import (
     ContextMemoryRouteCenter,
 )
 from context_memory.config import CompactionConfig, MemorySearchConfig
+from context_memory.search_adapter import ContextMemorySearchAdapter
 from models.memory import ConversationTurn, RoomMemory, TurnRole
 from models.request import ChatMemoryRequest, RoomCenterMemoryRequest
 from models.response import ChatMemoryResponse
@@ -526,21 +526,18 @@ async def test_compaction_service_exercises_real_facade_compaction_path():
 
 
 @pytest.mark.asyncio
-async def test_memory_search_service_delegates_search():
+async def test_context_memory_search_adapter_delegates_search():
     facade = FakeFacade()
-    service = MemorySearchService()
-    service.bind_facade(facade)
+    service = ContextMemorySearchAdapter(facade=facade)
 
     result = await service.search("query", "r1", user_id="u1")
 
-    assert result.results[0].content == "result"
-    assert facade.calls == [
-        ("legacy_search", "query", "r1", "u1", service.config.max_results)
-    ]
+    assert result["results"][0].content == "result"
+    assert facade.calls == [("legacy_search", "query", "r1", "u1", None)]
 
 
 @pytest.mark.asyncio
-async def test_memory_search_service_exercises_real_facade_search_path():
+async def test_context_memory_search_adapter_exercises_real_facade_search_path():
     content_repository = RealFacadeContentRepository(
         text_results=[
             {
@@ -552,8 +549,7 @@ async def test_memory_search_service_exercises_real_facade_search_path():
             }
         ]
     )
-    service = MemorySearchService()
-    service.bind_facade(
+    service = ContextMemorySearchAdapter(
         real_context_memory_facade(
             content_repository=content_repository,
             search_config=MemorySearchConfig(
@@ -566,12 +562,12 @@ async def test_memory_search_service_exercises_real_facade_search_path():
 
     result = await service.search("query", "r1")
 
-    assert result.results[0].content == "real facade result"
-    assert result.keyword_search_used is True
+    assert result["results"][0].content == "real facade result"
+    assert result["keyword_search_used"] is True
 
 
 @pytest.mark.asyncio
-async def test_memory_search_service_real_facade_respects_configured_max_results():
+async def test_context_memory_search_adapter_real_facade_respects_configured_limit():
     content_repository = RealFacadeContentRepository(
         text_results=[
             {
@@ -584,32 +580,31 @@ async def test_memory_search_service_real_facade_respects_configured_max_results
             for index in range(5)
         ]
     )
-    service = MemorySearchService()
-    service.bind_facade(
+    service = ContextMemorySearchAdapter(
         real_context_memory_facade(
             content_repository=content_repository,
             search_config=MemorySearchConfig(
                 enabled=True,
                 temporal_decay_enabled=False,
-                max_results=3,
+                max_results=5,
             ),
         )
     )
 
-    result = await service.search("query", "r1")
+    result = await service.search("query", "r1", limit=3)
 
-    assert len(result.results) == 3
+    assert len(result["results"]) == 3
 
 
 @pytest.mark.asyncio
-async def test_memory_search_service_delegates_index():
+async def test_context_memory_search_adapter_delegates_index():
     facade = FakeFacade()
-    service = MemorySearchService()
-    service.bind_facade(facade)
+    service = ContextMemorySearchAdapter(facade=facade)
+    turn = ConversationTurn(role=TurnRole.USER, content="hello", turn_id="t1")
 
     ok = await service.index_turn_for_search(
-        ConversationTurn(role=TurnRole.USER, content="hello", turn_id="t1"),
         "r1",
+        turn.model_dump(mode="json"),
     )
 
     assert ok is True
@@ -1113,9 +1108,9 @@ async def test_services_fail_fast_before_bind():
         await CompactionService().should_compact("r1")
     with pytest.raises(
         RuntimeError,
-        match="MemorySearchService.bind_facade\\(\\) not called - startup incomplete",
+        match="ContextMemorySearchAdapter has no facade bound",
     ):
-        await MemorySearchService().search("query", "r1")
+        await ContextMemorySearchAdapter().search("query", "r1")
     with pytest.raises(
         RuntimeError, match="ContextMemoryRoomMemoryAdapter requires facade"
     ):
