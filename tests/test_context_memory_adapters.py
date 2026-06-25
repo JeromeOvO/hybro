@@ -974,6 +974,31 @@ async def test_context_memory_room_adapter_initialize_empty_doc_is_malformed_and
 
 
 @pytest.mark.asyncio
+async def test_context_memory_room_adapter_initialize_uses_returned_memory_room_id():
+    class ProjectionFacade(FakeFacade):
+        async def initialize_or_update_room_memory(self, *args, **kwargs):
+            return {
+                "room_id": "memory-room",
+                "memory_id": "m1",
+                "memory_content": {"conversation_history": []},
+                "conversation_history": [],
+                "room_summary": {},
+                "room_facts": [],
+                "memory_created_at": NOW,
+            }
+
+    service = ContextMemoryRoomMemoryAdapter(facade=ProjectionFacade())
+
+    response = await service.initialize_or_update_room_memory(
+        RoomCenterMemoryRequest(room_id="request-room", memory_content="hello")
+    )
+
+    assert response.success is True
+    assert response.room_id == "memory-room"
+    assert response.memory_id == "m1"
+
+
+@pytest.mark.asyncio
 async def test_context_memory_room_adapter_initialize_duplicate_message_does_not_track_user():
     facade = DuplicateUserProjectionFacade()
     usage_store = type(

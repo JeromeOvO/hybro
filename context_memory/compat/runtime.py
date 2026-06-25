@@ -440,7 +440,7 @@ class ContextMemoryRoomMemoryAdapter:
             if memory is not None and not duplicate_turn:
                 await self._track_user_interaction(request.user_id)
             return RoomCenterMemoryResponse(
-                room_id=request.room_id,
+                room_id=_response_room_id(request, memory),
                 memory_id=memory.memory_id if memory else None,
                 memory=memory,
                 success=memory is not None,
