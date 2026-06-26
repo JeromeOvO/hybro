@@ -75,7 +75,7 @@ class _UnboundRoomMessageCenterStore:
 a2a_transport = None
 agent_resolver_service = None
 default_store = _UnboundRoomMessageCenterStore()
-debate_service = None
+debate_prompt_injector = None
 room_memory = None
 task_notifier = None
 rate_limit_service = None
@@ -151,7 +151,7 @@ class RoomMessageCenter:
         a2a_transport: A2ATransportPort,
         remote_task_reader: RemoteTaskReaderPort,
         room_memory: RoomMemoryPort,
-        debate_service,
+        debate_prompt_injector,
         rate_limit_service: RateLimitPort,
         room_supervisor_service,
         hitl_coordinator: HITLCoordinator,
@@ -277,7 +277,7 @@ class RoomMessageCenter:
             agent_lookup=self.agent_lookup,
             room_reader=self.room_reader,
             memory_reader=self.memory_reader,
-            debate_service=debate_service,
+            debate_prompt_injector=debate_prompt_injector,
             rate_limit_service=rate_limit_service,
             agent_dispatcher=self.agent_dispatcher,
             agent_message_processor=self.agent_message_processor,
@@ -1222,7 +1222,7 @@ class RoomMessageCenter:
 
         Deserializes ``agent_registry``, ``room_config``, and
         ``conversation_context`` from the user message's ``extend_info``
-        (set by ``_prepare_for_supervisor`` in ``RoomServices``), then
+        (prepared by the room runtime), then
         delegates to ``SupervisorExecutor.run()``.
 
         Also handles clarify-resume: when the user message was prepared by

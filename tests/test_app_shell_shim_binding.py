@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app_shell.a2a_runtime import A2AService
-from app_shell.room_runtime import AppShellRoomCenter, RoomServices
 from common.dto import RoomInfo
 from models.request import RoomCenterRoomSettingRequest
+from room.compat.runtime import RoomServices
 from room.compat.unbound import (
     UNBOUND_A2A_SERVICE,
     UNBOUND_AGENT_SELECTION_SERVICE,
@@ -16,6 +16,7 @@ from room.compat.unbound import (
     UNBOUND_DELIVERY,
     UNBOUND_TASK_SERVICE,
 )
+from room.route_adapter import RoomRouteAdapter
 
 
 @pytest.mark.asyncio
@@ -37,7 +38,7 @@ def test_room_services_defaults_to_room_owned_unbound_legacy_dependencies() -> N
     assert service.a2a_service is UNBOUND_A2A_SERVICE
     assert not hasattr(service, "room_memory_service")
     assert service.delivery is UNBOUND_DELIVERY
-    assert service.task_service is UNBOUND_TASK_SERVICE
+    assert service.remote_task_reader is UNBOUND_TASK_SERVICE
 
 
 def test_room_services_bind_legacy_dependencies_replaces_unbound_defaults() -> None:
@@ -47,7 +48,7 @@ def test_room_services_bind_legacy_dependencies_replaces_unbound_defaults() -> N
         "agent_selection_service": object(),
         "a2a_service": object(),
         "delivery": object(),
-        "task_service": object(),
+        "remote_task_reader": object(),
     }
 
     service.bind_legacy_dependencies(**deps)
@@ -56,7 +57,7 @@ def test_room_services_bind_legacy_dependencies_replaces_unbound_defaults() -> N
     assert service.agent_selection_service is deps["agent_selection_service"]
     assert service.a2a_service is deps["a2a_service"]
     assert service.delivery is deps["delivery"]
-    assert service.task_service is deps["task_service"]
+    assert service.remote_task_reader is deps["remote_task_reader"]
 
 
 @pytest.mark.asyncio
@@ -87,11 +88,11 @@ async def test_room_services_delegates_after_facade_bind() -> None:
 
 @pytest.mark.asyncio
 async def test_room_center_fails_before_bound_room_services() -> None:
-    center = AppShellRoomCenter(room_services=None)
+    center = RoomRouteAdapter(room_services=None)
 
     with pytest.raises(
         RuntimeError,
-        match=r"RoomCenter\.bind_facade\(\) not called - startup incomplete",
+        match=r"RoomRouteAdapter\.bind_facade\(\) not called - startup incomplete",
     ):
         await center.create_new_room(MagicMock())
 
@@ -102,7 +103,7 @@ async def test_room_center_delegates_after_room_services_bind() -> None:
         _bound=True,
         create_new_room=AsyncMock(return_value="created"),
     )
-    center = AppShellRoomCenter(room_services=room_services)
+    center = RoomRouteAdapter(room_services=room_services)
 
     assert await center.create_new_room(MagicMock()) == "created"
     room_services.create_new_room.assert_awaited_once()

@@ -190,7 +190,7 @@ def test_container_binds_room_compat_legacy_dependencies_at_startup():
     assert legacy_memory_keyword not in source
     assert "sse_transport=sse_manager" not in source
     assert "sse_transport=_delivery_facade" in source
-    assert "task_service=task_service" in source
+    assert "remote_task_reader=remote_task_reader" in source
 
 
 def test_container_builds_platform_config_from_scalar_settings():

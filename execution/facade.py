@@ -347,7 +347,7 @@ class ExecutionFacade:
         *,
         room_center: RoomCenterPort,
         room_message_center: RoomMessageCenterPort,
-        hitl_service: HITLServicePort,
+        hitl_manager: HITLServicePort,
         run_lifecycle: RunLifecyclePort,
         run_reader: RunReadPort,
         cancellation_state: CancellationStatePort,
@@ -362,7 +362,7 @@ class ExecutionFacade:
     ) -> None:
         self._room_center = room_center
         self._room_message_center = room_message_center
-        self._hitl_service = hitl_service
+        self._hitl_manager = hitl_manager
         self._run_lifecycle = run_lifecycle
         self._run_reader = run_reader
         self._cancellation_state = cancellation_state
@@ -382,7 +382,7 @@ class ExecutionFacade:
         request: ExecutionRequest,
     ) -> ExecutionAck | None:
         try:
-            pending_requests = await self._hitl_service.get_pending_requests(
+            pending_requests = await self._hitl_manager.get_pending_requests(
                 request.room_id
             )
         except Exception:
@@ -698,7 +698,7 @@ class ExecutionFacade:
         source: str,
         **kwargs: Any,
     ) -> HITLRequest | None:
-        result = await self._hitl_service.request_input(
+        result = await self._hitl_manager.request_input(
             room_id=room_id,
             user_message_id=user_message_id,
             source=source,
@@ -714,7 +714,7 @@ class ExecutionFacade:
         response: str,
         responder_id: str,
     ) -> HITLResponse:
-        result = await self._hitl_service.handle_response(
+        result = await self._hitl_manager.handle_response(
             room_id=room_id,
             request_id=request_id,
             user_input=response,
@@ -723,11 +723,11 @@ class ExecutionFacade:
         return hitl_response_dict_to_common(result)
 
     async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]:
-        requests = await self._hitl_service.get_pending_requests(room_id)
+        requests = await self._hitl_manager.get_pending_requests(room_id)
         return [model_hitl_request_to_common(request) for request in requests]
 
     async def cancel_hitl(self, room_id: str, request_id: str) -> bool:
-        result = await self._hitl_service.cancel_request(request_id, room_id=room_id)
+        result = await self._hitl_manager.cancel_request(request_id, room_id=room_id)
         return hitl_cancel_none_to_success(result)
 
     async def handle_hub_agent_response(

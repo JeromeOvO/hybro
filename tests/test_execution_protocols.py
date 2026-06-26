@@ -301,7 +301,7 @@ def _make_room_message_center_port_deps():
         "a2a_transport": MagicMock(),
         "remote_task_reader": MagicMock(),
         "room_memory": MagicMock(),
-        "debate_service": MagicMock(),
+        "debate_prompt_injector": MagicMock(),
         "rate_limit_service": MagicMock(),
         "room_supervisor_service": MagicMock(),
         "context_memory_runtime": MagicMock(),
@@ -383,6 +383,10 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.queue_executor.delivery is deps["delivery"]
     assert runtime.queue_executor.room_runtime is deps["room_runtime"]
     assert runtime.queue_executor.event_publisher is deps["event_publisher"]
+    assert (
+        runtime.queue_executor.debate_prompt_injector
+        is deps["debate_prompt_injector"]
+    )
     assert runtime.queue_executor.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.supervisor_executor.task_state_store is deps["task_state_store"]
     assert runtime.supervisor_executor.message_reader is deps["message_reader"]

@@ -19,7 +19,6 @@ FORBIDDEN_ROUTE_MODULE_ROOTS = {"agent", "room", "context_memory", "a2a_adapter"
 FOCUS_APP_SHELL_RUNTIME_MODULES = {
     "app_shell.a2a_runtime",
     "app_shell.repository_store",
-    "app_shell.room_runtime",
 }
 FOCUS_APP_SHELL_RUNTIME_NAMES = {
     module.removeprefix("app_shell.") for module in FOCUS_APP_SHELL_RUNTIME_MODULES

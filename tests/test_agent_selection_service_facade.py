@@ -215,7 +215,7 @@ async def test_facade_passes_is_debate_mode(mock_matched_agents):
 
 def test_derive_required_input_modes_with_attachments():
     """Test _derive_required_input_modes with attachments."""
-    from app_shell.room_runtime import RoomServices
+    from room.compat.runtime import RoomServices
 
     user_message = RoomUserMessage(
         room_id="room-123",
@@ -249,7 +249,7 @@ def test_derive_required_input_modes_with_attachments():
 
 def test_derive_required_input_modes_no_attachments():
     """Test _derive_required_input_modes without attachments."""
-    from app_shell.room_runtime import RoomServices
+    from room.compat.runtime import RoomServices
 
     user_message = RoomUserMessage(
         room_id="room-123",

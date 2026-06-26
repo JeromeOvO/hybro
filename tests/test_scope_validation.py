@@ -9,11 +9,10 @@ Covers:
 - _resolve_room_agent_refs marks private agents as inaccessible for non-owners
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app_shell.room_runtime import RoomServices
 from common.utils.time import utcnow
 from models.agent import Agent, AgentStatus
 from models.response import (
@@ -29,8 +28,7 @@ from models.supervisor import (
     TrajectoryEntry,
     TrajectoryStatus,
 )
-
-HITL_PATCH = "app_shell.room_runtime.hitl_service"
+from room.compat.runtime import RoomServices
 
 
 @pytest.fixture
@@ -47,7 +45,9 @@ def room_center():
     rc.a2a_service = MagicMock()
     rc.delivery = MagicMock()
     rc.delivery.send_processing_status = AsyncMock()
-    rc.task_service = MagicMock()
+    rc.remote_task_reader = MagicMock()
+    rc.hitl_coordinator = MagicMock()
+    rc.hitl_coordinator.get_pending_requests = AsyncMock(return_value=[])
     return rc
 
 
@@ -230,12 +230,9 @@ class TestPrePersistScopeValidation:
         room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
         room_center._persist_user_message = AsyncMock(return_value=True)
 
-        mock_hitl = MagicMock()
-        mock_hitl.get_pending_requests = AsyncMock(return_value=[])
-        with patch("app_shell.hitl_service.hitl_service", mock_hitl):
-            result = await room_center.send_message_to_room(
-                request, target_group="room_team", mentioned_agent_ids=["ghost-agent"],
-            )
+        result = await room_center.send_message_to_room(
+            request, target_group="room_team", mentioned_agent_ids=["ghost-agent"],
+        )
 
         assert result.success is False
         assert result.scope_resolution_error.code == "unauthorized_mention"
@@ -258,12 +255,9 @@ class TestPrePersistScopeValidation:
         room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
         room_center._persist_user_message = AsyncMock(return_value=True)
 
-        mock_hitl = MagicMock()
-        mock_hitl.get_pending_requests = AsyncMock(return_value=[])
-        with patch("app_shell.hitl_service.hitl_service", mock_hitl):
-            result = await room_center.send_message_to_room(
-                request, target_group="room_team", mentioned_agent_ids=None,
-            )
+        result = await room_center.send_message_to_room(
+            request, target_group="room_team", mentioned_agent_ids=None,
+        )
 
         assert result.success is False
         assert result.scope_resolution_error.code == "empty_scope"
@@ -287,12 +281,9 @@ class TestPrePersistScopeValidation:
         room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
         room_center._persist_user_message = AsyncMock(return_value=True)
 
-        mock_hitl = MagicMock()
-        mock_hitl.get_pending_requests = AsyncMock(return_value=[])
-        with patch("app_shell.hitl_service.hitl_service", mock_hitl):
-            result = await room_center.send_message_to_room(
-                request, target_group="nonexistent-group", mentioned_agent_ids=None,
-            )
+        result = await room_center.send_message_to_room(
+            request, target_group="nonexistent-group", mentioned_agent_ids=None,
+        )
 
         assert result.success is False
         assert result.scope_resolution_error.code == "group_not_usable"
@@ -371,12 +362,9 @@ class TestLegacyInlineMentionBehavior:
         room_center._handle_mentions_flow = handle_mentions
         room_center._prepare_for_supervisor = prepare_supervisor
 
-        mock_hitl = MagicMock()
-        mock_hitl.get_pending_requests = AsyncMock(return_value=[])
-        with patch("app_shell.hitl_service.hitl_service", mock_hitl):
-            result = await room_center.send_message_to_room(
-                request, target_group="room_team", mentioned_agent_ids=None,
-            )
+        result = await room_center.send_message_to_room(
+            request, target_group="room_team", mentioned_agent_ids=None,
+        )
 
         assert result.success is True
         handle_mentions.assert_not_awaited()
@@ -500,12 +488,9 @@ class TestLegacyInlineMentionBehavior:
         room_center._prepare_clarify_resume = prepare_clarify
         room_center._prepare_for_supervisor = prepare_supervisor
 
-        mock_hitl = MagicMock()
-        mock_hitl.get_pending_requests = AsyncMock(return_value=[])
-        with patch("app_shell.hitl_service.hitl_service", mock_hitl):
-            result = await room_center.send_message_to_room(
-                request, target_group="room_team", mentioned_agent_ids=None,
-            )
+        result = await room_center.send_message_to_room(
+            request, target_group="room_team", mentioned_agent_ids=None,
+        )
 
         assert result.success is True
         handle_mentions.assert_not_awaited()

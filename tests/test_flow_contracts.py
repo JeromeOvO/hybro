@@ -413,7 +413,7 @@ class TestHITLFlow:
     @pytest.mark.asyncio
     async def test_complete_hitl_flow(self):
         """request_input -> get_pending_requests -> cancel_request."""
-        from app_shell.hitl_service import create_hitl_service
+        from execution.hitl.factory import create_hitl_service
 
         room_id = "hitl-flow-room"
         msg_id = "hitl-flow-msg"
@@ -475,7 +475,8 @@ class TestHITLFlow:
     @pytest.mark.asyncio
     async def test_hitl_max_rounds_enforcement(self):
         """Should return None when max rounds exceeded."""
-        from app_shell.hitl_service import MAX_HITL_ROUNDS, create_hitl_service
+        from execution.hitl.factory import create_hitl_service
+        from execution.hitl.service import MAX_HITL_ROUNDS
 
         mock_db = MagicMock()
         mock_db.count_hitl_requests_for_message = AsyncMock(

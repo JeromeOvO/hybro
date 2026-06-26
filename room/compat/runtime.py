@@ -137,7 +137,7 @@ class RoomServices:
         self.debate_rounds = debate_rounds
         self.a2a_service = UNBOUND_A2A_SERVICE
         self.delivery = UNBOUND_DELIVERY
-        self.task_service = UNBOUND_TASK_SERVICE
+        self.remote_task_reader = UNBOUND_TASK_SERVICE
         self._object_storage = None
         self._s3_service = None
         self._facade = None
@@ -167,13 +167,13 @@ class RoomServices:
         agent_selection_service,
         a2a_service,
         delivery,
-        task_service,
+        remote_task_reader,
     ) -> None:
         self.agent_service = agent_service
         self.agent_selection_service = agent_selection_service
         self.a2a_service = a2a_service
         self.delivery = delivery
-        self.task_service = task_service
+        self.remote_task_reader = remote_task_reader
 
     @property
     def object_storage(self):
@@ -1549,8 +1549,7 @@ class RoomServices:
             # Clear it so the frontend shows a generic "Working on your request…" instead.
             # Also clear in multi-agent rooms when the LLM simply passed through the
             # user's message verbatim (no meaningful decomposition).
-            # BUT: never clear task_content in debate mode — debate_service needs it
-            # to inject prior agent responses into the prompt.
+            # Keep task_content in debate mode because the debate prompt injector reads it.
             is_debate = parsed_result.get("message_type", "").startswith("DEBATE")
             if not is_debate and (
                 is_direct_chat or task_content.strip() == original_text.strip()
@@ -3669,108 +3668,7 @@ room_runtime = RoomServices()
 room_services = room_runtime
 
 
-class AppShellRoomCenter:
-    def __init__(self, bound_room_services=None, room_services=None):
-        self.room_runtime = bound_room_services or room_services
-
-    def bind_facade(self, facade) -> None:
-        room_runtime.bind_facade(facade)
-        self.room_runtime = room_runtime
-
-    def bind_room_services(self, bound_room_services) -> None:
-        self.room_runtime = bound_room_services
-
-    def _require_room_services(self):
-        if self.room_runtime is None or not getattr(
-            self.room_runtime, "_bound", False
-        ):
-            raise RuntimeError(
-                "RoomCenter.bind_facade() not called - startup incomplete"
-            )
-        return self.room_runtime
-
-    async def create_new_room(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterRoomSettingResponse:
-        return await self._require_room_services().create_new_room(request)
-
-    async def inquiry_room_setting(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterRoomSettingResponse:
-        return await self._require_room_services().inquiry_room_setting(request)
-
-    async def inquiry_active_runs(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterActiveRunsResponse:
-        return await self._require_room_services().inquiry_active_runs(request)
-
-    async def delete_room_by_room_id(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterRoomSettingResponse:
-        return await self._require_room_services().delete_room_by_room_id(request)
-
-    async def inquiry_rooms_by_room_owner_id(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterRoomSettingResponse:
-        return await self._require_room_services().inquiry_rooms_by_room_owner_id(request)
-
-    async def update_room_agent_set(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterRoomSettingResponse:
-        return await self._require_room_services().update_room_agent_set(request)
-
-    async def update_room_name(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterRoomSettingResponse:
-        return await self._require_room_services().update_room_name(request)
-
-    async def update_room_extend_info(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterRoomSettingResponse:
-        return await self._require_room_services().update_room_extend_info(request)
-
-    async def inquiry_room_messages_by_room_id(
-        self, request: RoomCenterRoomMessageRequest
-    ) -> RoomCenterRoomMessageResponse:
-        return await self._require_room_services().inquiry_room_messages_by_room_id(
-            request
-        )
-
-    async def inquiry_agent_messages_by_related_message_id(
-        self, request: RoomCenterAgentMessageRequest
-    ) -> RoomCenterAgentMessageResponse:
-        return await self._require_room_services().inquiry_agent_messages_by_related_message_id(
-            request
-        )
-
-    async def send_message_to_room(
-        self,
-        request: RoomCenterUserMessageRequest,
-        target_group: str = "room_team",
-        mentioned_agent_ids: list[str] | None = None,
-    ) -> RoomCenterUserMessageResponse:
-        return await self._require_room_services().send_message_to_room(
-            request, target_group, mentioned_agent_ids
-        )
-
-    async def persist_message_to_room(
-        self,
-        request: RoomCenterUserMessageRequest,
-        target_group: str = "room_team",
-        mentioned_agent_ids: list[str] | None = None,
-    ):
-        return await self._require_room_services().persist_message_to_room(
-            request, target_group, mentioned_agent_ids
-        )
-
-    async def run_message_preflight_to_room(self, context):
-        return await self._require_room_services().run_message_preflight_to_room(
-            context
-        )
-
-
 __all__ = [
-    "AppShellRoomCenter",
     "DispatchStrategy",
     "RoomServices",
     "_ResolvedAttachments",

@@ -31,11 +31,11 @@ class MongoCancellationStoreAdapter:
 
 
 class HITLMessageCancellationAdapter:
-    def __init__(self, hitl_service) -> None:
-        self._hitl_service = hitl_service
+    def __init__(self, hitl_manager) -> None:
+        self._hitl_manager = hitl_manager
 
     async def cancel_requests_for_message(self, message_id: str) -> None:
-        await self._hitl_service.cancel_requests_for_message(message_id)
+        await self._hitl_manager.cancel_requests_for_message(message_id)
 
 
 class AgentTaskCleanupAdapter:

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from collections import deque
+from typing import Any
 from uuid import uuid4
 
-from app_shell.runtime_store import UNBOUND_RUNTIME_STORE
 from common.dto import RoomMessageSummary
 from common.types import (
     Message,
@@ -23,7 +23,20 @@ from models.room import CoordinatorAgentId, MessageContent, Room, RoomAgentMessa
 logger = get_logger(__name__)
 
 
-class RoomCoordinatorService:
+class _UnboundSynthesisStore:
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("__"):
+            raise AttributeError(name) from None
+
+        async def _missing_dependency(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError(
+                "SynthesisCoordinator store dependency has not been bound"
+            ) from None
+
+        return _missing_dependency
+
+
+class SynthesisCoordinator:
     """
     Local coordinator for room-level orchestration after agent messages complete.
 
@@ -39,12 +52,12 @@ class RoomCoordinatorService:
     """
 
     def __init__(self, *, message_store=None, delivery=None) -> None:
-        self._store = message_store or UNBOUND_RUNTIME_STORE
+        self._message_store = message_store or _UnboundSynthesisStore()
         self.summary_service = None
         self.delivery = delivery
 
     def bind_store(self, message_store) -> None:
-        self._store = message_store
+        self._message_store = message_store
 
     def bind_summary_service(self, service) -> None:
         self.summary_service = service
@@ -54,9 +67,7 @@ class RoomCoordinatorService:
 
     def _require_delivery(self):
         if self.delivery is None:
-            raise RuntimeError(
-                "RoomCoordinatorService delivery dependency is not bound"
-            )
+            raise RuntimeError("SynthesisCoordinator delivery dependency is not bound")
         return self.delivery
 
     async def on_room_user_message_completed(
@@ -98,17 +109,17 @@ class RoomCoordinatorService:
           directly to a specific agent (as a follow-up) or handled via normal
           parsing/decomposition/debate.
         - Apply per-room policies such as limiting debate rounds or selecting a
-          single “final” agent answer in addition to the summary.
+          single "final" agent answer in addition to the summary.
         """
         summary_message_id: str | None = None
         coordinator_agent_id: str | None = None
         summary_client_request_id: str | None = None
 
         try:
-            room: Room | None = await self._store.get_room_by_room_id(room_id)
+            room: Room | None = await self._message_store.get_room_by_room_id(room_id)
             if room is None:
                 logger.warning(
-                    "RoomCoordinatorService: Room %s not found, skipping coordination",
+                    "SynthesisCoordinator: Room %s not found, skipping coordination",
                     room_id,
                 )
                 return
@@ -120,9 +131,9 @@ class RoomCoordinatorService:
 
             if trajectory_responses:
                 # Fast path: caller already has agent response texts from the
-                # in-memory trajectory — skip DB BFS entirely.
+                # in-memory trajectory, so skip DB BFS entirely.
                 logger.info(
-                    "RoomCoordinatorService: using %d trajectory responses for room %s "
+                    "SynthesisCoordinator: using %d trajectory responses for room %s "
                     "(skipping DB read)",
                     len(trajectory_responses),
                     room_id,
@@ -132,11 +143,11 @@ class RoomCoordinatorService:
                 # Standard path: collect agent messages from DB via BFS and
                 # extract visible text from each message's history.
                 logger.debug(
-                    "RoomCoordinatorService: no trajectory responses for room %s, "
+                    "SynthesisCoordinator: no trajectory responses for room %s, "
                     "falling back to DB BFS",
                     room_id,
                 )
-                agent_messages = await self._collect_agent_messages_for_user_message(
+                agent_messages = await self._collect_related_agent_messages(
                     room_user_message_id
                 )
                 if len(agent_messages) < 2:
@@ -162,7 +173,7 @@ class RoomCoordinatorService:
                     text = extract_agent_text_from_room_message(msg)
                     if text and msg.agent_id:
                         # Get agent name from database
-                        agent_name = await self._store.get_agent_name_by_agent_id(
+                        agent_name = await self._message_store.get_agent_name_by_agent_id(
                             msg.agent_id
                         )
                         agent_responses.append(
@@ -184,8 +195,10 @@ class RoomCoordinatorService:
             # frontend shows a spinner while the LLM summarisation runs.
             summary_message_id = str(uuid4())
             summary_dispatched_at = utcnow().isoformat()
-            root_user_message = await self._store.get_room_user_message_by_message_id(
-                room_user_message_id
+            root_user_message = (
+                await self._message_store.get_room_user_message_by_message_id(
+                    room_user_message_id
+                )
             )
             summary_client_request_id = (
                 root_user_message.client_request_id if root_user_message else None
@@ -197,9 +210,7 @@ class RoomCoordinatorService:
                 and isinstance(root_user_message.message_content.message_text, str)
                 else None
             )
-            agent_name = (
-                "Debate Coordinator" if is_debate_mode else "Summary Agent"
-            )
+            agent_name = "Debate Coordinator" if is_debate_mode else "Summary Agent"
             await self._require_delivery().send_task_submitted(
                 room_id=room_id,
                 message_id=summary_message_id,
@@ -209,7 +220,7 @@ class RoomCoordinatorService:
                 status="working",
                 related_message_id=room_user_message_id,
                 created_at=summary_dispatched_at,
-                task_content="Summarizing agent responses…",
+                task_content="Summarizing agent responses...",
                 client_request_id=summary_client_request_id,
             )
 
@@ -241,7 +252,10 @@ class RoomCoordinatorService:
                 return
 
             await self._create_and_emit_summary_message(
-                room_id, room_user_message_id, summary_text, coordinator_agent_id,
+                room_id,
+                room_user_message_id,
+                summary_text,
+                coordinator_agent_id,
                 message_id=summary_message_id,
             )
 
@@ -249,7 +263,7 @@ class RoomCoordinatorService:
             raise
         except Exception as exc:  # noqa: BLE001
             logger.error(
-                "RoomCoordinatorService: Failed to coordinate room %s user message %s: %s",
+                "SynthesisCoordinator: Failed to coordinate room %s user message %s: %s",
                 room_id,
                 room_user_message_id,
                 str(exc),
@@ -267,7 +281,7 @@ class RoomCoordinatorService:
                 except Exception:  # noqa: BLE001
                     pass
 
-    async def _collect_agent_messages_for_user_message(
+    async def _collect_related_agent_messages(
         self,
         root_user_message_id: str,
     ) -> list[RoomAgentMessage]:
@@ -282,7 +296,7 @@ class RoomCoordinatorService:
         visited: set[str] = set()
 
         initial_children = (
-            await self._store.get_room_agent_messages_by_related_message_id(  # noqa: E501
+            await self._message_store.get_room_agent_messages_by_related_message_id(
                 root_user_message_id
             )
         )
@@ -299,8 +313,10 @@ class RoomCoordinatorService:
             visited.add(msg.message_id)
             all_messages.append(msg)
 
-            children = await self._store.get_room_agent_messages_by_related_message_id(  # noqa: E501
-                msg.message_id
+            children = (
+                await self._message_store.get_room_agent_messages_by_related_message_id(
+                    msg.message_id
+                )
             )
             if not children:
                 continue
@@ -386,8 +402,10 @@ class RoomCoordinatorService:
 
         summary_content = MessageContent(message_task=summary_task)
 
-        user_message = await self._store.get_room_user_message_by_message_id(
-            room_user_message_id
+        user_message = (
+            await self._message_store.get_room_user_message_by_message_id(
+                room_user_message_id
+            )
         )
         user_id = user_message.user_id if user_message else None
         client_request_id = user_message.client_request_id if user_message else None
@@ -410,7 +428,7 @@ class RoomCoordinatorService:
             },
         )
 
-        await self._store.add_room_agent_message(summary_agent_message)
+        await self._message_store.add_room_agent_message(summary_agent_message)
 
         await self._require_delivery().send_agent_response(
             room_id,
@@ -422,10 +440,7 @@ class RoomCoordinatorService:
         )
 
 
-room_coordinator_service = RoomCoordinatorService()
-
-
-def _room_message_summary_from_item(item) -> RoomMessageSummary:
+def _room_message_summary_from_item(item: Any) -> RoomMessageSummary:
     if isinstance(item, RoomMessageSummary):
         return item
     return RoomMessageSummary(
@@ -433,3 +448,6 @@ def _room_message_summary_from_item(item) -> RoomMessageSummary:
         agent_name=item.get("agent_name", "Unknown Agent"),
         message=item.get("message", ""),
     )
+
+
+__all__ = ["SynthesisCoordinator"]

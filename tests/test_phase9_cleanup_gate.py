@@ -285,6 +285,25 @@ def _sdk_import_files() -> set[str]:
     return files
 
 
+def _file_sdk_import_violations(path: Path) -> list[str]:
+    violations: list[str] = []
+    tree = ast.parse(path.read_text(), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names = [(alias.name, alias.name) for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            names = [(f"{node.module}.{alias.name}", node.module) for alias in node.names]
+        else:
+            continue
+        for imported_name, module in names:
+            if any(
+                module == prefix or module.startswith(f"{prefix}.")
+                for prefix in FORBIDDEN_SDK_IMPORT_PREFIXES
+            ):
+                violations.append(f"{path}:{node.lineno}: {imported_name}")
+    return violations
+
+
 def _common_import_violations() -> list[str]:
     violations: list[str] = []
     blocked_paths = _blocked_cleanup_paths(contract="common_import_boundary")
@@ -803,6 +822,19 @@ def test_a2a_task_api_has_no_sdk_confinement_blocker():
     assert "api/a2a_tasks.py" not in blocked_paths
 
 
+def test_room_runtime_has_no_sdk_confinement_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "room/compat/runtime.py" not in blocked_paths
+
+
+def test_remote_task_reader_has_no_sdk_confinement_blocker():
+    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
+
+    assert "a2a_adapter/remote_task_reader.py" not in blocked_paths
+    assert not _file_sdk_import_violations(Path("a2a_adapter/remote_task_reader.py"))
+
+
 def test_common_server_utils_has_no_sdk_confinement_blocker():
     blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
 
@@ -819,12 +851,6 @@ def test_a2a_runtime_has_no_sdk_confinement_blocker():
     blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
 
     assert "app_shell/a2a_runtime.py" not in blocked_paths
-
-
-def test_room_runtime_has_no_sdk_confinement_blocker():
-    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
-
-    assert "app_shell/room_runtime.py" not in blocked_paths
 
 
 def test_common_server_has_no_sdk_confinement_blocker():
@@ -1029,7 +1055,13 @@ def test_removed_legacy_packages_are_recorded_in_cleanup_manifest():
 
 
 def test_task_runtime_no_longer_exposes_legacy_task_center_crud():
-    source = Path("app_shell/task_service.py").read_text()
+    source = "\n".join(
+        path.read_text()
+        for path in (
+            Path("a2a_adapter/remote_task_reader.py"),
+            Path("execution/dispatch/transports/direct.py"),
+        )
+    )
     forbidden_tokens = {
         "TaskCenterRequest",
         "TaskCenterResponse",

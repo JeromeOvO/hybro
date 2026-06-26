@@ -2,7 +2,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app_shell.room_runtime import RoomServices
 from models.request import RoomCenterUserMessageRequest
 from models.room import (
     MessageContent,
@@ -10,6 +9,7 @@ from models.room import (
     RoomUserMessage,
     UserAttachment,
 )
+from room.compat.runtime import RoomServices
 
 
 @pytest.fixture

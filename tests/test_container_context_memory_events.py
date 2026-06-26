@@ -73,3 +73,4 @@ def test_validate_runtime_bindings_checks_app_state_delivery_facade():
     assert 'getattr(app.state, "delivery_facade", None)' in source
     assert 'getattr(sse_manager, "_facade", None)' not in source
     assert "sse_manager.delivery_facade" not in source
+    assert "app.state.execution_deps.hitl_manager" not in source

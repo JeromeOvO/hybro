@@ -16,10 +16,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app_shell.room_runtime import RoomServices
 from common.dto import MessageCommitted, RoomInfo
 from models.request import RoomCenterRoomSettingRequest, RoomCenterUserMessageRequest
 from models.room import MessageContent, Room, RoomUserMessage
+from room.compat.runtime import RoomServices
 
 
 @pytest.fixture
@@ -33,7 +33,7 @@ def room_center():
     rc.openai_service = MagicMock()
     rc.a2a_service = MagicMock()
     rc.delivery = MagicMock()
-    rc.task_service = MagicMock()
+    rc.remote_task_reader = MagicMock()
     return rc
 
 

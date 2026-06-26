@@ -108,7 +108,7 @@ class QueueExecutor:
         agent_lookup: RoomReader,
         room_reader: RoomReader,
         memory_reader: RoomMemoryReader,
-        debate_service: DebateServicePort,
+        debate_prompt_injector: DebateServicePort,
         rate_limit_service: RateLimitPort,
         agent_dispatcher: AgentDispatcher,
         agent_message_processor: AgentMessageProcessor,
@@ -130,7 +130,7 @@ class QueueExecutor:
         self.agent_lookup = agent_lookup
         self.room_reader = room_reader
         self.memory_reader = memory_reader
-        self.debate_service = debate_service
+        self.debate_prompt_injector = debate_prompt_injector
         self.rate_limit_service = rate_limit_service
         self.agent_dispatcher = agent_dispatcher
         self._agent_message_processor = agent_message_processor
@@ -1041,7 +1041,7 @@ class QueueExecutor:
 
             if is_debate_mode:
                 new_agent_message = (
-                    await self.debate_service.inject_short_debate_for_agent_message(
+                    await self.debate_prompt_injector.inject_short_debate_for_agent_message(
                         next_message
                     )
                 )

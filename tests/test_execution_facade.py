@@ -45,7 +45,7 @@ def _make_facade(**overrides):
         side_effect=run_message_preflight_to_room
     )
     room_message_center = SimpleNamespace(process_room_user_message=AsyncMock())
-    hitl_service = SimpleNamespace(
+    hitl_manager = SimpleNamespace(
         request_input=AsyncMock(),
         handle_response=AsyncMock(),
         get_pending_requests=AsyncMock(return_value=[]),
@@ -78,7 +78,7 @@ def _make_facade(**overrides):
     deps = {
         "room_center": room_center,
         "room_message_center": room_message_center,
-        "hitl_service": hitl_service,
+        "hitl_manager": hitl_manager,
         "run_lifecycle": run_lifecycle,
         "run_reader": run_reader,
         "cancellation_state": cancellation_state,
@@ -137,7 +137,7 @@ def test_constructor_core_dependencies_are_typed_ports():
 
     assert hints["room_center"].__name__ == "RoomCenterPort"
     assert hints["room_message_center"].__name__ == "RoomMessageCenterPort"
-    assert hints["hitl_service"].__name__ == "HITLServicePort"
+    assert hints["hitl_manager"].__name__ == "HITLServicePort"
 
 
 @pytest.mark.asyncio
@@ -181,7 +181,7 @@ async def test_execute_persists_ack_without_starting_orchestration():
 @pytest.mark.asyncio
 async def test_execute_rejects_pending_hitl_before_room_persist():
     facade, deps = _make_facade()
-    deps["hitl_service"].get_pending_requests.return_value = [SimpleNamespace()]
+    deps["hitl_manager"].get_pending_requests.return_value = [SimpleNamespace()]
     deps["room_center"].send_message_to_room.side_effect = AssertionError(
         "room persist should not be called"
     )
@@ -195,7 +195,7 @@ async def test_execute_rejects_pending_hitl_before_room_persist():
     assert ack.status_code == 409
     assert ack.should_start_orchestration is False
     assert "waiting for your input" in ack.error
-    deps["hitl_service"].get_pending_requests.assert_awaited_once_with("room-1")
+    deps["hitl_manager"].get_pending_requests.assert_awaited_once_with("room-1")
     deps["room_center"].send_message_to_room.assert_not_awaited()
     deps["run_reader"].get_run.assert_not_awaited()
     deps["run_reader"].get_runs_for_room.assert_not_awaited()
@@ -227,7 +227,7 @@ async def test_execute_rejects_active_run_before_room_persist():
     assert ack.status_code == 409
     assert ack.should_start_orchestration is False
     assert "already processing" in ack.error
-    deps["hitl_service"].get_pending_requests.assert_awaited_once_with("room-1")
+    deps["hitl_manager"].get_pending_requests.assert_awaited_once_with("room-1")
     deps["run_reader"].get_runs_for_room.assert_awaited_once_with("room-1")
     deps["room_center"].send_message_to_room.assert_not_awaited()
     deps["run_lifecycle"].record_processing_status.assert_not_awaited()
@@ -257,7 +257,7 @@ async def test_execute_continues_when_hitl_pending_lookup_fails():
             preflight_outcome="ready",
         )
 
-    deps["hitl_service"].get_pending_requests.side_effect = get_pending_requests
+    deps["hitl_manager"].get_pending_requests.side_effect = get_pending_requests
     deps["run_reader"].get_runs_for_room.side_effect = get_runs_for_room
     deps["room_center"].send_message_to_room.side_effect = send_message_to_room
 
@@ -269,7 +269,7 @@ async def test_execute_continues_when_hitl_pending_lookup_fails():
     assert ack.message_id == "msg-1"
     assert ack.should_start_orchestration is True
     assert order == ["hitl", "active_runs", "persist"]
-    deps["hitl_service"].get_pending_requests.assert_awaited_once_with("room-1")
+    deps["hitl_manager"].get_pending_requests.assert_awaited_once_with("room-1")
     deps["room_center"].send_message_to_room.assert_awaited_once()
     deps["run_reader"].get_runs_for_room.assert_awaited_once_with("room-1")
 
@@ -297,7 +297,7 @@ async def test_execute_continues_when_active_run_lookup_fails():
             preflight_outcome="ready",
         )
 
-    deps["hitl_service"].get_pending_requests.side_effect = get_pending_requests
+    deps["hitl_manager"].get_pending_requests.side_effect = get_pending_requests
     deps["run_reader"].get_runs_for_room.side_effect = get_runs_for_room
     deps["room_center"].send_message_to_room.side_effect = send_message_to_room
 
@@ -309,7 +309,7 @@ async def test_execute_continues_when_active_run_lookup_fails():
     assert ack.message_id == "msg-1"
     assert ack.should_start_orchestration is True
     assert order == ["hitl", "active_runs", "persist"]
-    deps["hitl_service"].get_pending_requests.assert_awaited_once_with("room-1")
+    deps["hitl_manager"].get_pending_requests.assert_awaited_once_with("room-1")
     deps["run_reader"].get_runs_for_room.assert_awaited_once_with("room-1")
     deps["room_center"].send_message_to_room.assert_awaited_once()
 
@@ -833,12 +833,12 @@ async def test_hitl_methods_delegate_and_translate():
         status="pending",
         display_message_id="display-msg-1",
     )
-    deps["hitl_service"].request_input.return_value = model_request
-    deps["hitl_service"].handle_response.return_value = {
+    deps["hitl_manager"].request_input.return_value = model_request
+    deps["hitl_manager"].handle_response.return_value = {
         "status": "ok",
         "request_id": "req-1",
     }
-    deps["hitl_service"].get_pending_requests.return_value = [model_request]
+    deps["hitl_manager"].get_pending_requests.return_value = [model_request]
 
     created = await facade.create_hitl_request(
         "room-1",
@@ -855,7 +855,7 @@ async def test_hitl_methods_delegate_and_translate():
     assert resolved.status == "ok"
     assert pending[0].message_id == "display-msg-1"
     assert canceled is True
-    deps["hitl_service"].cancel_request.assert_awaited_once_with(
+    deps["hitl_manager"].cancel_request.assert_awaited_once_with(
         "req-1",
         room_id="room-1",
     )

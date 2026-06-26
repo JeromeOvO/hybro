@@ -78,7 +78,7 @@ def test_constructor_requires_event_publisher():
         "agent_lookup": MagicMock(),
         "room_reader": MagicMock(),
         "memory_reader": MagicMock(),
-        "debate_service": MagicMock(),
+        "debate_prompt_injector": MagicMock(),
         "rate_limit_service": MagicMock(),
         "agent_dispatcher": MagicMock(),
         "agent_message_processor": MagicMock(),

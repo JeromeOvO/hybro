@@ -1,4 +1,4 @@
-"""Unit tests for RoomCoordinatorService.on_room_user_message_completed.
+"""Unit tests for SynthesisCoordinator.on_room_user_message_completed.
 
 .. deprecated::
     ``on_room_user_message_completed`` is deprecated in favour of
@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from common.dto import RoomMessageSummary
+from execution.orchestration.synthesis_coordinator import SynthesisCoordinator
 from llm_gateway.errors import LLMServiceNotBoundError
 from models.room import Room
 
@@ -37,16 +38,21 @@ def _make_room(debate_mode: bool = False) -> Room:
 
 @pytest.fixture
 def coordinator():
-    """Build a RoomCoordinatorService with all external dependencies mocked."""
-    from app_shell.room_coordinator_service import RoomCoordinatorService
-
-    svc = RoomCoordinatorService.__new__(RoomCoordinatorService)
-    svc._store = AsyncMock()
+    """Build a SynthesisCoordinator with all external dependencies mocked."""
+    store = AsyncMock()
+    store.get_room_by_room_id = AsyncMock(return_value=None)
+    store.get_room_user_message_by_message_id = AsyncMock(return_value=None)
+    store.get_room_agent_messages_by_related_message_id = AsyncMock(return_value=[])
+    store.get_agent_name_by_agent_id = AsyncMock(return_value=None)
+    store.add_room_agent_message = AsyncMock()
+    svc = SynthesisCoordinator(
+        message_store=store,
+        delivery=AsyncMock(),
+    )
     svc.summary_service = MagicMock()
     svc.summary_service.summarize_agent_responses_stream = MagicMock(
         return_value=_stream_text("Summary text.")
     )
-    svc.delivery = AsyncMock()
 
     # Stub _create_and_emit_summary_message so we can assert without
     # needing the full SSE/DB chain.
@@ -70,7 +76,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
     @pytest.mark.asyncio
     async def test_two_responses_debate_mode_generates_summary(self, coordinator):
         """Two trajectory entries in debate mode → debate summary generated."""
-        coordinator._store.get_room_by_room_id = AsyncMock(
+        coordinator._message_store.get_room_by_room_id = AsyncMock(
             return_value=_make_room(debate_mode=True)
         )
         coordinator.summary_service.summarize_agent_responses_stream = MagicMock(
@@ -103,7 +109,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
 
     @pytest.mark.asyncio
     async def test_uses_bound_summary_service_when_available(self, coordinator):
-        coordinator._store.get_room_by_room_id = AsyncMock(
+        coordinator._message_store.get_room_by_room_id = AsyncMock(
             return_value=_make_room(debate_mode=False)
         )
         coordinator.summary_service = MagicMock()
@@ -132,7 +138,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
 
     @pytest.mark.asyncio
     async def test_missing_summary_service_fails_fast(self, coordinator):
-        coordinator._store.get_room_by_room_id = AsyncMock(
+        coordinator._message_store.get_room_by_room_id = AsyncMock(
             return_value=_make_room(debate_mode=False)
         )
         coordinator.summary_service = None
@@ -150,7 +156,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
     @pytest.mark.asyncio
     async def test_two_responses_non_debate_mode_generates_summary(self, coordinator):
         """Two trajectory entries in non-debate mode → non_debate summary."""
-        coordinator._store.get_room_by_room_id = AsyncMock(
+        coordinator._message_store.get_room_by_room_id = AsyncMock(
             return_value=_make_room(debate_mode=False)
         )
         coordinator.summary_service.summarize_agent_responses_stream = MagicMock(
@@ -181,7 +187,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
     @pytest.mark.asyncio
     async def test_one_response_skips_summary(self, coordinator):
         """Only one trajectory entry → summary requires ≥2, so nothing emitted."""
-        coordinator._store.get_room_by_room_id = AsyncMock(
+        coordinator._message_store.get_room_by_room_id = AsyncMock(
             return_value=_make_room(debate_mode=True)
         )
 
@@ -199,10 +205,10 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
     @pytest.mark.asyncio
     async def test_db_bfs_not_called_when_trajectory_provided(self, coordinator):
         """When trajectory_responses is supplied, BFS DB read must be skipped."""
-        coordinator._store.get_room_by_room_id = AsyncMock(
+        coordinator._message_store.get_room_by_room_id = AsyncMock(
             return_value=_make_room(debate_mode=True)
         )
-        coordinator._store.get_room_agent_messages_by_related_message_id = (
+        coordinator._message_store.get_room_agent_messages_by_related_message_id = (
             AsyncMock()
         )
         coordinator.summary_service.summarize_agent_responses_stream = MagicMock(
@@ -218,16 +224,16 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
             ],
         )
 
-        coordinator._store.get_room_agent_messages_by_related_message_id.assert_not_awaited()
+        coordinator._message_store.get_room_agent_messages_by_related_message_id.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_empty_trajectory_responses_falls_back_to_db(self, coordinator):
         """Empty list is falsy → falls back to DB BFS path."""
-        coordinator._store.get_room_by_room_id = AsyncMock(
+        coordinator._message_store.get_room_by_room_id = AsyncMock(
             return_value=_make_room(debate_mode=True)
         )
         # BFS returns nothing so summary is skipped — we just verify the BFS was called.
-        coordinator._store.get_room_agent_messages_by_related_message_id = (
+        coordinator._message_store.get_room_agent_messages_by_related_message_id = (
             AsyncMock(return_value=[])
         )
 
@@ -237,7 +243,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
             trajectory_responses=[],
         )
 
-        coordinator._store.get_room_agent_messages_by_related_message_id.assert_awaited_once_with(
+        coordinator._message_store.get_room_agent_messages_by_related_message_id.assert_awaited_once_with(
             "msg-1"
         )
         coordinator._create_and_emit_summary_message.assert_not_awaited()
@@ -245,10 +251,10 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
     @pytest.mark.asyncio
     async def test_none_trajectory_responses_falls_back_to_db(self, coordinator):
         """None → falls back to DB BFS path (existing behaviour)."""
-        coordinator._store.get_room_by_room_id = AsyncMock(
+        coordinator._message_store.get_room_by_room_id = AsyncMock(
             return_value=_make_room(debate_mode=True)
         )
-        coordinator._store.get_room_agent_messages_by_related_message_id = (
+        coordinator._message_store.get_room_agent_messages_by_related_message_id = (
             AsyncMock(return_value=[])
         )
 
@@ -258,14 +264,14 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
             trajectory_responses=None,
         )
 
-        coordinator._store.get_room_agent_messages_by_related_message_id.assert_awaited_once_with(
+        coordinator._message_store.get_room_agent_messages_by_related_message_id.assert_awaited_once_with(
             "msg-1"
         )
 
     @pytest.mark.asyncio
     async def test_room_not_found_returns_early(self, coordinator):
         """If the room doesn't exist, nothing is attempted."""
-        coordinator._store.get_room_by_room_id = AsyncMock(return_value=None)
+        coordinator._message_store.get_room_by_room_id = AsyncMock(return_value=None)
 
         await coordinator.on_room_user_message_completed(
             room_id="missing-room",
@@ -282,7 +288,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
     @pytest.mark.asyncio
     async def test_summarize_returns_empty_skips_emit(self, coordinator):
         """If the LLM returns an empty summary, no message is emitted."""
-        coordinator._store.get_room_by_room_id = AsyncMock(
+        coordinator._message_store.get_room_by_room_id = AsyncMock(
             return_value=_make_room(debate_mode=True)
         )
         coordinator.summary_service.summarize_agent_responses_stream = MagicMock(
@@ -301,10 +307,11 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
         coordinator._create_and_emit_summary_message.assert_not_awaited()
 
 
-def test_room_coordinator_default_constructor_does_not_import_database_service():
-    from app_shell.room_coordinator_service import RoomCoordinatorService
+def test_synthesis_coordinator_default_constructor_does_not_import_database_service():
+    with patch(
+        "importlib.import_module",
+        side_effect=AssertionError("legacy import attempted"),
+    ):
+        svc = SynthesisCoordinator()
 
-    with patch("importlib.import_module", side_effect=AssertionError("legacy import attempted")):
-        svc = RoomCoordinatorService()
-
-    assert svc._store is not None
+    assert svc._message_store is not None

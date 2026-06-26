@@ -1106,7 +1106,7 @@ class TestHandleV2RunResultUnifiedSummary:
             patch("execution.orchestration.room_message_center.room_memory"),
             patch("execution.orchestration.room_message_center.room_supervisor_service"),
             patch("execution.orchestration.room_message_center.rate_limit_service"),
-            patch("execution.orchestration.room_message_center.debate_service"),
+            patch("execution.orchestration.room_message_center.debate_prompt_injector"),
         ):
             mock_db.get_room_user_message_by_message_id = AsyncMock(return_value=None)
             mock_db.update_room_user_message_by_message_id = AsyncMock()

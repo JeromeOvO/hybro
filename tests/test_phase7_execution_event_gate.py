@@ -88,7 +88,7 @@ def test_webhook_response_handler_binds_hitl_and_processing_status_deps():
     )
     kwargs = {kw.arg: ast.unparse(kw.value) for kw in handler_call.keywords}
 
-    assert kwargs["hitl_coordinator"] == "hitl_service"
+    assert kwargs["hitl_coordinator"] == "hitl_manager"
     assert any(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)

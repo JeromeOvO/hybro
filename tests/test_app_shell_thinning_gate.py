@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 APP_SHELL_TARGETS = {
-    "app_shell/room_runtime.py",
     "app_shell/a2a_runtime.py",
     "app_shell/repository_store.py",
 }
@@ -120,21 +119,6 @@ FORBIDDEN_MAIN_WIRING_SNIPPETS = (
 )
 
 FINAL_APP_SHELL_SHIMS = {
-    "app_shell/room_runtime.py": {
-        "max_lines": 80,
-        "required_exports": {
-            "AppShellRoomCenter",
-            "DispatchStrategy",
-            "RoomServices",
-            "_ResolvedAttachments",
-            "_human_size",
-            "build_turn_content",
-            "resolve_strategy",
-            "room_runtime",
-            "room_services",
-        },
-        "owning_module": "room.compat.runtime",
-    },
     "app_shell/a2a_runtime.py": {
         "max_lines": 60,
         "required_exports": {"A2ARuntimeConfig", "A2AService", "a2a_service"},
@@ -349,10 +333,6 @@ EXPECTED_MOVED_RUFF_IGNORES = {
     "app_shell/agent_service.py": (
         "agent/service.py",
         ["C901"],
-    ),
-    "app_shell/room_runtime.py": (
-        "room/compat/runtime.py",
-        ["C901", "UP042"],
     ),
 }
 
@@ -1726,7 +1706,7 @@ def test_context_memory_runtime_wiring_avoids_app_shell_singletons():
         for suffix in {"context_assembly_service", "memory_search_service"}
     }
     targets = [
-        Path("app_shell/room_runtime.py"),
+        Path("room/compat/runtime.py"),
         Path("execution/orchestration/room_message_center.py"),
         Path("execution/orchestration/factory.py"),
         Path("main.py"),
@@ -1754,6 +1734,108 @@ def test_context_memory_app_shell_legacy_files_are_removed():
         "ContextMemory-owned app_shell files should be deleted:\n"
         + "\n".join(present)
     )
+
+
+ROOM_EXECUTION_HITL_APP_SHELL_RUNTIME_SCAN_PATHS = (
+    "container.py",
+    "api",
+    "api_gateway",
+    "room",
+    "execution",
+    "a2a_adapter",
+)
+
+ROOM_EXECUTION_HITL_APP_SHELL_FORBIDDEN_MODULES = {
+    "app_shell.room_runtime",
+    "app_shell.hitl_service",
+    "app_shell.debate_service",
+    "app_shell.task_service",
+    "app_shell.execution_runtime",
+    "app_shell.room_coordinator_service",
+}
+
+
+def _room_execution_hitl_app_shell_runtime_scan_files(root: Path) -> list[Path]:
+    paths: list[Path] = []
+    for scan_path in ROOM_EXECUTION_HITL_APP_SHELL_RUNTIME_SCAN_PATHS:
+        base = root / scan_path
+        if base.is_file():
+            paths.append(base)
+        else:
+            paths.extend(path for path in sorted(base.rglob("*.py")) if path.is_file())
+    return paths
+
+
+def _room_execution_hitl_app_shell_forbidden_import_violations(
+    path: Path,
+    root: Path,
+    forbidden_modules: set[str],
+) -> list[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    rel = path.relative_to(root).as_posix()
+    violations: list[str] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            violations.extend(
+                f"{rel}:{node.lineno}: {alias.name}"
+                for alias in node.names
+                if alias.name in forbidden_modules
+            )
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            if node.module in forbidden_modules:
+                violations.append(f"{rel}:{node.lineno}: {node.module}")
+            if node.module == "app_shell":
+                violations.extend(
+                    f"{rel}:{node.lineno}: app_shell.{alias.name}"
+                    for alias in node.names
+                    if f"app_shell.{alias.name}" in forbidden_modules
+                )
+
+    return violations
+
+
+def test_room_execution_hitl_app_shell_runtime_paths_are_not_production_dependencies():
+    root = Path(__file__).resolve().parents[1]
+
+    violations: list[str] = []
+    for path in _room_execution_hitl_app_shell_runtime_scan_files(root):
+        violations.extend(
+            _room_execution_hitl_app_shell_forbidden_import_violations(
+                path,
+                root,
+                ROOM_EXECUTION_HITL_APP_SHELL_FORBIDDEN_MODULES,
+            )
+        )
+
+    assert violations == []
+
+
+def test_room_execution_hitl_app_shell_runtime_gate_flags_package_imports(tmp_path):
+    path = tmp_path / "bad.py"
+    path.write_text("from app_shell import " + "task_service\n")
+    violations = _room_execution_hitl_app_shell_forbidden_import_violations(
+        path,
+        tmp_path,
+        {"app_shell.task_service"},
+    )
+
+    assert violations == ["bad.py:1: app_shell.task_service"]
+
+
+def test_room_execution_hitl_app_shell_runtime_files_are_removed():
+    removed_paths = {
+        "app_shell/room_runtime.py",
+        "app_shell/hitl_service.py",
+        "app_shell/debate_service.py",
+        "app_shell/task_service.py",
+        "app_shell/execution_runtime.py",
+        "app_shell/room_coordinator_service.py",
+    }
+
+    existing = sorted(path for path in removed_paths if Path(path).exists())
+
+    assert existing == []
 
 
 def _context_memory_legacy_import_violations(path: Path) -> list[str]:

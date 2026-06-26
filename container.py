@@ -216,11 +216,6 @@ def validate_runtime_bindings(
     if getattr(app.state, "delivery_facade", None) is None:
         errors.append("app.state.delivery_facade")
 
-    from app_shell.hitl_service import hitl_service
-
-    if getattr(hitl_service, "_service", None) is None:
-        errors.append("hitl_service")
-
     if getattr(app.state, "execution_deps", None) is None:
         errors.append("app.state.execution_deps")
 
@@ -281,6 +276,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         if await mongo_dal.ping():
             from a2a_adapter import AgentCardResolverImpl, AgentTransportImpl
             from a2a_adapter import artifact_storage as a2a_artifact_storage
+            from a2a_adapter.remote_task_reader import RemoteTaskReader
             from agent.capability_issue import (
                 CapabilityIssueExclusionReader,
             )
@@ -295,10 +291,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.route_adapter import AgentRouteAdapter
             from agent.selection_service import AgentSelectionService
             from agent.service import AgentService
-            from app_shell.debate_service import debate_service
-            from app_shell.room_coordinator_service import room_coordinator_service
             from app_shell.room_membership_source import LegacyRoomMembershipSeedSource
-            from app_shell.task_service import task_service
             from common.utils.a2a_helpers import bind_a2a_artifact_storage
             from context_memory.compat.runtime import (
                 ContextMemoryChatAdapter,
@@ -306,9 +299,15 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ContextMemoryRouteCenter,
             )
             from context_memory.config import ContextMemoryLLMConfig
+            from execution.orchestration.debate_prompt_injector import (
+                DebatePromptInjector,
+            )
             from execution.orchestration.room_supervisor_service import (
                 SupervisorPlanningError,
                 room_supervisor_service,
+            )
+            from execution.orchestration.synthesis_coordinator import (
+                SynthesisCoordinator,
             )
             from llm_gateway import LLMGatewayImpl, ModelRegistryImpl
             from llm_gateway.config import LLMGatewayConfig
@@ -330,11 +329,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from platform_module.adapters import RateLimitCollectionAdapter
             from platform_module.rate_limit import PlatformAgentRateLimiter
             from room.compat.runtime import (
-                AppShellRoomCenter,
                 build_turn_content,
                 room_runtime,
                 room_services,
             )
+            from room.route_adapter import RoomRouteAdapter
 
             object_storage = create_object_storage_dal()
             platform_object_storage = PlatformObjectStorage(
@@ -358,7 +357,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             api_key_store = create_api_key_store(mongo=mongo_dal)
             bind_api_key_authenticator(MongoAPIKeyAuthenticator(api_key_store))
             vector_dal = create_vector_dal()
-            route_room_center = AppShellRoomCenter()
+            route_room_center = RoomRouteAdapter()
+            debate_prompt_injector = DebatePromptInjector()
+            synthesis_coordinator = SynthesisCoordinator()
+            remote_task_reader = RemoteTaskReader()
             route_repository_provider = AppShellDALViewSetRepositoryProvider(
                 mongo=mongo_dal
             )
@@ -395,11 +397,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 a2a_service,
             )
             from a2a_adapter.task_status import coerce_task_state
-            from app_shell.hitl_service import (
-                bind_hitl_service,
-                create_hitl_service,
-                hitl_service,
-            )
+            from execution.hitl.factory import create_hitl_service
 
             agent_capability_issue_repository = create_agent_capability_issue_repository(
                 mongo_dal
@@ -499,7 +497,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             room_supervisor_service.bind_supervisor_service(supervisor_llm_service)
             room_runtime.bind_message_parser_service(message_parser_llm_service)
             room_runtime.bind_debate_rounds(runtime.settings.debate_rounds)
-            room_coordinator_service.bind_summary_service(summary_llm_service)
+            synthesis_coordinator.bind_summary_service(summary_llm_service)
             agent_card_resolver = AgentCardResolverImpl()
             _agent_deps = create_agent_deps(
                 mongo=mongo_dal,
@@ -848,7 +846,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
             )
             execution_coordinator = SimpleNamespace(
-                emit_synthesis_message=room_coordinator_service.emit_synthesis_message,
+                emit_synthesis_message=synthesis_coordinator.emit_synthesis_message,
             )
 
             async def execution_inquiry_agent_messages_by_related_message_id(
@@ -884,14 +882,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     a2a_service.has_push_notification_capability
                 ),
             )
-            execution_remote_task_reader = SimpleNamespace(
-                get_task_from_agent=task_service.get_task_from_agent,
-            )
+            execution_remote_task_reader = remote_task_reader
 
             membership_source.bind_store(agent_room_store)
-            debate_service.bind_store(debate_message_store)
-            room_coordinator_service.bind_store(room_coordinator_message_store)
-            room_coordinator_service.bind_delivery(execution_delivery)
+            debate_prompt_injector.bind_store(debate_message_store)
+            synthesis_coordinator.bind_store(room_coordinator_message_store)
+            synthesis_coordinator.bind_delivery(execution_delivery)
             bind_notification_store(task_notification_store)
             bind_task_notification_runtime(
                 task_notifier=task_notifier,
@@ -910,22 +906,20 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             app.state.execution_client_request_id_resolver = (
                 app_shell_client_request_id_resolver
             )
-            bind_hitl_service(
-                create_hitl_service(
-                    persistence=hitl_runtime_store,
-                    delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
-                    agent_reply=A2AHITLContinuationAdapter(
-                        a2a_service,
-                        lambda: execution_room_message_center,
-                    ),
-                    continuation=A2AHITLContinuationAdapter(
-                        a2a_service,
-                        lambda: execution_room_message_center,
-                    ),
-                    task_notifications=HITLTaskNotificationAdapter(
-                        notify_task_update_with_string_state
-                    ),
-                )
+            hitl_manager = create_hitl_service(
+                persistence=hitl_runtime_store,
+                delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
+                agent_reply=A2AHITLContinuationAdapter(
+                    a2a_service,
+                    lambda: execution_room_message_center,
+                ),
+                continuation=A2AHITLContinuationAdapter(
+                    a2a_service,
+                    lambda: execution_room_message_center,
+                ),
+                task_notifications=HITLTaskNotificationAdapter(
+                    notify_task_update_with_string_state
+                ),
             )
             route_room_reader = SimpleNamespace(
                 get_room_by_room_id=agent_room_store.get_room_by_room_id,
@@ -951,7 +945,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_selection_service=agent_selection_service,
                 a2a_service=a2a_service,
                 delivery=execution_delivery,
-                task_service=task_service,
+                remote_task_reader=remote_task_reader,
             )
             room_runtime.bind_facade(_room_facade)
             room_runtime.bind_message_event_publisher(_delivery_deps.event_publisher)
@@ -1007,10 +1001,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 a2a_transport=execution_a2a_transport,
                 remote_task_reader=execution_remote_task_reader,
                 room_memory=execution_room_memory,
-                debate_service=debate_service,
+                debate_prompt_injector=debate_prompt_injector,
                 rate_limit_service=agent_rate_limiter,
                 room_supervisor_service=room_supervisor_service,
-                hitl_coordinator=hitl_service,
+                hitl_coordinator=hitl_manager,
                 task_notifications=TaskNotificationAdapter(
                     notify_task_update_with_string_state
                 ),
@@ -1040,7 +1034,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     hitl_reader=hitl_store,
                     delivery=execution_delivery,
                     room_message_center=execution_room_message_center,
-                    hitl_coordinator=hitl_service,
+                    hitl_coordinator=hitl_manager,
                     task_notifier=task_notifier,
                     task_notification_impl=_notify_task_update_impl,
                 )
@@ -1056,12 +1050,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             execution_facade = create_execution_facade(
                 room_center=route_room_center,
                 room_message_center=execution_room_message_center,
-                hitl_service=hitl_service,
+                hitl_manager=hitl_manager,
                 run_lifecycle=run_lifecycle,
                 run_reader=RunQueryAdapter(_execution_repos["run_repository"]),
                 cancellation_state=CancellationStateC3Adapter(execution_delivery),
                 cancellation_store=MongoCancellationStoreAdapter(task_store),
-                hitl_message_cancellation=HITLMessageCancellationAdapter(hitl_service),
+                hitl_message_cancellation=HITLMessageCancellationAdapter(hitl_manager),
                 agent_task_cleanup=AgentTaskCleanupAdapter(
                     message_task_store=message_store,
                     get_agent_card_from_url=a2a_service.get_agent_card_from_url,
@@ -1267,8 +1261,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             stale_task_checker.set_hitl_deps(
                 StaleHITLDeps(
-                    recover_stale_processing=hitl_service.recover_stale_processing,
-                    cancel_requests_for_message=hitl_service.cancel_requests_for_message,
+                    recover_stale_processing=hitl_manager.recover_stale_processing,
+                    cancel_requests_for_message=hitl_manager.cancel_requests_for_message,
                 )
             )
             stale_task_checker.set_run_watchdog_event_deps(
@@ -1320,7 +1314,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         await orphaned_upload_cleaner.start()
 
         # Initialize relay service
-        from app_shell.execution_runtime import get_bound_room_message_center
         from execution.facade import hub_agent_response_internal_to_agent_event
         from hub_runtime_bridge.adapters.legacy_failure import (
             RelayOfflineFailureAdapter,
@@ -1333,7 +1326,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         from hub_runtime_bridge.config import config_from_settings
         from hub_runtime_bridge.repository.mongo import HubMongoRepository
 
-        _rmc = get_bound_room_message_center()
+        _rmc = execution_room_message_center
         bind_redis_runtime_to_room(
             _rmc,
             redis_runtime=_redis_runtime,
@@ -1348,7 +1341,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             mongo=relay_hub_store,
             db=relay_runtime_store,
             room_message_center=_rmc,
-            hitl_coordinator=hitl_service,
+            hitl_coordinator=hitl_manager,
             event_publisher=_delivery_deps.event_publisher if _delivery_deps else None,
             worker_id=(
                 _delivery_facade.instance_id if _delivery_facade is not None else None

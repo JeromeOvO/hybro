@@ -1007,11 +1007,11 @@ def test_agent_center_route_protocol_excludes_legacy_internal_methods():
 def test_route_bound_compatibility_adapters_satisfy_protocols():
     from agent.protocols import AgentCenterCompatibility
     from agent.route_adapter import AgentRouteAdapter
-    from app_shell.room_runtime import AppShellRoomCenter
     from room.protocols import RoomCenterCompatibility
+    from room.route_adapter import RoomRouteAdapter
 
     assert isinstance(AgentRouteAdapter(service=object()), AgentCenterCompatibility)
-    assert isinstance(AppShellRoomCenter(), RoomCenterCompatibility)
+    assert isinstance(RoomRouteAdapter(), RoomCenterCompatibility)
 
 
 def test_agent_route_adapter_accepts_service():
