@@ -83,7 +83,7 @@ from room.compat.unbound import (
     UNBOUND_A2A_SERVICE,
     UNBOUND_AGENT_SELECTION_SERVICE,
     UNBOUND_AGENT_SERVICE,
-    UNBOUND_DELIVERY_MANAGER,
+    UNBOUND_DELIVERY,
     UNBOUND_RUNTIME_STORE,
     UNBOUND_TASK_SERVICE,
 )
@@ -136,7 +136,7 @@ class RoomServices:
         self.message_parser_service = None
         self.debate_rounds = debate_rounds
         self.a2a_service = UNBOUND_A2A_SERVICE
-        self.sse_manager = UNBOUND_DELIVERY_MANAGER
+        self.delivery = UNBOUND_DELIVERY
         self.task_service = UNBOUND_TASK_SERVICE
         self._object_storage = None
         self._s3_service = None
@@ -166,13 +166,13 @@ class RoomServices:
         agent_service,
         agent_selection_service,
         a2a_service,
-        sse_manager,
+        delivery,
         task_service,
     ) -> None:
         self.agent_service = agent_service
         self.agent_selection_service = agent_selection_service
         self.a2a_service = a2a_service
-        self.sse_manager = sse_manager
+        self.delivery = delivery
         self.task_service = task_service
 
     @property
@@ -1631,7 +1631,7 @@ class RoomServices:
                 "RoomServices: Message parsing cancelled (supervisor) for %s",
                 user_message.message_id,
             )
-            self.sse_manager.clear_cancellation(user_message.message_id)
+            self.delivery.clear_cancellation(user_message.message_id)
             return ParseResult(success=False, canceled=True)
 
         agent_registry = self._build_agent_registry(agents, selected_agent_set)
@@ -1867,7 +1867,7 @@ class RoomServices:
                 "RoomServices: Message parsing cancelled for %s, stopping all processing",
                 user_message_id,
             )
-            self.sse_manager.clear_cancellation(user_message_id)
+            self.delivery.clear_cancellation(user_message_id)
             return ParseResult(success=False, canceled=True)
 
         # Direct chat: single agent + no debate = skip LLM parsing entirely
@@ -2062,7 +2062,7 @@ class RoomServices:
         # (and later the queue step in RoomMessageCenter) can detect cancels
         # via the token.  If the user already hit cancel before we got here,
         # the token is pre-signalled.
-        token = self.sse_manager.create_token(user_message.message_id)
+        token = self.delivery.create_token(user_message.message_id)
 
         return (
             RoomCenterUserMessageResponse(

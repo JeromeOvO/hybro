@@ -68,7 +68,7 @@ class APIGatewayDeps:
     agent_selection_service: AgentSuggestionService
     execution_engine: ExecutionEngine
     sse_store: SSEStateReader
-    sse_manager: SSERouteTransport
+    sse_transport: SSERouteTransport
     webhook_receiver: WebhookReceiver
     repository_provider: ViewSetRepositoryProvider
     embedding_provider: EmbeddingServiceProtocol
@@ -260,10 +260,10 @@ def get_sse_store(
     return deps.sse_store
 
 
-def get_sse_manager(
+def get_sse_transport(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
 ) -> SSERouteTransport:
-    return deps.sse_manager
+    return deps.sse_transport
 
 
 def get_webhook_receiver(

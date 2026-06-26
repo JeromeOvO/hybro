@@ -122,10 +122,10 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 | 6 | **Room** | Room CRUD, membership, raw message persistence, message graph | `room/`, with `room/compat/runtime.py` as runtime compatibility owner and `app_shell/room_runtime.py` as shim |
 | 7 | **Context & Memory** | Context assembly, compaction, search, user memory, ~~chat contexts~~ (legacy; source removed in Phase 0d/8) | `context_memory/`, with app-shell memory/context shims for compatibility |
 | 8 | **Execution** | Run lifecycle, supervisor, debate, HITL, dispatch (NOT workflow) | `execution/`, `app_shell/hitl_service.py` |
-| 9 | **Delivery** | SSE connections, event broker, dedup, domain→frontend event translation | `app_shell/delivery_runtime.py`, `delivery/` |
+| 9 | **Delivery** | SSE connections, event broker, dedup, domain→frontend event translation | `delivery/` |
 | 10 | **Platform** | Gateway API, rate limiting, file storage | `platform_module/`, `api/gateway.py`, `api/discovery.py`, `api/files.py` |
-| 11 | **HubRuntimeBridge** | Hub connection, relay, liveness, offline queue, agent sync | `hub_runtime_bridge/`, `api/relay.py`, `api/hub.py`, `app_shell/relay_service.py` shim |
-| 12 | **Jobs** | Background tasks with leader election | `jobs/`, app-shell Redis runtime |
+| 11 | **HubRuntimeBridge** | Hub connection, relay, liveness, offline queue, agent sync | `hub_runtime_bridge/`, `api/relay.py`, `api/hub.py`, `hub_runtime_bridge/compat/relay_service.py` |
+| 12 | **Jobs** | Background tasks with leader election | `jobs/`, DAL Redis runtime |
 
 > **NOTE (Workflow decommission)**: The legacy `base_tasks` / `meta_tasks` / `task_sessions` data model
 > (from the first version of chat room) is **deleted** in this refactor, NOT wrapped. The endpoints
@@ -166,8 +166,8 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 
 > **Goal 7 acceptance state (2026-06-23):** The modular decoupling design is
 > accepted. The remaining app-shell focus files `room_runtime.py`,
-> `a2a_runtime.py`, `relay_service.py`, and `repository_store.py` are
-> import-compatible shims only. Runtime behavior lives in
+> `a2a_runtime.py`, and `repository_store.py` are import-compatible shims only.
+> Relay compatibility is owned directly by HubRuntimeBridge. Runtime behavior lives in
 > `room.compat.runtime`, `a2a_adapter.runtime_service`,
 > `hub_runtime_bridge.compat.relay_service`,
 > `context_memory.compat.context_assembly`, and `dal.runtime_store`.
@@ -811,8 +811,10 @@ DeliveryEvent = Annotated[
   and Redis fan-out envelopes use top-level `envelope["trace_id"]`.
 
 **Final Delivery/SSE seam:**
-- `app_shell/delivery_runtime.py` is now the C3 migration adapter. Startup binds
-  it to `DeliveryFacade`; before binding, public methods fail fast.
+- `DeliveryFacade` directly owns Delivery startup, SSE transport, event broker,
+  deduplication, and domain-to-wire translation. API/SSE wiring passes the facade
+  as `sse_transport=_delivery_facade` or resolves it through route dependency
+  injection; there is no app-shell Delivery runtime adapter lifecycle.
 - Backend modules emit typed `DeliveryEvent` DTOs. Delivery translates every frontend-visible
   event into the room SSE frame shape `{type, timestamp, room_id, data}`.
 - `delivery.translator` is the only DTO-to-wire translation point. Backend-internal
@@ -1680,7 +1682,6 @@ async def lifespan(app: FastAPI):
     # cancellation watcher readiness first, then Redis Pub/Sub subscriptions/health,
     # then EventPublisher's handler lifecycle hook.
     await delivery_facade.start()
-    sse_manager.bind_facade(delivery_facade)  # C3 adapter binding
     app.state.delivery_facade = delivery_facade
 
     # === Phase 3: HubRuntimeBridge background ===
@@ -1693,12 +1694,11 @@ async def lifespan(app: FastAPI):
     # Cancel tracked background orchestration tasks before Delivery/SSE drain so
     # cancellation lifecycle/status frames can still be emitted.
     await container.execution.execution_engine.cancel_inflight_tasks()
-    sse_manager.set_draining(True)
+    delivery_facade.set_draining(True)
     await asyncio.sleep(delivery_config.shutdown_drain_seconds)
     await scheduler.stop()
     await container.hub.hub_management.stop()
     await delivery_facade.stop()  # closes SSE connections, unsubscribes rooms, stops bus/watcher
-    sse_manager.unbind_facade()
     await container.dal.mongo.close()
     # Redis pools are Optional (None in single-worker no-redis mode)
     if container.dal.redis_kv:
@@ -1713,14 +1713,16 @@ Phase 6 implementation detail: the current repository does not yet have a single
 `DALContainer`; `container.py` exposes focused helpers instead:
 `create_mongo_dal()`, `create_vector_dal()`, `create_delivery_config()`,
 `create_delivery_redis_clients()`, `create_delivery_cancellation_collection()`,
-`create_delivery_facade()`, and `create_delivery_deps()`. `main.py` calls these helpers and
-does not import concrete `delivery.*`, `dal.*`, or legacy SSE `RedisBroker` implementations.
+`create_delivery_facade()`, and `create_delivery_deps()`. `container._runtime_lifespan()`
+and `startup_runtime()` construct Delivery through these container helpers and do not import
+concrete `delivery.*`, `dal.*`, or legacy SSE `RedisBroker` implementations.
 
 Health and multi-worker safety now use explicit fields:
-`delivery_pubsub_connected`, `delivery_kv_connected`, `legacy_redis_service_connected`,
+`delivery_pubsub_connected`, `delivery_kv_connected`, `redis_runtime_connected`,
 `relay_streams_available`, `change_stream_connected`, and `redis_expected`. Deprecated
-aliases (`broker_connected`, `broker_expected`, `redis_service_connected`) remain in
-`/health` for backend compatibility.
+aliases (`broker_connected`, `broker_expected`, `redis_service_connected`,
+`legacy_redis_service_connected`) remain in `/health` for backend compatibility
+and derive from canonical runtime fields.
 
 ### 6.2 Sub-Container Design
 
@@ -2241,7 +2243,8 @@ focused capability/tested service rather than a provider-named app-shell facade.
 - Deduplication (TTLCache per terminal status)
 - `register_internal_handler()` + `emit_internal()` for internal events
 - **No business logic** — verify by asserting no business module imports in delivery/
-- `app_shell/delivery_runtime.py` is a fail-fast C3 adapter bound to `DeliveryFacade` during startup.
+- `DeliveryFacade` is the direct runtime owner for Delivery. API/SSE wiring passes
+  `sse_transport=_delivery_facade` or obtains the facade through route dependencies.
 - `main.py` constructs Delivery through `container.py` helpers and does not import concrete `delivery.*`, concrete `dal.*`, or legacy SSE `RedisBroker`.
 - Old `sse_manager.send_processing_status()` is transport-only: no `record_processing_status()`, no `run_event_sse_enabled()`, no DB fallback.
 - At this point, the historical record-inside-send path is gone: callers already
@@ -2353,8 +2356,8 @@ class AgentService:
 | **Legacy Workflow** (DECOMMISSIONED — see Phase 0d) | | | |
 | Task decomposition / assignment / execution / CRUD | old workflow/task API surface | DELETED | Endpoints removed; collections dropped in Phase 8 cleanup |
 | **Delivery** | | | |
-| SSE broadcasting | `app_shell/delivery_runtime.py` | Delivery | `sse/manager.py` |
-| SSE connections | `app_shell/delivery_runtime.py` | Delivery | `sse/connection.py` |
+| SSE broadcasting | `delivery/` | Delivery | `sse/manager.py` |
+| SSE connections | `delivery/` | Delivery | `sse/connection.py` |
 | Event dedup | `delivery/` | Delivery | `sse/deduplication.py` |
 | Cross-instance pub/sub | `delivery/` | Delivery | `event_bus/cross_instance.py` |
 | Cancellation watcher | `delivery/` | Delivery | `sse/cancellation_watcher.py` |
@@ -2367,14 +2370,14 @@ class AgentService:
 | Agent avatar uploads | `platform_module/agent_avatar.py` | Platform over DAL | `api/agent.py` avatar route |
 | Object storage compatibility | `platform_module/object_storage.py` | Platform over DAL | `object_storage.py` |
 | **HubRuntimeBridge** | | | |
-| Hub relay | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_relay.py` |
-| Hub liveness | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_liveness.py` |
+| Hub relay | `hub_runtime_bridge/compat/relay_service.py` | HubRuntimeBridge | `service/hub_relay.py` |
+| Hub liveness | `hub_runtime_bridge/compat/relay_service.py` | HubRuntimeBridge | `service/hub_liveness.py` |
 | Hub connection | `api/hub.py` | HubRuntimeBridge | `service/hub_connection.py` |
-| Hub route lifecycle compatibility | `app_shell/relay_service.py` shim | HubRuntimeBridge | `adapters/legacy_lifecycle.py` |
+| Hub route lifecycle compatibility | `hub_runtime_bridge/compat/relay_service.py` | HubRuntimeBridge | `adapters/legacy_lifecycle.py` |
 | Hub publish intake | `hub_runtime_bridge/service/hub_publish.py` | HubRuntimeBridge | `service/hub_publish.py` |
 | Offline queue | `hub_runtime_bridge/` | HubRuntimeBridge | `transport/offline_queue.py` |
-| Redis Streams relay | `app_shell/redis_runtime.py` | HubRuntimeBridge | `transport/relay_transport.py` |
-| Hub agent sync | `app_shell/relay_service.py` | HubRuntimeBridge -> Agent | via `AgentRegistryWriter` |
+| Redis Streams relay | `hub_runtime_bridge/transport/relay_streams.py` plus DAL Redis clients | HubRuntimeBridge | `transport/relay_transport.py` |
+| Hub agent sync | `hub_runtime_bridge/compat/relay_service.py` | HubRuntimeBridge -> Agent | via `AgentRegistryWriter` |
 | **LLM Gateway** | | | |
 | OpenAI SDK calls | deleted app-shell facade | LLM Gateway | `providers/openai_provider.py` |
 | Gemini SDK calls | deleted app-shell facade | LLM Gateway | `providers/gemini_provider.py` |
@@ -2389,12 +2392,12 @@ class AgentService:
 | Push notification auth | `common/utils/push_notification_auth.py` | A2A Adapter | `push_notification.py` |
 | **DAL** | | | |
 | MongoDB client | `database/mongodb.py` | DAL | `mongo/client.py` |
-| Redis KV | `app_shell/redis_runtime.py` | DAL | `redis/kv.py` |
+| Redis KV | `dal/redis/kv.py` | DAL | `redis/kv.py` |
 | Redis Pub/Sub | `delivery/` | DAL | `redis/pubsub.py` |
-| Redis Streams | `app_shell/redis_runtime.py` | DAL | `redis/streams.py` |
+| Redis Streams | `dal/redis/streams.py` | DAL | `redis/streams.py` |
 | Pinecone | `database/pinecone_db.py` | DAL | `pinecone/client.py` |
 | S3 SDK calls | `app_shell/s3_service.py` shim | DAL | `s3/client.py` |
-| Leader election | `app_shell/redis_runtime.py` | DAL | `redis/leader.py` |
+| Leader election | `dal/redis/lock.py` | DAL | `redis/leader.py` |
 | **Jobs** | | | |
 | Health check | `jobs/agent_health_service.py` | Jobs | `agent_health_job.py` |
 | Compaction sweep | `jobs/compaction_sweep.py` | Jobs | `compaction_sweep_job.py` |

@@ -5,7 +5,7 @@ from typing import Any
 from common.protocols import AgentRepository, HubRepository, MongoDAL
 
 
-class AppShellRelayHubStore:
+class RelayHubStore:
     """Relay compatibility store backed by DAL repositories."""
 
     def __init__(

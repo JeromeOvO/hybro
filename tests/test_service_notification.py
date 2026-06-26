@@ -1,5 +1,5 @@
 """
-Unit tests for NotificationService (notification_service.py).
+Unit tests for TaskUpdateNotifier (task_notifier.py).
 
 Tests cover:
 - send_task_update: event formatting and SSE delegation
@@ -11,16 +11,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app_shell.notification_service import NotificationService
+from delivery.task_notifier import TaskUpdateNotifier
 
 
 @pytest.fixture
-def notif_svc():
-    """Create NotificationService with mocked SSE manager."""
-    svc = object.__new__(NotificationService)
-    svc.sse_manager = MagicMock()
-    svc.sse_manager.send_task_update = AsyncMock()
-    return svc
+def task_notifier():
+    """Create TaskUpdateNotifier with mocked delivery facade."""
+    delivery = MagicMock()
+    delivery.send_task_update = AsyncMock()
+    return TaskUpdateNotifier(delivery)
 
 
 # =============================================================================
@@ -32,8 +31,8 @@ class TestSendTaskUpdate:
     """Tests for task update notification formatting and dispatch."""
 
     @pytest.mark.asyncio
-    async def test_sends_update_with_all_fields(self, notif_svc):
-        await notif_svc.send_task_update(
+    async def test_sends_update_with_all_fields(self, task_notifier):
+        await task_notifier.send_task_update(
             room_id="room-1",
             message_id="msg-1",
             status="completed",
@@ -42,8 +41,8 @@ class TestSendTaskUpdate:
             content="Result content",
         )
 
-        notif_svc.sse_manager.send_task_update.assert_called_once()
-        kwargs = notif_svc.sse_manager.send_task_update.call_args.kwargs
+        task_notifier.delivery.send_task_update.assert_called_once()
+        kwargs = task_notifier.delivery.send_task_update.call_args.kwargs
         assert kwargs["room_id"] == "room-1"
         assert kwargs["message_id"] == "msg-1"
         assert kwargs["status"] == "completed"
@@ -51,46 +50,46 @@ class TestSendTaskUpdate:
         assert kwargs["content"] == "Result content"
 
     @pytest.mark.asyncio
-    async def test_skips_when_message_id_is_none(self, notif_svc):
-        await notif_svc.send_task_update(
+    async def test_skips_when_message_id_is_none(self, task_notifier):
+        await task_notifier.send_task_update(
             room_id="room-1",
             message_id=None,
             status="working",
         )
-        notif_svc.sse_manager.send_task_update.assert_not_called()
+        task_notifier.delivery.send_task_update.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_skips_when_message_id_is_empty(self, notif_svc):
-        await notif_svc.send_task_update(
+    async def test_skips_when_message_id_is_empty(self, task_notifier):
+        await task_notifier.send_task_update(
             room_id="room-1",
             message_id="",
             status="working",
         )
-        notif_svc.sse_manager.send_task_update.assert_not_called()
+        task_notifier.delivery.send_task_update.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_resolves_name_from_agent_card(self, notif_svc):
+    async def test_resolves_name_from_agent_card(self, task_notifier):
         """When agent_name is None but agent_card is provided, use card name."""
         mock_card = MagicMock()
         mock_card.name = "CardAgent"
 
-        await notif_svc.send_task_update(
+        await task_notifier.send_task_update(
             room_id="room-1",
             message_id="msg-1",
             status="working",
             agent_card=mock_card,
         )
 
-        kwargs = notif_svc.sse_manager.send_task_update.call_args.kwargs
+        kwargs = task_notifier.delivery.send_task_update.call_args.kwargs
         assert kwargs["agent_name"] == "CardAgent"
 
     @pytest.mark.asyncio
-    async def test_explicit_name_overrides_card(self, notif_svc):
+    async def test_explicit_name_overrides_card(self, task_notifier):
         """agent_name takes priority over agent_card.name."""
         mock_card = MagicMock()
         mock_card.name = "CardAgent"
 
-        await notif_svc.send_task_update(
+        await task_notifier.send_task_update(
             room_id="room-1",
             message_id="msg-1",
             status="working",
@@ -98,12 +97,12 @@ class TestSendTaskUpdate:
             agent_card=mock_card,
         )
 
-        kwargs = notif_svc.sse_manager.send_task_update.call_args.kwargs
+        kwargs = task_notifier.delivery.send_task_update.call_args.kwargs
         assert kwargs["agent_name"] == "ExplicitName"
 
     @pytest.mark.asyncio
-    async def test_passes_optional_fields(self, notif_svc):
-        await notif_svc.send_task_update(
+    async def test_passes_optional_fields(self, task_notifier):
+        await task_notifier.send_task_update(
             room_id="room-1",
             message_id="msg-1",
             status="working",
@@ -113,7 +112,7 @@ class TestSendTaskUpdate:
             related_message_id="related-1",
         )
 
-        kwargs = notif_svc.sse_manager.send_task_update.call_args.kwargs
+        kwargs = task_notifier.delivery.send_task_update.call_args.kwargs
         assert kwargs["step_number"] == 2
         assert kwargs["total_steps"] == 5
         assert kwargs["task_content"] == "Summarize document"

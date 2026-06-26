@@ -45,8 +45,8 @@ def room_center():
     rc.agent_service = MagicMock()
     rc.openai_service = MagicMock()
     rc.a2a_service = MagicMock()
-    rc.sse_manager = MagicMock()
-    rc.sse_manager.send_processing_status = AsyncMock()
+    rc.delivery = MagicMock()
+    rc.delivery.send_processing_status = AsyncMock()
     rc.task_service = MagicMock()
     return rc
 
@@ -365,7 +365,7 @@ class TestLegacyInlineMentionBehavior:
         room_center._materialize_room_quote = AsyncMock(return_value=None)
         room_center._persist_user_message = AsyncMock(return_value=True)
         room_center._initialize_room_memory = AsyncMock(return_value=None)
-        room_center.sse_manager.create_token = MagicMock(return_value=None)
+        room_center.delivery.create_token = MagicMock(return_value=None)
         handle_mentions = AsyncMock()
         prepare_supervisor = AsyncMock(return_value=ParseResult(success=True))
         room_center._handle_mentions_flow = handle_mentions
@@ -492,7 +492,7 @@ class TestLegacyInlineMentionBehavior:
         room_center._materialize_room_quote = AsyncMock(return_value=None)
         room_center._persist_user_message = AsyncMock(return_value=True)
         room_center._initialize_room_memory = AsyncMock(return_value=None)
-        room_center.sse_manager.create_token = MagicMock(return_value=None)
+        room_center.delivery.create_token = MagicMock(return_value=None)
         handle_mentions = AsyncMock()
         prepare_clarify = AsyncMock(return_value=True)
         prepare_supervisor = AsyncMock(return_value=ParseResult(success=True))
@@ -624,7 +624,7 @@ class TestAllAgentsPostPersistMessageId:
         room_center._materialize_room_quote = AsyncMock(return_value=None)
         room_center._persist_user_message = AsyncMock(return_value=True)
         room_center._initialize_room_memory = AsyncMock(return_value=None)
-        room_center.sse_manager.create_token = MagicMock()
+        room_center.delivery.create_token = MagicMock()
 
         # Make _resolve_explicit_target_scope return an error (simulating selector failure)
         error_response = RoomCenterUserMessageResponse(
@@ -679,7 +679,7 @@ class TestClientRequestIdPropagation:
         room_center._materialize_room_quote = AsyncMock(return_value=None)
         room_center._persist_user_message = AsyncMock(return_value=True)
         room_center._initialize_room_memory = AsyncMock(return_value=None)
-        room_center.sse_manager.create_token = MagicMock()
+        room_center.delivery.create_token = MagicMock()
 
         # Make scope resolution return an error so the function returns early.
         error_response = RoomCenterUserMessageResponse(

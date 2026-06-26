@@ -77,7 +77,7 @@ agent_resolver_service = None
 default_store = _UnboundRoomMessageCenterStore()
 debate_service = None
 room_memory = None
-notification_service = None
+task_notifier = None
 rate_limit_service = None
 coordinator = None
 summary_service = None
@@ -146,7 +146,7 @@ class RoomMessageCenter:
         hitl_reader: HITLReaderPort,
         delivery: ExecutionDeliveryPort,
         coordinator: CoordinatorSynthesisPort,
-        notification_service: NotificationServicePort,
+        task_notifier: NotificationServicePort,
         agent_resolver_service,
         a2a_transport: A2ATransportPort,
         remote_task_reader: RemoteTaskReaderPort,
@@ -203,7 +203,7 @@ class RoomMessageCenter:
             else orphan_threshold_minutes
         )
         self.debate_rounds = debate_rounds
-        self.tsm = TaskStateManager(self.room_runtime, notification_service)
+        self.tsm = TaskStateManager(self.room_runtime, task_notifier)
         self.agent_dispatcher = AgentDispatcher(
             agent_resolver=agent_resolver_service,
             message_writer=self.message_writer,
@@ -234,7 +234,7 @@ class RoomMessageCenter:
             delivery=self.delivery,
             room_message_center=self,
             hitl_coordinator=hitl_coordinator,
-            notification_service=notification_service,
+            task_notifier=task_notifier,
             task_notification_impl=task_notification_impl,
         )
 

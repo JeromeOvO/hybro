@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections import deque
 from uuid import uuid4
 
-from app_shell.delivery_runtime import sse_manager
 from app_shell.runtime_store import UNBOUND_RUNTIME_STORE
 from common.dto import RoomMessageSummary
 from common.types import (
@@ -39,16 +38,26 @@ class RoomCoordinatorService:
     - Be extended later to route follow-up questions and manage per-room policies
     """
 
-    def __init__(self, *, message_store=None) -> None:
+    def __init__(self, *, message_store=None, delivery=None) -> None:
         self._store = message_store or UNBOUND_RUNTIME_STORE
         self.summary_service = None
-        self.sse_manager = sse_manager
+        self.delivery = delivery
 
     def bind_store(self, message_store) -> None:
         self._store = message_store
 
     def bind_summary_service(self, service) -> None:
         self.summary_service = service
+
+    def bind_delivery(self, delivery) -> None:
+        self.delivery = delivery
+
+    def _require_delivery(self):
+        if self.delivery is None:
+            raise RuntimeError(
+                "RoomCoordinatorService delivery dependency is not bound"
+            )
+        return self.delivery
 
     async def on_room_user_message_completed(
         self,
@@ -191,7 +200,7 @@ class RoomCoordinatorService:
             agent_name = (
                 "Debate Coordinator" if is_debate_mode else "Summary Agent"
             )
-            await self.sse_manager.send_task_submitted(
+            await self._require_delivery().send_task_submitted(
                 room_id=room_id,
                 message_id=summary_message_id,
                 task_id=summary_message_id,
@@ -222,7 +231,7 @@ class RoomCoordinatorService:
 
             if not summary_text:
                 # Dismiss the working indicator by sending a completed-empty update
-                await self.sse_manager.send_task_update(
+                await self._require_delivery().send_task_update(
                     room_id=room_id,
                     message_id=summary_message_id,
                     status="completed",
@@ -248,7 +257,7 @@ class RoomCoordinatorService:
             # Dismiss the working spinner if it was already emitted.
             if summary_message_id is not None:
                 try:
-                    await self.sse_manager.send_task_update(
+                    await self._require_delivery().send_task_update(
                         room_id=room_id,
                         message_id=summary_message_id,
                         status="failed",
@@ -403,7 +412,7 @@ class RoomCoordinatorService:
 
         await self._store.add_room_agent_message(summary_agent_message)
 
-        await self.sse_manager.send_agent_response(
+        await self._require_delivery().send_agent_response(
             room_id,
             summary_agent_message.message_id,
             coordinator_agent_id,

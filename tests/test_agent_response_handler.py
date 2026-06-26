@@ -27,7 +27,7 @@ def _make_handler(
     sse=None,
     rmc=None,
     hitl_coordinator=None,
-    notification_service=None,
+    task_notifier=None,
     task_notification_impl=None,
 ):
     if db is None:
@@ -46,8 +46,8 @@ def _make_handler(
     if rmc is None:
         rmc = MagicMock()
         rmc.resume_queue_from_continuation = AsyncMock(return_value=True)
-    if notification_service is None:
-        notification_service = MagicMock()
+    if task_notifier is None:
+        task_notifier = MagicMock()
     return AgentResponseHandler(
         message_writer=db,
         task_writer=db,
@@ -58,7 +58,7 @@ def _make_handler(
         delivery=sse,
         room_message_center=rmc,
         hitl_coordinator=hitl_coordinator,
-        notification_service=notification_service,
+        task_notifier=task_notifier,
         task_notification_impl=task_notification_impl,
     )
 

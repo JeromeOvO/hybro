@@ -934,7 +934,7 @@ class HITLService:
         if client_request_id:
             data["client_request_id"] = client_request_id
         else:
-            # Match SSEManager turn-correlation: resolve from display/continuation/agent
+            # Match delivery turn-correlation: resolve from display/continuation/agent
             # message_id when the user row lacks client_request_id (strict frontend).
             mid = data.get("message_id")
             if isinstance(mid, str) and mid.strip():

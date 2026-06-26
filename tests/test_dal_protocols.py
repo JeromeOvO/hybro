@@ -1,4 +1,5 @@
 import ast
+import inspect
 import tomllib
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -78,6 +79,21 @@ def test_mongo_change_stream_protocol_is_exported():
     assert dal_protocols.MongoChangeStream is MongoChangeStream
     assert "MongoChangeStream" in protocols.__all__
     assert "MongoChangeStream" in dal_protocols.__all__
+
+
+def test_redis_protocols_expose_health_properties():
+    assert isinstance(RedisKV.__dict__["is_connected"], property)
+    assert isinstance(RedisStreams.__dict__["is_connected"], property)
+
+
+def test_leader_elector_protocol_accepts_keyword_ttl_seconds():
+    acquire_signature = inspect.signature(LeaderElector.try_acquire)
+    renew_signature = inspect.signature(LeaderElector.renew)
+
+    for signature in (acquire_signature, renew_signature):
+        ttl_seconds = signature.parameters["ttl_seconds"]
+        assert ttl_seconds.kind is inspect.Parameter.KEYWORD_ONLY
+        assert ttl_seconds.default is None
 
 
 def test_dal_top_level_exports_are_explicit():

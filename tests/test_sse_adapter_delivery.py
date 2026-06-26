@@ -1,92 +1,32 @@
 from __future__ import annotations
 
-import json
-import re
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
 
-from app_shell.delivery_runtime import SSEManager
+from delivery.facade import DeliveryFacade
 from tests.delivery_adapter_fakes import (
     FakeDeliveryCompat,
-    FakeDeliveryFacade,
     FakeEventPublisher,
+    make_delivery_facade,
 )
-
-NOW = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
-FAIL_FAST = re.escape("SSEManager.bind_facade() not called - startup incomplete")
 
 
 def _bind(
-    manager: SSEManager,
     compat: FakeDeliveryCompat | None = None,
     event_publisher: FakeEventPublisher | None = None,
-) -> FakeDeliveryCompat:
-    compat = compat or FakeDeliveryCompat()
-    manager.bind_facade(
-        FakeDeliveryFacade(
-            compat=compat,
-            instance_id="worker-bound",
-            event_publisher=event_publisher,
-        )
+) -> DeliveryFacade:
+    return make_delivery_facade(
+        compat=compat,
+        event_publisher=event_publisher,
+        instance_id="worker-bound",
     )
-    return compat
-
-
-async def _queued_frame(connection) -> dict:
-    return json.loads(await connection.queue.get())
-
-
-def test_public_methods_fail_fast_before_bind():
-    manager = SSEManager()
-
-    with pytest.raises(RuntimeError, match=FAIL_FAST):
-        manager.set_draining(True)
-    with pytest.raises(RuntimeError, match=FAIL_FAST):
-        manager.get_room_status("room-1")
-    with pytest.raises(RuntimeError, match=FAIL_FAST):
-        manager.cancel_message("msg-1")
-    with pytest.raises(RuntimeError, match=FAIL_FAST):
-        manager.create_token("msg-1")
-
-
-@pytest.mark.asyncio
-async def test_async_public_methods_fail_fast_before_bind():
-    manager = SSEManager()
-
-    with pytest.raises(RuntimeError, match=FAIL_FAST):
-        await manager.add_connection("room-1")
-    with pytest.raises(RuntimeError, match=FAIL_FAST):
-        await manager.start_event_broker(None)
-    with pytest.raises(RuntimeError, match=FAIL_FAST):
-        await manager.start_redis_service(None)
-    with pytest.raises(RuntimeError, match=FAIL_FAST):
-        await manager.start_change_stream_watcher(None)
-
-
-@pytest.mark.asyncio
-async def test_bind_unbind_and_rebind_delegates_to_current_facade():
-    manager = SSEManager()
-    first = _bind(manager)
-    first_conn = await manager.add_connection("room-1")
-    assert first_conn.connection_id in first.room_connections["room-1"]
-
-    manager.unbind_facade()
-    with pytest.raises(RuntimeError, match=FAIL_FAST):
-        await manager.add_connection("room-1")
-
-    second = _bind(manager)
-    second_conn = await manager.add_connection("room-2")
-    assert second_conn.connection_id in second.room_connections["room-2"]
-    assert "room-2" not in first.room_connections
 
 
 @pytest.mark.asyncio
 async def test_send_processing_status_emits_typed_event_and_skips_recording(
     monkeypatch,
 ):
-    monkeypatch.setattr("app_shell.delivery_runtime.utcnow", lambda: NOW)
     import execution.run_command_handler as handler_mod
 
     record = AsyncMock()
@@ -95,11 +35,11 @@ async def test_send_processing_status_emits_typed_event_and_skips_recording(
         "record_processing_status",
         record,
     )
-    manager = SSEManager()
+    compat = FakeDeliveryCompat()
     fake_publisher = FakeEventPublisher()
-    compat = _bind(manager, event_publisher=fake_publisher)
+    facade = _bind(compat=compat, event_publisher=fake_publisher)
 
-    await manager.send_processing_status(
+    await facade.send_processing_status(
         "room-1",
         "rate_limited",
         "msg-1",
@@ -124,13 +64,12 @@ async def test_send_processing_status_emits_typed_event_and_skips_recording(
 
 
 @pytest.mark.asyncio
-async def test_send_methods_emit_typed_events(monkeypatch):
-    monkeypatch.setattr("app_shell.delivery_runtime.utcnow", lambda: NOW)
-    manager = SSEManager()
+async def test_send_methods_emit_typed_events():
+    compat = FakeDeliveryCompat()
     fake_publisher = FakeEventPublisher()
-    compat = _bind(manager, event_publisher=fake_publisher)
+    facade = _bind(compat=compat, event_publisher=fake_publisher)
 
-    await manager.send_agent_response(
+    await facade.send_agent_response(
         "room-1",
         "msg-1",
         "agent-1",
@@ -139,7 +78,7 @@ async def test_send_methods_emit_typed_events(monkeypatch):
         parts=[{"type": "text"}],
         client_request_id="cr-1",
     )
-    await manager.send_artifact_update(
+    await facade.send_artifact_update(
         "room-1",
         "msg-2",
         "agent-1",
@@ -148,7 +87,7 @@ async def test_send_methods_emit_typed_events(monkeypatch):
         last_chunk=True,
         client_request_id="cr-2",
     )
-    await manager.send_task_submitted(
+    await facade.send_task_submitted(
         "room-1",
         "msg-3",
         "task-1",
@@ -162,7 +101,7 @@ async def test_send_methods_emit_typed_events(monkeypatch):
         task_content="do work",
         client_request_id="cr-3",
     )
-    await manager.send_task_update(
+    await facade.send_task_update(
         "room-1",
         "msg-4",
         "input_required",
@@ -181,8 +120,8 @@ async def test_send_methods_emit_typed_events(monkeypatch):
         parts=[{"type": "text"}],
         client_request_id="cr-4",
     )
-    await manager.send_error("room-1", "boom", message_id="msg-5")
-    await manager.send_rate_limit_error(
+    await facade.send_error("room-1", "boom", message_id="msg-5")
+    await facade.send_rate_limit_error(
         "room-1",
         "msg-6",
         "agent-1",
@@ -226,30 +165,33 @@ async def test_send_methods_emit_typed_events(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cancellation_and_lifecycle_methods_delegate():
-    manager = SSEManager()
-    compat = _bind(manager)
+async def test_cancellation_helpers_delegate_to_transport():
+    facade = _bind()
 
-    token = manager.create_token("msg-1")
-    manager.cancel_message("msg-1")
-    assert manager.is_cancelled("msg-1") is True
+    token = facade.create_token("msg-1")
+    facade.cancel_message("msg-1")
+    assert facade.is_cancelled("msg-1") is True
     assert token.is_cancelled is True
-    assert await manager.check_cancelled("msg-1") is True
-    manager.clear_cancellation("msg-1")
-    assert manager.is_cancelled("msg-1") is False
+    assert await facade.check_cancelled("msg-1") is True
+    facade.clear_cancellation("msg-1")
+    assert facade.is_cancelled("msg-1") is False
 
-    await manager.start_event_broker("broker")
-    await manager.start_redis_service("redis")
-    await manager.start_change_stream_watcher("collection")
-    await manager.stop_change_stream_watcher()
-    await manager.stop_redis_service()
-    await manager.stop_event_broker()
+
+@pytest.mark.asyncio
+async def test_lifecycle_start_stop_uses_delivery_surfaces():
+    compat = FakeDeliveryCompat()
+    fake_publisher = FakeEventPublisher()
+    facade = _bind(compat=compat, event_publisher=fake_publisher)
+
+    await facade.start()
+    await facade.stop()
 
     assert compat.lifecycle_calls == [
-        ("start_event_broker", "broker"),
-        ("start_redis_service", "redis"),
-        ("start_change_stream_watcher", None),
-        ("stop_change_stream_watcher", None),
-        ("stop_redis_service", None),
-        ("stop_event_broker", None),
+        ("start_cancellation_watcher", None),
+        ("start", None),
+        ("refresh_health", None),
+        ("close_all_connections", None),
+        ("stop", None),
+        ("stop_cancellation_watcher", None),
     ]
+    assert fake_publisher.lifecycle_calls == [("start", None), ("stop", None)]

@@ -6,8 +6,8 @@ from fastapi.responses import StreamingResponse
 
 from api_gateway.dependencies import (
     get_execution_engine,
-    get_sse_manager,
     get_sse_store,
+    get_sse_transport,
 )
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user, get_current_user_with_query_token
@@ -23,7 +23,7 @@ router = APIRouter()
 async def stream_room_messages(
     room_id: str = Path(..., description="room ID"),
     user: ClerkUser = Depends(get_current_user_with_query_token),
-    manager: SSERouteTransport = Depends(get_sse_manager),
+    transport: SSERouteTransport = Depends(get_sse_transport),
     db: SSEStateReader = Depends(get_sse_store),
 ):
     """
@@ -49,7 +49,7 @@ async def stream_room_messages(
         connection = None
         try:
             # create SSE connection
-            connection = await manager.add_connection(room_id)
+            connection = await transport.add_connection(room_id)
             logger.info(f"SSE stream started for room {room_id}")
 
             # send connected message
@@ -78,7 +78,7 @@ async def stream_room_messages(
         finally:
             # clean up connection
             if connection:
-                await manager.remove_connection(room_id, connection.connection_id)
+                await transport.remove_connection(room_id, connection.connection_id)
                 logger.info(f"SSE stream closed for room {room_id}")
 
     return StreamingResponse(
@@ -97,7 +97,7 @@ async def stream_room_messages(
 async def get_room_sse_status(
     room_id: str = Path(..., description="room ID"),
     user: ClerkUser = Depends(get_current_user_with_query_token),
-    manager: SSERouteTransport = Depends(get_sse_manager),
+    transport: SSERouteTransport = Depends(get_sse_transport),
     db: SSEStateReader = Depends(get_sse_store),
 ):
     """
@@ -118,7 +118,7 @@ async def get_room_sse_status(
             status_code=403,
             detail="You do not have permission to inspect this room",
         )
-    return manager.get_room_status(room_id)
+    return transport.get_room_status(room_id)
 
 
 @router.post("/sse/message/{message_id}/cancel")

@@ -9,10 +9,6 @@ class _DatabaseService:
     pass
 
 
-class _SSEManager:
-    pass
-
-
 class _OfflineFailurePort:
     async def mark_hub_message_failed(self, command) -> None:
         pass
@@ -77,7 +73,6 @@ def service(monkeypatch):
     relay = RelayService(
         mongo=None,
         legacy_store=_DatabaseService(),
-        sse_manager=_SSEManager(),
         offline_failure_port=_OfflineFailurePort(),
     )
     spy = _FacadeSpy()

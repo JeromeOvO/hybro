@@ -46,7 +46,7 @@ def coordinator():
     svc.summary_service.summarize_agent_responses_stream = MagicMock(
         return_value=_stream_text("Summary text.")
     )
-    svc.sse_manager = AsyncMock()
+    svc.delivery = AsyncMock()
 
     # Stub _create_and_emit_summary_message so we can assert without
     # needing the full SSE/DB chain.

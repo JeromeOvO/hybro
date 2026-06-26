@@ -61,7 +61,7 @@ logger = get_logger(__name__)
 ProcessingStatusEmitter = Callable[..., Awaitable[dict[str, Any] | None]]
 _processing_status_emitter: ProcessingStatusEmitter | None = None
 _notification_store: TaskNotificationStore | None = None
-_notification_service = None
+_task_notifier = None
 _delivery = None
 
 
@@ -81,10 +81,10 @@ def bind_processing_status_emitter(
 
 def bind_task_notification_runtime(
     *,
-    notification_service,
+    task_notifier,
     delivery,
 ) -> None:
-    globals()["_notification_service"] = notification_service
+    globals()["_task_notifier"] = task_notifier
     globals()["_delivery"] = delivery
 
 
@@ -528,11 +528,11 @@ async def notify_task_update(
     """
     if _notification_store is None:
         raise RuntimeError("Task notification store dependency has not been bound")
-    if _notification_service is None or _delivery is None:
+    if _task_notifier is None or _delivery is None:
         raise RuntimeError("Task notification runtime dependencies have not been bound")
     return await _notify_task_update_impl(
         _notification_store,
-        _notification_service,
+        _task_notifier,
         _delivery,
         message_id=message_id,
         state=state,
