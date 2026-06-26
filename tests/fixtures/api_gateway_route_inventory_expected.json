@@ -1358,8 +1358,8 @@
     "status_code": null,
     "dependencies": [
       "get_current_user_with_query_token",
-      "get_sse_manager",
-      "get_sse_store"
+      "get_sse_store",
+      "get_sse_transport"
     ],
     "auth_dependencies": [
       "get_current_user_with_query_token"
@@ -1380,8 +1380,8 @@
     "status_code": null,
     "dependencies": [
       "get_current_user_with_query_token",
-      "get_sse_manager",
-      "get_sse_store"
+      "get_sse_store",
+      "get_sse_transport"
     ],
     "auth_dependencies": [
       "get_current_user_with_query_token"

@@ -93,7 +93,7 @@ class TestTransitionTask:
         notif_svc.send_task_update = AsyncMock()
         return TaskStateManager(
             room_runtime=room_svc,
-            notification_service=notif_svc,
+            task_notifier=notif_svc,
         )
 
     @pytest.mark.asyncio
@@ -138,7 +138,7 @@ class TestTransitionTask:
         """transition_task no longer sends notifications — that's notify_task_update's job."""
         msg = _make_message_with_task(TaskState.submitted)
         await tsm.transition_task(msg, TaskState.working)
-        tsm.notification_service.send_task_update.assert_not_called()
+        tsm.task_notifier.send_task_update.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_attaches_error_message(self, tsm):
@@ -172,7 +172,7 @@ class TestCancelRemainingQueue:
         notif_svc = MagicMock()
         return TaskStateManager(
             room_runtime=room_svc,
-            notification_service=notif_svc,
+            task_notifier=notif_svc,
         )
 
     @pytest.mark.asyncio

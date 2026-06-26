@@ -16,7 +16,7 @@ from models.room import (
 def room_runtime():
     svc = RoomServices()
     svc._store = MagicMock()
-    svc.sse_manager = MagicMock()
+    svc.delivery = MagicMock()
     return svc
 
 

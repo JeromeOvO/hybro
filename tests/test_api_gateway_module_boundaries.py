@@ -18,7 +18,6 @@ MODULE_ROUTE_PROTOCOL_IMPORTS = {
 FORBIDDEN_ROUTE_MODULE_ROOTS = {"agent", "room", "context_memory", "a2a_adapter"}
 FOCUS_APP_SHELL_RUNTIME_MODULES = {
     "app_shell.a2a_runtime",
-    "app_shell.relay_service",
     "app_shell.repository_store",
     "app_shell.room_runtime",
 }

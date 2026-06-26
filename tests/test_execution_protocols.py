@@ -296,7 +296,7 @@ def _make_room_message_center_port_deps():
         "event_publisher": MagicMock(),
         "coordinator": MagicMock(),
         "summary_service": MagicMock(),
-        "notification_service": MagicMock(),
+        "task_notifier": MagicMock(),
         "agent_resolver_service": MagicMock(),
         "a2a_transport": MagicMock(),
         "remote_task_reader": MagicMock(),
@@ -338,7 +338,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.summary_service is deps["summary_service"]
     assert runtime.room_memory is deps["room_memory"]
     assert runtime.tsm.room_runtime is deps["room_runtime"]
-    assert runtime.tsm.notification_service is deps["notification_service"]
+    assert runtime.tsm.task_notifier is deps["task_notifier"]
     assert runtime.agent_dispatcher._message_writer is deps["message_writer"]
     assert runtime.agent_dispatcher._agent_lookup is deps["agent_lookup"]
     assert runtime.agent_dispatcher._agent_group_reader is deps["agent_group_reader"]
@@ -635,22 +635,18 @@ def test_room_message_center_uses_common_room_lock_protocol():
     )
 
 
-def test_app_shell_room_lock_uses_public_redis_protocol_surface():
-    from pathlib import Path
+def test_dal_room_lock_uses_dal_redis_owner_module():
     from typing import get_type_hints
 
-    from app_shell.room_lock import RedisLockStore, RedisRoomDistributedLock
+    from common.protocols import RoomDistributedLock
+    from dal.redis.lock import RoomRedisDistributedLock
+    from execution.orchestration.room_message_center import RoomMessageCenter
 
-    source = Path("app_shell/room_lock.py").read_text()
-    init_hints = get_type_hints(RedisRoomDistributedLock.__init__)
-
-    assert "Any" not in source
-    assert "._client" not in source
-    assert "_client" not in source
-    assert ".set_nx(" in source
-    assert init_hints["redis_service"] == RedisLockStore | None
-    acquire_hints = get_type_hints(RedisRoomDistributedLock.acquire)
+    hints = get_type_hints(RoomMessageCenter.set_room_distributed_lock)
+    assert hints["room_lock"] == RoomDistributedLock | None
+    acquire_hints = get_type_hints(RoomRedisDistributedLock.acquire)
     assert acquire_hints["ttl"] is int
+    assert RoomRedisDistributedLock.__module__ == "dal.redis.lock"
 
 
 class _FakeCursor:

@@ -3,9 +3,9 @@ Unit tests for SSE services (sse_app_shell.py).
 
 Tests cover:
 - SSEConnection: send_message, get_message (with timeout/heartbeat), close
-- SSEManager: cancel_message/is_cancelled/clear_cancellation lifecycle
-- SSEManager: CancellationToken creation and pre-signalling
-- SSEManager: add_connection/remove_connection and typed delivery helpers
+- DeliveryFacade: cancel_message/is_cancelled/clear_cancellation lifecycle
+- DeliveryFacade: CancellationToken creation and pre-signalling
+- DeliveryFacade: add_connection/remove_connection and typed delivery helpers
 """
 
 import json
@@ -13,9 +13,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app_shell.delivery_runtime import SSEConnection
 from common.config import settings
-from tests.delivery_adapter_fakes import make_bound_manager
+from common.utils.time import utcnow
+from delivery.sse.connection import SSEConnection
+from tests.delivery_adapter_fakes import make_delivery_facade
 
 # =============================================================================
 # SSEConnection Tests
@@ -25,28 +26,35 @@ from tests.delivery_adapter_fakes import make_bound_manager
 class TestSSEConnection:
     """Tests for SSEConnection message queue."""
 
+    def _connection(self) -> SSEConnection:
+        return SSEConnection(
+            room_id="room-1",
+            connection_id="conn-1",
+            heartbeat_interval=0.01,
+            now=utcnow,
+        )
+
     @pytest.mark.asyncio
     async def test_send_message_queues_json(self):
-        conn = SSEConnection(room_id="room-1")
+        conn = self._connection()
         result = await conn.send_message("test_event", {"key": "value"})
 
         assert result is True
-        raw = await conn.queue.get()
-        parsed = json.loads(raw)
+        parsed = await conn.queue.get()
         assert parsed["type"] == "test_event"
         assert parsed["room_id"] == "room-1"
         assert parsed["data"] == {"key": "value"}
 
     @pytest.mark.asyncio
     async def test_send_message_fails_when_closed(self):
-        conn = SSEConnection(room_id="room-1")
+        conn = self._connection()
         conn.close()
         result = await conn.send_message("test", {})
         assert result is False
 
     @pytest.mark.asyncio
     async def test_get_message_returns_queued_data(self):
-        conn = SSEConnection(room_id="room-1")
+        conn = self._connection()
         await conn.send_message("ping", {})
         msg = await conn.get_message(timeout=1.0)
         assert msg is not None
@@ -54,41 +62,41 @@ class TestSSEConnection:
 
     @pytest.mark.asyncio
     async def test_get_message_returns_heartbeat_on_timeout(self):
-        conn = SSEConnection(room_id="room-1")
+        conn = self._connection()
         msg = await conn.get_message(timeout=0.01)
         parsed = json.loads(msg)
         assert parsed["type"] == "heartbeat"
         assert parsed["room_id"] == "room-1"
 
     def test_close_marks_inactive(self):
-        conn = SSEConnection(room_id="room-1")
+        conn = self._connection()
         assert conn.is_active is True
         conn.close()
         assert conn.is_active is False
 
 
 # =============================================================================
-# SSEManager Cancellation Tests
+# DeliveryFacade Cancellation Tests
 # =============================================================================
 
 
-class TestSSEManagerCancellation:
+class TestDeliveryFacadeCancellation:
     """Tests for message cancellation lifecycle."""
 
     def test_cancel_then_is_cancelled(self):
-        mgr = make_bound_manager()
+        mgr = make_delivery_facade()
         assert mgr.is_cancelled("msg-1") is False
         mgr.cancel_message("msg-1")
         assert mgr.is_cancelled("msg-1") is True
 
     def test_clear_cancellation(self):
-        mgr = make_bound_manager()
+        mgr = make_delivery_facade()
         mgr.cancel_message("msg-1")
         mgr.clear_cancellation("msg-1")
         assert mgr.is_cancelled("msg-1") is False
 
     def test_clear_also_removes_token(self):
-        mgr = make_bound_manager()
+        mgr = make_delivery_facade()
         mgr.create_token("msg-1")
         mgr.clear_cancellation("msg-1")
         assert mgr.get_token("msg-1") is None
@@ -103,43 +111,43 @@ class TestCancellationToken:
     """Tests for CancellationToken creation and pre-signalling."""
 
     def test_create_token_returns_token(self):
-        mgr = make_bound_manager()
+        mgr = make_delivery_facade()
         token = mgr.create_token("msg-1")
         assert token is not None
         assert token.message_id == "msg-1"
         assert mgr.get_token("msg-1") is token
 
     def test_create_token_pre_signals_if_already_cancelled(self):
-        mgr = make_bound_manager()
+        mgr = make_delivery_facade()
         mgr.cancel_message("msg-1")
         token = mgr.create_token("msg-1")
         assert token.is_cancelled is True
 
     def test_cancel_signals_existing_token(self):
-        mgr = make_bound_manager()
+        mgr = make_delivery_facade()
         token = mgr.create_token("msg-1")
         assert token.is_cancelled is False
         mgr.cancel_message("msg-1")
         assert token.is_cancelled is True
 
     def test_remove_token(self):
-        mgr = make_bound_manager()
+        mgr = make_delivery_facade()
         mgr.create_token("msg-1")
         mgr.remove_token("msg-1")
         assert mgr.get_token("msg-1") is None
 
 
 # =============================================================================
-# SSEManager Connection Tests
+# DeliveryFacade Connection Tests
 # =============================================================================
 
 
-class TestSSEManagerConnections:
+class TestDeliveryFacadeConnections:
     """Tests for connection management."""
 
     @pytest.mark.asyncio
     async def test_add_and_remove_connection(self):
-        mgr = make_bound_manager()
+        mgr = make_delivery_facade()
         conn = await mgr.add_connection("room-1")
         assert "room-1" in mgr.room_connections
         assert conn.connection_id in mgr.room_connections["room-1"]
@@ -149,21 +157,20 @@ class TestSSEManagerConnections:
 
     @pytest.mark.asyncio
     async def test_typed_helper_delivers_to_all_connections(self):
-        mgr = make_bound_manager()
+        mgr = make_delivery_facade()
         c1 = await mgr.add_connection("room-1")
         c2 = await mgr.add_connection("room-1")
 
         await mgr.send_processing_status("room-1", "processing", "msg-1")
 
         for conn in [c1, c2]:
-            msg = await conn.queue.get()
-            parsed = json.loads(msg)
+            parsed = await conn.queue.get()
             assert parsed["type"] == "processing_status"
             assert parsed["data"]["message_id"] == "msg-1"
 
     @pytest.mark.asyncio
     async def test_typed_helper_to_empty_room_is_noop(self):
-        mgr = make_bound_manager()
+        mgr = make_delivery_facade()
         await mgr.send_processing_status("nonexistent", "processing", "msg-1")
 
 
@@ -177,30 +184,26 @@ class TestSendProcessingStatusClientRequestId:
 
     @pytest.mark.asyncio
     async def test_send_processing_status_includes_client_request_id(self):
-        mgr = make_bound_manager()
+        mgr = make_delivery_facade()
         conn = await mgr.add_connection("room-1")
 
         await mgr.send_processing_status(
             "room-1", "processing", "msg-1", client_request_id="cr-abc"
         )
 
-        msg = await conn.queue.get()
-        parsed = json.loads(msg)
+        parsed = await conn.queue.get()
         assert parsed["type"] == "processing_status"
         assert parsed["data"]["client_request_id"] == "cr-abc"
         assert parsed["data"]["message_id"] == "msg-1"
 
     @pytest.mark.asyncio
     async def test_send_processing_status_omits_client_request_id_when_none(self):
-        mgr = make_bound_manager()
+        mgr = make_delivery_facade()
         conn = await mgr.add_connection("room-1")
 
-        await mgr.send_processing_status(
-            "room-1", "processing", "msg-1"
-        )
+        await mgr.send_processing_status("room-1", "processing", "msg-1")
 
-        msg = await conn.queue.get()
-        parsed = json.loads(msg)
+        parsed = await conn.queue.get()
         assert parsed["type"] == "processing_status"
         assert "client_request_id" not in parsed["data"]
 
@@ -208,7 +211,7 @@ class TestSendProcessingStatusClientRequestId:
     async def test_send_processing_status_does_not_record_or_emit_run_event(self, monkeypatch):
         import execution.run_command_handler as handler_mod
 
-        mgr = make_bound_manager()
+        mgr = make_delivery_facade()
         conn = await mgr.add_connection("room-1")
         record = AsyncMock(
             return_value={
@@ -229,7 +232,6 @@ class TestSendProcessingStatusClientRequestId:
         await mgr.send_processing_status("room-1", "processing", "msg-1")
 
         record.assert_not_awaited()
-        msg = await conn.queue.get()
-        parsed = json.loads(msg)
+        parsed = await conn.queue.get()
         assert parsed["type"] == "processing_status"
         assert conn.queue.empty()

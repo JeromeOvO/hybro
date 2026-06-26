@@ -87,7 +87,6 @@ class RelayService:
         mongo: Any,
         db: Any | None = None,
         legacy_store: Any | None = None,
-        sse_manager: Any,
         event_publisher: Any | None = None,
         worker_id: str | None = None,
         response_converter: Callable[[Any], Any] | None = None,
@@ -348,7 +347,6 @@ def init_relay_service(
     mongo: Any,
     db: Any | None = None,
     legacy_store: Any | None = None,
-    sse_manager: Any,
     room_message_center: object,
     hitl_coordinator: object | None = None,
     event_publisher: Any | None = None,
@@ -366,7 +364,6 @@ def init_relay_service(
     relay_service = RelayService(
         mongo=mongo,
         db=resolved_db,
-        sse_manager=sse_manager,
         event_publisher=event_publisher,
         worker_id=worker_id,
         response_converter=response_converter,

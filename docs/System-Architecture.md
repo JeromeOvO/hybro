@@ -2,7 +2,7 @@
 
 This document describes the current architecture and core workflows of the
 `multi-agents-backend` codebase. It is based on the repository state as of
-2026-06-23 and focuses on the code that is currently present, not on older
+2026-06-26 and focuses on the code that is currently present, not on older
 design documents that may have existed previously.
 
 ## High-Level Shape
@@ -77,7 +77,7 @@ Startup has three practical phases:
 
 2. Runtime guard and background services:
    - Start Delivery/SSE runtime.
-   - Start app-shell Redis runtime services when `REDIS_URL` is configured.
+   - Probe DAL Redis KV and Streams runtime services when `REDIS_URL` is configured.
    - Enforce multi-worker safety with `check_multi_worker_safety`.
    - Start background jobs after the guard passes.
 
@@ -126,9 +126,9 @@ Examples:
 - Agent route compatibility is owned by `agent.route_adapter.AgentRouteAdapter`
   and `agent.service.AgentService`, both constructed directly by `container.py`
   over `agent.AgentFacade`.
-- `app_shell.relay_service` is an import-compatible shim over
-  `hub_runtime_bridge.compat.relay_service`; relay behavior is owned by
-  `hub_runtime_bridge.HubFacade` and HubRuntimeBridge adapters.
+- Relay compatibility lives directly in `hub_runtime_bridge.compat.relay_service`;
+  relay behavior is owned by `hub_runtime_bridge.HubFacade` and HubRuntimeBridge
+  adapters, with no app-shell relay runtime shim.
 - `app_shell.a2a_runtime` is an import-compatible shim over
   `a2a_adapter.runtime_service`. `A2AService` keeps legacy method names while
   delegating task-tracking placeholder creation, tracked-send push
@@ -139,7 +139,7 @@ Examples:
 Execution is intentionally independent from
 app-shell compatibility objects.
 `container.py` wires owner modules such as `a2a_adapter.runtime_service`,
-`room.compat.runtime`, Delivery/SSE, room memory, notification, and
+`room.compat.runtime`, Delivery/SSE, room memory, Delivery task notifier, and
 `dal.runtime_store` objects into focused execution ports. Files under
 `execution/` do not import app-shell modules and do not accept broad app-shell
 composite stores. Queue, supervisor, dispatch, HITL, cancellation, and webhook
@@ -404,16 +404,19 @@ It is composed from:
 
 - `SSETransportImpl`: local room connection management.
 - `EventPublisherImpl`: emits frames/events and handles deduplication.
+- `TaskUpdateNotifier`: execution-facing task update publisher that resolves
+  final agent display fields and delegates to `DeliveryFacade.send_task_update`.
 - `CrossInstanceEventBus`: Redis Pub/Sub based fan-out when Redis is enabled.
 - `CancellationWatcher`: tracks cancellation state through Mongo change streams
   and Redis KV when available.
 - `TerminalStatusDeduplicator`: prevents duplicate terminal status frames.
 
-`app_shell.delivery_runtime.sse_manager` is the route-facing delivery manager
-bound to the Delivery facade during startup. Routes call the manager, while the
-runtime implementation lives in `delivery`. Delivery never calls back into
-Execution or app-shell business services; lifecycle recording happens before
-typed delivery events are emitted.
+Delivery is exposed to SSE routes as `common.protocols.SSERouteTransport`
+through `APIGatewayDeps.sse_transport` and the `get_sse_transport` FastAPI
+provider. Routes call the delivery transport, while the runtime implementation
+lives in `delivery`. Delivery never calls back into Execution or app-shell
+business services; lifecycle recording happens before typed delivery events are
+emitted.
 
 ### `platform_module`
 
@@ -444,17 +447,18 @@ This module is used by:
 
 `hub_runtime_bridge.HubFacade` owns hub connection management, relay dispatch,
 agent sync, liveness, offline queue behavior, task ownership, and internal hub
-response routing. `app_shell.relay_service.RelayService` remains as a
-compatibility adapter for legacy route imports and APIKey/request adaptation; it
+response routing. `hub_runtime_bridge.compat.relay_service.RelayService`
+provides the legacy relay method surface for APIKey/request adaptation and
 delegates Hub behavior through facade public methods. Its runtime binding uses
-`AppShellRelayHubStore`, `HubMongoRepository`, `AgentRepository`, and an
-injected relay offline-failure port instead of the broad legacy Mongo/database
-singletons. The relay shim keeps the historical `sse_manager` constructor
-parameter for startup compatibility only; relay behavior no longer imports or
-stores the concrete app-shell Delivery runtime, and stream/leader bindings are
-protocol-style pass-throughs rather than app-shell Redis runtime concrete
-dependencies. Relay transport binding is stored once and exposed through the
-legacy `relay_transport` compatibility accessor rather than duplicated private
+`RelayHubStore` under HubRuntimeBridge ownership, `HubMongoRepository`,
+`AgentRepository`, and the `RelayOfflineFailureAdapter` instead of the broad
+legacy Mongo/database singletons. Route-facing Delivery transport state is no
+longer part of `RelayService` construction; offline failures enter Delivery
+through `RelayOfflineFailureAdapter`, and stream/leader bindings are
+protocol-style pass-throughs rather than app-shell-owned Redis runtime concrete
+dependencies.
+Relay transport binding is stored once and exposed through the legacy
+`relay_transport` compatibility accessor rather than duplicated private
 transport state.
 
 Hub relay responsibilities:
@@ -468,16 +472,20 @@ Hub relay responsibilities:
 - Journal internal responses and replay them if needed.
 - Maintain task ownership leases for multi-worker safety.
 - Own legacy hub publish authorization and cancellation-reader adapters used by
-  relay publish processing; `app_shell.relay_service` wires these adapters into
-  `HubFacade` instead of querying room/agent message state directly.
+  relay publish processing; HubRuntimeBridge compat wiring injects these
+  adapters into `HubFacade` instead of querying room/agent message state
+  directly.
 - Own legacy relay lifecycle adapter behavior for hub registration,
   owner/room authorization, heartbeat validation, hub status aggregation, and
-  disconnect bookkeeping. The app-shell relay service keeps compatibility
-  method names and delegates these operations to HubRuntimeBridge adapters.
+  disconnect bookkeeping. HubRuntimeBridge keeps relay compatibility method
+  names and delegates these operations to its adapters.
 
 When Redis Streams are available, relay events use streams for durable-ish hub
-event delivery. Without streams, the facade falls back to in-memory/offline
-queues for single-process/degraded operation.
+event delivery through `hub_runtime_bridge.transport.RelayStreamService`, which
+consumes DAL `RedisStreams` rows and optional DAL `RedisKV` heartbeat state.
+Redis stream and heartbeat failures are logged and degrade to empty reads,
+missing entry ids, or dead liveness checks so the facade can fall back to
+in-memory/offline queues for single-process/degraded operation.
 
 ### `a2a_adapter`
 
@@ -510,7 +518,8 @@ Business modules use module-scoped repositories built from `MongoDAL`,
 
 - `dal.mongo`: generic Mongo collection/DAL adapter.
 - `dal.pinecone`: vector adapter.
-- `dal.redis`: Redis KV, Pub/Sub, and related support.
+- `dal.redis`: Redis KV, Pub/Sub, Streams, leader election, and room
+  distributed locking support.
 - `dal.s3`: object storage adapter and the sole runtime owner of S3-compatible
   SDK calls.
 - `dal.index_registry`: startup index registration across modules.
@@ -587,15 +596,14 @@ Examples:
 
 - `app_shell.room_runtime`: re-exports `room.compat.runtime`.
 - `app_shell.a2a_runtime`: re-exports `a2a_adapter.runtime_service`.
-- `app_shell.relay_service`: re-exports
-  `hub_runtime_bridge.compat.relay_service`.
 - `app_shell.repository_store`: re-exports
   `dal.runtime_store.app_shell_store`.
 - Agent runtime focus shim modules under `app_shell` re-export `agent.*` owner
   modules; runtime construction happens in `container.py`.
 - `app_shell.domain_alias_service`: separate compatibility binding facade for
   domain alias lookup.
-- `execution.dispatch.task_notifications`: terminal task update notifications.
+- `delivery.task_notifier.TaskUpdateNotifier`: terminal task update publishing
+  facade used by Execution task notification paths.
 - `app_shell.hitl_service`: HITL lifecycle and response handling.
 
 A2A-facing API routes bind narrow readers from `common.protocols`:
@@ -616,9 +624,12 @@ pass:
 - `agent.health.AgentHealthService`: periodic health/liveness support for
   agents; the app-shell health module is a re-export shim.
 
-App-shell Redis runtime modules contain Redis services, leader election, room
-locks, relay streams, and event broker support. Leader election prevents
-duplicate job execution in multi-worker deployments.
+Redis runtime primitives live under `dal.redis`: KV and Streams expose
+`is_connected` health and use bounded Redis connection timeouts, leader election
+accepts explicit TTL overrides, and room distributed locking preserves the
+`True`/`False`/`None` acquire result used by Execution to distinguish acquisition,
+contention, and Redis degradation.
+Leader election prevents duplicate job execution in multi-worker deployments.
 
 ## Core Workflow: Frontend Room Message
 
@@ -704,7 +715,7 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
     - persists artifact updates,
     - updates task state on `room_agent_messages`,
     - handles final responses, errors, cancellations, and HITL states,
-    - emits SSE updates through `sse_manager`/Delivery,
+    - emits SSE updates through Delivery,
     - delegates terminal task notifications through
       `execution.dispatch.task_notifications`.
 
@@ -931,7 +942,7 @@ Multi-worker production:
 - Gunicorn-style multi-worker startup is allowed only when Redis-dependent
   services are connected.
 - `check_multi_worker_safety` fails startup if Redis Pub/Sub, Redis KV, relay
-  streams, app-shell Redis runtime, or cancellation change streams are missing.
+  streams, DAL Redis runtime, or cancellation change streams are missing.
 
 This guard exists because without Redis:
 
@@ -997,7 +1008,9 @@ or concrete module facades/services directly.
 API Gateway route modules are thin HTTP adapters. Business dependencies for
 routes and API viewsets are assembled once during application startup into
 `APIGatewayDeps` and stored on `app.state.api_gateway_deps`; provider functions
-in `api_gateway.dependencies` expose those objects through FastAPI `Depends`.
+in `api_gateway.dependencies` expose those objects through FastAPI `Depends`;
+route-owned SSE streaming uses the `sse_transport` provider rather than an
+app-shell manager dependency.
 Route modules must not own mutable dependency globals or `bind_*` startup
 functions, and route-level scalar configuration such as discovery defaults is
 passed through the same runtime dependency context rather than imported from

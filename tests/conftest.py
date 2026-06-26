@@ -412,18 +412,18 @@ def app():
 
 
 @pytest.fixture
-def mock_sse_manager():
-    """Create a mock SSE manager."""
-    mock = MagicMock()
-    mock.add_connection = AsyncMock()
-    mock.remove_connection = AsyncMock()
-    mock.broadcast_to_room = AsyncMock()
-    mock.cancel_message = MagicMock()
-    mock.cancel_message_and_broadcast = AsyncMock()
-    mock.clear_cancellation = MagicMock()
-    mock.send_processing_status = AsyncMock()
-    mock.get_room_status = MagicMock(return_value={"connections": 0})
-    return mock
+def mock_sse_transport():
+    """Create a mock SSE transport."""
+    transport = MagicMock()
+    transport.add_connection = AsyncMock()
+    transport.remove_connection = AsyncMock()
+    transport.broadcast_to_room = AsyncMock()
+    transport.cancel_message = MagicMock()
+    transport.cancel_message_and_broadcast = AsyncMock()
+    transport.clear_cancellation = MagicMock()
+    transport.send_processing_status = AsyncMock()
+    transport.get_room_status = MagicMock(return_value={"connections": 0})
+    return transport
 
 
 @pytest.fixture
@@ -627,7 +627,7 @@ def make_api_gateway_deps(
     mock_db_service,
     mock_agent_center,
     mock_room_center,
-    mock_sse_manager,
+    mock_sse_transport,
     mock_hitl_service,
     mock_s3_service,
 ):
@@ -707,7 +707,7 @@ def make_api_gateway_deps(
             "agent_selection_service": agent_selection_service,
             "execution_engine": execution_engine,
             "sse_store": mock_db_service,
-            "sse_manager": mock_sse_manager,
+            "sse_transport": mock_sse_transport,
             "webhook_receiver": MagicMock(),
             "repository_provider": MagicMock(),
             "embedding_provider": MagicMock(),
@@ -722,7 +722,7 @@ def make_api_gateway_deps(
 @pytest.fixture
 def patch_sse_deps(
     mock_db_service,
-    mock_sse_manager,
+    mock_sse_transport,
     mock_mongodb,
     mock_hitl_service,
     make_api_gateway_deps,
@@ -732,14 +732,14 @@ def patch_sse_deps(
     execution_engine.cancel = AsyncMock(return_value=True)
     return {
         "db_service": mock_db_service,
-        "sse_manager": mock_sse_manager,
+        "sse_transport": mock_sse_transport,
         "mongodb": mock_mongodb,
         "hitl_service": mock_hitl_service,
         "execution_engine": execution_engine,
         "deps": make_api_gateway_deps(
             task_store=mock_db_service,
             sse_store=mock_db_service,
-            sse_manager=mock_sse_manager,
+            sse_transport=mock_sse_transport,
             hitl_manager=mock_hitl_service,
             execution_engine=execution_engine,
         ),

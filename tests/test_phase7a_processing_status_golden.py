@@ -6,20 +6,21 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app_shell.delivery_runtime import SSEManager
 from common.config import settings
 from common.dto import RunEventNotification
+from delivery.facade import DeliveryFacade
 from execution.orchestration.room_message_center import RoomMessageCenter
 from models.supervisor import RunStatus, SupervisorRunResult, SupervisorTrajectory
-from tests.delivery_adapter_fakes import make_bound_manager
+from tests.delivery_adapter_fakes import make_delivery_facade
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 async def _next_sse_type(conn) -> tuple[str, dict]:
-    raw = await conn.queue.get()
-    parsed = json.loads(raw)
-    return parsed["type"], parsed["data"]
+    frame = await conn.queue.get()
+    if isinstance(frame, str):
+        frame = json.loads(frame)
+    return frame["type"], frame["data"]
 
 
 async def _drain_sse(conn) -> list[tuple[str, dict]]:
@@ -29,9 +30,9 @@ async def _drain_sse(conn) -> list[tuple[str, dict]]:
     return items
 
 
-def _make_rmc_for_supervisor_result(manager: SSEManager) -> RoomMessageCenter:
+def _make_rmc_for_supervisor_result(delivery: DeliveryFacade) -> RoomMessageCenter:
     rmc = object.__new__(RoomMessageCenter)
-    rmc.delivery = manager
+    rmc.delivery = delivery
     rmc.message_reader = SimpleNamespace(
         get_room_user_message_by_message_id=AsyncMock(
             return_value=SimpleNamespace(extend_info={})
@@ -62,7 +63,7 @@ def _make_rmc_for_supervisor_result(manager: SSEManager) -> RoomMessageCenter:
 
 def _bind_test_processing_emitter(
     rmc: RoomMessageCenter,
-    manager: SSEManager,
+    delivery: DeliveryFacade,
     record: AsyncMock,
 ) -> None:
     async def emit_processing_status(
@@ -85,7 +86,7 @@ def _bind_test_processing_emitter(
                 details=details,
             )
             if payload:
-                await manager._emit_event(
+                await delivery.emit(
                     RunEventNotification(
                         room_id=room_id,
                         event_id=payload.get("event_id"),
@@ -96,7 +97,7 @@ def _bind_test_processing_emitter(
                         correlation_id=client_request_id,
                     )
                 )
-        await manager.send_processing_status(
+        await delivery.send_processing_status(
             room_id,
             getattr(status, "value", status),
             message_id,
@@ -113,8 +114,8 @@ async def test_golden_execution_preflight_processing_status_order(monkeypatch):
     from common.dto import ExecutionAck, ExecutionRequest
     from execution.facade import ExecutionFacade
 
-    manager = make_bound_manager()
-    conn = await manager.add_connection("room-1")
+    delivery = make_delivery_facade()
+    conn = await delivery.add_connection("room-1")
     payload = {
         "event_id": "evt-1",
         "run_id": "root-msg-1",
@@ -132,7 +133,7 @@ async def test_golden_execution_preflight_processing_status_order(monkeypatch):
 
     facade = object.__new__(ExecutionFacade)
     facade._run_lifecycle = run_lifecycle
-    facade._event_publisher = manager._facade.event_publisher
+    facade._event_publisher = delivery.event_publisher
     facade._run_event_enabled = lambda: True
     facade._client_request_id_resolver = resolver
     request = ExecutionRequest(
@@ -165,8 +166,8 @@ async def test_golden_execution_preflight_processing_status_order(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_golden_hitl_resolve_resume_completion_order(monkeypatch):
-    manager = make_bound_manager()
-    conn = await manager.add_connection("room-1")
+    delivery = make_delivery_facade()
+    conn = await delivery.add_connection("room-1")
     payload = {
         "event_id": "evt-2",
         "run_id": "msg-1",
@@ -179,8 +180,8 @@ async def test_golden_hitl_resolve_resume_completion_order(monkeypatch):
     monkeypatch.setattr(settings, "feature_run_event_sse", True)
 
     rmc = object.__new__(RoomMessageCenter)
-    rmc.delivery = manager
-    _bind_test_processing_emitter(rmc, manager, record)
+    rmc.delivery = delivery
+    _bind_test_processing_emitter(rmc, delivery, record)
     rmc.continuation_store = SimpleNamespace(
         save_continuation_on_message=AsyncMock(),
     )
@@ -223,15 +224,15 @@ async def test_golden_hitl_resolve_resume_completion_order(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_resume_completion_uses_deterministic_kind_when_summary_skipped(monkeypatch):
-    manager = make_bound_manager()
-    conn = await manager.add_connection("room-1")
+    delivery = make_delivery_facade()
+    conn = await delivery.add_connection("room-1")
     record = AsyncMock(return_value=None)
 
     monkeypatch.setattr(settings, "feature_run_event_sse", True)
 
     rmc = object.__new__(RoomMessageCenter)
-    rmc.delivery = manager
-    _bind_test_processing_emitter(rmc, manager, record)
+    rmc.delivery = delivery
+    _bind_test_processing_emitter(rmc, delivery, record)
     rmc.continuation_store = SimpleNamespace(
         save_continuation_on_message=AsyncMock(),
     )
@@ -274,13 +275,13 @@ async def test_resume_completion_uses_deterministic_kind_when_summary_skipped(mo
 
 @pytest.mark.asyncio
 async def test_emit_summary_working_includes_turn_phase(monkeypatch):
-    manager = make_bound_manager()
-    conn = await manager.add_connection("room-1")
+    delivery = make_delivery_facade()
+    conn = await delivery.add_connection("room-1")
     record = AsyncMock(return_value=None)
 
     rmc = object.__new__(RoomMessageCenter)
-    rmc.delivery = manager
-    _bind_test_processing_emitter(rmc, manager, record)
+    rmc.delivery = delivery
+    _bind_test_processing_emitter(rmc, delivery, record)
 
     await rmc._emit_summary_working(
         room_id="room-1",
@@ -302,8 +303,8 @@ async def test_emit_summary_working_includes_turn_phase(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_golden_duplicate_terminal_root_completion_suppressed(monkeypatch):
-    manager = make_bound_manager()
-    conn = await manager.add_connection("room-1")
+    delivery = make_delivery_facade()
+    conn = await delivery.add_connection("room-1")
     payload = {
         "event_id": "evt-terminal",
         "run_id": "msg-1",
@@ -315,8 +316,8 @@ async def test_golden_duplicate_terminal_root_completion_suppressed(monkeypatch)
 
     monkeypatch.setattr(settings, "feature_run_event_sse", True)
 
-    rmc = _make_rmc_for_supervisor_result(manager)
-    _bind_test_processing_emitter(rmc, manager, record)
+    rmc = _make_rmc_for_supervisor_result(delivery)
+    _bind_test_processing_emitter(rmc, delivery, record)
     result = SupervisorRunResult(
         status=RunStatus.COMPLETED,
         trajectory=SupervisorTrajectory(),
@@ -338,10 +339,10 @@ async def test_golden_duplicate_terminal_suppressed_across_redis_l2(monkeypatch)
     from tests.test_sse_event_broker import MockRedisService
 
     redis = MockRedisService()
-    first_manager = make_bound_manager(redis_service=redis, instance_id="worker-1")
-    second_manager = make_bound_manager(redis_service=redis, instance_id="worker-2")
-    first_conn = await first_manager.add_connection("room-1")
-    second_conn = await second_manager.add_connection("room-1")
+    first_delivery = make_delivery_facade(redis_service=redis, instance_id="worker-1")
+    second_delivery = make_delivery_facade(redis_service=redis, instance_id="worker-2")
+    first_conn = await first_delivery.add_connection("room-1")
+    second_conn = await second_delivery.add_connection("room-1")
 
     payload = {
         "event_id": "evt-terminal",
@@ -358,10 +359,10 @@ async def test_golden_duplicate_terminal_suppressed_across_redis_l2(monkeypatch)
         status=RunStatus.COMPLETED,
         trajectory=SupervisorTrajectory(),
     )
-    first_rmc = _make_rmc_for_supervisor_result(first_manager)
-    second_rmc = _make_rmc_for_supervisor_result(second_manager)
-    _bind_test_processing_emitter(first_rmc, first_manager, record)
-    _bind_test_processing_emitter(second_rmc, second_manager, record)
+    first_rmc = _make_rmc_for_supervisor_result(first_delivery)
+    second_rmc = _make_rmc_for_supervisor_result(second_delivery)
+    _bind_test_processing_emitter(first_rmc, first_delivery, record)
+    _bind_test_processing_emitter(second_rmc, second_delivery, record)
     await first_rmc._handle_supervisor_run_result(result, "room-1", "msg-1")
     await second_rmc._handle_supervisor_run_result(result, "room-1", "msg-1")
 
@@ -378,13 +379,13 @@ async def test_golden_duplicate_terminal_suppressed_across_redis_l2(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_golden_clarifying_soft_complete_is_transport_only(monkeypatch):
-    manager = make_bound_manager()
-    conn = await manager.add_connection("room-1")
+    delivery = make_delivery_facade()
+    conn = await delivery.add_connection("room-1")
     lifecycle = AsyncMock()
 
     turn_appender = SimpleNamespace(append=AsyncMock())
-    rmc = _make_rmc_for_supervisor_result(manager)
-    _bind_test_processing_emitter(rmc, manager, lifecycle)
+    rmc = _make_rmc_for_supervisor_result(delivery)
+    _bind_test_processing_emitter(rmc, delivery, lifecycle)
     rmc._turn_event_appender = turn_appender
     result = SupervisorRunResult(
         status=RunStatus.CLARIFYING,
@@ -410,8 +411,8 @@ async def test_golden_clarify_resume_retry_failure_completed_is_transport_only(
     from execution.orchestration.room_supervisor_service import SupervisorPlanningError
     from models.supervisor import AgentProfile, RoomConfig
 
-    manager = make_bound_manager()
-    conn = await manager.add_connection("room-1")
+    delivery = make_delivery_facade()
+    conn = await delivery.add_connection("room-1")
     lifecycle = AsyncMock()
 
     trajectory = SupervisorTrajectory()
@@ -429,8 +430,8 @@ async def test_golden_clarify_resume_retry_failure_completed_is_transport_only(
         message_content=SimpleNamespace(message_text="Use account A", attachments=None),
     )
     original_msg = SimpleNamespace(extend_info={"supervisor_trajectory": {}})
-    rmc = _make_rmc_for_supervisor_result(manager)
-    _bind_test_processing_emitter(rmc, manager, lifecycle)
+    rmc = _make_rmc_for_supervisor_result(delivery)
+    _bind_test_processing_emitter(rmc, delivery, lifecycle)
     rmc.message_reader.get_room_user_message_by_message_id = AsyncMock(
         return_value=original_msg
     )
@@ -487,13 +488,13 @@ async def test_supervisor_completed_emits_turn_completion_kind_in_details():
         TrajectoryEntry,
     )
 
-    manager = make_bound_manager()
-    conn = await manager.add_connection("room-1")
-    rmc = _make_rmc_for_supervisor_result(manager)
+    delivery = make_delivery_facade()
+    conn = await delivery.add_connection("room-1")
+    rmc = _make_rmc_for_supervisor_result(delivery)
     rmc._emit_deterministic_digest = AsyncMock()
     rmc._run_supervisor_terminal_post_loop_integration = AsyncMock()
     record = AsyncMock(return_value=None)
-    _bind_test_processing_emitter(rmc, manager, record)
+    _bind_test_processing_emitter(rmc, delivery, record)
 
     result = SupervisorRunResult(
         status=RunStatus.COMPLETED,
@@ -552,12 +553,12 @@ async def test_supervisor_synthesis_completed_emits_synthesis_kind():
         TrajectoryEntry,
     )
 
-    manager = make_bound_manager()
-    conn = await manager.add_connection("room-1")
-    rmc = _make_rmc_for_supervisor_result(manager)
+    delivery = make_delivery_facade()
+    conn = await delivery.add_connection("room-1")
+    rmc = _make_rmc_for_supervisor_result(delivery)
     rmc._run_supervisor_terminal_post_loop_integration = AsyncMock()
     record = AsyncMock(return_value=None)
-    _bind_test_processing_emitter(rmc, manager, record)
+    _bind_test_processing_emitter(rmc, delivery, record)
 
     result = SupervisorRunResult(
         status=RunStatus.COMPLETED,

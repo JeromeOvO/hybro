@@ -279,6 +279,35 @@ async def test_redis_kv_impl_gracefully_degrades_without_url(monkeypatch):
     assert await kv.ping() is False
 
 
+def test_redis_kv_impl_constructs_client_with_bounded_timeout(monkeypatch):
+    from dal.redis import kv as kv_module
+
+    calls = []
+    client = MagicMock()
+
+    def from_url(url, **kwargs):
+        calls.append((url, kwargs))
+        return client
+
+    monkeypatch.setattr(kv_module.aioredis, "from_url", from_url)
+    monkeypatch.setattr(kv_module.settings, "redis_url", "redis://localhost:6379/0")
+    monkeypatch.setattr(kv_module.settings, "redis_max_connections", 17)
+
+    kv = kv_module.RedisKVImpl()
+
+    assert kv._ensure_client() is client
+    assert calls == [
+        (
+            "redis://localhost:6379/0",
+            {
+                "decode_responses": True,
+                "socket_connect_timeout": 5,
+                "max_connections": 17,
+            },
+        )
+    ]
+
+
 @pytest.mark.asyncio
 async def test_redis_kv_impl_raises_transient_error_for_configured_driver_failures():
     from dal.redis.kv import RedisKVImpl
@@ -337,6 +366,37 @@ async def test_redis_streams_impl_gracefully_degrades_without_url(monkeypatch):
     assert await streams.xadd("stream-a", {"payload": "one"}) == ""
     assert await streams.xread({"stream-a": "0-0"}) == []
     assert await streams.ping() is False
+
+
+def test_redis_streams_impl_constructs_client_with_bounded_timeout(monkeypatch):
+    from dal.redis import streams as streams_module
+
+    calls = []
+    client = MagicMock()
+
+    def from_url(url, **kwargs):
+        calls.append((url, kwargs))
+        return client
+
+    monkeypatch.setattr(streams_module.aioredis, "from_url", from_url)
+    monkeypatch.setattr(
+        streams_module.settings, "redis_url", "redis://localhost:6379/0"
+    )
+    monkeypatch.setattr(streams_module.settings, "redis_max_connections", 17)
+
+    streams = streams_module.RedisStreamsImpl()
+
+    assert streams._ensure_client() is client
+    assert calls == [
+        (
+            "redis://localhost:6379/0",
+            {
+                "decode_responses": True,
+                "socket_connect_timeout": 5,
+                "max_connections": 17,
+            },
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -564,6 +624,24 @@ async def test_leader_elector_impl_uses_instance_id_owner_checks():
 
     client.set.assert_awaited_once_with("leader:job", "inst", nx=True, ex=30)
     assert client.eval.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_leader_elector_impl_accepts_ttl_seconds_alias():
+    from dal.redis.lock import LeaderElectorImpl
+
+    client = MagicMock()
+    client.set = AsyncMock(return_value=True)
+    client.eval = AsyncMock(return_value=1)
+
+    elector = LeaderElectorImpl(client, instance_id="inst")
+
+    assert await elector.try_acquire("job", ttl=30, ttl_seconds=120) is True
+    assert await elector.renew("job", ttl=45, ttl_seconds=180) is True
+
+    client.set.assert_awaited_once_with("leader:job", "inst", nx=True, ex=120)
+    renew_args = client.eval.await_args.args
+    assert renew_args[1:] == (1, "leader:job", "inst", "180")
 
 
 @pytest.mark.asyncio

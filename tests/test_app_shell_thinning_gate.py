@@ -9,7 +9,6 @@ import pytest
 APP_SHELL_TARGETS = {
     "app_shell/room_runtime.py",
     "app_shell/a2a_runtime.py",
-    "app_shell/relay_service.py",
     "app_shell/repository_store.py",
 }
 
@@ -59,20 +58,14 @@ FORBIDDEN_MAIN_WIRING_IMPORT_PREFIXES = (
     "app_shell.agent_service",
     "app_shell.bedrock_service",
     "app_shell.debate_service",
-    "app_shell.delivery_runtime",
     "app_shell.execution_runtime",
     "app_shell.gemini_service",
     "app_shell.health_check",
     "app_shell.hitl_service",
     "app_shell.inspection_runtime",
-    "app_shell.notification_service",
     "app_shell.openai_service",
-    "app_shell.redis_runtime",
-    "app_shell.relay_service",
-    "app_shell.relay_store",
     "app_shell.repository_store",
     "app_shell.room_coordinator_service",
-    "app_shell.room_lock",
     "app_shell.room_membership_source",
     "app_shell.room_runtime",
     "app_shell.s3_service",
@@ -146,16 +139,6 @@ FINAL_APP_SHELL_SHIMS = {
         "max_lines": 60,
         "required_exports": {"A2ARuntimeConfig", "A2AService", "a2a_service"},
         "owning_module": "a2a_adapter.runtime_service",
-    },
-    "app_shell/relay_service.py": {
-        "max_lines": 80,
-        "required_exports": {
-            "RelayHubLivenessReader",
-            "RelayService",
-            "init_relay_service",
-            "relay_service",
-        },
-        "owning_module": "hub_runtime_bridge.compat.relay_service",
     },
     "app_shell/repository_store.py": {
         "max_lines": 80,
@@ -367,10 +350,6 @@ EXPECTED_MOVED_RUFF_IGNORES = {
         "agent/service.py",
         ["C901"],
     ),
-    "app_shell/relay_service.py": (
-        "hub_runtime_bridge/compat/relay_service.py",
-        ["C901"],
-    ),
     "app_shell/room_runtime.py": (
         "room/compat/runtime.py",
         ["C901", "UP042"],
@@ -440,6 +419,56 @@ def _legacy_import_blockers() -> set[tuple[str, str]]:
         if isinstance(path, str) and isinstance(prefix, str):
             blockers.add((path, prefix))
     return blockers
+
+
+def test_app_shell_runtime_hub_modules_removed_from_owner_runtime_paths():
+    root = Path(__file__).resolve().parents[1]
+    scanned_roots = [
+        root / "container.py",
+        root / "api",
+        root / "api_gateway",
+        root / "delivery",
+        root / "hub_runtime_bridge",
+        root / "dal",
+        root / "room",
+        root / "execution",
+    ]
+    forbidden_imports = {
+        "app_shell." + suffix
+        for suffix in (
+            "delivery_runtime",
+            "redis_runtime",
+            "relay_store",
+            "relay_service",
+            "room_lock",
+            "notification_service",
+        )
+    }
+    forbidden_runtime_names = {
+        "SSEManager",
+        "AppShellRedis",
+        "AppShellRelay",
+        "RedisRoomDistributedLock",
+    }
+
+    violations: list[str] = []
+    for base in scanned_roots:
+        paths = [base] if base.is_file() else sorted(base.rglob("*.py"))
+        for path in paths:
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root).as_posix()
+            for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+                for needle in sorted(forbidden_imports):
+                    if needle in line:
+                        violations.append(f"{rel}:{lineno}: contains {needle}")
+                for needle in sorted(forbidden_runtime_names):
+                    if needle in line:
+                        violations.append(f"{rel}:{lineno}: contains {needle}")
+
+    assert not violations, "Forbidden app-shell runtime references:\n" + "\n".join(
+        violations
+    )
 
 
 def _import_modules(path: Path) -> list[tuple[int, str]]:
@@ -663,50 +692,6 @@ def _static_string_literal_sequence(node: ast.AST) -> set[str] | None:
     return exports
 
 
-def _top_level_function(path: Path, name: str) -> ast.FunctionDef | None:
-    tree = ast.parse(path.read_text(), filename=str(path))
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == name:
-            return node
-    return None
-
-
-def _compares_name_to_string(node: ast.Compare, name: str) -> str | None:
-    if len(node.ops) != 1 or not isinstance(node.ops[0], ast.Eq):
-        return None
-    if len(node.comparators) != 1:
-        return None
-
-    left = node.left
-    right = node.comparators[0]
-    if (
-        isinstance(left, ast.Name)
-        and left.id == name
-        and isinstance(right, ast.Constant)
-        and isinstance(right.value, str)
-    ):
-        return right.value
-    if (
-        isinstance(right, ast.Name)
-        and right.id == name
-        and isinstance(left, ast.Constant)
-        and isinstance(left.value, str)
-    ):
-        return left.value
-    return None
-
-
-def _raises_attribute_error(node: ast.AST) -> bool:
-    if not isinstance(node, ast.Raise) or node.exc is None:
-        return False
-    exc = node.exc
-    if isinstance(exc, ast.Name):
-        return exc.id == "AttributeError"
-    if isinstance(exc, ast.Call):
-        return isinstance(exc.func, ast.Name) and exc.func.id == "AttributeError"
-    return False
-
-
 def _attribute_chain(node: ast.AST) -> tuple[str, ...] | None:
     if isinstance(node, ast.Name):
         return (node.id,)
@@ -780,102 +765,8 @@ def _invalidated_owner_refs(
     return {ref for ref in owner_refs if ref and ref[0] in mutated_roots}
 
 
-def _relay_impl_aliases(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(), filename=str(path))
-    aliases: set[str] = set()
-    alias_lines: dict[tuple[str, ...], int] = {}
-    for node in tree.body:
-        if not isinstance(node, ast.ImportFrom):
-            continue
-        if node.module != "hub_runtime_bridge.compat":
-            continue
-        for alias in node.names:
-            if alias.name != "relay_service":
-                continue
-            local_name = alias.asname or alias.name
-            aliases.add(local_name)
-            alias_lines[(local_name,)] = node.lineno
-    invalidated_aliases = {
-        alias
-        for alias in aliases
-        if (alias,)
-        in _invalidated_owner_refs(
-            tree,
-            {(alias,) for alias in aliases},
-            alias_lines,
-        )
-    }
-    return aliases - invalidated_aliases
-
-
-def _returns_relay_impl_service(node: ast.AST, relay_impl_aliases: set[str]) -> bool:
-    if not isinstance(node, ast.Return) or node.value is None:
-        return False
-    chain = _attribute_chain(node.value)
-    return chain in {(alias, "relay_service") for alias in relay_impl_aliases}
-
-
-def _relay_getattr_handler_if(
-    function: ast.FunctionDef,
-    attr_name_arg: str,
-    relay_impl_aliases: set[str],
-) -> ast.If | None:
-    for node in function.body:
-        if not isinstance(node, ast.If):
-            continue
-        if not isinstance(node.test, ast.Compare):
-            continue
-        if _compares_name_to_string(node.test, attr_name_arg) != "relay_service":
-            continue
-        if len(node.body) == 1 and _returns_relay_impl_service(
-            node.body[0],
-            relay_impl_aliases,
-        ):
-            return node
-    return None
-
-
-def _relay_getattr_has_attribute_error_fallback(
-    function: ast.FunctionDef,
-    handler_if: ast.If,
-) -> bool:
-    handler_index = function.body.index(handler_if)
-    if handler_index != 0:
-        return False
-    if handler_if.orelse:
-        if len(function.body) != 1:
-            return False
-        fallback_nodes = handler_if.orelse
-    else:
-        fallback_nodes = function.body[handler_index + 1 :]
-    if len(fallback_nodes) != 1:
-        return False
-    return _raises_attribute_error(fallback_nodes[0])
-
-
-def _relay_getattr_is_valid(path: Path) -> bool:
-    if path != Path("app_shell/relay_service.py"):
-        return False
-    function = _top_level_function(path, "__getattr__")
-    if function is None or not function.args.args:
-        return False
-    relay_impl_aliases = _relay_impl_aliases(path)
-    if not relay_impl_aliases:
-        return False
-
-    attr_name_arg = function.args.args[0].arg
-    handler_if = _relay_getattr_handler_if(
-        function,
-        attr_name_arg,
-        relay_impl_aliases,
-    )
-    if handler_if is None:
-        return False
-    return _relay_getattr_has_attribute_error_fallback(function, handler_if)
-
-
 def _dynamic_required_export_is_allowed(path: Path, export: str) -> bool:
-    return export == "relay_service" and _relay_getattr_is_valid(path)
+    return False
 
 
 def _module_path(module: str) -> Path:
@@ -1095,11 +986,6 @@ def _concrete_definitions(path: Path) -> list[str]:
         f"{path}:{node.lineno}: {node.name}"
         for node in tree.body
         if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
-        and not (
-            isinstance(node, ast.FunctionDef)
-            and node.name == "__getattr__"
-            and _relay_getattr_is_valid(path)
-        )
     ]
 
 
@@ -1377,18 +1263,6 @@ def test_forbidden_prefix_matching_is_segment_aware():
     assert _forbidden_prefix("a2a_adapter.client_facade") is None
 
 
-def _comparison_expression(source: str) -> ast.Compare:
-    expression = ast.parse(source, mode="eval").body
-    assert isinstance(expression, ast.Compare)
-    return expression
-
-
-def _function_from_source(source: str) -> ast.FunctionDef:
-    function = ast.parse(source).body[0]
-    assert isinstance(function, ast.FunctionDef)
-    return function
-
-
 def _import_from_source(source: str) -> ast.ImportFrom:
     node = ast.parse(source).body[0]
     assert isinstance(node, ast.ImportFrom)
@@ -1420,18 +1294,20 @@ __all__ = ["AppShellMessageStore"]
 
 def test_owner_import_gate_rejects_non_focus_app_shell_imports(tmp_path):
     path = tmp_path / "owner.py"
+    deleted_notification_module = "notification_" "service"
     path.write_text(
         "from app_shell import "
         "agent_service\n"
-        "from app_shell.notification_service import notification_service\n"
+        f"from app_shell.{deleted_notification_module} import task_notifier\n"
         "import app_shell.task_service\n",
     )
 
     violations = _app_shell_import_violations([path])
 
     agent_service_module = "app_shell." + "agent_service"
+    notification_service_module = "app_shell." + deleted_notification_module
     assert f"{path}:1: {agent_service_module}" in violations
-    assert f"{path}:2: app_shell.notification_service" in violations
+    assert f"{path}:2: {notification_service_module}" in violations
     assert f"{path}:3: app_shell.task_service" in violations
 
 
@@ -1534,99 +1410,6 @@ def test_required_exports_require_explicit_all(tmp_path):
 
     assert f"{path}: missing explicit __all__" in violations
     assert _module_export_surface(path, "owner.module") == set()
-
-
-def test_relay_getattr_export_comparison_requires_equality_operator():
-    assert (
-        _compares_name_to_string(
-            _comparison_expression('name == "relay_service"'),
-            "name",
-        )
-        == "relay_service"
-    )
-    assert (
-        _compares_name_to_string(
-            _comparison_expression('"relay_service" == name'),
-            "name",
-        )
-        == "relay_service"
-    )
-    assert (
-        _compares_name_to_string(
-            _comparison_expression('name != "relay_service"'),
-            "name",
-        )
-        is None
-    )
-    assert (
-        _compares_name_to_string(
-            _comparison_expression('name is "relay_service"'),
-            "name",
-        )
-        is None
-    )
-
-
-def test_relay_getattr_fallback_rejects_return_before_attribute_error():
-    valid_function = _function_from_source(
-        """
-def __getattr__(name):
-    if name == "relay_service":
-        return _impl.relay_service
-    raise AttributeError(name)
-"""
-    )
-    valid_handler = _relay_getattr_handler_if(valid_function, "name", {"_impl"})
-    assert valid_handler is not None
-    assert _relay_getattr_has_attribute_error_fallback(valid_function, valid_handler)
-
-    invalid_function = _function_from_source(
-        """
-def __getattr__(name):
-    if name == "relay_service":
-        return _impl.relay_service
-    return None
-    raise AttributeError(name)
-"""
-    )
-    invalid_handler = _relay_getattr_handler_if(invalid_function, "name", {"_impl"})
-    assert invalid_handler is not None
-    assert not _relay_getattr_has_attribute_error_fallback(
-        invalid_function,
-        invalid_handler,
-    )
-
-
-def test_relay_getattr_branch_must_directly_return_owner_service():
-    invalid_function = _function_from_source(
-        """
-def __getattr__(name):
-    if name == "relay_service":
-        return None
-        return _impl.relay_service
-    raise AttributeError(name)
-"""
-    )
-
-    assert _relay_getattr_handler_if(invalid_function, "name", {"_impl"}) is None
-
-
-def test_relay_impl_alias_rebinding_invalidates_dynamic_export(tmp_path):
-    path = tmp_path / "relay_service.py"
-    path.write_text(
-        """
-from hub_runtime_bridge.compat import relay_service as _impl
-
-_impl = object()
-
-def __getattr__(name):
-    if name == "relay_service":
-        return _impl.relay_service
-    raise AttributeError(name)
-""",
-    )
-
-    assert _relay_impl_aliases(path) == set()
 
 
 def test_owner_import_provenance_rejects_renamed_member_spoofing():
