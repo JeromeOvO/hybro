@@ -52,6 +52,9 @@ class TestHealthStatus:
         assert result["body"]["redis_expected"] is False
         assert result["body"]["broker_expected"] is False
         assert result["body"]["broker_connected"] is False
+        assert result["body"]["legacy_redis_service_connected"] is (
+            result["body"]["redis_runtime_connected"]
+        )
 
     def test_health_status_degraded_when_redis_expected_but_delivery_down(self):
         from main import compute_health_status
@@ -70,6 +73,9 @@ class TestHealthStatus:
         assert result["body"]["redis_expected"] is True
         assert result["body"]["delivery_pubsub_connected"] is False
         assert result["body"]["delivery_kv_connected"] is True
+        assert result["body"]["legacy_redis_service_connected"] is (
+            result["body"]["redis_runtime_connected"]
+        )
 
     def test_health_status_ok_when_all_expected_services_connected(self):
         from main import compute_health_status
@@ -88,6 +94,7 @@ class TestHealthStatus:
         assert result["body"]["broker_connected"] is True
         assert result["body"]["redis_runtime_connected"] is True
         assert result["body"]["redis_service_connected"] is True
+        assert result["body"]["legacy_redis_service_connected"] is True
 
     def test_health_status_degraded_when_change_stream_disconnected(self):
         from main import compute_health_status
@@ -104,3 +111,6 @@ class TestHealthStatus:
         assert result["body"]["status"] == "degraded"
         assert result["status_code"] == 503
         assert result["body"]["change_stream_connected"] is False
+        assert result["body"]["legacy_redis_service_connected"] is (
+            result["body"]["redis_runtime_connected"]
+        )

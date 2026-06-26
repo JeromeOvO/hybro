@@ -146,7 +146,7 @@ def check_multi_worker_safety(
 
     if problems:
         raise RuntimeError(
-            "Running under gunicorn requires all Redis app_shell. "
+            "Running under gunicorn requires all DAL Redis services. "
             "Issues: " + "; ".join(problems) + ". "
             "Fix: set REDIS_URL to a running Redis instance, "
             "or use 'uvicorn main:app' for single-process mode."

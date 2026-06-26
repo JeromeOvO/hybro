@@ -1720,8 +1720,9 @@ concrete `delivery.*`, `dal.*`, or legacy SSE `RedisBroker` implementations.
 Health and multi-worker safety now use explicit fields:
 `delivery_pubsub_connected`, `delivery_kv_connected`, `redis_runtime_connected`,
 `relay_streams_available`, `change_stream_connected`, and `redis_expected`. Deprecated
-aliases (`broker_connected`, `broker_expected`, `redis_service_connected`) remain in
-`/health` for backend compatibility.
+aliases (`broker_connected`, `broker_expected`, `redis_service_connected`,
+`legacy_redis_service_connected`) remain in `/health` for backend compatibility
+and derive from canonical runtime fields.
 
 ### 6.2 Sub-Container Design
 

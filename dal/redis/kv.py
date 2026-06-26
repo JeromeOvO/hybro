@@ -30,7 +30,10 @@ class RedisKVImpl:
             return self._client
         if not self._url:
             return None
-        kwargs: dict[str, Any] = {"decode_responses": True}
+        kwargs: dict[str, Any] = {
+            "decode_responses": True,
+            "socket_connect_timeout": 5,
+        }
         max_connections = getattr(settings, "redis_max_connections", None)
         if max_connections is not None:
             kwargs["max_connections"] = max_connections

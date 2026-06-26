@@ -624,9 +624,10 @@ pass:
   agents; the app-shell health module is a re-export shim.
 
 Redis runtime primitives live under `dal.redis`: KV and Streams expose
-`is_connected` health, leader election accepts explicit TTL overrides, and room
-distributed locking preserves the `True`/`False`/`None` acquire result used by
-Execution to distinguish acquisition, contention, and Redis degradation.
+`is_connected` health and use bounded Redis connection timeouts, leader election
+accepts explicit TTL overrides, and room distributed locking preserves the
+`True`/`False`/`None` acquire result used by Execution to distinguish acquisition,
+contention, and Redis degradation.
 Leader election prevents duplicate job execution in multi-worker deployments.
 
 ## Core Workflow: Frontend Room Message

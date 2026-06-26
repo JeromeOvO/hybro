@@ -154,6 +154,7 @@ def compute_health_status(
             "broker_connected": delivery_pubsub_connected,
             "broker_expected": redis_expected,
             "redis_service_connected": redis_runtime_connected,
+            "legacy_redis_service_connected": redis_runtime_connected,
         },
         "status_code": 503 if degraded else 200,
     }
