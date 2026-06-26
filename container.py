@@ -1007,7 +1007,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 a2a_transport=execution_a2a_transport,
                 remote_task_reader=execution_remote_task_reader,
                 room_memory=execution_room_memory,
-                debate_service=debate_service,
+                debate_prompt_injector=debate_service,
                 rate_limit_service=agent_rate_limiter,
                 room_supervisor_service=room_supervisor_service,
                 hitl_coordinator=hitl_service,

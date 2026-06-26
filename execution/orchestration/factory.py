@@ -38,7 +38,7 @@ def create_room_message_center(
         "a2a_transport": _defaults.a2a_transport,
         "remote_task_reader": _defaults.remote_task_reader,
         "room_memory": _defaults.room_memory,
-        "debate_service": _defaults.debate_service,
+        "debate_prompt_injector": _defaults.debate_prompt_injector,
         "rate_limit_service": _defaults.rate_limit_service,
         "room_supervisor_service": _defaults.room_supervisor_service,
         "hitl_coordinator": None,
