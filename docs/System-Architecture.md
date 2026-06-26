@@ -411,11 +411,11 @@ It is composed from:
   and Redis KV when available.
 - `TerminalStatusDeduplicator`: prevents duplicate terminal status frames.
 
-`app_shell.delivery_runtime.sse_manager` is the route-facing delivery manager
-bound to the Delivery facade during startup. Routes call the manager, while the
-runtime implementation lives in `delivery`. Delivery never calls back into
-Execution or app-shell business services; lifecycle recording happens before
-typed delivery events are emitted.
+Delivery is exposed to SSE routes through `APIGatewayDeps.sse_transport` and
+the `get_sse_transport` FastAPI provider. Routes call the delivery transport,
+while the runtime implementation lives in `delivery`. Delivery never calls back
+into Execution or app-shell business services; lifecycle recording happens
+before typed delivery events are emitted.
 
 ### `platform_module`
 
@@ -1000,7 +1000,9 @@ or concrete module facades/services directly.
 API Gateway route modules are thin HTTP adapters. Business dependencies for
 routes and API viewsets are assembled once during application startup into
 `APIGatewayDeps` and stored on `app.state.api_gateway_deps`; provider functions
-in `api_gateway.dependencies` expose those objects through FastAPI `Depends`.
+in `api_gateway.dependencies` expose those objects through FastAPI `Depends`;
+route-owned SSE streaming uses the `sse_transport` provider rather than an
+app-shell manager dependency.
 Route modules must not own mutable dependency globals or `bind_*` startup
 functions, and route-level scalar configuration such as discovery defaults is
 passed through the same runtime dependency context rather than imported from

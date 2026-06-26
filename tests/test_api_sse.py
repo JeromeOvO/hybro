@@ -31,7 +31,7 @@ class TestStreamRoomMessages:
 
     @pytest.mark.asyncio
     async def test_returns_streaming_response(
-        self, mock_user, mock_sse_manager, mock_db_service, sample_room
+        self, mock_user, mock_sse_transport, mock_db_service, sample_room
     ):
         """Should return a StreamingResponse for SSE."""
         mock_connection = MagicMock()
@@ -39,13 +39,13 @@ class TestStreamRoomMessages:
         mock_connection.is_active = False
         mock_connection.get_message = AsyncMock(return_value=None)
 
-        mock_sse_manager.add_connection.return_value = mock_connection
+        mock_sse_transport.add_connection.return_value = mock_connection
         mock_db_service.get_room_by_room_id.return_value = sample_room
 
         response = await stream_room_messages(
             sample_room.room_id,
             mock_user,
-            manager=mock_sse_manager,
+            transport=mock_sse_transport,
             db=mock_db_service,
         )
 
@@ -54,7 +54,7 @@ class TestStreamRoomMessages:
 
     @pytest.mark.asyncio
     async def test_sets_correct_headers(
-        self, mock_user, mock_sse_manager, mock_db_service, sample_room
+        self, mock_user, mock_sse_transport, mock_db_service, sample_room
     ):
         """Should set correct SSE headers."""
         mock_connection = MagicMock()
@@ -62,13 +62,13 @@ class TestStreamRoomMessages:
         mock_connection.is_active = False
         mock_connection.get_message = AsyncMock(return_value=None)
 
-        mock_sse_manager.add_connection.return_value = mock_connection
+        mock_sse_transport.add_connection.return_value = mock_connection
         mock_db_service.get_room_by_room_id.return_value = sample_room
 
         response = await stream_room_messages(
             sample_room.room_id,
             mock_user,
-            manager=mock_sse_manager,
+            transport=mock_sse_transport,
             db=mock_db_service,
         )
 
@@ -87,28 +87,28 @@ class TestStreamRoomMessages:
             await stream_room_messages(
                 room_id=sample_room.room_id,
                 user=mock_user_2,
-                manager=deps["sse_manager"],
+                transport=deps["sse_transport"],
                 db=deps["db_service"],
             )
 
         assert exc_info.value.status_code == 403
-        deps["sse_manager"].add_connection.assert_not_called()
+        deps["sse_transport"].add_connection.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_stream_starts_with_final_connected_frame(
-        self, mock_user, mock_sse_manager, mock_db_service, sample_room
+        self, mock_user, mock_sse_transport, mock_db_service, sample_room
     ):
         mock_connection = MagicMock()
         mock_connection.connection_id = "conn-123"
         mock_connection.is_active = False
         mock_connection.get_message = AsyncMock(return_value=None)
-        mock_sse_manager.add_connection.return_value = mock_connection
+        mock_sse_transport.add_connection.return_value = mock_connection
         mock_db_service.get_room_by_room_id.return_value = sample_room
 
         response = await stream_room_messages(
             sample_room.room_id,
             mock_user,
-            manager=mock_sse_manager,
+            transport=mock_sse_transport,
             db=mock_db_service,
         )
 
@@ -134,11 +134,11 @@ class TestGetRoomSseStatus:
 
     @pytest.mark.asyncio
     async def test_returns_room_status(
-        self, mock_user, mock_sse_manager, mock_db_service, sample_room
+        self, mock_user, mock_sse_transport, mock_db_service, sample_room
     ):
         """Should return SSE connection status for room."""
         mock_db_service.get_room_by_room_id.return_value = sample_room
-        mock_sse_manager.get_room_status.return_value = {
+        mock_sse_transport.get_room_status.return_value = {
             "room_id": sample_room.room_id,
             "connections": 2,
             "active": True,
@@ -147,12 +147,12 @@ class TestGetRoomSseStatus:
         result = await get_room_sse_status(
             sample_room.room_id,
             mock_user,
-            manager=mock_sse_manager,
+            transport=mock_sse_transport,
             db=mock_db_service,
         )
 
         assert result["connections"] == 2
-        mock_sse_manager.get_room_status.assert_called_once_with(sample_room.room_id)
+        mock_sse_transport.get_room_status.assert_called_once_with(sample_room.room_id)
 
     @pytest.mark.asyncio
     async def test_raises_403_when_status_user_does_not_own_room(
@@ -166,12 +166,12 @@ class TestGetRoomSseStatus:
             await get_room_sse_status(
                 room_id=sample_room.room_id,
                 user=mock_user_2,
-                manager=deps["sse_manager"],
+                transport=deps["sse_transport"],
                 db=deps["db_service"],
             )
 
         assert exc_info.value.status_code == 403
-        deps["sse_manager"].get_room_status.assert_not_called()
+        deps["sse_transport"].get_room_status.assert_not_called()
 
 
 # =============================================================================
@@ -357,7 +357,7 @@ class TestCancelMessage:
             engine=deps["execution_engine"],
         )
 
-        deps["sse_manager"].cancel_message_and_broadcast.assert_not_called()
+        deps["sse_transport"].cancel_message_and_broadcast.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_paused_agent_cleanup_failure_does_not_block_root_cancellation(
