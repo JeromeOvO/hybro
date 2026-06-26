@@ -1713,8 +1713,9 @@ Phase 6 implementation detail: the current repository does not yet have a single
 `DALContainer`; `container.py` exposes focused helpers instead:
 `create_mongo_dal()`, `create_vector_dal()`, `create_delivery_config()`,
 `create_delivery_redis_clients()`, `create_delivery_cancellation_collection()`,
-`create_delivery_facade()`, and `create_delivery_deps()`. `main.py` calls these helpers and
-does not import concrete `delivery.*`, `dal.*`, or legacy SSE `RedisBroker` implementations.
+`create_delivery_facade()`, and `create_delivery_deps()`. `container._runtime_lifespan()`
+and `startup_runtime()` construct Delivery through these container helpers and do not import
+concrete `delivery.*`, `dal.*`, or legacy SSE `RedisBroker` implementations.
 
 Health and multi-worker safety now use explicit fields:
 `delivery_pubsub_connected`, `delivery_kv_connected`, `redis_runtime_connected`,
@@ -2374,7 +2375,7 @@ class AgentService:
 | Hub route lifecycle compatibility | `app_shell/relay_service.py` shim | HubRuntimeBridge | `adapters/legacy_lifecycle.py` |
 | Hub publish intake | `hub_runtime_bridge/service/hub_publish.py` | HubRuntimeBridge | `service/hub_publish.py` |
 | Offline queue | `hub_runtime_bridge/` | HubRuntimeBridge | `transport/offline_queue.py` |
-| Redis Streams relay | `app_shell/redis_runtime.py` | HubRuntimeBridge | `transport/relay_transport.py` |
+| Redis Streams relay | `hub_runtime_bridge/transport/relay_streams.py` plus DAL Redis clients | HubRuntimeBridge | `transport/relay_transport.py` |
 | Hub agent sync | `app_shell/relay_service.py` | HubRuntimeBridge -> Agent | via `AgentRegistryWriter` |
 | **LLM Gateway** | | | |
 | OpenAI SDK calls | deleted app-shell facade | LLM Gateway | `providers/openai_provider.py` |
@@ -2390,12 +2391,12 @@ class AgentService:
 | Push notification auth | `common/utils/push_notification_auth.py` | A2A Adapter | `push_notification.py` |
 | **DAL** | | | |
 | MongoDB client | `database/mongodb.py` | DAL | `mongo/client.py` |
-| Redis KV | `app_shell/redis_runtime.py` | DAL | `redis/kv.py` |
+| Redis KV | `dal/redis/kv.py` | DAL | `redis/kv.py` |
 | Redis Pub/Sub | `delivery/` | DAL | `redis/pubsub.py` |
-| Redis Streams | `app_shell/redis_runtime.py` | DAL | `redis/streams.py` |
+| Redis Streams | `dal/redis/streams.py` | DAL | `redis/streams.py` |
 | Pinecone | `database/pinecone_db.py` | DAL | `pinecone/client.py` |
 | S3 SDK calls | `app_shell/s3_service.py` shim | DAL | `s3/client.py` |
-| Leader election | `app_shell/redis_runtime.py` | DAL | `redis/leader.py` |
+| Leader election | `dal/redis/lock.py` | DAL | `redis/leader.py` |
 | **Jobs** | | | |
 | Health check | `jobs/agent_health_service.py` | Jobs | `agent_health_job.py` |
 | Compaction sweep | `jobs/compaction_sweep.py` | Jobs | `compaction_sweep_job.py` |
