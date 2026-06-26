@@ -478,8 +478,11 @@ Hub relay responsibilities:
   method names and delegates these operations to HubRuntimeBridge adapters.
 
 When Redis Streams are available, relay events use streams for durable-ish hub
-event delivery. Without streams, the facade falls back to in-memory/offline
-queues for single-process/degraded operation.
+event delivery through `hub_runtime_bridge.transport.RelayStreamService`, which
+consumes DAL `RedisStreams` rows and optional DAL `RedisKV` heartbeat state.
+Redis stream and heartbeat failures are logged and degrade to empty reads,
+missing entry ids, or dead liveness checks so the facade can fall back to
+in-memory/offline queues for single-process/degraded operation.
 
 ### `a2a_adapter`
 
@@ -512,7 +515,8 @@ Business modules use module-scoped repositories built from `MongoDAL`,
 
 - `dal.mongo`: generic Mongo collection/DAL adapter.
 - `dal.pinecone`: vector adapter.
-- `dal.redis`: Redis KV, Pub/Sub, and related support.
+- `dal.redis`: Redis KV, Pub/Sub, Streams, leader election, and room
+  distributed locking support.
 - `dal.s3`: object storage adapter and the sole runtime owner of S3-compatible
   SDK calls.
 - `dal.index_registry`: startup index registration across modules.
@@ -619,9 +623,11 @@ pass:
 - `agent.health.AgentHealthService`: periodic health/liveness support for
   agents; the app-shell health module is a re-export shim.
 
-App-shell Redis runtime modules contain Redis services, leader election, room
-locks, relay streams, and event broker support. Leader election prevents
-duplicate job execution in multi-worker deployments.
+Redis runtime primitives live under `dal.redis`: KV and Streams expose
+`is_connected` health, leader election accepts explicit TTL overrides, and room
+distributed locking preserves the `True`/`False`/`None` acquire result used by
+Execution to distinguish acquisition, contention, and Redis degradation.
+Leader election prevents duplicate job execution in multi-worker deployments.
 
 ## Core Workflow: Frontend Room Message
 

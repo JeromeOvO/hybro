@@ -19,6 +19,11 @@ class RedisKVImpl:
     ) -> None:
         self._client = client
         self._url = settings.redis_url if url is None else url
+        self._last_ping_ok = client is not None
+
+    @property
+    def is_connected(self) -> bool:
+        return self._client is not None and self._last_ping_ok
 
     def _ensure_client(self) -> Any | None:
         if self._client is not None:
@@ -96,11 +101,15 @@ class RedisKVImpl:
     async def ping(self) -> bool:
         client = self._ensure_client()
         if client is None:
+            self._last_ping_ok = False
             return False
         try:
             await client.ping()
+            self._last_ping_ok = True
             return True
         except Exception:
+            self._last_ping_ok = False
+            self._client = None
             return False
 
     async def close(self) -> None:
@@ -110,3 +119,4 @@ class RedisKVImpl:
             except Exception:
                 pass
         self._client = None
+        self._last_ping_ok = False
