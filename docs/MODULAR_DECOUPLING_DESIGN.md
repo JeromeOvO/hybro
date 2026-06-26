@@ -124,7 +124,7 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 | 8 | **Execution** | Run lifecycle, supervisor, debate, HITL, dispatch (NOT workflow) | `execution/`, `app_shell/hitl_service.py` |
 | 9 | **Delivery** | SSE connections, event broker, dedup, domain→frontend event translation | `delivery/` |
 | 10 | **Platform** | Gateway API, rate limiting, file storage | `platform_module/`, `api/gateway.py`, `api/discovery.py`, `api/files.py` |
-| 11 | **HubRuntimeBridge** | Hub connection, relay, liveness, offline queue, agent sync | `hub_runtime_bridge/`, `api/relay.py`, `api/hub.py`, `app_shell/relay_service.py` shim |
+| 11 | **HubRuntimeBridge** | Hub connection, relay, liveness, offline queue, agent sync | `hub_runtime_bridge/`, `api/relay.py`, `api/hub.py`, `hub_runtime_bridge/compat/relay_service.py` |
 | 12 | **Jobs** | Background tasks with leader election | `jobs/`, DAL Redis runtime |
 
 > **NOTE (Workflow decommission)**: The legacy `base_tasks` / `meta_tasks` / `task_sessions` data model
@@ -166,8 +166,8 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 
 > **Goal 7 acceptance state (2026-06-23):** The modular decoupling design is
 > accepted. The remaining app-shell focus files `room_runtime.py`,
-> `a2a_runtime.py`, `relay_service.py`, and `repository_store.py` are
-> import-compatible shims only. Runtime behavior lives in
+> `a2a_runtime.py`, and `repository_store.py` are import-compatible shims only.
+> Relay compatibility is owned directly by HubRuntimeBridge. Runtime behavior lives in
 > `room.compat.runtime`, `a2a_adapter.runtime_service`,
 > `hub_runtime_bridge.compat.relay_service`,
 > `context_memory.compat.context_assembly`, and `dal.runtime_store`.
@@ -2370,14 +2370,14 @@ class AgentService:
 | Agent avatar uploads | `platform_module/agent_avatar.py` | Platform over DAL | `api/agent.py` avatar route |
 | Object storage compatibility | `platform_module/object_storage.py` | Platform over DAL | `object_storage.py` |
 | **HubRuntimeBridge** | | | |
-| Hub relay | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_relay.py` |
-| Hub liveness | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_liveness.py` |
+| Hub relay | `hub_runtime_bridge/compat/relay_service.py` | HubRuntimeBridge | `service/hub_relay.py` |
+| Hub liveness | `hub_runtime_bridge/compat/relay_service.py` | HubRuntimeBridge | `service/hub_liveness.py` |
 | Hub connection | `api/hub.py` | HubRuntimeBridge | `service/hub_connection.py` |
-| Hub route lifecycle compatibility | `app_shell/relay_service.py` shim | HubRuntimeBridge | `adapters/legacy_lifecycle.py` |
+| Hub route lifecycle compatibility | `hub_runtime_bridge/compat/relay_service.py` | HubRuntimeBridge | `adapters/legacy_lifecycle.py` |
 | Hub publish intake | `hub_runtime_bridge/service/hub_publish.py` | HubRuntimeBridge | `service/hub_publish.py` |
 | Offline queue | `hub_runtime_bridge/` | HubRuntimeBridge | `transport/offline_queue.py` |
 | Redis Streams relay | `hub_runtime_bridge/transport/relay_streams.py` plus DAL Redis clients | HubRuntimeBridge | `transport/relay_transport.py` |
-| Hub agent sync | `app_shell/relay_service.py` | HubRuntimeBridge -> Agent | via `AgentRegistryWriter` |
+| Hub agent sync | `hub_runtime_bridge/compat/relay_service.py` | HubRuntimeBridge -> Agent | via `AgentRegistryWriter` |
 | **LLM Gateway** | | | |
 | OpenAI SDK calls | deleted app-shell facade | LLM Gateway | `providers/openai_provider.py` |
 | Gemini SDK calls | deleted app-shell facade | LLM Gateway | `providers/gemini_provider.py` |

@@ -747,12 +747,12 @@ def test_manifest_paths_do_not_reference_deleted_packages() -> None:
     assert not deleted_paths
 
 
-def test_sse_manager_processing_status_has_no_run_lifecycle_side_effects() -> None:
+def test_delivery_facade_processing_status_has_no_run_lifecycle_side_effects() -> None:
     if os.environ.get("PHASE7A_ALLOW_LEGACY_SSE_MANAGER") == "1":
         return
 
-    path = ROOT / "app_shell" / "delivery_runtime.py"
-    tree = ast.parse(path.read_text(), filename="app_shell/delivery_runtime.py")
+    path = ROOT / "delivery" / "facade.py"
+    tree = ast.parse(path.read_text(), filename=str(path))
     forbidden_imports: list[str] = []
     for node in ast.walk(tree):
         if (

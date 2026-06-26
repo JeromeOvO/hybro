@@ -126,9 +126,9 @@ Examples:
 - Agent route compatibility is owned by `agent.route_adapter.AgentRouteAdapter`
   and `agent.service.AgentService`, both constructed directly by `container.py`
   over `agent.AgentFacade`.
-- `app_shell.relay_service` is an import-compatible shim over
-  `hub_runtime_bridge.compat.relay_service`; relay behavior is owned by
-  `hub_runtime_bridge.HubFacade` and HubRuntimeBridge adapters.
+- Relay compatibility lives directly in `hub_runtime_bridge.compat.relay_service`;
+  relay behavior is owned by `hub_runtime_bridge.HubFacade` and HubRuntimeBridge
+  adapters, with no app-shell relay runtime shim.
 - `app_shell.a2a_runtime` is an import-compatible shim over
   `a2a_adapter.runtime_service`. `A2AService` keeps legacy method names while
   delegating task-tracking placeholder creation, tracked-send push
@@ -446,17 +446,17 @@ This module is used by:
 
 `hub_runtime_bridge.HubFacade` owns hub connection management, relay dispatch,
 agent sync, liveness, offline queue behavior, task ownership, and internal hub
-response routing. `app_shell.relay_service.RelayService` remains as a
-compatibility adapter for legacy route imports and APIKey/request adaptation; it
+response routing. `hub_runtime_bridge.compat.relay_service.RelayService`
+provides the legacy relay method surface for APIKey/request adaptation and
 delegates Hub behavior through facade public methods. Its runtime binding uses
 `RelayHubStore` under HubRuntimeBridge ownership, `HubMongoRepository`,
 `AgentRepository`, and the `RelayOfflineFailureAdapter` instead of the broad
 legacy Mongo/database singletons. `sse_manager` is no longer part of
-`RelayService` or `init_relay_service` construction; offline failures enter
-Delivery through `RelayOfflineFailureAdapter`, and stream/leader bindings are
-protocol-style pass-throughs rather than app-shell-owned Redis runtime concrete
-dependencies. Relay transport binding is stored once and exposed through the
-legacy `relay_transport` compatibility accessor rather than duplicated private
+`RelayService` construction; offline failures enter Delivery through
+`RelayOfflineFailureAdapter`, and stream/leader bindings are protocol-style
+pass-throughs rather than app-shell-owned Redis runtime concrete dependencies.
+Relay transport binding is stored once and exposed through the legacy
+`relay_transport` compatibility accessor rather than duplicated private
 transport state.
 
 Hub relay responsibilities:
@@ -470,8 +470,9 @@ Hub relay responsibilities:
 - Journal internal responses and replay them if needed.
 - Maintain task ownership leases for multi-worker safety.
 - Own legacy hub publish authorization and cancellation-reader adapters used by
-  relay publish processing; `app_shell.relay_service` wires these adapters into
-  `HubFacade` instead of querying room/agent message state directly.
+  relay publish processing; HubRuntimeBridge compat wiring injects these
+  adapters into `HubFacade` instead of querying room/agent message state
+  directly.
 - Own legacy relay lifecycle adapter behavior for hub registration,
   owner/room authorization, heartbeat validation, hub status aggregation, and
   disconnect bookkeeping. The app-shell relay service keeps compatibility
@@ -593,8 +594,6 @@ Examples:
 
 - `app_shell.room_runtime`: re-exports `room.compat.runtime`.
 - `app_shell.a2a_runtime`: re-exports `a2a_adapter.runtime_service`.
-- `app_shell.relay_service`: re-exports
-  `hub_runtime_bridge.compat.relay_service`.
 - `app_shell.repository_store`: re-exports
   `dal.runtime_store.app_shell_store`.
 - Agent runtime focus shim modules under `app_shell` re-export `agent.*` owner
