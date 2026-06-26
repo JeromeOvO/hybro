@@ -293,20 +293,19 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.selection_service import AgentSelectionService
             from agent.service import AgentService
             from app_shell.bedrock_service import bedrock_service
-            from app_shell.compaction_service import compaction_service
-            from app_shell.context_memory_runtime import AppShellMemoryCenter
             from app_shell.debate_service import debate_service
             from app_shell.gemini_service import gemini_service
-            from app_shell.memory_service import (
-                chat_memory_service,
-                room_memory_service,
-            )
             from app_shell.notification_service import notification_service
             from app_shell.openai_service import openai_service
             from app_shell.room_coordinator_service import room_coordinator_service
             from app_shell.room_membership_source import LegacyRoomMembershipSeedSource
             from app_shell.task_service import task_service
             from common.utils.a2a_helpers import bind_a2a_artifact_storage
+            from context_memory.compat.runtime import (
+                ContextMemoryChatAdapter,
+                ContextMemoryRoomMemoryAdapter,
+                ContextMemoryRouteCenter,
+            )
             from context_memory.config import ContextMemoryLLMConfig
             from execution.orchestration.room_supervisor_service import (
                 SupervisorPlanningError,
@@ -362,7 +361,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             bind_api_key_authenticator(MongoAPIKeyAuthenticator(api_key_store))
             vector_dal = create_vector_dal()
             route_room_center = AppShellRoomCenter()
-            route_memory_center = AppShellMemoryCenter()
             route_repository_provider = AppShellDALViewSetRepositoryProvider(
                 mongo=mongo_dal
             )
@@ -517,8 +515,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 llm_gateway_config=llm_gateway_config,
             )
             room_supervisor_service.bind_supervisor_service(supervisor_llm_service)
-            room_memory_service.bind_turn_notes_llm_provider(llm_provider)
-            chat_memory_service.bind_room_memory_llm_service(room_memory_llm_service)
             room_runtime.bind_message_parser_service(message_parser_llm_service)
             room_runtime.bind_debate_rounds(runtime.settings.debate_rounds)
             room_coordinator_service.bind_summary_service(summary_llm_service)
@@ -925,16 +921,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             execution_remote_task_reader = SimpleNamespace(
                 get_task_from_agent=task_service.get_task_from_agent,
             )
-            execution_room_memory = SimpleNamespace(
-                add_synthesis_to_history=room_memory_service.add_synthesis_to_history,
-                update_room_summary=room_memory_service.update_room_summary,
-            )
 
             membership_source.bind_store(agent_room_store)
             debate_service.bind_store(debate_message_store)
             room_coordinator_service.bind_store(room_coordinator_message_store)
-            chat_memory_service.bind_store(memory_store)
-            room_memory_service.bind_store(memory_store)
             bind_notification_store(task_notification_store)
             bind_task_notification_runtime(
                 notification_service=notification_service,
@@ -993,7 +983,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_service=agent_compat_service,
                 agent_selection_service=agent_selection_service,
                 a2a_service=a2a_service,
-                room_memory_service=room_memory_service,
                 sse_manager=sse_manager,
                 task_service=task_service,
             )
@@ -1012,6 +1001,23 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
             )
             _context_memory_deps = create_context_memory_deps(context_memory_facade)
+            context_memory_chat_adapter = ContextMemoryChatAdapter(
+                chat_store=memory_store,
+                chat_context_llm=room_memory_llm_service,
+            )
+            route_memory_center = ContextMemoryRouteCenter(
+                chat_adapter=context_memory_chat_adapter,
+            )
+            context_memory_room_memory = ContextMemoryRoomMemoryAdapter(
+                facade=context_memory_facade,
+                usage_store=memory_store,
+            )
+            execution_room_memory = SimpleNamespace(
+                add_synthesis_to_history=(
+                    context_memory_room_memory.add_synthesis_to_history
+                ),
+                update_room_summary=context_memory_room_memory.update_room_summary,
+            )
             room_message_center_impl = create_room_message_center(
                 room_runtime=execution_room_runtime,
                 message_reader=execution_message_reader,
@@ -1046,7 +1052,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 object_storage=platform_object_storage,
                 capability_issue_service=agent_capability_issue_service,
                 context_memory_runtime=_context_memory_deps.context_memory_runtime,
-                compaction_service=compaction_service,
+                context_compaction=context_memory_facade,
                 build_turn_content_func=build_turn_content,
                 supervisor_planning_error_cls=SupervisorPlanningError,
                 orphan_threshold_minutes=runtime.settings.orphan_threshold_minutes,
@@ -1146,10 +1152,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 event_publisher=_delivery_deps.event_publisher,
                 context_memory_facade=context_memory_facade,
             )
-            compaction_service.bind_content_storage(platform_facade.content_storage)
-            compaction_service.bind_room_memory_reader(context_memory_facade)
-            compaction_service.bind_facade(context_memory_facade)
-            room_memory_service.bind_facade(context_memory_facade)
             room_runtime.bind_context_memory(
                 _context_memory_deps.memory_manager,
                 _context_memory_deps.context_memory_runtime,
@@ -1319,7 +1321,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         "run_repository"
                     ].get_room_ids_with_non_terminal_runs
                 ),
-                compaction_service=compaction_service,
+                context_compaction=context_memory_facade,
             )
         )
         orphaned_upload_cleaner.set_leader_election(_leader)

@@ -409,6 +409,16 @@ def test_context_memory_import_boundary():
         "models.request",
         "models.response",
     }
+    path_legacy_compat_imports = {
+        Path("context_memory/protocols.py"): protocol_legacy_model_imports,
+        Path("context_memory/compat/runtime.py"): {
+            "llm_gateway.errors",
+            "models.error",
+            "models.memory",
+            "models.request",
+            "models.response",
+        },
+    }
 
     for path in Path("context_memory").rglob("*.py"):
         tree = ast.parse(path.read_text())
@@ -416,10 +426,7 @@ def test_context_memory_import_boundary():
             root = None
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    if (
-                        path == Path("context_memory/protocols.py")
-                        and alias.name in protocol_legacy_model_imports
-                    ):
+                    if alias.name in path_legacy_compat_imports.get(path, set()):
                         continue
                     root = alias.name.split(".", 1)[0]
                     assert root in allowed_roots and root not in forbidden, (
@@ -427,10 +434,7 @@ def test_context_memory_import_boundary():
                         alias.name,
                     )
             elif isinstance(node, ast.ImportFrom) and node.module:
-                if (
-                    path == Path("context_memory/protocols.py")
-                    and node.module in protocol_legacy_model_imports
-                ):
+                if node.module in path_legacy_compat_imports.get(path, set()):
                     continue
                 root = node.module.split(".", 1)[0]
                 assert root in allowed_roots and root not in forbidden, (
@@ -444,6 +448,24 @@ def test_non_protocol_helper_call_boundary():
         "context_memory/compat/context_assembly.py": {
             "assemble_supervisor_context_from_memory",
             "assemble_agent_execution_context_from_memory",
+        },
+        "context_memory/compat/runtime.py": {
+            "legacy_create_room_memory",
+            "legacy_get_room_memory_by_room_id",
+            "legacy_get_room_memory_by_memory_id",
+            "legacy_update_room_memory_by_room_id",
+            "legacy_update_room_memory_by_memory_id",
+            "legacy_delete_room_memory_by_room_id",
+            "legacy_delete_room_memory_by_memory_id",
+            "initialize_or_update_room_memory",
+            "add_agent_response_to_memory",
+            "add_synthesis_to_history",
+            "update_room_summary",
+        },
+        "context_memory/search_adapter.py": {
+            "legacy_search",
+            "index_turn_for_search",
+            "delete_room_index",
         },
         "app_shell/memory_service.py": {
             "legacy_create_room_memory",
@@ -482,7 +504,8 @@ def test_non_protocol_helper_call_boundary():
     violations = []
     for path in Path(".").rglob("*.py"):
         if (
-            path.parts[0] in {"context_memory", "tests"}
+            path.parts[0] == "tests"
+                or (path.parts[0] == "context_memory" and path not in path_allowed_helpers)
                 or path in {Path("container.py"), Path("main.py")}
                 or ".venv" in path.parts
                 or ".worktrees" in path.parts

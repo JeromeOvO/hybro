@@ -293,7 +293,7 @@ def _mongo_singleton_blockers(path: Path) -> list[Blocker]:
     blockers.extend(
         _aliased_import_name_blockers(
             path,
-            module_prefixes={"app_shell.memory_search_service"},
+            module_prefixes={"context_memory.search_adapter"},
             names={"bind_mongo_backend"},
         )
     )
@@ -336,7 +336,7 @@ def _pinecone_singleton_blockers(path: Path) -> list[Blocker]:
     blockers.extend(
         _aliased_import_name_blockers(
             path,
-            module_prefixes={"app_shell.memory_search_service"},
+            module_prefixes={"context_memory.search_adapter"},
             names={"bind_pinecone_backend"},
         )
     )
@@ -571,7 +571,7 @@ def test_convergence_scanner_detects_aliased_legacy_backend_binds(tmp_path):
     sample.write_text(
         "\n".join(
             [
-                "from app_shell.memory_search_service import (",
+                "from context_memory.search_adapter import (",
                 "    bind_mongo_backend as bind_memory_store,",
                 "    bind_pinecone_backend as bind_vector_store,",
                 ")",

@@ -1,320 +1,184 @@
 """
-Unit tests for Memory Search Service.
+Unit tests for context memory search runtime behavior.
 
 Tests cover:
-- Vector search (Pinecone mock)
-- Keyword search (MongoDB mock)
+- Vector search
+- Keyword search
 - Result merging with weighted scoring
 - Temporal decay with configurable half-life
-- MMR re-ranking with hand-crafted vectors
-- Turn indexing (write path)
+- MMR re-ranking with hand-crafted score profiles
+- Turn indexing write path
 - Graceful degradation on failures
 - End-to-end search pipeline
 
-See CONTEXT_MEMORY_SYSTEM_DESIGN.md §8 for design specification.
+See CONTEXT_MEMORY_SYSTEM_DESIGN.md section 8 for design specification.
 """
 
-import asyncio
 import math
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
 
 import pytest
 
-from app_shell.memory_search_service import (
-    MemorySearchService,
-    _cosine_similarity,
-)
-from common.dto import MemorySearchResult as DtoMemorySearchResult
-from common.utils.time import utcnow
-from models.memory import ContentType, ConversationTurn, TurnRepresentation, TurnRole
-from models.search import MemorySearchResult, MemorySourceType
+from common.dto import VectorSearchResult
+from context_memory import search
+from context_memory.config import MemorySearchConfig
+from context_memory.models import SearchRankingRecord
+
+NOW = datetime.now(UTC)
 
 
-class BoundMemorySearchFacade:
-    def __init__(self, service: MemorySearchService):
-        self.service = service
-        self.search_config = service.config
-        self.vector = MagicMock()
-        self.vector.search = AsyncMock(return_value=[])
-        self.content_repository = MagicMock()
-        self.content_repository.text_search = AsyncMock(return_value=[])
-        self.content_repository.hydrate_turn_notes = AsyncMock(return_value=[])
+class FakeLLM:
+    def __init__(self, embedding: list[float] | None = None):
+        self.embedding = embedding or [0.1] * 1536
+        self.embedded = []
 
-    async def legacy_search(
-        self,
-        query: str,
-        room_id: str,
-        user_id: str | None = None,
-        limit: int | None = None,
-    ):
-        start_time = __import__("time").monotonic()
-        if not self.service.config.enabled:
-            return {
-                "query": query,
-                "room_id": room_id,
-                "results": [],
-                "vector_search_used": False,
-                "keyword_search_used": False,
-                "temporal_decay_applied": False,
-                "mmr_applied": False,
-            }
-
-        raw_results = await asyncio.gather(
-            self.service._vector_search(query, room_id),
-            self.service._keyword_search(query, room_id),
-            return_exceptions=True,
-        )
-        vector_results = []
-        keyword_results = []
-        vector_used = True
-        keyword_used = True
-        if isinstance(raw_results[0], Exception):
-            vector_used = False
-        else:
-            vector_results = raw_results[0]
-        if isinstance(raw_results[1], Exception):
-            keyword_used = False
-        else:
-            keyword_results = raw_results[1]
-
-        merged = self.service._merge_results(
-            vector_results,
-            keyword_results,
-            vector_weight=self.service.config.vector_weight,
-            keyword_weight=self.service.config.keyword_weight,
-        )
-        decay_applied = False
-        if self.service.config.temporal_decay_enabled and merged:
-            merged = self.service._apply_temporal_decay(
-                merged,
-                half_life_days=self.service.config.half_life_days,
-            )
-            decay_applied = True
-        mmr_applied = False
-        if merged:
-            merged = self.service._apply_mmr(
-                merged,
-                lambda_param=self.service.config.mmr_lambda,
-            )
-            mmr_applied = True
-
-        final = merged[: limit or self.service.config.max_results]
-        if [result.turn_id for result in final if not result.content and result.turn_id]:
-            await self.service._hydrate_results_from_storage(final, room_id)
-
-        dto_results = [
-            DtoMemorySearchResult(
-                room_id=result.room_id,
-                content=result.content,
-                score=result.combined_score,
-                metadata={
-                    "turn_id": result.turn_id,
-                    "fact_id": result.fact_id,
-                    "source_type": result.source_type.value,
-                    "content_preview": result.content_preview,
-                    "vector_score": result.vector_score,
-                    "keyword_score": result.keyword_score,
-                    "temporal_decay_factor": result.temporal_decay_factor,
-                    "timestamp": result.timestamp,
-                    "role": result.role,
-                    "agent_name": result.agent_name,
-                    "is_compact": result.is_compact,
-                    "can_expand": result.can_expand,
-                },
-            )
-            for result in final
-        ]
-        return {
-            "query": query,
-            "room_id": room_id,
-            "results": dto_results,
-            "total_matches": len(merged),
-            "search_time_ms": round((__import__("time").monotonic() - start_time) * 1000, 2),
-            "searched_at": utcnow(),
-            "vector_search_used": vector_used,
-            "keyword_search_used": keyword_used,
-            "temporal_decay_applied": decay_applied,
-            "mmr_applied": mmr_applied,
-        }
-
-    async def index_turn_for_search(self, room_id: str, turn_doc: dict) -> bool:
-        turn = turn_doc if not isinstance(turn_doc, dict) else ConversationTurn(**turn_doc)
-        content = turn.content
-        if not content:
-            return False
-        if getattr(self.service, "_index_available", True) is False:
-            return False
-        try:
-            embedding = await self.service.openai_service.get_embedding(content)
-            metadata = {
-                "room_id": room_id,
-                "turn_id": turn.turn_id,
-                "role": turn.role.value if turn.role else "unknown",
-                "agent_name": turn.agent_name or "",
-                "timestamp": turn.timestamp.isoformat() if turn.timestamp else "",
-            }
-            mock_index = getattr(self.service, "_mock_index", None)
-            if mock_index is not None:
-                mock_index.upsert(
-                    vectors=[
-                        {
-                            "id": turn.turn_id,
-                            "values": embedding,
-                            "metadata": metadata,
-                        }
-                    ]
-                )
-            return True
-        except Exception:
-            return False
-
-    async def delete_room_index(self, room_id: str) -> bool:
-        if getattr(self.service, "_index_available", True) is False:
-            return False
-        try:
-            mock_index = getattr(self.service, "_mock_index", None)
-            if mock_index is not None:
-                mock_index.delete(filter={"room_id": {"$eq": room_id}})
-            return True
-        except Exception:
-            return False
+    async def embed(self, text: str):
+        self.embedded.append(text)
+        return self.embedding
 
 
-def bind_memory_search_facade(service: MemorySearchService) -> MemorySearchService:
-    service.bind_facade(BoundMemorySearchFacade(service))
-    return service
+class FakeVector:
+    def __init__(self, matches=None):
+        self.matches = matches or []
+        self.search_calls = []
+        self.upserted = []
+        self.deleted = []
+
+    async def search(self, index, vector, top_k, filter=None):
+        self.search_calls.append((index, vector, top_k, filter))
+        return self.matches
+
+    async def upsert(self, index, records):
+        self.upserted.append((index, records))
+
+    async def delete_by_filter(self, index, filter):
+        self.deleted.append((index, filter))
 
 
-# =============================================================================
-# Test Fixtures
-# =============================================================================
+class RaisingVector(FakeVector):
+    async def search(self, index, vector, top_k, filter=None):
+        raise RuntimeError("vector unavailable")
+
+    async def upsert(self, index, records):
+        raise RuntimeError("upsert unavailable")
 
 
-@pytest.fixture
-def mock_settings():
-    """Mock settings for memory search configuration."""
-    with patch("models.context_config.settings") as mock:
-        mock.memory_search_enabled = True
-        mock.memory_search_vector_weight = 0.7
-        mock.memory_search_keyword_weight = 0.3
-        mock.memory_search_temporal_decay_enabled = True
-        mock.memory_search_half_life_days = 30
-        mock.memory_search_mmr_lambda = 0.7
-        mock.memory_search_max_results = 10
-        mock.memory_search_max_snippet_chars = 500
-        mock.memory_search_index_name = "room-memory"
-        yield mock
+class RaisingContentRepository:
+    async def text_search(self, room_id: str, query: str, limit: int = 50):
+        raise RuntimeError("keyword unavailable")
+
+    async def hydrate_turn_notes(self, room_id: str, turn_ids: list[str]):
+        return []
 
 
-@pytest.fixture
-def service():
-    """Create a MemorySearchService with mocked dependencies."""
-    svc = MemorySearchService()
-    svc.openai_service = MagicMock()
-    svc.openai_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
-    svc.embedding_service = MagicMock()
-    svc.embedding_service.get_embedding = AsyncMock(return_value=[0.1] * 1536)
-    svc._index_available = True
-    return bind_memory_search_facade(svc)
+class FakeContentRepository:
+    def __init__(self, *, text_results=None, hydrate_results=None):
+        self.text_results = text_results or []
+        self.hydrate_results = hydrate_results or []
+        self.text_calls = []
+        self.hydrate_calls = []
+
+    async def text_search(self, room_id: str, query: str, limit: int = 50):
+        self.text_calls.append((room_id, query, limit))
+        return self.text_results
+
+    async def hydrate_turn_notes(self, room_id: str, turn_ids: list[str]):
+        self.hydrate_calls.append((room_id, turn_ids))
+        wanted = set(turn_ids)
+        return [doc for doc in self.hydrate_results if doc.get("turn_id") in wanted]
+
+
+def config(**overrides):
+    values = {
+        "enabled": True,
+        "vector_weight": 0.7,
+        "keyword_weight": 0.3,
+        "temporal_decay_enabled": True,
+        "half_life_days": 30,
+        "mmr_lambda": 0.7,
+        "max_results": 10,
+        "max_snippet_chars": 500,
+        "index_name": "room-memory",
+    }
+    values.update(overrides)
+    return MemorySearchConfig(**values)
+
+
+def record(
+    turn_id: str,
+    *,
+    room_id: str = "room-1",
+    content: str = "",
+    vector_score: float = 0.0,
+    keyword_score: float = 0.0,
+    combined_score: float = 0.0,
+    temporal_decay_factor: float = 1.0,
+    timestamp: datetime | None = None,
+):
+    return SearchRankingRecord(
+        turn_id=turn_id,
+        room_id=room_id,
+        content=content,
+        vector_score=vector_score,
+        keyword_score=keyword_score,
+        combined_score=combined_score,
+        temporal_decay_factor=temporal_decay_factor,
+        timestamp=timestamp,
+    )
 
 
 @pytest.fixture
 def sample_vector_results():
-    """Sample results from vector search."""
-    now = datetime.now(UTC)
     return [
-        MemorySearchResult(
-            turn_id="turn-1",
-            room_id="room-1",
-            source_type=MemorySourceType.TURN,
-            content="",
-            vector_score=0.95,
-            timestamp=now - timedelta(days=1),
-        ),
-        MemorySearchResult(
-            turn_id="turn-2",
-            room_id="room-1",
-            source_type=MemorySourceType.TURN,
-            content="",
-            vector_score=0.80,
-            timestamp=now - timedelta(days=5),
-        ),
-        MemorySearchResult(
-            turn_id="turn-3",
-            room_id="room-1",
-            source_type=MemorySourceType.TURN,
-            content="",
-            vector_score=0.60,
-            timestamp=now - timedelta(days=30),
-        ),
+        record("turn-1", vector_score=0.95, timestamp=NOW - timedelta(days=1)),
+        record("turn-2", vector_score=0.80, timestamp=NOW - timedelta(days=5)),
+        record("turn-3", vector_score=0.60, timestamp=NOW - timedelta(days=30)),
     ]
 
 
 @pytest.fixture
 def sample_keyword_results():
-    """Sample results from keyword search."""
-    now = datetime.now(UTC)
     return [
-        MemorySearchResult(
-            turn_id="turn-2",
-            room_id="room-1",
-            source_type=MemorySourceType.TURN,
+        record(
+            "turn-2",
             content="keyword match content",
             keyword_score=5.0,
-            timestamp=now - timedelta(days=5),
+            timestamp=NOW - timedelta(days=5),
         ),
-        MemorySearchResult(
-            turn_id="turn-4",
-            room_id="room-1",
-            source_type=MemorySourceType.TURN,
+        record(
+            "turn-4",
             content="another keyword match",
             keyword_score=3.0,
-            timestamp=now - timedelta(days=10),
+            timestamp=NOW - timedelta(days=10),
         ),
     ]
 
 
-# =============================================================================
-# Cosine Similarity Tests
-# =============================================================================
-
-
 class TestCosineSimilarity:
-    """Tests for the _cosine_similarity utility."""
-
     def test_identical_vectors(self):
-        assert _cosine_similarity([1, 0, 0], [1, 0, 0]) == pytest.approx(1.0)
+        assert search.cosine_similarity([1, 0, 0], [1, 0, 0]) == pytest.approx(1.0)
 
     def test_orthogonal_vectors(self):
-        assert _cosine_similarity([1, 0, 0], [0, 1, 0]) == pytest.approx(0.0)
+        assert search.cosine_similarity([1, 0, 0], [0, 1, 0]) == pytest.approx(0.0)
 
     def test_opposite_vectors(self):
-        assert _cosine_similarity([1, 0], [-1, 0]) == pytest.approx(-1.0)
+        assert search.cosine_similarity([1, 0], [-1, 0]) == pytest.approx(-1.0)
 
     def test_zero_vector_returns_zero(self):
-        assert _cosine_similarity([0, 0, 0], [1, 2, 3]) == 0.0
+        assert search.cosine_similarity([0, 0, 0], [1, 2, 3]) == 0.0
 
     def test_known_angle(self):
-        """45-degree angle should give cos(45°) ≈ 0.707."""
-        result = _cosine_similarity([1, 0], [1, 1])
+        result = search.cosine_similarity([1, 0], [1, 1])
         expected = 1 / math.sqrt(2)
         assert result == pytest.approx(expected, rel=1e-6)
 
 
-# =============================================================================
-# Result Merging Tests
-# =============================================================================
-
-
 class TestMergeResults:
-    """Tests for _merge_results weighted combination."""
-
     def test_merge_disjoint_results(
         self, sample_vector_results, sample_keyword_results
     ):
-        """Disjoint results should appear with single-source scores."""
-        merged = MemorySearchService._merge_results(
+        merged = search.merge_results(
             sample_vector_results,
             sample_keyword_results,
             vector_weight=0.7,
@@ -327,8 +191,7 @@ class TestMergeResults:
     def test_merge_overlapping_turn(
         self, sample_vector_results, sample_keyword_results
     ):
-        """turn-2 appears in both; should have both scores combined."""
-        merged = MemorySearchService._merge_results(
+        merged = search.merge_results(
             sample_vector_results,
             sample_keyword_results,
             vector_weight=0.7,
@@ -342,23 +205,23 @@ class TestMergeResults:
         )
 
     def test_merge_empty_vector_results(self, sample_keyword_results):
-        merged = MemorySearchService._merge_results(
+        merged = search.merge_results(
             [], sample_keyword_results, vector_weight=0.7, keyword_weight=0.3
         )
         assert len(merged) == len(sample_keyword_results)
-        for r in merged:
-            assert r.vector_score == 0.0
+        for result in merged:
+            assert result.vector_score == 0.0
 
     def test_merge_empty_keyword_results(self, sample_vector_results):
-        merged = MemorySearchService._merge_results(
+        merged = search.merge_results(
             sample_vector_results, [], vector_weight=0.7, keyword_weight=0.3
         )
         assert len(merged) == len(sample_vector_results)
-        for r in merged:
-            assert r.keyword_score == 0.0
+        for result in merged:
+            assert result.keyword_score == 0.0
 
     def test_merge_both_empty(self):
-        merged = MemorySearchService._merge_results(
+        merged = search.merge_results(
             [], [], vector_weight=0.7, keyword_weight=0.3
         )
         assert merged == []
@@ -366,7 +229,7 @@ class TestMergeResults:
     def test_merge_sorted_by_combined_score(
         self, sample_vector_results, sample_keyword_results
     ):
-        merged = MemorySearchService._merge_results(
+        merged = search.merge_results(
             sample_vector_results,
             sample_keyword_results,
             vector_weight=0.7,
@@ -376,18 +239,11 @@ class TestMergeResults:
         assert scores == sorted(scores, reverse=True)
 
     def test_merge_normalizes_scores(self):
-        """Scores should be normalized to [0,1] within each source."""
         vec = [
-            MemorySearchResult(
-                turn_id="a", room_id="r", source_type=MemorySourceType.TURN,
-                content="", vector_score=100.0,
-            ),
-            MemorySearchResult(
-                turn_id="b", room_id="r", source_type=MemorySourceType.TURN,
-                content="", vector_score=50.0,
-            ),
+            record("a", room_id="r", vector_score=100.0),
+            record("b", room_id="r", vector_score=50.0),
         ]
-        merged = MemorySearchService._merge_results(
+        merged = search.merge_results(
             vec, [], vector_weight=1.0, keyword_weight=0.0
         )
         a = next(r for r in merged if r.turn_id == "a")
@@ -396,451 +252,484 @@ class TestMergeResults:
         assert b.vector_score == pytest.approx(0.5)
 
 
-# =============================================================================
-# Temporal Decay Tests
-# =============================================================================
-
-
 class TestTemporalDecay:
-    """Tests for _apply_temporal_decay."""
-
     def test_recent_result_decays_less(self):
-        now = datetime.now(UTC)
         results = [
-            MemorySearchResult(
-                turn_id="recent", room_id="r",
-                source_type=MemorySourceType.TURN, content="",
-                combined_score=1.0, timestamp=now - timedelta(days=1),
+            record(
+                "recent",
+                room_id="r",
+                combined_score=1.0,
+                timestamp=NOW - timedelta(days=1),
             ),
-            MemorySearchResult(
-                turn_id="old", room_id="r",
-                source_type=MemorySourceType.TURN, content="",
-                combined_score=1.0, timestamp=now - timedelta(days=60),
+            record(
+                "old",
+                room_id="r",
+                combined_score=1.0,
+                timestamp=NOW - timedelta(days=60),
             ),
         ]
-        decayed = MemorySearchService._apply_temporal_decay(results, half_life_days=30)
+        decayed = search.apply_temporal_decay(results, half_life_days=30)
         recent = next(r for r in decayed if r.turn_id == "recent")
         old = next(r for r in decayed if r.turn_id == "old")
         assert recent.combined_score > old.combined_score
 
     def test_half_life_halves_score(self):
-        now = datetime.now(UTC)
         results = [
-            MemorySearchResult(
-                turn_id="t", room_id="r",
-                source_type=MemorySourceType.TURN, content="",
+            record(
+                "t",
+                room_id="r",
                 combined_score=1.0,
-                timestamp=now - timedelta(days=30),
+                timestamp=NOW - timedelta(days=30),
             ),
         ]
-        decayed = MemorySearchService._apply_temporal_decay(results, half_life_days=30)
+        decayed = search.apply_temporal_decay(results, half_life_days=30)
         assert decayed[0].combined_score == pytest.approx(0.5, rel=0.01)
         assert decayed[0].temporal_decay_factor == pytest.approx(0.5, rel=0.01)
 
     def test_zero_age_no_decay(self):
-        now = datetime.now(UTC)
-        results = [
-            MemorySearchResult(
-                turn_id="t", room_id="r",
-                source_type=MemorySourceType.TURN, content="",
-                combined_score=1.0, timestamp=now,
-            ),
-        ]
-        decayed = MemorySearchService._apply_temporal_decay(results, half_life_days=30)
+        results = [record("t", room_id="r", combined_score=1.0, timestamp=NOW)]
+        decayed = search.apply_temporal_decay(results, half_life_days=30)
         assert decayed[0].combined_score == pytest.approx(1.0, rel=0.01)
 
     def test_no_timestamp_gets_penalty(self):
-        results = [
-            MemorySearchResult(
-                turn_id="t", room_id="r",
-                source_type=MemorySourceType.TURN, content="",
-                combined_score=1.0, timestamp=None,
-            ),
-        ]
-        decayed = MemorySearchService._apply_temporal_decay(results, half_life_days=30)
+        results = [record("t", room_id="r", combined_score=1.0, timestamp=None)]
+        decayed = search.apply_temporal_decay(results, half_life_days=30)
         assert decayed[0].temporal_decay_factor == 0.5
 
     def test_zero_half_life_returns_unchanged(self):
-        results = [
-            MemorySearchResult(
-                turn_id="t", room_id="r",
-                source_type=MemorySourceType.TURN, content="",
-                combined_score=1.0, timestamp=None,
-            ),
-        ]
-        decayed = MemorySearchService._apply_temporal_decay(results, half_life_days=0)
+        results = [record("t", room_id="r", combined_score=1.0, timestamp=None)]
+        decayed = search.apply_temporal_decay(results, half_life_days=0)
         assert decayed[0].combined_score == 1.0
 
     def test_decay_re_sorts_results(self):
-        """An older result with higher base score may rank below a newer lower-score result."""
-        now = datetime.now(UTC)
         results = [
-            MemorySearchResult(
-                turn_id="high-old", room_id="r",
-                source_type=MemorySourceType.TURN, content="",
+            record(
+                "high-old",
+                room_id="r",
                 combined_score=1.0,
-                timestamp=now - timedelta(days=120),
+                timestamp=NOW - timedelta(days=120),
             ),
-            MemorySearchResult(
-                turn_id="low-new", room_id="r",
-                source_type=MemorySourceType.TURN, content="",
+            record(
+                "low-new",
+                room_id="r",
                 combined_score=0.5,
-                timestamp=now - timedelta(days=1),
+                timestamp=NOW - timedelta(days=1),
             ),
         ]
-        decayed = MemorySearchService._apply_temporal_decay(results, half_life_days=30)
+        decayed = search.apply_temporal_decay(results, half_life_days=30)
         assert decayed[0].turn_id == "low-new"
 
 
-# =============================================================================
-# MMR Tests
-# =============================================================================
-
-
 class TestMMR:
-    """Tests for _apply_mmr Maximal Marginal Relevance."""
-
     def test_single_result_unchanged(self):
         results = [
-            MemorySearchResult(
-                turn_id="t", room_id="r",
-                source_type=MemorySourceType.TURN, content="",
-                combined_score=1.0, vector_score=1.0,
-                keyword_score=0.0, temporal_decay_factor=1.0,
+            record(
+                "t",
+                room_id="r",
+                combined_score=1.0,
+                vector_score=1.0,
+                temporal_decay_factor=1.0,
             ),
         ]
-        reranked = MemorySearchService._apply_mmr(results, lambda_param=0.7)
+        reranked = search.apply_mmr(results, lambda_param=0.7)
         assert len(reranked) == 1
         assert reranked[0].turn_id == "t"
 
     def test_empty_results(self):
-        assert MemorySearchService._apply_mmr([], lambda_param=0.7) == []
+        assert search.apply_mmr([], lambda_param=0.7) == []
 
     def test_first_pick_is_highest_score(self):
         results = [
-            MemorySearchResult(
-                turn_id="low", room_id="r",
-                source_type=MemorySourceType.TURN, content="",
-                combined_score=0.3, vector_score=0.3,
-                keyword_score=0.0, temporal_decay_factor=1.0,
-            ),
-            MemorySearchResult(
-                turn_id="high", room_id="r",
-                source_type=MemorySourceType.TURN, content="",
-                combined_score=0.9, vector_score=0.9,
-                keyword_score=0.0, temporal_decay_factor=1.0,
-            ),
+            record("low", room_id="r", combined_score=0.3, vector_score=0.3),
+            record("high", room_id="r", combined_score=0.9, vector_score=0.9),
         ]
-        reranked = MemorySearchService._apply_mmr(results, lambda_param=0.7)
+        reranked = search.apply_mmr(results, lambda_param=0.7)
         assert reranked[0].turn_id == "high"
 
     def test_pure_relevance_preserves_order(self):
-        """lambda=1.0 should give pure relevance ordering."""
         results = [
-            MemorySearchResult(
-                turn_id=f"t{i}", room_id="r",
-                source_type=MemorySourceType.TURN, content="",
+            record(
+                f"t{i}",
+                room_id="r",
                 combined_score=float(i) / 5,
                 vector_score=float(i) / 5,
-                keyword_score=0.0, temporal_decay_factor=1.0,
+                temporal_decay_factor=1.0,
             )
             for i in range(5, 0, -1)
         ]
-        reranked = MemorySearchService._apply_mmr(results, lambda_param=1.0)
+        reranked = search.apply_mmr(results, lambda_param=1.0)
         scores = [r.combined_score for r in reranked]
         assert scores == sorted(scores, reverse=True)
 
     def test_diversity_mode_promotes_diverse_results(self):
-        """lambda=0.0 should promote diversity (different score profiles)."""
         results = [
-            MemorySearchResult(
-                turn_id="vec-only", room_id="r",
-                source_type=MemorySourceType.TURN, content="",
+            record(
+                "vec-only",
+                room_id="r",
                 combined_score=0.8,
-                vector_score=1.0, keyword_score=0.0, temporal_decay_factor=1.0,
+                vector_score=1.0,
+                temporal_decay_factor=1.0,
             ),
-            MemorySearchResult(
-                turn_id="vec-clone", room_id="r",
-                source_type=MemorySourceType.TURN, content="",
+            record(
+                "vec-clone",
+                room_id="r",
                 combined_score=0.79,
-                vector_score=0.99, keyword_score=0.0, temporal_decay_factor=1.0,
+                vector_score=0.99,
+                temporal_decay_factor=1.0,
             ),
-            MemorySearchResult(
-                turn_id="kw-only", room_id="r",
-                source_type=MemorySourceType.TURN, content="",
+            record(
+                "kw-only",
+                room_id="r",
                 combined_score=0.5,
-                vector_score=0.0, keyword_score=1.0, temporal_decay_factor=1.0,
+                keyword_score=1.0,
+                temporal_decay_factor=1.0,
             ),
         ]
-        reranked = MemorySearchService._apply_mmr(results, lambda_param=0.0)
-        # "kw-only" is maximally diverse from "vec-only", should appear 2nd
+        reranked = search.apply_mmr(results, lambda_param=0.0)
         assert reranked[0].turn_id == "vec-only"
         assert reranked[1].turn_id == "kw-only"
 
     def test_all_results_included(self):
         results = [
-            MemorySearchResult(
-                turn_id=f"t{i}", room_id="r",
-                source_type=MemorySourceType.TURN, content="",
+            record(
+                f"t{i}",
+                room_id="r",
                 combined_score=0.5,
-                vector_score=0.5, keyword_score=0.5, temporal_decay_factor=1.0,
+                vector_score=0.5,
+                keyword_score=0.5,
+                temporal_decay_factor=1.0,
             )
             for i in range(5)
         ]
-        reranked = MemorySearchService._apply_mmr(results, lambda_param=0.7)
+        reranked = search.apply_mmr(results, lambda_param=0.7)
         assert len(reranked) == 5
 
 
-# =============================================================================
-# Indexing (Write Path) Tests
-# =============================================================================
+class TestVectorKeywordSearch:
+    @pytest.mark.asyncio
+    async def test_vector_search_embeds_and_queries_room_index(self):
+        llm = FakeLLM(embedding=[0.2] * 3)
+        vector = FakeVector(
+            [
+                VectorSearchResult(
+                    id="turn-abc",
+                    score=0.95,
+                    metadata={
+                        "turn_id": "turn-abc",
+                        "content_preview": "vector preview",
+                        "timestamp": NOW.isoformat(),
+                    },
+                )
+            ]
+        )
+
+        results = await search.vector_search(
+            room_id="room-1",
+            query="query",
+            vector=vector,
+            llm_provider=llm,
+            config=config(index_name="room-memory"),
+        )
+
+        assert results[0].turn_id == "turn-abc"
+        assert results[0].content == "vector preview"
+        assert results[0].metadata["can_expand"] is True
+        assert vector.search_calls == [
+            ("room-memory", [0.2] * 3, 50, {"room_id": {"$eq": "room-1"}})
+        ]
+
+    @pytest.mark.asyncio
+    async def test_keyword_search_uses_turn_notes_preview(self):
+        repo = FakeContentRepository(
+            text_results=[
+                {
+                    "turn_id": "turn-1",
+                    "score": 5.0,
+                    "turn_notes": {"one_liner": "keyword preview"},
+                    "content_type": "text",
+                    "stored_at": NOW,
+                }
+            ]
+        )
+
+        results = await search.keyword_search(
+            room_id="room-1",
+            query="keyword",
+            content_repository=repo,
+            config=config(),
+        )
+
+        assert results[0].turn_id == "turn-1"
+        assert results[0].content == "keyword preview"
+        assert results[0].keyword_score == 5.0
+        assert repo.text_calls == [("room-1", "keyword", 50)]
 
 
 class TestIndexing:
-    """Tests for index_turn_for_search write path."""
-
-    @pytest.fixture
-    def service_with_mocked_pinecone(self, service):
-        mock_index = MagicMock()
-        mock_index.upsert = MagicMock()
-        service._mock_index = mock_index
-        yield service
-
     @pytest.mark.asyncio
-    async def test_index_turn_embeds_and_upserts(
-        self, service_with_mocked_pinecone, mock_settings
-    ):
-        svc = service_with_mocked_pinecone
-        turn = ConversationTurn(
-            turn_id="turn-abc",
-            role=TurnRole.USER,
-            content="Hello world test content",
-            content_type=ContentType.TEXT,
-            representation=TurnRepresentation.FULL,
+    async def test_index_turn_embeds_and_upserts(self):
+        llm = FakeLLM(embedding=[0.3] * 3)
+        vector = FakeVector()
+
+        result = await search.index_turn_for_search(
+            room_id="room-1",
+            turn_doc={
+                "turn_id": "turn-abc",
+                "role": "user",
+                "agent_name": "Agent",
+                "content": "Hello world test content",
+                "timestamp": NOW,
+            },
+            vector=vector,
+            llm_provider=llm,
+            config=config(index_name="room-memory"),
         )
-        result = await svc.index_turn_for_search(turn, "room-1")
 
         assert result is True
-        svc.openai_service.get_embedding.assert_called_once_with(
-            "Hello world test content"
-        )
-        svc._mock_index.upsert.assert_called_once()
-        call_args = svc._mock_index.upsert.call_args
-        vectors = call_args[1]["vectors"]
-        assert vectors[0]["id"] == "turn-abc"
-        assert vectors[0]["metadata"]["room_id"] == "room-1"
+        assert llm.embedded == ["Hello world test content"]
+        record = vector.upserted[0][1][0]
+        assert record.id == "turn-abc"
+        assert record.vector == [0.3] * 3
+        assert record.metadata["room_id"] == "room-1"
 
     @pytest.mark.asyncio
-    async def test_index_turn_skips_empty_content(self, service, mock_settings):
-        turn = ConversationTurn(
-            turn_id="turn-empty",
-            role=TurnRole.USER,
-            content=None,
-            content_type=ContentType.TEXT,
-            representation=TurnRepresentation.COMPACT,
+    async def test_index_turn_skips_empty_content(self):
+        llm = FakeLLM()
+
+        result = await search.index_turn_for_search(
+            room_id="room-1",
+            turn_doc={"turn_id": "turn-empty", "role": "user", "content": ""},
+            vector=FakeVector(),
+            llm_provider=llm,
+            config=config(),
         )
-        result = await service.index_turn_for_search(turn, "room-1")
+
         assert result is False
-        service.openai_service.get_embedding.assert_not_called()
+        assert llm.embedded == []
 
     @pytest.mark.asyncio
-    async def test_index_turn_handles_embedding_failure(
-        self, service, mock_settings
-    ):
-        service.openai_service.get_embedding = AsyncMock(
-            side_effect=Exception("API error")
+    async def test_index_turn_handles_embedding_failure(self):
+        class FailingLLM:
+            async def embed(self, text: str):
+                raise RuntimeError("API error")
+
+        result = await search.index_turn_for_search(
+            room_id="room-1",
+            turn_doc={"turn_id": "turn-fail", "role": "user", "content": "content"},
+            vector=FakeVector(),
+            llm_provider=FailingLLM(),
+            config=config(),
         )
-        turn = ConversationTurn(
-            turn_id="turn-fail",
-            role=TurnRole.USER,
-            content="content",
-            content_type=ContentType.TEXT,
-        )
-        result = await service.index_turn_for_search(turn, "room-1")
+
         assert result is False
-
-
-# =============================================================================
-# End-to-End Search Pipeline Tests
-# =============================================================================
 
 
 class TestSearchPipeline:
-    """Tests for the full search() method."""
+    @pytest.mark.asyncio
+    async def test_search_disabled_returns_empty(self):
+        results, response = await search.search_memory(
+            room_id="room-1",
+            query="test query",
+            limit=10,
+            vector=FakeVector(),
+            llm_provider=FakeLLM(),
+            content_repository=FakeContentRepository(),
+            config=config(enabled=False),
+        )
+
+        assert results == []
+        assert response["results"] == []
+        assert response["vector_search_used"] is False
 
     @pytest.mark.asyncio
-    async def test_search_disabled_returns_empty(self, service, mock_settings):
-        mock_settings.memory_search_enabled = False
-        response = await service.search("test query", "room-1")
-        assert response.results == []
-        assert response.vector_search_used is False
+    async def test_search_combines_vector_and_keyword(self):
+        vector = FakeVector(
+            [
+                SimpleNamespace(
+                    id="turn-1",
+                    score=0.95,
+                    metadata={
+                        "turn_id": "turn-1",
+                        "content_preview": "vector preview",
+                        "timestamp": NOW.isoformat(),
+                    },
+                )
+            ]
+        )
+        repo = FakeContentRepository(
+            text_results=[
+                {
+                    "turn_id": "turn-2",
+                    "score": 5.0,
+                    "turn_notes": {"one_liner": "keyword match content"},
+                    "content_type": "text",
+                    "stored_at": NOW,
+                }
+            ]
+        )
+
+        results, response = await search.search_memory(
+            room_id="room-1",
+            query="test",
+            limit=10,
+            vector=vector,
+            llm_provider=FakeLLM(),
+            content_repository=repo,
+            config=config(),
+        )
+
+        assert len(results) == 2
+        assert response["vector_search_used"] is True
+        assert response["keyword_search_used"] is True
+        assert response["temporal_decay_applied"] is True
+        assert response["mmr_applied"] is True
+        assert response["search_time_ms"] >= 0
 
     @pytest.mark.asyncio
-    async def test_search_combines_vector_and_keyword(
-        self, service, mock_settings, sample_vector_results, sample_keyword_results
-    ):
-        """Full pipeline should merge, decay, and MMR results."""
-        with patch.object(
-            service, "_vector_search",
-            new=AsyncMock(return_value=sample_vector_results),
-        ):
-            with patch.object(
-                service, "_keyword_search",
-                new=AsyncMock(return_value=sample_keyword_results),
-            ):
-                response = await service.search("test", "room-1")
+    async def test_search_graceful_on_vector_failure(self):
+        results, response = await search.search_memory(
+            room_id="room-1",
+            query="test",
+            limit=10,
+            vector=RaisingVector(),
+            llm_provider=FakeLLM(),
+            content_repository=FakeContentRepository(
+                text_results=[
+                    {
+                        "turn_id": "turn-2",
+                        "score": 5.0,
+                        "turn_notes": {"one_liner": "keyword match content"},
+                        "content_type": "text",
+                        "stored_at": NOW,
+                    }
+                ]
+            ),
+            config=config(),
+        )
 
-        assert len(response.results) > 0
-        assert response.vector_search_used is True
-        assert response.keyword_search_used is True
-        assert response.temporal_decay_applied is True
-        assert response.mmr_applied is True
-        assert response.search_time_ms > 0
-
-    @pytest.mark.asyncio
-    async def test_search_graceful_on_vector_failure(
-        self, service, mock_settings, sample_keyword_results
-    ):
-        """Should return keyword results even if vector search fails."""
-        with patch.object(
-            service, "_vector_search",
-            new=AsyncMock(side_effect=Exception("Pinecone down")),
-        ):
-            with patch.object(
-                service, "_keyword_search",
-                new=AsyncMock(return_value=sample_keyword_results),
-            ):
-                response = await service.search("test", "room-1")
-
-        assert response.vector_search_used is False
-        assert response.keyword_search_used is True
-        assert len(response.results) > 0
+        assert response["vector_search_used"] is False
+        assert response["keyword_search_used"] is True
+        assert len(results) > 0
 
     @pytest.mark.asyncio
-    async def test_search_graceful_on_keyword_failure(
-        self, service, mock_settings, sample_vector_results
-    ):
-        """Should return vector results even if keyword search fails."""
-        with patch.object(
-            service, "_vector_search",
-            new=AsyncMock(return_value=sample_vector_results),
-        ):
-            with patch.object(
-                service, "_keyword_search",
-                new=AsyncMock(side_effect=Exception("MongoDB down")),
-            ):
-                response = await service.search("test", "room-1")
+    async def test_search_graceful_on_keyword_failure(self):
+        results, response = await search.search_memory(
+            room_id="room-1",
+            query="test",
+            limit=10,
+            vector=FakeVector(
+                [
+                    SimpleNamespace(
+                        id="turn-1",
+                        score=0.95,
+                        metadata={"turn_id": "turn-1", "content_preview": "vector"},
+                    )
+                ]
+            ),
+            llm_provider=FakeLLM(),
+            content_repository=RaisingContentRepository(),
+            config=config(),
+        )
 
-        assert response.vector_search_used is True
-        assert response.keyword_search_used is False
-        assert len(response.results) > 0
-
-    @pytest.mark.asyncio
-    async def test_search_both_fail_returns_empty(self, service, mock_settings):
-        """Should return empty results if both backends fail."""
-        with patch.object(
-            service, "_vector_search",
-            new=AsyncMock(side_effect=Exception("fail")),
-        ):
-            with patch.object(
-                service, "_keyword_search",
-                new=AsyncMock(side_effect=Exception("fail")),
-            ):
-                response = await service.search("test", "room-1")
-
-        assert response.results == []
-        assert response.vector_search_used is False
-        assert response.keyword_search_used is False
+        assert response["vector_search_used"] is True
+        assert response["keyword_search_used"] is False
+        assert len(results) > 0
 
     @pytest.mark.asyncio
-    async def test_search_respects_max_results(self, service, mock_settings):
-        mock_settings.memory_search_max_results = 3
-        many_results = [
-            MemorySearchResult(
-                turn_id=f"t{i}", room_id="room-1",
-                source_type=MemorySourceType.TURN, content="",
-                vector_score=float(i) / 10,
-                timestamp=datetime.now(UTC),
-            )
-            for i in range(10)
-        ]
-        with patch.object(
-            service, "_vector_search",
-            new=AsyncMock(return_value=many_results),
-        ):
-            with patch.object(
-                service, "_keyword_search",
-                new=AsyncMock(return_value=[]),
-            ):
-                response = await service.search("test", "room-1")
+    async def test_search_both_fail_returns_empty(self):
+        results, response = await search.search_memory(
+            room_id="room-1",
+            query="test",
+            limit=10,
+            vector=RaisingVector(),
+            llm_provider=FakeLLM(),
+            content_repository=RaisingContentRepository(),
+            config=config(),
+        )
 
-        assert len(response.results) <= 3
+        assert results == []
+        assert response["results"] == []
+        assert response["vector_search_used"] is False
+        assert response["keyword_search_used"] is False
 
+    @pytest.mark.asyncio
+    async def test_search_respects_configured_max_results(self):
+        vector = FakeVector(
+            [
+                SimpleNamespace(
+                    id=f"t{i}",
+                    score=float(10 - i),
+                    metadata={"turn_id": f"t{i}", "content_preview": f"result {i}"},
+                )
+                for i in range(10)
+            ]
+        )
 
-# =============================================================================
-# PineconeDB Multi-Index Tests
-# =============================================================================
+        results, response = await search.search_memory(
+            room_id="room-1",
+            query="test",
+            limit=None,
+            vector=vector,
+            llm_provider=FakeLLM(),
+            content_repository=FakeContentRepository(),
+            config=config(max_results=3),
+        )
+
+        assert len(results) == 3
+        assert len(response["results"]) == 3
 
 
 class TestPineconeMultiIndex:
-    """Tests for VectorDALImpl multi-index support."""
-
     def test_get_index_caches(self):
         from dal.pinecone.client import VectorDALImpl
 
-        mock_pc = MagicMock()
-        mock_index = MagicMock()
-        mock_pc.Index.return_value = mock_index
-        vector = VectorDALImpl(client=mock_pc)
+        class FakePinecone:
+            def __init__(self):
+                self.index_calls = []
+                self.index = object()
+
+            def Index(self, name):
+                self.index_calls.append(name)
+                return self.index
+
+        fake_pc = FakePinecone()
+        vector = VectorDALImpl(client=fake_pc)
 
         idx1 = vector._get_index("test-index")
         idx2 = vector._get_index("test-index")
 
         assert idx1 is idx2
-        mock_pc.Index.assert_called_once_with("test-index")
+        assert fake_pc.index_calls == ["test-index"]
 
     def test_get_index_different_names(self):
         from dal.pinecone.client import VectorDALImpl
 
-        mock_pc = MagicMock()
-        vector = VectorDALImpl(client=mock_pc)
+        class FakePinecone:
+            def __init__(self):
+                self.index_calls = []
+
+            def Index(self, name):
+                self.index_calls.append(name)
+                return object()
+
+        fake_pc = FakePinecone()
+        vector = VectorDALImpl(client=fake_pc)
 
         vector._get_index("index-a")
         vector._get_index("index-b")
 
-        assert mock_pc.Index.call_count == 2
-
-
-# =============================================================================
-# Context Config Tests
-# =============================================================================
+        assert fake_pc.index_calls == ["index-a", "index-b"]
 
 
 class TestMemorySearchConfig:
-    """Tests for MemorySearchConfig from context_config.py."""
+    def test_index_name_reads_settings(self, monkeypatch):
+        from context_memory import config as config_module
 
-    def test_reads_from_settings(self, mock_settings):
-        from models.context_config import memory_search_config
+        monkeypatch.setattr(
+            config_module, "_setting", lambda name, fallback: "settings-room-memory"
+        )
 
-        assert memory_search_config.enabled is True
-        assert memory_search_config.vector_weight == 0.7
-        assert memory_search_config.keyword_weight == 0.3
-        assert memory_search_config.half_life_days == 30
-        assert memory_search_config.mmr_lambda == 0.7
-        assert memory_search_config.max_results == 10
-        assert memory_search_config.index_name == "room-memory"
-
-    def test_disabled_when_setting_false(self, mock_settings):
-        mock_settings.memory_search_enabled = False
-        from models.context_config import memory_search_config
-
-        assert memory_search_config.enabled is False
-
-    def test_index_name_reads_settings(self, mock_settings):
-        mock_settings.memory_search_index_name = "settings-room-memory"
-        from models.context_config import memory_search_config
-
-        assert memory_search_config.index_name == "settings-room-memory"
+        assert MemorySearchConfig().index_name == "settings-room-memory"
 
     def test_blank_index_name_falls_back_to_default(self):
         from common.config import MEMORY_SEARCH_INDEX_NAME_DEFAULT, Settings
@@ -848,57 +737,3 @@ class TestMemorySearchConfig:
         settings = Settings(_env_file=None, memory_search_index_name="")
 
         assert settings.memory_search_index_name == MEMORY_SEARCH_INDEX_NAME_DEFAULT
-
-
-# =========================================================================
-# Test: facade/vector-backed search and write failures
-# =========================================================================
-
-
-@pytest.mark.asyncio
-async def test_vector_search_returns_empty_on_vector_dal_failure(service):
-    bound = service._facade
-    bound.vector.search = AsyncMock(side_effect=RuntimeError("vector unavailable"))
-
-    results = await service._vector_search("query", "room-1")
-
-    assert results == []
-
-
-@pytest.mark.asyncio
-async def test_vector_search_uses_bound_embedding_service(service):
-    bound = service._facade
-    service.embedding_service = MagicMock()
-    service.embedding_service.embed = AsyncMock(return_value=[0.2] * 1536)
-    service.openai_service.get_embedding = AsyncMock(side_effect=AssertionError("legacy"))
-    bound.vector.search = AsyncMock(return_value=[])
-
-    result = await service._vector_search("query", "room-1")
-
-    assert result == []
-    service.embedding_service.embed.assert_awaited_once_with("query")
-    service.openai_service.get_embedding.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_index_turn_skips_empty_content(service):
-    turn = MagicMock(spec=ConversationTurn)
-    turn.model_dump.return_value = {
-        "turn_id": "turn-1",
-        "role": "user",
-        "content": "",
-    }
-
-    result = await service.index_turn_for_search(turn, "room-1")
-
-    assert result is False
-
-
-@pytest.mark.asyncio
-async def test_delete_room_index_returns_false_on_bound_facade_failure(service):
-    bound = service._facade
-    bound.delete_room_index = AsyncMock(return_value=False)
-
-    result = await service.delete_room_index("room-1")
-
-    assert result is False

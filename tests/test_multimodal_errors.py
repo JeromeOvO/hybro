@@ -267,7 +267,6 @@ class TestMissingFileId:
         svc = RoomServices()
         svc.database_service = MagicMock()
         svc.sse_manager = MagicMock()
-        svc.room_memory_service = MagicMock()
 
         reader = MagicMock()
         reader.get_for_room_file = AsyncMock(return_value=None)

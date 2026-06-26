@@ -17,7 +17,6 @@ def room_runtime():
     svc = RoomServices()
     svc._store = MagicMock()
     svc.sse_manager = MagicMock()
-    svc.room_memory_service = MagicMock()
     return svc
 
 

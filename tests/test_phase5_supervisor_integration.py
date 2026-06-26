@@ -4,7 +4,7 @@ Unit tests for Phase 5: Supervisor Integration.
 Tests cover:
 1. build_supervisor_context() wiring into _prepare_for_supervisor()
 2. build_agent_execution_context() wiring into process_agent_message()
-3. add_synthesis_to_history() in RoomMemoryService
+3. add_synthesis_to_history() through the ContextMemory runtime adapter
 4. update_room_summary() with LLM extraction
 5. Compaction trigger in _handle_supervisor_run_result() for terminal statuses
 6. Prompt cache optimization (conversation_context in system prompt)
@@ -14,12 +14,14 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §11, §12.3, §18 Phase 5 for specification
 
 import asyncio
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from common.utils.time import utcnow
 from context_memory import assembly as context_memory_assembly
+from context_memory.compat.runtime import ContextMemoryRoomMemoryAdapter
 from context_memory.config import TokenBudgetConfig
 from models.memory import (
     ConversationTurn,
@@ -202,9 +204,13 @@ class BoundRoomMemoryFacade:
         )
 
 
-def bind_room_memory_facade(service):
-    service.bind_facade(BoundRoomMemoryFacade(service))
-    return service
+def room_memory_adapter(mock_db_service, mock_openai_service):
+    holder = SimpleNamespace(
+        _store=mock_db_service,
+        openai_service=mock_openai_service,
+        _enrich_turn_notes_background=AsyncMock(),
+    )
+    return ContextMemoryRoomMemoryAdapter(facade=BoundRoomMemoryFacade(holder)), holder
 
 
 class BoundAssemblyFacade:
@@ -288,7 +294,7 @@ def mock_openai_service():
 
 
 class TestAddSynthesisToHistory:
-    """Tests for RoomMemoryService.add_synthesis_to_history()."""
+    """Tests for synthesis history through the runtime adapter."""
 
     @pytest.mark.asyncio
     async def test_adds_supervisor_turn_and_persists(
@@ -297,11 +303,7 @@ class TestAddSynthesisToHistory:
         """Synthesis text should be atomically pushed as a SUPERVISOR turn."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, _holder = room_memory_adapter(mock_db_service, mock_openai_service)
 
         result = await service.add_synthesis_to_history(
             room_id="test_room",
@@ -322,11 +324,7 @@ class TestAddSynthesisToHistory:
         """Should return None when room document doesn't exist."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (False, False)
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, _holder = room_memory_adapter(mock_db_service, mock_openai_service)
 
         result = await service.add_synthesis_to_history(
             room_id="nonexistent",
@@ -342,11 +340,7 @@ class TestAddSynthesisToHistory:
         """Should return None when DB persistence fails."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (False, True)
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, _holder = room_memory_adapter(mock_db_service, mock_openai_service)
 
         result = await service.add_synthesis_to_history(
             room_id="test_room",
@@ -366,16 +360,12 @@ class TestSynthesisLLMEnrichment:
         """Long synthesis text should trigger background _enrich_turn_notes_background."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, holder = room_memory_adapter(mock_db_service, mock_openai_service)
 
         long_text = "This is a very detailed synthesis. " * 50
 
         with patch.object(
-            service, "_enrich_turn_notes_background", new_callable=AsyncMock
+            holder, "_enrich_turn_notes_background", new_callable=AsyncMock
         ) as mock_enrich:
             result = await service.add_synthesis_to_history(
                 room_id="test_room",
@@ -396,14 +386,10 @@ class TestSynthesisLLMEnrichment:
         """Short synthesis text should NOT trigger background enrichment."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, holder = room_memory_adapter(mock_db_service, mock_openai_service)
 
         with patch.object(
-            service, "_enrich_turn_notes_background", new_callable=AsyncMock
+            holder, "_enrich_turn_notes_background", new_callable=AsyncMock
         ) as mock_enrich:
             result = await service.add_synthesis_to_history(
                 room_id="test_room",
@@ -421,7 +407,7 @@ class TestSynthesisLLMEnrichment:
 
 
 class TestUpdateRoomSummary:
-    """Tests for RoomMemoryService.update_room_summary()."""
+    """Tests for summary updates through the runtime adapter."""
 
     @pytest.mark.asyncio
     async def test_extracts_and_persists_summary(
@@ -441,11 +427,7 @@ class TestUpdateRoomSummary:
             "important_constraints": ["Must finish by Friday"],
         }
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, _holder = room_memory_adapter(mock_db_service, mock_openai_service)
 
         success = await service.update_room_summary(
             room_id="test_room",
@@ -467,11 +449,7 @@ class TestUpdateRoomSummary:
             "LLM timeout"
         )
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, _holder = room_memory_adapter(mock_db_service, mock_openai_service)
 
         success = await service.update_room_summary(
             room_id="test_room",
@@ -495,11 +473,7 @@ class TestUpdateRoomSummary:
             "important_constraints": [],
         }
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, _holder = room_memory_adapter(mock_db_service, mock_openai_service)
 
         success = await service.update_room_summary(
             room_id="nonexistent",
@@ -529,11 +503,7 @@ class TestUpdateRoomSummary:
             "important_constraints": [],
         }
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, _holder = room_memory_adapter(mock_db_service, mock_openai_service)
 
         success = await service.update_room_summary(
             room_id="test_room",
@@ -564,11 +534,7 @@ class TestUpdateRoomSummary:
             "important_constraints": [],
         }
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, _holder = room_memory_adapter(mock_db_service, mock_openai_service)
 
         success = await service.update_room_summary(
             room_id="test_room",

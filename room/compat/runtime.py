@@ -84,7 +84,6 @@ from room.compat.unbound import (
     UNBOUND_AGENT_SELECTION_SERVICE,
     UNBOUND_AGENT_SERVICE,
     UNBOUND_DELIVERY_MANAGER,
-    UNBOUND_ROOM_MEMORY_SERVICE,
     UNBOUND_RUNTIME_STORE,
     UNBOUND_TASK_SERVICE,
 )
@@ -137,7 +136,6 @@ class RoomServices:
         self.message_parser_service = None
         self.debate_rounds = debate_rounds
         self.a2a_service = UNBOUND_A2A_SERVICE
-        self.room_memory_service = UNBOUND_ROOM_MEMORY_SERVICE
         self.sse_manager = UNBOUND_DELIVERY_MANAGER
         self.task_service = UNBOUND_TASK_SERVICE
         self._object_storage = None
@@ -168,14 +166,12 @@ class RoomServices:
         agent_service,
         agent_selection_service,
         a2a_service,
-        room_memory_service,
         sse_manager,
         task_service,
     ) -> None:
         self.agent_service = agent_service
         self.agent_selection_service = agent_selection_service
         self.a2a_service = a2a_service
-        self.room_memory_service = room_memory_service
         self.sse_manager = sse_manager
         self.task_service = task_service
 

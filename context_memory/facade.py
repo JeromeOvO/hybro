@@ -421,8 +421,19 @@ class ContextMemoryFacade:
         )
 
     async def compact_room_memory(
-        self, room_id: str, room_memory_doc: dict | None = None
+        self,
+        room_id: str,
+        room_memory_doc: object | None = None,
+        *,
+        room_memory: object | None = None,
     ):
+        if room_memory is not None:
+            if room_memory_doc is not None:
+                raise ValueError(
+                    "compact_room_memory accepts either room_memory_doc or "
+                    "room_memory, not both"
+                )
+            room_memory_doc = room_memory
         return await compaction.compact_room_memory(
             repository=self.memory_repository,
             content_repository=self.content_repository,

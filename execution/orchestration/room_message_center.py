@@ -17,6 +17,7 @@ from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from common.utils.summary_streaming import stream_summary_to_sse
 from common.utils.time import utcnow
+from context_memory.protocols import ContextMemoryCompactionPort
 from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
 from execution.dispatch.response_handler import AgentResponseHandler
@@ -86,7 +87,7 @@ delivery = None
 event_publisher = None
 remote_task_reader = None
 context_memory_runtime = None
-compaction_service = None
+context_compaction = None
 build_turn_content = None
 SupervisorPlanningError = RuntimeError
 
@@ -162,7 +163,7 @@ class RoomMessageCenter:
         s3_service=None,
         capability_issue_service=None,
         context_memory_runtime: ContextMemoryRuntime | None = None,
-        compaction_service=None,
+        context_compaction: ContextMemoryCompactionPort | None = None,
         build_turn_content_func=None,
         supervisor_planning_error_cls=RuntimeError,
         orphan_threshold_minutes: int | None = None,
@@ -193,7 +194,7 @@ class RoomMessageCenter:
         self.room_memory = room_memory
         self.hitl_coordinator = hitl_coordinator
         self.context_memory_runtime = context_memory_runtime
-        self.compaction_service = compaction_service
+        self.context_compaction = context_compaction
         self.build_turn_content = build_turn_content_func
         self.supervisor_planning_error_cls = supervisor_planning_error_cls
         self.orphan_threshold_minutes = (
@@ -2346,8 +2347,8 @@ class RoomMessageCenter:
     async def _trigger_compaction_safe(self, room_id: str) -> None:
         """Wrapper for compaction trigger (§6.5). Awaited within per-room lock."""
         try:
-            if self.compaction_service is not None:
-                await self.compaction_service.compact_if_needed(room_id)
+            if self.context_compaction is not None:
+                await self.context_compaction.compact_if_needed(room_id)
         except Exception as e:
             logger.warning(
                 "RoomMessageCenter: Background compaction failed for %s: %s",

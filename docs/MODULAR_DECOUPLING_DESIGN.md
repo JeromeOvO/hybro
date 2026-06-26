@@ -165,9 +165,9 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 > adapter ownership remains in `a2a_adapter`.
 
 > **Goal 7 acceptance state (2026-06-23):** The modular decoupling design is
-> accepted. The app-shell focus files `room_runtime.py`, `a2a_runtime.py`,
-> `relay_service.py`, `context_assembly_service.py`, and `repository_store.py`
-> are import-compatible shims only. Runtime behavior lives in
+> accepted. The remaining app-shell focus files `room_runtime.py`,
+> `a2a_runtime.py`, `relay_service.py`, and `repository_store.py` are
+> import-compatible shims only. Runtime behavior lives in
 > `room.compat.runtime`, `a2a_adapter.runtime_service`,
 > `hub_runtime_bridge.compat.relay_service`,
 > `context_memory.compat.context_assembly`, and `dal.runtime_store`.
@@ -2334,10 +2334,10 @@ class AgentService:
 | Agent message persistence | `room/compat/runtime.py` owner, `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `MessageMongoRepository` |
 | Message graph | `room/compat/runtime.py` owner, `app_shell/room_runtime.py` shim | Room | `room/repository/` message queries |
 | **Context & Memory** | | | |
-| Context assembly and legacy selection/metrics | `app_shell/context_assembly_service.py` shim | Context & Memory | `context_memory/facade.py`, `context_memory/assembly.py`, `context_memory/legacy_assembly.py` |
-| Memory compaction | `app_shell/compaction_service.py` | Context & Memory | `service/compaction.py` |
-| Memory search | `app_shell/memory_search_service.py` | Context & Memory | `service/memory_search.py` |
-| User memories | `app_shell/memory_service.py` | Context & Memory | `service/user_memory.py` |
+| Context assembly and legacy selection/metrics | `context_memory/compat/context_assembly.py` | Context & Memory | `context_memory/facade.py`, `context_memory/assembly.py`, `context_memory/legacy_assembly.py` |
+| Memory compaction | `context_memory/compaction.py` and `ContextMemoryFacade` | Context & Memory | `context_memory/compaction.py`, `context_memory/protocols.py` |
+| Memory search | `context_memory/search.py` and `context_memory/search_adapter.py` | Context & Memory | `context_memory/search.py`, `context_memory/search_adapter.py` |
+| Room/chat memories | `context_memory/compat/runtime.py` and `ContextMemoryFacade` | Context & Memory | `context_memory/compat/runtime.py`, `context_memory/facade.py` |
 | **Execution** | | | |
 | Message dispatch | `execution/orchestration/room_message_center.py` | Execution | `orchestration/` + `dispatch/` |
 | Supervisor loop | `execution/orchestration/supervisor_executor.py` | Execution | `orchestration/supervisor_executor.py` |

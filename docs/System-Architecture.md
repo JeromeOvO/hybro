@@ -120,7 +120,9 @@ Examples:
 - `app_shell.room_runtime` is an import-compatible shim over
   `room.compat.runtime`, where `AppShellRoomCenter` delegates to `RoomServices`
   bound to `room.RoomFacade`, room-owned unbound startup sentinels, and an
-  explicit repository-backed runtime store.
+  explicit repository-backed runtime store. `RoomServices` does not expose a
+  legacy memory-service slot; ContextMemory access is bound through the
+  ContextMemory runtime protocol and route adapters.
 - Agent route compatibility is owned by `agent.route_adapter.AgentRouteAdapter`
   and `agent.service.AgentService`, both constructed directly by `container.py`
   over `agent.AgentFacade`.
@@ -361,16 +363,26 @@ attachment descriptions. Agent commit events carry `agent_name` and
 turn shape. ContextMemory reloads the persisted message by `message_id`,
 projects it idempotently, and runs compaction only after a successful new
 projection.
-`app_shell.context_assembly_service` and `app_shell.memory_search_service`
-remain compatibility shims for tests and legacy callers; production
-`RoomServices` and `RoomMessageCenter` use injected protocols and
-`MessageCommitted` instead of directly calling ContextMemory write helpers.
+### ContextMemory Runtime Ownership
+
+`context_memory/` owns room memory projection, legacy chat-context route
+compatibility, memory search, turn indexing, compaction, content expansion,
+context assembly, and route/runtime adapters that expose memory-facing behavior.
+`ContextMemoryFacade` is the canonical runtime object for Room, Execution,
+background compaction, and event-driven projection. API Gateway memory routes use
+`context_memory.compat.runtime.ContextMemoryRouteCenter`, which adapts legacy
+chat-context request/response models without importing `app_shell`.
+
+The app-shell ContextMemory service files have been removed. Startup wiring in
+`container.py` constructs ContextMemory repositories, facade, and compatibility
+adapters directly. The preserved event path remains:
+`MessageCommitted -> ContextMemoryEventHandler -> ContextMemoryFacade.project_message_for_event`,
+with compaction triggered through ContextMemory-owned facade methods.
 Legacy turn-selection and context metric logging helpers live in
-`context_memory.legacy_assembly`, leaving the app-shell context assembly shim to
-convert result shapes and expose the legacy truncation counter.
-`app_shell.compaction_service` and `app_shell.memory_service` are still bound to
-the facade by the container runtime while their compatibility surfaces remain in
-use.
+`context_memory.legacy_assembly`. Route compatibility uses
+`ContextMemoryRouteCenter` with a store-backed `ContextMemoryChatAdapter`, while
+execution room-memory compatibility uses the facade-backed
+`ContextMemoryRoomMemoryAdapter` instead of app-shell memory service objects.
 
 ### `delivery`
 
@@ -578,8 +590,6 @@ Examples:
 - `app_shell.a2a_runtime`: re-exports `a2a_adapter.runtime_service`.
 - `app_shell.relay_service`: re-exports
   `hub_runtime_bridge.compat.relay_service`.
-- `app_shell.context_assembly_service`: re-exports
-  `context_memory.compat.context_assembly`.
 - `app_shell.repository_store`: re-exports
   `dal.runtime_store.app_shell_store`.
 - Agent runtime focus shim modules under `app_shell` re-export `agent.*` owner
@@ -889,9 +899,9 @@ memory search results, and quoted reply context separate so each can be bounded
 and tested independently.
 
 Memory search is provided by `ContextMemoryFacade` through the injected
-context-memory runtime protocol. The app-shell memory-search service is a
-compatibility adapter over the same facade, not a production orchestration
-dependency. Vector retrieval goes through `VectorDAL`, and keyword
+context-memory runtime protocol. Legacy search response consumers use
+`context_memory.search_adapter.ContextMemorySearchAdapter` over the same facade,
+not an app-shell service. Vector retrieval goes through `VectorDAL`, and keyword
 search/hydration goes through the context-memory content repository rather than
 private legacy database runtime backends.
 
