@@ -30,6 +30,24 @@ class Streams:
         ]
 
 
+class RedisPyStreams:
+    is_connected = True
+
+    async def xread(self, streams, count, block):
+        stream = next(iter(streams))
+        return [
+            (
+                stream,
+                [
+                    (
+                        "1-0",
+                        {"payload": json.dumps({"type": "user_message"})},
+                    )
+                ],
+            )
+        ]
+
+
 class KV:
     is_connected = True
 
@@ -57,6 +75,15 @@ async def test_relay_stream_payload_and_heartbeat_ttl_parity() -> None:
     assert entry_id == "1-0"
     assert entries == [("1-0", {"type": "user_message"})]
     assert await streams.is_hub_alive("hub-1") is True
+
+
+@pytest.mark.asyncio
+async def test_relay_streams_read_redis_py_tuple_rows() -> None:
+    streams = RelayStreamService(RedisPyStreams())
+
+    entries = await streams.read_events("hub-1", last_id="0-0")
+
+    assert entries == [("1-0", {"type": "user_message"})]
 
 
 class BrokenStreams:

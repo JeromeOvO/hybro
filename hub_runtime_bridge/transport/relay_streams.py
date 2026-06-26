@@ -72,7 +72,27 @@ class RelayStreamService:
 
         entries: list[tuple[str, dict]] = []
         for row in rows:
+            entries.extend(self._parse_read_row(row))
+        return entries
+
+    def _parse_read_row(self, row: Any) -> list[tuple[str, dict]]:
+        if isinstance(row, dict):
             entry = self._parse_row(row)
+            return [] if entry is None else [entry]
+
+        if not isinstance(row, tuple) or len(row) != 2:
+            return []
+
+        _stream_name, stream_entries = row
+        if not isinstance(stream_entries, list | tuple):
+            return []
+
+        entries: list[tuple[str, dict]] = []
+        for stream_entry in stream_entries:
+            if not isinstance(stream_entry, tuple) or len(stream_entry) != 2:
+                continue
+            entry_id, fields = stream_entry
+            entry = self._parse_entry(entry_id, fields or {})
             if entry is not None:
                 entries.append(entry)
         return entries
@@ -80,6 +100,9 @@ class RelayStreamService:
     def _parse_row(self, row: dict[str, Any]) -> tuple[str, dict] | None:
         entry_id = row.get("id")
         fields = row.get("fields") or {}
+        return self._parse_entry(entry_id, fields)
+
+    def _parse_entry(self, entry_id: Any, fields: Any) -> tuple[str, dict] | None:
         if not isinstance(entry_id, str) or not isinstance(fields, dict):
             return None
         payload = fields.get("payload", "{}")
