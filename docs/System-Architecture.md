@@ -241,14 +241,13 @@ without importing domain models:
 - `DiscoveryLLMService`: discovery query expansion.
 - `SummaryLLMService`: streaming synthesis of multi-agent responses (system prompt includes shared markdown formatting rules from `common/prompts/markdown_response_format.py`).
 - `AgentSelectionLLMService`, `MessageParserLLMService`, `RoomMemoryLLMService`,
-  and `DebateLLMService`: DTO-backed compatibility workflows for legacy app-shell
-  callers while migration continues.
+  and `DebateLLMService`: DTO-backed workflows used directly by runtime modules
+  or tested as focused LLM capabilities.
 
 `container.py` constructs one `LLMGatewayImpl` during runtime startup and binds
-these focused services into production consumers. Legacy `app_shell.openai_service`,
-`app_shell.gemini_service`, and `app_shell.bedrock_service` remain as
-side-effect-free compatibility adapters, but they no longer construct provider
-SDK clients or read LLM environment variables directly.
+focused services into production consumers. Provider-named app-shell LLM
+facades have been removed: runtime modules now depend on focused LLM services
+or gateway capability protocols instead of provider-named app-shell modules.
 
 ### `agent`
 
