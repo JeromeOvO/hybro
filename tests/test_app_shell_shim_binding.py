@@ -92,7 +92,7 @@ async def test_room_center_fails_before_bound_room_services() -> None:
 
     with pytest.raises(
         RuntimeError,
-        match=r"RoomCenter\.bind_facade\(\) not called - startup incomplete",
+        match=r"RoomRouteAdapter\.bind_facade\(\) not called - startup incomplete",
     ):
         await center.create_new_room(MagicMock())
 
