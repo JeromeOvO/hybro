@@ -944,7 +944,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_selection_service=agent_selection_service,
                 a2a_service=a2a_service,
                 delivery=execution_delivery,
-                task_service=task_service,
+                remote_task_reader=task_service,
             )
             room_runtime.bind_facade(_room_facade)
             room_runtime.bind_message_event_publisher(_delivery_deps.event_publisher)

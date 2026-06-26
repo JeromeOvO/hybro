@@ -137,7 +137,7 @@ class RoomServices:
         self.debate_rounds = debate_rounds
         self.a2a_service = UNBOUND_A2A_SERVICE
         self.delivery = UNBOUND_DELIVERY
-        self.task_service = UNBOUND_TASK_SERVICE
+        self.remote_task_reader = UNBOUND_TASK_SERVICE
         self._object_storage = None
         self._s3_service = None
         self._facade = None
@@ -167,13 +167,13 @@ class RoomServices:
         agent_selection_service,
         a2a_service,
         delivery,
-        task_service,
+        remote_task_reader,
     ) -> None:
         self.agent_service = agent_service
         self.agent_selection_service = agent_selection_service
         self.a2a_service = a2a_service
         self.delivery = delivery
-        self.task_service = task_service
+        self.remote_task_reader = remote_task_reader
 
     @property
     def object_storage(self):
@@ -1549,8 +1549,7 @@ class RoomServices:
             # Clear it so the frontend shows a generic "Working on your request…" instead.
             # Also clear in multi-agent rooms when the LLM simply passed through the
             # user's message verbatim (no meaningful decomposition).
-            # BUT: never clear task_content in debate mode — debate_service needs it
-            # to inject prior agent responses into the prompt.
+            # Keep task_content in debate mode because the debate prompt injector reads it.
             is_debate = parsed_result.get("message_type", "").startswith("DEBATE")
             if not is_debate and (
                 is_direct_chat or task_content.strip() == original_text.strip()

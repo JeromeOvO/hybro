@@ -38,7 +38,7 @@ def test_room_services_defaults_to_room_owned_unbound_legacy_dependencies() -> N
     assert service.a2a_service is UNBOUND_A2A_SERVICE
     assert not hasattr(service, "room_memory_service")
     assert service.delivery is UNBOUND_DELIVERY
-    assert service.task_service is UNBOUND_TASK_SERVICE
+    assert service.remote_task_reader is UNBOUND_TASK_SERVICE
 
 
 def test_room_services_bind_legacy_dependencies_replaces_unbound_defaults() -> None:
@@ -48,7 +48,7 @@ def test_room_services_bind_legacy_dependencies_replaces_unbound_defaults() -> N
         "agent_selection_service": object(),
         "a2a_service": object(),
         "delivery": object(),
-        "task_service": object(),
+        "remote_task_reader": object(),
     }
 
     service.bind_legacy_dependencies(**deps)
@@ -57,7 +57,7 @@ def test_room_services_bind_legacy_dependencies_replaces_unbound_defaults() -> N
     assert service.agent_selection_service is deps["agent_selection_service"]
     assert service.a2a_service is deps["a2a_service"]
     assert service.delivery is deps["delivery"]
-    assert service.task_service is deps["task_service"]
+    assert service.remote_task_reader is deps["remote_task_reader"]
 
 
 def test_app_shell_room_center_legacy_name_aliases_room_route_adapter() -> None:
