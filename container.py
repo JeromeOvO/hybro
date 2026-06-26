@@ -1431,7 +1431,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_selection_service=agent_selection_service,
                 execution_engine=_execution_deps.execution_engine,
                 sse_store=sse_state_reader,
-                sse_manager=sse_manager,
+                sse_transport=sse_manager,
                 webhook_receiver=create_webhook_transport(),
                 repository_provider=route_repository_provider,
                 embedding_provider=embedding_llm_service,
