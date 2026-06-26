@@ -2,4 +2,7 @@
 
 from dal.runtime_store.app_shell_store import AppShellRepositoryStore
 
-__all__ = ["AppShellRepositoryStore"]
+# Temporary compatibility alias for container wiring until the Task 4 DAL rename.
+RuntimeRepositoryStore = AppShellRepositoryStore
+
+__all__ = ["AppShellRepositoryStore", "RuntimeRepositoryStore"]

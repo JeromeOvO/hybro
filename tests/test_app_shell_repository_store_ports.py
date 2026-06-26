@@ -4,6 +4,7 @@ import inspect
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import get_type_hints
 
 from common.protocols import (
@@ -139,6 +140,22 @@ def _make_runtime_store():
         message_repository=object(),
         agent_repository=object(),
     )
+
+
+def test_container_runtime_repository_store_factory_resolves_runtime_export():
+    from container import create_runtime_repository_store
+    from dal.runtime_store import RuntimeRepositoryStore
+
+    store = create_runtime_repository_store(
+        mongo=_FakeMongo(),
+        room_deps=SimpleNamespace(
+            room_repository=object(),
+            message_repository=object(),
+        ),
+        agent_deps=SimpleNamespace(agent_repository=object()),
+    )
+
+    assert isinstance(store, RuntimeRepositoryStore)
 
 
 def test_runtime_store_wires_agent_room_part():
