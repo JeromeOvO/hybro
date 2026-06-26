@@ -1222,7 +1222,7 @@ class RoomMessageCenter:
 
         Deserializes ``agent_registry``, ``room_config``, and
         ``conversation_context`` from the user message's ``extend_info``
-        (set by ``_prepare_for_supervisor`` in ``RoomServices``), then
+        (prepared by the room runtime), then
         delegates to ``SupervisorExecutor.run()``.
 
         Also handles clarify-resume: when the user message was prepared by
