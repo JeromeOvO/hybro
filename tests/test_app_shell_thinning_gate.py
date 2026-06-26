@@ -468,6 +468,8 @@ def test_app_shell_runtime_hub_modules_removed_from_owner_runtime_paths():
         "AppShellRedis",
         "AppShellRelay",
         "RedisRoomDistributedLock",
+        # Task updates must use Delivery-owned TaskUpdateNotifier/task_notifier
+        # ports, not a global app-shell notification runtime name.
         "notification_service",
     }
 
