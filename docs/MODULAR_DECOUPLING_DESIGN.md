@@ -117,7 +117,7 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 | 1 | **Common** | Protocols, DTOs, auth, config, utils, errors | `common/`, `models/` |
 | 2 | **DAL** | Unified data access clients (split by concern) | `dal/`, `database/` (legacy migrations only) |
 | 3 | **A2A Protocol Adapter** | Anti-corruption for a2a-sdk, internal model ↔ A2A types | `a2a_adapter/`, with `app_shell/a2a_runtime.py` as compatibility shim |
-| 4 | **LLM Gateway** | Unified LLM invocation, provider routing, capability registry | `app_shell/openai_service.py`, `app_shell/gemini_service.py`, `app_shell/bedrock_service.py` |
+| 4 | **LLM Gateway** | Unified LLM invocation, provider routing, capability registry | `llm_gateway/` |
 | 5 | **Agent** | Agent lifecycle, health, matching, discovery | `app_shell/agent_*.py`, `api/agent.py`, `api/discovery.py` |
 | 6 | **Room** | Room CRUD, membership, raw message persistence, message graph | `room/`, with `room/compat/runtime.py` as runtime compatibility owner and `app_shell/room_runtime.py` as shim |
 | 7 | **Context & Memory** | Context assembly, compaction, search, user memory, ~~chat contexts~~ (legacy; source removed in Phase 0d/8) | `context_memory/`, with app-shell memory/context shims for compatibility |
@@ -2177,9 +2177,9 @@ provider transport.
 **Implemented LLM migration note (2026-06-05):** `LLMGatewayImpl` now owns
 logical model routing, retry/timeout behavior, structured JSON-object mode, and
 streaming. Provider adapters own SDK translation only. Legacy
-`app_shell/openai_service.py`, `app_shell/gemini_service.py`, and
-`app_shell/bedrock_service.py` are gateway-backed compatibility adapters with no
-direct provider SDK or LLM env reads. Focused services under
+provider-named app-shell compatibility adapters have been removed; production
+consumers bind to focused LLM services with no direct provider SDK or LLM env
+reads. Focused services under
 `llm_gateway/services/` cover supervisor, embeddings, discovery, summary, agent
 selection, message parsing, room memory, and debate workflows. `main.py`
 constructs a single gateway and binds these focused services into production
@@ -2377,10 +2377,10 @@ class AgentService:
 | Redis Streams relay | `app_shell/redis_runtime.py` | HubRuntimeBridge | `transport/relay_transport.py` |
 | Hub agent sync | `app_shell/relay_service.py` | HubRuntimeBridge -> Agent | via `AgentRegistryWriter` |
 | **LLM Gateway** | | | |
-| OpenAI SDK calls | `app_shell/openai_service.py` | LLM Gateway | `providers/openai_provider.py` |
-| Gemini SDK calls | `app_shell/gemini_service.py` | LLM Gateway | `providers/gemini_provider.py` |
-| Bedrock SDK calls | `app_shell/bedrock_service.py` | LLM Gateway | `providers/bedrock_provider.py` |
-| Embedding generation | `app_shell/openai_service.py`, memory/search adapters | LLM Gateway | `EmbeddingLLMService` + `gateway.py` |
+| OpenAI SDK calls | `llm_gateway/providers/openai_provider.py` | LLM Gateway | `providers/openai_provider.py` |
+| Gemini SDK calls | `llm_gateway/providers/gemini_provider.py` | LLM Gateway | `providers/gemini_provider.py` |
+| Bedrock SDK calls | `llm_gateway/providers/bedrock_provider.py` | LLM Gateway | `providers/bedrock_provider.py` |
+| Embedding generation | memory/search adapters via LLM Gateway services | LLM Gateway | `EmbeddingLLMService` + `gateway.py` |
 | Supervisor, summary, parsing, memory prompts | legacy app-shell prompt owners | LLM Gateway services | `llm_gateway/services/` |
 | **A2A Adapter** | | | |
 | A2A message send/stream | `app_shell/a2a_runtime.py` shim | A2A Adapter | `a2a_adapter/client_facade.py` |
