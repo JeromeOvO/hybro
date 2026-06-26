@@ -10,9 +10,33 @@ APP_SHELL_TARGETS = {
     "app_shell/room_runtime.py",
     "app_shell/a2a_runtime.py",
     "app_shell/relay_service.py",
-    "app_shell/context_assembly_service.py",
     "app_shell/repository_store.py",
 }
+
+CONTEXT_MEMORY_APP_SHELL_LEGACY_FILES = {
+    "app_shell/memory_service.py",
+    "app_shell/memory_search_service.py",
+    "app_shell/compaction_service.py",
+    "app_shell/context_memory_runtime.py",
+    "app_shell/context_assembly_service.py",
+}
+
+CONTEXT_MEMORY_APP_SHELL_LEGACY_SUFFIXES = {
+    "memory_service",
+    "memory_search_service",
+    "compaction_service",
+    "context_memory_runtime",
+    "context_assembly_service",
+}
+
+
+def _context_memory_legacy_modules() -> set[str]:
+    app_shell_prefix = "app_shell" + "."
+    return {
+        f"{app_shell_prefix}{suffix}"
+        for suffix in CONTEXT_MEMORY_APP_SHELL_LEGACY_SUFFIXES
+    }
+
 
 FORBIDDEN_APP_SHELL_IMPORT_PREFIXES = (
     "a2a",
@@ -34,9 +58,6 @@ FORBIDDEN_MAIN_WIRING_IMPORT_PREFIXES = (
     "app_shell.agent_selection_service",
     "app_shell.agent_service",
     "app_shell.bedrock_service",
-    "app_shell.compaction_service",
-    "app_shell.context_assembly_service",
-    "app_shell.context_memory_runtime",
     "app_shell.debate_service",
     "app_shell.delivery_runtime",
     "app_shell.execution_runtime",
@@ -44,8 +65,6 @@ FORBIDDEN_MAIN_WIRING_IMPORT_PREFIXES = (
     "app_shell.health_check",
     "app_shell.hitl_service",
     "app_shell.inspection_runtime",
-    "app_shell.memory_search_service",
-    "app_shell.memory_service",
     "app_shell.notification_service",
     "app_shell.openai_service",
     "app_shell.redis_runtime",
@@ -66,6 +85,7 @@ FORBIDDEN_MAIN_WIRING_IMPORT_PREFIXES = (
     "llm_gateway",
     "platform_module.adapters",
     "platform_module.rate_limit",
+    *sorted(_context_memory_legacy_modules()),
 )
 
 REQUIRED_MAIN_RUNTIME_ENTRYPOINTS = (
@@ -136,17 +156,6 @@ FINAL_APP_SHELL_SHIMS = {
             "relay_service",
         },
         "owning_module": "hub_runtime_bridge.compat.relay_service",
-    },
-    "app_shell/context_assembly_service.py": {
-        "max_lines": 70,
-        "required_exports": {
-            "ContextAssemblyResult",
-            "ContextAssemblyService",
-            "ContextMetrics",
-            "TruncationReason",
-            "context_assembly_service",
-        },
-        "owning_module": "context_memory.compat.context_assembly",
     },
     "app_shell/repository_store.py": {
         "max_lines": 80,
@@ -357,10 +366,6 @@ EXPECTED_MOVED_RUFF_IGNORES = {
     "app_shell/agent_service.py": (
         "agent/service.py",
         ["C901"],
-    ),
-    "app_shell/context_assembly_service.py": (
-        "context_memory/compat/context_assembly.py",
-        ["C901", "UP042"],
     ),
     "app_shell/relay_service.py": (
         "hub_runtime_bridge/compat/relay_service.py",
@@ -1932,9 +1937,10 @@ def test_app_shell_focus_owning_modules_exist_and_are_not_app_shell_owned():
 
 
 def test_context_memory_runtime_wiring_avoids_app_shell_singletons():
+    app_shell_prefix = "app_shell" + "."
     forbidden = {
-        "app_shell.context_assembly_service",
-        "app_shell.memory_search_service",
+        f"{app_shell_prefix}{suffix}"
+        for suffix in {"context_assembly_service", "memory_search_service"}
     }
     targets = [
         Path("app_shell/room_runtime.py"),
@@ -1952,6 +1958,84 @@ def test_context_memory_runtime_wiring_avoids_app_shell_singletons():
     assert not violations, "App-shell context singleton imports remain:\n" + "\n".join(
         violations
     )
+
+
+def test_context_memory_app_shell_legacy_files_are_removed():
+    present = [
+        path
+        for path in sorted(CONTEXT_MEMORY_APP_SHELL_LEGACY_FILES)
+        if Path(path).exists()
+    ]
+
+    assert not present, (
+        "ContextMemory-owned app_shell files should be deleted:\n"
+        + "\n".join(present)
+    )
+
+
+def _context_memory_legacy_import_violations(path: Path) -> list[str]:
+    forbidden_modules = _context_memory_legacy_modules()
+    tree = ast.parse(path.read_text(), filename=str(path))
+    violations: list[str] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in forbidden_modules:
+                    violations.append(f"{path}:{node.lineno}: {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            module = _resolved_import_from_module(path, node)
+            if module in forbidden_modules:
+                violations.append(f"{path}:{node.lineno}: {module}")
+            if module == "app_shell":
+                for alias in node.names:
+                    if alias.name in CONTEXT_MEMORY_APP_SHELL_LEGACY_SUFFIXES:
+                        violations.append(
+                            f"{path}:{node.lineno}: app_shell.{alias.name}"
+                        )
+
+    return violations
+
+
+def _context_memory_runtime_scan_files() -> list[Path]:
+    paths = set(_production_module_python_files())
+    app_shell_root = Path("app_shell")
+    if app_shell_root.exists():
+        paths.update(app_shell_root.rglob("*.py"))
+    return sorted(paths)
+
+
+def test_context_memory_legacy_modules_are_not_imported_anywhere_runtime_uses():
+    production_and_tests = [
+        *_context_memory_runtime_scan_files(),
+        *sorted(Path("tests").rglob("*.py")),
+    ]
+    violations: list[str] = []
+
+    for path in production_and_tests:
+        if path == Path(__file__):
+            continue
+        violations.extend(_context_memory_legacy_import_violations(path))
+
+    assert not violations, (
+        "ContextMemory legacy app_shell imports remain:\n" + "\n".join(violations)
+    )
+
+
+def test_context_memory_legacy_gate_catches_relative_app_shell_imports(tmp_path):
+    package = tmp_path / "app_shell"
+    package.mkdir()
+    path = package / "consumer.py"
+    path.write_text(
+        "from .memory_service import MemoryService\n"
+        "from . import compaction_service\n"
+    )
+
+    violations = _context_memory_legacy_import_violations(path)
+    app_shell_prefix = "app_shell" + "."
+
+    assert f"{path}:1: {app_shell_prefix}memory_service" in violations
+    assert f"{path}:2: {app_shell_prefix}compaction_service" in violations
 
 
 def test_domain_modules_do_not_depend_on_app_shell_focus_runtime_modules():

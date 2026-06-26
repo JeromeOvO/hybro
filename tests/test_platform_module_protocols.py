@@ -180,7 +180,14 @@ def test_container_binds_room_compat_legacy_dependencies_at_startup():
     assert "agent_service=agent_compat_service" in source
     assert "agent_selection_service=agent_selection_service" in source
     assert "a2a_service=a2a_service" in source
-    assert "room_memory_service=room_memory_service" in source
+    legacy_memory_keyword = (
+        "room_"
+        "memory_"
+        "service=room_"
+        "memory_"
+        "service"
+    )
+    assert legacy_memory_keyword not in source
     assert "sse_manager=sse_manager" in source
     assert "task_service=task_service" in source
 

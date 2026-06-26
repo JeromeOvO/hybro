@@ -7,7 +7,6 @@ import pytest
 
 from app_shell import relay_service as relay_module
 from app_shell.a2a_runtime import A2AService
-from app_shell.context_assembly_service import ContextAssemblyService
 from app_shell.relay_service import RelayService, init_relay_service
 from app_shell.room_runtime import AppShellRoomCenter, RoomServices
 from common.dto import RoomInfo
@@ -17,7 +16,6 @@ from room.compat.unbound import (
     UNBOUND_AGENT_SELECTION_SERVICE,
     UNBOUND_AGENT_SERVICE,
     UNBOUND_DELIVERY_MANAGER,
-    UNBOUND_ROOM_MEMORY_SERVICE,
     UNBOUND_TASK_SERVICE,
 )
 
@@ -39,7 +37,7 @@ def test_room_services_defaults_to_room_owned_unbound_legacy_dependencies() -> N
     assert service.agent_service is UNBOUND_AGENT_SERVICE
     assert service.agent_selection_service is UNBOUND_AGENT_SELECTION_SERVICE
     assert service.a2a_service is UNBOUND_A2A_SERVICE
-    assert service.room_memory_service is UNBOUND_ROOM_MEMORY_SERVICE
+    assert not hasattr(service, "room_memory_service")
     assert service.sse_manager is UNBOUND_DELIVERY_MANAGER
     assert service.task_service is UNBOUND_TASK_SERVICE
 
@@ -50,7 +48,6 @@ def test_room_services_bind_legacy_dependencies_replaces_unbound_defaults() -> N
         "agent_service": object(),
         "agent_selection_service": object(),
         "a2a_service": object(),
-        "room_memory_service": object(),
         "sse_manager": object(),
         "task_service": object(),
     }
@@ -60,7 +57,6 @@ def test_room_services_bind_legacy_dependencies_replaces_unbound_defaults() -> N
     assert service.agent_service is deps["agent_service"]
     assert service.agent_selection_service is deps["agent_selection_service"]
     assert service.a2a_service is deps["a2a_service"]
-    assert service.room_memory_service is deps["room_memory_service"]
     assert service.sse_manager is deps["sse_manager"]
     assert service.task_service is deps["task_service"]
 
@@ -153,28 +149,6 @@ async def test_a2a_service_delegates_after_task_store_bind() -> None:
         step_number=1,
         total_steps=2,
     )
-
-
-def test_context_assembly_service_fails_before_facade_bind() -> None:
-    service = ContextAssemblyService()
-
-    with pytest.raises(
-        RuntimeError,
-        match=(
-            r"ContextAssemblyService\.bind_facade\(\) not called - startup incomplete"
-        ),
-    ):
-        service.get_budget_summary()
-
-
-def test_context_assembly_service_delegates_after_facade_bind() -> None:
-    service = ContextAssemblyService()
-    facade = SimpleNamespace(get_budget_summary=MagicMock(return_value={"budget": 1}))
-
-    service.bind_facade(facade)
-
-    assert service.get_budget_summary() == {"budget": 1}
-    facade.get_budget_summary.assert_called_once_with()
 
 
 class _RelayFacadeSpy:

@@ -10,9 +10,9 @@ LLM_COMPATIBILITY_SERVICES = [
 
 FOCUSED_LLM_CONSUMERS = [
     Path("agent/resolver.py"),
-    Path("app_shell/memory_search_service.py"),
-    Path("app_shell/memory_service.py"),
     Path("app_shell/room_coordinator_service.py"),
+    Path("context_memory/compat/runtime.py"),
+    Path("context_memory/search_adapter.py"),
     Path("room/compat/runtime.py"),
     Path("execution/orchestration/room_supervisor_service.py"),
 ]
@@ -142,8 +142,9 @@ def test_container_binds_focused_llm_services_to_production_consumers():
         "context_memory_facade = create_context_memory_facade(",
         "llm_provider=llm_provider,",
         "room_coordinator_service.bind_summary_service(",
-        "chat_memory_service.bind_room_memory_llm_service(",
-        "room_memory_service.bind_turn_notes_llm_provider(llm_provider)",
+        "ContextMemoryChatAdapter(",
+        "chat_context_llm=room_memory_llm_service,",
+        "ContextMemoryRoomMemoryAdapter(",
         "openai_service.bind_debate_service(",
     ]
     missing = [snippet for snippet in expected_snippets if snippet not in source]
@@ -163,19 +164,18 @@ def test_focused_llm_consumers_do_not_import_openai_compatibility_adapter():
 
 
 def test_focused_llm_binding_targets_expose_startup_methods():
-    from app_shell.memory_search_service import memory_search_service
-    from app_shell.memory_service import chat_memory_service, room_memory_service
     from app_shell.openai_service import openai_service
     from app_shell.room_coordinator_service import room_coordinator_service
     from app_shell.room_runtime import room_runtime
+    from context_memory.compat.runtime import (
+        ContextMemoryChatAdapter,
+        ContextMemoryRoomMemoryAdapter,
+    )
 
     bindings = [
         (room_runtime, "bind_message_parser_service"),
         (room_runtime, "bind_debate_rounds"),
-        (memory_search_service, "bind_embedding_service"),
         (room_coordinator_service, "bind_summary_service"),
-        (chat_memory_service, "bind_room_memory_llm_service"),
-        (room_memory_service, "bind_turn_notes_llm_provider"),
         (openai_service, "bind_debate_service"),
     ]
     missing = [
@@ -184,6 +184,8 @@ def test_focused_llm_binding_targets_expose_startup_methods():
         if not callable(getattr(target, method, None))
     ]
     assert not missing
+    assert ContextMemoryChatAdapter.__name__ == "ContextMemoryChatAdapter"
+    assert ContextMemoryRoomMemoryAdapter.__name__ == "ContextMemoryRoomMemoryAdapter"
 
 
 def test_llm_settings_are_not_read_by_feature_or_app_shell_modules():

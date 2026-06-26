@@ -277,6 +277,19 @@ def existing_doc():
 
 
 @pytest.mark.asyncio
+async def test_facade_compact_room_memory_accepts_protocol_keyword():
+    doc = existing_doc()
+    memory_repo = StateMemoryRepository(doc)
+    service = facade(memory_repo=memory_repo)
+
+    result = await service.compact_room_memory("r1", room_memory=doc)
+
+    assert result.room_id == "r1"
+    assert result.compacted_count == 1
+    assert memory_repo.compacted
+
+
+@pytest.mark.asyncio
 async def test_facade_assemble_context_creates_transient_doc():
     service = facade(
         history=FakeHistoryReader(

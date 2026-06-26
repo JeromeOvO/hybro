@@ -32,7 +32,6 @@ def room_center():
     rc.agent_service = MagicMock()
     rc.openai_service = MagicMock()
     rc.a2a_service = MagicMock()
-    rc.room_memory_service = MagicMock()
     rc.sse_manager = MagicMock()
     rc.task_service = MagicMock()
     return rc
