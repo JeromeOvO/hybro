@@ -11,7 +11,6 @@ if __name__ == "__main__":
         reload_dirs=[
             "api",
             "api_gateway",
-            "app_shell",
             "common",
             "database",
             "execution",

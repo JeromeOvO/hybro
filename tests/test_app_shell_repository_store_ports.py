@@ -25,7 +25,7 @@ def test_runtime_store_protocols_are_exported():
     assert protocols.RuntimeMemoryStore is RuntimeMemoryStore
 
 
-def test_app_shell_repository_store_declares_runtime_protocol_surface():
+def test_runtime_repository_store_declares_runtime_protocol_surface():
     from dal.runtime_store import AppShellRepositoryStore
 
     store = object.__new__(AppShellRepositoryStore)
@@ -130,7 +130,7 @@ class _FakeMongo:
         return self.collections.setdefault(name, object())
 
 
-def _make_app_shell_store():
+def _make_runtime_store():
     from dal.runtime_store import AppShellRepositoryStore
 
     return AppShellRepositoryStore(
@@ -141,49 +141,49 @@ def _make_app_shell_store():
     )
 
 
-def test_app_shell_repository_store_wires_agent_room_part():
+def test_runtime_store_wires_agent_room_part():
     from dal.runtime_store.parts.agent_room_store import AppShellAgentRoomStore
 
-    store = _make_app_shell_store()
+    store = _make_runtime_store()
 
     assert isinstance(store.agent_room, AppShellAgentRoomStore)
 
 
-def test_app_shell_repository_store_wires_message_part():
+def test_runtime_store_wires_message_part():
     from dal.runtime_store.parts.message_store import AppShellMessageStore
 
-    store = _make_app_shell_store()
+    store = _make_runtime_store()
 
     assert isinstance(store.messages, AppShellMessageStore)
 
 
-def test_app_shell_repository_store_wires_task_lifecycle_part():
+def test_runtime_store_wires_task_lifecycle_part():
     from dal.runtime_store.parts.task_lifecycle_store import (
         AppShellTaskLifecycleStore,
     )
 
-    store = _make_app_shell_store()
+    store = _make_runtime_store()
 
     assert isinstance(store.tasks, AppShellTaskLifecycleStore)
 
 
-def test_app_shell_repository_store_wires_hitl_part():
+def test_runtime_store_wires_hitl_part():
     from dal.runtime_store.parts.hitl_store import AppShellHITLStore
 
-    store = _make_app_shell_store()
+    store = _make_runtime_store()
 
     assert isinstance(store.hitl, AppShellHITLStore)
 
 
-def test_app_shell_repository_store_wires_memory_part():
+def test_runtime_store_wires_memory_part():
     from dal.runtime_store.parts.memory_store import AppShellMemoryStore
 
-    store = _make_app_shell_store()
+    store = _make_runtime_store()
 
     assert isinstance(store.memory, AppShellMemoryStore)
 
 
-def test_app_shell_repository_store_wires_all_focused_parts():
+def test_runtime_store_wires_all_focused_parts():
     from dal.runtime_store.parts import (
         AppShellAgentRoomStore,
         AppShellHITLStore,
@@ -192,7 +192,7 @@ def test_app_shell_repository_store_wires_all_focused_parts():
         AppShellTaskLifecycleStore,
     )
 
-    store = _make_app_shell_store()
+    store = _make_runtime_store()
 
     assert isinstance(store.agent_room, AppShellAgentRoomStore)
     assert isinstance(store.messages, AppShellMessageStore)
@@ -295,8 +295,8 @@ def test_legacy_repository_part_webhook_shim_exports_dal_owner_helpers():
         )
 
 
-def test_app_shell_repository_store_part_properties_do_not_recreate_missing_parts():
-    store = _make_app_shell_store()
+def test_runtime_store_part_properties_do_not_recreate_missing_parts():
+    store = _make_runtime_store()
 
     del store._agent_room_part
     del store._message_part
@@ -327,7 +327,8 @@ def _references_name(node: ast.AST, name: str) -> bool:
 
 
 def test_container_binds_focused_runtime_store_parts_before_aggregate_shims():
-    tree = ast.parse(Path("container.py").read_text())
+    container_source = Path("container.py").read_text()
+    tree = ast.parse(container_source)
     expected_assignments = {
         "agent_room_store": "agent_room",
         "message_store": "messages",
@@ -343,13 +344,15 @@ def test_container_binds_focused_runtime_store_parts_before_aggregate_shims():
         if (
             isinstance(node.value, ast.Attribute)
             and isinstance(node.value.value, ast.Name)
-            and node.value.value.id == "app_shell_store"
+            and node.value.value.id == "runtime_store"
         ):
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     assignments[target.id] = node.value.attr
 
     assert expected_assignments.items() <= assignments.items()
+    assert "create_runtime_repository_store" in container_source
+    assert "create_app_" + "shell_repository_store" not in container_source
 
 
 def test_main_keeps_broad_repository_store_only_for_documented_compatibility_points():
