@@ -261,8 +261,8 @@ class TestSharedInlineConversionCap:
 
 class TestMissingFileId:
     async def test_resolve_attachments_missing_file(self):
-        from app_shell.room_runtime import RoomServices
         from models.response import RoomCenterUserMessageResponse
+        from room.compat.runtime import RoomServices
 
         svc = RoomServices()
         svc.database_service = MagicMock()

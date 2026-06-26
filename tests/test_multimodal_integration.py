@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app_shell.room_runtime import RoomServices
 from models.room import UserAttachment
+from room.compat.runtime import RoomServices
 
 
 @pytest.fixture
@@ -39,7 +39,7 @@ class TestUploadToSendFlow:
     async def test_resolve_builds_user_attachment(self, room_svc):
         result = await room_svc._resolve_attachments(["f1"], "room1")
 
-        from app_shell.room_runtime import _ResolvedAttachments
+        from room.compat.runtime import _ResolvedAttachments
         assert isinstance(result, _ResolvedAttachments)
         assert len(result.attachments) == 1
         att = result.attachments[0]
@@ -50,7 +50,7 @@ class TestUploadToSendFlow:
     async def test_content_summary_has_images(self, room_svc):
         result = await room_svc._resolve_attachments(["f1"], "room1")
 
-        from app_shell.room_runtime import _ResolvedAttachments
+        from room.compat.runtime import _ResolvedAttachments
         assert isinstance(result, _ResolvedAttachments)
         assert result.content_summary["has_images"] is True
         assert result.content_summary["attachment_count"] == 1
@@ -69,7 +69,7 @@ class TestUploadToSendFlow:
 
         result = await room_svc._resolve_attachments(["f1", "f2"], "room1")
 
-        from app_shell.room_runtime import _ResolvedAttachments
+        from room.compat.runtime import _ResolvedAttachments
         assert isinstance(result, _ResolvedAttachments)
         assert result.content_summary["has_images"] is True
         assert result.content_summary["has_files"] is True

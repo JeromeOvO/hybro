@@ -97,6 +97,10 @@ def test_provider_named_llm_runtime_symbols_are_gone_from_runtime_modules():
 def test_llm_gateway_services_import_boundary():
     services_path = Path("llm_gateway/services")
     assert services_path.exists(), "llm_gateway/services package must exist"
+    forbidden_domain_modules = {
+        "execution.orchestration.synthesis_coordinator",
+        "room.compat.runtime",
+    }
     allowed_roots = set(sys.stdlib_module_names) | {
         "__future__",
         "common",
@@ -120,12 +124,17 @@ def test_llm_gateway_services_import_boundary():
     for path in services_path.rglob("*.py"):
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
+            imported_modules = _imported_modules(node)
+            assert imported_modules.isdisjoint(forbidden_domain_modules), (
+                f"{path} imports forbidden domain module "
+                f"{imported_modules & forbidden_domain_modules}"
+            )
             imported_roots = _imported_roots(node)
             assert imported_roots.isdisjoint(forbidden_roots), (
                 f"{path} imports forbidden domain root "
                 f"{imported_roots & forbidden_roots}"
             )
-            assert "llm_gateway.providers" not in _imported_modules(node), (
+            assert "llm_gateway.providers" not in imported_modules, (
                 f"{path} must depend on gateway protocols, not raw providers"
             )
             unexpected = imported_roots - allowed_roots
@@ -164,7 +173,7 @@ def test_container_binds_focused_llm_services_to_production_consumers():
         "room_supervisor_service.bind_supervisor_service(supervisor_llm_service)",
         "room_runtime.bind_message_parser_service(message_parser_llm_service)",
         "room_runtime.bind_debate_rounds(runtime.settings.debate_rounds)",
-        "room_coordinator_service.bind_summary_service(summary_llm_service)",
+        "synthesis_coordinator.bind_summary_service(summary_llm_service)",
         "context_memory_facade = create_context_memory_facade(",
         "llm_provider=llm_provider,",
         "ContextMemoryChatAdapter(",
@@ -216,18 +225,20 @@ def test_runtime_llm_consumers_do_not_import_provider_named_app_shell_services()
 
 
 def test_focused_llm_binding_targets_expose_startup_methods():
-    from app_shell.room_coordinator_service import room_coordinator_service
-    from app_shell.room_runtime import room_runtime
     from context_memory.compat.runtime import (
         ContextMemoryChatAdapter,
         ContextMemoryRoomMemoryAdapter,
     )
     from execution.orchestration.room_supervisor_service import room_supervisor_service
+    from execution.orchestration.synthesis_coordinator import SynthesisCoordinator
+    from room.compat.runtime import room_runtime
+
+    synthesis_coordinator = SynthesisCoordinator()
 
     bindings = [
         (room_runtime, "bind_message_parser_service"),
         (room_runtime, "bind_debate_rounds"),
-        (room_coordinator_service, "bind_summary_service"),
+        (synthesis_coordinator, "bind_summary_service"),
         (room_supervisor_service, "bind_supervisor_service"),
     ]
     missing = [

@@ -16,10 +16,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app_shell.room_runtime import RoomServices
 from common.dto import MessageCommitted, RoomInfo
 from models.request import RoomCenterRoomSettingRequest, RoomCenterUserMessageRequest
 from models.room import MessageContent, Room, RoomUserMessage
+from room.compat.runtime import RoomServices
 
 
 @pytest.fixture

@@ -60,15 +60,6 @@ def test_room_services_bind_legacy_dependencies_replaces_unbound_defaults() -> N
     assert service.remote_task_reader is deps["remote_task_reader"]
 
 
-def test_app_shell_room_center_legacy_name_aliases_room_route_adapter() -> None:
-    from app_shell.room_runtime import AppShellRoomCenter
-
-    room_services = SimpleNamespace(_bound=True)
-
-    assert AppShellRoomCenter is RoomRouteAdapter
-    assert AppShellRoomCenter(bound_room_services=room_services).room_runtime is room_services
-
-
 @pytest.mark.asyncio
 async def test_room_services_delegates_after_facade_bind() -> None:
     service = RoomServices()

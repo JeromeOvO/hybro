@@ -334,7 +334,7 @@ def test_context_memory_setting_helper_does_not_swallow_import_failures(monkeypa
 
 
 def test_room_delete_has_no_stale_direct_context_memory_cleanup():
-    from app_shell.room_runtime import RoomServices
+    from room.compat.runtime import RoomServices
 
     source = inspect.getsource(RoomServices.delete_room_by_room_id)
 
@@ -343,7 +343,7 @@ def test_room_delete_has_no_stale_direct_context_memory_cleanup():
 
 
 def test_room_delete_logs_when_context_memory_cleanup_is_unbound():
-    from app_shell.room_runtime import RoomServices
+    from room.compat.runtime import RoomServices
 
     source = inspect.getsource(RoomServices._cleanup_context_memory_for_room)
 

@@ -23,12 +23,12 @@ from agent.matcher import (
     select_top_agents,
 )
 from agent.selection_service import AgentSelectionService, RoutingStrategy
-from app_shell.room_runtime import RoomServices
 from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
 from execution.orchestration.debate_prompt_injector import DebatePromptInjector
 from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
 from models.agent import Agent, AgentStatus
 from models.room import MessageContent, RoomUserMessage, UserAttachment
+from room.compat.runtime import RoomServices
 
 # ---- Test Helpers ----
 
