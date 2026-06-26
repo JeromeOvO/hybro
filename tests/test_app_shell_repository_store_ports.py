@@ -400,8 +400,8 @@ def test_container_binds_debate_and_coordinator_to_focused_message_adapters():
             continue
         call_name = _dotted_name(node.func)
         if call_name not in {
-            "debate_service.bind_store",
-            "room_coordinator_service.bind_store",
+            "debate_prompt_injector.bind_store",
+            "synthesis_coordinator.bind_store",
         }:
             continue
         assert len(node.args) == 1
@@ -409,8 +409,8 @@ def test_container_binds_debate_and_coordinator_to_focused_message_adapters():
         bound_adapters[call_name] = node.args[0].id
 
     assert bound_adapters == {
-        "debate_service.bind_store": "debate_message_store",
-        "room_coordinator_service.bind_store": "room_coordinator_message_store",
+        "debate_prompt_injector.bind_store": "debate_message_store",
+        "synthesis_coordinator.bind_store": "room_coordinator_message_store",
     }
     assert _simple_namespace_keywords(tree, "debate_message_store") == {
         "get_agent_name_by_agent_id",
