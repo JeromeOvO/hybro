@@ -15,8 +15,8 @@ from models.room import MessageContent, Room, RoomAgentMessage
 FROZEN_TIME = datetime(2026, 1, 15, 12, 0, 0)
 
 PATCH_DB = "execution.dispatch.task_notifications._notification_store"
-PATCH_NOTIF = "app_shell.notification_service.notification_service"
-PATCH_SSE = "app_shell.delivery_runtime.sse_manager"
+PATCH_NOTIFIER = "execution.dispatch.task_notifications._task_notifier"
+PATCH_DELIVERY = "execution.dispatch.task_notifications._delivery"
 PATCH_EXTRACT_ERR = "execution.dispatch.task_notifications.extract_error_message"
 PATCH_EXTRACT_STATUS = "execution.dispatch.task_notifications.extract_status_message"
 PATCH_HAS_VISIBLE = "execution.dispatch.task_notifications.task_has_visible_content"
@@ -94,20 +94,20 @@ def _setup_db_mock(db, *, msg=None, idempotency_return=True, idempotency_error=F
     db.get_room_by_room_id = AsyncMock(return_value=None)
 
 
-def _setup_notif_mock(notif):
-    """Ensure notification_service methods are AsyncMock."""
-    notif.send_task_update = AsyncMock()
+def _setup_notifier_mock(notifier):
+    """Ensure task_notifier methods are AsyncMock."""
+    notifier.send_task_update = AsyncMock()
     from execution.dispatch import task_notifications
 
-    task_notifications._notification_service = notif
+    task_notifications._task_notifier = notifier
 
 
-def _setup_sse_mock(sse):
+def _setup_delivery_mock(delivery):
     """Ensure delivery methods are AsyncMock."""
-    sse.send_processing_status = AsyncMock()
+    delivery.send_processing_status = AsyncMock()
     from execution.dispatch import task_notifications
 
-    task_notifications._delivery = sse
+    task_notifications._delivery = delivery
 
 
 CALL_KWARGS = dict(
@@ -128,19 +128,19 @@ class TestNotifyTaskUpdate:
     async def test_idempotent_skip_when_state_not_new(self):
         with (
             patch(PATCH_DB) as db,
-            patch(PATCH_NOTIF) as notif,
-            patch(PATCH_SSE) as sse,
+            patch(PATCH_NOTIFIER) as notifier,
+            patch(PATCH_DELIVERY) as delivery,
         ):
             db.update_last_notified_state = AsyncMock(return_value=False)
-            _setup_notif_mock(notif)
-            _setup_sse_mock(sse)
+            _setup_notifier_mock(notifier)
+            _setup_delivery_mock(delivery)
 
             result = await notify_task_update(**CALL_KWARGS)
 
             assert result is False
             db.update_last_notified_state.assert_awaited_once_with("msg-1", "completed")
-            notif.send_task_update.assert_not_called()
-            sse.send_processing_status.assert_not_called()
+            notifier.send_task_update.assert_not_called()
+            delivery.send_processing_status.assert_not_called()
 
     # --------------------------------------------------------------------- #
     # 2. Proceeds when idempotency DB check raises
@@ -158,20 +158,20 @@ class TestNotifyTaskUpdate:
 
         with (
             patch(PATCH_DB) as db,
-            patch(PATCH_NOTIF) as notif,
-            patch(PATCH_SSE) as sse,
+            patch(PATCH_NOTIFIER) as notifier,
+            patch(PATCH_DELIVERY) as delivery,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
             patch(PATCH_EXTRACT_PARTS, return_value=_extracted_parts_mock(text="Hello")),
         ):
             _setup_db_mock(db, msg=msg, idempotency_error=True)
-            _setup_notif_mock(notif)
-            _setup_sse_mock(sse)
+            _setup_notifier_mock(notifier)
+            _setup_delivery_mock(delivery)
 
             result = await notify_task_update(**CALL_KWARGS)
 
             assert result is True
-            notif.send_task_update.assert_awaited_once()
+            notifier.send_task_update.assert_awaited_once()
 
     # --------------------------------------------------------------------- #
     # 3. Retries message load 3 attempts
@@ -183,8 +183,8 @@ class TestNotifyTaskUpdate:
 
         with (
             patch(PATCH_DB) as db,
-            patch(PATCH_NOTIF) as notif,
-            patch(PATCH_SSE) as sse,
+            patch(PATCH_NOTIFIER) as notifier,
+            patch(PATCH_DELIVERY) as delivery,
             patch(PATCH_SLEEP, new_callable=AsyncMock) as mock_sleep,
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
         ):
@@ -192,8 +192,8 @@ class TestNotifyTaskUpdate:
             db.get_room_agent_message_by_message_id = AsyncMock(
                 side_effect=[None, None, msg],
             )
-            _setup_notif_mock(notif)
-            _setup_sse_mock(sse)
+            _setup_notifier_mock(notifier)
+            _setup_delivery_mock(delivery)
 
             result = await notify_task_update(**CALL_KWARGS)
 
@@ -201,7 +201,7 @@ class TestNotifyTaskUpdate:
             assert db.get_room_agent_message_by_message_id.await_count == 3
             assert mock_sleep.await_count == 2
             mock_sleep.assert_awaited_with(0.5)
-            notif.send_task_update.assert_awaited_once()
+            notifier.send_task_update.assert_awaited_once()
 
     # --------------------------------------------------------------------- #
     # 4. Returns False when no task tracking after retries
@@ -212,19 +212,19 @@ class TestNotifyTaskUpdate:
 
         with (
             patch(PATCH_DB) as db,
-            patch(PATCH_NOTIF) as notif,
-            patch(PATCH_SSE) as sse,
+            patch(PATCH_NOTIFIER) as notifier,
+            patch(PATCH_DELIVERY) as delivery,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
         ):
             _setup_db_mock(db, msg=msg_no_tracking)
-            _setup_notif_mock(notif)
-            _setup_sse_mock(sse)
+            _setup_notifier_mock(notifier)
+            _setup_delivery_mock(delivery)
 
             result = await notify_task_update(**CALL_KWARGS)
 
             assert result is False
             assert db.get_room_agent_message_by_message_id.await_count == 3
-            notif.send_task_update.assert_not_called()
+            notifier.send_task_update.assert_not_called()
 
     # --------------------------------------------------------------------- #
     # 5. Completed state extracts artifact text
@@ -246,21 +246,21 @@ class TestNotifyTaskUpdate:
 
         with (
             patch(PATCH_DB) as db,
-            patch(PATCH_NOTIF) as notif,
-            patch(PATCH_SSE) as sse,
+            patch(PATCH_NOTIFIER) as notifier,
+            patch(PATCH_DELIVERY) as delivery,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
             patch(PATCH_EXTRACT_PARTS, return_value=extracted) as mock_ep,
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
         ):
             _setup_db_mock(db, msg=msg)
-            _setup_notif_mock(notif)
-            _setup_sse_mock(sse)
+            _setup_notifier_mock(notifier)
+            _setup_delivery_mock(delivery)
 
             result = await notify_task_update(**CALL_KWARGS)
 
             assert result is True
             assert mock_ep.call_count >= 1
-            call_kw = notif.send_task_update.call_args.kwargs
+            call_kw = notifier.send_task_update.call_args.kwargs
             assert call_kw["content"] == "Hello world"
 
     # --------------------------------------------------------------------- #
@@ -273,14 +273,14 @@ class TestNotifyTaskUpdate:
 
         with (
             patch(PATCH_DB) as db,
-            patch(PATCH_NOTIF) as notif,
-            patch(PATCH_SSE) as sse,
+            patch(PATCH_NOTIFIER) as notifier,
+            patch(PATCH_DELIVERY) as delivery,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
         ):
             _setup_db_mock(db, msg=msg)
-            _setup_notif_mock(notif)
-            _setup_sse_mock(sse)
+            _setup_notifier_mock(notifier)
+            _setup_delivery_mock(delivery)
 
             result = await notify_task_update(**CALL_KWARGS)
 
@@ -302,15 +302,15 @@ class TestNotifyTaskUpdate:
 
         with (
             patch(PATCH_DB) as db,
-            patch(PATCH_NOTIF) as notif,
-            patch(PATCH_SSE) as sse,
+            patch(PATCH_NOTIFIER) as notifier,
+            patch(PATCH_DELIVERY) as delivery,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
             patch(PATCH_EXTRACT_ERR, return_value=None) as mock_err,
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
         ):
             _setup_db_mock(db, msg=msg)
-            _setup_notif_mock(notif)
-            _setup_sse_mock(sse)
+            _setup_notifier_mock(notifier)
+            _setup_delivery_mock(delivery)
 
             result = await notify_task_update(
                 message_id="msg-1",
@@ -321,7 +321,7 @@ class TestNotifyTaskUpdate:
 
             assert result is True
             mock_err.assert_called_once()
-            call_kw = notif.send_task_update.call_args.kwargs
+            call_kw = notifier.send_task_update.call_args.kwargs
             assert call_kw["error"] == "Task failed"
 
     # --------------------------------------------------------------------- #
@@ -346,16 +346,16 @@ class TestNotifyTaskUpdate:
 
         with (
             patch(PATCH_DB) as db,
-            patch(PATCH_NOTIF) as notif,
-            patch(PATCH_SSE) as sse,
+            patch(PATCH_NOTIFIER) as notifier,
+            patch(PATCH_DELIVERY) as delivery,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
             patch(PATCH_EXTRACT_PARTS, return_value=extracted) as mock_ep,
             patch(PATCH_EXTRACT_ERR, return_value="Agent error"),
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
         ):
             _setup_db_mock(db, msg=msg)
-            _setup_notif_mock(notif)
-            _setup_sse_mock(sse)
+            _setup_notifier_mock(notifier)
+            _setup_delivery_mock(delivery)
 
             result = await notify_task_update(
                 message_id="msg-1",
@@ -367,7 +367,7 @@ class TestNotifyTaskUpdate:
             assert result is True
             # Artifacts should be extracted regardless of state
             mock_ep.assert_called_once()
-            call_kw = notif.send_task_update.call_args.kwargs
+            call_kw = notifier.send_task_update.call_args.kwargs
             assert call_kw["content"] == "Partial result before failure"
             assert call_kw["error"] == "Agent error"
 
@@ -381,15 +381,15 @@ class TestNotifyTaskUpdate:
 
         with (
             patch(PATCH_DB) as db,
-            patch(PATCH_NOTIF) as notif,
-            patch(PATCH_SSE) as sse,
+            patch(PATCH_NOTIFIER) as notifier,
+            patch(PATCH_DELIVERY) as delivery,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
             patch(PATCH_EXTRACT_STATUS, return_value="Please provide input") as mock_st,
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
         ):
             _setup_db_mock(db, msg=msg)
-            _setup_notif_mock(notif)
-            _setup_sse_mock(sse)
+            _setup_notifier_mock(notifier)
+            _setup_delivery_mock(delivery)
             emitter = AsyncMock()
             from execution.dispatch import task_notifications as task_notifications_mod
 
@@ -407,7 +407,7 @@ class TestNotifyTaskUpdate:
 
             assert result is True
             mock_st.assert_called_once()
-            call_kw = notif.send_task_update.call_args.kwargs
+            call_kw = notifier.send_task_update.call_args.kwargs
             assert call_kw["requires_input"] is True
             assert call_kw["status_message"] == "Please provide input"
             emitter.assert_awaited_once_with(
@@ -431,15 +431,15 @@ class TestNotifyTaskUpdate:
 
         with (
             patch(PATCH_DB) as db,
-            patch(PATCH_NOTIF) as notif,
-            patch(PATCH_SSE) as sse,
+            patch(PATCH_NOTIFIER) as notifier,
+            patch(PATCH_DELIVERY) as delivery,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
             patch(PATCH_EXTRACT_STATUS, return_value=None),
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
         ):
             _setup_db_mock(db, msg=msg)
-            _setup_notif_mock(notif)
-            _setup_sse_mock(sse)
+            _setup_notifier_mock(notifier)
+            _setup_delivery_mock(delivery)
 
             result = await notify_task_update(
                 message_id="msg-1",
@@ -449,7 +449,7 @@ class TestNotifyTaskUpdate:
             )
 
             assert result is True
-            call_kw = notif.send_task_update.call_args.kwargs
+            call_kw = notifier.send_task_update.call_args.kwargs
             assert call_kw["requires_auth"] is True
             assert call_kw["status_message"] == "Authentication required"
 
@@ -463,16 +463,16 @@ class TestNotifyTaskUpdate:
 
         with (
             patch(PATCH_DB) as db,
-            patch(PATCH_NOTIF) as notif,
-            patch(PATCH_SSE) as sse,
+            patch(PATCH_NOTIFIER) as notifier,
+            patch(PATCH_DELIVERY) as delivery,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
             patch(PATCH_HAS_VISIBLE, return_value=False),
             patch(PATCH_EXTRACT_STATUS, return_value="No visible output from upstream agent"),
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
         ):
             _setup_db_mock(db, msg=msg)
-            _setup_notif_mock(notif)
-            _setup_sse_mock(sse)
+            _setup_notifier_mock(notifier)
+            _setup_delivery_mock(delivery)
 
             result = await notify_task_update(
                 message_id="msg-1",
@@ -482,7 +482,7 @@ class TestNotifyTaskUpdate:
             )
 
             assert result is True
-            call_kw = notif.send_task_update.call_args.kwargs
+            call_kw = notifier.send_task_update.call_args.kwargs
             assert call_kw["status_message"] == "No visible output from upstream agent"
 
     # --------------------------------------------------------------------- #
@@ -498,14 +498,14 @@ class TestNotifyTaskUpdate:
 
         with (
             patch(PATCH_DB) as db,
-            patch(PATCH_NOTIF) as notif,
-            patch(PATCH_SSE) as sse,
+            patch(PATCH_NOTIFIER) as notifier,
+            patch(PATCH_DELIVERY) as delivery,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
             patch(PATCH_EXTRACT_STATUS, return_value="Need input"),
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
         ):
-            _setup_notif_mock(notif)
-            _setup_sse_mock(sse)
+            _setup_notifier_mock(notifier)
+            _setup_delivery_mock(delivery)
             emitter = AsyncMock()
             from execution.dispatch import task_notifications as task_notifications_mod
 
@@ -534,7 +534,7 @@ class TestNotifyTaskUpdate:
             )
 
             emitter.reset_mock()
-            notif.send_task_update.reset_mock()
+            notifier.send_task_update.reset_mock()
 
             # --- input_required -> lifecycle awaiting_input emitted
             _setup_db_mock(db, msg=msg_input)
@@ -578,20 +578,20 @@ class TestNotifyTaskUpdate:
 
         with (
             patch(PATCH_DB) as db,
-            patch(PATCH_NOTIF) as notif,
-            patch(PATCH_SSE) as sse,
+            patch(PATCH_NOTIFIER) as notifier,
+            patch(PATCH_DELIVERY) as delivery,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
             patch(PATCH_EXTRACT_PARTS, return_value=extracted),
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
         ):
             _setup_db_mock(db, msg=msg)
             db.get_room_by_room_id = AsyncMock(return_value=room)
-            _setup_notif_mock(notif)
-            _setup_sse_mock(sse)
+            _setup_notifier_mock(notifier)
+            _setup_delivery_mock(delivery)
 
             result = await notify_task_update(**CALL_KWARGS)
 
             assert result is True
             db.get_room_by_room_id.assert_awaited_once_with("room-1")
-            call_kw = notif.send_task_update.call_args.kwargs
+            call_kw = notifier.send_task_update.call_args.kwargs
             assert call_kw["agent_name"] == "SuperAgent"

@@ -296,7 +296,7 @@ def _make_room_message_center_port_deps():
         "event_publisher": MagicMock(),
         "coordinator": MagicMock(),
         "summary_service": MagicMock(),
-        "notification_service": MagicMock(),
+        "task_notifier": MagicMock(),
         "agent_resolver_service": MagicMock(),
         "a2a_transport": MagicMock(),
         "remote_task_reader": MagicMock(),
@@ -338,7 +338,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.summary_service is deps["summary_service"]
     assert runtime.room_memory is deps["room_memory"]
     assert runtime.tsm.room_runtime is deps["room_runtime"]
-    assert runtime.tsm.notification_service is deps["notification_service"]
+    assert runtime.tsm.task_notifier is deps["task_notifier"]
     assert runtime.agent_dispatcher._message_writer is deps["message_writer"]
     assert runtime.agent_dispatcher._agent_lookup is deps["agent_lookup"]
     assert runtime.agent_dispatcher._agent_group_reader is deps["agent_group_reader"]

@@ -1099,7 +1099,7 @@ class TestHandleV2RunResultUnifiedSummary:
             patch("execution.orchestration.room_message_center.delivery") as mock_delivery,
             patch("execution.orchestration.room_message_center.coordinator"),
             patch("execution.orchestration.room_message_center.room_runtime"),
-            patch("execution.orchestration.room_message_center.notification_service"),
+            patch("execution.orchestration.room_message_center.task_notifier"),
             patch("execution.orchestration.room_message_center.a2a_transport"),
             patch("execution.orchestration.room_message_center.remote_task_reader"),
             patch("execution.orchestration.room_message_center.agent_resolver_service"),

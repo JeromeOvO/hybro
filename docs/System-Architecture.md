@@ -2,7 +2,7 @@
 
 This document describes the current architecture and core workflows of the
 `multi-agents-backend` codebase. It is based on the repository state as of
-2026-06-23 and focuses on the code that is currently present, not on older
+2026-06-26 and focuses on the code that is currently present, not on older
 design documents that may have existed previously.
 
 ## High-Level Shape
@@ -139,7 +139,7 @@ Examples:
 Execution is intentionally independent from
 app-shell compatibility objects.
 `container.py` wires owner modules such as `a2a_adapter.runtime_service`,
-`room.compat.runtime`, Delivery/SSE, room memory, notification, and
+`room.compat.runtime`, Delivery/SSE, room memory, Delivery task notifier, and
 `dal.runtime_store` objects into focused execution ports. Files under
 `execution/` do not import app-shell modules and do not accept broad app-shell
 composite stores. Queue, supervisor, dispatch, HITL, cancellation, and webhook
@@ -404,6 +404,8 @@ It is composed from:
 
 - `SSETransportImpl`: local room connection management.
 - `EventPublisherImpl`: emits frames/events and handles deduplication.
+- `TaskUpdateNotifier`: execution-facing task update publisher that resolves
+  final agent display fields and delegates to `DeliveryFacade.send_task_update`.
 - `CrossInstanceEventBus`: Redis Pub/Sub based fan-out when Redis is enabled.
 - `CancellationWatcher`: tracks cancellation state through Mongo change streams
   and Redis KV when available.
@@ -595,7 +597,8 @@ Examples:
   modules; runtime construction happens in `container.py`.
 - `app_shell.domain_alias_service`: separate compatibility binding facade for
   domain alias lookup.
-- `execution.dispatch.task_notifications`: terminal task update notifications.
+- `delivery.TaskUpdateNotifier`: terminal task update publishing facade used by
+  Execution task notification paths.
 - `app_shell.hitl_service`: HITL lifecycle and response handling.
 
 A2A-facing API routes bind narrow readers from `common.protocols`:
@@ -704,7 +707,7 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
     - persists artifact updates,
     - updates task state on `room_agent_messages`,
     - handles final responses, errors, cancellations, and HITL states,
-    - emits SSE updates through `sse_manager`/Delivery,
+    - emits SSE updates through Delivery,
     - delegates terminal task notifications through
       `execution.dispatch.task_notifications`.
 

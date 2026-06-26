@@ -102,7 +102,7 @@ class AgentResponseHandler:
         room_message_center: object,
         slot_lifecycle=None,
         hitl_coordinator=None,
-        notification_service=None,
+        task_notifier=None,
         task_notification_impl=None,
     ) -> None:
         self._message_writer = message_writer
@@ -115,7 +115,7 @@ class AgentResponseHandler:
         self._rmc = room_message_center
         self._slot_lifecycle = slot_lifecycle
         self.hitl_coordinator = hitl_coordinator
-        self._notification_service = notification_service
+        self._task_notifier = task_notifier
         self._task_notification_impl = task_notification_impl
         self._processing_status_emitter = None
 
@@ -645,12 +645,12 @@ class AgentResponseHandler:
         Preferred over the standalone ``notify_task_update`` function
         because it uses injected services instead of global singletons.
         """
-        if self._notification_service is None or self._task_notification_impl is None:
-            raise RuntimeError("Task notification dependencies have not been bound")
+        if self._task_notifier is None or self._task_notification_impl is None:
+            raise RuntimeError("Task notification runtime dependencies have not been bound")
 
         return await self._task_notification_impl(
             self._task_writer,
-            self._notification_service,
+            self._task_notifier,
             self._delivery,
             message_id=message_id,
             state=state,

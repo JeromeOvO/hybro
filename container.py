@@ -293,7 +293,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.selection_service import AgentSelectionService
             from agent.service import AgentService
             from app_shell.debate_service import debate_service
-            from app_shell.notification_service import notification_service
             from app_shell.room_coordinator_service import room_coordinator_service
             from app_shell.room_membership_source import LegacyRoomMembershipSeedSource
             from app_shell.task_service import task_service
@@ -414,6 +413,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 HITLMessageCancellationAdapter,
                 MongoCancellationStoreAdapter,
             )
+            from delivery.task_notifier import TaskUpdateNotifier
             from execution.client_request_id import SSEClientRequestIdResolver
             from execution.dispatch.response_handler import AgentResponseHandler
             from execution.dispatch.task_notifications import (
@@ -885,6 +885,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     sse_manager.cancel_message_and_broadcast
                 )
             execution_delivery = SimpleNamespace(**execution_delivery_methods)
+            task_notifier = TaskUpdateNotifier(execution_delivery)
             execution_a2a_transport = SimpleNamespace(
                 has_streaming_capability=a2a_service.has_streaming_capability,
                 send_message_streaming=a2a_service.send_message_streaming,
@@ -907,7 +908,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             room_coordinator_service.bind_store(room_coordinator_message_store)
             bind_notification_store(task_notification_store)
             bind_task_notification_runtime(
-                notification_service=notification_service,
+                task_notifier=task_notifier,
                 delivery=execution_delivery,
             )
             a2a_service.bind_runtime_config(
@@ -1015,7 +1016,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 event_publisher=_delivery_deps.event_publisher,
                 coordinator=execution_coordinator,
                 summary_service=summary_llm_service,
-                notification_service=notification_service,
+                task_notifier=task_notifier,
                 agent_resolver_service=agent_resolver_service,
                 a2a_transport=execution_a2a_transport,
                 remote_task_reader=execution_remote_task_reader,
@@ -1054,7 +1055,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     delivery=execution_delivery,
                     room_message_center=execution_room_message_center,
                     hitl_coordinator=hitl_service,
-                    notification_service=notification_service,
+                    task_notifier=task_notifier,
                     task_notification_impl=_notify_task_update_impl,
                 )
                 handler.bind_execution_event_deps(emit_room_processing_status)
