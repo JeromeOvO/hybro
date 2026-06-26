@@ -1,5 +1,4 @@
 from room.compat.runtime import (
-    AppShellRoomCenter,
     DispatchStrategy,
     RoomServices,
     _human_size,
@@ -11,7 +10,6 @@ from room.compat.runtime import (
 )
 
 __all__ = [
-    "AppShellRoomCenter",
     "DispatchStrategy",
     "RoomServices",
     "_ResolvedAttachments",

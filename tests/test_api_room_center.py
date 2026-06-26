@@ -29,12 +29,12 @@ from api.room_center import (
     update_room_name,
     verify_room_ownership,
 )
-from app_shell.room_runtime import AppShellRoomCenter as RoomCenter
 from common.dto import ExecutionAck
 from models.response import (
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
 )
+from room.route_adapter import RoomRouteAdapter as RoomCenter
 
 # =============================================================================
 # Room Ownership Verification Tests

@@ -329,11 +329,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from platform_module.adapters import RateLimitCollectionAdapter
             from platform_module.rate_limit import PlatformAgentRateLimiter
             from room.compat.runtime import (
-                AppShellRoomCenter,
                 build_turn_content,
                 room_runtime,
                 room_services,
             )
+            from room.route_adapter import RoomRouteAdapter
 
             object_storage = create_object_storage_dal()
             platform_object_storage = PlatformObjectStorage(
@@ -357,7 +357,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             api_key_store = create_api_key_store(mongo=mongo_dal)
             bind_api_key_authenticator(MongoAPIKeyAuthenticator(api_key_store))
             vector_dal = create_vector_dal()
-            route_room_center = AppShellRoomCenter()
+            route_room_center = RoomRouteAdapter()
             route_repository_provider = AppShellDALViewSetRepositoryProvider(
                 mongo=mongo_dal
             )

@@ -1,5 +1,4 @@
 from room.compat.runtime import (
-    AppShellRoomCenter,
     DispatchStrategy,
     RoomServices,
     _human_size,
@@ -9,6 +8,7 @@ from room.compat.runtime import (
     room_runtime,
     room_services,
 )
+from room.route_adapter import RoomRouteAdapter as AppShellRoomCenter
 
 __all__ = [
     "AppShellRoomCenter",
