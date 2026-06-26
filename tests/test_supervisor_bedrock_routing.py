@@ -66,7 +66,7 @@ class FakeGatewayProvider:
 
 @pytest.mark.asyncio
 async def test_supervisor_service_fails_fast_when_llm_service_unbound():
-    service = RoomSupervisorService(store=AsyncMock())
+    service = RoomSupervisorService()
 
     with pytest.raises(LLMServiceNotBoundError):
         await service._call_supervisor_llm("system", "user")
@@ -89,7 +89,7 @@ async def test_supervisor_service_fails_fast_when_llm_service_unbound():
 
 @pytest.mark.asyncio
 async def test_supervisor_decide_next_propagates_routing_errors():
-    service = RoomSupervisorService(store=AsyncMock())
+    service = RoomSupervisorService()
     service._call_supervisor_llm = AsyncMock(
         side_effect=LLMModelRoutingError("unregistered model")
     )
@@ -109,7 +109,7 @@ async def test_supervisor_synthesize_stream_propagates_routing_errors():
         raise LLMModelRoutingError("unregistered model")
         yield "unreachable"
 
-    service = RoomSupervisorService(store=AsyncMock())
+    service = RoomSupervisorService()
     service._supervisor_llm_text_stream = MagicMock(return_value=error_stream())
     trajectory = SupervisorTrajectory(
         entries=[
@@ -146,7 +146,6 @@ async def test_supervisor_service_delegates_json_to_focused_service():
     )
     service = RoomSupervisorService(
         supervisor_service=supervisor,
-        store=AsyncMock(),
     )
 
     result = await service._call_supervisor_llm("system", "user")
@@ -167,7 +166,6 @@ async def test_supervisor_service_delegates_text_stream_to_focused_service():
     supervisor.call_text_stream = MagicMock(side_effect=stream)
     service = RoomSupervisorService(
         supervisor_service=supervisor,
-        store=AsyncMock(),
     )
 
     result = await service._call_supervisor_llm_text("system", "user")
@@ -206,7 +204,6 @@ async def test_focused_supervisor_routes_to_bedrock_provider_when_flag_enabled(
     )
     service = RoomSupervisorService(
         supervisor_service=SupervisorLLMService(gateway),
-        store=AsyncMock(),
     )
 
     result = await service._call_supervisor_llm(
