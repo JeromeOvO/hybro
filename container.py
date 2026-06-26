@@ -216,10 +216,6 @@ def validate_runtime_bindings(
     if getattr(app.state, "delivery_facade", None) is None:
         errors.append("app.state.delivery_facade")
 
-    execution_deps = getattr(app.state, "execution_deps", None)
-    if getattr(execution_deps, "hitl_manager", None) is None:
-        errors.append("app.state.execution_deps.hitl_manager")
-
     if getattr(app.state, "execution_deps", None) is None:
         errors.append("app.state.execution_deps")
 

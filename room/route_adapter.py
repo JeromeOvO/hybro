@@ -44,7 +44,7 @@ class RoomRouteAdapter:
             self.room_runtime, "_bound", False
         ):
             raise RuntimeError(
-                "RoomCenter.bind_facade() not called - startup incomplete"
+                "RoomRouteAdapter.bind_facade() not called - startup incomplete"
             )
         return self.room_runtime
 

@@ -48,7 +48,7 @@ class TestRoomCenterAdapter:
 
         with pytest.raises(
             RuntimeError,
-            match=r"RoomCenter\.bind_facade\(\) not called - startup incomplete",
+            match=r"RoomRouteAdapter\.bind_facade\(\) not called - startup incomplete",
         ):
             await center.create_new_room(MagicMock())
 
