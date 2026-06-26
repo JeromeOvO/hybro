@@ -26,7 +26,8 @@ At runtime the system follows this broad layering:
 flowchart TD
     Client[Frontend / API client] --> FastAPI[main.py FastAPI app]
     FastAPI --> APIGateway[api_gateway routers]
-    APIGateway --> AppShell[app_shell compatibility shims]
+    APIGateway --> RoomRoutes[room.route_adapter / RoomCenterCompatibility]
+    APIGateway --> AppShell[legacy app_shell compatibility shims]
     APIGateway --> Execution[execution facade]
     APIGateway --> Platform[platform facade]
 
@@ -117,12 +118,13 @@ route -> app-shell compatibility shim -> owner facade/service -> repository/DAL
 
 Examples:
 
-- `app_shell.room_runtime` is an import-compatible shim over
-  `room.compat.runtime`, where `AppShellRoomCenter` delegates to `RoomServices`
-  bound to `room.RoomFacade`, room-owned unbound startup sentinels, and an
-  explicit repository-backed runtime store. `RoomServices` does not expose a
-  legacy memory-service slot; ContextMemory access is bound through the
-  ContextMemory runtime protocol and route adapters.
+- Room CRUD, membership compatibility, message persistence helpers, and
+  route-shaped room behavior live in `room.compat.runtime` and
+  `room.route_adapter`. Startup binds `RoomRouteAdapter` into API Gateway
+  through `RoomCenterCompatibility`; production code does not import an
+  app-shell room runtime shim. `RoomServices` does not expose a legacy
+  memory-service slot; ContextMemory access is bound through the ContextMemory
+  runtime protocol and route adapters.
 - Agent route compatibility is owned by `agent.route_adapter.AgentRouteAdapter`
   and `agent.service.AgentService`, both constructed directly by `container.py`
   over `agent.AgentFacade`.
@@ -494,6 +496,9 @@ in-memory/offline queues for single-process/degraded operation.
 - Resolve and validate AgentCards.
 - Own all production imports of the upstream A2A SDK.
 - Build outbound A2A send, stream, cancellation, HITL, and task-fetch requests.
+- Remote task reads are exposed to Execution through
+  `a2a_adapter.remote_task_reader.RemoteTaskReader`, which delegates SDK calls
+  to `a2a_adapter.remote_task`.
 - Translate internal common models to SDK payloads and normalize SDK responses
   back to SDK-free dictionaries or `common.types` models.
 - Own A2A output-mode negotiation and response/task coercion helpers used by
@@ -594,7 +599,9 @@ they do not own business behavior.
 
 Examples:
 
-- `app_shell.room_runtime`: re-exports `room.compat.runtime`.
+- The six decommissioned Room/Execution/HITL runtime and service entrypoints
+  are no longer exposed through `app_shell`; repository/runtime-store
+  compatibility surfaces remain listed below.
 - `app_shell.a2a_runtime`: re-exports `a2a_adapter.runtime_service`.
 - `app_shell.repository_store`: re-exports
   `dal.runtime_store.app_shell_store`.
@@ -604,7 +611,6 @@ Examples:
   domain alias lookup.
 - `delivery.task_notifier.TaskUpdateNotifier`: terminal task update publishing
   facade used by Execution task notification paths.
-- `app_shell.hitl_service`: HITL lifecycle and response handling.
 
 A2A-facing API routes bind narrow readers from `common.protocols`:
 `A2ATaskStatusReader` for task inspection, `RoomRouteReader` for room ownership
@@ -656,12 +662,11 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
 4. `ExecutionFacade.execute` owns execution preflight:
    - checks pending HITL requests before persistence,
    - checks active runs before persistence,
-   - delegates room persistence to `AppShellRoomCenter.persist_message_to_room`,
-     which reaches `room.compat.runtime.RoomServices.persist_message_to_room`,
+   - delegates room persistence to the room route/runtime port,
    - emits preflight `processing` status immediately after the user message is
      persisted so the frontend has a cancellable `message_id`,
-   - continues room-side preflight through
-     `AppShellRoomCenter.run_message_preflight_to_room`,
+   - asks the room route/runtime port to run message preflight before Execution
+     starts orchestration,
    - emits terminal preflight status when a persisted room response completes
      before orchestration starts.
 
@@ -858,7 +863,9 @@ provide it directly.
 
 HITL is used when an agent or supervisor needs user input before continuing.
 
-Main responsibilities live in `app_shell.hitl_service` and execution adapters:
+Main responsibilities live in `execution.hitl.service`, constructed by
+`execution.hitl.factory.create_hitl_service` and passed through Execution
+facade/port wiring:
 
 - Create HITL requests.
 - Broadcast input-required state.
