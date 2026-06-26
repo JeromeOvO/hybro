@@ -567,6 +567,24 @@ async def test_leader_elector_impl_uses_instance_id_owner_checks():
 
 
 @pytest.mark.asyncio
+async def test_leader_elector_impl_accepts_ttl_seconds_alias():
+    from dal.redis.lock import LeaderElectorImpl
+
+    client = MagicMock()
+    client.set = AsyncMock(return_value=True)
+    client.eval = AsyncMock(return_value=1)
+
+    elector = LeaderElectorImpl(client, instance_id="inst")
+
+    assert await elector.try_acquire("job", ttl=30, ttl_seconds=120) is True
+    assert await elector.renew("job", ttl=45, ttl_seconds=180) is True
+
+    client.set.assert_awaited_once_with("leader:job", "inst", nx=True, ex=120)
+    renew_args = client.eval.await_args.args
+    assert renew_args[1:] == (1, "leader:job", "inst", "180")
+
+
+@pytest.mark.asyncio
 async def test_leader_elector_impl_gracefully_degrades_without_url(monkeypatch):
     from dal.redis import lock as lock_module
 

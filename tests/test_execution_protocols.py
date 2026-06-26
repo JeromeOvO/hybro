@@ -635,22 +635,18 @@ def test_room_message_center_uses_common_room_lock_protocol():
     )
 
 
-def test_app_shell_room_lock_uses_public_redis_protocol_surface():
-    from pathlib import Path
+def test_dal_room_lock_uses_dal_redis_owner_module():
     from typing import get_type_hints
 
-    from app_shell.room_lock import RedisLockStore, RedisRoomDistributedLock
+    from common.protocols import RoomDistributedLock
+    from dal.redis.lock import RoomRedisDistributedLock
+    from execution.orchestration.room_message_center import RoomMessageCenter
 
-    source = Path("app_shell/room_lock.py").read_text()
-    init_hints = get_type_hints(RedisRoomDistributedLock.__init__)
-
-    assert "Any" not in source
-    assert "._client" not in source
-    assert "_client" not in source
-    assert ".set_nx(" in source
-    assert init_hints["redis_service"] == RedisLockStore | None
-    acquire_hints = get_type_hints(RedisRoomDistributedLock.acquire)
+    hints = get_type_hints(RoomMessageCenter.set_room_distributed_lock)
+    assert hints["room_lock"] == RoomDistributedLock | None
+    acquire_hints = get_type_hints(RoomRedisDistributedLock.acquire)
     assert acquire_hints["ttl"] is int
+    assert RoomRedisDistributedLock.__module__ == "dal.redis.lock"
 
 
 class _FakeCursor:
