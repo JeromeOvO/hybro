@@ -16,7 +16,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from app_shell.api_key_auth import MongoAPIKeyAuthenticator
 from common.api_key_auth import (
     bind_api_key_authenticator,
     get_api_key,
@@ -24,6 +23,7 @@ from common.api_key_auth import (
     hash_api_key,
     validate_api_key,
 )
+from platform_module.api_key_auth import MongoAPIKeyAuthenticator
 
 
 @pytest.fixture(autouse=True)

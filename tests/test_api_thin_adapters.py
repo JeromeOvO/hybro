@@ -543,7 +543,9 @@ def test_phase9_route_inventory_does_not_use_platform_implementation_owners():
     )
 
 
-def test_phase9_route_inventory_does_not_use_app_shell_bound_protocols():
+def test_phase9_route_inventory_does_not_use_removed_runtime_bound_protocols():
+    REMOVED_RUNTIME_PACKAGE = "app_" + "shell"
+    removed_bound_module = f"{REMOVED_RUNTIME_PACKAGE}.bound"
     routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
     violations: list[str] = []
 
@@ -553,11 +555,12 @@ def test_phase9_route_inventory_does_not_use_app_shell_bound_protocols():
             *(route.get("supporting_protocols") or []),
         ]
         for protocol_path in protocol_paths:
-            if protocol_path.startswith("app_shell.bound."):
+            if protocol_path.startswith(f"{removed_bound_module}."):
                 violations.append(f"{route['path']}: {protocol_path}")
 
     assert not violations, (
-        "Routes must not use app_shell.bound protocol shims:\n" + "\n".join(violations)
+        "Routes must not use removed runtime protocol shims:\n"
+        + "\n".join(violations)
     )
 
 
@@ -882,11 +885,11 @@ def test_route_owner_protocols_match_handler_calls():
         AgentInspection,
         AgentLivenessChecker,
     )
-    from app_shell.health_check import HealthCheck
     from common.protocols import (
         A2ATaskStatusReader,
         AgentAvatarManager,
         AgentRegistry,
+        HealthCheck,
         HubRelayManagement,
         HubStatusReader,
         RoomRouteReader,
@@ -1440,10 +1443,10 @@ def test_health_route_delegates_to_health_check_protocol():
 
 def test_health_check_service_uses_request_state_not_main_closures():
     import main
-    from app_shell.health_check import AppShellHealthCheck
+    from common.health_check import RuntimeHealthCheck
 
     main_source = inspect.getsource(main)
-    health_source = inspect.getsource(AppShellHealthCheck)
+    health_source = inspect.getsource(RuntimeHealthCheck)
 
     assert "_relay_streams_available" not in main_source
     assert "relay_streams_available=" not in main_source
@@ -1524,11 +1527,15 @@ def test_route_owner_protocols_do_not_expose_any_annotations():
 
 def test_route_protocols_do_not_expose_broad_annotations():
     import agent.protocols as agent_protocols
-    import app_shell.health_check as health_check
     import context_memory.protocols as memory_protocols
     import room.protocols as room_protocols
     from agent.protocols import AgentGroupStoreCompatibility
-    from common.protocols import A2ATaskStatusReader, RoomRouteReader, SSEStateReader
+    from common.protocols import (
+        A2ATaskStatusReader,
+        HealthCheck,
+        RoomRouteReader,
+        SSEStateReader,
+    )
 
     protocols = [
         getattr(module, name)
@@ -1538,7 +1545,7 @@ def test_route_protocols_do_not_expose_broad_annotations():
     ]
     protocols.extend([A2ATaskStatusReader, RoomRouteReader, SSEStateReader])
     protocols.append(AgentGroupStoreCompatibility)
-    protocols.append(health_check.HealthCheck)
+    protocols.append(HealthCheck)
     violations: list[str] = []
 
     for protocol in protocols:

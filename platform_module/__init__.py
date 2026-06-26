@@ -1,4 +1,5 @@
 from platform_module.agent_avatar import PlatformAgentAvatarManager
+from platform_module.api_key_auth import MongoAPIKeyAuthenticator
 from platform_module.attachments import (
     PlatformAttachmentCleanupPort,
     PlatformAttachmentMetadataReader,
@@ -9,6 +10,7 @@ from platform_module.facade import PlatformFacade
 from platform_module.object_storage import ObjectStoragePort, PlatformObjectStorage
 
 __all__ = [
+    "MongoAPIKeyAuthenticator",
     "ObjectStoragePort",
     "PlatformAgentAvatarManager",
     "PlatformAttachmentCleanupPort",
