@@ -165,9 +165,9 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 > adapter ownership remains in `a2a_adapter`.
 
 > **Goal 7 acceptance state (2026-06-23):** The modular decoupling design is
-> accepted. The app-shell focus files `room_runtime.py`, `a2a_runtime.py`,
-> `relay_service.py`, `context_assembly_service.py`, and `repository_store.py`
-> are import-compatible shims only. Runtime behavior lives in
+> accepted. The remaining app-shell focus files `room_runtime.py`,
+> `a2a_runtime.py`, `relay_service.py`, and `repository_store.py` are
+> import-compatible shims only. Runtime behavior lives in
 > `room.compat.runtime`, `a2a_adapter.runtime_service`,
 > `hub_runtime_bridge.compat.relay_service`,
 > `context_memory.compat.context_assembly`, and `dal.runtime_store`.
