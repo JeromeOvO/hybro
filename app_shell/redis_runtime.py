@@ -424,11 +424,8 @@ class AppShellRelayStreamService(RelayStreamService):
         maxlen: int = 10_000,
         heartbeat_ttl: int = 90,
     ) -> None:
-        kv = (
-            _AppShellRedisKVBridge(command_client)
-            if command_client is not None
-            else None
-        )
+        kv_client = command_client if command_client is not None else streams_client
+        kv = _AppShellRedisKVBridge(kv_client)
         super().__init__(
             streams_client,
             kv=kv,

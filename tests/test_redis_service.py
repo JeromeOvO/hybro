@@ -209,6 +209,28 @@ async def test_app_shell_relay_stream_service_uses_command_client_for_heartbeat(
 
 
 @pytest.mark.asyncio
+async def test_app_shell_relay_stream_service_reuses_single_client_for_heartbeat():
+    from app_shell.redis_runtime import AppShellRelayStreamService
+
+    redis_client = MagicMock()
+    redis_client.is_connected = True
+    redis_client.set_with_ttl = AsyncMock(return_value=True)
+    redis_client.exists = AsyncMock(return_value=True)
+
+    relay_streams = AppShellRelayStreamService(redis_client, heartbeat_ttl=19)
+
+    await relay_streams.record_heartbeat("hub-1")
+    assert await relay_streams.is_hub_alive("hub-1") is True
+
+    redis_client.set_with_ttl.assert_awaited_once_with(
+        "hub:heartbeat:hub-1",
+        "1",
+        ex=19,
+    )
+    redis_client.exists.assert_awaited_once_with("hub:heartbeat:hub-1")
+
+
+@pytest.mark.asyncio
 async def test_app_shell_redis_runtime_passes_command_client_to_relay_streams(
     monkeypatch,
 ):
