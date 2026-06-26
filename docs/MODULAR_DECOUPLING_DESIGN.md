@@ -122,7 +122,7 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 | 6 | **Room** | Room CRUD, membership, raw message persistence, message graph | `room/`, with `room/compat/runtime.py` as runtime compatibility owner and `app_shell/room_runtime.py` as shim |
 | 7 | **Context & Memory** | Context assembly, compaction, search, user memory, ~~chat contexts~~ (legacy; source removed in Phase 0d/8) | `context_memory/`, with app-shell memory/context shims for compatibility |
 | 8 | **Execution** | Run lifecycle, supervisor, debate, HITL, dispatch (NOT workflow) | `execution/`, `app_shell/hitl_service.py` |
-| 9 | **Delivery** | SSE connections, event broker, dedup, domain→frontend event translation | `app_shell/delivery_runtime.py`, `delivery/` |
+| 9 | **Delivery** | SSE connections, event broker, dedup, domain→frontend event translation | `delivery/` |
 | 10 | **Platform** | Gateway API, rate limiting, file storage | `platform_module/`, `api/gateway.py`, `api/discovery.py`, `api/files.py` |
 | 11 | **HubRuntimeBridge** | Hub connection, relay, liveness, offline queue, agent sync | `hub_runtime_bridge/`, `api/relay.py`, `api/hub.py`, `app_shell/relay_service.py` shim |
 | 12 | **Jobs** | Background tasks with leader election | `jobs/`, DAL Redis runtime |
@@ -811,8 +811,10 @@ DeliveryEvent = Annotated[
   and Redis fan-out envelopes use top-level `envelope["trace_id"]`.
 
 **Final Delivery/SSE seam:**
-- `app_shell/delivery_runtime.py` is now the C3 migration adapter. Startup binds
-  it to `DeliveryFacade`; before binding, public methods fail fast.
+- `DeliveryFacade` directly owns Delivery startup, SSE transport, event broker,
+  deduplication, and domain-to-wire translation. API/SSE wiring passes the facade
+  as `sse_transport=_delivery_facade` or resolves it through route dependency
+  injection; there is no app-shell Delivery runtime adapter lifecycle.
 - Backend modules emit typed `DeliveryEvent` DTOs. Delivery translates every frontend-visible
   event into the room SSE frame shape `{type, timestamp, room_id, data}`.
 - `delivery.translator` is the only DTO-to-wire translation point. Backend-internal
@@ -1680,7 +1682,6 @@ async def lifespan(app: FastAPI):
     # cancellation watcher readiness first, then Redis Pub/Sub subscriptions/health,
     # then EventPublisher's handler lifecycle hook.
     await delivery_facade.start()
-    sse_manager.bind_facade(delivery_facade)  # C3 adapter binding
     app.state.delivery_facade = delivery_facade
 
     # === Phase 3: HubRuntimeBridge background ===
@@ -1693,12 +1694,11 @@ async def lifespan(app: FastAPI):
     # Cancel tracked background orchestration tasks before Delivery/SSE drain so
     # cancellation lifecycle/status frames can still be emitted.
     await container.execution.execution_engine.cancel_inflight_tasks()
-    sse_manager.set_draining(True)
+    delivery_facade.set_draining(True)
     await asyncio.sleep(delivery_config.shutdown_drain_seconds)
     await scheduler.stop()
     await container.hub.hub_management.stop()
     await delivery_facade.stop()  # closes SSE connections, unsubscribes rooms, stops bus/watcher
-    sse_manager.unbind_facade()
     await container.dal.mongo.close()
     # Redis pools are Optional (None in single-worker no-redis mode)
     if container.dal.redis_kv:
@@ -2241,7 +2241,8 @@ focused capability/tested service rather than a provider-named app-shell facade.
 - Deduplication (TTLCache per terminal status)
 - `register_internal_handler()` + `emit_internal()` for internal events
 - **No business logic** — verify by asserting no business module imports in delivery/
-- `app_shell/delivery_runtime.py` is a fail-fast C3 adapter bound to `DeliveryFacade` during startup.
+- `DeliveryFacade` is the direct runtime owner for Delivery. API/SSE wiring passes
+  `sse_transport=_delivery_facade` or obtains the facade through route dependencies.
 - `main.py` constructs Delivery through `container.py` helpers and does not import concrete `delivery.*`, concrete `dal.*`, or legacy SSE `RedisBroker`.
 - Old `sse_manager.send_processing_status()` is transport-only: no `record_processing_status()`, no `run_event_sse_enabled()`, no DB fallback.
 - At this point, the historical record-inside-send path is gone: callers already
@@ -2353,8 +2354,8 @@ class AgentService:
 | **Legacy Workflow** (DECOMMISSIONED — see Phase 0d) | | | |
 | Task decomposition / assignment / execution / CRUD | old workflow/task API surface | DELETED | Endpoints removed; collections dropped in Phase 8 cleanup |
 | **Delivery** | | | |
-| SSE broadcasting | `app_shell/delivery_runtime.py` | Delivery | `sse/manager.py` |
-| SSE connections | `app_shell/delivery_runtime.py` | Delivery | `sse/connection.py` |
+| SSE broadcasting | `delivery/` | Delivery | `sse/manager.py` |
+| SSE connections | `delivery/` | Delivery | `sse/connection.py` |
 | Event dedup | `delivery/` | Delivery | `sse/deduplication.py` |
 | Cross-instance pub/sub | `delivery/` | Delivery | `event_bus/cross_instance.py` |
 | Cancellation watcher | `delivery/` | Delivery | `sse/cancellation_watcher.py` |
