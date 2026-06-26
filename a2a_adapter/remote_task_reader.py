@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from a2a_adapter.remote_task import fetch_remote_task
 from common.types import AgentCard, Task
+
+from .remote_task import fetch_remote_task
 
 
 class RemoteTaskReader:
