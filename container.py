@@ -292,11 +292,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.route_adapter import AgentRouteAdapter
             from agent.selection_service import AgentSelectionService
             from agent.service import AgentService
-            from app_shell.bedrock_service import bedrock_service
             from app_shell.debate_service import debate_service
-            from app_shell.gemini_service import gemini_service
             from app_shell.notification_service import notification_service
-            from app_shell.openai_service import openai_service
             from app_shell.room_coordinator_service import room_coordinator_service
             from app_shell.room_membership_source import LegacyRoomMembershipSeedSource
             from app_shell.task_service import task_service
@@ -315,7 +312,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from llm_gateway.config import LLMGatewayConfig
             from llm_gateway.services import (
                 AgentSelectionLLMService,
-                DebateLLMService,
                 DiscoveryLLMService,
                 EmbeddingLLMService,
                 MessageParserLLMService,
@@ -495,30 +491,14 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             agent_selection_llm_service = AgentSelectionLLMService(
                 llm_provider=llm_provider
             )
-            debate_llm_service = DebateLLMService(llm_provider=llm_provider)
             message_parser_llm_service = MessageParserLLMService(
                 llm_provider=llm_provider
             )
             room_memory_llm_service = RoomMemoryLLMService(llm_provider=llm_provider)
-            openai_service.bind_llm_gateway(
-                llm_provider,
-                llm_gateway_config,
-                discovery_query_expansion_threshold=(
-                    runtime.settings.discovery_query_expansion_threshold
-                ),
-                debate_rounds=runtime.settings.debate_rounds,
-            )
-            gemini_service.bind_llm_gateway(llm_provider)
-            bedrock_service.bind_llm_services(
-                supervisor_service=supervisor_llm_service,
-                llm_provider=llm_provider,
-                llm_gateway_config=llm_gateway_config,
-            )
             room_supervisor_service.bind_supervisor_service(supervisor_llm_service)
             room_runtime.bind_message_parser_service(message_parser_llm_service)
             room_runtime.bind_debate_rounds(runtime.settings.debate_rounds)
             room_coordinator_service.bind_summary_service(summary_llm_service)
-            openai_service.bind_debate_service(debate_llm_service)
             agent_card_resolver = AgentCardResolverImpl()
             _agent_deps = create_agent_deps(
                 mongo=mongo_dal,
