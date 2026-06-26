@@ -13,9 +13,11 @@ from llm_gateway.services import (
     AgentSelectionLLMService,
     DebateLLMService,
     DiscoveryLLMService,
+    EmbeddingLLMService,
     MessageParserLLMService,
     RoomMemoryLLMService,
     SummaryLLMService,
+    SupervisorLLMService,
 )
 
 
@@ -24,6 +26,8 @@ class FakeWorkflowGateway:
         self.generate_calls = []
         self.structured_calls = []
         self.stream_calls = []
+        self.embed_calls = []
+        self.embed_batch_calls = []
         self.structured_data = structured_data or {
             "message_type": "AUTO_ASSIGNED",
             "original_text": "hello",
@@ -45,6 +49,14 @@ class FakeWorkflowGateway:
     async def generate_stream(self, messages, **kwargs):
         self.stream_calls.append((messages, kwargs))
         yield "summary"
+
+    async def embed(self, text, **kwargs):
+        self.embed_calls.append((text, kwargs))
+        return [1.0, 2.0, 3.0, 4.0]
+
+    async def embed_batch(self, texts, **kwargs):
+        self.embed_batch_calls.append((texts, kwargs))
+        return [[float(index), float(index + 1)] for index, _text in enumerate(texts)]
 
 
 @pytest.mark.asyncio
@@ -263,3 +275,40 @@ async def test_summary_service_uses_room_message_summary_dtos():
     user_prompt = gateway.stream_calls[0][0][1]["content"]
     assert "Agent A" in user_prompt
     assert "Response A" in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_embedding_service_resizes_embeddings_and_uses_logical_model():
+    gateway = FakeWorkflowGateway()
+    service = EmbeddingLLMService(gateway)
+
+    resized = await service.get_embedding("hello", target_dim=6)
+    truncated = await service.get_embedding("hello", target_dim=2)
+
+    assert resized == [1.0, 2.0, 3.0, 4.0, 0.0, 0.0]
+    assert truncated == [1.0, 2.0]
+    assert gateway.embed_calls == [
+        ("hello", {"model": "embedding_model"}),
+        ("hello", {"model": "embedding_model"}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_supervisor_service_uses_default_supervisor_model_for_json_text_and_stream():
+    gateway = FakeWorkflowGateway(
+        structured_data={"action": "done", "reasoning": "complete"}
+    )
+    service = SupervisorLLMService(gateway)
+
+    json_result = await service.call_json("system", "user")
+    text_result = await service.call_text("system", "user")
+    stream_result = [
+        chunk async for chunk in service.call_text_stream("system", "user")
+    ]
+
+    assert json_result == {"action": "done", "reasoning": "complete"}
+    assert text_result == "generated"
+    assert stream_result == ["summary"]
+    assert gateway.structured_calls[0][1]["model"] == "supervisor_model"
+    assert gateway.generate_calls[0][1]["model"] == "supervisor_model"
+    assert gateway.stream_calls[0][1]["model"] == "supervisor_model"
