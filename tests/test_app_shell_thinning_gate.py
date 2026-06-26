@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 APP_SHELL_TARGETS = {
-    "app_shell/room_runtime.py",
     "app_shell/a2a_runtime.py",
     "app_shell/repository_store.py",
 }
@@ -120,21 +119,6 @@ FORBIDDEN_MAIN_WIRING_SNIPPETS = (
 )
 
 FINAL_APP_SHELL_SHIMS = {
-    "app_shell/room_runtime.py": {
-        "max_lines": 80,
-        "required_exports": {
-            "AppShellRoomCenter",
-            "DispatchStrategy",
-            "RoomServices",
-            "_ResolvedAttachments",
-            "_human_size",
-            "build_turn_content",
-            "resolve_strategy",
-            "room_runtime",
-            "room_services",
-        },
-        "owning_module": "room.compat.runtime",
-    },
     "app_shell/a2a_runtime.py": {
         "max_lines": 60,
         "required_exports": {"A2ARuntimeConfig", "A2AService", "a2a_service"},
@@ -349,10 +333,6 @@ EXPECTED_MOVED_RUFF_IGNORES = {
     "app_shell/agent_service.py": (
         "agent/service.py",
         ["C901"],
-    ),
-    "app_shell/room_runtime.py": (
-        "room/compat/runtime.py",
-        ["C901", "UP042"],
     ),
 }
 
@@ -1726,7 +1706,7 @@ def test_context_memory_runtime_wiring_avoids_app_shell_singletons():
         for suffix in {"context_assembly_service", "memory_search_service"}
     }
     targets = [
-        Path("app_shell/room_runtime.py"),
+        Path("room/compat/runtime.py"),
         Path("execution/orchestration/room_message_center.py"),
         Path("execution/orchestration/factory.py"),
         Path("main.py"),
