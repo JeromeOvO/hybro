@@ -449,11 +449,11 @@ agent sync, liveness, offline queue behavior, task ownership, and internal hub
 response routing. `app_shell.relay_service.RelayService` remains as a
 compatibility adapter for legacy route imports and APIKey/request adaptation; it
 delegates Hub behavior through facade public methods. Its runtime binding uses
-`AppShellRelayHubStore`, `HubMongoRepository`, `AgentRepository`, and an
-injected relay offline-failure port instead of the broad legacy Mongo/database
-singletons. The relay shim keeps the historical `sse_manager` constructor
-parameter for startup compatibility only; relay behavior no longer imports or
-stores the concrete app-shell Delivery runtime, and stream/leader bindings are
+`RelayHubStore` under HubRuntimeBridge ownership, `HubMongoRepository`,
+`AgentRepository`, and the `RelayOfflineFailureAdapter` instead of the broad
+legacy Mongo/database singletons. `sse_manager` is no longer part of
+`RelayService` or `init_relay_service` construction; offline failures enter
+Delivery through `RelayOfflineFailureAdapter`, and stream/leader bindings are
 protocol-style pass-throughs rather than app-shell Redis runtime concrete
 dependencies. Relay transport binding is stored once and exposed through the
 legacy `relay_transport` compatibility accessor rather than duplicated private
