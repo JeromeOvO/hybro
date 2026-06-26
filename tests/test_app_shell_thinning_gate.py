@@ -1756,46 +1756,77 @@ def test_context_memory_app_shell_legacy_files_are_removed():
     )
 
 
+ROOM_EXECUTION_HITL_APP_SHELL_RUNTIME_SCAN_PATHS = (
+    "container.py",
+    "api",
+    "api_gateway",
+    "room",
+    "execution",
+    "a2a_adapter",
+)
+
+ROOM_EXECUTION_HITL_APP_SHELL_FORBIDDEN_MODULES = {
+    "app_shell.room_runtime",
+    "app_shell.hitl_service",
+    "app_shell.debate_service",
+    "app_shell.task_service",
+    "app_shell.execution_runtime",
+    "app_shell.room_coordinator_service",
+}
+
+
+def _room_execution_hitl_app_shell_runtime_scan_files(root: Path) -> list[Path]:
+    paths: list[Path] = []
+    for scan_path in ROOM_EXECUTION_HITL_APP_SHELL_RUNTIME_SCAN_PATHS:
+        base = root / scan_path
+        if base.is_file():
+            paths.append(base)
+        else:
+            paths.extend(path for path in sorted(base.rglob("*.py")) if path.is_file())
+    return paths
+
+
+def _room_execution_hitl_app_shell_forbidden_import_violations(
+    path: Path,
+    root: Path,
+    forbidden_modules: set[str],
+) -> list[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    rel = path.relative_to(root).as_posix()
+    violations: list[str] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            violations.extend(
+                f"{rel}:{node.lineno}: {alias.name}"
+                for alias in node.names
+                if alias.name in forbidden_modules
+            )
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            if node.module in forbidden_modules:
+                violations.append(f"{rel}:{node.lineno}: {node.module}")
+            if node.module == "app_shell":
+                violations.extend(
+                    f"{rel}:{node.lineno}: app_shell.{alias.name}"
+                    for alias in node.names
+                    if f"app_shell.{alias.name}" in forbidden_modules
+                )
+
+    return violations
+
+
 def test_room_execution_hitl_app_shell_runtime_paths_are_not_production_dependencies():
     root = Path(__file__).resolve().parents[1]
-    scanned_roots = [
-        root / "container.py",
-        root / "api",
-        root / "api_gateway",
-        root / "room",
-        root / "execution",
-        root / "a2a_adapter",
-    ]
-    forbidden_modules = {
-        "app_shell.room_runtime",
-        "app_shell.hitl_service",
-        "app_shell.debate_service",
-        "app_shell.task_service",
-        "app_shell.execution_runtime",
-        "app_shell.room_coordinator_service",
-    }
 
     violations: list[str] = []
-    for base in scanned_roots:
-        paths = [base] if base.is_file() else sorted(base.rglob("*.py"))
-        for path in paths:
-            if not path.is_file():
-                continue
-            tree = ast.parse(path.read_text(), filename=str(path))
-            rel = path.relative_to(root).as_posix()
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        if alias.name in forbidden_modules:
-                            violations.append(f"{rel}:{node.lineno}: {alias.name}")
-                elif isinstance(node, ast.ImportFrom) and node.module:
-                    if node.module in forbidden_modules:
-                        violations.append(f"{rel}:{node.lineno}: {node.module}")
-                    if node.module == "app_shell":
-                        for alias in node.names:
-                            expanded = f"app_shell.{alias.name}"
-                            if expanded in forbidden_modules:
-                                violations.append(f"{rel}:{node.lineno}: {expanded}")
+    for path in _room_execution_hitl_app_shell_runtime_scan_files(root):
+        violations.extend(
+            _room_execution_hitl_app_shell_forbidden_import_violations(
+                path,
+                root,
+                ROOM_EXECUTION_HITL_APP_SHELL_FORBIDDEN_MODULES,
+            )
+        )
 
     assert violations == []
 
@@ -1803,15 +1834,11 @@ def test_room_execution_hitl_app_shell_runtime_paths_are_not_production_dependen
 def test_room_execution_hitl_app_shell_runtime_gate_flags_package_imports(tmp_path):
     path = tmp_path / "bad.py"
     path.write_text("from app_shell import " + "task_service\n")
-    tree = ast.parse(path.read_text(), filename=str(path))
-    forbidden_modules = {"app_shell.task_service"}
-    violations = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "app_shell":
-            for alias in node.names:
-                expanded = f"app_shell.{alias.name}"
-                if expanded in forbidden_modules:
-                    violations.append(f"{path.name}:{node.lineno}: {expanded}")
+    violations = _room_execution_hitl_app_shell_forbidden_import_violations(
+        path,
+        tmp_path,
+        {"app_shell.task_service"},
+    )
 
     assert violations == ["bad.py:1: app_shell.task_service"]
 
