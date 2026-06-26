@@ -5,9 +5,9 @@ from common.dto import OfflineHubFailureCommand
 
 
 class RelayOfflineFailureAdapter:
-    def __init__(self, db, sse_manager) -> None:
+    def __init__(self, db, delivery) -> None:
         self._db = db
-        self._sse = sse_manager
+        self._delivery = delivery
 
     async def mark_hub_message_failed(self, command: OfflineHubFailureCommand) -> None:
         if not command.agent_message_id:
@@ -32,7 +32,7 @@ class RelayOfflineFailureAdapter:
                 command.agent_message_id, msg
             )
         if command.room_id:
-            await self._sse.send_error(
+            await self._delivery.send_error(
                 command.room_id,
                 command.error_text,
                 message_id=command.agent_message_id,

@@ -5,8 +5,8 @@ import pytest
 
 from api.hub import hub_status_for_user
 from api.relay import RegisterHubRequest, relay_register, relay_status
-from app_shell.relay_store import AppShellRelayHubStore
 from common.auth import ClerkUser
+from hub_runtime_bridge.adapters.relay_hub_store import RelayHubStore
 from models.api_key import APIKey
 
 
@@ -76,7 +76,7 @@ async def test_relay_hub_store_delegates_hub_and_agent_repository_calls():
         count_hub_agents=AsyncMock(return_value=(2, 1)),
         increment_agent_call_count=AsyncMock(),
     )
-    store = AppShellRelayHubStore(
+    store = RelayHubStore(
         mongo=mongo,
         hub_repository=hub_repository,
         agent_repository=agent_repository,
@@ -117,7 +117,7 @@ async def test_relay_hub_store_delegates_hub_and_agent_repository_calls():
 
 @pytest.mark.asyncio
 async def test_relay_hub_store_requires_hub_id_for_upsert():
-    store = AppShellRelayHubStore(
+    store = RelayHubStore(
         mongo=SimpleNamespace(collection=lambda name: None),
         hub_repository=SimpleNamespace(upsert=AsyncMock()),
         agent_repository=SimpleNamespace(),

@@ -151,53 +151,27 @@ def test_execution_relay_transport_is_outbound_only() -> None:
     assert "app_shell.relay_service" not in imported
 
 
-def test_legacy_relay_is_shim_and_stream_runtime_moved_to_app_shell() -> None:
-    from app_shell.redis_runtime import AppShellRelayStreamService
-    from hub_runtime_bridge.transport.relay_streams import RelayStreamService
-
-    shim = ROOT / "app_shell/relay_service.py"
-    shim_imports = _imports(shim)
-    shim_text = shim.read_text()
-    shim_tree = ast.parse(shim_text, filename=str(shim))
-
-    assert len(shim_text.splitlines()) <= 80
-    assert "hub_runtime_bridge.compat" in shim_imports
-    assert "hub_runtime_bridge.compat.relay_service" in shim_imports
-    assert "relay_service" in shim_text
-    assert "__getattr__" in shim_text
-    assert "_LegacyPublishSink" not in shim_text
-    assert not any(name.startswith("modules") for name in shim_imports)
-
-    getattr_defs = [
-        node for node in shim_tree.body if isinstance(node, ast.FunctionDef)
-    ]
-    assert [node.name for node in getattr_defs] == ["__getattr__"]
-    export_assignments = [
-        node
-        for node in shim_tree.body
-        if isinstance(node, ast.Assign)
-        and any(
-            isinstance(target, ast.Name) and target.id == "__all__"
-            for target in node.targets
-        )
-    ]
-    assert len(export_assignments) == 1
-
+def test_relay_service_runtime_is_owned_by_hub_runtime_bridge() -> None:
     relay = ROOT / "hub_runtime_bridge/compat/relay_service.py"
     relay_imports = _imports(relay)
     relay_calls = _calls(relay)
     relay_text = relay.read_text()
 
     assert "hub_runtime_bridge.facade" in relay_imports
+    assert "app_shell.relay_service" not in relay_imports
+    assert "app_shell.relay_service" not in relay_text
+    assert "app_shell.redis_runtime" not in relay_imports
+    assert "app_shell.redis_runtime" not in relay_text
+    assert "app_shell.delivery_runtime" not in relay_imports
+    assert "app_shell.delivery_runtime" not in relay_text
+    assert "sse_manager" not in relay_text
+    assert "AppShellRelayStreamService" not in relay_text
     assert not any(name.startswith("modules") for name in relay_imports)
     assert "execution.facade" not in relay_text
     assert "AgentResponseHandler" not in relay_text
     assert "RelayTransport" not in relay_text
     assert "AgentResponseHandler" not in relay_calls
     assert "RelayTransport" not in relay_calls
-
-    assert not (ROOT / "infrastructure/relay_streams.py").exists()
-    assert issubclass(AppShellRelayStreamService, RelayStreamService)
 
 
 def test_legacy_relay_does_not_import_delivery_runtime_concrete() -> None:
