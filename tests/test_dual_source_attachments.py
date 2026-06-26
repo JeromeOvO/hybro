@@ -16,7 +16,7 @@ from models.room import MessageContent, RoomUserMessage
 def room_svc():
     svc = RoomServices()
     svc.database_service = MagicMock()
-    svc.sse_manager = MagicMock()
+    svc.delivery = MagicMock()
     reader = MagicMock()
     reader.get_for_room_file = AsyncMock(
         side_effect=lambda room_id, file_id: _file_meta(file_id, room_id) if room_id == "room1" else None

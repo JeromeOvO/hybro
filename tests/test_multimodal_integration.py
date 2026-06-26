@@ -11,7 +11,7 @@ from models.room import UserAttachment
 def room_svc():
     svc = RoomServices()
     svc.database_service = MagicMock()
-    svc.sse_manager = MagicMock()
+    svc.delivery = MagicMock()
     svc._s3_service = AsyncMock()
     svc._s3_service.generate_presigned_url = AsyncMock(return_value="https://s3/presigned")
     reader = MagicMock()

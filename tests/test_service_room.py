@@ -32,7 +32,7 @@ def room_center():
     rc.agent_service = MagicMock()
     rc.openai_service = MagicMock()
     rc.a2a_service = MagicMock()
-    rc.sse_manager = MagicMock()
+    rc.delivery = MagicMock()
     rc.task_service = MagicMock()
     return rc
 
@@ -337,8 +337,8 @@ async def test_room_services_persist_message_to_room_passes_room_agent_set_to_us
     )
     svc._bound = False
     svc._facade = None
-    svc.sse_manager = MagicMock()
-    svc.sse_manager.create_token.return_value = object()
+    svc.delivery = MagicMock()
+    svc.delivery.create_token.return_value = object()
     svc._validate_send_message_request = MagicMock(return_value=None)
     svc._resolve_and_apply_attachments = AsyncMock(return_value=None)
     svc._resolve_explicit_target_scope = AsyncMock()
