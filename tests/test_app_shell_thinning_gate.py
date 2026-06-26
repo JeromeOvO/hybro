@@ -478,15 +478,17 @@ def test_app_shell_runtime_hub_modules_removed_from_owner_runtime_paths():
             if not path.is_file():
                 continue
             rel = path.relative_to(root).as_posix()
-            text = path.read_text()
-            for needle in forbidden_imports:
-                if needle in text:
-                    violations.append(f"{rel}: contains {needle}")
-            for needle in forbidden_runtime_names:
-                if needle in text:
-                    violations.append(f"{rel}: contains {needle}")
+            for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+                for needle in sorted(forbidden_imports):
+                    if needle in line:
+                        violations.append(f"{rel}:{lineno}: contains {needle}")
+                for needle in sorted(forbidden_runtime_names):
+                    if needle in line:
+                        violations.append(f"{rel}:{lineno}: contains {needle}")
 
-    assert violations == []
+    assert not violations, "Forbidden app-shell runtime references:\n" + "\n".join(
+        violations
+    )
 
 
 def _import_modules(path: Path) -> list[tuple[int, str]]:
