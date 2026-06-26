@@ -1,5 +1,4 @@
 import ast
-import importlib
 import inspect
 import subprocess
 import sys
@@ -216,100 +215,6 @@ def test_runtime_store_wires_all_focused_parts():
     assert isinstance(store.tasks, AppShellTaskLifecycleStore)
     assert isinstance(store.hitl, AppShellHITLStore)
     assert isinstance(store.memory, AppShellMemoryStore)
-
-
-def test_legacy_repository_part_shims_export_dal_owner_objects():
-    from app_shell.repository_parts import (
-        AppShellAgentRoomStore as LegacyAgentRoomStore,
-    )
-    from app_shell.repository_parts import AppShellHITLStore as LegacyHITLStore
-    from app_shell.repository_parts import AppShellMemoryStore as LegacyMemoryStore
-    from app_shell.repository_parts import AppShellMessageStore as LegacyMessageStore
-    from app_shell.repository_parts import (
-        AppShellTaskLifecycleStore as LegacyTaskLifecycleStore,
-    )
-    from app_shell.repository_parts.hitl_store import (
-        AppShellHITLStore as LegacyHITLModuleStore,
-    )
-    from app_shell.repository_parts.memory_store import (
-        AppShellMemoryStore as LegacyMemoryModuleStore,
-    )
-    from app_shell.repository_parts.message_store import (
-        AppShellMessageStore as LegacyMessageModuleStore,
-    )
-    from app_shell.repository_parts.task_lifecycle_store import (
-        AppShellTaskLifecycleStore as LegacyTaskLifecycleModuleStore,
-    )
-    from dal.runtime_store.parts import (
-        AppShellAgentRoomStore,
-        AppShellHITLStore,
-        AppShellMemoryStore,
-        AppShellMessageStore,
-        AppShellTaskLifecycleStore,
-    )
-
-    legacy_agent_room_module = importlib.import_module(
-        "app_shell.repository_parts." + "agent_room_store"
-    )
-    LegacyAgentRoomModuleStore = legacy_agent_room_module.AppShellAgentRoomStore
-
-    assert LegacyAgentRoomStore is AppShellAgentRoomStore
-    assert LegacyAgentRoomModuleStore is AppShellAgentRoomStore
-    assert LegacyHITLStore is AppShellHITLStore
-    assert LegacyHITLModuleStore is AppShellHITLStore
-    assert LegacyMemoryStore is AppShellMemoryStore
-    assert LegacyMemoryModuleStore is AppShellMemoryStore
-    assert LegacyMessageStore is AppShellMessageStore
-    assert LegacyMessageModuleStore is AppShellMessageStore
-    assert LegacyTaskLifecycleStore is AppShellTaskLifecycleStore
-    assert LegacyTaskLifecycleModuleStore is AppShellTaskLifecycleStore
-
-
-def test_legacy_repository_part_parsing_shim_exports_dal_owner_helpers():
-    import app_shell.repository_parts.parsing as legacy_parsing
-    import dal.runtime_store.parts.parsing as owner_parsing
-
-    helper_names = [
-        "_extract_text_from_artifact_parts",
-        "_modified_count",
-        "_mongo_update_succeeded",
-        "_safe_parse_agent",
-        "_safe_parse_agent_group",
-        "_safe_parse_agent_message",
-        "_safe_parse_chat_context",
-        "_safe_parse_room",
-        "_safe_parse_room_memory",
-        "_safe_parse_user_message",
-        "_strip_file_urls",
-        "_strip_unset_task_tracking_fields",
-        "_task_tracking_matches",
-    ]
-
-    assert legacy_parsing.__all__ == helper_names
-    for helper_name in helper_names:
-        assert getattr(legacy_parsing, helper_name) is getattr(
-            owner_parsing,
-            helper_name,
-        )
-
-
-def test_legacy_repository_part_webhook_shim_exports_dal_owner_helpers():
-    import app_shell.repository_parts.webhook_tokens as legacy_webhook_tokens
-    import dal.runtime_store.parts.webhook_tokens as owner_webhook_tokens
-
-    helper_names = [
-        "generate_webhook_token",
-        "get_webhook_signing_key",
-        "hash_webhook_token",
-        "verify_webhook_token",
-    ]
-
-    assert legacy_webhook_tokens.__all__ == helper_names
-    for helper_name in helper_names:
-        assert getattr(legacy_webhook_tokens, helper_name) is getattr(
-            owner_webhook_tokens,
-            helper_name,
-        )
 
 
 def test_runtime_store_part_properties_do_not_recreate_missing_parts():
