@@ -1384,7 +1384,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         logger.info("Relay service initialized and heartbeat checker started")
 
         # Attach Redis Streams to relay service
-        if bind_redis_runtime_to_relay(_relay_svc, redis_runtime=_redis_runtime):
+        if bind_redis_runtime_to_relay(
+            _relay_svc,
+            redis_runtime=_redis_runtime,
+            redis_streams_ready=redis_streams_ready,
+        ):
             logger.info(
                 "Redis Streams relay enabled (separate pool for blocking XREAD)"
             )
@@ -1596,16 +1600,17 @@ def create_redis_runtime_deps(
     from hub_runtime_bridge.transport.relay_streams import RelayStreamService
 
     command_client = RedisKVImpl(url=redis_url)
+    shared_command_client = command_client._ensure_client()
     streams_client = RedisStreamsImpl(url=redis_url)
     return RedisRuntimeDeps(
         command_client=command_client,
         streams_client=streams_client,
         leader=(
-            LeaderElectorImpl(instance_id=instance_id, url=redis_url)
+            LeaderElectorImpl(client=shared_command_client, instance_id=instance_id)
             if instance_id is not None
             else None
         ),
-        room_lock=RoomRedisDistributedLock(url=redis_url),
+        room_lock=RoomRedisDistributedLock(client=shared_command_client),
         relay_streams=RelayStreamService(
             streams_client,
             kv=command_client,
@@ -1625,9 +1630,10 @@ async def close_redis_runtime_deps(redis_runtime: RedisRuntimeDeps | None) -> No
     for attr in ("streams_client", "command_client", "leader", "room_lock"):
         client = getattr(redis_runtime, attr, None)
         close = getattr(client, "close", None)
-        if close is None or id(client) in closed:
+        close_target = getattr(client, "_client", None) or client
+        if close is None or id(close_target) in closed:
             continue
-        closed.add(id(client))
+        closed.add(id(close_target))
         await close()
 
 
@@ -1646,9 +1652,10 @@ def bind_redis_runtime_to_relay(
     relay_service: Any,
     *,
     redis_runtime: RedisRuntimeDeps,
+    redis_streams_ready: bool,
 ) -> bool:
     relay_streams = redis_runtime.relay_streams
-    if relay_streams and relay_streams.is_connected:
+    if redis_streams_ready and relay_streams:
         relay_service.set_stream_service(relay_streams)
         return True
     return False

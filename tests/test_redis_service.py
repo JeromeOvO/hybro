@@ -193,6 +193,8 @@ async def test_create_redis_runtime_deps_wires_command_client_to_relay_heartbeat
     command_client.is_connected = True
     command_client.set = AsyncMock(return_value=True)
     command_client.exists = AsyncMock(return_value=True)
+    raw_command_client = object()
+    command_client._ensure_client = MagicMock(return_value=raw_command_client)
 
     streams_client = MagicMock()
     streams_client.is_connected = True
@@ -217,11 +219,12 @@ async def test_create_redis_runtime_deps_wires_command_client_to_relay_heartbeat
     assert redis_runtime.streams_client is streams_client
     redis_kv_ctor.assert_called_once_with(url="redis://unit-test")
     redis_streams_ctor.assert_called_once_with(url="redis://unit-test")
+    command_client._ensure_client.assert_called_once_with()
     leader_ctor.assert_called_once_with(
+        client=raw_command_client,
         instance_id="worker-1",
-        url="redis://unit-test",
     )
-    room_lock_ctor.assert_called_once_with(url="redis://unit-test")
+    room_lock_ctor.assert_called_once_with(client=raw_command_client)
 
     await redis_runtime.relay_streams.record_heartbeat("hub-1")
     assert await redis_runtime.relay_streams.is_hub_alive("hub-1") is True
@@ -232,6 +235,41 @@ async def test_create_redis_runtime_deps_wires_command_client_to_relay_heartbeat
         ttl=17,
     )
     command_client.exists.assert_awaited_once_with("hub:heartbeat:hub-1")
+
+
+@pytest.mark.asyncio
+async def test_close_redis_runtime_deps_dedupes_shared_underlying_clients():
+    import container
+
+    shared_client = object()
+    streams_client = object()
+    command_client = MagicMock()
+    command_client._client = shared_client
+    command_client.close = AsyncMock()
+    leader = MagicMock()
+    leader._client = shared_client
+    leader.close = AsyncMock()
+    room_lock = MagicMock()
+    room_lock._client = shared_client
+    room_lock.close = AsyncMock()
+    streams = MagicMock()
+    streams._client = streams_client
+    streams.close = AsyncMock()
+
+    redis_runtime = container.RedisRuntimeDeps(
+        command_client=command_client,
+        streams_client=streams,
+        leader=leader,
+        room_lock=room_lock,
+        relay_streams=None,
+    )
+
+    await container.close_redis_runtime_deps(redis_runtime)
+
+    streams.close.assert_awaited_once_with()
+    command_client.close.assert_awaited_once_with()
+    leader.close.assert_not_awaited()
+    room_lock.close.assert_not_awaited()
 
 
 @pytest.mark.asyncio

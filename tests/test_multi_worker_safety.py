@@ -29,7 +29,11 @@ def test_container_degraded_redis_skips_room_lock_and_unconnected_relay_streams(
         redis_runtime=runtime,
         redis_kv_ready=False,
     )
-    stream_bound = bind_redis_runtime_to_relay(relay_service, redis_runtime=runtime)
+    stream_bound = bind_redis_runtime_to_relay(
+        relay_service,
+        redis_runtime=runtime,
+        redis_streams_ready=False,
+    )
 
     assert room_bindings == [None]
     assert stream_bound is False
@@ -38,7 +42,20 @@ def test_container_degraded_redis_skips_room_lock_and_unconnected_relay_streams(
     connected_streams = SimpleNamespace(is_connected=True)
     runtime.relay_streams = connected_streams
 
-    stream_bound = bind_redis_runtime_to_relay(relay_service, redis_runtime=runtime)
+    stream_bound = bind_redis_runtime_to_relay(
+        relay_service,
+        redis_runtime=runtime,
+        redis_streams_ready=True,
+    )
 
     assert stream_bound is True
+    assert stream_bindings == [connected_streams]
+
+    stream_bound = bind_redis_runtime_to_relay(
+        relay_service,
+        redis_runtime=runtime,
+        redis_streams_ready=False,
+    )
+
+    assert stream_bound is False
     assert stream_bindings == [connected_streams]
