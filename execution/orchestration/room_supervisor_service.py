@@ -207,21 +207,8 @@ class RoomSupervisorService:
 
     def __init__(
         self,
-        openai_service: object | None = None,
         supervisor_service: SupervisorLLMService | None = None,
-        bedrock_service: object | None = None,
-        supervisor_store=None,
-        **kwargs,
-    ):
-        store = (
-            supervisor_store
-            if supervisor_store is not None
-            else kwargs.pop("store", None)
-        )
-        if kwargs:
-            unexpected = next(iter(kwargs))
-            raise TypeError(f"unexpected keyword argument: {unexpected}")
-        _ = openai_service, bedrock_service, store
+    ) -> None:
         self._supervisor_service = supervisor_service
 
     def bind_supervisor_service(

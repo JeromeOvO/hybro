@@ -30,8 +30,8 @@ class RoomCoordinatorService:
 
     Initial responsibility:
     - When debate mode is enabled for a room and multiple agent answers exist for a
-      given user message, generate a debate summary using OpenAIService and emit it
-      as an additional agent message in the room.
+      given user message, generate a debate summary using the bound summary LLM
+      service and emit it as an additional agent message in the room.
 
     This service is intentionally backend-local (not an A2A agent) so it can:
     - Access room and message structures directly
