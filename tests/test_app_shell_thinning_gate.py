@@ -442,6 +442,53 @@ def _legacy_import_blockers() -> set[tuple[str, str]]:
     return blockers
 
 
+def test_app_shell_runtime_hub_modules_removed_from_owner_runtime_paths():
+    root = Path(__file__).resolve().parents[1]
+    scanned_roots = [
+        root / "container.py",
+        root / "api",
+        root / "api_gateway",
+        root / "delivery",
+        root / "hub_runtime_bridge",
+        root / "dal",
+        root / "room",
+        root / "execution",
+    ]
+    forbidden_imports = {
+        "app_shell.delivery_runtime",
+        "app_shell.redis_runtime",
+        "app_shell.relay_store",
+        "app_shell.relay_service",
+        "app_shell.room_lock",
+        "app_shell.notification_service",
+    }
+    forbidden_runtime_names = {
+        "SSEManager",
+        "sse_manager",
+        "AppShellRedis",
+        "AppShellRelay",
+        "RedisRoomDistributedLock",
+        "notification_service",
+    }
+
+    violations: list[str] = []
+    for base in scanned_roots:
+        paths = [base] if base.is_file() else sorted(base.rglob("*.py"))
+        for path in paths:
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root).as_posix()
+            text = path.read_text()
+            for needle in forbidden_imports:
+                if needle in text:
+                    violations.append(f"{rel}: contains {needle}")
+            for needle in forbidden_runtime_names:
+                if needle in text:
+                    violations.append(f"{rel}: contains {needle}")
+
+    assert violations == []
+
+
 def _import_modules(path: Path) -> list[tuple[int, str]]:
     tree = ast.parse(path.read_text(), filename=str(path))
     modules: list[tuple[int, str]] = []
