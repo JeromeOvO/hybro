@@ -216,10 +216,9 @@ def validate_runtime_bindings(
     if getattr(app.state, "delivery_facade", None) is None:
         errors.append("app.state.delivery_facade")
 
-    from app_shell.hitl_service import hitl_service
-
-    if getattr(hitl_service, "_service", None) is None:
-        errors.append("hitl_service")
+    execution_deps = getattr(app.state, "execution_deps", None)
+    if getattr(execution_deps, "hitl_manager", None) is None:
+        errors.append("app.state.execution_deps.hitl_manager")
 
     if getattr(app.state, "execution_deps", None) is None:
         errors.append("app.state.execution_deps")
@@ -395,11 +394,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 a2a_service,
             )
             from a2a_adapter.task_status import coerce_task_state
-            from app_shell.hitl_service import (
-                bind_hitl_service,
-                create_hitl_service,
-                hitl_service,
-            )
+            from execution.hitl.factory import create_hitl_service
 
             agent_capability_issue_repository = create_agent_capability_issue_repository(
                 mongo_dal
@@ -910,22 +905,20 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             app.state.execution_client_request_id_resolver = (
                 app_shell_client_request_id_resolver
             )
-            bind_hitl_service(
-                create_hitl_service(
-                    persistence=hitl_runtime_store,
-                    delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
-                    agent_reply=A2AHITLContinuationAdapter(
-                        a2a_service,
-                        lambda: execution_room_message_center,
-                    ),
-                    continuation=A2AHITLContinuationAdapter(
-                        a2a_service,
-                        lambda: execution_room_message_center,
-                    ),
-                    task_notifications=HITLTaskNotificationAdapter(
-                        notify_task_update_with_string_state
-                    ),
-                )
+            hitl_manager = create_hitl_service(
+                persistence=hitl_runtime_store,
+                delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
+                agent_reply=A2AHITLContinuationAdapter(
+                    a2a_service,
+                    lambda: execution_room_message_center,
+                ),
+                continuation=A2AHITLContinuationAdapter(
+                    a2a_service,
+                    lambda: execution_room_message_center,
+                ),
+                task_notifications=HITLTaskNotificationAdapter(
+                    notify_task_update_with_string_state
+                ),
             )
             route_room_reader = SimpleNamespace(
                 get_room_by_room_id=agent_room_store.get_room_by_room_id,
@@ -1010,7 +1003,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 debate_prompt_injector=debate_service,
                 rate_limit_service=agent_rate_limiter,
                 room_supervisor_service=room_supervisor_service,
-                hitl_coordinator=hitl_service,
+                hitl_coordinator=hitl_manager,
                 task_notifications=TaskNotificationAdapter(
                     notify_task_update_with_string_state
                 ),
@@ -1040,7 +1033,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     hitl_reader=hitl_store,
                     delivery=execution_delivery,
                     room_message_center=execution_room_message_center,
-                    hitl_coordinator=hitl_service,
+                    hitl_coordinator=hitl_manager,
                     task_notifier=task_notifier,
                     task_notification_impl=_notify_task_update_impl,
                 )
@@ -1056,12 +1049,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             execution_facade = create_execution_facade(
                 room_center=route_room_center,
                 room_message_center=execution_room_message_center,
-                hitl_service=hitl_service,
+                hitl_manager=hitl_manager,
                 run_lifecycle=run_lifecycle,
                 run_reader=RunQueryAdapter(_execution_repos["run_repository"]),
                 cancellation_state=CancellationStateC3Adapter(execution_delivery),
                 cancellation_store=MongoCancellationStoreAdapter(task_store),
-                hitl_message_cancellation=HITLMessageCancellationAdapter(hitl_service),
+                hitl_message_cancellation=HITLMessageCancellationAdapter(hitl_manager),
                 agent_task_cleanup=AgentTaskCleanupAdapter(
                     message_task_store=message_store,
                     get_agent_card_from_url=a2a_service.get_agent_card_from_url,
@@ -1267,8 +1260,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             stale_task_checker.set_hitl_deps(
                 StaleHITLDeps(
-                    recover_stale_processing=hitl_service.recover_stale_processing,
-                    cancel_requests_for_message=hitl_service.cancel_requests_for_message,
+                    recover_stale_processing=hitl_manager.recover_stale_processing,
+                    cancel_requests_for_message=hitl_manager.cancel_requests_for_message,
                 )
             )
             stale_task_checker.set_run_watchdog_event_deps(
@@ -1348,7 +1341,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             mongo=relay_hub_store,
             db=relay_runtime_store,
             room_message_center=_rmc,
-            hitl_coordinator=hitl_service,
+            hitl_coordinator=hitl_manager,
             event_publisher=_delivery_deps.event_publisher if _delivery_deps else None,
             worker_id=(
                 _delivery_facade.instance_id if _delivery_facade is not None else None

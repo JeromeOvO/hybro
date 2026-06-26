@@ -1020,6 +1020,3 @@ class BoundHITLServiceProxy:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._require_service(), name)
-
-
-hitl_service = BoundHITLServiceProxy()

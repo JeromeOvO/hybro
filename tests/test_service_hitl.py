@@ -14,13 +14,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app_shell.hitl_service import MAX_HITL_ROUNDS, HITLService
 from execution.hitl.exceptions import (
     HITLConflictError,
     HITLNotFoundError,
     HITLRoomMismatchError,
     HITLRoutingFailedError,
 )
+from execution.hitl.service import MAX_HITL_ROUNDS, HITLService
 from models.hitl import (
     HITLEventType,
     HITLPromptType,
@@ -143,10 +143,11 @@ def test_bound_hitl_service_proxy_raises_before_binding_and_forwards_after_bindi
     assert proxy.recover_stale_processing is target.recover_stale_processing
 
 
-def test_legacy_hitl_singleton_is_bound_proxy():
-    from app_shell.hitl_service import BoundHITLServiceProxy, hitl_service
+def test_bound_hitl_proxy_class_is_available_without_global_singleton():
+    from execution.hitl.service import BoundHITLServiceProxy
 
-    assert isinstance(hitl_service, BoundHITLServiceProxy)
+    proxy = BoundHITLServiceProxy()
+    assert proxy._service is None
 
 
 class TestRequestInput:
