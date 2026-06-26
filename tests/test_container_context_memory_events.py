@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -64,3 +65,11 @@ async def test_register_context_memory_event_handlers_projects_and_compacts():
 
     assert facade.projected == [("room-1", "msg-1")]
     assert facade.compacted == ["room-1"]
+
+
+def test_validate_runtime_bindings_checks_app_state_delivery_facade():
+    source = Path("container.py").read_text()
+
+    assert 'getattr(app.state, "delivery_facade", None)' in source
+    assert 'getattr(sse_manager, "_facade", None)' not in source
+    assert "sse_manager.delivery_facade" not in source

@@ -18,7 +18,6 @@ from api_gateway.dependencies import (
     missing_required_deps,
 )
 from app_shell.api_key_auth import MongoAPIKeyAuthenticator
-from app_shell.delivery_runtime import sse_manager
 from app_shell.viewset import AppShellDALViewSetRepositoryProvider
 from common.api_key_auth import bind_api_key_authenticator
 from common.config.settings import settings
@@ -48,6 +47,7 @@ from common.protocols import (
     HubManagement,
     LLMEmbeddingGateway,
     LLMGateway,
+    LeaderElector,
     MemoryManager,
     MemoryProjector,
     MemoryRepository,
@@ -56,6 +56,8 @@ from common.protocols import (
     ObjectStorageDAL,
     RedisKV,
     RedisPubSub,
+    RedisStreams,
+    RoomDistributedLock,
     RoomHistoryReader,
     RoomManagement,
     RoomMembershipSeedSource,
@@ -211,8 +213,8 @@ def validate_runtime_bindings(
     if getattr(execution_room_message_center, "_runtime", None) is None:
         errors.append("execution.room_message_center")
 
-    if getattr(sse_manager, "_facade", None) is None:
-        errors.append("sse_manager.delivery_facade")
+    if getattr(app.state, "delivery_facade", None) is None:
+        errors.append("app.state.delivery_facade")
 
     from app_shell.hitl_service import hitl_service
 
@@ -262,9 +264,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
     _delivery_config = None
     _execution_deps = None
     _mongo_dal = None
-    _delivery_bound = False
     _bg_started = False
     agent_health_service = None
+    redis_kv_ready = False
+    redis_streams_ready = False
 
     try:
         # ── Phase 1: Infrastructure (DB + Redis, no background work) ──
@@ -383,8 +386,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 config=_delivery_config,
             )
             await _delivery_facade.start()
-            sse_manager.bind_facade(_delivery_facade)
-            _delivery_bound = True
             _delivery_deps = create_delivery_deps(_delivery_facade)
             app.state.delivery_facade = _delivery_facade
             app.state.delivery_deps = _delivery_deps
@@ -868,23 +869,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     execution_inquiry_agent_messages_by_related_message_id
                 ),
             )
-            execution_delivery_methods = {
-                "send_task_submitted": sse_manager.send_task_submitted,
-                "send_task_update": sse_manager.send_task_update,
-                "send_rate_limit_error": sse_manager.send_rate_limit_error,
-                "send_agent_response": sse_manager.send_agent_response,
-                "send_artifact_update": sse_manager.send_artifact_update,
-                "send_error": sse_manager.send_error,
-                "clear_cancellation": sse_manager.clear_cancellation,
-                "get_token": sse_manager.get_token,
-                "create_token": sse_manager.create_token,
-                "remove_token": sse_manager.remove_token,
-            }
-            if hasattr(sse_manager, "cancel_message_and_broadcast"):
-                execution_delivery_methods["cancel_message_and_broadcast"] = (
-                    sse_manager.cancel_message_and_broadcast
-                )
-            execution_delivery = SimpleNamespace(**execution_delivery_methods)
+            execution_delivery = _delivery_facade
             task_notifier = TaskUpdateNotifier(execution_delivery)
             execution_a2a_transport = SimpleNamespace(
                 has_streaming_capability=a2a_service.has_streaming_capability,
@@ -1157,28 +1142,34 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         if runtime.settings.webhook_signing_key:
             await hitl_store.ensure_hitl_indexes()
 
-        # Init app-shell Redis subsystems before the guard. Delivery-owned
+        # Init DAL Redis subsystems before the guard. Delivery-owned
         # Pub/Sub/KV clients are constructed through container.py above.
-        from app_shell.redis_runtime import create_app_shell_redis_runtime
-
-        _redis_runtime = create_app_shell_redis_runtime(
+        _redis_runtime = create_redis_runtime_deps(
+            redis_url=runtime.settings.redis_url,
             instance_id=(
-                _delivery_facade.instance_id
-                if _delivery_facade is not None
-                else sse_manager._instance_id
-            )
+                _delivery_facade.instance_id if _delivery_facade is not None else None
+            ),
+            relay_stream_maxlen=runtime.settings.relay_stream_maxlen,
+            relay_hub_heartbeat_ttl=runtime.settings.relay_hub_heartbeat_ttl,
         )
         _redis_service = _redis_runtime.command_client
         if _redis_service:
-            await _redis_service.start()
-            logger.info("App-shell Redis started (leader election/relay enabled)")
+            redis_kv_ready = await _redis_service.ping()
+            if redis_kv_ready:
+                logger.info("DAL Redis KV connected (leader election/relay enabled)")
+            else:
+                logger.warning("DAL Redis KV unavailable; Redis KV features disabled")
         else:
-            logger.info("App-shell Redis disabled (REDIS_URL not set)")
+            logger.info("DAL Redis disabled (REDIS_URL not set)")
         app.state.redis_runtime = _redis_runtime
 
         _redis_streams_service = _redis_runtime.streams_client
         if _redis_streams_service:
-            await _redis_streams_service.start()
+            redis_streams_ready = await _redis_streams_service.ping()
+            if redis_streams_ready:
+                logger.info("DAL Redis Streams connected")
+            else:
+                logger.warning("DAL Redis Streams unavailable; relay streams disabled")
 
         # ── Guard: fail if gunicorn without fully connected Redis ──
         check_multi_worker_safety(
@@ -1189,12 +1180,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             delivery_kv_connected=bool(
                 _delivery_facade and _delivery_facade.delivery_kv_connected
             ),
-            redis_service_connected=bool(
-                _redis_service and _redis_service.is_connected
-            ),
-            relay_streams_connected=bool(
-                _redis_streams_service and _redis_streams_service.is_connected
-            ),
+            redis_service_connected=redis_kv_ready,
+            relay_streams_connected=redis_streams_ready,
             change_stream_connected=bool(
                 _delivery_facade and _delivery_facade.change_stream_connected
             ),
@@ -1202,7 +1189,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
         # ── Phase 2: Background services (only after guard passes) ──
 
-        if _redis_service and _redis_service.is_connected:
+        if redis_kv_ready:
             _leader = _redis_runtime.leader
             logger.info("Leader election enabled for background jobs")
 
@@ -1334,7 +1321,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
         # Initialize relay service
         from app_shell.execution_runtime import get_bound_room_message_center
-        from app_shell.room_lock import RedisRoomDistributedLock
         from execution.facade import hub_agent_response_internal_to_agent_event
         from hub_runtime_bridge.adapters.legacy_failure import (
             RelayOfflineFailureAdapter,
@@ -1348,7 +1334,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         from hub_runtime_bridge.repository.mongo import HubMongoRepository
 
         _rmc = get_bound_room_message_center()
-        _rmc.set_room_distributed_lock(RedisRoomDistributedLock(_redis_service))
+        bind_redis_runtime_to_room(
+            _rmc,
+            redis_runtime=_redis_runtime,
+            redis_kv_ready=redis_kv_ready,
+        )
         relay_hub_store = RelayHubStore(
             mongo=mongo_dal,
             hub_repository=HubMongoRepository(mongo_dal),
@@ -1394,9 +1384,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         logger.info("Relay service initialized and heartbeat checker started")
 
         # Attach Redis Streams to relay service
-        if _redis_streams_service and _redis_streams_service.is_connected:
-            _relay_streams = _redis_runtime.relay_streams
-            _relay_svc.set_stream_service(_relay_streams)
+        if bind_redis_runtime_to_relay(_relay_svc, redis_runtime=_redis_runtime):
             logger.info(
                 "Redis Streams relay enabled (separate pool for blocking XREAD)"
             )
@@ -1431,7 +1419,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_selection_service=agent_selection_service,
                 execution_engine=_execution_deps.execution_engine,
                 sse_store=sse_state_reader,
-                sse_transport=sse_manager,
+                sse_transport=_delivery_facade,
                 webhook_receiver=create_webhook_transport(),
                 repository_provider=route_repository_provider,
                 embedding_provider=embedding_llm_service,
@@ -1445,8 +1433,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         # the drain window after the adapter has been successfully bound.
         if _relay_svc:
             await _relay_svc.stop()
-        if _redis_streams_service:
-            await _redis_streams_service.stop()
         if _bg_started:
             await stale_task_checker.stop()
             await compaction_sweep.stop()
@@ -1455,8 +1441,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 await agent_health_service.stop()
         if _leader:
             await _leader.release_all(ALL_JOB_NAMES)
-        if _redis_service:
-            await _redis_service.stop()
+        await close_redis_runtime_deps(_redis_runtime)
         if _mongo_dal is not None:
             await _mongo_dal.close()
             app.state.mongo_dal = None
@@ -1464,8 +1449,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             if _delivery_facade is not None:
                 await _delivery_facade.stop()
         finally:
-            if _delivery_bound:
-                sse_manager.unbind_facade()
             app.state.delivery_facade = None
         raise
 
@@ -1480,10 +1463,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
         if _relay_svc_shutdown:
             await _relay_svc_shutdown.stop()
-
-        # Stop Redis Streams service (hub relay)
-        if _redis_streams_service:
-            await _redis_streams_service.stop()
 
         # Stop background services
         await stale_task_checker.stop()
@@ -1505,8 +1484,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
 
         # Drain: stop accepting new SSE connections and allow in-flight events to finish
-        if _delivery_bound:
-            sse_manager.set_draining(True)
+        if _delivery_facade is not None:
+            _delivery_facade.set_draining(True)
         await asyncio.sleep(
             _delivery_config.shutdown_drain_seconds
             if _delivery_config is not None
@@ -1517,13 +1496,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             if _delivery_facade is not None:
                 await _delivery_facade.stop()
         finally:
-            if _delivery_bound:
-                sse_manager.unbind_facade()
             app.state.delivery_facade = None
 
-        # Stop RedisService
-        if _redis_service:
-            await _redis_service.stop()
+        await close_redis_runtime_deps(_redis_runtime)
         if _mongo_dal is not None:
             await _mongo_dal.close()
             app.state.mongo_dal = None
@@ -1588,6 +1563,95 @@ class HubDeps:
     hub_dispatch_port: HubDispatchPort
     hub_dispatch_policy: HubDispatchPolicy
     hub_facade: Any
+
+
+@dataclass(frozen=True)
+class RedisRuntimeDeps:
+    command_client: RedisKV | None
+    streams_client: RedisStreams | None
+    leader: LeaderElector | None
+    room_lock: RoomDistributedLock | None
+    relay_streams: Any | None
+
+
+def create_redis_runtime_deps(
+    *,
+    redis_url: str,
+    instance_id: str | None = None,
+    relay_stream_maxlen: int | None = None,
+    relay_hub_heartbeat_ttl: int | None = None,
+) -> RedisRuntimeDeps:
+    if not redis_url:
+        return RedisRuntimeDeps(
+            command_client=None,
+            streams_client=None,
+            leader=None,
+            room_lock=None,
+            relay_streams=None,
+        )
+
+    from dal.redis.kv import RedisKVImpl
+    from dal.redis.lock import LeaderElectorImpl, RoomRedisDistributedLock
+    from dal.redis.streams import RedisStreamsImpl
+    from hub_runtime_bridge.transport.relay_streams import RelayStreamService
+
+    command_client = RedisKVImpl(url=redis_url)
+    streams_client = RedisStreamsImpl(url=redis_url)
+    return RedisRuntimeDeps(
+        command_client=command_client,
+        streams_client=streams_client,
+        leader=(
+            LeaderElectorImpl(instance_id=instance_id, url=redis_url)
+            if instance_id is not None
+            else None
+        ),
+        room_lock=RoomRedisDistributedLock(url=redis_url),
+        relay_streams=RelayStreamService(
+            streams_client,
+            kv=command_client,
+            maxlen=relay_stream_maxlen or settings.relay_stream_maxlen,
+            heartbeat_ttl=(
+                relay_hub_heartbeat_ttl or settings.relay_hub_heartbeat_ttl
+            ),
+        ),
+    )
+
+
+async def close_redis_runtime_deps(redis_runtime: RedisRuntimeDeps | None) -> None:
+    if redis_runtime is None:
+        return
+
+    closed: set[int] = set()
+    for attr in ("streams_client", "command_client", "leader", "room_lock"):
+        client = getattr(redis_runtime, attr, None)
+        close = getattr(client, "close", None)
+        if close is None or id(client) in closed:
+            continue
+        closed.add(id(client))
+        await close()
+
+
+def bind_redis_runtime_to_room(
+    room_message_center: Any,
+    *,
+    redis_runtime: RedisRuntimeDeps,
+    redis_kv_ready: bool,
+) -> None:
+    room_message_center.set_room_distributed_lock(
+        redis_runtime.room_lock if redis_kv_ready else None
+    )
+
+
+def bind_redis_runtime_to_relay(
+    relay_service: Any,
+    *,
+    redis_runtime: RedisRuntimeDeps,
+) -> bool:
+    relay_streams = redis_runtime.relay_streams
+    if relay_streams and relay_streams.is_connected:
+        relay_service.set_stream_service(relay_streams)
+        return True
+    return False
 
 
 def create_mongo_dal() -> MongoDAL:

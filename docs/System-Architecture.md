@@ -77,7 +77,7 @@ Startup has three practical phases:
 
 2. Runtime guard and background services:
    - Start Delivery/SSE runtime.
-   - Start app-shell Redis runtime services when `REDIS_URL` is configured.
+   - Probe DAL Redis KV and Streams runtime services when `REDIS_URL` is configured.
    - Enforce multi-worker safety with `check_multi_worker_safety`.
    - Start background jobs after the guard passes.
 
@@ -454,7 +454,7 @@ delegates Hub behavior through facade public methods. Its runtime binding uses
 legacy Mongo/database singletons. `sse_manager` is no longer part of
 `RelayService` or `init_relay_service` construction; offline failures enter
 Delivery through `RelayOfflineFailureAdapter`, and stream/leader bindings are
-protocol-style pass-throughs rather than app-shell Redis runtime concrete
+protocol-style pass-throughs rather than app-shell-owned Redis runtime concrete
 dependencies. Relay transport binding is stored once and exposed through the
 legacy `relay_transport` compatibility accessor rather than duplicated private
 transport state.
@@ -480,8 +480,6 @@ Hub relay responsibilities:
 When Redis Streams are available, relay events use streams for durable-ish hub
 event delivery through `hub_runtime_bridge.transport.RelayStreamService`, which
 consumes DAL `RedisStreams` rows and optional DAL `RedisKV` heartbeat state.
-Until the app-shell Redis runtime is removed, `AppShellRelayStreamService`
-adapts the app-shell command Redis client to that DAL KV heartbeat surface.
 Redis stream and heartbeat failures are logged and degrade to empty reads,
 missing entry ids, or dead liveness checks so the facade can fall back to
 in-memory/offline queues for single-process/degraded operation.
@@ -942,7 +940,7 @@ Multi-worker production:
 - Gunicorn-style multi-worker startup is allowed only when Redis-dependent
   services are connected.
 - `check_multi_worker_safety` fails startup if Redis Pub/Sub, Redis KV, relay
-  streams, app-shell Redis runtime, or cancellation change streams are missing.
+  streams, DAL Redis runtime, or cancellation change streams are missing.
 
 This guard exists because without Redis:
 

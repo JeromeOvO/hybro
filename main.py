@@ -128,7 +128,7 @@ def compute_health_status(
     *,
     delivery_pubsub_connected: bool,
     delivery_kv_connected: bool,
-    legacy_redis_service_connected: bool,
+    redis_runtime_connected: bool,
     relay_streams_available: bool = False,
     redis_url: str,
     change_stream_connected: bool,
@@ -138,7 +138,7 @@ def compute_health_status(
     redis_degraded = redis_expected and not (
         delivery_pubsub_connected
         and delivery_kv_connected
-        and legacy_redis_service_connected
+        and redis_runtime_connected
         and relay_streams_available
     )
     degraded = redis_degraded or not change_stream_connected
@@ -148,12 +148,12 @@ def compute_health_status(
             "change_stream_connected": change_stream_connected,
             "delivery_pubsub_connected": delivery_pubsub_connected,
             "delivery_kv_connected": delivery_kv_connected,
-            "legacy_redis_service_connected": legacy_redis_service_connected,
+            "redis_runtime_connected": redis_runtime_connected,
             "relay_streams_available": relay_streams_available,
             "redis_expected": redis_expected,
             "broker_connected": delivery_pubsub_connected,
             "broker_expected": redis_expected,
-            "redis_service_connected": legacy_redis_service_connected,
+            "redis_service_connected": redis_runtime_connected,
         },
         "status_code": 503 if degraded else 200,
     }

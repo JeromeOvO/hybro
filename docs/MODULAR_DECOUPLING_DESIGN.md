@@ -125,7 +125,7 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 | 9 | **Delivery** | SSE connections, event broker, dedup, domain→frontend event translation | `app_shell/delivery_runtime.py`, `delivery/` |
 | 10 | **Platform** | Gateway API, rate limiting, file storage | `platform_module/`, `api/gateway.py`, `api/discovery.py`, `api/files.py` |
 | 11 | **HubRuntimeBridge** | Hub connection, relay, liveness, offline queue, agent sync | `hub_runtime_bridge/`, `api/relay.py`, `api/hub.py`, `app_shell/relay_service.py` shim |
-| 12 | **Jobs** | Background tasks with leader election | `jobs/`, app-shell Redis runtime |
+| 12 | **Jobs** | Background tasks with leader election | `jobs/`, DAL Redis runtime |
 
 > **NOTE (Workflow decommission)**: The legacy `base_tasks` / `meta_tasks` / `task_sessions` data model
 > (from the first version of chat room) is **deleted** in this refactor, NOT wrapped. The endpoints
@@ -1717,7 +1717,7 @@ Phase 6 implementation detail: the current repository does not yet have a single
 does not import concrete `delivery.*`, `dal.*`, or legacy SSE `RedisBroker` implementations.
 
 Health and multi-worker safety now use explicit fields:
-`delivery_pubsub_connected`, `delivery_kv_connected`, `legacy_redis_service_connected`,
+`delivery_pubsub_connected`, `delivery_kv_connected`, `redis_runtime_connected`,
 `relay_streams_available`, `change_stream_connected`, and `redis_expected`. Deprecated
 aliases (`broker_connected`, `broker_expected`, `redis_service_connected`) remain in
 `/health` for backend compatibility.

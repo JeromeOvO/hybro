@@ -220,6 +220,26 @@ def test_app_shell_routes_internal_hub_events_through_hub_router() -> None:
     assert "router.dispatch_hub_internal_response" in container
 
 
+def test_container_uses_owner_runtime_modules_for_delivery_redis_and_relay() -> None:
+    container_path = ROOT / "container.py"
+    container = container_path.read_text()
+    container_imports = _imports(container_path)
+
+    assert "app_shell.delivery_runtime" not in container_imports
+    assert "app_shell.redis_runtime" not in container_imports
+    assert "app_shell.room_lock" not in container_imports
+    assert "create_app_shell_redis_runtime" not in container
+    assert "AppShellRelayHubStore" not in container
+    assert "RedisRoomDistributedLock" not in container
+    assert "class RedisRuntimeDeps" in container
+    assert "def create_redis_runtime_deps" in container
+    assert "RedisKVImpl" in container
+    assert "RedisStreamsImpl" in container
+    assert "LeaderElectorImpl" in container
+    assert "RoomRedisDistributedLock" in container
+    assert "RelayStreamService" in container
+
+
 def test_relay_and_hub_route_inventory_matches_fixture() -> None:
     from api.hub import router as hub_router
     from api.relay import router as relay_router

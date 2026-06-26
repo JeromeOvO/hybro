@@ -33,7 +33,7 @@ class AppShellHealthCheck:
             delivery_kv_connected=bool(
                 delivery_facade and delivery_facade.delivery_kv_connected
             ),
-            legacy_redis_service_connected=bool(
+            redis_runtime_connected=bool(
                 redis_service and redis_service.is_connected
             ),
             relay_streams_available=bool(
