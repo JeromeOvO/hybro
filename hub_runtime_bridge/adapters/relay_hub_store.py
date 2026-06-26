@@ -57,4 +57,3 @@ class RelayHubStore:
             agent_id,
             success=success,
         )
-
