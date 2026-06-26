@@ -411,11 +411,12 @@ It is composed from:
   and Redis KV when available.
 - `TerminalStatusDeduplicator`: prevents duplicate terminal status frames.
 
-Delivery is exposed to SSE routes through `APIGatewayDeps.sse_transport` and
-the `get_sse_transport` FastAPI provider. Routes call the delivery transport,
-while the runtime implementation lives in `delivery`. Delivery never calls back
-into Execution or app-shell business services; lifecycle recording happens
-before typed delivery events are emitted.
+Delivery is exposed to SSE routes as `common.protocols.SSERouteTransport`
+through `APIGatewayDeps.sse_transport` and the `get_sse_transport` FastAPI
+provider. Routes call the delivery transport, while the runtime implementation
+lives in `delivery`. Delivery never calls back into Execution or app-shell
+business services; lifecycle recording happens before typed delivery events are
+emitted.
 
 ### `platform_module`
 
@@ -451,10 +452,11 @@ provides the legacy relay method surface for APIKey/request adaptation and
 delegates Hub behavior through facade public methods. Its runtime binding uses
 `RelayHubStore` under HubRuntimeBridge ownership, `HubMongoRepository`,
 `AgentRepository`, and the `RelayOfflineFailureAdapter` instead of the broad
-legacy Mongo/database singletons. `sse_manager` is no longer part of
-`RelayService` construction; offline failures enter Delivery through
-`RelayOfflineFailureAdapter`, and stream/leader bindings are protocol-style
-pass-throughs rather than app-shell-owned Redis runtime concrete dependencies.
+legacy Mongo/database singletons. Route-facing Delivery transport state is no
+longer part of `RelayService` construction; offline failures enter Delivery
+through `RelayOfflineFailureAdapter`, and stream/leader bindings are
+protocol-style pass-throughs rather than app-shell-owned Redis runtime concrete
+dependencies.
 Relay transport binding is stored once and exposed through the legacy
 `relay_transport` compatibility accessor rather than duplicated private
 transport state.
@@ -600,8 +602,8 @@ Examples:
   modules; runtime construction happens in `container.py`.
 - `app_shell.domain_alias_service`: separate compatibility binding facade for
   domain alias lookup.
-- `delivery.TaskUpdateNotifier`: terminal task update publishing facade used by
-  Execution task notification paths.
+- `delivery.task_notifier.TaskUpdateNotifier`: terminal task update publishing
+  facade used by Execution task notification paths.
 - `app_shell.hitl_service`: HITL lifecycle and response handling.
 
 A2A-facing API routes bind narrow readers from `common.protocols`:
