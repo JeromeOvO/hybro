@@ -475,8 +475,8 @@ Hub relay responsibilities:
   directly.
 - Own legacy relay lifecycle adapter behavior for hub registration,
   owner/room authorization, heartbeat validation, hub status aggregation, and
-  disconnect bookkeeping. The app-shell relay service keeps compatibility
-  method names and delegates these operations to HubRuntimeBridge adapters.
+  disconnect bookkeeping. HubRuntimeBridge keeps relay compatibility method
+  names and delegates these operations to its adapters.
 
 When Redis Streams are available, relay events use streams for durable-ish hub
 event delivery through `hub_runtime_bridge.transport.RelayStreamService`, which

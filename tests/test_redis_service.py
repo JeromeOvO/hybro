@@ -181,6 +181,60 @@ class TestRedisStreamsImpl:
 
 
 @pytest.mark.asyncio
+async def test_create_redis_runtime_deps_wires_command_client_to_relay_heartbeat(
+    monkeypatch,
+):
+    import container
+    from dal.redis import kv as kv_module
+    from dal.redis import lock as lock_module
+    from dal.redis import streams as streams_module
+
+    command_client = MagicMock()
+    command_client.is_connected = True
+    command_client.set = AsyncMock(return_value=True)
+    command_client.exists = AsyncMock(return_value=True)
+
+    streams_client = MagicMock()
+    streams_client.is_connected = True
+
+    redis_kv_ctor = MagicMock(return_value=command_client)
+    redis_streams_ctor = MagicMock(return_value=streams_client)
+    leader_ctor = MagicMock(return_value=MagicMock())
+    room_lock_ctor = MagicMock(return_value=MagicMock())
+    monkeypatch.setattr(kv_module, "RedisKVImpl", redis_kv_ctor)
+    monkeypatch.setattr(streams_module, "RedisStreamsImpl", redis_streams_ctor)
+    monkeypatch.setattr(lock_module, "LeaderElectorImpl", leader_ctor)
+    monkeypatch.setattr(lock_module, "RoomRedisDistributedLock", room_lock_ctor)
+
+    redis_runtime = container.create_redis_runtime_deps(
+        redis_url="redis://unit-test",
+        instance_id="worker-1",
+        relay_stream_maxlen=123,
+        relay_hub_heartbeat_ttl=17,
+    )
+
+    assert redis_runtime.command_client is command_client
+    assert redis_runtime.streams_client is streams_client
+    redis_kv_ctor.assert_called_once_with(url="redis://unit-test")
+    redis_streams_ctor.assert_called_once_with(url="redis://unit-test")
+    leader_ctor.assert_called_once_with(
+        instance_id="worker-1",
+        url="redis://unit-test",
+    )
+    room_lock_ctor.assert_called_once_with(url="redis://unit-test")
+
+    await redis_runtime.relay_streams.record_heartbeat("hub-1")
+    assert await redis_runtime.relay_streams.is_hub_alive("hub-1") is True
+
+    command_client.set.assert_awaited_once_with(
+        "hub:heartbeat:hub-1",
+        "1",
+        ttl=17,
+    )
+    command_client.exists.assert_awaited_once_with("hub:heartbeat:hub-1")
+
+
+@pytest.mark.asyncio
 async def test_relay_stream_service_uses_command_client_for_heartbeat():
     from hub_runtime_bridge.transport.relay_streams import RelayStreamService
 
