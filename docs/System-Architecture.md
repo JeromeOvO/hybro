@@ -480,6 +480,8 @@ Hub relay responsibilities:
 When Redis Streams are available, relay events use streams for durable-ish hub
 event delivery through `hub_runtime_bridge.transport.RelayStreamService`, which
 consumes DAL `RedisStreams` rows and optional DAL `RedisKV` heartbeat state.
+Until the app-shell Redis runtime is removed, `AppShellRelayStreamService`
+adapts the app-shell command Redis client to that DAL KV heartbeat surface.
 Redis stream and heartbeat failures are logged and degrade to empty reads,
 missing entry ids, or dead liveness checks so the facade can fall back to
 in-memory/offline queues for single-process/degraded operation.

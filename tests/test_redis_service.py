@@ -178,3 +178,62 @@ class TestRedisStreamsImpl:
         assert await streams.xadd("test_stream", {"field": "value"}) == ""
         assert await streams.xread({"test_stream": "0"}) == []
         assert await streams.ping() is False
+
+
+@pytest.mark.asyncio
+async def test_app_shell_relay_stream_service_uses_command_client_for_heartbeat():
+    from app_shell.redis_runtime import AppShellRelayStreamService
+
+    streams_client = MagicMock()
+    streams_client.is_connected = True
+    command_client = MagicMock()
+    command_client.is_connected = True
+    command_client.set_with_ttl = AsyncMock(return_value=True)
+    command_client.exists = AsyncMock(return_value=True)
+
+    relay_streams = AppShellRelayStreamService(
+        streams_client,
+        command_client,
+        heartbeat_ttl=17,
+    )
+
+    await relay_streams.record_heartbeat("hub-1")
+    assert await relay_streams.is_hub_alive("hub-1") is True
+
+    command_client.set_with_ttl.assert_awaited_once_with(
+        "hub:heartbeat:hub-1",
+        "1",
+        ex=17,
+    )
+    command_client.exists.assert_awaited_once_with("hub:heartbeat:hub-1")
+
+
+@pytest.mark.asyncio
+async def test_app_shell_redis_runtime_passes_command_client_to_relay_streams(
+    monkeypatch,
+):
+    from app_shell import redis_runtime as runtime_module
+
+    command_client = MagicMock()
+    command_client.is_connected = True
+    command_client.set_with_ttl = AsyncMock(return_value=True)
+    command_client.exists = AsyncMock(return_value=True)
+    streams_client = MagicMock()
+    streams_client.is_connected = True
+    clients = [command_client, streams_client]
+
+    monkeypatch.setattr(runtime_module, "_create_client", lambda: clients.pop(0))
+    monkeypatch.setattr(runtime_module.settings, "relay_hub_heartbeat_ttl", 23)
+
+    runtime = runtime_module.create_app_shell_redis_runtime(instance_id="instance-1")
+
+    assert runtime.relay_streams is not None
+    await runtime.relay_streams.record_heartbeat("hub-1")
+    assert await runtime.relay_streams.is_hub_alive("hub-1") is True
+
+    command_client.set_with_ttl.assert_awaited_once_with(
+        "hub:heartbeat:hub-1",
+        "1",
+        ex=23,
+    )
+    command_client.exists.assert_awaited_once_with("hub:heartbeat:hub-1")

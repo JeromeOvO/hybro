@@ -396,8 +396,45 @@ class AppShellLeaderElection:
             await self.release(job_name)
 
 
+class _AppShellRedisKVBridge:
+    """Adapt app-shell Redis commands to the DAL KV surface used by relay streams."""
+
+    def __init__(self, redis_service: AppShellRedisService) -> None:
+        self._redis = redis_service
+
+    @property
+    def is_connected(self) -> bool:
+        return self._redis.is_connected
+
+    async def set(self, key: str, value: str, ttl: int | None = None) -> None:
+        await self._redis.set_with_ttl(key, value, ex=ttl)
+
+    async def exists(self, key: str) -> bool:
+        return await self._redis.exists(key)
+
+
 class AppShellRelayStreamService(RelayStreamService):
     """App-shell name for active hub relay stream behavior."""
+
+    def __init__(
+        self,
+        streams_client: AppShellRedisService,
+        command_client: AppShellRedisService | None = None,
+        *,
+        maxlen: int = 10_000,
+        heartbeat_ttl: int = 90,
+    ) -> None:
+        kv = (
+            _AppShellRedisKVBridge(command_client)
+            if command_client is not None
+            else None
+        )
+        super().__init__(
+            streams_client,
+            kv=kv,
+            maxlen=maxlen,
+            heartbeat_ttl=heartbeat_ttl,
+        )
 
 
 @dataclass
@@ -430,6 +467,7 @@ def create_app_shell_redis_runtime(*, instance_id: str | None = None) -> AppShel
     relay_streams = (
         AppShellRelayStreamService(
             streams_client,
+            command_client,
             maxlen=settings.relay_stream_maxlen,
             heartbeat_ttl=settings.relay_hub_heartbeat_ttl,
         )
