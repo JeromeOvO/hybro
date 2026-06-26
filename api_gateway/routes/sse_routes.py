@@ -6,8 +6,8 @@ from fastapi.responses import StreamingResponse
 
 from api_gateway.dependencies import (
     get_execution_engine,
-    get_sse_transport,
     get_sse_store,
+    get_sse_transport,
 )
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user, get_current_user_with_query_token

@@ -45,9 +45,9 @@ from common.protocols import (
     HubDispatchPort,
     HubLivenessReader,
     HubManagement,
+    LeaderElector,
     LLMEmbeddingGateway,
     LLMGateway,
-    LeaderElector,
     MemoryManager,
     MemoryProjector,
     MemoryRepository,
@@ -408,13 +408,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 repository=agent_capability_issue_repository
             )
             from common.observability.run_metrics import increment_counter
+            from delivery.task_notifier import TaskUpdateNotifier
             from execution.cancellation import (
                 AgentTaskCleanupAdapter,
                 CancellationStateC3Adapter,
                 HITLMessageCancellationAdapter,
                 MongoCancellationStoreAdapter,
             )
-            from delivery.task_notifier import TaskUpdateNotifier
             from execution.client_request_id import SSEClientRequestIdResolver
             from execution.dispatch.response_handler import AgentResponseHandler
             from execution.dispatch.task_notifications import (

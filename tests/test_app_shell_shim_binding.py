@@ -147,4 +147,3 @@ async def test_a2a_service_delegates_after_task_store_bind() -> None:
         step_number=1,
         total_steps=2,
     )
-
