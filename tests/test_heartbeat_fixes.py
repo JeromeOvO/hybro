@@ -103,16 +103,9 @@ def _make_service(mongo=None, streams=None):
     db_service.ai_service.get_embedding = AsyncMock(return_value=[0.0] * 128)
     db_service.pinecone.upsert = MagicMock()
 
-    sse_manager = MagicMock()
-    sse_manager.send_agent_response = AsyncMock()
-    sse_manager.send_task_submitted = AsyncMock()
-    sse_manager.send_processing_status = AsyncMock()
-    sse_manager.send_error = AsyncMock()
-
     svc = RelayService(
         mongo=mongo,
         legacy_store=db_service,
-        sse_manager=sse_manager,
         offline_failure_port=MagicMock(mark_hub_message_failed=AsyncMock()),
     )
     if streams is not None:

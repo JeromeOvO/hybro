@@ -277,7 +277,6 @@ def _relay_service_with_spies() -> tuple[
     service = RelayService(
         mongo=None,
         legacy_store=object(),
-        sse_manager=object(),
         offline_failure_port=object(),
     )
     facade = _RelayFacadeSpy()
@@ -295,7 +294,6 @@ def test_relay_service_fails_fast_for_missing_constructor_dependencies() -> None
         RelayService(
             mongo=None,
             legacy_store=None,
-            sse_manager=object(),
             offline_failure_port=object(),
         )
 
@@ -306,7 +304,6 @@ def test_relay_service_fails_fast_for_missing_constructor_dependencies() -> None
         init_relay_service(
             mongo=None,
             db=object(),
-            sse_manager=object(),
             room_message_center=SimpleNamespace(agent_response_handler=object()),
         )
 
@@ -443,7 +440,6 @@ def test_init_relay_service_binds_dependencies_on_happy_path() -> None:
     service = init_relay_service(
         mongo=None,
         db=object(),
-        sse_manager=object(),
         room_message_center=SimpleNamespace(
             agent_response_handler=response_handler,
             agent_message_processor=processor,

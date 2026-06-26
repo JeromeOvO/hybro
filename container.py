@@ -1334,12 +1334,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
         # Initialize relay service
         from app_shell.execution_runtime import get_bound_room_message_center
-        from app_shell.relay_store import AppShellRelayHubStore
         from app_shell.room_lock import RedisRoomDistributedLock
         from execution.facade import hub_agent_response_internal_to_agent_event
         from hub_runtime_bridge.adapters.legacy_failure import (
             RelayOfflineFailureAdapter,
         )
+        from hub_runtime_bridge.adapters.relay_hub_store import RelayHubStore
         from hub_runtime_bridge.compat.relay_service import (
             RelayHubLivenessReader,
             init_relay_service,
@@ -1349,7 +1349,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
         _rmc = get_bound_room_message_center()
         _rmc.set_room_distributed_lock(RedisRoomDistributedLock(_redis_service))
-        relay_hub_store = AppShellRelayHubStore(
+        relay_hub_store = RelayHubStore(
             mongo=mongo_dal,
             hub_repository=HubMongoRepository(mongo_dal),
             agent_repository=_agent_deps.agent_repository,
@@ -1357,7 +1357,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         _relay_svc = init_relay_service(
             mongo=relay_hub_store,
             db=relay_runtime_store,
-            sse_manager=sse_manager,
             room_message_center=_rmc,
             hitl_coordinator=hitl_service,
             event_publisher=_delivery_deps.event_publisher if _delivery_deps else None,
@@ -1367,7 +1366,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             response_converter=hub_agent_response_internal_to_agent_event,
             offline_failure_port=RelayOfflineFailureAdapter(
                 message_store,
-                sse_manager,
+                _delivery_facade,
             ),
             config=config_from_settings(settings),
         )
