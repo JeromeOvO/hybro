@@ -906,6 +906,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             membership_source.bind_store(agent_room_store)
             debate_service.bind_store(debate_message_store)
             room_coordinator_service.bind_store(room_coordinator_message_store)
+            room_coordinator_service.bind_delivery(execution_delivery)
             bind_notification_store(task_notification_store)
             bind_task_notification_runtime(
                 task_notifier=task_notifier,
@@ -964,7 +965,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_service=agent_compat_service,
                 agent_selection_service=agent_selection_service,
                 a2a_service=a2a_service,
-                sse_manager=sse_manager,
+                delivery=execution_delivery,
                 task_service=task_service,
             )
             room_runtime.bind_facade(_room_facade)

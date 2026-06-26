@@ -15,7 +15,7 @@ from room.compat.unbound import (
     UNBOUND_A2A_SERVICE,
     UNBOUND_AGENT_SELECTION_SERVICE,
     UNBOUND_AGENT_SERVICE,
-    UNBOUND_DELIVERY_MANAGER,
+    UNBOUND_DELIVERY,
     UNBOUND_TASK_SERVICE,
 )
 
@@ -38,7 +38,7 @@ def test_room_services_defaults_to_room_owned_unbound_legacy_dependencies() -> N
     assert service.agent_selection_service is UNBOUND_AGENT_SELECTION_SERVICE
     assert service.a2a_service is UNBOUND_A2A_SERVICE
     assert not hasattr(service, "room_memory_service")
-    assert service.sse_manager is UNBOUND_DELIVERY_MANAGER
+    assert service.delivery is UNBOUND_DELIVERY
     assert service.task_service is UNBOUND_TASK_SERVICE
 
 
@@ -48,7 +48,7 @@ def test_room_services_bind_legacy_dependencies_replaces_unbound_defaults() -> N
         "agent_service": object(),
         "agent_selection_service": object(),
         "a2a_service": object(),
-        "sse_manager": object(),
+        "delivery": object(),
         "task_service": object(),
     }
 
@@ -57,7 +57,7 @@ def test_room_services_bind_legacy_dependencies_replaces_unbound_defaults() -> N
     assert service.agent_service is deps["agent_service"]
     assert service.agent_selection_service is deps["agent_selection_service"]
     assert service.a2a_service is deps["a2a_service"]
-    assert service.sse_manager is deps["sse_manager"]
+    assert service.delivery is deps["delivery"]
     assert service.task_service is deps["task_service"]
 
 
