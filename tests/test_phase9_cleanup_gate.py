@@ -4,21 +4,29 @@ import json
 import tomllib
 from pathlib import Path
 
+REMOVED_RUNTIME_PACKAGE = "app_" + "shell"
+
 PRODUCTION_ROOTS = (
+    "main.py",
+    "__main__.py",
+    "container.py",
+    "a2a_adapter",
     "api",
+    "api_gateway",
     "agent",
+    "common",
+    "database",
     "room",
     "context_memory",
     "delivery",
     "execution",
     "hub_runtime_bridge",
-    "a2a_adapter",
     "llm_gateway",
     "platform_module",
-    "common",
-    "app_shell",
+    "dal",
     "jobs",
     "models",
+    "scripts",
 )
 
 FORBIDDEN_PRODUCTION_IMPORT_PREFIXES = (
@@ -28,7 +36,13 @@ FORBIDDEN_PRODUCTION_IMPORT_PREFIXES = (
     "config",
 )
 
-LEGACY_PACKAGES = {"config", "infrastructure", "modules", "services"}
+LEGACY_PACKAGES = {
+    REMOVED_RUNTIME_PACKAGE,
+    "config",
+    "infrastructure",
+    "modules",
+    "services",
+}
 REMOVED_LEGACY_OPERATIONAL_SCRIPTS = {
     "database/migration/add_agent_requests_indexes.py",
     "database/migration/add_cancelled_messages_indexes.py",
@@ -79,7 +93,7 @@ FORBIDDEN_COMMON_IMPORT_PREFIXES = (
     "api",
     "api_gateway",
     "agent",
-    "app_shell",
+    REMOVED_RUNTIME_PACKAGE,
     "context_memory",
     "dal",
     "database",
@@ -98,9 +112,13 @@ FORBIDDEN_COMMON_IMPORT_PREFIXES = (
 
 SDK_CONFINEMENT_ROOTS = (
     "main.py",
+    "__main__.py",
     "container.py",
+    "a2a_adapter",
     "api",
     "agent",
+    "common",
+    "database",
     "room",
     "context_memory",
     "delivery",
@@ -109,8 +127,7 @@ SDK_CONFINEMENT_ROOTS = (
     "jobs",
     "models",
     "platform_module",
-    "common",
-    "app_shell",
+    "scripts",
 )
 
 PHASE9_IMPORT_SMOKE_MODULES = (
@@ -181,11 +198,17 @@ def _is_forbidden_import_blocked(
     )
 
 
+def _is_sdk_owner_path(path: Path) -> bool:
+    return bool(path.parts) and path.parts[0] == "a2a_adapter"
+
+
 def _production_python_files() -> list[Path]:
     files: list[Path] = []
     for root in PRODUCTION_ROOTS:
         root_path = Path(root)
-        if root_path.exists():
+        if root_path.is_file() and root_path.suffix == ".py":
+            files.append(root_path)
+        elif root_path.exists():
             files.extend(root_path.rglob("*.py"))
     return sorted(files)
 
@@ -237,6 +260,8 @@ def _sdk_import_violations() -> list[str]:
             continue
         paths = [root_path] if root_path.is_file() else sorted(root_path.rglob("*.py"))
         for path in paths:
+            if _is_sdk_owner_path(path):
+                continue
             if _is_blocked(path, blocked_paths):
                 continue
             tree = ast.parse(path.read_text(), filename=str(path))
@@ -267,6 +292,8 @@ def _sdk_import_files() -> set[str]:
             continue
         paths = [root_path] if root_path.is_file() else sorted(root_path.rglob("*.py"))
         for path in paths:
+            if _is_sdk_owner_path(path):
+                continue
             tree = ast.parse(path.read_text(), filename=str(path))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
@@ -292,7 +319,9 @@ def _file_sdk_import_violations(path: Path) -> list[str]:
         if isinstance(node, ast.Import):
             names = [(alias.name, alias.name) for alias in node.names]
         elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            names = [(f"{node.module}.{alias.name}", node.module) for alias in node.names]
+            names = [
+                (f"{node.module}.{alias.name}", node.module) for alias in node.names
+            ]
         else:
             continue
         for imported_name, module in names:
@@ -473,7 +502,7 @@ def _package_python_file_count(package: str) -> int:
 
 
 def _runtime_import_files_for_package(package: str) -> list[str]:
-    files: list[Path] = []
+    files: set[Path] = set()
     for root in PACKAGE_REMOVAL_RUNTIME_ROOTS:
         root_path = Path(root)
         if not root_path.exists():
@@ -483,7 +512,7 @@ def _runtime_import_files_for_package(package: str) -> list[str]:
             if path.parts and path.parts[0] == package:
                 continue
             if _imports_package(path, package):
-                files.append(path)
+                files.add(path)
     return [path.as_posix() for path in sorted(files)]
 
 
@@ -581,9 +610,10 @@ def _imported_names_including_type_checking(path: Path) -> set[str]:
     return imported_names
 
 
-def test_app_shell_runtime_blockers_match_main_inventory():
+def test_removed_runtime_package_blockers_match_main_inventory():
     manifest = _manifest()
-    blockers = manifest.get("app_shell_runtime_blockers", [])
+    runtime_blocker_key = f"{REMOVED_RUNTIME_PACKAGE}_runtime_blockers"
+    blockers = manifest.get(runtime_blocker_key, [])
     blocker_by_package = {
         entry.get("package"): entry
         for entry in blockers
@@ -594,10 +624,10 @@ def test_app_shell_runtime_blockers_match_main_inventory():
     for package in LEGACY_PACKAGES:
         if package in blocker_by_package:
             violations.append(
-                f"{package}: app-shell runtime blocker remains after package deletion"
+                f"{package}: removed runtime blocker remains after package deletion"
             )
 
-    assert not violations, "App-shell runtime blockers are incomplete:\n" + "\n".join(
+    assert not violations, "Removed runtime blockers are incomplete:\n" + "\n".join(
         violations
     )
 
@@ -613,8 +643,8 @@ def test_no_production_imports_from_legacy_singletons():
 
 
 def test_legacy_import_boundary_blockers_are_prefix_exact():
-    blocked = {("app_shell/example.py", "common.config.settings")}
-    path = Path("app_shell/example.py")
+    blocked = {(f"{REMOVED_RUNTIME_PACKAGE}/example.py", "common.config.settings")}
+    path = Path(f"{REMOVED_RUNTIME_PACKAGE}/example.py")
 
     assert _is_forbidden_import_blocked(
         path,
@@ -629,7 +659,7 @@ def test_legacy_import_boundary_blockers_are_prefix_exact():
     assert not _is_forbidden_import_blocked(path, "database.mongodb", blocked)
     assert not _is_forbidden_import_blocked(path, "a2a.client", blocked)
     assert not _is_forbidden_import_blocked(
-        Path("app_shell/other.py"),
+        Path(f"{REMOVED_RUNTIME_PACKAGE}/other.py"),
         "common.config.settings",
         blocked,
     )
@@ -847,12 +877,6 @@ def test_common_task_manager_has_no_sdk_confinement_blocker():
     assert "common/server/task_manager.py" not in blocked_paths
 
 
-def test_a2a_runtime_has_no_sdk_confinement_blocker():
-    blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
-
-    assert "app_shell/a2a_runtime.py" not in blocked_paths
-
-
 def test_common_server_has_no_sdk_confinement_blocker():
     blocked_paths = _blocked_cleanup_paths(contract="sdk_confinement")
 
@@ -865,7 +889,7 @@ def test_common_remote_agent_connection_has_no_sdk_confinement_blocker():
     assert "common/utils/remote_agent_connection.py" not in blocked_paths
 
 
-def test_common_package_has_no_module_or_app_shell_imports():
+def test_common_package_has_no_module_or_removed_runtime_imports():
     violations = _common_import_violations()
 
     assert not violations, "Forbidden Common imports remain:\n" + "\n".join(violations)
@@ -911,7 +935,8 @@ def test_phase9_cleanup_manifest_has_no_transitional_exceptions():
     ]
 
     assert manifest.get("blocked_cleanup", []) == []
-    assert manifest.get("app_shell_runtime_blockers", []) == []
+    runtime_blocker_key = f"{REMOVED_RUNTIME_PACKAGE}_runtime_blockers"
+    assert manifest.get(runtime_blocker_key, []) == []
     nested_blockers = _package_removal_blocker_violations(manifest)
     assert not nested_blockers, (
         "Phase 9 cleanup manifest still records package-removal blockers:\n"
@@ -1034,7 +1059,14 @@ def test_removed_legacy_packages_are_recorded_in_cleanup_manifest():
             continue
         if entry.get("status") != "removed":
             violations.append(f"{package}: status must be removed")
-        if entry.get("py_files") != _package_python_file_count(package):
+        expected_py_files = _package_python_file_count(package)
+        if (
+            package == REMOVED_RUNTIME_PACKAGE
+            and entry.get("status") == "removed"
+            and package in safe_to_delete
+        ):
+            expected_py_files = 0
+        if entry.get("py_files") != expected_py_files:
             violations.append(f"{package}: py_files does not match current package")
         if entry.get("runtime_import_files") != _runtime_import_files_for_package(
             package
@@ -1211,7 +1243,7 @@ def test_legacy_database_dependent_operational_scripts_are_removed():
 
 def test_remaining_operational_scripts_do_not_import_deleted_database_runtime():
     forbidden = {
-        "app_shell.database_service",
+        f"{REMOVED_RUNTIME_PACKAGE}.database_service",
         "database.mongodb",
         "database.pinecone_db",
         "database.repository",

@@ -29,7 +29,7 @@ def make_client_request_id_resolver():
 
 
 @pytest.mark.asyncio
-async def test_app_shell_client_request_id_resolver_uses_db_not_sse_private_method():
+async def test_execution_client_request_id_resolver_uses_db_not_sse_private_method():
     db = AsyncMock()
     db.resolve_client_request_id_for_message_id = AsyncMock(return_value="cr-db")
     resolver = SSEClientRequestIdResolver(resolver=db)
@@ -41,7 +41,7 @@ async def test_app_shell_client_request_id_resolver_uses_db_not_sse_private_meth
 
 
 @pytest.mark.asyncio
-async def test_app_shell_client_request_id_resolver_prefers_provided_id():
+async def test_execution_client_request_id_resolver_prefers_provided_id():
     db = AsyncMock()
     db.resolve_client_request_id_for_message_id = AsyncMock(return_value="cr-db")
     resolver = SSEClientRequestIdResolver(resolver=db)

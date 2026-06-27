@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from dal.runtime_store import AppShellRepositoryStore
+from dal.runtime_store import RuntimeRepositoryStore
 
 
 class FakeMongo:
@@ -100,8 +100,8 @@ def _store(
     collection: RecordingCollection | None = None,
     *,
     hitl_collection: RecordingCollection | None = None,
-) -> AppShellRepositoryStore:
-    return AppShellRepositoryStore(
+) -> RuntimeRepositoryStore:
+    return RuntimeRepositoryStore(
         mongo=FakeMongo(
             {
                 "room_agent_messages": collection or RecordingCollection(),
@@ -131,7 +131,7 @@ async def test_check_task_limits_honors_compatibility_store_overrides():
         async def count_agent_messages(self, query: dict) -> int:
             return 1
 
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=FakeMongo(),
         room_repository=object(),
         message_repository=CountingMessageRepository(),
@@ -145,7 +145,7 @@ async def test_check_task_limits_honors_compatibility_store_overrides():
 
 
 def test_webhook_token_helpers_do_not_require_repository_attributes():
-    store = object.__new__(AppShellRepositoryStore)
+    store = object.__new__(RuntimeRepositoryStore)
 
     token = store.generate_webhook_token()
 
@@ -167,7 +167,7 @@ async def test_check_task_limits_passes_facade_limits_without_mutating_part():
         async def count_agent_messages(self, query: dict) -> int:
             return 1
 
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=FakeMongo(),
         room_repository=object(),
         message_repository=CountingMessageRepository(),

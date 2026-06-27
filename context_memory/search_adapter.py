@@ -9,7 +9,7 @@ class ContextMemorySearchAdapter:
     """Compatibility adapter for legacy memory search response consumers.
 
     Delegates legacy-oriented operations to a ``ContextMemoryFacade``-compatible
-    object while keeping the app shell's existing response surface.
+    object while keeping the former compatibility response surface.
     """
 
     def __init__(self, facade: Any | None = None) -> None:

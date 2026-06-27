@@ -23,7 +23,7 @@ from models.supervisor import TrajectoryStatus
 logger = get_logger(__name__)
 
 
-class AppShellTaskLifecycleStore:
+class TaskLifecycleRuntimeStorePart:
     def __init__(
         self,
         *,

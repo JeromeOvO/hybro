@@ -21,7 +21,7 @@ class TruncationReason(StrEnum):
 
 @dataclass
 class ContextAssemblyResult:
-    """Legacy app-shell result shape for context assembly."""
+    """Former compatibility result shape for context assembly."""
 
     context: str
     total_tokens: int

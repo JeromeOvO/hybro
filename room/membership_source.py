@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from app_shell.runtime_store import UNBOUND_RUNTIME_STORE
 from common.dto import AgentInfo, SavedAgentGroupSnapshot
 from common.utils.logger import get_logger
 from models.request import AgentCenterRequest
+from room.compat.unbound import UNBOUND_RUNTIME_STORE
 
 logger = get_logger(__name__)
 
 
-class LegacyRoomMembershipSeedSource:
+class RepositoryRoomMembershipSeedSource:
     def __init__(
         self,
         *,
@@ -47,23 +47,24 @@ class LegacyRoomMembershipSeedSource:
                 )
                 if response.success and response.agents is not None:
                     return [
-                        self.agent_info_from_legacy(agent) for agent in response.agents
+                        self.agent_info_from_record(agent)
+                        for agent in response.agents
                     ]
             except Exception as exc:
                 logger.debug(
-                    "Legacy room membership source falling back to database active agents: %s",
+                    "Room membership source falling back to database active agents: %s",
                     exc,
                 )
 
         agents = await self._store.get_all_active_agents(user_id=user_id)
-        return [self.agent_info_from_legacy(agent) for agent in agents or []]
+        return [self.agent_info_from_record(agent) for agent in agents or []]
 
     @staticmethod
-    def agent_info_from_legacy(agent: Any) -> AgentInfo:
-        return _agent_info_from_legacy(agent)
+    def agent_info_from_record(agent: Any) -> AgentInfo:
+        return _agent_info_from_record(agent)
 
 
-def _agent_info_from_legacy(agent: Any) -> AgentInfo:
+def _agent_info_from_record(agent: Any) -> AgentInfo:
     card = getattr(agent, "agent_card", None)
     raw_status = getattr(agent, "agent_status", None)
     status = getattr(raw_status, "value", None)
@@ -72,7 +73,7 @@ def _agent_info_from_legacy(agent: Any) -> AgentInfo:
     resolved_status = status or str(raw_status or "active")
     if not agent_id or name is None or raw_status is None or not resolved_status:
         logger.warning(
-            "Legacy room membership agent missing critical fields: agent_id=%r name=%r status=%r",
+            "Room membership agent missing critical fields: agent_id=%r name=%r status=%r",
             agent_id,
             name,
             resolved_status,
@@ -93,4 +94,4 @@ def _agent_info_from_legacy(agent: Any) -> AgentInfo:
     )
 
 
-__all__ = ["LegacyRoomMembershipSeedSource"]
+__all__ = ["RepositoryRoomMembershipSeedSource"]

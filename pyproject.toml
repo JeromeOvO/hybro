@@ -124,7 +124,6 @@ ignore = ["E501"]
 "api_gateway/viewsets/base.py" = ["B008"]
 "agent/health.py" = ["C901"]
 "agent/service.py" = ["C901"]
-"app_shell/bound.py" = ["UP040"]
 "execution/orchestration/synthesis_coordinator.py" = ["C901"]
 "room/compat/runtime.py" = ["C901", "UP042"]
 "common/a2a_constants.py" = ["UP042"]
@@ -214,8 +213,6 @@ packages = [
     "api_gateway",
     "api_gateway.routes",
     "api_gateway.viewsets",
-    "app_shell",
-    "app_shell.repository_parts",
     "models",
     "common",
     "common.client",

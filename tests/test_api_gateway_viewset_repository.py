@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-from app_shell.viewset import AppShellDALViewSetRepository
+from api_gateway.viewsets.repository import DALViewSetRepository
 
 
 class FakeCollection:
@@ -29,7 +29,7 @@ class UpdatePayload(BaseModel):
 
 async def test_viewset_repository_update_accepts_json_map_payload():
     mongo = FakeMongo()
-    repo = AppShellDALViewSetRepository(
+    repo = DALViewSetRepository(
         mongo=mongo,
         collection_name="agents",
         pk_field="_id",
@@ -45,7 +45,7 @@ async def test_viewset_repository_update_accepts_json_map_payload():
 
 async def test_viewset_repository_patch_preserves_model_exclude_unset():
     mongo = FakeMongo()
-    repo = AppShellDALViewSetRepository(
+    repo = DALViewSetRepository(
         mongo=mongo,
         collection_name="agents",
         pk_field="_id",

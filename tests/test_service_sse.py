@@ -1,5 +1,4 @@
-"""
-Unit tests for SSE services (sse_app_shell.py).
+"""Unit tests for SSE services.
 
 Tests cover:
 - SSEConnection: send_message, get_message (with timeout/heartbeat), close
@@ -74,10 +73,9 @@ class TestSSEConnection:
         conn.close()
         assert conn.is_active is False
 
-
-# =============================================================================
-# DeliveryFacade Cancellation Tests
-# =============================================================================
+        # =============================================================================
+        # DeliveryFacade Cancellation Tests
+        # =============================================================================
 
 
 class TestDeliveryFacadeCancellation:
@@ -101,10 +99,9 @@ class TestDeliveryFacadeCancellation:
         mgr.clear_cancellation("msg-1")
         assert mgr.get_token("msg-1") is None
 
-
-# =============================================================================
-# CancellationToken Tests
-# =============================================================================
+        # =============================================================================
+        # CancellationToken Tests
+        # =============================================================================
 
 
 class TestCancellationToken:
@@ -136,10 +133,9 @@ class TestCancellationToken:
         mgr.remove_token("msg-1")
         assert mgr.get_token("msg-1") is None
 
-
-# =============================================================================
-# DeliveryFacade Connection Tests
-# =============================================================================
+        # =============================================================================
+        # DeliveryFacade Connection Tests
+        # =============================================================================
 
 
 class TestDeliveryFacadeConnections:
@@ -173,10 +169,9 @@ class TestDeliveryFacadeConnections:
         mgr = make_delivery_facade()
         await mgr.send_processing_status("nonexistent", "processing", "msg-1")
 
-
-# =============================================================================
-# send_processing_status client_request_id Tests
-# =============================================================================
+        # =============================================================================
+        # send_processing_status client_request_id Tests
+        # =============================================================================
 
 
 class TestSendProcessingStatusClientRequestId:
@@ -208,7 +203,9 @@ class TestSendProcessingStatusClientRequestId:
         assert "client_request_id" not in parsed["data"]
 
     @pytest.mark.asyncio
-    async def test_send_processing_status_does_not_record_or_emit_run_event(self, monkeypatch):
+    async def test_send_processing_status_does_not_record_or_emit_run_event(
+        self, monkeypatch
+    ):
         import execution.run_command_handler as handler_mod
 
         mgr = make_delivery_facade()

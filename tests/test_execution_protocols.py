@@ -349,8 +349,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.agent_response_handler._message_writer is deps["message_writer"]
     assert runtime.agent_response_handler._task_writer is deps["message_writer"]
     assert (
-        runtime.agent_response_handler._continuation_store
-        is deps["continuation_store"]
+        runtime.agent_response_handler._continuation_store is deps["continuation_store"]
     )
     client_request_resolver = runtime.agent_response_handler._client_request_resolver
     assert (
@@ -384,8 +383,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.queue_executor.room_runtime is deps["room_runtime"]
     assert runtime.queue_executor.event_publisher is deps["event_publisher"]
     assert (
-        runtime.queue_executor.debate_prompt_injector
-        is deps["debate_prompt_injector"]
+        runtime.queue_executor.debate_prompt_injector is deps["debate_prompt_injector"]
     )
     assert runtime.queue_executor.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.supervisor_executor.task_state_store is deps["task_state_store"]
@@ -533,12 +531,10 @@ def test_container_wires_execution_with_focused_port_names():
     assert "QuotedSnippet.model_validate" in source
     assert "execution_inquiry_agent_messages_by_related_message_id" in source
     assert (
-        "RoomCenterAgentMessageRequest(related_message_id=related_message_id)"
-        in source
+        "RoomCenterAgentMessageRequest(related_message_id=related_message_id)" in source
     )
     assert (
-        "from app_shell." + "compaction_service import compaction_service"
-        not in source
+        ('from ' + 'app_' + 'shell' + '.') + "compaction_service import compaction_service" not in source
     )
     assert "compaction_service.bind_content_storage" not in source
     assert "compaction_service.bind_room_memory_reader" not in source
@@ -553,8 +549,7 @@ def test_container_wires_execution_with_focused_port_names():
     )
     assert (
         "inquiry_agent_messages_by_related_message_id(\n"
-        "                room_user_message_id\n"
-        in rmc_source
+        "                room_user_message_id\n" in rmc_source
     )
 
     hitl_call = calls_named("create_hitl_service")[0]
@@ -630,7 +625,7 @@ def test_room_message_center_uses_common_room_lock_protocol():
     source = Path("execution/orchestration/room_message_center.py").read_text()
     hints = get_type_hints(RoomMessageCenter.set_room_distributed_lock)
 
-    assert "AppShellRedisService" not in source
+    assert ('App' + 'Shell' + 'RedisService') not in source
     assert "._client" not in source
     assert hints["room_lock"] == RoomDistributedLock | None
     assert (

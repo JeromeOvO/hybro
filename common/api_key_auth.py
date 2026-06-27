@@ -2,7 +2,7 @@
 API Key Authentication for Discovery API
 
 Validates X-API-Key header for external API access.
-Validation is delegated to an app-shell-bound authenticator.
+Validation is delegated to the bound API key authenticator.
 """
 
 import hashlib
@@ -44,7 +44,7 @@ async def validate_api_key(
     api_key: str, *, track_usage: bool = True
 ) -> APIKeyPrincipal:
     """
-    Validate an API key through the bound app-shell authenticator.
+    Validate an API key through the bound authenticator.
 
     Args:
         api_key: The plaintext API key from the request

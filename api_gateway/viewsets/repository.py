@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import math
 from typing import Any
 
@@ -15,7 +17,7 @@ from common.protocols import (
 from models.response import PaginatedResponse, PaginationMeta
 
 
-class AppShellViewSetRepositoryProvider:
+class TransactionalViewSetRepositoryProvider:
     def __init__(
         self,
         *,
@@ -35,16 +37,14 @@ class AppShellViewSetRepositoryProvider:
             pk_field=pk_field,
         )
 
-    async def run_in_transaction(
-        self, operation: ViewSetOperation
-    ) -> ViewSetResult:
+    async def run_in_transaction(self, operation: ViewSetOperation) -> ViewSetResult:
         db = self._db_provider()
         async with await db.client.start_session() as session:
             async with session.start_transaction():
                 return await operation()
 
 
-class AppShellDALViewSetRepository:
+class DALViewSetRepository:
     def __init__(self, *, mongo: MongoDAL, collection_name: str, pk_field: str) -> None:
         self._collection = mongo.collection(collection_name)
         self._pk_field = pk_field
@@ -59,10 +59,15 @@ class AppShellDALViewSetRepository:
 
         if pagination is None:
             pagination = ViewSetPaginationParams(
-                page=1, limit=total if total > 0 else 10
+                page=1,
+                limit=total if total > 0 else 10,
             )
 
-        sort = [(filters.sort_by, filters.sort_order)] if filters and filters.sort_by else None
+        sort = (
+            [(filters.sort_by, filters.sort_order)]
+            if filters and filters.sort_by
+            else None
+        )
         items = await self._collection.find(
             query,
             limit=pagination.limit,
@@ -112,22 +117,20 @@ class AppShellDALViewSetRepository:
         return await self.get(item_id)
 
 
-class AppShellDALViewSetRepositoryProvider:
+class DALViewSetRepositoryProvider:
     def __init__(self, *, mongo: MongoDAL) -> None:
         self._mongo = mongo
 
     def get_repository(
         self, *, collection_name: str, pk_field: str = "_id"
     ) -> ViewSetRepository:
-        return AppShellDALViewSetRepository(
+        return DALViewSetRepository(
             mongo=self._mongo,
             collection_name=collection_name,
             pk_field=pk_field,
         )
 
-    async def run_in_transaction(
-        self, operation: ViewSetOperation
-    ) -> ViewSetResult:
+    async def run_in_transaction(self, operation: ViewSetOperation) -> ViewSetResult:
         return await operation()
 
 
@@ -140,6 +143,7 @@ def _payload_to_dict(item: Any, *, exclude_unset: bool = False) -> dict:
 
 
 __all__ = [
-    "AppShellDALViewSetRepositoryProvider",
-    "AppShellViewSetRepositoryProvider",
+    "DALViewSetRepository",
+    "DALViewSetRepositoryProvider",
+    "TransactionalViewSetRepositoryProvider",
 ]

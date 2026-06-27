@@ -13,7 +13,7 @@ from models.memory import ChatContext, RoomMemory
 logger = get_logger(__name__)
 
 
-class AppShellMemoryStore:
+class MemoryRuntimeStorePart:
     def __init__(
         self,
         *,

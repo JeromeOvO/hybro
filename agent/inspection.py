@@ -106,7 +106,4 @@ class AgentInspectionService:
                 status_code=500,
             )
 
-
-AppShellInspectionCenter = AgentInspectionService
-
-__all__ = ["AgentInspectionService", "AppShellInspectionCenter"]
+__all__ = ["AgentInspectionService"]

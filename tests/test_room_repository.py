@@ -346,8 +346,8 @@ async def test_message_repository_pending_user_tasks_filters_and_sorts():
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_cancel_message_is_idempotent_when_record_exists():
-    from dal.runtime_store import AppShellRepositoryStore
+async def test_runtime_store_cancel_message_is_idempotent_when_record_exists():
+    from dal.runtime_store import RuntimeRepositoryStore
 
     class ExistingCancellationCollection(FakeCollection):
         async def update_one(self, query: dict, update: dict, **kwargs) -> bool:
@@ -355,7 +355,7 @@ async def test_app_shell_store_cancel_message_is_idempotent_when_record_exists()
             return False
 
     mongo = FakeMongo({"cancelled_messages": ExistingCancellationCollection()})
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=mongo,
         room_repository=object(),
         message_repository=object(),
@@ -373,13 +373,13 @@ async def test_app_shell_store_cancel_message_is_idempotent_when_record_exists()
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_updates_last_notified_state_atomically():
-    from dal.runtime_store import AppShellRepositoryStore
+async def test_runtime_store_updates_last_notified_state_atomically():
+    from dal.runtime_store import RuntimeRepositoryStore
 
     agent_messages = FakeCollection(
         [{"message_id": "a1", "last_notified_state": "working"}]
     )
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=FakeMongo({"room_agent_messages": agent_messages}),
         room_repository=object(),
         message_repository=object(),
@@ -399,8 +399,8 @@ async def test_app_shell_store_updates_last_notified_state_atomically():
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_accumulates_artifacts_with_atomic_collection_update():
-    from dal.runtime_store import AppShellRepositoryStore
+async def test_runtime_store_accumulates_artifacts_with_atomic_collection_update():
+    from dal.runtime_store import RuntimeRepositoryStore
 
     class RecordingSuccessCollection(FakeCollection):
         async def update_one(self, query: dict, update: dict, **kwargs) -> bool:
@@ -411,7 +411,7 @@ async def test_app_shell_store_accumulates_artifacts_with_atomic_collection_upda
 
     agent_messages = RecordingSuccessCollection()
     mongo = FakeMongo({"room_agent_messages": agent_messages})
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=mongo,
         room_repository=object(),
         message_repository=object(),
@@ -438,8 +438,8 @@ async def test_app_shell_store_accumulates_artifacts_with_atomic_collection_upda
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_filters_malformed_related_agent_messages():
-    from dal.runtime_store import AppShellRepositoryStore
+async def test_runtime_store_filters_malformed_related_agent_messages():
+    from dal.runtime_store import RuntimeRepositoryStore
 
     class RelatedMessageRepository:
         async def get_agent_messages_by_related_message_id(self, related_message_id):
@@ -456,7 +456,7 @@ async def test_app_shell_store_filters_malformed_related_agent_messages():
                 },
             ]
 
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=FakeMongo(),
         room_repository=object(),
         message_repository=RelatedMessageRepository(),
@@ -469,9 +469,9 @@ async def test_app_shell_store_filters_malformed_related_agent_messages():
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_full_agent_update_preserves_task_tracking_fields():
+async def test_runtime_store_full_agent_update_preserves_task_tracking_fields():
     from common.dto import RuntimeMessageContent, RuntimeRoomAgentMessage
-    from dal.runtime_store import AppShellRepositoryStore
+    from dal.runtime_store import RuntimeRepositoryStore
 
     class RecordingMessageRepository:
         def __init__(self) -> None:
@@ -482,7 +482,7 @@ async def test_app_shell_store_full_agent_update_preserves_task_tracking_fields(
             return True
 
     message_repository = RecordingMessageRepository()
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=FakeMongo(),
         room_repository=object(),
         message_repository=message_repository,
@@ -518,9 +518,9 @@ async def test_app_shell_store_full_agent_update_preserves_task_tracking_fields(
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_generates_agent_message_id_when_empty():
+async def test_runtime_store_generates_agent_message_id_when_empty():
     from common.dto import RuntimeMessageContent, RuntimeRoomAgentMessage
-    from dal.runtime_store import AppShellRepositoryStore
+    from dal.runtime_store import RuntimeRepositoryStore
 
     class RecordingMessageRepository:
         def __init__(self) -> None:
@@ -531,7 +531,7 @@ async def test_app_shell_store_generates_agent_message_id_when_empty():
             return "saved"
 
     message_repository = RecordingMessageRepository()
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=FakeMongo(),
         room_repository=object(),
         message_repository=message_repository,
@@ -551,8 +551,8 @@ async def test_app_shell_store_generates_agent_message_id_when_empty():
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_task_tracking_writes_return_false_on_repository_error():
-    from dal.runtime_store import AppShellRepositoryStore
+async def test_runtime_store_task_tracking_writes_return_false_on_repository_error():
+    from dal.runtime_store import RuntimeRepositoryStore
 
     class FailingMessageRepository:
         async def update_agent_message(self, *args, **kwargs):
@@ -561,7 +561,7 @@ async def test_app_shell_store_task_tracking_writes_return_false_on_repository_e
         async def update_agent_message_if_not_terminal(self, *args, **kwargs):
             raise RuntimeError("database down")
 
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=FakeMongo(),
         room_repository=object(),
         message_repository=FailingMessageRepository(),
@@ -584,8 +584,8 @@ async def test_app_shell_store_task_tracking_writes_return_false_on_repository_e
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_task_tracking_noop_successes_by_readback():
-    from dal.runtime_store import AppShellRepositoryStore
+async def test_runtime_store_task_tracking_noop_successes_by_readback():
+    from dal.runtime_store import RuntimeRepositoryStore
 
     class NoopTrackedMessageRepository:
         async def update_agent_message(self, message_id, updates):
@@ -600,7 +600,7 @@ async def test_app_shell_store_task_tracking_noop_successes_by_readback():
                 "message_content": {"message_task": {"id": "task-1"}},
             }
 
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=FakeMongo(),
         room_repository=object(),
         message_repository=NoopTrackedMessageRepository(),
@@ -621,9 +621,9 @@ async def test_app_shell_store_task_tracking_noop_successes_by_readback():
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_chat_context_mutations_succeed_on_no_exception():
+async def test_runtime_store_chat_context_mutations_succeed_on_no_exception():
     from common.dto import RuntimeChatContext
-    from dal.runtime_store import AppShellRepositoryStore
+    from dal.runtime_store import RuntimeRepositoryStore
 
     class NoopCollection(FakeCollection):
         async def update_one(self, query: dict, update: dict, **kwargs) -> bool:
@@ -637,7 +637,7 @@ async def test_app_shell_store_chat_context_mutations_succeed_on_no_exception():
             return False
 
     chat_contexts = NoopCollection()
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=FakeMongo({"chat_contexts": chat_contexts}),
         room_repository=object(),
         message_repository=object(),
@@ -652,8 +652,8 @@ async def test_app_shell_store_chat_context_mutations_succeed_on_no_exception():
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_memory_write_methods_use_expected_dependencies():
-    from dal.runtime_store import AppShellRepositoryStore
+async def test_runtime_store_memory_write_methods_use_expected_dependencies():
+    from dal.runtime_store import RuntimeRepositoryStore
 
     class RecordingUpsertCollection(FakeCollection):
         async def update_one(self, query: dict, update: dict, **kwargs) -> bool:
@@ -682,7 +682,7 @@ async def test_app_shell_store_memory_write_methods_use_expected_dependencies():
     user_memories = RecordingUpsertCollection()
     agent_memories = RecordingUpsertCollection()
     room_repository = RoomRepositoryWithTurnNotes()
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=FakeMongo(
             {
                 "user_memories": user_memories,
@@ -739,7 +739,7 @@ async def test_app_shell_store_memory_write_methods_use_expected_dependencies():
     assert await store.update_turn_notes("room-1", "turn-1", turn_notes) is True
     assert room_repository.calls == [("room-1", "turn-1", turn_notes)]
 
-    no_method_store = AppShellRepositoryStore(
+    no_method_store = RuntimeRepositoryStore(
         mongo=FakeMongo(),
         room_repository=object(),
         message_repository=object(),
@@ -747,7 +747,7 @@ async def test_app_shell_store_memory_write_methods_use_expected_dependencies():
     )
     assert await no_method_store.update_turn_notes("room-1", "turn-1", {}) is False
 
-    failing_store = AppShellRepositoryStore(
+    failing_store = RuntimeRepositoryStore(
         mongo=FakeMongo(),
         room_repository=FailingRoomRepository(),
         message_repository=object(),
@@ -757,12 +757,12 @@ async def test_app_shell_store_memory_write_methods_use_expected_dependencies():
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_generates_chat_context_memory_id_when_empty():
+async def test_runtime_store_generates_chat_context_memory_id_when_empty():
     from common.dto import RuntimeChatContext
-    from dal.runtime_store import AppShellRepositoryStore
+    from dal.runtime_store import RuntimeRepositoryStore
 
     chat_contexts = FakeCollection()
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=FakeMongo({"chat_contexts": chat_contexts}),
         room_repository=object(),
         message_repository=object(),
@@ -776,13 +776,13 @@ async def test_app_shell_store_generates_chat_context_memory_id_when_empty():
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_room_runtime_methods_use_repositories_and_dal():
+async def test_runtime_store_room_runtime_methods_use_repositories_and_dal():
     from common.dto import (
         RuntimeMessageContent,
         RuntimeRoomRecord,
         RuntimeRoomUserMessage,
     )
-    from dal.runtime_store import AppShellRepositoryStore
+    from dal.runtime_store import RuntimeRepositoryStore
 
     room_repo, mongo, rooms = _room_repo(
         [
@@ -832,16 +832,16 @@ async def test_app_shell_store_room_runtime_methods_use_repositories_and_dal():
             "runs": runs,
         }
     )
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=mongo,
         room_repository=room_repo,
         message_repository=message_repo,
         agent_repository=object(),
     )
 
-    assert [room.room_id for room in await store.get_rooms_by_room_owner_id("owner-1")] == [
-        "r1"
-    ]
+    assert [
+        room.room_id for room in await store.get_rooms_by_room_owner_id("owner-1")
+    ] == ["r1"]
     room = RuntimeRoomRecord(
         room_id="r1",
         room_owner_id="owner-1",
@@ -859,9 +859,9 @@ async def test_app_shell_store_room_runtime_methods_use_repositories_and_dal():
     )
 
     assert await store.add_room_user_message(user_message) is True
-    assert [msg.message_id for msg in await store.get_room_user_messages_by_room_id("r1")] == [
-        "u1"
-    ]
+    assert [
+        msg.message_id for msg in await store.get_room_user_messages_by_room_id("r1")
+    ] == ["u1"]
     updated_user_message = RuntimeRoomUserMessage(
         room_id="r1",
         message_id="u1",
@@ -872,9 +872,12 @@ async def test_app_shell_store_room_runtime_methods_use_repositories_and_dal():
     assert await store.update_room_user_message_by_message_id(
         "u1", updated_user_message
     )
-    assert mongo.collections["room_user_messages"].docs[0]["message_content"][
-        "message_text"
-    ] == "updated"
+    assert (
+        mongo.collections["room_user_messages"].docs[0]["message_content"][
+            "message_text"
+        ]
+        == "updated"
+    )
     assert [agent.agent_id for agent in await store.get_agents_with_conditions()] == [
         "agent-1"
     ]
@@ -886,9 +889,9 @@ async def test_app_shell_store_room_runtime_methods_use_repositories_and_dal():
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_room_update_noop_succeeds_when_room_exists():
+async def test_runtime_store_room_update_noop_succeeds_when_room_exists():
     from common.dto import RuntimeRoomRecord
-    from dal.runtime_store import AppShellRepositoryStore
+    from dal.runtime_store import RuntimeRepositoryStore
 
     class NoopRoomRepository:
         async def update(self, room_id: str, updates: dict) -> bool:
@@ -902,7 +905,7 @@ async def test_app_shell_store_room_update_noop_succeeds_when_room_exists():
                 "room_name": "Room",
             }
 
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=FakeMongo(),
         room_repository=NoopRoomRepository(),
         message_repository=object(),
@@ -921,9 +924,9 @@ async def test_app_shell_store_room_update_noop_succeeds_when_room_exists():
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_sparse_room_update_preserves_membership():
+async def test_runtime_store_sparse_room_update_preserves_membership():
     from common.dto import RuntimeRoomRecord
-    from dal.runtime_store import AppShellRepositoryStore
+    from dal.runtime_store import RuntimeRepositoryStore
 
     room_repo, _, rooms = _room_repo(
         [
@@ -936,7 +939,7 @@ async def test_app_shell_store_sparse_room_update_preserves_membership():
             }
         ]
     )
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=FakeMongo(),
         room_repository=room_repo,
         message_repository=object(),
@@ -959,9 +962,9 @@ async def test_app_shell_store_sparse_room_update_preserves_membership():
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_upsert_room_agent_message_replaces_full_document():
+async def test_runtime_store_upsert_room_agent_message_replaces_full_document():
     from common.dto import RuntimeMessageContent, RuntimeRoomAgentMessage
-    from dal.runtime_store import AppShellRepositoryStore
+    from dal.runtime_store import RuntimeRepositoryStore
 
     agent_messages = FakeCollection(
         [
@@ -976,7 +979,7 @@ async def test_app_shell_store_upsert_room_agent_message_replaces_full_document(
             }
         ]
     )
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=FakeMongo({"room_agent_messages": agent_messages}),
         room_repository=object(),
         message_repository=object(),
@@ -999,8 +1002,8 @@ async def test_app_shell_store_upsert_room_agent_message_replaces_full_document(
 
 
 @pytest.mark.asyncio
-async def test_app_shell_store_room_orchestration_claim_cancel_and_continuation():
-    from dal.runtime_store import AppShellRepositoryStore
+async def test_runtime_store_room_orchestration_claim_cancel_and_continuation():
+    from dal.runtime_store import RuntimeRepositoryStore
 
     user_messages = FakeCollection(
         [{"message_id": "u1", "room_id": "r1", "processing_claimed_at": None}]
@@ -1011,25 +1014,19 @@ async def test_app_shell_store_room_orchestration_claim_cancel_and_continuation(
                 "message_id": "a1",
                 "room_id": "r1",
                 "related_message_id": "u1",
-                "message_content": {
-                    "message_task": {"status": {"state": "working"}}
-                },
+                "message_content": {"message_task": {"status": {"state": "working"}}},
             },
             {
                 "message_id": "a2",
                 "room_id": "r1",
                 "related_message_id": "a1",
-                "message_content": {
-                    "message_task": {"status": {"state": "submitted"}}
-                },
+                "message_content": {"message_task": {"status": {"state": "submitted"}}},
             },
             {
                 "message_id": "done",
                 "room_id": "r1",
                 "related_message_id": "u1",
-                "message_content": {
-                    "message_task": {"status": {"state": "completed"}}
-                },
+                "message_content": {"message_task": {"status": {"state": "completed"}}},
             },
         ]
     )
@@ -1039,7 +1036,7 @@ async def test_app_shell_store_room_orchestration_claim_cancel_and_continuation(
             "room_agent_messages": agent_messages,
         }
     )
-    store = AppShellRepositoryStore(
+    store = RuntimeRepositoryStore(
         mongo=mongo,
         room_repository=object(),
         message_repository=MessageMongoRepository(mongo=mongo),

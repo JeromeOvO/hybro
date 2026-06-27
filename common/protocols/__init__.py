@@ -88,6 +88,7 @@ from common.protocols.platform_protocols import (
     FileStorage,
     GatewayDiscoveryProvider,
     GatewayService,
+    HealthCheck,
     RateLimiter,
 )
 from common.protocols.repository_protocols import (
@@ -172,6 +173,7 @@ __all__ = [
     "FileStorage",
     "GatewayDiscoveryProvider",
     "GatewayService",
+    "HealthCheck",
     "HITLManager",
     "HITLRepository",
     "HubAgentResponseSink",

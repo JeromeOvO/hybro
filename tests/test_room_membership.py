@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app_shell.room_membership_source import LegacyRoomMembershipSeedSource
 from common.dto import (
     AgentInfo,
     MembershipSeed,
@@ -14,6 +13,7 @@ from common.dto import (
     UserMessageInput,
 )
 from room.membership import normalize_room_agent_set, resolve_membership_seed
+from room.membership_source import RepositoryRoomMembershipSeedSource
 from room.message_graph import select_thread, sort_messages, status_update_payload
 from room.translators import (
     create_room_doc,
@@ -153,7 +153,7 @@ def test_user_message_doc_from_input_preserves_metadata():
 
 
 @pytest.mark.asyncio
-async def test_legacy_membership_source_logs_agent_service_fallback():
+async def test_membership_source_logs_agent_service_fallback():
     agent = SimpleNamespace(
         agent_id="a1",
         agent_card=SimpleNamespace(name="Agent One", description=None, url=None),
@@ -164,7 +164,7 @@ async def test_legacy_membership_source_logs_agent_service_fallback():
         is_public=True,
         public_url=None,
     )
-    source = LegacyRoomMembershipSeedSource(
+    source = RepositoryRoomMembershipSeedSource(
         membership_store=SimpleNamespace(
             get_all_active_agents=AsyncMock(return_value=[agent])
         ),
@@ -173,26 +173,26 @@ async def test_legacy_membership_source_logs_agent_service_fallback():
         ),
     )
 
-    with patch("app_shell.room_membership_source.logger", create=True) as logger:
+    with patch("room.membership_source.logger", create=True) as logger:
         agents = await source.list_current_agents("owner")
 
     assert [agent.agent_id for agent in agents] == ["a1"]
     logger.debug.assert_called_once()
 
 
-def test_legacy_membership_source_warns_for_missing_critical_agent_fields():
+def test_membership_source_warns_for_missing_critical_agent_fields():
     agent = SimpleNamespace(agent_id="a1", agent_card=None)
 
-    with patch("app_shell.room_membership_source.logger", create=True) as logger:
-        info = LegacyRoomMembershipSeedSource.agent_info_from_legacy(agent)
+    with patch("room.membership_source.logger", create=True) as logger:
+        info = RepositoryRoomMembershipSeedSource.agent_info_from_record(agent)
 
     assert info.agent_id == "a1"
     logger.warning.assert_called_once()
 
 
-def test_legacy_membership_source_default_constructor_does_not_import_database_service():
+def test_membership_source_default_constructor_does_not_import_database_service():
     with patch("importlib.import_module", side_effect=AssertionError("legacy import attempted")):
-        source = LegacyRoomMembershipSeedSource()
+        source = RepositoryRoomMembershipSeedSource()
 
     assert source._store is not None
 

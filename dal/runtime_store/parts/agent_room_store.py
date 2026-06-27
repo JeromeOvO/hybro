@@ -15,7 +15,7 @@ from models.room import Room
 logger = get_logger(__name__)
 
 
-class AppShellAgentRoomStore:
+class AgentRoomRuntimeStorePart:
     def __init__(
         self, *, agent_groups, agents, room_repository, agent_repository
     ) -> None:

@@ -22,11 +22,13 @@ class TestClaimUserMessageForProcessing:
     @pytest.mark.asyncio
     async def test_claim_succeeds_for_never_claimed(self):
         """claim_user_message_for_processing returns True for unclaimed messages."""
-        from dal.runtime_store import AppShellRepositoryStore
+        from dal.runtime_store import RuntimeRepositoryStore
 
-        store = object.__new__(AppShellRepositoryStore)
+        store = object.__new__(RuntimeRepositoryStore)
         mock_collection = MagicMock()
-        mock_collection.find_one_and_update = AsyncMock(return_value={"message_id": "m1"})
+        mock_collection.find_one_and_update = AsyncMock(
+            return_value={"message_id": "m1"}
+        )
         store._room_user_messages = mock_collection
 
         result = await store.claim_user_message_for_processing("m1")
@@ -38,9 +40,9 @@ class TestClaimUserMessageForProcessing:
     @pytest.mark.asyncio
     async def test_claim_fails_for_already_claimed(self):
         """claim_user_message_for_processing returns False if already claimed."""
-        from dal.runtime_store import AppShellRepositoryStore
+        from dal.runtime_store import RuntimeRepositoryStore
 
-        store = object.__new__(AppShellRepositoryStore)
+        store = object.__new__(RuntimeRepositoryStore)
         mock_collection = MagicMock()
         mock_collection.find_one_and_update = AsyncMock(return_value=None)
         store._room_user_messages = mock_collection
@@ -55,11 +57,13 @@ class TestClaimOrReclaimUserMessage:
     @pytest.mark.asyncio
     async def test_reclaim_succeeds_for_stale(self):
         """claim_or_reclaim_user_message returns True for stale-claimed messages."""
-        from dal.runtime_store import AppShellRepositoryStore
+        from dal.runtime_store import RuntimeRepositoryStore
 
-        store = object.__new__(AppShellRepositoryStore)
+        store = object.__new__(RuntimeRepositoryStore)
         mock_collection = MagicMock()
-        mock_collection.find_one_and_update = AsyncMock(return_value={"message_id": "m1"})
+        mock_collection.find_one_and_update = AsyncMock(
+            return_value={"message_id": "m1"}
+        )
         store._room_user_messages = mock_collection
 
         threshold = datetime(2026, 1, 1, tzinfo=UTC)
@@ -75,9 +79,9 @@ class TestClaimOrReclaimUserMessage:
     @pytest.mark.asyncio
     async def test_reclaim_fails_for_recently_claimed(self):
         """claim_or_reclaim_user_message returns False if recently claimed."""
-        from dal.runtime_store import AppShellRepositoryStore
+        from dal.runtime_store import RuntimeRepositoryStore
 
-        store = object.__new__(AppShellRepositoryStore)
+        store = object.__new__(RuntimeRepositoryStore)
         mock_collection = MagicMock()
         mock_collection.find_one_and_update = AsyncMock(return_value=None)
         store._room_user_messages = mock_collection
@@ -120,9 +124,7 @@ class TestIdempotencyGuardInRoomMessageCenter:
 
         rmc = object.__new__(RoomMessageCenter)
         rmc.message_writer = MagicMock()
-        rmc.message_writer.claim_or_reclaim_user_message = AsyncMock(
-            return_value=False
-        )
+        rmc.message_writer.claim_or_reclaim_user_message = AsyncMock(return_value=False)
         rmc.delivery = MagicMock()
 
         request = OrchestrationRequest(
@@ -144,9 +146,7 @@ class TestIdempotencyGuardInRoomMessageCenter:
 
         rmc = object.__new__(RoomMessageCenter)
         rmc.message_writer = MagicMock()
-        rmc.message_writer.claim_or_reclaim_user_message = AsyncMock(
-            return_value=False
-        )
+        rmc.message_writer.claim_or_reclaim_user_message = AsyncMock(return_value=False)
         rmc.delivery = MagicMock()
         rmc.orphan_threshold_minutes = 2
 
@@ -163,8 +163,10 @@ class TestIdempotencyGuardInRoomMessageCenter:
 
         call_args = rmc.message_writer.claim_or_reclaim_user_message.call_args
         threshold_arg = call_args[0][1]
-        assert before - timedelta(minutes=2) <= threshold_arg <= after - timedelta(
-            minutes=2
+        assert (
+            before - timedelta(minutes=2)
+            <= threshold_arg
+            <= after - timedelta(minutes=2)
         )
 
 
@@ -416,10 +418,21 @@ class TestCORSConfiguration:
 
         expected_methods = {"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"}
         # Our configured headers — the framework may also add CORS-safelisted headers
-        configured_headers = {"Authorization", "Content-Type", "X-API-Key", "Cache-Control", "sentry-trace", "baggage"}
+        configured_headers = {
+            "Authorization",
+            "Content-Type",
+            "X-API-Key",
+            "Cache-Control",
+            "sentry-trace",
+            "baggage",
+        }
 
-        actual_methods = {m.strip() for m in allow_methods.split(",")} if allow_methods else set()
-        actual_headers = {h.strip() for h in allow_headers.split(",")} if allow_headers else set()
+        actual_methods = (
+            {m.strip() for m in allow_methods.split(",")} if allow_methods else set()
+        )
+        actual_headers = (
+            {h.strip() for h in allow_headers.split(",")} if allow_headers else set()
+        )
 
         assert expected_methods == actual_methods
         assert configured_headers.issubset(actual_headers)

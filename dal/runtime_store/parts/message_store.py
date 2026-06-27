@@ -21,7 +21,7 @@ from models.room import MessageContent, RoomAgentMessage, RoomUserMessage
 logger = get_logger(__name__)
 
 
-class AppShellMessageStore:
+class MessageRuntimeStorePart:
     def __init__(
         self, *, room_agent_messages, room_user_messages, message_repository
     ) -> None:

@@ -1,5 +1,5 @@
-"""Runtime-store compatibility adapters backed by DAL repositories."""
+"""Runtime-store adapters backed by DAL repositories."""
 
-from dal.runtime_store.app_shell_store import AppShellRepositoryStore
+from dal.runtime_store.repository_store import RuntimeRepositoryStore
 
-__all__ = ["AppShellRepositoryStore"]
+__all__ = ["RuntimeRepositoryStore"]

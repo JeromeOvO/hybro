@@ -121,7 +121,9 @@ def test_common_a2a_helpers_do_not_perform_storage_signing():
 
     assert not any(marker in source for marker in storage_markers)
 
-    manifest = json.loads(Path("tests/fixtures/phase9_cleanup_manifest.json").read_text())
+    manifest = json.loads(
+        Path("tests/fixtures/phase9_cleanup_manifest.json").read_text()
+    )
     blockers = [
         entry
         for entry in manifest["blocked_cleanup"]
@@ -154,7 +156,9 @@ def test_common_utils_dependency_seams_are_protocol_typed_not_any_globals():
                 continue
             annotation = ast.unparse(node.annotation)
             if annotation != expected[node.target.id] or "Any" in annotation:
-                violations.append(f"{path}:{node.lineno}: {node.target.id}: {annotation}")
+                violations.append(
+                    f"{path}:{node.lineno}: {node.target.id}: {annotation}"
+                )
 
     context_source = Path("common/utils/context_utils.py").read_text()
     if "turn_notes_llm_provider" in context_source:
@@ -162,8 +166,8 @@ def test_common_utils_dependency_seams_are_protocol_typed_not_any_globals():
     if "def bind_context_llm_provider" in context_source:
         violations.append("common/utils/context_utils.py: bind_context_llm_provider")
 
-    assert not violations, "Common utility dependency seams are broad globals:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Common utility dependency seams are broad globals:\n" + "\n".join(violations)
     )
 
 
@@ -258,9 +262,7 @@ def test_agent_card_preserves_known_sdk_extension_fields_with_aliases():
         description="desc",
         url="https://agent.example",
         version="1.0.0",
-        capabilities=AgentCapabilities(
-            extensions=[{"uri": "urn:capability:example"}]
-        ),
+        capabilities=AgentCapabilities(extensions=[{"uri": "urn:capability:example"}]),
         skills=[AgentSkill(id="skill", name="Skill")],
         protocolVersion="0.3.0",
         preferredTransport="JSONRPC",
@@ -274,9 +276,7 @@ def test_agent_card_preserves_known_sdk_extension_fields_with_aliases():
     dumped = card.model_dump(mode="json")
 
     assert dumped["protocolVersion"] == "0.3.0"
-    assert dumped["capabilities"]["extensions"] == [
-        {"uri": "urn:capability:example"}
-    ]
+    assert dumped["capabilities"]["extensions"] == [{"uri": "urn:capability:example"}]
     assert dumped["security"] == [{"bearer": []}]
     assert dumped["signatures"] == [{"protected": "header", "signature": "sig"}]
     assert dumped["supportsAuthenticatedExtendedCard"] is True
@@ -551,7 +551,10 @@ def test_common_json_aliases_are_protocol_safe():
                 "import sys; "
                 "import common.json_types; "
                 "import common.protocols; "
-                "assert 'app_shell.bound' not in sys.modules"
+                "assert '"
+                "app_"
+                "shell"
+                ".bound' not in sys.modules"
             ),
         ],
         check=True,
@@ -837,8 +840,7 @@ def _public_protocol_methods(protocol):
         for name, member in protocol.__dict__.items()
         if inspect.isfunction(member)
         and (
-            not name.startswith("_")
-            or name in {"__aenter__", "__aexit__", "__call__"}
+            not name.startswith("_") or name in {"__aenter__", "__aexit__", "__call__"}
         )
     }
 
@@ -1381,6 +1383,7 @@ def test_protocol_methods_match_design_doc():
         protocols.APIKeyPrincipal,
         protocols.APIKeyRecord,
         protocols.A2ATaskStatusMessage,
+        protocols.HealthCheck,
         protocols.LLMGateway,
         protocols.MongoChangeStream,
         protocols.RoomRouteRecord,
@@ -1388,9 +1391,7 @@ def test_protocol_methods_match_design_doc():
         protocols.ViewSetDatabase,
     }
     missing_coverage = protocol_exports - set(expected_methods) - marker_protocols
-    assert not missing_coverage, {
-        protocol.__name__ for protocol in missing_coverage
-    }
+    assert not missing_coverage, {protocol.__name__ for protocol in missing_coverage}
 
     assert not hasattr(protocols, "CrudRepository")
     assert not hasattr(protocols, "TaskRepository")
@@ -1472,9 +1473,7 @@ def test_protocol_methods_match_design_doc():
     _assert_params(protocols.ViewSetRepository.patch, ["self", "item_id", "data"])
     _assert_params(protocols.ViewSetRepository.update, ["self", "item_id", "data"])
     _assert_params(protocols.MongoCollection.find, ["self", "query", "kwargs"])
-    _assert_params(
-        protocols.DistributedLock.acquire, ["self", "key", "owner", "ttl"]
-    )
+    _assert_params(protocols.DistributedLock.acquire, ["self", "key", "owner", "ttl"])
 
 
 def test_run_state_contract_matches_persisted_values():

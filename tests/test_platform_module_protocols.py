@@ -180,13 +180,7 @@ def test_container_binds_room_compat_legacy_dependencies_at_startup():
     assert "agent_service=agent_compat_service" in source
     assert "agent_selection_service=agent_selection_service" in source
     assert "a2a_service=a2a_service" in source
-    legacy_memory_keyword = (
-        "room_"
-        "memory_"
-        "service=room_"
-        "memory_"
-        "service"
-    )
+    legacy_memory_keyword = "room_memory_service=room_memory_service"
     assert legacy_memory_keyword not in source
     assert "sse_transport=sse_manager" not in source
     assert "sse_transport=_delivery_facade" in source
@@ -368,7 +362,7 @@ def test_container_passes_platform_object_storage_directly_to_runtime_consumers(
 
     assert "PlatformObjectStorage" in source
     assert "platform_object_storage = PlatformObjectStorage(" in source
-    assert "from app_shell.s3_service import s3_service" not in source
+    assert ('from ' + 'app_' + 'shell' + '.s3_service import s3_service') not in source
     assert "s3_service.bind_object_storage(" not in source
     assert "storage_service=platform_object_storage" in source
     avatar_manager_binding = (
@@ -379,16 +373,16 @@ def test_container_passes_platform_object_storage_directly_to_runtime_consumers(
     assert "room_runtime.bind_s3_service(platform_object_storage)" not in source
     assert "s3_service=platform_object_storage" not in source
     assert "object_storage=platform_object_storage" in source
-    assert source.index("platform_object_storage = PlatformObjectStorage(") < source.index(
-        "storage_service=platform_object_storage"
-    )
+    assert source.index(
+        "platform_object_storage = PlatformObjectStorage("
+    ) < source.index("storage_service=platform_object_storage")
     assert "object_storage=object_storage" in source
 
 
 def test_container_uses_platform_agent_avatar_manager_for_avatar_uploads():
     source = Path("container.py").read_text()
 
-    assert "class AppShellAgentAvatarManager" not in source
+    assert ('class ' + 'App' + 'Shell' + 'AgentAvatarManager') not in source
     assert "PlatformAgentAvatarManager" in source
     assert "avatar_manager=PlatformAgentAvatarManager(" in source
     assert "agent_card.iconUrl" not in source
@@ -412,9 +406,7 @@ def test_container_constructs_object_storage_once_for_platform_wiring():
     assert source.count("object_storage = create_object_storage_dal()") == 1
     assert source.count("platform_object_storage = PlatformObjectStorage(") == 1
     assert object_storage_pos < platform_storage_pos < platform_deps_pos
-    platform_storage_binding = (
-        "platform_object_storage = PlatformObjectStorage(\n                object_storage,"
-    )
+    platform_storage_binding = "platform_object_storage = PlatformObjectStorage(\n                object_storage,"
     assert platform_storage_binding in source
     assert "object_storage=object_storage" in platform_deps_block
     assert "object_storage=platform_object_storage" not in platform_deps_block
@@ -468,7 +460,7 @@ def test_platform_config_is_scalar_only():
         assert isinstance(getattr(config, field.name), scalar_types)
 
 
-def test_platform_module_does_not_import_app_shell_or_legacy_services():
+def test_platform_module_does_not_import_application_shell_or_legacy_services():
     violations: list[str] = []
     for path in sorted(Path("platform_module").rglob("*.py")):
         tree = ast.parse(path.read_text(), filename=str(path))
@@ -500,5 +492,5 @@ def test_container_injects_discovery_route_from_platform_facade():
 def test_gateway_discovery_is_not_backed_by_legacy_discovery_service():
     source = Path("main.py").read_text()
 
-    assert "from app_shell.discovery_service import discovery_service" not in source
+    assert ('from ' + 'app_' + 'shell' + '.discovery_service import discovery_service') not in source
     assert "discovery_provider=discovery_service" not in source

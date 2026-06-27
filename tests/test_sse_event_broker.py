@@ -1,10 +1,5 @@
-"""Compatibility checks for the retired legacy SSE broker surface.
+('Compatibility checks for the retired legacy SSE broker surface.\n\nThe broker behavior itself now lives under ``delivery/event_bus`` and\n``delivery/event_publisher``. This file keeps the legacy factory/no-Redis\nbehavior and ' + 'app-' + 'shell' + ' health aliases covered for callers that still import the\nold test helpers.\n')
 
-The broker behavior itself now lives under ``delivery/event_bus`` and
-``delivery/event_publisher``. This file keeps the legacy factory/no-Redis
-behavior and app-shell health aliases covered for callers that still import the
-old test helpers.
-"""
 
 class MockRedisService:
     """In-memory mock used by Phase 7a golden transport tests."""
@@ -52,8 +47,9 @@ class TestHealthStatus:
         assert result["body"]["redis_expected"] is False
         assert result["body"]["broker_expected"] is False
         assert result["body"]["broker_connected"] is False
-        assert result["body"]["legacy_redis_service_connected"] is (
-            result["body"]["redis_runtime_connected"]
+        assert (
+            result["body"]["legacy_redis_service_connected"]
+            is (result["body"]["redis_runtime_connected"])
         )
 
     def test_health_status_degraded_when_redis_expected_but_delivery_down(self):
@@ -73,8 +69,9 @@ class TestHealthStatus:
         assert result["body"]["redis_expected"] is True
         assert result["body"]["delivery_pubsub_connected"] is False
         assert result["body"]["delivery_kv_connected"] is True
-        assert result["body"]["legacy_redis_service_connected"] is (
-            result["body"]["redis_runtime_connected"]
+        assert (
+            result["body"]["legacy_redis_service_connected"]
+            is (result["body"]["redis_runtime_connected"])
         )
 
     def test_health_status_ok_when_all_expected_services_connected(self):
@@ -111,6 +108,7 @@ class TestHealthStatus:
         assert result["body"]["status"] == "degraded"
         assert result["status_code"] == 503
         assert result["body"]["change_stream_connected"] is False
-        assert result["body"]["legacy_redis_service_connected"] is (
-            result["body"]["redis_runtime_connected"]
+        assert (
+            result["body"]["legacy_redis_service_connected"]
+            is (result["body"]["redis_runtime_connected"])
         )

@@ -17,11 +17,11 @@ from api_gateway.dependencies import (
     bind_api_gateway_deps,
     missing_required_deps,
 )
-from app_shell.api_key_auth import MongoAPIKeyAuthenticator
-from app_shell.viewset import AppShellDALViewSetRepositoryProvider
+from api_gateway.viewsets.repository import DALViewSetRepositoryProvider
 from common.api_key_auth import bind_api_key_authenticator
 from common.config.settings import settings
 from common.dto import VectorRecord
+from common.health_check import RuntimeHealthCheck
 from common.observability import MetricsCollector, traced_create_task
 from common.protocols import (
     AgentCallCounter,
@@ -100,12 +100,14 @@ from platform_module.adapters import (
     MongoFileMetadataRepository,
     RateLimitCollectionAdapter,
 )
+from platform_module.api_key_auth import MongoAPIKeyAuthenticator
 from platform_module.deps import DiscoveryQueryExpander, LoggerLike
 from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
+from room.membership_source import RepositoryRoomMembershipSeedSource
 from room.repository import RoomQuoteMongoRepository
 
 if TYPE_CHECKING:
-    from dal.runtime_store import AppShellRepositoryStore
+    from dal.runtime_store import RuntimeRepositoryStore
 
 
 # Pure function — trivially testable without lifespan/DB
@@ -169,9 +171,7 @@ def create_health_check_service(
     redis_url: str,
     compute_health_status: Callable[..., dict[str, Any]],
 ) -> Any:
-    from app_shell.health_check import AppShellHealthCheck
-
-    return AppShellHealthCheck(
+    return RuntimeHealthCheck(
         redis_url=redis_url,
         compute_health_status=compute_health_status,
     )
@@ -291,7 +291,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.route_adapter import AgentRouteAdapter
             from agent.selection_service import AgentSelectionService
             from agent.service import AgentService
-            from app_shell.room_membership_source import LegacyRoomMembershipSeedSource
             from common.utils.a2a_helpers import bind_a2a_artifact_storage
             from context_memory.compat.runtime import (
                 ContextMemoryChatAdapter,
@@ -361,9 +360,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             debate_prompt_injector = DebatePromptInjector()
             synthesis_coordinator = SynthesisCoordinator()
             remote_task_reader = RemoteTaskReader()
-            route_repository_provider = AppShellDALViewSetRepositoryProvider(
-                mongo=mongo_dal
-            )
             route_agent_vector_index = create_agent_viewset_vector_index(
                 vector=vector_dal,
                 index_name=runtime.settings.pinecone_index_name,
@@ -530,14 +526,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_registry_writer=_agent_deps.agent_registry_writer,
             )
             route_inspection_center = AgentInspectionService()
-            from agent.domain_alias import DomainAliasService as _DomainAliasSvc
-            from app_shell.domain_alias_service import (
-                bind_domain_alias_service as _bind_domain_alias,
-            )
-
-            _bind_domain_alias(_DomainAliasSvc(repository=_agent_deps.agent_repository))
-
-            membership_source = LegacyRoomMembershipSeedSource(
+            membership_source = RepositoryRoomMembershipSeedSource(
                 agent_service_adapter=agent_compat_service
             )
             _room_deps = create_room_deps(
@@ -546,25 +535,23 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 membership_source=membership_source,
             )
             _room_facade = _room_deps.room_registry
-            # Compatibility store: callers below still receive the composite object while
-            # AppShellRepositoryStore delegates to focused runtime store parts. Do not add
-            # new broad-store consumers; bind a focused part or protocol instead.
-            app_shell_store = create_app_shell_repository_store(
+            # Runtime store aggregate: callers below receive focused runtime-store parts.
+            # Do not add new broad-store consumers; bind a focused part or protocol instead.
+            runtime_store = create_runtime_repository_store(
                 mongo=mongo_dal,
                 room_deps=_room_deps,
                 agent_deps=_agent_deps,
             )
-            agent_room_store = app_shell_store.agent_room
-            message_store = app_shell_store.messages
-            task_store = app_shell_store.tasks
-            hitl_store = app_shell_store.hitl
-            memory_store = app_shell_store.memory
-            max_tasks_per_user = app_shell_store.MAX_TASKS_PER_USER
-            max_tasks_per_room = app_shell_store.MAX_TASKS_PER_ROOM
+            agent_room_store = runtime_store.agent_room
+            message_store = runtime_store.messages
+            task_store = runtime_store.tasks
+            hitl_store = runtime_store.hitl
+            memory_store = runtime_store.memory
+            max_tasks_per_user = runtime_store.MAX_TASKS_PER_USER
+            max_tasks_per_room = runtime_store.MAX_TASKS_PER_ROOM
 
-            # P3 compatibility adapters keep startup wiring narrow without
-            # introducing long-lived app-shell classes. These SimpleNamespace
-            # seams are intentionally constrained to container assembly.
+            # P3 runtime adapters keep startup wiring narrow. These SimpleNamespace
+            # boundaries are intentionally constrained to container assembly.
             async def check_task_limits(
                 user_id: str,
                 room_id: str,
@@ -900,11 +887,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 a2a_task_tracking_store,
                 call_counter=agent_room_store,
             )
-            app_shell_client_request_id_resolver = SSEClientRequestIdResolver(
+            execution_client_request_id_resolver = SSEClientRequestIdResolver(
                 resolver=task_store,
             )
             app.state.execution_client_request_id_resolver = (
-                app_shell_client_request_id_resolver
+                execution_client_request_id_resolver
             )
             hitl_manager = create_hitl_service(
                 persistence=hitl_runtime_store,
@@ -1065,7 +1052,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_response_handler=execution_room_message_center.agent_response_handler,
                 event_publisher=_delivery_deps.event_publisher,
                 run_event_enabled=run_event_sse_enabled,
-                client_request_id_resolver=app_shell_client_request_id_resolver,
+                client_request_id_resolver=execution_client_request_id_resolver,
             )
             _execution_deps = create_execution_deps(execution_facade)
 
@@ -1075,7 +1062,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     run_lifecycle=run_lifecycle,
                     event_publisher=_delivery_deps.event_publisher,
                     run_event_enabled=run_event_sse_enabled,
-                    client_request_id_resolver=app_shell_client_request_id_resolver,
+                    client_request_id_resolver=execution_client_request_id_resolver,
                 )
 
             bind_task_processing_status_emitter(emit_room_processing_status)
@@ -1251,7 +1238,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     run_lifecycle=run_lifecycle,
                     event_publisher=_delivery_deps.event_publisher,
                     run_event_enabled=run_event_sse_enabled,
-                    client_request_id_resolver=app_shell_client_request_id_resolver,
+                    client_request_id_resolver=execution_client_request_id_resolver,
                 )
 
             stale_task_checker.set_execution_recovery_deps(
@@ -1418,7 +1405,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 sse_store=sse_state_reader,
                 sse_transport=_delivery_facade,
                 webhook_receiver=create_webhook_transport(),
-                repository_provider=route_repository_provider,
+                repository_provider=DALViewSetRepositoryProvider(mongo=mongo_dal),
                 embedding_provider=embedding_llm_service,
                 vector_index=route_agent_vector_index,
             ),
@@ -2427,15 +2414,15 @@ def create_api_key_store(*, mongo: MongoDAL):
     return MongoAPIKeyStore(mongo=mongo)
 
 
-def create_app_shell_repository_store(
+def create_runtime_repository_store(
     *,
     mongo: MongoDAL,
     room_deps: RoomDeps,
     agent_deps: AgentDeps,
-) -> AppShellRepositoryStore:
-    from dal.runtime_store import AppShellRepositoryStore
+) -> RuntimeRepositoryStore:
+    from dal.runtime_store import RuntimeRepositoryStore
 
-    return AppShellRepositoryStore(
+    return RuntimeRepositoryStore(
         mongo=mongo,
         room_repository=room_deps.room_repository,
         message_repository=room_deps.message_repository,

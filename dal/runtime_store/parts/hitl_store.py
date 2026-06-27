@@ -9,7 +9,7 @@ from common.utils.time import utcnow
 logger = get_logger(__name__)
 
 
-class AppShellHITLStore:
+class HITLRuntimeStorePart:
     def __init__(
         self, *, hitl_requests, room_agent_messages, room_user_messages
     ) -> None:

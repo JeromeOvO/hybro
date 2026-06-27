@@ -1,15 +1,13 @@
+from __future__ import annotations
+
 from collections.abc import Callable
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
 
-@runtime_checkable
-class HealthCheck(Protocol):
-    async def check(self, request: Request) -> JSONResponse: ...
-
-class AppShellHealthCheck:
+class RuntimeHealthCheck:
     def __init__(
         self,
         *,
@@ -47,4 +45,4 @@ class AppShellHealthCheck:
         return JSONResponse(content=result["body"], status_code=result["status_code"])
 
 
-__all__ = ["AppShellHealthCheck", "HealthCheck"]
+__all__ = ["RuntimeHealthCheck"]

@@ -3,7 +3,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION_ROOTS = [
     ROOT / "api_gateway",
-    ROOT / "app_shell",
     ROOT / "delivery",
     ROOT / "execution",
     ROOT / "jobs",
