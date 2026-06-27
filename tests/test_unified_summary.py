@@ -266,6 +266,9 @@ class TestEmitUnifiedSummary:
         """When OpenAI returns empty content, the working card is dismissed with failed status."""
 
         rmc._stream_summary_content = AsyncMock(return_value="")
+        # Prevent the mocked summary_service from returning an unawaited coroutine
+        from unittest.mock import Mock
+        rmc.summary_service.summarize_agent_responses_stream = Mock()
 
         await rmc._emit_unified_summary(
             room_id="room-1",
