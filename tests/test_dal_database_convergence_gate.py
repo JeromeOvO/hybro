@@ -647,7 +647,7 @@ def test_legacy_runtime_files_are_exact():
 
 
 def test_production_object_storage_access_goes_through_dal():
-    ('Ensure no production module directly imports ' + 'app_' + 'shell' + '.s3_service.\n\n    ' + 'app_' + 'shell' + '.s3_service is a compatibility shim, not a production dependency\n    target. Only the shim implementation may refer to itself.\n')
+    """Ensure production object storage access goes through DAL ownership."""
     offenders = []
     for path in _py_files():
         rel = _rel(path)

@@ -1,10 +1,8 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-REMOVED_RUNTIME_PACKAGE = "app_" + "shell"
 PRODUCTION_ROOTS = [
     ROOT / "api_gateway",
-    ROOT / REMOVED_RUNTIME_PACKAGE,
     ROOT / "delivery",
     ROOT / "execution",
     ROOT / "jobs",
