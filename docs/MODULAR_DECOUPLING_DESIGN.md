@@ -1575,6 +1575,12 @@ statuses (`queued`, `processing`, `awaiting_input`, `completed`, `failed`,
 `details: dict | None`; human-readable failure text belongs in lifecycle
 records or `error_message` inputs that are normalized before frontend delivery.
 
+Execution owns the boundary between runtime lifecycle status and persisted A2A
+task state. Frontend lifecycle events may use `awaiting_input`, but system task
+records must persist the A2A state `input-required`; this mapping belongs in
+`execution/state/`, not Delivery or Room. Delivery continues to translate and
+deliver typed events only.
+
 ### 5.5 In-Flight Task Tracking (fix 2.10)
 
 ```python

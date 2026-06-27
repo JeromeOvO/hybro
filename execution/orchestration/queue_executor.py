@@ -27,6 +27,7 @@ from common.utils.logger import get_logger
 from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
 from execution.state.task_state_manager import TaskStateManager
+from execution.state.task_status_mapping import system_task_state_from_runtime_status
 from models.processing import ProcessingResult, ProcessingStatus
 from models.room import CoordinatorAgentId, RoomAgentMessage
 
@@ -545,10 +546,8 @@ class QueueExecutor:
                     and db_msg.message_content
                     and db_msg.message_content.message_task
                 ):
-                    from common.types import TaskState
-
-                    db_msg.message_content.message_task.status.state = TaskState(
-                        task_status
+                    db_msg.message_content.message_task.status.state = (
+                        system_task_state_from_runtime_status(task_status)
                     )
                     await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
                         db_msg.message_id, db_msg.message_content
