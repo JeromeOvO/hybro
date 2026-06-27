@@ -1,4 +1,5 @@
 import ast
+import importlib
 import json
 import tomllib
 from fnmatch import fnmatch
@@ -827,6 +828,8 @@ def _owner_import_provenance(
                 )
             elif alias.name in required_exports and alias.asname in {None, alias.name}:
                 backed_exports.add(alias.name)
+            elif alias.asname in required_exports:
+                backed_exports.add(alias.asname)
 
     return backed_exports, owner_refs
 
@@ -852,6 +855,8 @@ def _rebound_owner_import_exports(
                     alias.name,
                 }:
                     imported_exports.add(alias.name)
+                elif alias.asname in required_exports:
+                    imported_exports.add(alias.asname)
             continue
 
         rebound_exports.update(imported_exports & _top_level_rebound_names(node))
@@ -1698,6 +1703,11 @@ def test_application_shell_focus_files_are_final_import_shims():
             violations.append(
                 f"{target}: does not import owning module {owning_module}"
             )
+        module_name = target.removesuffix(".py").replace("/", ".")
+        try:
+            importlib.import_module(module_name)
+        except Exception as exc:  # pragma: no cover - assertion reports details
+            violations.append(f"{target}: import failed: {exc!r}")
 
     assert not violations, "App-shell focus files are not final import shims:\n" + (
         "\n".join(violations)
