@@ -115,7 +115,7 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 | # | Module | Responsibility | Current Source |
 |---|--------|---------------|----------------|
 | 1 | **Common** | Protocols, DTOs, auth, config, utils, errors | `common/`, `models/` |
-| 2 | **DAL** | Unified data access clients (split by concern) | `dal/`, `database/` (legacy migrations only) |
+| 2 | **DAL** | Unified data access clients (split by concern) | `dal/` |
 | 3 | **A2A Protocol Adapter** | Anti-corruption for a2a-sdk, internal model ↔ A2A types | `a2a_adapter/` |
 | 4 | **LLM Gateway** | Unified LLM invocation, provider routing, capability registry | `llm_gateway/`, `llm_gateway/providers/`, `llm_gateway/services/` |
 | 5 | **Agent** | Agent lifecycle, health, matching, discovery | `agent/`, `agent/repository/` |
@@ -2147,11 +2147,13 @@ The final legacy runtime deletion removed `database/mongodb.py`,
 the former application-shell database service; production code must not
 reintroduce them.
 
-**Operational migration/script compatibility decision (2026-06-11):** One-off
+**Operational migration/script compatibility decision (2026-06-26):** One-off
 scripts and historical migrations that imported `database.mongodb` were removed
-with the final legacy runtime deletion. New migration scripts must be standalone
-Motor/DAL scripts and must not restore `database/mongodb.py`,
-`database/pinecone_db.py`, `database/repository.py`, or
+with the final legacy runtime deletion, and the retired `database/migration/`
+package has also been removed after its remaining migrations were applied. New
+migration scripts must be standalone Motor/DAL scripts or live under a current
+owner package; they must not restore `database/mongodb.py`,
+`database/pinecone_db.py`, `database/repository.py`, `database/migration/`, or
 the former application-shell database service for compatibility.
 
 #### Phase 2: Adapter Layer (2.5 weeks)

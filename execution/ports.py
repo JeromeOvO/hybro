@@ -355,6 +355,26 @@ class NotificationServicePort(Protocol):
     ) -> None: ...
 
 
+class TaskNotificationStorePort(Protocol):
+    async def update_last_notified_state(
+        self, message_id: str, state: str
+    ) -> bool: ...
+
+    async def get_room_agent_message_by_message_id(
+        self, message_id: str
+    ) -> RoomAgentMessage | None: ...
+
+    async def update_room_agent_message_by_message_id(
+        self, message_id: str, room_agent_message: Any
+    ) -> bool: ...
+
+    async def get_room_by_room_id(self, room_id: str) -> Room | None: ...
+
+    async def resolve_client_request_id_for_agent_message(
+        self, room_agent_message: Any
+    ) -> str | None: ...
+
+
 class AgentRateLimitResultPort(Protocol):
     allowed: bool
     reason: str | None

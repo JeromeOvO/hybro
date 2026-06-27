@@ -200,11 +200,11 @@ Runtime application code reads environment-backed configuration through
 config unification gate in `tests/test_config_unification_gate.py` scans tracked
 production Python files and fails on new raw env reads outside that file.
 
-The gate intentionally excludes `tests/`, `scripts/`, `docs/`, and
-`database/migration/`: tests may set env vars to verify settings loading, while
-scripts and migration utilities run outside the app runtime. `SERVER_SOFTWARE`
-is exposed as the live `Settings.is_gunicorn` property because it is
-server-injected runtime metadata, not user application configuration.
+The gate intentionally excludes `tests/`, `scripts/`, and `docs/`: tests may
+set env vars to verify settings loading, while scripts run outside the app
+runtime. `SERVER_SOFTWARE` is exposed as the live `Settings.is_gunicorn`
+property because it is server-injected runtime metadata, not user application
+configuration.
 
 ### `llm_gateway`
 
@@ -302,6 +302,9 @@ Key components:
   tasks.
 - `AgentResponseHandler`: single place that normalizes agent events, persists
   task/artifact state, handles HITL states, and emits SSE/task updates.
+  Handler-owned task notifications use the explicit
+  `TaskNotificationStorePort` for idempotency and message/room reads, keeping
+  task-state persistence writers write-only.
 - `TaskStateManager`: owns task state transitions and persistence for agent
   messages.
 
@@ -536,11 +539,10 @@ still written so remote agent completion is not lost due to object-storage
 transient failures.
 
 The legacy runtime database files `database/mongodb.py`,
-`database/pinecone_db.py`, `database/repository.py`, and the former
-application-shell database service have been removed. Production startup wiring
-in `container.py` uses `MongoDAL`, `VectorDAL`, DAL-backed repositories, and
-narrow owner adapters directly. The remaining `database/` package is limited to
-retired migration scripts and is not part of production runtime wiring.
+`database/pinecone_db.py`, `database/repository.py`, the retired
+`database/migration/` scripts, and the former application-shell database service
+have been removed. Production startup wiring in `container.py` uses `MongoDAL`,
+`VectorDAL`, DAL-backed repositories, and narrow owner adapters directly.
 
 Important Mongo collections include:
 
@@ -744,6 +746,11 @@ adapters wherever a narrower port is sufficient. Relay route registration, hub
 status, and liveness use explicit repository-backed owner adapters. Remaining
 runtime-store aggregate use is limited to documented compatibility shims rather
 than new production business owners.
+
+Task notification persistence is a distinct execution port. `ResponseTaskWriter`
+remains limited to task-state writes, while `TaskNotificationStorePort` supplies
+the idempotency update plus message, room, and client-request-id reads needed by
+`execution.dispatch.task_notifications`.
 
 **Agent display text:** Terminal `message_text` and artifact text parts are persisted as received from agents. List/section markdown repair runs only in the frontend remark plugin pipeline (`hybro-frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown render time. Hybro-controlled LLM paths (supervisor synthesis, `SummaryLLMService`) append `HYBRO_MARKDOWN_RESPONSE_FORMAT` so synthesis uses `###` section headers; third-party agent text is still stored as-is. Backend terminal helpers in `common/utils/a2a_helpers.py` (`prepare_terminal_agent_content`, `resolve_terminal_sse_content`, `sync_artifact_dicts_to_canonical_text`) resolve canonical text from artifacts and align artifact payloads without transforming markdown. Terminal resolution is owned by `update_task_state_on_message`; streaming text parts collapse to a single canonical text part while file/data parts are preserved. SSE terminal `content` is authoritative for display text; `parts` carries only non-text payloads.
 

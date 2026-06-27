@@ -39,33 +39,22 @@ from common.utils.a2a_helpers import (
 from common.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from typing import Protocol
-
-    class TaskNotificationStore(Protocol):
-        async def update_last_notified_state(
-            self, message_id: str, state: str
-        ) -> bool: ...
-        async def get_room_agent_message_by_message_id(self, message_id: str): ...
-        async def update_room_agent_message_by_message_id(
-            self, message_id: str, room_agent_message
-        ) -> bool: ...
-        async def get_room_by_room_id(self, room_id: str): ...
-        async def resolve_client_request_id_for_agent_message(
-            self, room_agent_message
-        ) -> str | None: ...
-
-    from execution.ports import ExecutionDeliveryPort, NotificationServicePort
+    from execution.ports import (
+        ExecutionDeliveryPort,
+        NotificationServicePort,
+        TaskNotificationStorePort,
+    )
 
 logger = get_logger(__name__)
 
 ProcessingStatusEmitter = Callable[..., Awaitable[dict[str, Any] | None]]
 _processing_status_emitter: ProcessingStatusEmitter | None = None
-_notification_store: TaskNotificationStore | None = None
+_notification_store: TaskNotificationStorePort | None = None
 _task_notifier = None
 _delivery = None
 
 
-def bind_notification_store(notification_store: TaskNotificationStore) -> None:
+def bind_notification_store(notification_store: TaskNotificationStorePort) -> None:
     global _notification_store
 
     _notification_store = notification_store
@@ -140,7 +129,7 @@ def _map_task_state_to_processing_status(state: TaskState) -> SSEProcessingStatu
 
 
 async def _notify_task_update_impl(
-    notification_store: TaskNotificationStore,
+    notification_store: TaskNotificationStorePort,
     notification_svc: NotificationServicePort,
     delivery: ExecutionDeliveryPort,
     *,

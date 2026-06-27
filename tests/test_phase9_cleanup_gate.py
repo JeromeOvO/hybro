@@ -32,13 +32,14 @@ PRODUCTION_ROOTS = (
 FORBIDDEN_PRODUCTION_IMPORT_PREFIXES = (
     "services",
     "modules",
-    "database.mongodb",
+    "database",
     "config",
 )
 
 LEGACY_PACKAGES = {
     REMOVED_RUNTIME_PACKAGE,
     "config",
+    "database",
     "infrastructure",
     "modules",
     "services",
@@ -61,8 +62,10 @@ REMOVED_LEGACY_OPERATIONAL_SCRIPTS = {
     "database/migration/fix_legacy_stale_tasks.py",
     "database/migration/migrate_room_memories.py",
     "database/migration/migrate_room_memory_to_conversation_history.py",
+    "database/migration/migrate_legacy_system_agents.py",
     "database/migration/null_legacy_room_processing_message_id.py",
     "database/migration/purge_empty_artifact_parts.py",
+    "database/migration/recreate_task_tracking_indexes.py",
     "database/migration/rename_supervisor_v2_fields.py",
     "scripts/backfill_agent_status.py",
     "scripts/backfill_room_agent_message_parts.py",
@@ -81,7 +84,7 @@ PACKAGE_REMOVAL_RUNTIME_ROOTS = (
 
 FORBIDDEN_LEGACY_SHIM_IMPORT_PREFIXES = (
     "a2a",
-    "database.mongodb",
+    "database",
     "config",
     "services",
 )

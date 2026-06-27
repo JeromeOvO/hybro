@@ -62,11 +62,22 @@
             "test_import_files": [],
             "test_blockers": [],
             "required_before_remove": []
+        },
+        {
+            "package": "database",
+            "py_files": 0,
+            "runtime_import_files": [],
+            "runtime_blockers": [],
+            "status": "removed",
+            "test_import_files": [],
+            "test_blockers": [],
+            "required_before_remove": []
         }
     ],
     "safe_to_delete": [
         "app_shell",
         "config",
+        "database",
         "infrastructure",
         "modules",
         "services",

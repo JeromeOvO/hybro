@@ -228,8 +228,6 @@ packages = [
     "llm_gateway",
     "llm_gateway.providers",
     "llm_gateway.services",
-    "database",
-    "database.migration",
     "jobs",
     "scripts",
 ]

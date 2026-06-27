@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from execution.dispatch.agent_event import AgentEvent
-from execution.dispatch.response_handler import AgentResponseHandler
+from execution.dispatch.response_handler import AgentResponseHandler, ResponseTaskWriter
 
 # =============================================================================
 # Fixtures
@@ -27,8 +27,10 @@ def _make_handler(
     sse=None,
     rmc=None,
     hitl_coordinator=None,
+    slot_lifecycle=None,
     task_notifier=None,
     task_notification_impl=None,
+    task_notification_store=None,
 ):
     if db is None:
         db = MagicMock()
@@ -48,19 +50,23 @@ def _make_handler(
         rmc.resume_queue_from_continuation = AsyncMock(return_value=True)
     if task_notifier is None:
         task_notifier = MagicMock()
-    return AgentResponseHandler(
-        message_writer=db,
-        task_writer=db,
-        continuation_store=db,
-        client_request_resolver=db,
-        room_reader=db,
-        hitl_reader=db,
-        delivery=sse,
-        room_message_center=rmc,
-        hitl_coordinator=hitl_coordinator,
-        task_notifier=task_notifier,
-        task_notification_impl=task_notification_impl,
-    )
+    kwargs = {
+        "message_writer": db,
+        "task_writer": db,
+        "continuation_store": db,
+        "client_request_resolver": db,
+        "room_reader": db,
+        "hitl_reader": db,
+        "delivery": sse,
+        "room_message_center": rmc,
+        "slot_lifecycle": slot_lifecycle,
+        "hitl_coordinator": hitl_coordinator,
+        "task_notifier": task_notifier,
+        "task_notification_impl": task_notification_impl,
+    }
+    if task_notification_store is not None:
+        kwargs["task_notification_store"] = task_notification_store
+    return AgentResponseHandler(**kwargs)
 
 
 def _base_event(**overrides):
@@ -307,6 +313,42 @@ class TestResponseEvent:
         h._rmc.resume_queue_from_continuation.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_terminal_notification_failure_does_not_block_response_cleanup(self):
+        slot_lifecycle = MagicMock()
+        slot_lifecycle.terminate_slot = AsyncMock()
+        h = _make_handler(slot_lifecycle=slot_lifecycle)
+        event = AgentEvent(
+            kind="response",
+            **_base_event(),
+            text="Done!",
+            turn_id="turn-001",
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(side_effect=RuntimeError("notification store missing read")),
+            )
+            await h.handle(event)
+
+        h._message_writer.update_task_state_on_message.assert_awaited_once_with(
+            "msg-001", "completed", message_text="Done!", artifacts=None,
+        )
+        slot_lifecycle.terminate_slot.assert_awaited_once_with(
+            room_id="room-001",
+            turn_id="turn-001",
+            slot_id="msg-001",
+            status="completed",
+            content="Done!",
+            artifacts=None,
+            error=None,
+            has_partial_content=None,
+        )
+        h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
+            message_id="msg-001", task_result_text="Done!", failed=False,
+        )
+
+    @pytest.mark.asyncio
     async def test_uses_resolved_terminal_text_from_database_layer(self):
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(
@@ -396,6 +438,44 @@ class TestErrorEvent:
         )
 
     @pytest.mark.asyncio
+    async def test_terminal_notification_failure_does_not_block_error_cleanup(self):
+        slot_lifecycle = MagicMock()
+        slot_lifecycle.terminate_slot = AsyncMock()
+        h = _make_handler(slot_lifecycle=slot_lifecycle)
+        event = AgentEvent(
+            kind="error",
+            **_base_event(),
+            error_text="boom",
+            text="partial",
+            state="failed",
+            turn_id="turn-001",
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(side_effect=RuntimeError("notification store missing read")),
+            )
+            await h.handle(event)
+
+        h._message_writer.update_task_state_on_message.assert_awaited_once_with(
+            "msg-001", "failed", message_text="boom",
+        )
+        slot_lifecycle.terminate_slot.assert_awaited_once_with(
+            room_id="room-001",
+            turn_id="turn-001",
+            slot_id="msg-001",
+            status="failed",
+            content="partial",
+            artifacts=None,
+            error="boom",
+            has_partial_content=True,
+        )
+        h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
+            message_id="msg-001", task_result_text=None, failed=True,
+        )
+
+    @pytest.mark.asyncio
     async def test_preserves_rejected_state(self):
         h = _make_handler()
         event = AgentEvent(
@@ -435,6 +515,42 @@ class TestCanceledEvent:
 
         h._message_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001", "canceled", message_text="stopped",
+        )
+        h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
+            message_id="msg-001", task_result_text=None, failed=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_terminal_notification_failure_does_not_block_cancel_cleanup(self):
+        slot_lifecycle = MagicMock()
+        slot_lifecycle.terminate_slot = AsyncMock()
+        h = _make_handler(slot_lifecycle=slot_lifecycle)
+        event = AgentEvent(
+            kind="canceled",
+            **_base_event(),
+            text="stopped",
+            turn_id="turn-001",
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(side_effect=RuntimeError("notification store missing read")),
+            )
+            await h.handle(event)
+
+        h._message_writer.update_task_state_on_message.assert_awaited_once_with(
+            "msg-001", "canceled", message_text="stopped",
+        )
+        slot_lifecycle.terminate_slot.assert_awaited_once_with(
+            room_id="room-001",
+            turn_id="turn-001",
+            slot_id="msg-001",
+            status="canceled",
+            content=None,
+            artifacts=None,
+            error=None,
+            has_partial_content=None,
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
             message_id="msg-001", task_result_text=None, failed=True,
@@ -492,6 +608,7 @@ class TestInteractiveEvent:
             db=db,
             hitl_coordinator=hitl,
             task_notification_impl=mock_impl,
+            task_notification_store=db,
         )
         event = AgentEvent(
             kind="interactive", **_base_event(),
@@ -555,6 +672,7 @@ class TestInteractiveEvent:
             db=db,
             hitl_coordinator=hitl,
             task_notification_impl=mock_impl,
+            task_notification_store=db,
         )
         event = AgentEvent(
             kind="interactive", **_base_event(),
@@ -915,10 +1033,26 @@ class TestStatusUpdateSendsTaskUpdate:
 class TestHandlerNotifyTaskUpdate:
     """notify_task_update method delegates to _notify_task_update_impl."""
 
+    def test_response_task_writer_remains_write_only(self):
+        assert "get_room_agent_message_by_message_id" not in ResponseTaskWriter.__dict__
+        assert "get_room_by_room_id" not in ResponseTaskWriter.__dict__
+        assert (
+            "resolve_client_request_id_for_agent_message"
+            not in ResponseTaskWriter.__dict__
+        )
+
+    def test_notification_impl_requires_notification_store_at_construction(self):
+        with pytest.raises(RuntimeError, match="Task notification store"):
+            _make_handler(task_notification_impl=AsyncMock(return_value=True))
+
     @pytest.mark.asyncio
     async def test_delegates_to_shared_impl(self):
         mock_impl = AsyncMock(return_value=True)
-        h = _make_handler(task_notification_impl=mock_impl)
+        notification_store = MagicMock()
+        h = _make_handler(
+            task_notification_impl=mock_impl,
+            task_notification_store=notification_store,
+        )
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
 
@@ -934,8 +1068,9 @@ class TestHandlerNotifyTaskUpdate:
         assert result is True
         mock_impl.assert_awaited_once()
         call_args = mock_impl.call_args
-        # First positional arg is the handler's notification store
-        assert call_args[0][0] is h._task_writer
+        # First positional arg is the handler's read-capable notification store.
+        assert call_args[0][0] is notification_store
+        assert call_args[0][0] is not h._task_writer
         # Third positional arg is the handler's sse instance
         assert call_args[0][2] is h._delivery
         assert call_args.kwargs["emit_processing_status"] is True
@@ -944,7 +1079,10 @@ class TestHandlerNotifyTaskUpdate:
     @pytest.mark.asyncio
     async def test_processing_status_terminal_close_out_does_not_duplicate_emit(self):
         mock_impl = AsyncMock(return_value=True)
-        h = _make_handler(task_notification_impl=mock_impl)
+        h = _make_handler(
+            task_notification_impl=mock_impl,
+            task_notification_store=MagicMock(),
+        )
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
         event = AgentEvent(
@@ -972,7 +1110,10 @@ class TestHandlerNotifyTaskUpdate:
     async def test_notify_helper_delegates_to_method(self):
         """_notify helper calls self.notify_task_update with event fields."""
         mock_impl = AsyncMock(return_value=True)
-        h = _make_handler(task_notification_impl=mock_impl)
+        h = _make_handler(
+            task_notification_impl=mock_impl,
+            task_notification_store=MagicMock(),
+        )
         from a2a.types import TaskState
 
         event = AgentEvent(

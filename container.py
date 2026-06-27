@@ -984,6 +984,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 coordinator=execution_coordinator,
                 summary_service=summary_llm_service,
                 task_notifier=task_notifier,
+                task_notification_store=task_notification_store,
                 agent_resolver_service=agent_resolver_service,
                 a2a_transport=execution_a2a_transport,
                 remote_task_reader=execution_remote_task_reader,
@@ -1023,6 +1024,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     room_message_center=execution_room_message_center,
                     hitl_coordinator=hitl_manager,
                     task_notifier=task_notifier,
+                    task_notification_store=task_notification_store,
                     task_notification_impl=_notify_task_update_impl,
                 )
                 handler.bind_execution_event_deps(emit_room_processing_status)
