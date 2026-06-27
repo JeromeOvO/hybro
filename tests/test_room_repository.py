@@ -346,7 +346,7 @@ async def test_message_repository_pending_user_tasks_filters_and_sorts():
 
 
 @pytest.mark.asyncio
-async def test_repository_store_cancel_message_is_idempotent_when_record_exists():
+async def test_runtime_store_cancel_message_is_idempotent_when_record_exists():
     from dal.runtime_store import RuntimeRepositoryStore
 
     class ExistingCancellationCollection(FakeCollection):
@@ -373,7 +373,7 @@ async def test_repository_store_cancel_message_is_idempotent_when_record_exists(
 
 
 @pytest.mark.asyncio
-async def test_repository_store_updates_last_notified_state_atomically():
+async def test_runtime_store_updates_last_notified_state_atomically():
     from dal.runtime_store import RuntimeRepositoryStore
 
     agent_messages = FakeCollection(
@@ -399,7 +399,7 @@ async def test_repository_store_updates_last_notified_state_atomically():
 
 
 @pytest.mark.asyncio
-async def test_repository_store_accumulates_artifacts_with_atomic_collection_update():
+async def test_runtime_store_accumulates_artifacts_with_atomic_collection_update():
     from dal.runtime_store import RuntimeRepositoryStore
 
     class RecordingSuccessCollection(FakeCollection):
@@ -438,7 +438,7 @@ async def test_repository_store_accumulates_artifacts_with_atomic_collection_upd
 
 
 @pytest.mark.asyncio
-async def test_repository_store_filters_malformed_related_agent_messages():
+async def test_runtime_store_filters_malformed_related_agent_messages():
     from dal.runtime_store import RuntimeRepositoryStore
 
     class RelatedMessageRepository:
@@ -469,7 +469,7 @@ async def test_repository_store_filters_malformed_related_agent_messages():
 
 
 @pytest.mark.asyncio
-async def test_repository_store_full_agent_update_preserves_task_tracking_fields():
+async def test_runtime_store_full_agent_update_preserves_task_tracking_fields():
     from common.dto import RuntimeMessageContent, RuntimeRoomAgentMessage
     from dal.runtime_store import RuntimeRepositoryStore
 
@@ -518,7 +518,7 @@ async def test_repository_store_full_agent_update_preserves_task_tracking_fields
 
 
 @pytest.mark.asyncio
-async def test_repository_store_generates_agent_message_id_when_empty():
+async def test_runtime_store_generates_agent_message_id_when_empty():
     from common.dto import RuntimeMessageContent, RuntimeRoomAgentMessage
     from dal.runtime_store import RuntimeRepositoryStore
 
@@ -551,7 +551,7 @@ async def test_repository_store_generates_agent_message_id_when_empty():
 
 
 @pytest.mark.asyncio
-async def test_repository_store_task_tracking_writes_return_false_on_repository_error():
+async def test_runtime_store_task_tracking_writes_return_false_on_repository_error():
     from dal.runtime_store import RuntimeRepositoryStore
 
     class FailingMessageRepository:
@@ -584,7 +584,7 @@ async def test_repository_store_task_tracking_writes_return_false_on_repository_
 
 
 @pytest.mark.asyncio
-async def test_repository_store_task_tracking_noop_successes_by_readback():
+async def test_runtime_store_task_tracking_noop_successes_by_readback():
     from dal.runtime_store import RuntimeRepositoryStore
 
     class NoopTrackedMessageRepository:
@@ -621,7 +621,7 @@ async def test_repository_store_task_tracking_noop_successes_by_readback():
 
 
 @pytest.mark.asyncio
-async def test_repository_store_chat_context_mutations_succeed_on_no_exception():
+async def test_runtime_store_chat_context_mutations_succeed_on_no_exception():
     from common.dto import RuntimeChatContext
     from dal.runtime_store import RuntimeRepositoryStore
 
@@ -652,7 +652,7 @@ async def test_repository_store_chat_context_mutations_succeed_on_no_exception()
 
 
 @pytest.mark.asyncio
-async def test_repository_store_memory_write_methods_use_expected_dependencies():
+async def test_runtime_store_memory_write_methods_use_expected_dependencies():
     from dal.runtime_store import RuntimeRepositoryStore
 
     class RecordingUpsertCollection(FakeCollection):
@@ -757,7 +757,7 @@ async def test_repository_store_memory_write_methods_use_expected_dependencies()
 
 
 @pytest.mark.asyncio
-async def test_repository_store_generates_chat_context_memory_id_when_empty():
+async def test_runtime_store_generates_chat_context_memory_id_when_empty():
     from common.dto import RuntimeChatContext
     from dal.runtime_store import RuntimeRepositoryStore
 
@@ -776,7 +776,7 @@ async def test_repository_store_generates_chat_context_memory_id_when_empty():
 
 
 @pytest.mark.asyncio
-async def test_repository_store_room_runtime_methods_use_repositories_and_dal():
+async def test_runtime_store_room_runtime_methods_use_repositories_and_dal():
     from common.dto import (
         RuntimeMessageContent,
         RuntimeRoomRecord,
@@ -889,7 +889,7 @@ async def test_repository_store_room_runtime_methods_use_repositories_and_dal():
 
 
 @pytest.mark.asyncio
-async def test_repository_store_room_update_noop_succeeds_when_room_exists():
+async def test_runtime_store_room_update_noop_succeeds_when_room_exists():
     from common.dto import RuntimeRoomRecord
     from dal.runtime_store import RuntimeRepositoryStore
 
@@ -924,7 +924,7 @@ async def test_repository_store_room_update_noop_succeeds_when_room_exists():
 
 
 @pytest.mark.asyncio
-async def test_repository_store_sparse_room_update_preserves_membership():
+async def test_runtime_store_sparse_room_update_preserves_membership():
     from common.dto import RuntimeRoomRecord
     from dal.runtime_store import RuntimeRepositoryStore
 
@@ -962,7 +962,7 @@ async def test_repository_store_sparse_room_update_preserves_membership():
 
 
 @pytest.mark.asyncio
-async def test_repository_store_upsert_room_agent_message_replaces_full_document():
+async def test_runtime_store_upsert_room_agent_message_replaces_full_document():
     from common.dto import RuntimeMessageContent, RuntimeRoomAgentMessage
     from dal.runtime_store import RuntimeRepositoryStore
 
@@ -1002,7 +1002,7 @@ async def test_repository_store_upsert_room_agent_message_replaces_full_document
 
 
 @pytest.mark.asyncio
-async def test_repository_store_room_orchestration_claim_cancel_and_continuation():
+async def test_runtime_store_room_orchestration_claim_cancel_and_continuation():
     from dal.runtime_store import RuntimeRepositoryStore
 
     user_messages = FakeCollection(
