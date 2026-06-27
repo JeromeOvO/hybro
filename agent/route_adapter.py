@@ -210,7 +210,4 @@ class AgentRouteAdapter:
     ) -> AgentCenterResponse:
         return self.agent_service._mask_sensitive_information(response, fields)
 
-
-AppShellAgentCenter = AgentRouteAdapter
-
-__all__ = ["AgentRouteAdapter", "AppShellAgentCenter"]
+__all__ = ["AgentRouteAdapter"]
