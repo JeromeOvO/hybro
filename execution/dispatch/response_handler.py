@@ -349,14 +349,9 @@ class AgentResponseHandler:
             )
             if resolved_text:
                 display_text = resolved_text
-        try:
-            await self._notify(e, coerce_task_state("completed"))
-        except Exception:
-            logger.warning(
-                "AgentResponseHandler: terminal task notification failed for %s",
-                e.message_id,
-                exc_info=True,
-            )
+        await self._notify_terminal_best_effort(
+            e, coerce_task_state("completed")
+        )
         await self._terminate_slot(
             e,
             "completed",
@@ -377,14 +372,9 @@ class AgentResponseHandler:
                 state,
                 message_text=error,
             )
-        try:
-            await self._notify(e, coerce_task_state(state), error=error)
-        except Exception:
-            logger.warning(
-                "AgentResponseHandler: terminal task notification failed for %s",
-                e.message_id,
-                exc_info=True,
-            )
+        await self._notify_terminal_best_effort(
+            e, coerce_task_state(state), error=error
+        )
         has_partial = bool(e.text and e.text.strip())
         await self._terminate_slot(
             e,
@@ -402,14 +392,7 @@ class AgentResponseHandler:
                 "canceled",
                 message_text=e.text or "Task was canceled",
             )
-        try:
-            await self._notify(e, coerce_task_state("canceled"))
-        except Exception:
-            logger.warning(
-                "AgentResponseHandler: terminal task notification failed for %s",
-                e.message_id,
-                exc_info=True,
-            )
+        await self._notify_terminal_best_effort(e, coerce_task_state("canceled"))
         await self._terminate_slot(e, "canceled")
         await self._resume_orchestration(e.message_id, "", failed=True)
 
@@ -705,6 +688,22 @@ class AgentResponseHandler:
             parts=e.parts,
             emit_processing_status=emit_processing_status,
         )
+
+    async def _notify_terminal_best_effort(
+        self,
+        e: AgentEvent,
+        state: Any,
+        *,
+        error: str | None = None,
+    ) -> None:
+        try:
+            await self._notify(e, state, error=error)
+        except Exception:
+            logger.warning(
+                "AgentResponseHandler: terminal task notification failed for %s",
+                e.message_id,
+                exc_info=True,
+            )
 
     async def _resume_orchestration(
         self,
