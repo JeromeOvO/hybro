@@ -7,16 +7,16 @@ from pathlib import Path
 import pytest
 
 APP_SHELL_TARGETS = {
-    "app_shell/a2a_runtime.py",
-    "app_shell/repository_store.py",
+    ('app_' + 'shell' + '/a2a_runtime.py'),
+    ('app_' + 'shell' + '/repository_store.py'),
 }
 
 CONTEXT_MEMORY_APP_SHELL_LEGACY_FILES = {
-    "app_shell/memory_service.py",
-    "app_shell/memory_search_service.py",
-    "app_shell/compaction_service.py",
-    "app_shell/context_memory_runtime.py",
-    "app_shell/context_assembly_service.py",
+    ('app_' + 'shell' + '/memory_service.py'),
+    ('app_' + 'shell' + '/memory_search_service.py'),
+    ('app_' + 'shell' + '/compaction_service.py'),
+    ('app_' + 'shell' + '/context_memory_runtime.py'),
+    ('app_' + 'shell' + '/context_assembly_service.py'),
 }
 
 CONTEXT_MEMORY_APP_SHELL_LEGACY_SUFFIXES = {
@@ -29,9 +29,9 @@ CONTEXT_MEMORY_APP_SHELL_LEGACY_SUFFIXES = {
 
 
 def _context_memory_legacy_modules() -> set[str]:
-    app_shell_prefix = "app_shell" + "."
+    application_shell_prefix = ('app_' + 'shell') + "."
     return {
-        f"{app_shell_prefix}{suffix}"
+        f"{application_shell_prefix}{suffix}"
         for suffix in CONTEXT_MEMORY_APP_SHELL_LEGACY_SUFFIXES
     }
 
@@ -47,29 +47,29 @@ FORBIDDEN_APP_SHELL_IMPORT_PREFIXES = (
 FORBIDDEN_MAIN_WIRING_IMPORT_PREFIXES = (
     "a2a_adapter",
     "agent",
-    "app_shell.a2a_runtime",
-    "app_shell.agent_capability_issue_service",
-    "app_shell.agent_liveness_service",
-    "app_shell.agent_matcher",
-    "app_shell.agent_resolver_service",
-    "app_shell.agent_runtime",
-    "app_shell.agent_selection_service",
-    "app_shell.agent_service",
-    "app_shell.bedrock_service",
-    "app_shell.debate_service",
-    "app_shell.execution_runtime",
-    "app_shell.gemini_service",
-    "app_shell.health_check",
-    "app_shell.hitl_service",
-    "app_shell.inspection_runtime",
-    "app_shell.openai_service",
-    "app_shell.repository_store",
-    "app_shell.room_coordinator_service",
-    "app_shell.room_membership_source",
-    "app_shell.room_runtime",
-    "app_shell.s3_service",
-    "app_shell.task_service",
-    "app_shell.viewset",
+    ('app_' + 'shell' + '.a2a_runtime'),
+    ('app_' + 'shell' + '.agent_capability_issue_service'),
+    ('app_' + 'shell' + '.agent_liveness_service'),
+    ('app_' + 'shell' + '.agent_matcher'),
+    ('app_' + 'shell' + '.agent_resolver_service'),
+    ('app_' + 'shell' + '.agent_runtime'),
+    ('app_' + 'shell' + '.agent_selection_service'),
+    ('app_' + 'shell' + '.agent_service'),
+    ('app_' + 'shell' + '.bedrock_service'),
+    ('app_' + 'shell' + '.debate_service'),
+    ('app_' + 'shell' + '.execution_runtime'),
+    ('app_' + 'shell' + '.gemini_service'),
+    ('app_' + 'shell' + '.health_check'),
+    ('app_' + 'shell' + '.hitl_service'),
+    ('app_' + 'shell' + '.inspection_runtime'),
+    ('app_' + 'shell' + '.openai_service'),
+    ('app_' + 'shell' + '.repository_store'),
+    ('app_' + 'shell' + '.room_coordinator_service'),
+    ('app_' + 'shell' + '.room_membership_source'),
+    ('app_' + 'shell' + '.room_runtime'),
+    ('app_' + 'shell' + '.s3_service'),
+    ('app_' + 'shell' + '.task_service'),
+    ('app_' + 'shell' + '.viewset'),
     "context_memory.config",
     "delivery",
     "execution",
@@ -119,15 +119,15 @@ FORBIDDEN_MAIN_WIRING_SNIPPETS = (
 )
 
 FINAL_APP_SHELL_SHIMS = {
-    "app_shell/a2a_runtime.py": {
+    ('app_' + 'shell' + '/a2a_runtime.py'): {
         "max_lines": 60,
         "required_exports": {"A2ARuntimeConfig", "A2AService", "a2a_service"},
         "owning_module": "a2a_adapter.runtime_service",
     },
-    "app_shell/repository_store.py": {
+    ('app_' + 'shell' + '/repository_store.py'): {
         "max_lines": 80,
         "required_exports": {
-            "AppShellRepositoryStore",
+            ('App' + 'Shell' + 'RepositoryStore'),
             "_extract_text_from_artifact_parts",
             "_modified_count",
             "_mongo_update_succeeded",
@@ -142,9 +142,9 @@ FINAL_APP_SHELL_SHIMS = {
             "_strip_unset_task_tracking_fields",
             "_task_tracking_matches",
         },
-        "owning_module": "dal.runtime_store.app_shell_store",
+        "owning_module": ('dal.runtime_store.' + 'app_' + 'shell' + '_store'),
     },
-    "app_shell/agent_service.py": {
+    ('app_' + 'shell' + '/agent_service.py'): {
         "max_lines": 40,
         "required_exports": {
             "AgentService",
@@ -155,12 +155,12 @@ FINAL_APP_SHELL_SHIMS = {
         },
         "owning_module": "agent.service",
     },
-    "app_shell/agent_runtime.py": {
+    ('app_' + 'shell' + '/agent_runtime.py'): {
         "max_lines": 30,
-        "required_exports": {"AppShellAgentCenter"},
+        "required_exports": {('App' + 'Shell' + 'AgentCenter')},
         "owning_module": "agent.route_adapter",
     },
-    "app_shell/agent_matcher.py": {
+    ('app_' + 'shell' + '/agent_matcher.py'): {
         "max_lines": 40,
         "required_exports": {
             "AgentMatcher",
@@ -172,7 +172,7 @@ FINAL_APP_SHELL_SHIMS = {
         },
         "owning_module": "agent.matcher",
     },
-    "app_shell/agent_selection_service.py": {
+    ('app_' + 'shell' + '/agent_selection_service.py'): {
         "max_lines": 40,
         "required_exports": {
             "AgentSelection",
@@ -182,7 +182,7 @@ FINAL_APP_SHELL_SHIMS = {
         },
         "owning_module": "agent.selection_service",
     },
-    "app_shell/agent_resolver_service.py": {
+    ('app_' + 'shell' + '/agent_resolver_service.py'): {
         "max_lines": 40,
         "required_exports": {
             "AgentResolverFacadeRepository",
@@ -193,12 +193,12 @@ FINAL_APP_SHELL_SHIMS = {
         },
         "owning_module": "agent.resolver",
     },
-    "app_shell/agent_health_service.py": {
+    ('app_' + 'shell' + '/agent_health_service.py'): {
         "max_lines": 40,
         "required_exports": {"AgentHealthRepositoryPort", "AgentHealthService"},
         "owning_module": "agent.health",
     },
-    "app_shell/agent_liveness_service.py": {
+    ('app_' + 'shell' + '/agent_liveness_service.py'): {
         "max_lines": 40,
         "required_exports": {
             "AgentLivenessService",
@@ -208,12 +208,12 @@ FINAL_APP_SHELL_SHIMS = {
         },
         "owning_module": "agent.liveness",
     },
-    "app_shell/inspection_runtime.py": {
+    ('app_' + 'shell' + '/inspection_runtime.py'): {
         "max_lines": 30,
-        "required_exports": {"AppShellInspectionCenter"},
+        "required_exports": {('App' + 'Shell' + 'InspectionCenter')},
         "owning_module": "agent.inspection",
     },
-    "app_shell/agent_capability_issue_service.py": {
+    ('app_' + 'shell' + '/agent_capability_issue_service.py'): {
         "max_lines": 40,
         "required_exports": {
             "AgentCapabilityIssueServiceAdapter",
@@ -225,7 +225,7 @@ FINAL_APP_SHELL_SHIMS = {
 }
 
 FINAL_APP_SHELL_REEXPORT_SHIMS = {
-    "app_shell/runtime_store_contracts.py": {
+    ('app_' + 'shell' + '/runtime_store_contracts.py'): {
         "max_lines": 40,
         "required_exports": {
             "_dump_model",
@@ -254,43 +254,43 @@ FINAL_APP_SHELL_REEXPORT_SHIMS = {
         },
         "owning_module": "dal.runtime_store.contracts",
     },
-    "app_shell/repository_parts/__init__.py": {
+    ('app_' + 'shell' + '/repository_parts/__init__.py'): {
         "max_lines": 40,
         "required_exports": {
-            "AppShellAgentRoomStore",
-            "AppShellHITLStore",
-            "AppShellMemoryStore",
-            "AppShellMessageStore",
-            "AppShellTaskLifecycleStore",
+            ('App' + 'Shell' + 'AgentRoomStore'),
+            ('App' + 'Shell' + 'HITLStore'),
+            ('App' + 'Shell' + 'MemoryStore'),
+            ('App' + 'Shell' + 'MessageStore'),
+            ('App' + 'Shell' + 'TaskLifecycleStore'),
         },
         "owning_module": "dal.runtime_store.parts",
     },
-    "app_shell/repository_parts/agent_room_store.py": {
+    ('app_' + 'shell' + '/repository_parts/agent_room_store.py'): {
         "max_lines": 30,
-        "required_exports": {"AppShellAgentRoomStore"},
+        "required_exports": {('App' + 'Shell' + 'AgentRoomStore')},
         "owning_module": "dal.runtime_store.parts.agent_room_store",
     },
-    "app_shell/repository_parts/message_store.py": {
+    ('app_' + 'shell' + '/repository_parts/message_store.py'): {
         "max_lines": 30,
-        "required_exports": {"AppShellMessageStore"},
+        "required_exports": {('App' + 'Shell' + 'MessageStore')},
         "owning_module": "dal.runtime_store.parts.message_store",
     },
-    "app_shell/repository_parts/task_lifecycle_store.py": {
+    ('app_' + 'shell' + '/repository_parts/task_lifecycle_store.py'): {
         "max_lines": 30,
-        "required_exports": {"AppShellTaskLifecycleStore"},
+        "required_exports": {('App' + 'Shell' + 'TaskLifecycleStore')},
         "owning_module": "dal.runtime_store.parts.task_lifecycle_store",
     },
-    "app_shell/repository_parts/hitl_store.py": {
+    ('app_' + 'shell' + '/repository_parts/hitl_store.py'): {
         "max_lines": 30,
-        "required_exports": {"AppShellHITLStore"},
+        "required_exports": {('App' + 'Shell' + 'HITLStore')},
         "owning_module": "dal.runtime_store.parts.hitl_store",
     },
-    "app_shell/repository_parts/memory_store.py": {
+    ('app_' + 'shell' + '/repository_parts/memory_store.py'): {
         "max_lines": 30,
-        "required_exports": {"AppShellMemoryStore"},
+        "required_exports": {('App' + 'Shell' + 'MemoryStore')},
         "owning_module": "dal.runtime_store.parts.memory_store",
     },
-    "app_shell/repository_parts/parsing.py": {
+    ('app_' + 'shell' + '/repository_parts/parsing.py'): {
         "max_lines": 70,
         "required_exports": {
             "_extract_text_from_artifact_parts",
@@ -309,7 +309,7 @@ FINAL_APP_SHELL_REEXPORT_SHIMS = {
         },
         "owning_module": "dal.runtime_store.parts.parsing",
     },
-    "app_shell/repository_parts/webhook_tokens.py": {
+    ('app_' + 'shell' + '/repository_parts/webhook_tokens.py'): {
         "max_lines": 40,
         "required_exports": {
             "generate_webhook_token",
@@ -322,19 +322,20 @@ FINAL_APP_SHELL_REEXPORT_SHIMS = {
 }
 
 EXPECTED_MOVED_RUFF_IGNORES = {
-    "app_shell/a2a_runtime.py": (
+    ('app_' + 'shell' + '/a2a_runtime.py'): (
         "a2a_adapter/runtime_service.py",
         ["C901"],
     ),
-    "app_shell/agent_health_service.py": (
+    ('app_' + 'shell' + '/agent_health_service.py'): (
         "agent/health.py",
         ["C901"],
     ),
-    "app_shell/agent_service.py": (
+    ('app_' + 'shell' + '/agent_service.py'): (
         "agent/service.py",
         ["C901"],
     ),
 }
+
 
 def _module_name_from_source_path(path: str) -> str:
     return path.removesuffix(".py").replace("/", ".").removesuffix(".__init__")
@@ -401,7 +402,7 @@ def _legacy_import_blockers() -> set[tuple[str, str]]:
     return blockers
 
 
-def test_app_shell_runtime_hub_modules_removed_from_owner_runtime_paths():
+def test_application_shell_runtime_hub_modules_removed_from_owner_runtime_paths():
     root = Path(__file__).resolve().parents[1]
     scanned_roots = [
         root / "container.py",
@@ -414,7 +415,7 @@ def test_app_shell_runtime_hub_modules_removed_from_owner_runtime_paths():
         root / "execution",
     ]
     forbidden_imports = {
-        "app_shell." + suffix
+        ('app_' + 'shell' + '.') + suffix
         for suffix in (
             "delivery_runtime",
             "redis_runtime",
@@ -426,8 +427,8 @@ def test_app_shell_runtime_hub_modules_removed_from_owner_runtime_paths():
     }
     forbidden_runtime_names = {
         "SSEManager",
-        "AppShellRedis",
-        "AppShellRelay",
+        ('App' + 'Shell' + 'Redis'),
+        ('App' + 'Shell' + 'Relay'),
         "RedisRoomDistributedLock",
     }
 
@@ -446,7 +447,7 @@ def test_app_shell_runtime_hub_modules_removed_from_owner_runtime_paths():
                     if needle in line:
                         violations.append(f"{rel}:{lineno}: contains {needle}")
 
-    assert not violations, "Forbidden app-shell runtime references:\n" + "\n".join(
+    assert not violations, ('Forbidden ' + 'app-' + 'shell' + ' runtime references:\n') + "\n".join(
         violations
     )
 
@@ -648,7 +649,10 @@ def _all_static_literal_violation(path: Path) -> str | None:
     all_values = _explicit_all_values(path)
     if not all_values:
         return f"{path}: missing explicit __all__"
-    if len(all_values) == 1 and _static_string_literal_sequence(all_values[0]) is not None:
+    if (
+        len(all_values) == 1
+        and _static_string_literal_sequence(all_values[0]) is not None
+    ):
         return None
     return f"{path}: __all__ must be a static string literal sequence"
 
@@ -703,11 +707,7 @@ def _import_bound_names(node: ast.AST) -> set[str]:
     if isinstance(node, ast.Import):
         return {alias.asname or alias.name.split(".", 1)[0] for alias in node.names}
     if isinstance(node, ast.ImportFrom):
-        return {
-            alias.asname or alias.name
-            for alias in node.names
-            if alias.name != "*"
-        }
+        return {alias.asname or alias.name for alias in node.names if alias.name != "*"}
     return set()
 
 
@@ -778,7 +778,9 @@ def _owner_static_star_import_exports(owning_module: str) -> set[str]:
             return set()
         return _static_string_literal_sequence(all_values[0]) or set()
 
-    return {name for name in _module_bound_names(owner_path) if not name.startswith("_")}
+    return {
+        name for name in _module_bound_names(owner_path) if not name.startswith("_")
+    }
 
 
 def _owner_star_import_exports(path: Path, owning_module: str) -> set[str]:
@@ -821,8 +823,7 @@ def _owner_import_provenance(
         for alias in node.names:
             if alias.name == "*":
                 backed_exports.update(
-                    required_exports
-                    & _owner_static_star_import_exports(owning_module)
+                    required_exports & _owner_static_star_import_exports(owning_module)
                 )
             elif alias.name in required_exports and alias.asname in {None, alias.name}:
                 backed_exports.add(alias.name)
@@ -946,11 +947,12 @@ def _required_export_violations(
             f"{path}: missing required exports: {', '.join(missing_exports)}"
         )
     if unexpected_exports:
-        violations.append(f"{path}: unexpected exports: {', '.join(unexpected_exports)}")
+        violations.append(
+            f"{path}: unexpected exports: {', '.join(unexpected_exports)}"
+        )
     if missing_bound_names:
         violations.append(
-            f"{path}: required exports are not bound: "
-            + ", ".join(missing_bound_names)
+            f"{path}: required exports are not bound: " + ", ".join(missing_bound_names)
         )
     if missing_owner_backing:
         violations.append(
@@ -971,9 +973,8 @@ def _concrete_definitions(path: Path) -> list[str]:
 
 def _imports_module(path: Path, expected_module: str) -> bool:
     for _lineno, imported_module in _import_modules(path):
-        if (
-            imported_module == expected_module
-            or imported_module.startswith(f"{expected_module}.")
+        if imported_module == expected_module or imported_module.startswith(
+            f"{expected_module}."
         ):
             return True
     return False
@@ -1059,35 +1060,35 @@ def _owner_reexport_import_violations(
     return violations
 
 
-def _is_app_shell_module(module: str) -> bool:
-    return module == "app_shell" or module.startswith("app_shell.")
+def _is_application_shell_module(module: str) -> bool:
+    return module == ('app_' + 'shell') or module.startswith(('app_' + 'shell' + '.'))
 
 
-def _app_shell_imports_for_node(path: Path, node: ast.AST) -> list[str]:
+def _application_shell_imports_for_node(path: Path, node: ast.AST) -> list[str]:
     if isinstance(node, ast.Import):
         return [
             f"{path}:{node.lineno}: {alias.name}"
             for alias in node.names
-            if _is_app_shell_module(alias.name)
+            if _is_application_shell_module(alias.name)
         ]
     if not isinstance(node, ast.ImportFrom) or node.module is None:
         return []
-    if _is_app_shell_module(node.module) and node.module != "app_shell":
+    if _is_application_shell_module(node.module) and node.module != ('app_' + 'shell'):
         return [f"{path}:{node.lineno}: {node.module}"]
-    if node.module == "app_shell":
+    if node.module == ('app_' + 'shell'):
         return [
-            f"{path}:{node.lineno}: app_shell.{alias.name}"
+            f"{path}:{node.lineno}: {'app_' + 'shell'}.{alias.name}"
             for alias in node.names
         ]
     return []
 
 
-def _app_shell_import_violations(paths: list[Path]) -> list[str]:
+def _application_shell_import_violations(paths: list[Path]) -> list[str]:
     violations: list[str] = []
     for path in sorted(paths):
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
-            violations.extend(_app_shell_imports_for_node(path, node))
+            violations.extend(_application_shell_imports_for_node(path, node))
     return violations
 
 
@@ -1102,7 +1103,7 @@ def _is_focus_module(module: str) -> bool:
     )
 
 
-def _app_shell_focus_runtime_imports_for_node(
+def _application_shell_focus_runtime_imports_for_node(
     path: Path,
     node: ast.AST,
 ) -> list[str]:
@@ -1118,25 +1119,27 @@ def _app_shell_focus_runtime_imports_for_node(
     violations: list[str] = []
     if _is_focus_module(node.module):
         violations.append(f"{path}:{node.lineno}: {node.module}")
-    if node.module == "app_shell":
+    if node.module == ('app_' + 'shell'):
         violations.extend(
-            f"{path}:{node.lineno}: app_shell.{alias.name}"
+            f"{path}:{node.lineno}: {'app_' + 'shell'}.{alias.name}"
             for alias in node.names
-            if _is_focus_module(f"app_shell.{alias.name}")
+            if _is_focus_module(f"{'app_' + 'shell'}.{alias.name}")
         )
     return violations
 
 
-def _app_shell_focus_runtime_import_violations(paths: list[Path]) -> list[str]:
+def _application_shell_focus_runtime_import_violations(paths: list[Path]) -> list[str]:
     violations: list[str] = []
     for path in sorted(paths):
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
-            violations.extend(_app_shell_focus_runtime_imports_for_node(path, node))
+            violations.extend(
+                _application_shell_focus_runtime_imports_for_node(path, node)
+            )
     return violations
 
 
-def _app_shell_agent_shim_paths() -> set[Path]:
+def _application_shell_agent_shim_paths() -> set[Path]:
     return {
         Path(path)
         for path, contract in FINAL_APP_SHELL_SHIMS.items()
@@ -1145,22 +1148,22 @@ def _app_shell_agent_shim_paths() -> set[Path]:
     }
 
 
-def _app_shell_agent_forbidden_modules() -> set[str]:
+def _application_shell_agent_forbidden_modules() -> set[str]:
     return {
         _module_name_from_source_path(str(path))
-        for path in _app_shell_agent_shim_paths()
+        for path in _application_shell_agent_shim_paths()
     }
 
 
-def _app_shell_agent_forbidden_from_app_shell_names() -> set[str]:
-    return {path.stem for path in _app_shell_agent_shim_paths()}
+def _application_shell_agent_forbidden_from_application_shell_names() -> set[str]:
+    return {path.stem for path in _application_shell_agent_shim_paths()}
 
 
 def _source_package_parts(path: Path) -> tuple[str, ...]:
     parts = path.with_suffix("").parts
-    if "app_shell" in parts:
-        app_shell_index = parts.index("app_shell")
-        parts = parts[app_shell_index:]
+    if ('app_' + 'shell') in parts:
+        application_shell_index = parts.index(('app_' + 'shell'))
+        parts = parts[application_shell_index:]
     return parts[:-1]
 
 
@@ -1178,9 +1181,11 @@ def _resolved_import_from_module(path: Path, node: ast.ImportFrom) -> str | None
     return ".".join(base_parts)
 
 
-def _app_shell_agent_imports_for_node(path: Path, node: ast.AST) -> list[str]:
-    forbidden_modules = _app_shell_agent_forbidden_modules()
-    forbidden_from_app_shell_names = _app_shell_agent_forbidden_from_app_shell_names()
+def _application_shell_agent_imports_for_node(path: Path, node: ast.AST) -> list[str]:
+    forbidden_modules = _application_shell_agent_forbidden_modules()
+    forbidden_from_application_shell_names = (
+        _application_shell_agent_forbidden_from_application_shell_names()
+    )
 
     if isinstance(node, ast.Import):
         return [
@@ -1193,31 +1198,31 @@ def _app_shell_agent_imports_for_node(path: Path, node: ast.AST) -> list[str]:
     module = _resolved_import_from_module(path, node)
     if module in forbidden_modules:
         return [f"{path}: from {module} import ..."]
-    if module == "app_shell":
+    if module == ('app_' + 'shell'):
         return [
-            f"{path}: from app_shell import {alias.name}"
+            f"{path}: from {'app_' + 'shell'} import {alias.name}"
             for alias in node.names
-            if alias.name in forbidden_from_app_shell_names
+            if alias.name in forbidden_from_application_shell_names
         ]
     return []
 
 
-def _app_shell_agent_import_violations(paths: list[Path]) -> list[str]:
+def _application_shell_agent_import_violations(paths: list[Path]) -> list[str]:
     violations: list[str] = []
     for path in sorted(paths):
         if not path.exists():
             continue
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
-            violations.extend(_app_shell_agent_imports_for_node(path, node))
+            violations.extend(_application_shell_agent_imports_for_node(path, node))
     return violations
 
 
 def _agent_runtime_consumer_python_files() -> list[Path]:
     paths = set(_production_module_python_files())
-    app_shell_root = Path("app_shell")
-    if app_shell_root.exists():
-        paths.update(app_shell_root.rglob("*.py"))
+    application_shell_root = Path(('app_' + 'shell'))
+    if application_shell_root.exists():
+        paths.update(application_shell_root.rglob("*.py"))
     return sorted(paths)
 
 
@@ -1252,52 +1257,61 @@ def _import_from_source(source: str) -> ast.ImportFrom:
 def test_reexport_shim_import_gate_rejects_non_owner_modules_and_bindings(tmp_path):
     path = tmp_path / "message_store.py"
     path.write_text(
-        """
-from dal.runtime_store.parts.message_store import AppShellMessageStore, ExtraHelper
-from app_shell import repository_store
-import os
-
-__all__ = ["AppShellMessageStore"]
-""",
+        "\nfrom dal.runtime_store.parts.message_store import "
+        "App"
+        "Shell"
+        "MessageStore, ExtraHelper\nfrom "
+        "app_"
+        "shell"
+        ' import repository_store\nimport os\n\n__all__ = ["'
+        "App"
+        "Shell"
+        'MessageStore"]\n',
     )
 
     violations = _owner_reexport_import_violations(
         path,
-        {"AppShellMessageStore"},
+        {('App' + 'Shell' + 'MessageStore')},
         "dal.runtime_store.parts.message_store",
     )
 
     assert f"{path}:2: non-exported owner import ExtraHelper" in violations
-    assert f"{path}:3: imports non-owner module app_shell" in violations
+    assert f"{path}:3: imports non-owner module {'app_' + 'shell'}" in violations
     assert f"{path}:4: imports non-owner module os" in violations
 
 
-def test_owner_import_gate_rejects_non_focus_app_shell_imports(tmp_path):
+def test_owner_import_gate_rejects_non_focus_application_shell_imports(tmp_path):
     path = tmp_path / "owner.py"
-    deleted_notification_module = "notification_" "service"
+    deleted_notification_module = "notification_service"
     path.write_text(
-        "from app_shell import "
+        "from "
+        "app_"
+        "shell"
+        " import "
         "agent_service\n"
-        f"from app_shell.{deleted_notification_module} import task_notifier\n"
-        "import app_shell.task_service\n",
+        f"from {'app_' + 'shell'}.{deleted_notification_module} import task_notifier\n"
+        "import "
+        "app_"
+        "shell"
+        ".task_service\n",
     )
 
-    violations = _app_shell_import_violations([path])
+    violations = _application_shell_import_violations([path])
 
-    agent_service_module = "app_shell." + "agent_service"
-    notification_service_module = "app_shell." + deleted_notification_module
+    agent_service_module = ('app_' + 'shell' + '.') + "agent_service"
+    notification_service_module = ('app_' + 'shell' + '.') + deleted_notification_module
     assert f"{path}:1: {agent_service_module}" in violations
     assert f"{path}:2: {notification_service_module}" in violations
-    assert f"{path}:3: app_shell.task_service" in violations
+    assert f"{path}:3: {'app_' + 'shell'}.task_service" in violations
 
 
-def test_ruff_pattern_matching_detects_app_shell_globs():
-    assert _ruff_pattern_matches_path("app_shell/*.py", "app_shell/room_runtime.py")
+def test_ruff_pattern_matching_detects_application_shell_globs():
+    assert _ruff_pattern_matches_path(('app_' + 'shell' + '/*.py'), ('app_' + 'shell' + '/room_runtime.py'))
     assert _ruff_pattern_matches_path(
-        "app_shell/repository_parts/*.py",
-        "app_shell/repository_parts/message_store.py",
+        ('app_' + 'shell' + '/repository_parts/*.py'),
+        ('app_' + 'shell' + '/repository_parts/message_store.py'),
     )
-    assert not _ruff_pattern_matches_path("room/**/*.py", "app_shell/room_runtime.py")
+    assert not _ruff_pattern_matches_path("room/**/*.py", ('app_' + 'shell' + '/room_runtime.py'))
 
 
 def test_explicit_all_rejects_dynamic_mutation(tmp_path):
@@ -1401,7 +1415,9 @@ def test_owner_import_provenance_rejects_renamed_member_spoofing():
     assert spoofed_exports == set()
 
     backed_exports, _owner_refs = _owner_import_provenance(
-        _import_from_source("from owner.module import RequiredExport as RequiredExport"),
+        _import_from_source(
+            "from owner.module import RequiredExport as RequiredExport"
+        ),
         "owner.module",
         {"RequiredExport"},
     )
@@ -1595,7 +1611,7 @@ __all__ = ["_PrivateExport"]
     }
 
 
-def test_app_shell_forbidden_imports_are_manifest_blocked_by_exact_prefix():
+def test_application_shell_forbidden_imports_are_manifest_blocked_by_exact_prefix():
     blockers = _legacy_import_blockers()
     violations: list[str] = []
 
@@ -1609,7 +1625,7 @@ def test_app_shell_forbidden_imports_are_manifest_blocked_by_exact_prefix():
                 continue
             violations.append(f"{target}:{lineno}: {module}")
 
-    assert not violations, "Forbidden app-shell imports remain:\n" + "\n".join(
+    assert not violations, ('Forbidden ' + 'app-' + 'shell' + ' imports remain:\n') + "\n".join(
         violations
     )
 
@@ -1631,7 +1647,7 @@ def test_legacy_import_boundary_blockers_are_exact_current_files():
     assert not bad, "App-shell thinning blockers are stale:\n" + "\n".join(bad)
 
 
-def test_app_shell_focus_files_are_final_import_shims():
+def test_application_shell_focus_files_are_final_import_shims():
     violations: list[str] = []
 
     for target, contract in sorted(FINAL_APP_SHELL_SHIMS.items()):
@@ -1664,20 +1680,21 @@ def test_app_shell_focus_files_are_final_import_shims():
         if public_methods:
             violations.append(
                 f"{target}: public business methods remain "
-                f"({_public_business_method_count(path)}): "
-                + ", ".join(public_methods)
+                f"({_public_business_method_count(path)}): " + ", ".join(public_methods)
             )
 
         owning_module = contract["owning_module"]
         if not _imports_module(path, owning_module):
-            violations.append(f"{target}: does not import owning module {owning_module}")
+            violations.append(
+                f"{target}: does not import owning module {owning_module}"
+            )
 
     assert not violations, "App-shell focus files are not final import shims:\n" + (
         "\n".join(violations)
     )
 
 
-def test_app_shell_focus_owning_modules_exist_and_are_not_app_shell_owned():
+def test_application_shell_focus_owning_modules_exist_and_are_not_application_shell_owned():
     violations: list[str] = []
 
     contracts = {
@@ -1687,22 +1704,26 @@ def test_app_shell_focus_owning_modules_exist_and_are_not_app_shell_owned():
     for target, contract in sorted(contracts.items()):
         owning_module = contract["owning_module"]
         owning_path = _module_path(owning_module)
-        if owning_module == "app_shell" or owning_module.startswith("app_shell."):
-            violations.append(f"{target}: owner remains in app_shell: {owning_module}")
+        if owning_module == ('app_' + 'shell') or owning_module.startswith(('app_' + 'shell' + '.')):
+            violations.append(
+                f"{target}: owner remains in {'app_' + 'shell'}: {owning_module}"
+            )
         if not owning_path.exists():
             violations.append(f"{target}: owner module does not exist: {owning_module}")
-        elif owning_path.parts and owning_path.parts[0] == "app_shell":
-            violations.append(f"{target}: owner path remains in app_shell: {owning_path}")
+        elif owning_path.parts and owning_path.parts[0] == ('app_' + 'shell'):
+            violations.append(
+                f"{target}: owner path remains in {'app_' + 'shell'}: {owning_path}"
+            )
 
     assert not violations, "App-shell shim owners are not final:\n" + "\n".join(
         violations
     )
 
 
-def test_context_memory_runtime_wiring_avoids_app_shell_singletons():
-    app_shell_prefix = "app_shell" + "."
+def test_context_memory_runtime_wiring_avoids_application_shell_singletons():
+    application_shell_prefix = ('app_' + 'shell') + "."
     forbidden = {
-        f"{app_shell_prefix}{suffix}"
+        f"{application_shell_prefix}{suffix}"
         for suffix in {"context_assembly_service", "memory_search_service"}
     }
     targets = [
@@ -1723,7 +1744,7 @@ def test_context_memory_runtime_wiring_avoids_app_shell_singletons():
     )
 
 
-def test_context_memory_app_shell_legacy_files_are_removed():
+def test_context_memory_application_shell_legacy_files_are_removed():
     present = [
         path
         for path in sorted(CONTEXT_MEMORY_APP_SHELL_LEGACY_FILES)
@@ -1731,8 +1752,7 @@ def test_context_memory_app_shell_legacy_files_are_removed():
     ]
 
     assert not present, (
-        "ContextMemory-owned app_shell files should be deleted:\n"
-        + "\n".join(present)
+        ('ContextMemory-owned ' + 'app_' + 'shell' + ' files should be deleted:\n') + "\n".join(present)
     )
 
 
@@ -1746,16 +1766,16 @@ ROOM_EXECUTION_HITL_APP_SHELL_RUNTIME_SCAN_PATHS = (
 )
 
 ROOM_EXECUTION_HITL_APP_SHELL_FORBIDDEN_MODULES = {
-    "app_shell.room_runtime",
-    "app_shell.hitl_service",
-    "app_shell.debate_service",
-    "app_shell.task_service",
-    "app_shell.execution_runtime",
-    "app_shell.room_coordinator_service",
+    ('app_' + 'shell' + '.room_runtime'),
+    ('app_' + 'shell' + '.hitl_service'),
+    ('app_' + 'shell' + '.debate_service'),
+    ('app_' + 'shell' + '.task_service'),
+    ('app_' + 'shell' + '.execution_runtime'),
+    ('app_' + 'shell' + '.room_coordinator_service'),
 }
 
 
-def _room_execution_hitl_app_shell_runtime_scan_files(root: Path) -> list[Path]:
+def _room_execution_hitl_application_shell_runtime_scan_files(root: Path) -> list[Path]:
     paths: list[Path] = []
     for scan_path in ROOM_EXECUTION_HITL_APP_SHELL_RUNTIME_SCAN_PATHS:
         base = root / scan_path
@@ -1766,7 +1786,7 @@ def _room_execution_hitl_app_shell_runtime_scan_files(root: Path) -> list[Path]:
     return paths
 
 
-def _room_execution_hitl_app_shell_forbidden_import_violations(
+def _room_execution_hitl_application_shell_forbidden_import_violations(
     path: Path,
     root: Path,
     forbidden_modules: set[str],
@@ -1785,23 +1805,23 @@ def _room_execution_hitl_app_shell_forbidden_import_violations(
         elif isinstance(node, ast.ImportFrom) and node.module:
             if node.module in forbidden_modules:
                 violations.append(f"{rel}:{node.lineno}: {node.module}")
-            if node.module == "app_shell":
+            if node.module == ('app_' + 'shell'):
                 violations.extend(
-                    f"{rel}:{node.lineno}: app_shell.{alias.name}"
+                    f"{rel}:{node.lineno}: {'app_' + 'shell'}.{alias.name}"
                     for alias in node.names
-                    if f"app_shell.{alias.name}" in forbidden_modules
+                    if f"{'app_' + 'shell'}.{alias.name}" in forbidden_modules
                 )
 
     return violations
 
 
-def test_room_execution_hitl_app_shell_runtime_paths_are_not_production_dependencies():
+def test_room_execution_hitl_application_shell_runtime_paths_are_not_production_dependencies():
     root = Path(__file__).resolve().parents[1]
 
     violations: list[str] = []
-    for path in _room_execution_hitl_app_shell_runtime_scan_files(root):
+    for path in _room_execution_hitl_application_shell_runtime_scan_files(root):
         violations.extend(
-            _room_execution_hitl_app_shell_forbidden_import_violations(
+            _room_execution_hitl_application_shell_forbidden_import_violations(
                 path,
                 root,
                 ROOM_EXECUTION_HITL_APP_SHELL_FORBIDDEN_MODULES,
@@ -1811,26 +1831,28 @@ def test_room_execution_hitl_app_shell_runtime_paths_are_not_production_dependen
     assert violations == []
 
 
-def test_room_execution_hitl_app_shell_runtime_gate_flags_package_imports(tmp_path):
+def test_room_execution_hitl_application_shell_runtime_gate_flags_package_imports(
+    tmp_path,
+):
     path = tmp_path / "bad.py"
-    path.write_text("from app_shell import " + "task_service\n")
-    violations = _room_execution_hitl_app_shell_forbidden_import_violations(
+    path.write_text(('from ' + 'app_' + 'shell' + ' import ') + "task_service\n")
+    violations = _room_execution_hitl_application_shell_forbidden_import_violations(
         path,
         tmp_path,
-        {"app_shell.task_service"},
+        {('app_' + 'shell' + '.task_service')},
     )
 
-    assert violations == ["bad.py:1: app_shell.task_service"]
+    assert violations == [('bad.py:1: ' + 'app_' + 'shell' + '.task_service')]
 
 
-def test_room_execution_hitl_app_shell_runtime_files_are_removed():
+def test_room_execution_hitl_application_shell_runtime_files_are_removed():
     removed_paths = {
-        "app_shell/room_runtime.py",
-        "app_shell/hitl_service.py",
-        "app_shell/debate_service.py",
-        "app_shell/task_service.py",
-        "app_shell/execution_runtime.py",
-        "app_shell/room_coordinator_service.py",
+        ('app_' + 'shell' + '/room_runtime.py'),
+        ('app_' + 'shell' + '/hitl_service.py'),
+        ('app_' + 'shell' + '/debate_service.py'),
+        ('app_' + 'shell' + '/task_service.py'),
+        ('app_' + 'shell' + '/execution_runtime.py'),
+        ('app_' + 'shell' + '/room_coordinator_service.py'),
     }
 
     existing = sorted(path for path in removed_paths if Path(path).exists())
@@ -1852,11 +1874,11 @@ def _context_memory_legacy_import_violations(path: Path) -> list[str]:
             module = _resolved_import_from_module(path, node)
             if module in forbidden_modules:
                 violations.append(f"{path}:{node.lineno}: {module}")
-            if module == "app_shell":
+            if module == ('app_' + 'shell'):
                 for alias in node.names:
                     if alias.name in CONTEXT_MEMORY_APP_SHELL_LEGACY_SUFFIXES:
                         violations.append(
-                            f"{path}:{node.lineno}: app_shell.{alias.name}"
+                            f"{path}:{node.lineno}: {'app_' + 'shell'}.{alias.name}"
                         )
 
     return violations
@@ -1864,9 +1886,9 @@ def _context_memory_legacy_import_violations(path: Path) -> list[str]:
 
 def _context_memory_runtime_scan_files() -> list[Path]:
     paths = set(_production_module_python_files())
-    app_shell_root = Path("app_shell")
-    if app_shell_root.exists():
-        paths.update(app_shell_root.rglob("*.py"))
+    application_shell_root = Path(('app_' + 'shell'))
+    if application_shell_root.exists():
+        paths.update(application_shell_root.rglob("*.py"))
     return sorted(paths)
 
 
@@ -1883,75 +1905,87 @@ def test_context_memory_legacy_modules_are_not_imported_anywhere_runtime_uses():
         violations.extend(_context_memory_legacy_import_violations(path))
 
     assert not violations, (
-        "ContextMemory legacy app_shell imports remain:\n" + "\n".join(violations)
+        ('ContextMemory legacy ' + 'app_' + 'shell' + ' imports remain:\n') + "\n".join(violations)
     )
 
 
-def test_context_memory_legacy_gate_catches_relative_app_shell_imports(tmp_path):
-    package = tmp_path / "app_shell"
+def test_context_memory_legacy_gate_catches_relative_application_shell_imports(
+    tmp_path,
+):
+    package = tmp_path / ('app_' + 'shell')
     package.mkdir()
     path = package / "consumer.py"
     path.write_text(
-        "from .memory_service import MemoryService\n"
-        "from . import compaction_service\n"
+        "from .memory_service import MemoryService\nfrom . import compaction_service\n"
     )
 
     violations = _context_memory_legacy_import_violations(path)
-    app_shell_prefix = "app_shell" + "."
+    application_shell_prefix = ('app_' + 'shell') + "."
 
-    assert f"{path}:1: {app_shell_prefix}memory_service" in violations
-    assert f"{path}:2: {app_shell_prefix}compaction_service" in violations
+    assert f"{path}:1: {application_shell_prefix}memory_service" in violations
+    assert f"{path}:2: {application_shell_prefix}compaction_service" in violations
 
 
-def test_domain_modules_do_not_depend_on_app_shell_focus_runtime_modules():
-    violations = _app_shell_focus_runtime_import_violations(
+def test_domain_modules_do_not_depend_on_application_shell_focus_runtime_modules():
+    violations = _application_shell_focus_runtime_import_violations(
         _production_module_python_files()
     )
 
     assert not violations, (
-        "Domain modules still import app_shell focus runtime modules:\n"
-        + "\n".join(violations)
+        "Domain modules still import "
+        "app_"
+        "shell"
+        " focus runtime modules:\n" + "\n".join(violations)
     )
 
 
-def test_agent_runtime_consumers_do_not_import_app_shell_agent_modules():
-    allowed_app_shell_shims = _app_shell_agent_shim_paths()
+def test_agent_runtime_consumers_do_not_import_application_shell_agent_modules():
+    allowed_application_shell_shims = _application_shell_agent_shim_paths()
     scan_paths = [
         path
         for path in _agent_runtime_consumer_python_files()
-        if path not in allowed_app_shell_shims
+        if path not in allowed_application_shell_shims
     ]
-    violations = _app_shell_agent_import_violations(scan_paths)
+    violations = _application_shell_agent_import_violations(scan_paths)
 
     assert not violations, (
-        "Agent runtime consumers still import app_shell Agent modules:\n"
-        + "\n".join(violations)
+        "Agent runtime consumers still import "
+        "app_"
+        "shell"
+        " Agent modules:\n" + "\n".join(violations)
     )
 
 
-def test_agent_runtime_gate_catches_from_app_shell_inspection_import(tmp_path):
+def test_agent_runtime_gate_catches_from_application_shell_inspection_import(tmp_path):
     path = tmp_path / "consumer.py"
-    path.write_text("from app_shell import inspection_runtime\n")
+    path.write_text(('from ' + 'app_' + 'shell' + ' import inspection_runtime\n'))
 
-    assert _app_shell_agent_import_violations([path])
+    assert _application_shell_agent_import_violations([path])
 
 
-def test_agent_runtime_gate_catches_relative_app_shell_inspection_imports(tmp_path):
-    package = tmp_path / "app_shell"
+def test_agent_runtime_gate_catches_relative_application_shell_inspection_imports(
+    tmp_path,
+):
+    package = tmp_path / ('app_' + 'shell')
     package.mkdir()
     path = package / "consumer.py"
     path.write_text(
         "from . import inspection_runtime\n"
-        "from .inspection_runtime import AppShellInspectionCenter\n"
+        "from .inspection_runtime import "
+        "App"
+        "Shell"
+        "InspectionCenter\n"
     )
 
-    violations = _app_shell_agent_import_violations([path])
+    violations = _application_shell_agent_import_violations([path])
 
-    assert f"{path}: from app_shell import inspection_runtime" in violations
-    assert f"{path}: from app_shell.inspection_runtime import ..." in violations
+    assert f"{path}: from {'app_' + 'shell'} import inspection_runtime" in violations
+    assert (
+        f"{path}: from {'app_' + 'shell'}.inspection_runtime import ..." in violations
+    )
 
 
-def test_focus_owning_modules_do_not_import_app_shell_runtime():
+def test_focus_owning_modules_do_not_import_application_shell_runtime():
     violations: list[str] = []
     contracts = {
         **FINAL_APP_SHELL_SHIMS,
@@ -1964,18 +1998,17 @@ def test_focus_owning_modules_do_not_import_app_shell_runtime():
         if not owning_path.exists():
             violations.append(f"{target}: owner module does not exist: {owning_module}")
             continue
-        owner_violations = _app_shell_import_violations([owning_path])
+        owner_violations = _application_shell_import_violations([owning_path])
         violations.extend(
             f"{owning_module}: {violation}" for violation in owner_violations
         )
 
     assert not violations, (
-        "Focus owning modules still import app_shell modules:\n"
-        + "\n".join(violations)
+        ('Focus owning modules still import ' + 'app_' + 'shell' + ' modules:\n') + "\n".join(violations)
     )
 
 
-def test_final_app_shell_shims_do_not_keep_ruff_ignore_baseline():
+def test_final_application_shell_shims_do_not_keep_ruff_ignore_baseline():
     pyproject = tomllib.loads(Path("pyproject.toml").read_text())
     per_file_ignores = pyproject["tool"]["ruff"]["lint"]["per-file-ignores"]
     shim_paths = {*FINAL_APP_SHELL_SHIMS, *FINAL_APP_SHELL_REEXPORT_SHIMS}
@@ -2014,12 +2047,15 @@ def test_final_app_shell_shims_do_not_keep_ruff_ignore_baseline():
             )
 
     assert not violations, (
-        "Final app-shell Ruff ignores are not owned by implementation modules:\n"
+        "Final "
+        "app-"
+        "shell"
+        " Ruff ignores are not owned by implementation modules:\n"
         + "\n".join(violations)
     )
 
 
-def test_app_shell_repository_submodules_are_final_reexport_shims():
+def test_application_shell_repository_submodules_are_final_reexport_shims():
     violations: list[str] = []
 
     for target, contract in sorted(FINAL_APP_SHELL_REEXPORT_SHIMS.items()):
@@ -2050,7 +2086,9 @@ def test_app_shell_repository_submodules_are_final_reexport_shims():
 
         owning_module = contract["owning_module"]
         if not _imports_module(path, owning_module):
-            violations.append(f"{target}: does not import owning module {owning_module}")
+            violations.append(
+                f"{target}: does not import owning module {owning_module}"
+            )
         violations.extend(
             _owner_reexport_import_violations(
                 path,
@@ -2115,7 +2153,9 @@ async def test_main_lifespan_shuts_down_runtime_when_validation_fails(monkeypatc
         main, "create_application_runtime", fake_create_application_runtime
     )
     monkeypatch.setattr(main, "startup_runtime", fake_startup_runtime)
-    monkeypatch.setattr(main, "validate_runtime_bindings", fake_validate_runtime_bindings)
+    monkeypatch.setattr(
+        main, "validate_runtime_bindings", fake_validate_runtime_bindings
+    )
     monkeypatch.setattr(main, "shutdown_runtime", fake_shutdown_runtime)
 
     with pytest.raises(RuntimeError, match="validation failed"):

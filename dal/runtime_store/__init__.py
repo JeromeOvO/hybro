@@ -1,8 +1,5 @@
-"""Runtime-store compatibility adapters backed by DAL repositories."""
+"""Runtime-store adapters backed by DAL repositories."""
 
-from dal.runtime_store.app_shell_store import AppShellRepositoryStore
+from dal.runtime_store.repository_store import RuntimeRepositoryStore
 
-# Temporary compatibility alias for container wiring until the Task 4 DAL rename.
-RuntimeRepositoryStore = AppShellRepositoryStore
-
-__all__ = ["AppShellRepositoryStore", "RuntimeRepositoryStore"]
+__all__ = ["RuntimeRepositoryStore"]

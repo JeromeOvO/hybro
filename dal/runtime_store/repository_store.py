@@ -41,11 +41,11 @@ from dal.runtime_store.contracts import (
     runtime_user_messages,
 )
 from dal.runtime_store.parts import (
-    AppShellAgentRoomStore,
-    AppShellHITLStore,
-    AppShellMemoryStore,
-    AppShellMessageStore,
-    AppShellTaskLifecycleStore,
+    AgentRoomRuntimeStorePart,
+    HITLRuntimeStorePart,
+    MemoryRuntimeStorePart,
+    MessageRuntimeStorePart,
+    TaskLifecycleRuntimeStorePart,
 )
 from dal.runtime_store.parts.parsing import (
     _extract_text_from_artifact_parts,
@@ -71,7 +71,7 @@ from dal.runtime_store.parts.webhook_tokens import (
 logger = get_logger(__name__)
 
 __all__ = [
-    "AppShellRepositoryStore",
+    "RuntimeRepositoryStore",
     "_extract_text_from_artifact_parts",
     "_modified_count",
     "_mongo_update_succeeded",
@@ -88,8 +88,8 @@ __all__ = [
 ]
 
 
-class AppShellRepositoryStore:
-    """Compatibility store backed by DAL repositories during app-shell migration."""
+class RuntimeRepositoryStore:
+    """Compatibility store backed by DAL repositories during runtime-store migration."""
 
     MAX_TASKS_PER_USER = 100
     MAX_TASKS_PER_ROOM = 50
@@ -116,18 +116,18 @@ class AppShellRepositoryStore:
         self._room_repository = room_repository
         self._message_repository = message_repository
         self._agent_repository = agent_repository
-        self._agent_room_part = AppShellAgentRoomStore(
+        self._agent_room_part = AgentRoomRuntimeStorePart(
             agent_groups=self._agent_groups,
             agents=self._agents,
             room_repository=self._room_repository,
             agent_repository=self._agent_repository,
         )
-        self._message_part = AppShellMessageStore(
+        self._message_part = MessageRuntimeStorePart(
             room_agent_messages=self._room_agent_messages,
             room_user_messages=self._room_user_messages,
             message_repository=self._message_repository,
         )
-        self._task_lifecycle_part = AppShellTaskLifecycleStore(
+        self._task_lifecycle_part = TaskLifecycleRuntimeStorePart(
             room_agent_messages=self._room_agent_messages,
             room_user_messages=self._room_user_messages,
             cancelled_messages=self._cancelled_messages,
@@ -135,12 +135,12 @@ class AppShellRepositoryStore:
             message_repository=self._message_repository,
             message_store=self.messages,
         )
-        self._hitl_part = AppShellHITLStore(
+        self._hitl_part = HITLRuntimeStorePart(
             hitl_requests=self._hitl_requests,
             room_agent_messages=self._room_agent_messages,
             room_user_messages=self._room_user_messages,
         )
-        self._memory_part = AppShellMemoryStore(
+        self._memory_part = MemoryRuntimeStorePart(
             chat_contexts=self._chat_contexts,
             user_memories=self._user_memories,
             agent_memories=self._agent_memories,
@@ -149,40 +149,40 @@ class AppShellRepositoryStore:
         )
 
     @property
-    def agent_room(self) -> AppShellAgentRoomStore:
+    def agent_room(self) -> AgentRoomRuntimeStorePart:
         return self._agent_room_part
 
     @property
-    def messages(self) -> AppShellMessageStore:
+    def messages(self) -> MessageRuntimeStorePart:
         return self._message_part
 
     @property
-    def tasks(self) -> AppShellTaskLifecycleStore:
+    def tasks(self) -> TaskLifecycleRuntimeStorePart:
         return self._task_lifecycle_part
 
     @property
-    def hitl(self) -> AppShellHITLStore:
+    def hitl(self) -> HITLRuntimeStorePart:
         return self._hitl_part
 
     @property
-    def memory(self) -> AppShellMemoryStore:
+    def memory(self) -> MemoryRuntimeStorePart:
         return self._memory_part
 
-    def _message_delegate(self) -> AppShellMessageStore:
+    def _message_delegate(self) -> MessageRuntimeStorePart:
         part = getattr(self, "_message_part", None)
         if part is not None:
             return part
-        return AppShellMessageStore(
+        return MessageRuntimeStorePart(
             room_agent_messages=getattr(self, "_room_agent_messages", None),
             room_user_messages=getattr(self, "_room_user_messages", None),
             message_repository=getattr(self, "_message_repository", None),
         )
 
-    def _task_delegate(self) -> AppShellTaskLifecycleStore:
+    def _task_delegate(self) -> TaskLifecycleRuntimeStorePart:
         part = getattr(self, "_task_lifecycle_part", None)
         if part is not None:
             return part
-        return AppShellTaskLifecycleStore(
+        return TaskLifecycleRuntimeStorePart(
             room_agent_messages=getattr(self, "_room_agent_messages", None),
             room_user_messages=getattr(self, "_room_user_messages", None),
             cancelled_messages=getattr(self, "_cancelled_messages", None),
@@ -191,21 +191,21 @@ class AppShellRepositoryStore:
             message_store=self._message_delegate(),
         )
 
-    def _hitl_delegate(self) -> AppShellHITLStore:
+    def _hitl_delegate(self) -> HITLRuntimeStorePart:
         part = getattr(self, "_hitl_part", None)
         if part is not None:
             return part
-        return AppShellHITLStore(
+        return HITLRuntimeStorePart(
             hitl_requests=getattr(self, "_hitl_requests", None),
             room_agent_messages=getattr(self, "_room_agent_messages", None),
             room_user_messages=getattr(self, "_room_user_messages", None),
         )
 
-    def _memory_delegate(self) -> AppShellMemoryStore:
+    def _memory_delegate(self) -> MemoryRuntimeStorePart:
         part = getattr(self, "_memory_part", None)
         if part is not None:
             return part
-        return AppShellMemoryStore(
+        return MemoryRuntimeStorePart(
             chat_contexts=getattr(self, "_chat_contexts", None),
             user_memories=getattr(self, "_user_memories", None),
             agent_memories=getattr(self, "_agent_memories", None),
@@ -223,9 +223,7 @@ class AppShellRepositoryStore:
             await self.agent_room.get_agent_groups_by_owner(owner_id)
         )
 
-    async def get_agent_group_by_id(
-        self, group_id: str
-    ) -> RuntimeAgentGroup | None:
+    async def get_agent_group_by_id(self, group_id: str) -> RuntimeAgentGroup | None:
         agent_group = await self.agent_room.get_agent_group_by_id(group_id)
         return agent_group_to_runtime(agent_group) if agent_group is not None else None
 
@@ -390,9 +388,7 @@ class AppShellRepositoryStore:
         self, room_id: str, *, limit: int = 50
     ) -> list[RuntimeRoomAgentMessage]:
         return runtime_agent_messages(
-            await self._task_delegate().get_task_messages_for_room(
-                room_id, limit=limit
-            )
+            await self._task_delegate().get_task_messages_for_room(room_id, limit=limit)
         )
 
     async def get_pending_task_messages_for_user(
@@ -647,7 +643,9 @@ class AppShellRepositoryStore:
         group_id: str,
         claim_id: str,
     ) -> bool:
-        return await self._hitl_delegate().release_hitl_group_routing(group_id, claim_id)
+        return await self._hitl_delegate().release_hitl_group_routing(
+            group_id, claim_id
+        )
 
     async def count_hitl_requests_for_message(
         self,
@@ -717,9 +715,7 @@ class AppShellRepositoryStore:
             session_id
         )
         return (
-            chat_context_to_runtime(chat_context)
-            if chat_context is not None
-            else None
+            chat_context_to_runtime(chat_context) if chat_context is not None else None
         )
 
     async def update_chat_context_by_session_id(

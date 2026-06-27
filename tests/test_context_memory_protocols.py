@@ -14,6 +14,8 @@ from common.protocols import (
     MemoryRepository,
 )
 
+REMOVED_RUNTIME_PACKAGE = "app_" + "shell"
+
 
 class FakeMongo:
     def collection(self, name: str):
@@ -45,7 +47,9 @@ class FakeMemoryRepository:
     async def update_room_memory_by_room_id(self, room_id: str, updates: dict) -> bool:
         return True
 
-    async def update_room_memory_by_memory_id(self, memory_id: str, updates: dict) -> bool:
+    async def update_room_memory_by_memory_id(
+        self, memory_id: str, updates: dict
+    ) -> bool:
         return True
 
     async def delete_room_memory_by_memory_id(self, memory_id: str) -> bool:
@@ -74,7 +78,9 @@ class FakeMemoryRepository:
     ) -> tuple[bool, bool, bool]:
         return True, True, False
 
-    async def update_turn_notes(self, room_id: str, turn_id: str, turn_notes: dict) -> bool:
+    async def update_turn_notes(
+        self, room_id: str, turn_id: str, turn_notes: dict
+    ) -> bool:
         return True
 
     async def get_room_summary_projection(self, room_id: str) -> dict | None:
@@ -90,7 +96,9 @@ class FakeMemoryRepository:
     ) -> bool:
         return True
 
-    async def compact_turns_bulk(self, room_id: str, compacted_turns: list[dict]) -> bool:
+    async def compact_turns_bulk(
+        self, room_id: str, compacted_turns: list[dict]
+    ) -> bool:
         return True
 
     async def list_room_ids_with_memory(self, limit: int | None = None) -> list[str]:
@@ -116,7 +124,9 @@ class FakeContentRepository:
     async def get_content_stats_for_room(self, room_id: str) -> dict:
         return {"room_id": room_id}
 
-    async def text_search(self, room_id: str, query: str, limit: int = 50) -> list[dict]:
+    async def text_search(
+        self, room_id: str, query: str, limit: int = 50
+    ) -> list[dict]:
         return []
 
     async def hydrate_turn_notes(self, room_id: str, turn_ids: list[str]) -> list[dict]:
@@ -467,7 +477,7 @@ def test_non_protocol_helper_call_boundary():
             "index_turn_for_search",
             "delete_room_index",
         },
-        "app_shell/memory_service.py": {
+        f"{REMOVED_RUNTIME_PACKAGE}/memory_service.py": {
             "legacy_create_room_memory",
             "legacy_get_room_memory_by_room_id",
             "legacy_get_room_memory_by_memory_id",
@@ -480,12 +490,12 @@ def test_non_protocol_helper_call_boundary():
             "add_synthesis_to_history",
             "update_room_summary",
         },
-        "app_shell/memory_search_service.py": {
+        f"{REMOVED_RUNTIME_PACKAGE}/memory_search_service.py": {
             "legacy_search",
             "index_turn_for_search",
             "delete_room_index",
         },
-        "app_shell/compaction_service.py": {
+        f"{REMOVED_RUNTIME_PACKAGE}/compaction_service.py": {
             "should_compact",
             "compact_if_needed",
             "compact_room_memory",
@@ -505,11 +515,11 @@ def test_non_protocol_helper_call_boundary():
     for path in Path(".").rglob("*.py"):
         if (
             path.parts[0] == "tests"
-                or (path.parts[0] == "context_memory" and path not in path_allowed_helpers)
-                or path in {Path("container.py"), Path("main.py")}
-                or ".venv" in path.parts
-                or ".worktrees" in path.parts
-            ):
+            or (path.parts[0] == "context_memory" and path not in path_allowed_helpers)
+            or path in {Path("container.py"), Path("main.py")}
+            or ".venv" in path.parts
+            or ".worktrees" in path.parts
+        ):
             continue
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):

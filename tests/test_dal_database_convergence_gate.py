@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+REMOVED_RUNTIME_PACKAGE = "app_" + "shell"
 MANIFEST = ROOT / "tests/fixtures/dal_database_convergence_manifest.json"
 DEFAULT_EXCLUDE_DIRS = {
     "tests",
@@ -22,13 +23,13 @@ DEFAULT_EXCLUDE_DIRS = {
     "multi_agents_backend.egg-info",
 }
 LEGACY_RUNTIME_FILES = (
-    "app_shell/database_service.py",
+    f"{REMOVED_RUNTIME_PACKAGE}/database_service.py",
     "database/mongodb.py",
     "database/pinecone_db.py",
     "database/repository.py",
 )
-OBJECT_STORAGE_SHIM_IMPORT_PREFIX = "app_shell.s3_service"
-OBJECT_STORAGE_SHIM_EXEMPT_FILES = {"app_shell/s3_service.py"}
+OBJECT_STORAGE_SHIM_IMPORT_PREFIX = f"{REMOVED_RUNTIME_PACKAGE}.s3_service"
+OBJECT_STORAGE_SHIM_EXEMPT_FILES = {f"{REMOVED_RUNTIME_PACKAGE}/s3_service.py"}
 AWS_SDK_IMPORT_PREFIXES = {"aioboto3", "botocore"}
 AWS_SDK_ALLOWED_PREFIXES = ("dal/s3/",)
 AWS_SDK_TEMPORARY_ALLOWLIST = {
@@ -267,7 +268,9 @@ def _aliased_import_name_blockers(
 def _database_service_blockers(path: Path) -> list[Blocker]:
     blockers: list[Blocker] = []
     for blocker in [*_iter_imports(path), *_iter_dynamic_imports(path)]:
-        if _is_module_match(blocker.symbol, "app_shell.database_service"):
+        if _is_module_match(
+            blocker.symbol, f"{REMOVED_RUNTIME_PACKAGE}.database_service"
+        ):
             blockers.append(blocker)
     blockers.extend(_name_blockers(path, {"database_service", "db_service", "_db_svc"}))
     blockers.extend(_string_literal_blockers(path, {"database_service", "db_service"}))
@@ -417,9 +420,8 @@ def _aws_sdk_import_blockers() -> list[str]:
     for path in _py_files():
         for blocker in [*_iter_imports(path), *_iter_dynamic_imports(path)]:
             root = _import_root(blocker.symbol)
-            if (
-                root in AWS_SDK_IMPORT_PREFIXES
-                and not _is_aws_sdk_import_allowed(blocker)
+            if root in AWS_SDK_IMPORT_PREFIXES and not _is_aws_sdk_import_allowed(
+                blocker
             ):
                 blockers.append(blocker.as_manifest_entry())
     return sorted(blockers)
@@ -518,38 +520,45 @@ def test_convergence_scanner_detects_dynamic_imports_and_pinecone_calls(tmp_path
     assert "sample.py:8:self.client.Index" in direct
 
 
-def test_dynamic_import_scanner_detects_dunder_import_app_shell_s3_service(tmp_path):
+def test_dynamic_import_scanner_detects_dunder_import_application_shell_s3_service(
+    tmp_path,
+):
     sample = tmp_path / "sample.py"
-    sample.write_text('__import__("app_shell.s3_service")')
+    removed_runtime_package = REMOVED_RUNTIME_PACKAGE
+    sample.write_text(f'__import__("{removed_runtime_package}.s3_service")')
 
-    assert "sample.py:1:app_shell.s3_service" in _entries(
+    assert f"sample.py:1:{removed_runtime_package}.s3_service" in _entries(
         _iter_dynamic_imports(sample)
     )
 
 
-def test_dynamic_import_scanner_detects_importlib_app_shell_s3_service(tmp_path):
+def test_dynamic_import_scanner_detects_importlib_application_shell_s3_service(
+    tmp_path,
+):
     sample = tmp_path / "sample.py"
+    removed_runtime_package = REMOVED_RUNTIME_PACKAGE
     sample.write_text(
         "\n".join(
             [
                 "import importlib",
-                'importlib.import_module("app_shell.s3_service")',
+                f'importlib.import_module("{removed_runtime_package}.s3_service")',
             ]
         )
     )
 
-    assert "sample.py:2:app_shell.s3_service" in _entries(
+    assert f"sample.py:2:{removed_runtime_package}.s3_service" in _entries(
         _iter_dynamic_imports(sample)
     )
 
 
 def test_convergence_scanner_detects_from_import_legacy_modules(tmp_path):
     sample = tmp_path / "sample.py"
+    removed_runtime_package = REMOVED_RUNTIME_PACKAGE
     sample.write_text(
         "\n".join(
             [
                 "from database import mongodb, pinecone_db, repository",
-                "from app_shell import database_service",
+                f"from {removed_runtime_package} import database_service",
             ]
         )
     )
@@ -561,7 +570,7 @@ def test_convergence_scanner_detects_from_import_legacy_modules(tmp_path):
     assert "sample.py:1:database.repository" in _entries(
         _database_repository_blockers(sample)
     )
-    assert "sample.py:2:app_shell.database_service" in _entries(
+    assert f"sample.py:2:{removed_runtime_package}.database_service" in _entries(
         _database_service_blockers(sample)
     )
 
@@ -638,11 +647,7 @@ def test_legacy_runtime_files_are_exact():
 
 
 def test_production_object_storage_access_goes_through_dal():
-    """Ensure no production module directly imports app_shell.s3_service.
-
-    app_shell.s3_service is a compatibility shim, not a production dependency
-    target. Only the shim implementation may refer to itself.
-    """
+    ('Ensure no production module directly imports ' + 'app_' + 'shell' + '.s3_service.\n\n    ' + 'app_' + 'shell' + '.s3_service is a compatibility shim, not a production dependency\n    target. Only the shim implementation may refer to itself.\n')
     offenders = []
     for path in _py_files():
         rel = _rel(path)

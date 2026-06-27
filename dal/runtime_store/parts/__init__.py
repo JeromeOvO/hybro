@@ -1,13 +1,13 @@
-from dal.runtime_store.parts.agent_room_store import AppShellAgentRoomStore
-from dal.runtime_store.parts.hitl_store import AppShellHITLStore
-from dal.runtime_store.parts.memory_store import AppShellMemoryStore
-from dal.runtime_store.parts.message_store import AppShellMessageStore
-from dal.runtime_store.parts.task_lifecycle_store import AppShellTaskLifecycleStore
+from dal.runtime_store.parts.agent_room_store import AgentRoomRuntimeStorePart
+from dal.runtime_store.parts.hitl_store import HITLRuntimeStorePart
+from dal.runtime_store.parts.memory_store import MemoryRuntimeStorePart
+from dal.runtime_store.parts.message_store import MessageRuntimeStorePart
+from dal.runtime_store.parts.task_lifecycle_store import TaskLifecycleRuntimeStorePart
 
 __all__ = [
-    "AppShellAgentRoomStore",
-    "AppShellHITLStore",
-    "AppShellMemoryStore",
-    "AppShellMessageStore",
-    "AppShellTaskLifecycleStore",
+    "AgentRoomRuntimeStorePart",
+    "HITLRuntimeStorePart",
+    "MemoryRuntimeStorePart",
+    "MessageRuntimeStorePart",
+    "TaskLifecycleRuntimeStorePart",
 ]

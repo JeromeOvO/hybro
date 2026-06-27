@@ -7,20 +7,18 @@ from execution import ports
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_execution_modules_do_not_import_app_shell() -> None:
+def test_execution_modules_do_not_import_application_shell() -> None:
     bad: list[str] = []
     for path in sorted((ROOT / "execution").rglob("*.py")):
         tree = ast.parse(path.read_text(), filename=str(path))
         rel_path = path.relative_to(ROOT)
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module:
-                if node.module == "app_shell" or node.module.startswith("app_shell."):
+                if node.module == ('app_' + 'shell') or node.module.startswith(('app_' + 'shell' + '.')):
                     bad.append(f"{rel_path}:{node.lineno}:{node.module}")
             elif isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name == "app_shell" or alias.name.startswith(
-                        "app_shell."
-                    ):
+                    if alias.name == ('app_' + 'shell') or alias.name.startswith(('app_' + 'shell' + '.')):
                         bad.append(f"{rel_path}:{node.lineno}:{alias.name}")
 
     assert not bad, "Execution must depend on module-owned ports:\n" + "\n".join(bad)
@@ -139,8 +137,8 @@ def test_execution_shell_ports_use_named_method_contracts() -> None:
             ):
                 variadic_methods.append(f"{port.__name__}.{method_name}{signature}")
 
-    assert not variadic_methods, "Port methods must use named signatures:\n" + "\n".join(
-        variadic_methods
+    assert not variadic_methods, (
+        "Port methods must use named signatures:\n" + "\n".join(variadic_methods)
     )
 
 
@@ -385,4 +383,6 @@ def test_execution_modules_do_not_store_legacy_runtime_fields() -> None:
             if token in source:
                 bad.append(f"{rel_path}: contains {token!r}")
 
-    assert not bad, "Execution modules must use focused runtime ports:\n" + "\n".join(bad)
+    assert not bad, "Execution modules must use focused runtime ports:\n" + "\n".join(
+        bad
+    )

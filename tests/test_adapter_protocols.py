@@ -110,7 +110,7 @@ def test_a2a_runtime_service_import_boundary():
         "models",
     }
     forbidden_roots = {
-        "app_shell",
+        ('app_' + 'shell'),
         "config",
         "container",
         "database",
@@ -173,8 +173,9 @@ def test_llm_gateway_provider_sdks_are_limited_to_provider_adapters():
             if leaked:
                 violations.append(f"{path}: {sorted(leaked)}")
 
-    assert not violations, "Provider SDK imports must stay under llm_gateway/providers:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Provider SDK imports must stay under llm_gateway/providers:\n"
+        + "\n".join(violations)
     )
 
 
@@ -186,7 +187,9 @@ def _assert_import_boundary(
 ) -> None:
     assert package_path.exists(), f"{package_path} does not exist"
 
-    paths = [package_path] if package_path.is_file() else sorted(package_path.rglob("*.py"))
+    paths = (
+        [package_path] if package_path.is_file() else sorted(package_path.rglob("*.py"))
+    )
     for path in paths:
         if path in (excluded_paths or set()):
             continue

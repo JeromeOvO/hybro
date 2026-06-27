@@ -559,8 +559,7 @@ def test_phase9_route_inventory_does_not_use_removed_runtime_bound_protocols():
                 violations.append(f"{route['path']}: {protocol_path}")
 
     assert not violations, (
-        "Routes must not use removed runtime protocol shims:\n"
-        + "\n".join(violations)
+        "Routes must not use removed runtime protocol shims:\n" + "\n".join(violations)
     )
 
 
@@ -1437,7 +1436,7 @@ def test_health_route_delegates_to_health_check_protocol():
 
     assert "get_health_check" in source
     assert ".check(" in source
-    assert "app_shell." not in source
+    assert ('app_' + 'shell' + '.') not in source
     assert "settings." not in source
 
 

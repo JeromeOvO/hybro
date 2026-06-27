@@ -26,9 +26,9 @@ def test_runtime_store_protocols_are_exported():
 
 
 def test_runtime_repository_store_declares_runtime_protocol_surface():
-    from dal.runtime_store import AppShellRepositoryStore
+    from dal.runtime_store import RuntimeRepositoryStore
 
-    store = object.__new__(AppShellRepositoryStore)
+    store = object.__new__(RuntimeRepositoryStore)
 
     assert isinstance(store, RuntimeAgentRoomStore)
     assert isinstance(store, RuntimeMessageStore)
@@ -70,7 +70,7 @@ def test_runtime_store_protocol_signatures_match_current_store_surface():
         RuntimeMessageStore,
         RuntimeTaskLifecycleStore,
     )
-    from dal.runtime_store import AppShellRepositoryStore
+    from dal.runtime_store import RuntimeRepositoryStore
 
     protocol_types = [
         RuntimeAgentRoomStore,
@@ -84,7 +84,7 @@ def test_runtime_store_protocol_signatures_match_current_store_surface():
         for method_name, method in protocol_type.__dict__.items():
             if method_name.startswith("_") or not inspect.isfunction(method):
                 continue
-            assert _signature_text(AppShellRepositoryStore, method_name) == (
+            assert _signature_text(RuntimeRepositoryStore, method_name) == (
                 _signature_text(protocol_type, method_name)
             )
 
@@ -131,9 +131,9 @@ class _FakeMongo:
 
 
 def _make_runtime_store():
-    from dal.runtime_store import AppShellRepositoryStore
+    from dal.runtime_store import RuntimeRepositoryStore
 
-    return AppShellRepositoryStore(
+    return RuntimeRepositoryStore(
         mongo=_FakeMongo(),
         room_repository=object(),
         message_repository=object(),
@@ -158,63 +158,63 @@ def test_container_runtime_repository_store_factory_resolves_runtime_export():
 
 
 def test_runtime_store_wires_agent_room_part():
-    from dal.runtime_store.parts.agent_room_store import AppShellAgentRoomStore
+    from dal.runtime_store.parts.agent_room_store import AgentRoomRuntimeStorePart
 
     store = _make_runtime_store()
 
-    assert isinstance(store.agent_room, AppShellAgentRoomStore)
+    assert isinstance(store.agent_room, AgentRoomRuntimeStorePart)
 
 
 def test_runtime_store_wires_message_part():
-    from dal.runtime_store.parts.message_store import AppShellMessageStore
+    from dal.runtime_store.parts.message_store import MessageRuntimeStorePart
 
     store = _make_runtime_store()
 
-    assert isinstance(store.messages, AppShellMessageStore)
+    assert isinstance(store.messages, MessageRuntimeStorePart)
 
 
 def test_runtime_store_wires_task_lifecycle_part():
     from dal.runtime_store.parts.task_lifecycle_store import (
-        AppShellTaskLifecycleStore,
+        TaskLifecycleRuntimeStorePart,
     )
 
     store = _make_runtime_store()
 
-    assert isinstance(store.tasks, AppShellTaskLifecycleStore)
+    assert isinstance(store.tasks, TaskLifecycleRuntimeStorePart)
 
 
 def test_runtime_store_wires_hitl_part():
-    from dal.runtime_store.parts.hitl_store import AppShellHITLStore
+    from dal.runtime_store.parts.hitl_store import HITLRuntimeStorePart
 
     store = _make_runtime_store()
 
-    assert isinstance(store.hitl, AppShellHITLStore)
+    assert isinstance(store.hitl, HITLRuntimeStorePart)
 
 
 def test_runtime_store_wires_memory_part():
-    from dal.runtime_store.parts.memory_store import AppShellMemoryStore
+    from dal.runtime_store.parts.memory_store import MemoryRuntimeStorePart
 
     store = _make_runtime_store()
 
-    assert isinstance(store.memory, AppShellMemoryStore)
+    assert isinstance(store.memory, MemoryRuntimeStorePart)
 
 
 def test_runtime_store_wires_all_focused_parts():
     from dal.runtime_store.parts import (
-        AppShellAgentRoomStore,
-        AppShellHITLStore,
-        AppShellMemoryStore,
-        AppShellMessageStore,
-        AppShellTaskLifecycleStore,
+        AgentRoomRuntimeStorePart,
+        HITLRuntimeStorePart,
+        MemoryRuntimeStorePart,
+        MessageRuntimeStorePart,
+        TaskLifecycleRuntimeStorePart,
     )
 
     store = _make_runtime_store()
 
-    assert isinstance(store.agent_room, AppShellAgentRoomStore)
-    assert isinstance(store.messages, AppShellMessageStore)
-    assert isinstance(store.tasks, AppShellTaskLifecycleStore)
-    assert isinstance(store.hitl, AppShellHITLStore)
-    assert isinstance(store.memory, AppShellMemoryStore)
+    assert isinstance(store.agent_room, AgentRoomRuntimeStorePart)
+    assert isinstance(store.messages, MessageRuntimeStorePart)
+    assert isinstance(store.tasks, TaskLifecycleRuntimeStorePart)
+    assert isinstance(store.hitl, HITLRuntimeStorePart)
+    assert isinstance(store.memory, MemoryRuntimeStorePart)
 
 
 def test_runtime_store_part_properties_do_not_recreate_missing_parts():
@@ -245,7 +245,9 @@ def _dotted_name(node: ast.AST) -> str | None:
 
 
 def _references_name(node: ast.AST, name: str) -> bool:
-    return any(isinstance(child, ast.Name) and child.id == name for child in ast.walk(node))
+    return any(
+        isinstance(child, ast.Name) and child.id == name for child in ast.walk(node)
+    )
 
 
 def test_container_binds_focused_runtime_store_parts_before_aggregate_shims():
@@ -287,10 +289,10 @@ def test_main_keeps_broad_repository_store_only_for_documented_compatibility_poi
             continue
         call_name = _dotted_name(node.func) or "<unknown>"
         call_refs_broad_store = any(
-            _references_name(arg, "app_shell_store") for arg in node.args
+            _references_name(arg, "repository_store") for arg in node.args
         ) or any(
             keyword.value is not None
-            and _references_name(keyword.value, "app_shell_store")
+            and _references_name(keyword.value, "repository_store")
             for keyword in node.keywords
         )
         if call_refs_broad_store and call_name not in allowed_broad_calls:

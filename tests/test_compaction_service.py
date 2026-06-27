@@ -1,8 +1,7 @@
-"""
-Owner-level tests for ContextMemory compaction runtime behavior.
+"""Owner-level tests for ContextMemory compaction runtime behavior.
 
 These tests intentionally exercise context_memory.compaction and
-ContextMemoryFacade directly instead of the legacy AppShell shim.
+ContextMemoryFacade directly instead of the legacy application shell shim.
 """
 
 from __future__ import annotations

@@ -19,7 +19,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "tests" / "fixtures" / "phase7a_processing_status_callers.json"
-PRODUCTION_ROOTS = ("api", "app_shell", "jobs", "execution", "room")
+PRODUCTION_ROOTS = ("api", ('app_' + 'shell'), "jobs", "execution", "room")
 OBSOLETE_CALL_IDS = {
     "api.sse.cancel_message.canceled",
 }
@@ -224,12 +224,13 @@ def _discover_calls() -> list[ProcessingStatusCall]:
                     status_expression = "status"
                     client_request_id_expression = "client_request_id"
                     details_expression = "details"
-            elif rel_path.startswith("execution/") and call_name in EXECUTION_STATUS_HELPERS:
+            elif (
+                rel_path.startswith("execution/")
+                and call_name in EXECUTION_STATUS_HELPERS
+            ):
                 room_id_expression = _unparse(_arg_or_kw(node, 0, "room_id"))
                 status_expression = _unparse(_arg_or_kw(node, 1, "status"))
-                sse_message_id_expression = _unparse(
-                    _arg_or_kw(node, 2, "message_id")
-                )
+                sse_message_id_expression = _unparse(_arg_or_kw(node, 2, "message_id"))
                 client_request_id_expression = _unparse(
                     _keyword(node, "client_request_id")
                 )

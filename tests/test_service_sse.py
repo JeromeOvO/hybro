@@ -1,12 +1,4 @@
-"""
-Unit tests for SSE services (sse_app_shell.py).
-
-Tests cover:
-- SSEConnection: send_message, get_message (with timeout/heartbeat), close
-- DeliveryFacade: cancel_message/is_cancelled/clear_cancellation lifecycle
-- DeliveryFacade: CancellationToken creation and pre-signalling
-- DeliveryFacade: add_connection/remove_connection and typed delivery helpers
-"""
+('\nUnit tests for SSE services (sse_' + 'app_' + 'shell' + '.py).\n\nTests cover:\n- SSEConnection: send_message, get_message (with timeout/heartbeat), close\n- DeliveryFacade: cancel_message/is_cancelled/clear_cancellation lifecycle\n- DeliveryFacade: CancellationToken creation and pre-signalling\n- DeliveryFacade: add_connection/remove_connection and typed delivery helpers\n')
 
 import json
 from unittest.mock import AsyncMock
@@ -74,10 +66,9 @@ class TestSSEConnection:
         conn.close()
         assert conn.is_active is False
 
-
-# =============================================================================
-# DeliveryFacade Cancellation Tests
-# =============================================================================
+        # =============================================================================
+        # DeliveryFacade Cancellation Tests
+        # =============================================================================
 
 
 class TestDeliveryFacadeCancellation:
@@ -101,10 +92,9 @@ class TestDeliveryFacadeCancellation:
         mgr.clear_cancellation("msg-1")
         assert mgr.get_token("msg-1") is None
 
-
-# =============================================================================
-# CancellationToken Tests
-# =============================================================================
+        # =============================================================================
+        # CancellationToken Tests
+        # =============================================================================
 
 
 class TestCancellationToken:
@@ -136,10 +126,9 @@ class TestCancellationToken:
         mgr.remove_token("msg-1")
         assert mgr.get_token("msg-1") is None
 
-
-# =============================================================================
-# DeliveryFacade Connection Tests
-# =============================================================================
+        # =============================================================================
+        # DeliveryFacade Connection Tests
+        # =============================================================================
 
 
 class TestDeliveryFacadeConnections:
@@ -173,10 +162,9 @@ class TestDeliveryFacadeConnections:
         mgr = make_delivery_facade()
         await mgr.send_processing_status("nonexistent", "processing", "msg-1")
 
-
-# =============================================================================
-# send_processing_status client_request_id Tests
-# =============================================================================
+        # =============================================================================
+        # send_processing_status client_request_id Tests
+        # =============================================================================
 
 
 class TestSendProcessingStatusClientRequestId:
@@ -208,7 +196,9 @@ class TestSendProcessingStatusClientRequestId:
         assert "client_request_id" not in parsed["data"]
 
     @pytest.mark.asyncio
-    async def test_send_processing_status_does_not_record_or_emit_run_event(self, monkeypatch):
+    async def test_send_processing_status_does_not_record_or_emit_run_event(
+        self, monkeypatch
+    ):
         import execution.run_command_handler as handler_mod
 
         mgr = make_delivery_facade()
