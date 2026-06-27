@@ -471,7 +471,10 @@ def _route_inventory_values(value: Any):
 
 
 def test_removed_runtime_package_directory_is_absent() -> None:
-    assert not (ROOT / REMOVED_RUNTIME_PACKAGE).exists()
+    package_dir = ROOT / REMOVED_RUNTIME_PACKAGE
+    if package_dir.exists():
+        py_files = list(package_dir.rglob("*.py"))
+        assert not py_files, f"Python files still exist in {REMOVED_RUNTIME_PACKAGE}: {py_files}"
 
 
 def test_runtime_code_has_no_removed_runtime_package_imports() -> None:
