@@ -11,13 +11,11 @@
         ".ruff_cache",
         "logs",
         "multi_agents_backend.egg-info",
-        "database/migration",
         "scripts",
         "tests",
         "docs"
     ],
     "notes": {
-        "database/migration": "Standalone migration scripts run outside the app runtime",
         "scripts": "CLI tools with their own env var needs (HYBRO_API_KEY etc.)",
         "tests": "Test code legitimately uses os.environ for monkeypatch/conditional skips"
     }

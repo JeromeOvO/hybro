@@ -13,7 +13,6 @@ DEFAULT_EXCLUDE_DIRS = {
     "tests",
     "docs",
     "scripts",
-    "database/migration",
     "__pycache__",
     ".git",
     ".venv",

@@ -200,11 +200,11 @@ Runtime application code reads environment-backed configuration through
 config unification gate in `tests/test_config_unification_gate.py` scans tracked
 production Python files and fails on new raw env reads outside that file.
 
-The gate intentionally excludes `tests/`, `scripts/`, `docs/`, and
-`database/migration/`: tests may set env vars to verify settings loading, while
-scripts and migration utilities run outside the app runtime. `SERVER_SOFTWARE`
-is exposed as the live `Settings.is_gunicorn` property because it is
-server-injected runtime metadata, not user application configuration.
+The gate intentionally excludes `tests/`, `scripts/`, and `docs/`: tests may
+set env vars to verify settings loading, while scripts run outside the app
+runtime. `SERVER_SOFTWARE` is exposed as the live `Settings.is_gunicorn`
+property because it is server-injected runtime metadata, not user application
+configuration.
 
 ### `llm_gateway`
 
@@ -536,11 +536,10 @@ still written so remote agent completion is not lost due to object-storage
 transient failures.
 
 The legacy runtime database files `database/mongodb.py`,
-`database/pinecone_db.py`, `database/repository.py`, and the former
-application-shell database service have been removed. Production startup wiring
-in `container.py` uses `MongoDAL`, `VectorDAL`, DAL-backed repositories, and
-narrow owner adapters directly. The remaining `database/` package is limited to
-retired migration scripts and is not part of production runtime wiring.
+`database/pinecone_db.py`, `database/repository.py`, the retired
+`database/migration/` scripts, and the former application-shell database service
+have been removed. Production startup wiring in `container.py` uses `MongoDAL`,
+`VectorDAL`, DAL-backed repositories, and narrow owner adapters directly.
 
 Important Mongo collections include:
 
