@@ -19,7 +19,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "tests" / "fixtures" / "phase7a_processing_status_callers.json"
-PRODUCTION_ROOTS = ("api", ('app_' + 'shell'), "jobs", "execution", "room")
+PRODUCTION_ROOTS = ("api", "jobs", "execution", "room")
 OBSOLETE_CALL_IDS = {
     "api.sse.cancel_message.canceled",
 }

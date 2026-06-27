@@ -5,26 +5,31 @@ from pathlib import Path
 from execution import ports
 
 ROOT = Path(__file__).resolve().parents[1]
+REMOVED_RUNTIME_PACKAGE = "app_" + "shell"
 
 
-def test_execution_modules_do_not_import_application_shell() -> None:
+def test_execution_modules_do_not_import_removed_runtime_package() -> None:
     bad: list[str] = []
     for path in sorted((ROOT / "execution").rglob("*.py")):
         tree = ast.parse(path.read_text(), filename=str(path))
         rel_path = path.relative_to(ROOT)
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module:
-                if node.module == ('app_' + 'shell') or node.module.startswith(('app_' + 'shell' + '.')):
+                if node.module == REMOVED_RUNTIME_PACKAGE or node.module.startswith(
+                    f"{REMOVED_RUNTIME_PACKAGE}."
+                ):
                     bad.append(f"{rel_path}:{node.lineno}:{node.module}")
             elif isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name == ('app_' + 'shell') or alias.name.startswith(('app_' + 'shell' + '.')):
+                    if alias.name == REMOVED_RUNTIME_PACKAGE or alias.name.startswith(
+                        f"{REMOVED_RUNTIME_PACKAGE}."
+                    ):
                         bad.append(f"{rel_path}:{node.lineno}:{alias.name}")
 
     assert not bad, "Execution must depend on module-owned ports:\n" + "\n".join(bad)
 
 
-def test_execution_shell_ports_use_named_method_contracts() -> None:
+def test_execution_runtime_ports_use_named_method_contracts() -> None:
     port_methods = {
         ports.A2ATransportPort: [
             "has_streaming_capability",

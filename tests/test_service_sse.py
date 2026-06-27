@@ -1,4 +1,11 @@
-('\nUnit tests for SSE services (sse_' + 'app_' + 'shell' + '.py).\n\nTests cover:\n- SSEConnection: send_message, get_message (with timeout/heartbeat), close\n- DeliveryFacade: cancel_message/is_cancelled/clear_cancellation lifecycle\n- DeliveryFacade: CancellationToken creation and pre-signalling\n- DeliveryFacade: add_connection/remove_connection and typed delivery helpers\n')
+"""Unit tests for SSE services.
+
+Tests cover:
+- SSEConnection: send_message, get_message (with timeout/heartbeat), close
+- DeliveryFacade: cancel_message/is_cancelled/clear_cancellation lifecycle
+- DeliveryFacade: CancellationToken creation and pre-signalling
+- DeliveryFacade: add_connection/remove_connection and typed delivery helpers
+"""
 
 import json
 from unittest.mock import AsyncMock

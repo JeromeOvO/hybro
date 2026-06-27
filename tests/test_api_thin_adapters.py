@@ -1564,8 +1564,8 @@ def test_route_protocols_do_not_expose_broad_annotations():
                 elif _annotation_contains_broad_object(parameter.annotation):
                     violations.append(f"{protocol.__name__}.{name}.{parameter.name}")
 
-    assert not violations, (
-        "App-shell route protocols expose broad shapes:\n" + "\n".join(violations)
+    assert not violations, "Route protocols expose broad shapes:\n" + "\n".join(
+        violations
     )
 
 

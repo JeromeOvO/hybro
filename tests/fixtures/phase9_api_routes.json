@@ -1755,7 +1755,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "app_shell.health_check.HealthCheck",
+    "owning_protocol": "common.protocols.HealthCheck",
     "path": "/health",
     "response_class": null,
     "response_model": null,

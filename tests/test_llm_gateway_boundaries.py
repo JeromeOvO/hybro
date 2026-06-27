@@ -2,11 +2,7 @@ import ast
 import sys
 from pathlib import Path
 
-DECOMMISSIONED_LLM_APP_SHELL_FILES = [
-    Path(('app_' + 'shell' + '/openai_service.py')),
-    Path(('app_' + 'shell' + '/gemini_service.py')),
-    Path(('app_' + 'shell' + '/bedrock_service.py')),
-]
+REMOVED_RUNTIME_PACKAGE = "app_" + "shell"
 
 PRODUCTION_LLM_CONSUMER_ROOTS = [
     Path("container.py"),
@@ -14,7 +10,6 @@ PRODUCTION_LLM_CONSUMER_ROOTS = [
     Path("__main__.py"),
     Path("api"),
     Path("api_gateway"),
-    Path(('app_' + 'shell')),
     Path("agent"),
     Path("common"),
     Path("context_memory"),
@@ -27,14 +22,14 @@ PRODUCTION_LLM_CONSUMER_ROOTS = [
     Path("room"),
 ]
 
-PROVIDER_NAMED_APP_SHELL_MODULES = {
-    ('app_' + 'shell' + '.openai_service'),
-    ('app_' + 'shell' + '.gemini_service'),
-    ('app_' + 'shell' + '.bedrock_service'),
+PROVIDER_NAMED_REMOVED_RUNTIME_MODULES = {
+    f"{REMOVED_RUNTIME_PACKAGE}.openai_service",
+    f"{REMOVED_RUNTIME_PACKAGE}.gemini_service",
+    f"{REMOVED_RUNTIME_PACKAGE}.bedrock_service",
 }
 
-PROVIDER_NAMED_APP_SHELL_LEAF_MODULES = {
-    module.rsplit(".", 1)[-1] for module in PROVIDER_NAMED_APP_SHELL_MODULES
+PROVIDER_NAMED_REMOVED_RUNTIME_LEAF_MODULES = {
+    module.rsplit(".", 1)[-1] for module in PROVIDER_NAMED_REMOVED_RUNTIME_MODULES
 }
 
 PROVIDER_NAMED_RUNTIME_SYMBOLS = {
@@ -59,47 +54,6 @@ LLM_SETTINGS_FIELDS = {
 }
 
 
-def test_provider_named_application_shell_llm_files_are_removed():
-    remaining = [
-        str(path) for path in DECOMMISSIONED_LLM_APP_SHELL_FILES if path.exists()
-    ]
-    assert remaining == [], (
-        f"provider-named {'app-' + 'shell'} LLM files remain: {remaining}"
-    )
-
-
-def test_provider_named_application_shell_imports_are_gone_from_runtime_modules():
-    violations: list[str] = []
-    for path in _python_files(PRODUCTION_LLM_CONSUMER_ROOTS):
-        tree = ast.parse(path.read_text(), filename=str(path))
-        for node in ast.walk(tree):
-            modules = _imported_modules_for_path(path, node)
-            leaked = modules & PROVIDER_NAMED_APP_SHELL_MODULES
-            if leaked:
-                violations.append(f"{path}: {sorted(leaked)}")
-    assert violations == [], (
-        "runtime modules still import provider-named "
-        "app-"
-        "shell"
-        " LLM modules: "
-        f"{violations}"
-    )
-
-
-def test_provider_named_llm_runtime_symbols_are_gone_from_runtime_modules():
-    violations: list[str] = []
-    for path in _python_files(PRODUCTION_LLM_CONSUMER_ROOTS):
-        tree = ast.parse(path.read_text(), filename=str(path))
-        for node in ast.walk(tree):
-            symbol = _provider_named_runtime_symbol(node)
-            if symbol:
-                violations.append(f"{path}:{node.lineno}: {symbol}")
-    assert violations == [], (
-        "runtime modules still reference provider-named LLM service symbols: "
-        f"{violations}"
-    )
-
-
 def test_llm_gateway_services_import_boundary():
     services_path = Path("llm_gateway/services")
     assert services_path.exists(), "llm_gateway/services package must exist"
@@ -114,7 +68,7 @@ def test_llm_gateway_services_import_boundary():
     }
     forbidden_roots = {
         "models",
-        ('app_' + 'shell'),
+        REMOVED_RUNTIME_PACKAGE,
         "execution",
         "room",
         "agent",
@@ -164,6 +118,21 @@ def test_provider_hint_is_not_public_protocol_or_service_api():
                 )
 
 
+def test_provider_named_llm_runtime_symbols_are_gone_from_runtime_modules():
+    violations: list[str] = []
+    for path in _python_files(PRODUCTION_LLM_CONSUMER_ROOTS):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            symbol = _provider_named_runtime_symbol(node)
+            if symbol:
+                violations.append(f"{path}:{node.lineno}: {symbol}")
+
+    assert not violations, (
+        "Runtime modules still reference provider-named LLM service symbols: "
+        f"{violations}"
+    )
+
+
 def test_container_binds_focused_llm_services_to_production_consumers():
     source = Path("container.py").read_text()
     main_source = Path("main.py").read_text()
@@ -192,9 +161,9 @@ def test_container_binds_focused_llm_services_to_production_consumers():
         "embedding_provider=embedding_llm_service,",
     ]
     forbidden_snippets = [
-        ('from ' + 'app_' + 'shell' + '.openai_service import'),
-        ('from ' + 'app_' + 'shell' + '.gemini_service import'),
-        ('from ' + 'app_' + 'shell' + '.bedrock_service import'),
+        f"from {REMOVED_RUNTIME_PACKAGE}.openai_service import",
+        f"from {REMOVED_RUNTIME_PACKAGE}.gemini_service import",
+        f"from {REMOVED_RUNTIME_PACKAGE}.bedrock_service import",
         "openai_service.bind_llm_gateway(",
         "gemini_service.bind_llm_gateway(",
         "bedrock_service.bind_llm_services(",
@@ -206,33 +175,16 @@ def test_container_binds_focused_llm_services_to_production_consumers():
     ]
     leaked_legacy = [snippet for snippet in forbidden_snippets if snippet in source]
     leaked_legacy.extend(
-        _provider_named_application_shell_imports(Path("container.py"))
+        _provider_named_removed_runtime_imports(Path("container.py"))
     )
-    leaked_legacy.extend(_provider_named_application_shell_calls(Path("container.py")))
+    leaked_legacy.extend(_provider_named_removed_runtime_calls(Path("container.py")))
     assert missing == [], f"container.py missing focused LLM bindings: {missing}"
     assert leaked_to_main == [], f"main.py owns focused LLM bindings: {leaked_to_main}"
     assert leaked_legacy == [], (
         "container.py still contains legacy provider-named "
-        "app-"
-        "shell"
+        "runtime package"
         " wiring: "
         f"{leaked_legacy}"
-    )
-
-
-def test_runtime_llm_consumers_do_not_import_provider_named_application_shell_services():
-    violations: list[str] = []
-    for path in _python_files(PRODUCTION_LLM_CONSUMER_ROOTS):
-        tree = ast.parse(path.read_text(), filename=str(path))
-        for node in ast.walk(tree):
-            leaked = (
-                _imported_modules_for_path(path, node)
-                & PROVIDER_NAMED_APP_SHELL_MODULES
-            )
-            if leaked:
-                violations.append(f"{path}: {sorted(leaked)}")
-    assert violations == [], (
-        f"runtime modules still import provider-named {'app-' + 'shell'} services: {violations}"
     )
 
 
@@ -263,7 +215,7 @@ def test_focused_llm_binding_targets_expose_startup_methods():
     assert ContextMemoryRoomMemoryAdapter.__name__ == "ContextMemoryRoomMemoryAdapter"
 
 
-def test_llm_settings_are_not_read_by_feature_or_application_shell_modules():
+def test_llm_settings_are_not_read_by_feature_runtime_modules():
     allowed_prefixes = (
         "common/config/",
         "llm_gateway/config.py",
@@ -271,7 +223,6 @@ def test_llm_settings_are_not_read_by_feature_or_application_shell_modules():
         "llm_gateway/providers/",
     )
     scan_roots = [
-        Path(('app_' + 'shell')),
         Path("execution"),
         Path("api"),
         Path("agent"),
@@ -306,11 +257,11 @@ def _imported_modules(node: ast.AST) -> set[str]:
         return {alias.name for alias in node.names}
     if isinstance(node, ast.ImportFrom) and node.module:
         modules = {node.module}
-        if node.module == ('app_' + 'shell'):
+        if node.module == REMOVED_RUNTIME_PACKAGE:
             modules.update(
-                f"{'app_' + 'shell'}.{alias.name}"
+                f"{REMOVED_RUNTIME_PACKAGE}.{alias.name}"
                 for alias in node.names
-                if alias.name in PROVIDER_NAMED_APP_SHELL_LEAF_MODULES
+                if alias.name in PROVIDER_NAMED_REMOVED_RUNTIME_LEAF_MODULES
             )
         return modules
     return set()
@@ -318,7 +269,7 @@ def _imported_modules(node: ast.AST) -> set[str]:
 
 def _imported_modules_for_path(path: Path, node: ast.AST) -> set[str]:
     modules = set(_imported_modules(node))
-    modules.update(_relative_provider_named_application_shell_modules(path, node))
+    modules.update(_relative_provider_named_removed_runtime_modules(path, node))
     return modules
 
 
@@ -341,21 +292,22 @@ def _python_files(paths: list[Path]) -> list[Path]:
     return sorted(files)
 
 
-def _provider_named_application_shell_imports(path: Path) -> list[str]:
+def _provider_named_removed_runtime_imports(path: Path) -> list[str]:
     violations: list[str] = []
     tree = ast.parse(path.read_text(), filename=str(path))
     for node in ast.walk(tree):
         leaked = (
-            _imported_modules_for_path(path, node) & PROVIDER_NAMED_APP_SHELL_MODULES
+            _imported_modules_for_path(path, node)
+            & PROVIDER_NAMED_REMOVED_RUNTIME_MODULES
         )
         if leaked:
             violations.append(f"{path}:{node.lineno}: imports {sorted(leaked)}")
     return violations
 
 
-def _provider_named_application_shell_calls(path: Path) -> list[str]:
+def _provider_named_removed_runtime_calls(path: Path) -> list[str]:
     tree = ast.parse(path.read_text(), filename=str(path))
-    legacy_binding_names = _provider_named_application_shell_binding_names(tree)
+    legacy_binding_names = _provider_named_removed_runtime_binding_names(tree)
     violations: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
@@ -369,45 +321,45 @@ def _provider_named_application_shell_calls(path: Path) -> list[str]:
     return violations
 
 
-def _provider_named_application_shell_binding_names(tree: ast.AST) -> set[str]:
+def _provider_named_removed_runtime_binding_names(tree: ast.AST) -> set[str]:
     binding_names: set[str] = set()
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.ImportFrom)
-            and node.module in PROVIDER_NAMED_APP_SHELL_MODULES
+            and node.module in PROVIDER_NAMED_REMOVED_RUNTIME_MODULES
         ):
             binding_names.update(alias.asname or alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module == ('app_' + 'shell'):
+        elif isinstance(node, ast.ImportFrom) and node.module == REMOVED_RUNTIME_PACKAGE:
             binding_names.update(
                 alias.asname or alias.name
                 for alias in node.names
-                if alias.name in PROVIDER_NAMED_APP_SHELL_LEAF_MODULES
+                if alias.name in PROVIDER_NAMED_REMOVED_RUNTIME_LEAF_MODULES
             )
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name in PROVIDER_NAMED_APP_SHELL_MODULES:
+                if alias.name in PROVIDER_NAMED_REMOVED_RUNTIME_MODULES:
                     binding_names.add(alias.asname or alias.name.split(".")[-1])
     return binding_names
 
 
-def _relative_provider_named_application_shell_modules(
+def _relative_provider_named_removed_runtime_modules(
     path: Path, node: ast.AST
 ) -> set[str]:
     if (
         not isinstance(node, ast.ImportFrom)
         or node.level == 0
-        or path.parts[:1] != (('app_' + 'shell'),)
+        or path.parts[:1] != (REMOVED_RUNTIME_PACKAGE,)
     ):
         return set()
 
     modules: set[str] = set()
-    if node.module in PROVIDER_NAMED_APP_SHELL_LEAF_MODULES:
-        modules.add(f"{'app_' + 'shell'}.{node.module}")
+    if node.module in PROVIDER_NAMED_REMOVED_RUNTIME_LEAF_MODULES:
+        modules.add(f"{REMOVED_RUNTIME_PACKAGE}.{node.module}")
 
     modules.update(
-        f"{'app_' + 'shell'}.{alias.name}"
+        f"{REMOVED_RUNTIME_PACKAGE}.{alias.name}"
         for alias in node.names
-        if alias.name in PROVIDER_NAMED_APP_SHELL_LEAF_MODULES
+        if alias.name in PROVIDER_NAMED_REMOVED_RUNTIME_LEAF_MODULES
     )
     return modules
 
