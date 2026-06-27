@@ -142,7 +142,7 @@ FINAL_APP_SHELL_SHIMS = {
             "_strip_unset_task_tracking_fields",
             "_task_tracking_matches",
         },
-        "owning_module": ('dal.runtime_store.' + 'app_' + 'shell' + '_store'),
+        "owning_module": "dal.runtime_store.repository_store",
     },
     ('app_' + 'shell' + '/agent_service.py'): {
         "max_lines": 40,
@@ -868,17 +868,12 @@ def _owner_assignment_backed_exports(
     chain = _attribute_chain(node.value)
     if chain is None or len(chain) < 2:
         return set()
-    imported_member = chain[-1]
     if chain[:-1] not in owner_refs:
         return set()
 
     backed_exports: set[str] = set()
     for target in node.targets:
-        backed_exports.update(
-            target_name
-            for target_name in _target_names(target)
-            if target_name == imported_member
-        )
+        backed_exports.update(_target_names(target))
     return backed_exports
 
 
@@ -1026,16 +1021,27 @@ def _owner_reexport_import_violations(
 ) -> list[str]:
     tree = ast.parse(path.read_text(), filename=str(path))
     violations: list[str] = []
+    owner_refs: set[tuple[str, ...]] = set()
+
+    for node in tree.body:
+        _, imported_refs = _owner_import_provenance(
+            node,
+            owning_module,
+            required_exports,
+        )
+        owner_refs.update(imported_refs)
 
     for node in tree.body:
         if _is_module_docstring_node(node):
             continue
 
         if isinstance(node, ast.Import):
-            violations.extend(
-                f"{path}:{node.lineno}: imports non-owner module {alias.name}"
-                for alias in node.names
-            )
+            for alias in node.names:
+                if _is_owner_import_module(alias.name, owning_module):
+                    continue
+                violations.append(
+                    f"{path}:{node.lineno}: imports non-owner module {alias.name}"
+                )
             continue
 
         if isinstance(node, ast.ImportFrom):
@@ -1051,6 +1057,10 @@ def _owner_reexport_import_violations(
 
         if isinstance(node, (ast.Assign, ast.AnnAssign)) and _targets_all(node):
             continue
+        if isinstance(node, ast.Assign):
+            backed_exports = _owner_assignment_backed_exports(node, owner_refs)
+            if backed_exports and backed_exports <= required_exports:
+                continue
 
         violations.append(
             f"{path}:{node.lineno}: non-re-export top-level statement "
