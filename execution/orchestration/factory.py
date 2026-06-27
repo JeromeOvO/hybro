@@ -34,6 +34,7 @@ def create_room_message_center(
         "coordinator": _defaults.coordinator,
         "summary_service": _defaults.summary_service,
         "task_notifier": _defaults.task_notifier,
+        "task_notification_store": default_store,
         "agent_resolver_service": _defaults.agent_resolver_service,
         "a2a_transport": _defaults.a2a_transport,
         "remote_task_reader": _defaults.remote_task_reader,

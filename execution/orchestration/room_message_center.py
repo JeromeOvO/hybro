@@ -42,6 +42,7 @@ from execution.ports import (
     RoomRuntimePort,
     RoomTaskStateStore,
     RoomWriter,
+    TaskNotificationStorePort,
 )
 from execution.state.task_state_manager import TaskStateManager
 from llm_gateway.errors import LLMServiceNotBoundError
@@ -147,6 +148,7 @@ class RoomMessageCenter:
         delivery: ExecutionDeliveryPort,
         coordinator: CoordinatorSynthesisPort,
         task_notifier: NotificationServicePort,
+        task_notification_store: TaskNotificationStorePort,
         agent_resolver_service,
         a2a_transport: A2ATransportPort,
         remote_task_reader: RemoteTaskReaderPort,
@@ -191,6 +193,7 @@ class RoomMessageCenter:
         self.coordinator = coordinator
         self.summary_service = summary_service
         self.task_notifications = task_notifications
+        self.task_notification_store = task_notification_store
         self.room_memory = room_memory
         self.hitl_coordinator = hitl_coordinator
         self.context_memory_runtime = context_memory_runtime
@@ -235,6 +238,7 @@ class RoomMessageCenter:
             room_message_center=self,
             hitl_coordinator=hitl_coordinator,
             task_notifier=task_notifier,
+            task_notification_store=self.task_notification_store,
             task_notification_impl=task_notification_impl,
         )
 

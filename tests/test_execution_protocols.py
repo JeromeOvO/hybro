@@ -297,6 +297,7 @@ def _make_room_message_center_port_deps():
         "coordinator": MagicMock(),
         "summary_service": MagicMock(),
         "task_notifier": MagicMock(),
+        "task_notification_store": MagicMock(),
         "agent_resolver_service": MagicMock(),
         "a2a_transport": MagicMock(),
         "remote_task_reader": MagicMock(),
@@ -336,6 +337,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.event_publisher is deps["event_publisher"]
     assert runtime.coordinator is deps["coordinator"]
     assert runtime.summary_service is deps["summary_service"]
+    assert runtime.task_notification_store is deps["task_notification_store"]
     assert runtime.room_memory is deps["room_memory"]
     assert runtime.tsm.room_runtime is deps["room_runtime"]
     assert runtime.tsm.task_notifier is deps["task_notifier"]
@@ -367,6 +369,10 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.agent_response_handler._room_reader is deps["room_reader"]
     assert runtime.agent_response_handler._hitl_reader is deps["hitl_reader"]
     assert runtime.agent_response_handler._delivery is deps["delivery"]
+    assert (
+        runtime.agent_response_handler._task_notification_store
+        is deps["task_notification_store"]
+    )
     assert runtime.direct_transport._message_reader is deps["message_reader"]
     assert runtime.direct_transport._artifact_store is deps["message_writer"]
     assert runtime.direct_transport._task_updater is deps["task_state_store"]
@@ -491,6 +497,7 @@ def test_container_wires_execution_with_focused_port_names():
         "remote_task_reader",
         "room_memory",
         "context_compaction",
+        "task_notification_store",
     }
     legacy_keywords = {
         "store",
@@ -512,6 +519,7 @@ def test_container_wires_execution_with_focused_port_names():
         "room_memory": "execution_room_memory",
         "event_publisher": "_delivery_deps.event_publisher",
         "context_compaction": "context_memory_facade",
+        "task_notification_store": "task_notification_store",
     }
     for keyword, expected_name in expected_room_center_adapter_names.items():
         value = keyword_value(room_center_call, keyword)
@@ -579,10 +587,16 @@ def test_container_wires_execution_with_focused_port_names():
     webhook_handler_call = calls_named("AgentResponseHandler")[0]
     webhook_keywords = keyword_names(webhook_handler_call)
     assert "delivery" in webhook_keywords
+    assert "task_notification_store" in webhook_keywords
     assert "sse_manager" not in webhook_keywords
     delivery_value = keyword_value(webhook_handler_call, "delivery")
     assert isinstance(delivery_value, ast.Name)
     assert delivery_value.id == "execution_delivery"
+    webhook_notification_store = keyword_value(
+        webhook_handler_call, "task_notification_store"
+    )
+    assert isinstance(webhook_notification_store, ast.Name)
+    assert webhook_notification_store.id == "task_notification_store"
 
 
 def test_room_message_center_constructor_requires_explicit_dependencies():

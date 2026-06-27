@@ -22,7 +22,9 @@ from common.types import (
     TextPart,
 )
 from common.utils.a2a_helpers import get_text_from_message
+from execution.dispatch.agent_event import AgentEvent
 from execution.dispatch.dispatch_middleware import DispatchContext
+from execution.dispatch.response_handler import AgentResponseHandler
 from execution.dispatch.transports import direct as direct_module
 from execution.dispatch.transports.direct import DirectTransport, MessageStreamingState
 from models.error import A2AServiceError
@@ -497,6 +499,89 @@ class TestFinalizeStreamingWritesArtifacts:
         assert event_arg.message_id == "msg-1"
         assert event_arg.room_id == "room-1"
         assert current_message.message_content.message_text == "Final answer from agent."
+
+
+class TestDispatchTerminalNotificationFailure:
+    @pytest.mark.asyncio
+    async def test_streaming_terminal_notification_failure_does_not_mark_task_failed(self):
+        proc = _make_processor()
+        message = _make_room_agent_message()
+        proc.a2a_transport.has_streaming_capability = MagicMock(return_value=True)
+        proc.capability_issue_service = None
+        proc.tsm.transition_task = AsyncMock()
+
+        handler_store = MagicMock()
+        handler_store.update_task_state_on_message = AsyncMock(return_value=(True, None))
+        handler_store.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        handler_store.get_pending_continuation_on_message = AsyncMock(return_value=None)
+        delivery = MagicMock()
+        rmc = MagicMock()
+        rmc.resume_queue_from_continuation = AsyncMock(return_value=True)
+        task_notifier = MagicMock()
+        task_notification_impl = AsyncMock(
+            side_effect=RuntimeError("notification store missing read")
+        )
+        proc.response_handler = AgentResponseHandler(
+            message_writer=handler_store,
+            task_writer=handler_store,
+            continuation_store=handler_store,
+            client_request_resolver=handler_store,
+            room_reader=handler_store,
+            hitl_reader=handler_store,
+            delivery=delivery,
+            room_message_center=rmc,
+            task_notifier=task_notifier,
+            task_notification_store=MagicMock(),
+            task_notification_impl=task_notification_impl,
+        )
+        proc._message_reader.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=message
+        )
+
+        async def successful_streaming_with_terminal_notification_failure(*_args, **_kwargs):
+            message.message_content.message_text = "Final answer from agent."
+            await proc.tsm.transition_task(
+                message,
+                CommonTaskState.COMPLETED,
+                persist=True,
+            )
+            await proc.response_handler.handle(
+                AgentEvent(
+                    kind="response",
+                    message_id=message.message_id,
+                    room_id="room-1",
+                    agent_id=message.agent_id or "",
+                    text="Final answer from agent.",
+                    related_message_id=message.related_message_id,
+                    user_id=message.user_id or "",
+                    skip_persist=True,
+                )
+            )
+            return ProcessingStatus.SUCCESS, "Final answer from agent."
+
+        proc.handle_streaming_response = AsyncMock(
+            side_effect=successful_streaming_with_terminal_notification_failure
+        )
+        proc._emit_terminal = AsyncMock()
+
+        agent = MagicMock()
+        agent.agent_card = MagicMock()
+        ctx = DispatchContext(
+            agent=agent,
+            room_agent_message=message,
+            room_id="room-1",
+            user_message_id="user-msg-1",
+            prepared_message=MagicMock(),
+        )
+
+        result = await proc.dispatch(ctx, message)
+
+        assert result.status == ProcessingStatus.SUCCESS
+        assert result.response_text == "Final answer from agent."
+        transition_states = [call.args[1] for call in proc.tsm.transition_task.await_args_list]
+        assert CommonTaskState.COMPLETED in transition_states
+        assert CommonTaskState.FAILED not in transition_states
+        proc._emit_terminal.assert_not_awaited()
 
 
 # =============================================================================
